@@ -37,7 +37,6 @@
 //! `paged-scene`; this module stays focused on shape extraction.
 
 use quick_xml::events::Event;
-use serde::{Deserialize, Serialize};
 
 use crate::util::{attr, parse_tint_attr};
 use crate::ParseError;
@@ -60,29 +59,7 @@ pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
 /// "continued on page" footers).
 pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Story {
-    pub paragraphs: Vec<Paragraph>,
-    /// `<StoryPreference OpticalMarginAlignment="true">` enables
-    /// "hanging punctuation" — quotes, commas, periods, hyphens at
-    /// the edge of a column hang slightly outside the text rectangle
-    /// for a tighter visual alignment. The text shaper already
-    /// implements the hang via `paged_text::shape::apply_optical_margin`;
-    /// this flag tells the renderer to call it. `false` is the IDML
-    /// default.
-    pub optical_margin_alignment: bool,
-    /// `<StoryPreference OpticalMarginSize="12">` — bounds the hang
-    /// magnitude for glyphs smaller than this point size. InDesign
-    /// typically writes 12 (the body-copy point size). 0.0 means the
-    /// attribute was absent.
-    pub optical_margin_size: f32,
-    /// `<Story StoryDirection="VerticalWritingDirection">` — CJK
-    /// vertical-text mode. `None` when the attribute is absent (IDML
-    /// implicit default: horizontal). Parser-only today; the renderer
-    /// does not yet honour this — see docs/plan.md Tier 4 — CJK
-    /// Stage 3.
-    pub story_direction: Option<StoryDirection>,
-}
+pub use paged_model::Story;
 
 /// Parse the discrete `OTF*` attributes off a CharacterStyleRange /
 /// CharacterStyle start tag. Returns an all-`None` bag when none of
@@ -142,1048 +119,1043 @@ struct TableContext {
     outer_cell: Option<TableCell>,
 }
 
-impl Story {
-    pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
-        let mut reader = quick_xml::Reader::from_reader(xml);
-        reader.config_mut().trim_text(false);
+pub fn parse_story(xml: &[u8]) -> Result<Story, ParseError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
 
-        let mut out = Story::default();
-        let mut current_paragraph: Option<Paragraph> = None;
-        let mut current_run: Option<CharacterRun> = None;
-        // Phase 5 — table context stack. Each `<Table>` push, each
-        // `</Table>` pop. Nested tables (a table inside a `<Cell>`'s
-        // `<Paragraph>`) stack their contexts so the inner table's
-        // rows / columns / cells don't bleed into the outer table,
-        // and so the outer cell's saved paragraph / run state survives
-        // the inner table's `<Cell>` boundaries. Each frame carries
-        // the table itself plus the parked outer-paragraph / outer-run
-        // for the cell *being parsed inside this table* (the same
-        // slots the flat parser used as `outer_paragraph` /
-        // `outer_run`, but now per-table instead of global).
-        let mut table_stack: Vec<TableContext> = Vec::new();
-        let mut current_cell: Option<TableCell> = None;
-        // Phase 5 — footnote context stack. Each `<Footnote>` open
-        // pushes; `</Footnote>` close pops, attaches the captured
-        // body to the host paragraph, and restores the parker state.
-        // Nesting is rare but handled.
-        let mut footnote_stack: Vec<FootnoteContext> = Vec::new();
-        // W1.4 — hyperlink / cross-reference *source* span stack. IDML
-        // wraps the character ranges a hyperlink covers in a
-        // `<HyperlinkTextSource Self="...">` (or `<CrossReferenceSource
-        // Self="...">`) element; every CharacterStyleRange opened while
-        // such a wrapper is on the stack inherits its `Self` as
-        // `hyperlink_source`. The designmap's `<Hyperlink Source=...>`
-        // then resolves the run back to a destination. A vec (not a
-        // single slot) because IDML technically permits nesting, though
-        // it's exotic — the innermost source wins.
-        let mut source_stack: Vec<String> = Vec::new();
-        let mut in_content = false;
-        let mut buf = Vec::new();
-        // `<Properties>` child elements appear *inside* a CharacterStyleRange
-        // or ParagraphStyleRange to carry typed values that the spec lets
-        // InDesign serialise either as XML attributes or as nested elements
-        // with `type="string"|"unit"|"enumeration"`. Real exports prefer the
-        // child-element form for AppliedFont, Leading, BulletsFont, etc., so
-        // a parser that only reads attributes loses the data entirely. We
-        // track the *enclosing* container of the Properties block plus the
-        // currently-open child name so the Text event can accumulate the
-        // value.
-        //
-        //   1 → Properties under a CharacterStyleRange (run-level)
-        //   2 → Properties under a ParagraphStyleRange (paragraph-level)
-        //
-        // 0 / None means Properties belongs to a Story / TextFrame / other
-        // container we don't extract typed children from yet.
-        let mut properties_kind: u8 = 0;
-        let mut properties_field: Option<Vec<u8>> = None;
-        let mut properties_text = String::new();
-        // Anchored-frame state. When a <TextFrame> / <Rectangle> /
-        // <Group> opens as a child of a CharacterStyleRange, we
-        // record it as an anchored object on the current paragraph
-        // and recurse through its body until the matching close.
-        //
-        // `anchored_depth` counts open XML elements currently inside
-        // the outermost anchored body (it bumps on every Start,
-        // decrements on every End). 0 ⇒ outside any anchored frame.
-        //
-        // `anchored_stack` holds the open frame records: the bottom
-        // is the outermost anchored frame, deeper entries are nested
-        // children inside Groups. When an End event for a frame
-        // element name (`TextFrame` / `Rectangle` / `Group`) fires
-        // we pop the top frame; if it leaves the stack non-empty we
-        // attach it as a child of the new top, otherwise we attach
-        // it to the host paragraph.
-        //
-        // The (Image / Link, AnchoredObjectSetting) attribute capture
-        // mutates the top of the stack so attributes always land on
-        // the nearest enclosing frame.
-        let mut anchored_depth: u32 = 0;
-        let mut anchored_stack: Vec<AnchoredFrame> = Vec::new();
-        // Suppressed-subtree depth. IDML uses `<HiddenText>` (authored
-        // but not flowed), `<Note>` (sticky-note annotations), and
-        // `<Index>` / `<IndexEntry>` (index markers — the marker is a
-        // zero-width metadata point; the entry text is metadata, not
-        // body copy). While `suppress_depth > 0` every Start bumps it,
-        // every End decrements it, and Content / inline glyph events
-        // (Br, Tab, TextVariableInstance) are dropped. The wrapper
-        // itself does not insert any character into the host run, so
-        // the surrounding flow is uninterrupted.
-        let mut suppress_depth: u32 = 0;
-        // Parallel to `anchored_stack`: tracks whether the top frame's
-        // `bounds` were derived from a `<PathPointType>` chain (`true`)
-        // or from a `GeometricBounds` attribute (`false`). The
-        // PathPointType handler only extends bounds when the flag is
-        // `true`, so an explicit `GeometricBounds="…"` always wins.
-        let mut bounds_from_path: Vec<bool> = Vec::new();
+    let mut out = Story::default();
+    let mut current_paragraph: Option<Paragraph> = None;
+    let mut current_run: Option<CharacterRun> = None;
+    // Phase 5 — table context stack. Each `<Table>` push, each
+    // `</Table>` pop. Nested tables (a table inside a `<Cell>`'s
+    // `<Paragraph>`) stack their contexts so the inner table's
+    // rows / columns / cells don't bleed into the outer table,
+    // and so the outer cell's saved paragraph / run state survives
+    // the inner table's `<Cell>` boundaries. Each frame carries
+    // the table itself plus the parked outer-paragraph / outer-run
+    // for the cell *being parsed inside this table* (the same
+    // slots the flat parser used as `outer_paragraph` /
+    // `outer_run`, but now per-table instead of global).
+    let mut table_stack: Vec<TableContext> = Vec::new();
+    let mut current_cell: Option<TableCell> = None;
+    // Phase 5 — footnote context stack. Each `<Footnote>` open
+    // pushes; `</Footnote>` close pops, attaches the captured
+    // body to the host paragraph, and restores the parker state.
+    // Nesting is rare but handled.
+    let mut footnote_stack: Vec<FootnoteContext> = Vec::new();
+    // W1.4 — hyperlink / cross-reference *source* span stack. IDML
+    // wraps the character ranges a hyperlink covers in a
+    // `<HyperlinkTextSource Self="...">` (or `<CrossReferenceSource
+    // Self="...">`) element; every CharacterStyleRange opened while
+    // such a wrapper is on the stack inherits its `Self` as
+    // `hyperlink_source`. The designmap's `<Hyperlink Source=...>`
+    // then resolves the run back to a destination. A vec (not a
+    // single slot) because IDML technically permits nesting, though
+    // it's exotic — the innermost source wins.
+    let mut source_stack: Vec<String> = Vec::new();
+    let mut in_content = false;
+    let mut buf = Vec::new();
+    // `<Properties>` child elements appear *inside* a CharacterStyleRange
+    // or ParagraphStyleRange to carry typed values that the spec lets
+    // InDesign serialise either as XML attributes or as nested elements
+    // with `type="string"|"unit"|"enumeration"`. Real exports prefer the
+    // child-element form for AppliedFont, Leading, BulletsFont, etc., so
+    // a parser that only reads attributes loses the data entirely. We
+    // track the *enclosing* container of the Properties block plus the
+    // currently-open child name so the Text event can accumulate the
+    // value.
+    //
+    //   1 → Properties under a CharacterStyleRange (run-level)
+    //   2 → Properties under a ParagraphStyleRange (paragraph-level)
+    //
+    // 0 / None means Properties belongs to a Story / TextFrame / other
+    // container we don't extract typed children from yet.
+    let mut properties_kind: u8 = 0;
+    let mut properties_field: Option<Vec<u8>> = None;
+    let mut properties_text = String::new();
+    // Anchored-frame state. When a <TextFrame> / <Rectangle> /
+    // <Group> opens as a child of a CharacterStyleRange, we
+    // record it as an anchored object on the current paragraph
+    // and recurse through its body until the matching close.
+    //
+    // `anchored_depth` counts open XML elements currently inside
+    // the outermost anchored body (it bumps on every Start,
+    // decrements on every End). 0 ⇒ outside any anchored frame.
+    //
+    // `anchored_stack` holds the open frame records: the bottom
+    // is the outermost anchored frame, deeper entries are nested
+    // children inside Groups. When an End event for a frame
+    // element name (`TextFrame` / `Rectangle` / `Group`) fires
+    // we pop the top frame; if it leaves the stack non-empty we
+    // attach it as a child of the new top, otherwise we attach
+    // it to the host paragraph.
+    //
+    // The (Image / Link, AnchoredObjectSetting) attribute capture
+    // mutates the top of the stack so attributes always land on
+    // the nearest enclosing frame.
+    let mut anchored_depth: u32 = 0;
+    let mut anchored_stack: Vec<AnchoredFrame> = Vec::new();
+    // Suppressed-subtree depth. IDML uses `<HiddenText>` (authored
+    // but not flowed), `<Note>` (sticky-note annotations), and
+    // `<Index>` / `<IndexEntry>` (index markers — the marker is a
+    // zero-width metadata point; the entry text is metadata, not
+    // body copy). While `suppress_depth > 0` every Start bumps it,
+    // every End decrements it, and Content / inline glyph events
+    // (Br, Tab, TextVariableInstance) are dropped. The wrapper
+    // itself does not insert any character into the host run, so
+    // the surrounding flow is uninterrupted.
+    let mut suppress_depth: u32 = 0;
+    // Parallel to `anchored_stack`: tracks whether the top frame's
+    // `bounds` were derived from a `<PathPointType>` chain (`true`)
+    // or from a `GeometricBounds` attribute (`false`). The
+    // PathPointType handler only extends bounds when the flag is
+    // `true`, so an explicit `GeometricBounds="…"` always wins.
+    let mut bounds_from_path: Vec<bool> = Vec::new();
 
-        // Helper: build an `AnchoredFrame` record from a frame
-        // element's start tag. Mirrors `spread.rs::read_common_attrs`
-        // for the cross-cutting attribute set so the renderer sees
-        // the full styling alongside geometry + setting.
-        fn make_anchored_frame(
-            e: &quick_xml::events::BytesStart,
-            kind: AnchoredFrameKind,
-        ) -> AnchoredFrame {
-            let bounds = attr(e, b"GeometricBounds").and_then(|s| parse_bounds_local(&s));
-            let item_transform = attr(e, b"ItemTransform").and_then(|s| parse_matrix_local(&s));
-            let parent_story = if matches!(kind, AnchoredFrameKind::TextFrame) {
-                attr(e, b"ParentStory")
-            } else {
-                None
-            };
-            AnchoredFrame {
-                frame_kind: kind,
-                self_id: attr(e, b"Self"),
-                bounds,
-                item_transform,
-                parent_story,
-                setting: None,
-                fill_color: attr(e, b"FillColor"),
-                stroke_color: attr(e, b"StrokeColor"),
-                stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
-                fill_tint: parse_tint_attr(e, b"FillTint"),
-                gradient_fill_angle: attr(e, b"GradientFillAngle").and_then(|s| s.parse().ok()),
-                applied_object_style: attr(e, b"AppliedObjectStyle"),
-                image_link: None,
-                image_item_transform: None,
-                children: Vec::new(),
+    // Helper: build an `AnchoredFrame` record from a frame
+    // element's start tag. Mirrors `spread.rs::read_common_attrs`
+    // for the cross-cutting attribute set so the renderer sees
+    // the full styling alongside geometry + setting.
+    fn make_anchored_frame(
+        e: &quick_xml::events::BytesStart,
+        kind: AnchoredFrameKind,
+    ) -> AnchoredFrame {
+        let bounds = attr(e, b"GeometricBounds").and_then(|s| parse_bounds_local(&s));
+        let item_transform = attr(e, b"ItemTransform").and_then(|s| parse_matrix_local(&s));
+        let parent_story = if matches!(kind, AnchoredFrameKind::TextFrame) {
+            attr(e, b"ParentStory")
+        } else {
+            None
+        };
+        AnchoredFrame {
+            frame_kind: kind,
+            self_id: attr(e, b"Self"),
+            bounds,
+            item_transform,
+            parent_story,
+            setting: None,
+            fill_color: attr(e, b"FillColor"),
+            stroke_color: attr(e, b"StrokeColor"),
+            stroke_weight: attr(e, b"StrokeWeight").and_then(|s| s.parse().ok()),
+            fill_tint: parse_tint_attr(e, b"FillTint"),
+            gradient_fill_angle: attr(e, b"GradientFillAngle").and_then(|s| s.parse().ok()),
+            applied_object_style: attr(e, b"AppliedObjectStyle"),
+            image_link: None,
+            image_item_transform: None,
+            children: Vec::new(),
+        }
+    }
+
+    // Helper: classify an element name as a frame element (i.e.
+    // one that opens an anchored sub-frame on the stack).
+    fn anchored_kind_from_name(name: &[u8]) -> Option<AnchoredFrameKind> {
+        match name {
+            b"TextFrame" => Some(AnchoredFrameKind::TextFrame),
+            b"Rectangle" => Some(AnchoredFrameKind::Rectangle),
+            b"Group" => Some(AnchoredFrameKind::Group),
+            _ => None,
+        }
+    }
+
+    // Helper: pop the top anchored frame and attach it to its
+    // parent (the new top of stack) or the host paragraph. Pops
+    // the parallel `bounds_from_path` flag at the same time.
+    fn finalise_anchored_top(
+        anchored_stack: &mut Vec<AnchoredFrame>,
+        bounds_from_path: &mut Vec<bool>,
+        current_paragraph: &mut Option<Paragraph>,
+    ) {
+        bounds_from_path.pop();
+        if let Some(frame) = anchored_stack.pop() {
+            if let Some(parent) = anchored_stack.last_mut() {
+                parent.children.push(frame);
+            } else if let Some(para) = current_paragraph.as_mut() {
+                para.anchored_frames.push(frame);
             }
         }
+    }
 
-        // Helper: classify an element name as a frame element (i.e.
-        // one that opens an anchored sub-frame on the stack).
-        fn anchored_kind_from_name(name: &[u8]) -> Option<AnchoredFrameKind> {
-            match name {
-                b"TextFrame" => Some(AnchoredFrameKind::TextFrame),
-                b"Rectangle" => Some(AnchoredFrameKind::Rectangle),
-                b"Group" => Some(AnchoredFrameKind::Group),
-                _ => None,
-            }
-        }
-
-        // Helper: pop the top anchored frame and attach it to its
-        // parent (the new top of stack) or the host paragraph. Pops
-        // the parallel `bounds_from_path` flag at the same time.
-        fn finalise_anchored_top(
-            anchored_stack: &mut Vec<AnchoredFrame>,
-            bounds_from_path: &mut Vec<bool>,
-            current_paragraph: &mut Option<Paragraph>,
-        ) {
-            bounds_from_path.pop();
-            if let Some(frame) = anchored_stack.pop() {
-                if let Some(parent) = anchored_stack.last_mut() {
-                    parent.children.push(frame);
-                } else if let Some(para) = current_paragraph.as_mut() {
-                    para.anchored_frames.push(frame);
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) => {
+                let n = e.name();
+                let name = n.as_ref();
+                // Anchored-frame handling. A `<TextFrame>` /
+                // `<Rectangle>` / `<Group>` nested directly
+                // inside a `<CharacterStyleRange>` is an
+                // inline-anchored object — capture geometry +
+                // attributes; recurse into Group children.
+                if anchored_depth > 0 {
+                    // Nested frame element: open a new frame on
+                    // the stack so its attributes / children
+                    // capture independently of the parent.
+                    if let Some(kind) = anchored_kind_from_name(name) {
+                        let frame = make_anchored_frame(&e, kind);
+                        bounds_from_path.push(frame.bounds.is_none());
+                        anchored_stack.push(frame);
+                    } else if name == b"AnchoredObjectSetting" {
+                        if let Some(p) = anchored_stack.last_mut() {
+                            p.setting = Some(parse_anchored_object_setting(&e));
+                        }
+                    } else if name == b"Image" || name == b"Link" {
+                        anchored_capture_image_attrs(&e, &mut anchored_stack);
+                    } else if name == b"PathPointType" {
+                        anchored_extend_path_bounds(&e, &mut anchored_stack, &mut bounds_from_path);
+                    }
+                    // Always bump depth on Start so we stay
+                    // inside the anchored body until the
+                    // matching End fires.
+                    anchored_depth += 1;
+                    buf.clear();
+                    continue;
                 }
-            }
-        }
-
-        loop {
-            match reader.read_event_into(&mut buf)? {
-                Event::Start(e) => {
-                    let n = e.name();
-                    let name = n.as_ref();
-                    // Anchored-frame handling. A `<TextFrame>` /
-                    // `<Rectangle>` / `<Group>` nested directly
-                    // inside a `<CharacterStyleRange>` is an
-                    // inline-anchored object — capture geometry +
-                    // attributes; recurse into Group children.
-                    if anchored_depth > 0 {
-                        // Nested frame element: open a new frame on
-                        // the stack so its attributes / children
-                        // capture independently of the parent.
-                        if let Some(kind) = anchored_kind_from_name(name) {
-                            let frame = make_anchored_frame(&e, kind);
-                            bounds_from_path.push(frame.bounds.is_none());
-                            anchored_stack.push(frame);
-                        } else if name == b"AnchoredObjectSetting" {
-                            if let Some(p) = anchored_stack.last_mut() {
-                                p.setting = Some(parse_anchored_object_setting(&e));
-                            }
-                        } else if name == b"Image" || name == b"Link" {
-                            anchored_capture_image_attrs(&e, &mut anchored_stack);
-                        } else if name == b"PathPointType" {
-                            anchored_extend_path_bounds(
-                                &e,
-                                &mut anchored_stack,
-                                &mut bounds_from_path,
-                            );
-                        }
-                        // Always bump depth on Start so we stay
-                        // inside the anchored body until the
-                        // matching End fires.
-                        anchored_depth += 1;
+                if current_run.is_some() {
+                    if let Some(kind) = anchored_kind_from_name(name) {
+                        let frame = make_anchored_frame(&e, kind);
+                        // `false` ⇒ bounds came from
+                        // GeometricBounds attribute; `true` ⇒
+                        // bounds will be derived from
+                        // `<PathPointType>` anchor coordinates.
+                        bounds_from_path.push(frame.bounds.is_none());
+                        anchored_stack.push(frame);
+                        anchored_depth = 1;
                         buf.clear();
                         continue;
                     }
-                    if current_run.is_some() {
-                        if let Some(kind) = anchored_kind_from_name(name) {
-                            let frame = make_anchored_frame(&e, kind);
-                            // `false` ⇒ bounds came from
-                            // GeometricBounds attribute; `true` ⇒
-                            // bounds will be derived from
-                            // `<PathPointType>` anchor coordinates.
-                            bounds_from_path.push(frame.bounds.is_none());
-                            anchored_stack.push(frame);
-                            anchored_depth = 1;
-                            buf.clear();
-                            continue;
+                }
+                // Suppressed subtree: enter on the wrapper, bump
+                // depth on every child so the matching End pairs
+                // up. Skip the body handlers entirely.
+                if suppress_depth > 0 {
+                    suppress_depth += 1;
+                    buf.clear();
+                    continue;
+                }
+                if matches!(name, b"HiddenText" | b"Note") {
+                    suppress_depth = 1;
+                    buf.clear();
+                    continue;
+                }
+                match name {
+                    // `<Story Self="..." StoryDirection="...">` is the
+                    // document root inside `<idPkg:Story>`. We only
+                    // surface the writing-direction flag today;
+                    // additional Story-level attributes (`AppliedTOCStyle`,
+                    // `TrackChanges`, etc.) land in followup parser slices.
+                    b"Story" => {
+                        if let Some(v) = attr(&e, b"StoryDirection") {
+                            out.story_direction = StoryDirection::from_idml(&v);
                         }
                     }
-                    // Suppressed subtree: enter on the wrapper, bump
-                    // depth on every child so the matching End pairs
-                    // up. Skip the body handlers entirely.
-                    if suppress_depth > 0 {
-                        suppress_depth += 1;
-                        buf.clear();
-                        continue;
+                    // W1.4 — a hyperlink / cross-reference source span
+                    // wraps the character ranges it covers. Push its
+                    // `Self` so every run opened inside inherits the id;
+                    // the matching End pops it. (Self-closing sources
+                    // arrive via `Event::Empty` and never reach here, so
+                    // they don't unbalance the stack.)
+                    b"HyperlinkTextSource" | b"CrossReferenceSource" => {
+                        if let Some(self_id) = attr(&e, b"Self") {
+                            source_stack.push(self_id);
+                        } else {
+                            // Keep the stack depth-balanced with the
+                            // End even when the id is missing.
+                            source_stack.push(String::new());
+                        }
                     }
-                    if matches!(name, b"HiddenText" | b"Note") {
-                        suppress_depth = 1;
-                        buf.clear();
-                        continue;
+                    // <StoryPreference> may also appear with
+                    // children (e.g. nested <Properties>) instead of
+                    // self-closing. Read the attributes off the Start
+                    // event as well so the data lands either way.
+                    b"StoryPreference" => {
+                        if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
+                            if let Ok(b) = v.parse::<bool>() {
+                                out.optical_margin_alignment = b;
+                            }
+                        }
+                        if let Some(v) = attr(&e, b"OpticalMarginSize") {
+                            if let Ok(f) = v.parse::<f32>() {
+                                out.optical_margin_size = f;
+                            }
+                        }
                     }
-                    match name {
-                        // `<Story Self="..." StoryDirection="...">` is the
-                        // document root inside `<idPkg:Story>`. We only
-                        // surface the writing-direction flag today;
-                        // additional Story-level attributes (`AppliedTOCStyle`,
-                        // `TrackChanges`, etc.) land in followup parser slices.
-                        b"Story" => {
-                            if let Some(v) = attr(&e, b"StoryDirection") {
-                                out.story_direction = StoryDirection::from_idml(&v);
-                            }
+                    b"ParagraphStyleRange" => {
+                        current_paragraph = Some(Paragraph {
+                            paragraph_style: attr(&e, b"AppliedParagraphStyle"),
+                            justification: attr(&e, b"Justification")
+                                .as_deref()
+                                .and_then(Justification::from_idml),
+                            first_line_indent: attr(&e, b"FirstLineIndent")
+                                .and_then(|s| s.parse().ok()),
+                            left_indent: attr(&e, b"LeftIndent").and_then(|s| s.parse().ok()),
+                            right_indent: attr(&e, b"RightIndent").and_then(|s| s.parse().ok()),
+                            space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
+                            space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
+                            tab_list: Vec::new(),
+                            bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
+                            bullet_character: None,
+                            numbering_format: attr(&e, b"NumberingFormat"),
+                            applied_numbering_list: match attr(&e, b"AppliedNumberingList")
+                                .as_deref()
+                            {
+                                Some("n") | Some("NumberingList/n") | Some("") => None,
+                                Some(s) if s.ends_with("[No numbering list]") => None,
+                                _ => attr(&e, b"AppliedNumberingList"),
+                            },
+                            drop_cap_characters: attr(&e, b"DropCapCharacters")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            drop_cap_lines: attr(&e, b"DropCapLines")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            drop_cap_detail: attr(&e, b"DropCapDetail")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0),
+                            hyphenation: attr(&e, b"Hyphenation")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            keep_lines_together: attr(&e, b"KeepLinesTogether")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            keep_with_next: attr(&e, b"KeepWithNext")
+                                .and_then(|s| s.parse::<u32>().ok()),
+                            rule_above: crate::styles::parse_paragraph_rule(&e, "RuleAbove"),
+                            rule_below: crate::styles::parse_paragraph_rule(&e, "RuleBelow"),
+                            kinsoku_set: attr(&e, b"KinsokuSet"),
+                            kinsoku_type: attr(&e, b"KinsokuType"),
+                            mojikumi_table: attr(&e, b"MojikumiTable"),
+                            mojikumi_set: attr(&e, b"MojikumiSet"),
+                            runs: Vec::new(),
+                            anchored_frames: Vec::new(),
+                            table: None,
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            footnotes: Vec::new(),
+                            index_markers: Vec::new(),
+                        });
+                    }
+                    b"Table" => {
+                        // Tables nest inside a CharacterStyleRange; the
+                        // run that hosts the table is typically
+                        // contentless, so we let it pass through as-is.
+                        // Push a fresh frame; an outer table already
+                        // on the stack stays untouched. Save the
+                        // current `current_cell` (Some when this
+                        // table opens inside an outer cell, None at
+                        // the story level) so we can restore it after
+                        // the inner table closes.
+                        table_stack.push(TableContext {
+                            outer_paragraph: None,
+                            outer_run: None,
+                            outer_cell: current_cell.take(),
+                            table: Table {
+                                self_id: attr(&e, b"Self"),
+                                header_row_count: attr(&e, b"HeaderRowCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0),
+                                footer_row_count: attr(&e, b"FooterRowCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0),
+                                body_row_count: attr(&e, b"BodyRowCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0),
+                                column_count: attr(&e, b"ColumnCount")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0),
+                                repeating_header: attr(&e, b"RepeatingHeader")
+                                    .and_then(|s| s.parse::<bool>().ok()),
+                                repeating_footer: attr(&e, b"RepeatingFooter")
+                                    .and_then(|s| s.parse::<bool>().ok()),
+                                applied_table_style: attr(&e, b"AppliedTableStyle"),
+                                rows: Vec::new(),
+                                columns: Vec::new(),
+                                cells: Vec::new(),
+                                border: TableBorder {
+                                    top_color: attr(&e, b"TopBorderStrokeColor"),
+                                    top_type: attr(&e, b"TopBorderStrokeType"),
+                                    top_weight: attr(&e, b"TopBorderStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    top_tint: parse_tint_attr(&e, b"TopBorderStrokeTint"),
+                                    top_gap_color: attr(&e, b"TopBorderStrokeGapColor"),
+                                    top_gap_tint: parse_tint_attr(&e, b"TopBorderStrokeGapTint"),
+                                    bottom_color: attr(&e, b"BottomBorderStrokeColor"),
+                                    bottom_type: attr(&e, b"BottomBorderStrokeType"),
+                                    bottom_weight: attr(&e, b"BottomBorderStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    bottom_tint: parse_tint_attr(&e, b"BottomBorderStrokeTint"),
+                                    bottom_gap_color: attr(&e, b"BottomBorderStrokeGapColor"),
+                                    bottom_gap_tint: parse_tint_attr(
+                                        &e,
+                                        b"BottomBorderStrokeGapTint",
+                                    ),
+                                    left_color: attr(&e, b"LeftBorderStrokeColor"),
+                                    left_type: attr(&e, b"LeftBorderStrokeType"),
+                                    left_weight: attr(&e, b"LeftBorderStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    left_tint: parse_tint_attr(&e, b"LeftBorderStrokeTint"),
+                                    left_gap_color: attr(&e, b"LeftBorderStrokeGapColor"),
+                                    left_gap_tint: parse_tint_attr(&e, b"LeftBorderStrokeGapTint"),
+                                    right_color: attr(&e, b"RightBorderStrokeColor"),
+                                    right_type: attr(&e, b"RightBorderStrokeType"),
+                                    right_weight: attr(&e, b"RightBorderStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    right_tint: parse_tint_attr(&e, b"RightBorderStrokeTint"),
+                                    right_gap_color: attr(&e, b"RightBorderStrokeGapColor"),
+                                    right_gap_tint: parse_tint_attr(
+                                        &e,
+                                        b"RightBorderStrokeGapTint",
+                                    ),
+                                },
+                                row_strokes: TableLineStrokes {
+                                    start_count: attr(&e, b"StartRowStrokeCount")
+                                        .and_then(|s| s.parse().ok()),
+                                    start_color: attr(&e, b"StartRowStrokeColor"),
+                                    start_type: attr(&e, b"StartRowStrokeType"),
+                                    start_weight: attr(&e, b"StartRowStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    start_tint: parse_tint_attr(&e, b"StartRowStrokeTint"),
+                                    start_gap_color: attr(&e, b"StartRowStrokeGapColor"),
+                                    start_gap_tint: parse_tint_attr(&e, b"StartRowStrokeGapTint"),
+                                    end_count: attr(&e, b"EndRowStrokeCount")
+                                        .and_then(|s| s.parse().ok()),
+                                    end_color: attr(&e, b"EndRowStrokeColor"),
+                                    end_type: attr(&e, b"EndRowStrokeType"),
+                                    end_weight: attr(&e, b"EndRowStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    end_tint: parse_tint_attr(&e, b"EndRowStrokeTint"),
+                                    end_gap_color: attr(&e, b"EndRowStrokeGapColor"),
+                                    end_gap_tint: parse_tint_attr(&e, b"EndRowStrokeGapTint"),
+                                },
+                                column_strokes: TableLineStrokes {
+                                    start_count: attr(&e, b"StartColumnStrokeCount")
+                                        .and_then(|s| s.parse().ok()),
+                                    start_color: attr(&e, b"StartColumnStrokeColor"),
+                                    start_type: attr(&e, b"StartColumnStrokeType"),
+                                    start_weight: attr(&e, b"StartColumnStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    start_tint: parse_tint_attr(&e, b"StartColumnStrokeTint"),
+                                    start_gap_color: attr(&e, b"StartColumnStrokeGapColor"),
+                                    start_gap_tint: parse_tint_attr(
+                                        &e,
+                                        b"StartColumnStrokeGapTint",
+                                    ),
+                                    end_count: attr(&e, b"EndColumnStrokeCount")
+                                        .and_then(|s| s.parse().ok()),
+                                    end_color: attr(&e, b"EndColumnStrokeColor"),
+                                    end_type: attr(&e, b"EndColumnStrokeType"),
+                                    end_weight: attr(&e, b"EndColumnStrokeWeight")
+                                        .and_then(|s| s.parse().ok()),
+                                    end_tint: parse_tint_attr(&e, b"EndColumnStrokeTint"),
+                                    end_gap_color: attr(&e, b"EndColumnStrokeGapColor"),
+                                    end_gap_tint: parse_tint_attr(&e, b"EndColumnStrokeGapTint"),
+                                },
+                            },
+                        });
+                    }
+                    b"Footnote" => {
+                        // Park the host-paragraph/run state on the
+                        // new footnote frame; the next
+                        // `<ParagraphStyleRange>` will start the
+                        // footnote body in a fresh `current_paragraph`.
+                        // On `</Footnote>` we restore and attach.
+                        footnote_stack.push(FootnoteContext {
+                            footnote: Footnote {
+                                self_id: attr(&e, b"Self"),
+                                paragraphs: Vec::new(),
+                            },
+                            outer_paragraph: current_paragraph.take(),
+                            outer_run: current_run.take(),
+                        });
+                    }
+                    b"Cell" => {
+                        // Park outer paragraph/run on the active
+                        // table frame so cell content can re-use the
+                        // same slots without leaking, and so nested
+                        // tables get their own slot.
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.outer_paragraph = current_paragraph.take();
+                            ctx.outer_run = current_run.take();
                         }
-                        // W1.4 — a hyperlink / cross-reference source span
-                        // wraps the character ranges it covers. Push its
-                        // `Self` so every run opened inside inherits the id;
-                        // the matching End pops it. (Self-closing sources
-                        // arrive via `Event::Empty` and never reach here, so
-                        // they don't unbalance the stack.)
-                        b"HyperlinkTextSource" | b"CrossReferenceSource" => {
-                            if let Some(self_id) = attr(&e, b"Self") {
-                                source_stack.push(self_id);
-                            } else {
-                                // Keep the stack depth-balanced with the
-                                // End even when the id is missing.
-                                source_stack.push(String::new());
-                            }
-                        }
-                        // <StoryPreference> may also appear with
-                        // children (e.g. nested <Properties>) instead of
-                        // self-closing. Read the attributes off the Start
-                        // event as well so the data lands either way.
-                        b"StoryPreference" => {
-                            if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
-                                if let Ok(b) = v.parse::<bool>() {
-                                    out.optical_margin_alignment = b;
-                                }
-                            }
-                            if let Some(v) = attr(&e, b"OpticalMarginSize") {
-                                if let Ok(f) = v.parse::<f32>() {
-                                    out.optical_margin_size = f;
-                                }
-                            }
-                        }
-                        b"ParagraphStyleRange" => {
-                            current_paragraph = Some(Paragraph {
-                                paragraph_style: attr(&e, b"AppliedParagraphStyle"),
-                                justification: attr(&e, b"Justification")
-                                    .as_deref()
-                                    .and_then(Justification::from_idml),
-                                first_line_indent: attr(&e, b"FirstLineIndent")
+                        current_cell = Some(TableCell {
+                            self_id: attr(&e, b"Self"),
+                            name: attr(&e, b"Name"),
+                            row_span: attr(&e, b"RowSpan")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1),
+                            column_span: attr(&e, b"ColumnSpan")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(1),
+                            text_top_inset: attr(&e, b"TextTopInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_left_inset: attr(&e, b"TextLeftInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_bottom_inset: attr(&e, b"TextBottomInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            text_right_inset: attr(&e, b"TextRightInset")
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0.0),
+                            applied_cell_style: attr(&e, b"AppliedCellStyle"),
+                            top_edge_stroke_color: attr(&e, b"TopEdgeStrokeColor"),
+                            top_edge_stroke_weight: attr(&e, b"TopEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            top_edge_stroke_tint: parse_tint_attr(&e, b"TopEdgeStrokeTint"),
+                            bottom_edge_stroke_color: attr(&e, b"BottomEdgeStrokeColor"),
+                            bottom_edge_stroke_weight: attr(&e, b"BottomEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            bottom_edge_stroke_tint: parse_tint_attr(&e, b"BottomEdgeStrokeTint"),
+                            left_edge_stroke_color: attr(&e, b"LeftEdgeStrokeColor"),
+                            left_edge_stroke_weight: attr(&e, b"LeftEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            left_edge_stroke_tint: parse_tint_attr(&e, b"LeftEdgeStrokeTint"),
+                            right_edge_stroke_color: attr(&e, b"RightEdgeStrokeColor"),
+                            right_edge_stroke_weight: attr(&e, b"RightEdgeStrokeWeight")
+                                .and_then(|s| s.parse().ok()),
+                            right_edge_stroke_tint: parse_tint_attr(&e, b"RightEdgeStrokeTint"),
+                            fill_color: attr(&e, b"FillColor"),
+                            first_baseline_offset: attr(&e, b"FirstBaselineOffset"),
+                            minimum_first_baseline_offset: attr(&e, b"MinimumFirstBaselineOffset")
+                                .and_then(|s| s.parse().ok()),
+                            diagonal: CellDiagonal {
+                                left_line_drawn: attr(&e, b"LeftLineDrawn")
                                     .and_then(|s| s.parse().ok()),
-                                left_indent: attr(&e, b"LeftIndent").and_then(|s| s.parse().ok()),
-                                right_indent: attr(&e, b"RightIndent").and_then(|s| s.parse().ok()),
-                                space_before: attr(&e, b"SpaceBefore").and_then(|s| s.parse().ok()),
-                                space_after: attr(&e, b"SpaceAfter").and_then(|s| s.parse().ok()),
-                                tab_list: Vec::new(),
-                                bullets_list_type: attr(&e, b"BulletsAndNumberingListType"),
-                                bullet_character: None,
-                                numbering_format: attr(&e, b"NumberingFormat"),
-                                applied_numbering_list: match attr(&e, b"AppliedNumberingList")
-                                    .as_deref()
-                                {
-                                    Some("n") | Some("NumberingList/n") | Some("") => None,
-                                    Some(s) if s.ends_with("[No numbering list]") => None,
-                                    _ => attr(&e, b"AppliedNumberingList"),
-                                },
-                                drop_cap_characters: attr(&e, b"DropCapCharacters")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0),
-                                drop_cap_lines: attr(&e, b"DropCapLines")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0),
-                                drop_cap_detail: attr(&e, b"DropCapDetail")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0),
-                                hyphenation: attr(&e, b"Hyphenation")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                keep_lines_together: attr(&e, b"KeepLinesTogether")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                keep_with_next: attr(&e, b"KeepWithNext")
-                                    .and_then(|s| s.parse::<u32>().ok()),
-                                rule_above: crate::styles::parse_paragraph_rule(&e, "RuleAbove"),
-                                rule_below: crate::styles::parse_paragraph_rule(&e, "RuleBelow"),
-                                kinsoku_set: attr(&e, b"KinsokuSet"),
-                                kinsoku_type: attr(&e, b"KinsokuType"),
-                                mojikumi_table: attr(&e, b"MojikumiTable"),
-                                mojikumi_set: attr(&e, b"MojikumiSet"),
-                                runs: Vec::new(),
-                                anchored_frames: Vec::new(),
-                                table: None,
-                                overprint_fill: attr(&e, b"OverprintFill")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                overprint_stroke: attr(&e, b"OverprintStroke")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                footnotes: Vec::new(),
-                                index_markers: Vec::new(),
-                            });
-                        }
-                        b"Table" => {
-                            // Tables nest inside a CharacterStyleRange; the
-                            // run that hosts the table is typically
-                            // contentless, so we let it pass through as-is.
-                            // Push a fresh frame; an outer table already
-                            // on the stack stays untouched. Save the
-                            // current `current_cell` (Some when this
-                            // table opens inside an outer cell, None at
-                            // the story level) so we can restore it after
-                            // the inner table closes.
-                            table_stack.push(TableContext {
-                                outer_paragraph: None,
-                                outer_run: None,
-                                outer_cell: current_cell.take(),
-                                table: Table {
-                                    self_id: attr(&e, b"Self"),
-                                    header_row_count: attr(&e, b"HeaderRowCount")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0),
-                                    footer_row_count: attr(&e, b"FooterRowCount")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0),
-                                    body_row_count: attr(&e, b"BodyRowCount")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0),
-                                    column_count: attr(&e, b"ColumnCount")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0),
-                                    repeating_header: attr(&e, b"RepeatingHeader")
-                                        .and_then(|s| s.parse::<bool>().ok()),
-                                    repeating_footer: attr(&e, b"RepeatingFooter")
-                                        .and_then(|s| s.parse::<bool>().ok()),
-                                    applied_table_style: attr(&e, b"AppliedTableStyle"),
-                                    rows: Vec::new(),
-                                    columns: Vec::new(),
-                                    cells: Vec::new(),
-                                    border: TableBorder {
-                                        top_color: attr(&e, b"TopBorderStrokeColor"),
-                                        top_type: attr(&e, b"TopBorderStrokeType"),
-                                        top_weight: attr(&e, b"TopBorderStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        top_tint: parse_tint_attr(&e, b"TopBorderStrokeTint"),
-                                        top_gap_color: attr(&e, b"TopBorderStrokeGapColor"),
-                                        top_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"TopBorderStrokeGapTint",
-                                        ),
-                                        bottom_color: attr(&e, b"BottomBorderStrokeColor"),
-                                        bottom_type: attr(&e, b"BottomBorderStrokeType"),
-                                        bottom_weight: attr(&e, b"BottomBorderStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        bottom_tint: parse_tint_attr(&e, b"BottomBorderStrokeTint"),
-                                        bottom_gap_color: attr(&e, b"BottomBorderStrokeGapColor"),
-                                        bottom_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"BottomBorderStrokeGapTint",
-                                        ),
-                                        left_color: attr(&e, b"LeftBorderStrokeColor"),
-                                        left_type: attr(&e, b"LeftBorderStrokeType"),
-                                        left_weight: attr(&e, b"LeftBorderStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        left_tint: parse_tint_attr(&e, b"LeftBorderStrokeTint"),
-                                        left_gap_color: attr(&e, b"LeftBorderStrokeGapColor"),
-                                        left_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"LeftBorderStrokeGapTint",
-                                        ),
-                                        right_color: attr(&e, b"RightBorderStrokeColor"),
-                                        right_type: attr(&e, b"RightBorderStrokeType"),
-                                        right_weight: attr(&e, b"RightBorderStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        right_tint: parse_tint_attr(&e, b"RightBorderStrokeTint"),
-                                        right_gap_color: attr(&e, b"RightBorderStrokeGapColor"),
-                                        right_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"RightBorderStrokeGapTint",
-                                        ),
-                                    },
-                                    row_strokes: TableLineStrokes {
-                                        start_count: attr(&e, b"StartRowStrokeCount")
-                                            .and_then(|s| s.parse().ok()),
-                                        start_color: attr(&e, b"StartRowStrokeColor"),
-                                        start_type: attr(&e, b"StartRowStrokeType"),
-                                        start_weight: attr(&e, b"StartRowStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        start_tint: parse_tint_attr(&e, b"StartRowStrokeTint"),
-                                        start_gap_color: attr(&e, b"StartRowStrokeGapColor"),
-                                        start_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"StartRowStrokeGapTint",
-                                        ),
-                                        end_count: attr(&e, b"EndRowStrokeCount")
-                                            .and_then(|s| s.parse().ok()),
-                                        end_color: attr(&e, b"EndRowStrokeColor"),
-                                        end_type: attr(&e, b"EndRowStrokeType"),
-                                        end_weight: attr(&e, b"EndRowStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        end_tint: parse_tint_attr(&e, b"EndRowStrokeTint"),
-                                        end_gap_color: attr(&e, b"EndRowStrokeGapColor"),
-                                        end_gap_tint: parse_tint_attr(&e, b"EndRowStrokeGapTint"),
-                                    },
-                                    column_strokes: TableLineStrokes {
-                                        start_count: attr(&e, b"StartColumnStrokeCount")
-                                            .and_then(|s| s.parse().ok()),
-                                        start_color: attr(&e, b"StartColumnStrokeColor"),
-                                        start_type: attr(&e, b"StartColumnStrokeType"),
-                                        start_weight: attr(&e, b"StartColumnStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        start_tint: parse_tint_attr(&e, b"StartColumnStrokeTint"),
-                                        start_gap_color: attr(&e, b"StartColumnStrokeGapColor"),
-                                        start_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"StartColumnStrokeGapTint",
-                                        ),
-                                        end_count: attr(&e, b"EndColumnStrokeCount")
-                                            .and_then(|s| s.parse().ok()),
-                                        end_color: attr(&e, b"EndColumnStrokeColor"),
-                                        end_type: attr(&e, b"EndColumnStrokeType"),
-                                        end_weight: attr(&e, b"EndColumnStrokeWeight")
-                                            .and_then(|s| s.parse().ok()),
-                                        end_tint: parse_tint_attr(&e, b"EndColumnStrokeTint"),
-                                        end_gap_color: attr(&e, b"EndColumnStrokeGapColor"),
-                                        end_gap_tint: parse_tint_attr(
-                                            &e,
-                                            b"EndColumnStrokeGapTint",
-                                        ),
-                                    },
-                                },
-                            });
-                        }
-                        b"Footnote" => {
-                            // Park the host-paragraph/run state on the
-                            // new footnote frame; the next
-                            // `<ParagraphStyleRange>` will start the
-                            // footnote body in a fresh `current_paragraph`.
-                            // On `</Footnote>` we restore and attach.
-                            footnote_stack.push(FootnoteContext {
-                                footnote: Footnote {
-                                    self_id: attr(&e, b"Self"),
-                                    paragraphs: Vec::new(),
-                                },
-                                outer_paragraph: current_paragraph.take(),
-                                outer_run: current_run.take(),
-                            });
-                        }
-                        b"Cell" => {
-                            // Park outer paragraph/run on the active
-                            // table frame so cell content can re-use the
-                            // same slots without leaking, and so nested
-                            // tables get their own slot.
-                            if let Some(ctx) = table_stack.last_mut() {
-                                ctx.outer_paragraph = current_paragraph.take();
-                                ctx.outer_run = current_run.take();
+                                left_line_color: attr(&e, b"LeftLineStrokeColor"),
+                                left_line_weight: attr(&e, b"LeftLineStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                left_line_tint: parse_tint_attr(&e, b"LeftLineStrokeTint"),
+                                right_line_drawn: attr(&e, b"RightLineDrawn")
+                                    .and_then(|s| s.parse().ok()),
+                                right_line_color: attr(&e, b"RightLineStrokeColor"),
+                                right_line_weight: attr(&e, b"RightLineStrokeWeight")
+                                    .and_then(|s| s.parse().ok()),
+                                right_line_tint: parse_tint_attr(&e, b"RightLineStrokeTint"),
+                                diagonal_in_front: attr(&e, b"DiagonalLineInFront")
+                                    .and_then(|s| s.parse().ok()),
+                            },
+                            rotation_angle: attr(&e, b"RotationAngle").and_then(|s| s.parse().ok()),
+                            vertical_justification: attr(&e, b"VerticalJustification"),
+                            paragraphs: Vec::new(),
+                        });
+                    }
+                    b"TabStop" => {
+                        // <TabStop Position="..." Alignment="..."/>
+                        // appears nested inside <TabList><ListItem>.
+                        // Append to the open paragraph's list.
+                        if let Some(stop) = parse_tab_stop(&e) {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.tab_list.push(stop);
                             }
-                            current_cell = Some(TableCell {
+                        }
+                    }
+                    b"CharacterStyleRange" => {
+                        current_run = Some(CharacterRun {
+                            character_style: attr(&e, b"AppliedCharacterStyle"),
+                            font: attr(&e, b"AppliedFont"),
+                            font_style: attr(&e, b"FontStyle"),
+                            point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
+                            fill_color: attr(&e, b"FillColor"),
+                            fill_tint: parse_tint_attr(&e, b"FillTint"),
+                            capitalization: attr(&e, b"Capitalization"),
+                            baseline_shift: attr(&e, b"BaselineShift").and_then(|s| s.parse().ok()),
+                            horizontal_scale: attr(&e, b"HorizontalScale")
+                                .and_then(|s| s.parse().ok()),
+                            vertical_scale: attr(&e, b"VerticalScale").and_then(|s| s.parse().ok()),
+                            skew: attr(&e, b"Skew").and_then(|s| s.parse().ok()),
+                            position: attr(&e, b"Position"),
+                            tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
+                            underline: attr(&e, b"Underline").and_then(|s| s.parse::<bool>().ok()),
+                            strikethru: attr(&e, b"StrikeThru")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            leading: attr(&e, b"Leading").and_then(|s| s.parse::<f32>().ok()),
+                            ruby_flag: attr(&e, b"RubyFlag").and_then(|s| s.parse::<bool>().ok()),
+                            ruby_type: attr(&e, b"RubyType"),
+                            ruby_string: attr(&e, b"RubyString"),
+                            kenten_kind: attr(&e, b"KentenKind"),
+                            kenten_character: attr(&e, b"KentenCharacter"),
+                            kenten_font_size: attr(&e, b"KentenFontSize")
+                                .and_then(|s| s.parse().ok()),
+                            overprint_fill: attr(&e, b"OverprintFill")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            overprint_stroke: attr(&e, b"OverprintStroke")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            // `Swatch/None` is IDML's literal for
+                            // "no stroke"; treat it as a missing
+                            // colour so the cascade fall-through can
+                            // see "no run-level override" rather
+                            // than "Swatch/None override".
+                            stroke_color: attr(&e, b"StrokeColor").and_then(|s| match s.as_str() {
+                                "Swatch/None" | "n" | "" => None,
+                                _ => Some(s),
+                            }),
+                            stroke_weight: attr(&e, b"StrokeWeight")
+                                .and_then(|s| s.parse::<f32>().ok()),
+                            ligatures_on: attr(&e, b"Ligatures")
+                                .and_then(|s| s.parse::<bool>().ok()),
+                            kerning_method: attr(&e, b"KerningMethod"),
+                            applied_language: attr(&e, b"AppliedLanguage"),
+                            // OpenType feature tags have no single IDML
+                            // attribute; left None at parse time and
+                            // owned by the mutate API as a free-form
+                            // authoring string. The discrete parsed
+                            // attributes land in `otf` below.
+                            otf_features: None,
+                            otf: parse_otf_features(&e),
+                            applied_conditions: attr(&e, b"AppliedConditions")
+                                .map(|s| s.split_whitespace().map(|t| t.to_string()).collect())
+                                .unwrap_or_default(),
+                            // Inherit the enclosing hyperlink/xref source
+                            // span (if any) so the run carries the source
+                            // id the designmap's <Hyperlink> references.
+                            hyperlink_source: source_stack.last().cloned(),
+                            text_variable: None,
+                            placeholder: None,
+                            text: String::new(),
+                        });
+                    }
+                    b"Content" => {
+                        in_content = true;
+                    }
+                    b"Properties" => {
+                        // Disambiguate by which container is currently
+                        // open. A Properties child of CharacterStyleRange
+                        // takes precedence (current_run is open while we
+                        // walk the run's children). The paragraph-level
+                        // form fires when we're between runs but still
+                        // inside an open ParagraphStyleRange.
+                        properties_kind = if current_run.is_some() {
+                            1
+                        } else if current_paragraph.is_some() {
+                            2
+                        } else {
+                            0
+                        };
+                    }
+                    other if properties_kind != 0 => {
+                        // Capture the next Text events as the value of
+                        // this typed child element. The `type` attribute
+                        // (`string` / `unit` / `enumeration`) is
+                        // informational; we infer the destination field
+                        // from the element name on End.
+                        properties_field = Some(other.to_vec());
+                        properties_text.clear();
+                    }
+                    _ => {}
+                } // close inner `match name { ... }`
+            }
+            Event::End(e) => {
+                let n = e.name();
+                let name = n.as_ref();
+                // Anchored-frame close: pop depth; when an End
+                // for a frame element fires we pop the top of
+                // the anchored stack and attach it to its parent
+                // (Group child) or the host paragraph (outermost).
+                if anchored_depth > 0 {
+                    anchored_depth -= 1;
+                    if anchored_kind_from_name(name).is_some() {
+                        finalise_anchored_top(
+                            &mut anchored_stack,
+                            &mut bounds_from_path,
+                            &mut current_paragraph,
+                        );
+                    }
+                    buf.clear();
+                    continue;
+                }
+                if suppress_depth > 0 {
+                    suppress_depth -= 1;
+                    buf.clear();
+                    continue;
+                }
+                match name {
+                    b"Content" => {
+                        in_content = false;
+                    }
+                    b"Properties" => {
+                        properties_kind = 0;
+                        properties_field = None;
+                        properties_text.clear();
+                    }
+                    name if properties_kind != 0 && properties_field.as_deref() == Some(name) => {
+                        let value = properties_text.trim().to_string();
+                        match (properties_kind, name) {
+                            // CharacterStyleRange Properties.
+                            (1, b"AppliedFont") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if !value.is_empty() {
+                                        run.font = Some(value);
+                                    }
+                                }
+                            }
+                            (1, b"FontStyle") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if !value.is_empty() {
+                                        run.font_style = Some(value);
+                                    }
+                                }
+                            }
+                            (1, b"Leading") => {
+                                if let Some(run) = current_run.as_mut() {
+                                    if let Ok(v) = value.parse::<f32>() {
+                                        run.leading = Some(v);
+                                    }
+                                }
+                            }
+                            // ParagraphStyleRange Properties: no fields
+                            // surfaced on Paragraph yet; the typed
+                            // children land in followup parser slices.
+                            _ => {}
+                        }
+                        properties_field = None;
+                        properties_text.clear();
+                    }
+                    b"CharacterStyleRange" => {
+                        if let (Some(run), Some(para)) =
+                            (current_run.take(), current_paragraph.as_mut())
+                        {
+                            if !run.text.is_empty() {
+                                para.runs.push(run);
+                            }
+                        }
+                    }
+                    // W1.4 — close the hyperlink / cross-reference
+                    // source span so following runs stop inheriting it.
+                    b"HyperlinkTextSource" | b"CrossReferenceSource" => {
+                        source_stack.pop();
+                    }
+                    b"ParagraphStyleRange" => {
+                        if let Some(para) = current_paragraph.take() {
+                            // Keep paragraphs that have either a
+                            // shaped run or a hosted table; drop
+                            // truly empty ones.
+                            if !para.runs.is_empty() || para.table.is_some() {
+                                // Route by parser nesting: footnote
+                                // wins over cell wins over story root.
+                                // The footnote check has to come
+                                // first because a footnote anchored
+                                // inside a cell paragraph still wants
+                                // its body paragraphs to live on the
+                                // footnote, not on the cell.
+                                if let Some(ctx) = footnote_stack.last_mut() {
+                                    ctx.footnote.paragraphs.push(para);
+                                } else if let Some(cell) = current_cell.as_mut() {
+                                    cell.paragraphs.push(para);
+                                } else {
+                                    out.paragraphs.push(para);
+                                }
+                            }
+                        }
+                    }
+                    b"Cell" => {
+                        if let (Some(cell), Some(ctx)) =
+                            (current_cell.take(), table_stack.last_mut())
+                        {
+                            ctx.table.cells.push(cell);
+                        }
+                        // Restore the outer paragraph/run state from
+                        // the active table frame so the next Cell or
+                        // the closing Table sees the host paragraph
+                        // again. Nested tables: the inner cell's
+                        // close restores the inner table's outer
+                        // state (which is the inner-table's host
+                        // paragraph, i.e. a paragraph inside the
+                        // outer table's cell).
+                        if let Some(ctx) = table_stack.last_mut() {
+                            current_paragraph = ctx.outer_paragraph.take();
+                            current_run = ctx.outer_run.take();
+                        }
+                    }
+                    b"Table" => {
+                        // Pop the active table frame and attach its
+                        // table to the current host paragraph. For
+                        // nested tables, the host paragraph is one of
+                        // the OUTER table's cell paragraphs (which
+                        // were restored by the inner table's last
+                        // `</Cell>` close — both sat on the inner
+                        // frame's `outer_paragraph` slot). Restore the
+                        // outer `current_cell` so the outer cell
+                        // continues to accept further content.
+                        if let Some(ctx) = table_stack.pop() {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.table = Some(ctx.table);
+                            }
+                            if ctx.outer_cell.is_some() {
+                                current_cell = ctx.outer_cell;
+                            }
+                        }
+                    }
+                    b"Footnote" => {
+                        // Pop the active footnote frame, restore the
+                        // host-paragraph / host-run state, then
+                        // attach the captured footnote to the host
+                        // paragraph. The host paragraph keeps
+                        // accumulating runs after this point.
+                        if let Some(ctx) = footnote_stack.pop() {
+                            current_paragraph = ctx.outer_paragraph;
+                            current_run = ctx.outer_run;
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.footnotes.push(ctx.footnote);
+                            }
+                        }
+                    }
+                    _ => {}
+                } // close inner `match name { ... }`
+            }
+            Event::Empty(e) => {
+                let n = e.name();
+                let name = n.as_ref();
+                // Anchored-frame self-closing forms. These never
+                // visit the End arm so attribute capture must
+                // happen inline; nested self-closing frames push
+                // and immediately finalise.
+                if anchored_depth > 0 {
+                    if let Some(kind) = anchored_kind_from_name(name) {
+                        // Self-closing nested frame: push, then
+                        // finalise so the parent picks it up.
+                        let frame = make_anchored_frame(&e, kind);
+                        bounds_from_path.push(frame.bounds.is_none());
+                        anchored_stack.push(frame);
+                        finalise_anchored_top(
+                            &mut anchored_stack,
+                            &mut bounds_from_path,
+                            &mut current_paragraph,
+                        );
+                    } else if name == b"AnchoredObjectSetting" {
+                        if let Some(p) = anchored_stack.last_mut() {
+                            p.setting = Some(parse_anchored_object_setting(&e));
+                        }
+                    } else if name == b"Image" || name == b"Link" {
+                        anchored_capture_image_attrs(&e, &mut anchored_stack);
+                    } else if name == b"PathPointType" {
+                        anchored_extend_path_bounds(&e, &mut anchored_stack, &mut bounds_from_path);
+                    }
+                    // No depth bump — Empty events have no
+                    // matching End.
+                    buf.clear();
+                    continue;
+                }
+                // Self-closing suppressed wrappers carry no flow
+                // content; drop them. Inline glyph events
+                // (`<Br/>` / `<Tab/>` / `<TextVariableInstance/>`)
+                // nested inside an open suppressed subtree are
+                // also dropped to keep the wrapper truly silent.
+                if suppress_depth > 0 || matches!(name, b"HiddenText" | b"Note") {
+                    buf.clear();
+                    continue;
+                }
+                // Phase 5 — `<PageReference>` / `<IndexEntry>` /
+                // `<Index>` self-closing markers. Capture the
+                // indexed term onto the current paragraph so the
+                // index-resolution pass can collect entries.
+                // IDML serialises both element-only (`<Index ...>`
+                // wrapping) and self-closing (`<IndexEntry ...>`
+                // marker) forms; both carry the same attributes.
+                if matches!(name, b"PageReference" | b"IndexEntry" | b"Index") {
+                    if let Some(marker) = parse_index_marker(&e) {
+                        if let Some(p) = current_paragraph.as_mut() {
+                            p.index_markers.push(marker);
+                        }
+                    }
+                    buf.clear();
+                    continue;
+                }
+                if current_run.is_some() {
+                    if let Some(kind) = anchored_kind_from_name(name) {
+                        // Self-closing outermost anchored frame:
+                        // push + finalise so it lands on the
+                        // host paragraph immediately.
+                        let frame = make_anchored_frame(&e, kind);
+                        bounds_from_path.push(frame.bounds.is_none());
+                        anchored_stack.push(frame);
+                        finalise_anchored_top(
+                            &mut anchored_stack,
+                            &mut bounds_from_path,
+                            &mut current_paragraph,
+                        );
+                        buf.clear();
+                        continue;
+                    }
+                }
+                match name {
+                    // <StoryPreference OpticalMarginAlignment="true"
+                    // OpticalMarginSize="12" .../> appears once per
+                    // story near the top. Drives hanging punctuation
+                    // (`apply_optical_margin` in paged-text) when the
+                    // renderer is wired up to call it.
+                    b"StoryPreference" => {
+                        if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
+                            if let Ok(b) = v.parse::<bool>() {
+                                out.optical_margin_alignment = b;
+                            }
+                        }
+                        if let Some(v) = attr(&e, b"OpticalMarginSize") {
+                            if let Ok(f) = v.parse::<f32>() {
+                                out.optical_margin_size = f;
+                            }
+                        }
+                    }
+                    // <BulletChar BulletCharacterType="UnicodeWithFont"
+                    // BulletCharacterValue="187"/> appears inside
+                    // <Properties> of an open <ParagraphStyleRange> as
+                    // a local override of the cascaded bullet glyph.
+                    // Valid only at paragraph-level Properties (kind 2).
+                    b"BulletChar" if properties_kind == 2 => {
+                        if let Some(p) = current_paragraph.as_mut() {
+                            if let Some(v) = attr(&e, b"BulletCharacterValue") {
+                                if let Ok(cp) = v.parse::<u32>() {
+                                    p.bullet_character = Some(cp);
+                                }
+                            }
+                        }
+                    }
+                    // Line breaks inside a paragraph surface as <Br/> — treat
+                    // them as a logical newline in the current run.
+                    b"Br" => {
+                        if let Some(run) = current_run.as_mut() {
+                            run.text.push('\n');
+                        }
+                    }
+                    // <TextVariableInstance ResultText="..."
+                    // AssociatedTextVariable="TextVariable/<id>" />
+                    // appears inside <Content> as a placeholder for a
+                    // computed value (running header, file name,
+                    // chapter number, …). InDesign bakes the last
+                    // composed value into ResultText.
+                    //
+                    // W1.4: split the instance into its OWN run so the
+                    // renderer can re-resolve the value per variable
+                    // type at emit time (real page count, document name,
+                    // custom content, formatted dates) instead of always
+                    // trusting the stale baked string. The dedicated run
+                    // clones the open run's style, carries ResultText as
+                    // its `text`, and tags `text_variable` with the
+                    // associated id. Any text accumulated in the open run
+                    // before the instance is flushed first so byte order
+                    // is preserved; a fresh continuation run (same style,
+                    // empty text) stays open for content after it.
+                    b"TextVariableInstance" => {
+                        if let Some(run) = current_run.as_mut() {
+                            let result_text = attr(&e, b"ResultText").unwrap_or_default();
+                            // Flush text that preceded the instance as a
+                            // plain run.
+                            if !run.text.is_empty() {
+                                let mut flushed = run.clone();
+                                flushed.text_variable = None;
+                                if let Some(para) = current_paragraph.as_mut() {
+                                    para.runs.push(flushed);
+                                }
+                                run.text.clear();
+                            }
+                            // Emit the variable run (style cloned from the
+                            // open run; text = baked ResultText).
+                            let mut var_run = run.clone();
+                            var_run.text = result_text;
+                            var_run.text_variable = attr(&e, b"AssociatedTextVariable");
+                            if !var_run.text.is_empty() {
+                                if let Some(para) = current_paragraph.as_mut() {
+                                    para.runs.push(var_run);
+                                }
+                            }
+                            // `run` continues open with empty text for
+                            // any content following the instance.
+                        }
+                    }
+                    // Tab characters surface as <Tab/>; the layout
+                    // pass treats '\t' as wide whitespace until a
+                    // proper TabList-aware breaker lands.
+                    b"Tab" => {
+                        if let Some(run) = current_run.as_mut() {
+                            run.text.push('\t');
+                        }
+                    }
+                    // Self-closing <TabStop .../> inside the
+                    // paragraph's TabList.
+                    b"TabStop" => {
+                        if let Some(stop) = parse_tab_stop(&e) {
+                            if let Some(p) = current_paragraph.as_mut() {
+                                p.tab_list.push(stop);
+                            }
+                        }
+                    }
+                    // <Row Self="..." Name="..." SingleRowHeight="..."/>
+                    b"Row" => {
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.table.rows.push(TableRow {
                                 self_id: attr(&e, b"Self"),
                                 name: attr(&e, b"Name"),
-                                row_span: attr(&e, b"RowSpan")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(1),
-                                column_span: attr(&e, b"ColumnSpan")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(1),
-                                text_top_inset: attr(&e, b"TextTopInset")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0.0),
-                                text_left_inset: attr(&e, b"TextLeftInset")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0.0),
-                                text_bottom_inset: attr(&e, b"TextBottomInset")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0.0),
-                                text_right_inset: attr(&e, b"TextRightInset")
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0.0),
-                                applied_cell_style: attr(&e, b"AppliedCellStyle"),
-                                top_edge_stroke_color: attr(&e, b"TopEdgeStrokeColor"),
-                                top_edge_stroke_weight: attr(&e, b"TopEdgeStrokeWeight")
+                                single_row_height: attr(&e, b"SingleRowHeight")
                                     .and_then(|s| s.parse().ok()),
-                                top_edge_stroke_tint: parse_tint_attr(&e, b"TopEdgeStrokeTint"),
-                                bottom_edge_stroke_color: attr(&e, b"BottomEdgeStrokeColor"),
-                                bottom_edge_stroke_weight: attr(&e, b"BottomEdgeStrokeWeight")
+                                minimum_height: attr(&e, b"MinimumHeight")
                                     .and_then(|s| s.parse().ok()),
-                                bottom_edge_stroke_tint: parse_tint_attr(
-                                    &e,
-                                    b"BottomEdgeStrokeTint",
-                                ),
-                                left_edge_stroke_color: attr(&e, b"LeftEdgeStrokeColor"),
-                                left_edge_stroke_weight: attr(&e, b"LeftEdgeStrokeWeight")
+                                maximum_height: attr(&e, b"MaximumHeight")
                                     .and_then(|s| s.parse().ok()),
-                                left_edge_stroke_tint: parse_tint_attr(&e, b"LeftEdgeStrokeTint"),
-                                right_edge_stroke_color: attr(&e, b"RightEdgeStrokeColor"),
-                                right_edge_stroke_weight: attr(&e, b"RightEdgeStrokeWeight")
-                                    .and_then(|s| s.parse().ok()),
-                                right_edge_stroke_tint: parse_tint_attr(&e, b"RightEdgeStrokeTint"),
-                                fill_color: attr(&e, b"FillColor"),
-                                first_baseline_offset: attr(&e, b"FirstBaselineOffset"),
-                                minimum_first_baseline_offset: attr(
-                                    &e,
-                                    b"MinimumFirstBaselineOffset",
-                                )
-                                .and_then(|s| s.parse().ok()),
-                                diagonal: CellDiagonal {
-                                    left_line_drawn: attr(&e, b"LeftLineDrawn")
-                                        .and_then(|s| s.parse().ok()),
-                                    left_line_color: attr(&e, b"LeftLineStrokeColor"),
-                                    left_line_weight: attr(&e, b"LeftLineStrokeWeight")
-                                        .and_then(|s| s.parse().ok()),
-                                    left_line_tint: parse_tint_attr(&e, b"LeftLineStrokeTint"),
-                                    right_line_drawn: attr(&e, b"RightLineDrawn")
-                                        .and_then(|s| s.parse().ok()),
-                                    right_line_color: attr(&e, b"RightLineStrokeColor"),
-                                    right_line_weight: attr(&e, b"RightLineStrokeWeight")
-                                        .and_then(|s| s.parse().ok()),
-                                    right_line_tint: parse_tint_attr(&e, b"RightLineStrokeTint"),
-                                    diagonal_in_front: attr(&e, b"DiagonalLineInFront")
-                                        .and_then(|s| s.parse().ok()),
-                                },
-                                rotation_angle: attr(&e, b"RotationAngle")
-                                    .and_then(|s| s.parse().ok()),
-                                vertical_justification: attr(&e, b"VerticalJustification"),
-                                paragraphs: Vec::new(),
                             });
                         }
-                        b"TabStop" => {
-                            // <TabStop Position="..." Alignment="..."/>
-                            // appears nested inside <TabList><ListItem>.
-                            // Append to the open paragraph's list.
-                            if let Some(stop) = parse_tab_stop(&e) {
-                                if let Some(p) = current_paragraph.as_mut() {
-                                    p.tab_list.push(stop);
-                                }
-                            }
-                        }
-                        b"CharacterStyleRange" => {
-                            current_run = Some(CharacterRun {
-                                character_style: attr(&e, b"AppliedCharacterStyle"),
-                                font: attr(&e, b"AppliedFont"),
-                                font_style: attr(&e, b"FontStyle"),
-                                point_size: attr(&e, b"PointSize").and_then(|s| s.parse().ok()),
-                                fill_color: attr(&e, b"FillColor"),
-                                fill_tint: parse_tint_attr(&e, b"FillTint"),
-                                capitalization: attr(&e, b"Capitalization"),
-                                baseline_shift: attr(&e, b"BaselineShift")
+                    }
+                    // <Column Self="..." Name="..." SingleColumnWidth="..."/>
+                    b"Column" => {
+                        if let Some(ctx) = table_stack.last_mut() {
+                            ctx.table.columns.push(TableColumn {
+                                self_id: attr(&e, b"Self"),
+                                name: attr(&e, b"Name"),
+                                single_column_width: attr(&e, b"SingleColumnWidth")
                                     .and_then(|s| s.parse().ok()),
-                                horizontal_scale: attr(&e, b"HorizontalScale")
-                                    .and_then(|s| s.parse().ok()),
-                                vertical_scale: attr(&e, b"VerticalScale")
-                                    .and_then(|s| s.parse().ok()),
-                                skew: attr(&e, b"Skew").and_then(|s| s.parse().ok()),
-                                position: attr(&e, b"Position"),
-                                tracking: attr(&e, b"Tracking").and_then(|s| s.parse().ok()),
-                                underline: attr(&e, b"Underline")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                strikethru: attr(&e, b"StrikeThru")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                leading: attr(&e, b"Leading").and_then(|s| s.parse::<f32>().ok()),
-                                ruby_flag: attr(&e, b"RubyFlag")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                ruby_type: attr(&e, b"RubyType"),
-                                ruby_string: attr(&e, b"RubyString"),
-                                kenten_kind: attr(&e, b"KentenKind"),
-                                kenten_character: attr(&e, b"KentenCharacter"),
-                                kenten_font_size: attr(&e, b"KentenFontSize")
-                                    .and_then(|s| s.parse().ok()),
-                                overprint_fill: attr(&e, b"OverprintFill")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                overprint_stroke: attr(&e, b"OverprintStroke")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                // `Swatch/None` is IDML's literal for
-                                // "no stroke"; treat it as a missing
-                                // colour so the cascade fall-through can
-                                // see "no run-level override" rather
-                                // than "Swatch/None override".
-                                stroke_color: attr(&e, b"StrokeColor").and_then(|s| {
-                                    match s.as_str() {
-                                        "Swatch/None" | "n" | "" => None,
-                                        _ => Some(s),
-                                    }
-                                }),
-                                stroke_weight: attr(&e, b"StrokeWeight")
-                                    .and_then(|s| s.parse::<f32>().ok()),
-                                ligatures_on: attr(&e, b"Ligatures")
-                                    .and_then(|s| s.parse::<bool>().ok()),
-                                kerning_method: attr(&e, b"KerningMethod"),
-                                applied_language: attr(&e, b"AppliedLanguage"),
-                                // OpenType feature tags have no single IDML
-                                // attribute; left None at parse time and
-                                // owned by the mutate API as a free-form
-                                // authoring string. The discrete parsed
-                                // attributes land in `otf` below.
-                                otf_features: None,
-                                otf: parse_otf_features(&e),
-                                applied_conditions: attr(&e, b"AppliedConditions")
-                                    .map(|s| s.split_whitespace().map(|t| t.to_string()).collect())
-                                    .unwrap_or_default(),
-                                // Inherit the enclosing hyperlink/xref source
-                                // span (if any) so the run carries the source
-                                // id the designmap's <Hyperlink> references.
-                                hyperlink_source: source_stack.last().cloned(),
-                                text_variable: None,
-                                placeholder: None,
-                                text: String::new(),
                             });
                         }
-                        b"Content" => {
-                            in_content = true;
-                        }
-                        b"Properties" => {
-                            // Disambiguate by which container is currently
-                            // open. A Properties child of CharacterStyleRange
-                            // takes precedence (current_run is open while we
-                            // walk the run's children). The paragraph-level
-                            // form fires when we're between runs but still
-                            // inside an open ParagraphStyleRange.
-                            properties_kind = if current_run.is_some() {
-                                1
-                            } else if current_paragraph.is_some() {
-                                2
-                            } else {
-                                0
-                            };
-                        }
-                        other if properties_kind != 0 => {
-                            // Capture the next Text events as the value of
-                            // this typed child element. The `type` attribute
-                            // (`string` / `unit` / `enumeration`) is
-                            // informational; we infer the destination field
-                            // from the element name on End.
-                            properties_field = Some(other.to_vec());
-                            properties_text.clear();
-                        }
-                        _ => {}
-                    } // close inner `match name { ... }`
-                }
-                Event::End(e) => {
-                    let n = e.name();
-                    let name = n.as_ref();
-                    // Anchored-frame close: pop depth; when an End
-                    // for a frame element fires we pop the top of
-                    // the anchored stack and attach it to its parent
-                    // (Group child) or the host paragraph (outermost).
-                    if anchored_depth > 0 {
-                        anchored_depth -= 1;
-                        if anchored_kind_from_name(name).is_some() {
-                            finalise_anchored_top(
-                                &mut anchored_stack,
-                                &mut bounds_from_path,
-                                &mut current_paragraph,
-                            );
-                        }
-                        buf.clear();
-                        continue;
                     }
-                    if suppress_depth > 0 {
-                        suppress_depth -= 1;
-                        buf.clear();
-                        continue;
-                    }
-                    match name {
-                        b"Content" => {
-                            in_content = false;
-                        }
-                        b"Properties" => {
-                            properties_kind = 0;
-                            properties_field = None;
-                            properties_text.clear();
-                        }
-                        name if properties_kind != 0
-                            && properties_field.as_deref() == Some(name) =>
-                        {
-                            let value = properties_text.trim().to_string();
-                            match (properties_kind, name) {
-                                // CharacterStyleRange Properties.
-                                (1, b"AppliedFont") => {
-                                    if let Some(run) = current_run.as_mut() {
-                                        if !value.is_empty() {
-                                            run.font = Some(value);
-                                        }
-                                    }
-                                }
-                                (1, b"FontStyle") => {
-                                    if let Some(run) = current_run.as_mut() {
-                                        if !value.is_empty() {
-                                            run.font_style = Some(value);
-                                        }
-                                    }
-                                }
-                                (1, b"Leading") => {
-                                    if let Some(run) = current_run.as_mut() {
-                                        if let Ok(v) = value.parse::<f32>() {
-                                            run.leading = Some(v);
-                                        }
-                                    }
-                                }
-                                // ParagraphStyleRange Properties: no fields
-                                // surfaced on Paragraph yet; the typed
-                                // children land in followup parser slices.
-                                _ => {}
-                            }
-                            properties_field = None;
-                            properties_text.clear();
-                        }
-                        b"CharacterStyleRange" => {
-                            if let (Some(run), Some(para)) =
-                                (current_run.take(), current_paragraph.as_mut())
-                            {
-                                if !run.text.is_empty() {
-                                    para.runs.push(run);
-                                }
-                            }
-                        }
-                        // W1.4 — close the hyperlink / cross-reference
-                        // source span so following runs stop inheriting it.
-                        b"HyperlinkTextSource" | b"CrossReferenceSource" => {
-                            source_stack.pop();
-                        }
-                        b"ParagraphStyleRange" => {
-                            if let Some(para) = current_paragraph.take() {
-                                // Keep paragraphs that have either a
-                                // shaped run or a hosted table; drop
-                                // truly empty ones.
-                                if !para.runs.is_empty() || para.table.is_some() {
-                                    // Route by parser nesting: footnote
-                                    // wins over cell wins over story root.
-                                    // The footnote check has to come
-                                    // first because a footnote anchored
-                                    // inside a cell paragraph still wants
-                                    // its body paragraphs to live on the
-                                    // footnote, not on the cell.
-                                    if let Some(ctx) = footnote_stack.last_mut() {
-                                        ctx.footnote.paragraphs.push(para);
-                                    } else if let Some(cell) = current_cell.as_mut() {
-                                        cell.paragraphs.push(para);
-                                    } else {
-                                        out.paragraphs.push(para);
-                                    }
-                                }
-                            }
-                        }
-                        b"Cell" => {
-                            if let (Some(cell), Some(ctx)) =
-                                (current_cell.take(), table_stack.last_mut())
-                            {
-                                ctx.table.cells.push(cell);
-                            }
-                            // Restore the outer paragraph/run state from
-                            // the active table frame so the next Cell or
-                            // the closing Table sees the host paragraph
-                            // again. Nested tables: the inner cell's
-                            // close restores the inner table's outer
-                            // state (which is the inner-table's host
-                            // paragraph, i.e. a paragraph inside the
-                            // outer table's cell).
-                            if let Some(ctx) = table_stack.last_mut() {
-                                current_paragraph = ctx.outer_paragraph.take();
-                                current_run = ctx.outer_run.take();
-                            }
-                        }
-                        b"Table" => {
-                            // Pop the active table frame and attach its
-                            // table to the current host paragraph. For
-                            // nested tables, the host paragraph is one of
-                            // the OUTER table's cell paragraphs (which
-                            // were restored by the inner table's last
-                            // `</Cell>` close — both sat on the inner
-                            // frame's `outer_paragraph` slot). Restore the
-                            // outer `current_cell` so the outer cell
-                            // continues to accept further content.
-                            if let Some(ctx) = table_stack.pop() {
-                                if let Some(p) = current_paragraph.as_mut() {
-                                    p.table = Some(ctx.table);
-                                }
-                                if ctx.outer_cell.is_some() {
-                                    current_cell = ctx.outer_cell;
-                                }
-                            }
-                        }
-                        b"Footnote" => {
-                            // Pop the active footnote frame, restore the
-                            // host-paragraph / host-run state, then
-                            // attach the captured footnote to the host
-                            // paragraph. The host paragraph keeps
-                            // accumulating runs after this point.
-                            if let Some(ctx) = footnote_stack.pop() {
-                                current_paragraph = ctx.outer_paragraph;
-                                current_run = ctx.outer_run;
-                                if let Some(p) = current_paragraph.as_mut() {
-                                    p.footnotes.push(ctx.footnote);
-                                }
-                            }
-                        }
-                        _ => {}
-                    } // close inner `match name { ... }`
-                }
-                Event::Empty(e) => {
-                    let n = e.name();
-                    let name = n.as_ref();
-                    // Anchored-frame self-closing forms. These never
-                    // visit the End arm so attribute capture must
-                    // happen inline; nested self-closing frames push
-                    // and immediately finalise.
-                    if anchored_depth > 0 {
-                        if let Some(kind) = anchored_kind_from_name(name) {
-                            // Self-closing nested frame: push, then
-                            // finalise so the parent picks it up.
-                            let frame = make_anchored_frame(&e, kind);
-                            bounds_from_path.push(frame.bounds.is_none());
-                            anchored_stack.push(frame);
-                            finalise_anchored_top(
-                                &mut anchored_stack,
-                                &mut bounds_from_path,
-                                &mut current_paragraph,
-                            );
-                        } else if name == b"AnchoredObjectSetting" {
-                            if let Some(p) = anchored_stack.last_mut() {
-                                p.setting = Some(parse_anchored_object_setting(&e));
-                            }
-                        } else if name == b"Image" || name == b"Link" {
-                            anchored_capture_image_attrs(&e, &mut anchored_stack);
-                        } else if name == b"PathPointType" {
-                            anchored_extend_path_bounds(
-                                &e,
-                                &mut anchored_stack,
-                                &mut bounds_from_path,
-                            );
-                        }
-                        // No depth bump — Empty events have no
-                        // matching End.
-                        buf.clear();
-                        continue;
-                    }
-                    // Self-closing suppressed wrappers carry no flow
-                    // content; drop them. Inline glyph events
-                    // (`<Br/>` / `<Tab/>` / `<TextVariableInstance/>`)
-                    // nested inside an open suppressed subtree are
-                    // also dropped to keep the wrapper truly silent.
-                    if suppress_depth > 0 || matches!(name, b"HiddenText" | b"Note") {
-                        buf.clear();
-                        continue;
-                    }
-                    // Phase 5 — `<PageReference>` / `<IndexEntry>` /
-                    // `<Index>` self-closing markers. Capture the
-                    // indexed term onto the current paragraph so the
-                    // index-resolution pass can collect entries.
-                    // IDML serialises both element-only (`<Index ...>`
-                    // wrapping) and self-closing (`<IndexEntry ...>`
-                    // marker) forms; both carry the same attributes.
-                    if matches!(name, b"PageReference" | b"IndexEntry" | b"Index") {
-                        if let Some(marker) = parse_index_marker(&e) {
-                            if let Some(p) = current_paragraph.as_mut() {
-                                p.index_markers.push(marker);
-                            }
-                        }
-                        buf.clear();
-                        continue;
-                    }
-                    if current_run.is_some() {
-                        if let Some(kind) = anchored_kind_from_name(name) {
-                            // Self-closing outermost anchored frame:
-                            // push + finalise so it lands on the
-                            // host paragraph immediately.
-                            let frame = make_anchored_frame(&e, kind);
-                            bounds_from_path.push(frame.bounds.is_none());
-                            anchored_stack.push(frame);
-                            finalise_anchored_top(
-                                &mut anchored_stack,
-                                &mut bounds_from_path,
-                                &mut current_paragraph,
-                            );
-                            buf.clear();
-                            continue;
-                        }
-                    }
-                    match name {
-                        // <StoryPreference OpticalMarginAlignment="true"
-                        // OpticalMarginSize="12" .../> appears once per
-                        // story near the top. Drives hanging punctuation
-                        // (`apply_optical_margin` in paged-text) when the
-                        // renderer is wired up to call it.
-                        b"StoryPreference" => {
-                            if let Some(v) = attr(&e, b"OpticalMarginAlignment") {
-                                if let Ok(b) = v.parse::<bool>() {
-                                    out.optical_margin_alignment = b;
-                                }
-                            }
-                            if let Some(v) = attr(&e, b"OpticalMarginSize") {
-                                if let Ok(f) = v.parse::<f32>() {
-                                    out.optical_margin_size = f;
-                                }
-                            }
-                        }
-                        // <BulletChar BulletCharacterType="UnicodeWithFont"
-                        // BulletCharacterValue="187"/> appears inside
-                        // <Properties> of an open <ParagraphStyleRange> as
-                        // a local override of the cascaded bullet glyph.
-                        // Valid only at paragraph-level Properties (kind 2).
-                        b"BulletChar" if properties_kind == 2 => {
-                            if let Some(p) = current_paragraph.as_mut() {
-                                if let Some(v) = attr(&e, b"BulletCharacterValue") {
-                                    if let Ok(cp) = v.parse::<u32>() {
-                                        p.bullet_character = Some(cp);
-                                    }
-                                }
-                            }
-                        }
-                        // Line breaks inside a paragraph surface as <Br/> — treat
-                        // them as a logical newline in the current run.
-                        b"Br" => {
-                            if let Some(run) = current_run.as_mut() {
+                    _ => {}
+                } // close inner `match name { ... }`
+            }
+            Event::Text(t) => {
+                if in_content {
+                    if let Some(run) = current_run.as_mut() {
+                        // Normalise Unicode line/paragraph
+                        // separators (U+2028, U+2029) emitted by
+                        // InDesign for "Forced Line Break"
+                        // (Shift+Enter) into `\n`. The downstream
+                        // composer splits paragraphs on `\n` and
+                        // treats consecutive newlines as empty
+                        // sub-paragraphs that advance y_cursor by
+                        // one line — which is how InDesign visibly
+                        // spaces blocks separated by Shift+Enter.
+                        // Without this normalisation the shaper
+                        // filters `\u{2028}` as a control glyph
+                        // and the visual gap collapses.
+                        let raw = t
+                            .xml_content(quick_xml::XmlVersion::Implicit1_0)
+                            .unwrap_or_default();
+                        for ch in raw.chars() {
+                            if matches!(ch, '\u{2028}' | '\u{2029}') {
                                 run.text.push('\n');
+                            } else {
+                                run.text.push(ch);
                             }
                         }
-                        // <TextVariableInstance ResultText="..."
-                        // AssociatedTextVariable="TextVariable/<id>" />
-                        // appears inside <Content> as a placeholder for a
-                        // computed value (running header, file name,
-                        // chapter number, …). InDesign bakes the last
-                        // composed value into ResultText.
-                        //
-                        // W1.4: split the instance into its OWN run so the
-                        // renderer can re-resolve the value per variable
-                        // type at emit time (real page count, document name,
-                        // custom content, formatted dates) instead of always
-                        // trusting the stale baked string. The dedicated run
-                        // clones the open run's style, carries ResultText as
-                        // its `text`, and tags `text_variable` with the
-                        // associated id. Any text accumulated in the open run
-                        // before the instance is flushed first so byte order
-                        // is preserved; a fresh continuation run (same style,
-                        // empty text) stays open for content after it.
-                        b"TextVariableInstance" => {
-                            if let Some(run) = current_run.as_mut() {
-                                let result_text = attr(&e, b"ResultText").unwrap_or_default();
-                                // Flush text that preceded the instance as a
-                                // plain run.
-                                if !run.text.is_empty() {
-                                    let mut flushed = run.clone();
-                                    flushed.text_variable = None;
-                                    if let Some(para) = current_paragraph.as_mut() {
-                                        para.runs.push(flushed);
-                                    }
-                                    run.text.clear();
-                                }
-                                // Emit the variable run (style cloned from the
-                                // open run; text = baked ResultText).
-                                let mut var_run = run.clone();
-                                var_run.text = result_text;
-                                var_run.text_variable = attr(&e, b"AssociatedTextVariable");
-                                if !var_run.text.is_empty() {
-                                    if let Some(para) = current_paragraph.as_mut() {
-                                        para.runs.push(var_run);
-                                    }
-                                }
-                                // `run` continues open with empty text for
-                                // any content following the instance.
-                            }
-                        }
-                        // Tab characters surface as <Tab/>; the layout
-                        // pass treats '\t' as wide whitespace until a
-                        // proper TabList-aware breaker lands.
-                        b"Tab" => {
-                            if let Some(run) = current_run.as_mut() {
-                                run.text.push('\t');
-                            }
-                        }
-                        // Self-closing <TabStop .../> inside the
-                        // paragraph's TabList.
-                        b"TabStop" => {
-                            if let Some(stop) = parse_tab_stop(&e) {
-                                if let Some(p) = current_paragraph.as_mut() {
-                                    p.tab_list.push(stop);
-                                }
-                            }
-                        }
-                        // <Row Self="..." Name="..." SingleRowHeight="..."/>
-                        b"Row" => {
-                            if let Some(ctx) = table_stack.last_mut() {
-                                ctx.table.rows.push(TableRow {
-                                    self_id: attr(&e, b"Self"),
-                                    name: attr(&e, b"Name"),
-                                    single_row_height: attr(&e, b"SingleRowHeight")
-                                        .and_then(|s| s.parse().ok()),
-                                    minimum_height: attr(&e, b"MinimumHeight")
-                                        .and_then(|s| s.parse().ok()),
-                                    maximum_height: attr(&e, b"MaximumHeight")
-                                        .and_then(|s| s.parse().ok()),
-                                });
-                            }
-                        }
-                        // <Column Self="..." Name="..." SingleColumnWidth="..."/>
-                        b"Column" => {
-                            if let Some(ctx) = table_stack.last_mut() {
-                                ctx.table.columns.push(TableColumn {
-                                    self_id: attr(&e, b"Self"),
-                                    name: attr(&e, b"Name"),
-                                    single_column_width: attr(&e, b"SingleColumnWidth")
-                                        .and_then(|s| s.parse().ok()),
-                                });
-                            }
-                        }
-                        _ => {}
-                    } // close inner `match name { ... }`
+                    }
+                } else if properties_field.is_some() {
+                    properties_text.push_str(
+                        &t.xml_content(quick_xml::XmlVersion::Implicit1_0)
+                            .unwrap_or_default(),
+                    );
                 }
-                Event::Text(t) => {
+            }
+            Event::GeneralRef(r) => {
+                // quick-xml ≥0.40 emits entity references as their
+                // own events, SPLITTING the surrounding text — so
+                // `wizard&apos;s` arrives as Text("wizard"),
+                // GeneralRef(apos), Text("s"). Dropping them here
+                // silently lost the entity characters from run
+                // text (apostrophes never parsed → never rendered,
+                // never round-tripped). Resolve the predefined
+                // five + numeric references and append.
+                if in_content || properties_field.is_some() {
+                    let name = String::from_utf8_lossy(r.as_ref());
+                    let resolved = quick_xml::escape::unescape(&format!("&{name};"))
+                        .map(|c| c.into_owned())
+                        .unwrap_or_default();
                     if in_content {
                         if let Some(run) = current_run.as_mut() {
-                            // Normalise Unicode line/paragraph
-                            // separators (U+2028, U+2029) emitted by
-                            // InDesign for "Forced Line Break"
-                            // (Shift+Enter) into `\n`. The downstream
-                            // composer splits paragraphs on `\n` and
-                            // treats consecutive newlines as empty
-                            // sub-paragraphs that advance y_cursor by
-                            // one line — which is how InDesign visibly
-                            // spaces blocks separated by Shift+Enter.
-                            // Without this normalisation the shaper
-                            // filters `\u{2028}` as a control glyph
-                            // and the visual gap collapses.
-                            let raw = t
-                                .xml_content(quick_xml::XmlVersion::Implicit1_0)
-                                .unwrap_or_default();
-                            for ch in raw.chars() {
+                            for ch in resolved.chars() {
                                 if matches!(ch, '\u{2028}' | '\u{2029}') {
                                     run.text.push('\n');
                                 } else {
@@ -1191,69 +1163,37 @@ impl Story {
                                 }
                             }
                         }
-                    } else if properties_field.is_some() {
-                        properties_text.push_str(
-                            &t.xml_content(quick_xml::XmlVersion::Implicit1_0)
-                                .unwrap_or_default(),
-                        );
+                    } else {
+                        properties_text.push_str(&resolved);
                     }
                 }
-                Event::GeneralRef(r) => {
-                    // quick-xml ≥0.40 emits entity references as their
-                    // own events, SPLITTING the surrounding text — so
-                    // `wizard&apos;s` arrives as Text("wizard"),
-                    // GeneralRef(apos), Text("s"). Dropping them here
-                    // silently lost the entity characters from run
-                    // text (apostrophes never parsed → never rendered,
-                    // never round-tripped). Resolve the predefined
-                    // five + numeric references and append.
-                    if in_content || properties_field.is_some() {
-                        let name = String::from_utf8_lossy(r.as_ref());
-                        let resolved = quick_xml::escape::unescape(&format!("&{name};"))
-                            .map(|c| c.into_owned())
-                            .unwrap_or_default();
-                        if in_content {
-                            if let Some(run) = current_run.as_mut() {
-                                for ch in resolved.chars() {
-                                    if matches!(ch, '\u{2028}' | '\u{2029}') {
-                                        run.text.push('\n');
-                                    } else {
-                                        run.text.push(ch);
-                                    }
-                                }
-                            }
-                        } else {
-                            properties_text.push_str(&resolved);
-                        }
-                    }
-                }
-                Event::PI(pi) => {
-                    // InDesign serialises auto-page-number markers
-                    // inside <Content> as `<?ACE 18?>` processing
-                    // instructions. Map them to private-use chars
-                    // so the renderer can substitute the actual
-                    // page number per emission. ACE 18 is the
-                    // current-page-number marker; ACE 19 is the
-                    // next-page-number marker.
-                    if in_content {
-                        if let Some(run) = current_run.as_mut() {
-                            let body = pi.as_ref();
-                            let body_str = std::str::from_utf8(body).unwrap_or("");
-                            if body_str.trim_start().starts_with("ACE 18") {
-                                run.text.push(AUTO_PAGE_NUMBER_MARKER);
-                            } else if body_str.trim_start().starts_with("ACE 19") {
-                                run.text.push(NEXT_PAGE_NUMBER_MARKER);
-                            }
-                        }
-                    }
-                }
-                Event::Eof => break,
-                _ => {}
             }
-            buf.clear();
+            Event::PI(pi) => {
+                // InDesign serialises auto-page-number markers
+                // inside <Content> as `<?ACE 18?>` processing
+                // instructions. Map them to private-use chars
+                // so the renderer can substitute the actual
+                // page number per emission. ACE 18 is the
+                // current-page-number marker; ACE 19 is the
+                // next-page-number marker.
+                if in_content {
+                    if let Some(run) = current_run.as_mut() {
+                        let body = pi.as_ref();
+                        let body_str = std::str::from_utf8(body).unwrap_or("");
+                        if body_str.trim_start().starts_with("ACE 18") {
+                            run.text.push(AUTO_PAGE_NUMBER_MARKER);
+                        } else if body_str.trim_start().starts_with("ACE 19") {
+                            run.text.push(NEXT_PAGE_NUMBER_MARKER);
+                        }
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
         }
-        Ok(out)
+        buf.clear();
     }
+    Ok(out)
 }
 
 /// Parse a "y1 x1 y2 x2" `GeometricBounds` attribute. Local copy
@@ -1457,7 +1397,7 @@ mod tests {
 
     #[test]
     fn extracts_paragraphs_and_runs() {
-        let s = Story::parse(SAMPLE).unwrap();
+        let s = parse_story(SAMPLE).unwrap();
         assert_eq!(s.paragraphs.len(), 2);
 
         let p1 = &s.paragraphs[0];
@@ -1488,7 +1428,7 @@ mod tests {
             <CharacterStyleRange><Content> now.</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let runs = &s.paragraphs[0].runs;
         assert_eq!(runs.len(), 3);
         assert_eq!(runs[0].hyperlink_source, None);
@@ -1514,7 +1454,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let runs = &s.paragraphs[0].runs;
         // "Season: " | variable run "Spring 2026" | "."
         assert_eq!(runs.len(), 3);
@@ -1536,7 +1476,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs[0].runs.len(), 1);
         assert_eq!(s.paragraphs[0].runs[0].text, "visible");
     }
@@ -1551,7 +1491,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs[0].runs.len(), 1);
         assert_eq!(s.paragraphs[0].runs[0].text, "visible");
     }
@@ -1567,7 +1507,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs[0].runs[0].text, "line one\nline two");
     }
 
@@ -1582,7 +1522,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs[0].runs[0].text, "name\tvalue");
     }
 
@@ -1601,7 +1541,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let stops = &s.paragraphs[0].tab_list;
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[0].position, 36.0);
@@ -1632,7 +1572,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml.as_bytes()).unwrap();
+        let s = parse_story(xml.as_bytes()).unwrap();
         let stops = &s.paragraphs[0].tab_list;
         assert_eq!(stops[0].leader.as_deref(), Some(". "));
         assert_eq!(stops[1].leader.as_deref(), Some("-"));
@@ -1690,7 +1630,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs.len(), 1, "table-host paragraph kept");
         let table = s.paragraphs[0]
             .table
@@ -1743,7 +1683,7 @@ mod tests {
             </CharacterStyleRange></ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let table = s.paragraphs[0].table.as_ref().unwrap();
         let cell00 = table
             .cells
@@ -1833,7 +1773,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let table = s.paragraphs[0]
             .table
             .as_ref()
@@ -1908,7 +1848,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         // Cell content stays nested in the cell — story-level
         // paragraphs should only carry the table-host paragraph,
         // never the cell's own paragraphs.
@@ -1963,7 +1903,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let table = s.paragraphs[0].table.as_ref().unwrap();
         assert_eq!(table.repeating_header, Some(false));
         assert_eq!(table.repeating_footer, Some(true));
@@ -1985,7 +1925,7 @@ mod tests {
             <CharacterStyleRange><Content>No drop cap here.</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs.len(), 2);
         assert_eq!(s.paragraphs[0].drop_cap_characters, 1);
         assert_eq!(s.paragraphs[0].drop_cap_lines, 3);
@@ -2021,7 +1961,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let af = &s.paragraphs[0].anchored_frames[0];
         assert_eq!(af.fill_color.as_deref(), Some("Color/Paper"));
         assert_eq!(af.stroke_color.as_deref(), Some("Color/Black"));
@@ -2075,7 +2015,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let af = &s.paragraphs[0].anchored_frames[0];
         let b = af.bounds.expect("bounds derived from path");
         assert_eq!(b.left, 0.0);
@@ -2110,7 +2050,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let b = s.paragraphs[0].anchored_frames[0]
             .bounds
             .expect("GeometricBounds attribute");
@@ -2138,7 +2078,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let af = &s.paragraphs[0].anchored_frames[0];
         assert_eq!(af.frame_kind, AnchoredFrameKind::Rectangle);
         assert_eq!(af.image_link.as_deref(), Some("file:///tmp/photo.jpg"));
@@ -2171,7 +2111,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let g = &s.paragraphs[0].anchored_frames[0];
         assert_eq!(g.frame_kind, AnchoredFrameKind::Group);
         assert_eq!(g.children.len(), 2, "group exposes its child frames");
@@ -2213,7 +2153,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs.len(), 1);
         let p = &s.paragraphs[0];
         assert_eq!(p.runs.len(), 1, "the two Content blocks merged");
@@ -2244,7 +2184,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let p = &s.paragraphs[0];
         assert_eq!(p.anchored_frames.len(), 1);
         assert_eq!(
@@ -2270,7 +2210,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert!(s.optical_margin_alignment);
         assert_eq!(s.optical_margin_size, 12.0);
         assert_eq!(s.paragraphs.len(), 1);
@@ -2283,7 +2223,7 @@ mod tests {
             <CharacterStyleRange><Content>Hi</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert!(!s.optical_margin_alignment);
         assert_eq!(s.optical_margin_size, 0.0);
     }
@@ -2301,7 +2241,7 @@ mod tests {
             <CharacterStyleRange><Content>X</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert!(s.optical_margin_alignment);
         assert_eq!(s.optical_margin_size, 9.0);
     }
@@ -2341,7 +2281,7 @@ mod tests {
             <CharacterStyleRange><Content>Y</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(
             s.paragraphs[0].justification,
             Some(Justification::CenterAlign)
@@ -2359,7 +2299,7 @@ mod tests {
             <CharacterStyleRange><Content>CJK body</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(
             s.story_direction,
             Some(StoryDirection::VerticalWritingDirection)
@@ -2373,7 +2313,7 @@ mod tests {
             <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(
             s.story_direction,
             Some(StoryDirection::HorizontalWritingDirection)
@@ -2387,7 +2327,7 @@ mod tests {
             <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.story_direction, None);
     }
 
@@ -2402,7 +2342,7 @@ mod tests {
             <CharacterStyleRange><Content>body</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let p = &s.paragraphs[0];
         assert_eq!(
             p.kinsoku_set.as_deref(),
@@ -2426,7 +2366,7 @@ mod tests {
             <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let p = &s.paragraphs[0];
         assert!(p.kinsoku_set.is_none());
         assert!(p.kinsoku_type.is_none());
@@ -2454,7 +2394,7 @@ mod tests {
             <CharacterStyleRange><Content>body</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let p = &s.paragraphs[0];
         assert_eq!(p.left_indent, Some(18.0));
         assert_eq!(p.right_indent, Some(9.0));
@@ -2477,7 +2417,7 @@ mod tests {
             <CharacterStyleRange><Content>x</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let p = &s.paragraphs[0];
         assert!(p.left_indent.is_none());
         assert!(p.right_indent.is_none());
@@ -2504,7 +2444,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let r = &s.paragraphs[0].runs[0];
         assert_eq!(r.ruby_flag, Some(true));
         assert_eq!(r.ruby_type.as_deref(), Some("PerCharacter"));
@@ -2520,7 +2460,7 @@ mod tests {
             <CharacterStyleRange><Content>plain</Content></CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let r = &s.paragraphs[0].runs[0];
         assert!(r.ruby_flag.is_none());
         assert!(r.ruby_type.is_none());
@@ -2567,7 +2507,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let outer = s.paragraphs[0]
             .table
             .as_ref()
@@ -2611,7 +2551,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let para = &s.paragraphs[0];
         assert_eq!(para.index_markers.len(), 2);
         // First marker: explicit topic name.
@@ -2649,7 +2589,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let host = &s.paragraphs[0];
 
         // Host runs preserve their content; the footnote body does
@@ -2686,7 +2626,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         assert_eq!(s.paragraphs[0].overprint_fill, Some(true));
         assert_eq!(s.paragraphs[0].overprint_stroke, Some(false));
         assert_eq!(s.paragraphs[0].runs[0].overprint_fill, Some(true));
@@ -2727,7 +2667,7 @@ mod tests {
             </ParagraphStyleRange>
           </Story>
         </idPkg:Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let table = s.paragraphs[0].table.as_ref().unwrap();
         let c00 = &table.cells[0].diagonal;
         assert_eq!(c00.left_line_drawn, Some(true));
@@ -2761,7 +2701,7 @@ mod tests {
             </CharacterStyleRange>
           </ParagraphStyleRange>
         </Story>"#;
-        let s = Story::parse(xml).unwrap();
+        let s = parse_story(xml).unwrap();
         let otf = &s.paragraphs[0].runs[0].otf;
         assert_eq!(otf.fraction, Some(true));
         assert_eq!(otf.ordinal, Some(true));

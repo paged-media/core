@@ -28,7 +28,7 @@ fn main() {
         if !name.starts_with("Stories/") || !name.ends_with(".xml") {
             continue;
         }
-        let story = paged_parse::Story::parse(raw).unwrap();
+        let story = paged_parse::parse_story(raw).unwrap();
         for p in &story.paragraphs {
             for r in &p.runs {
                 if r.text.contains(paged_parse::AUTO_PAGE_NUMBER_MARKER)

@@ -54,9 +54,9 @@ pub use spread::{
     SatinParams, Spread, TextFrame, TextPath, TextWrap, TextWrapMode, VerticalJustification,
 };
 pub use story::{
-    AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal, CharacterRun,
-    Justification, OtfFeatures, Paragraph, PlaceholderField, Story, TabStop, Table, TableBorder,
-    TableCell, TableColumn, TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER,
+    parse_story, AnchoredFrame, AnchoredFrameKind, AnchoredObjectSetting, CellDiagonal,
+    CharacterRun, Justification, OtfFeatures, Paragraph, PlaceholderField, Story, TabStop, Table,
+    TableBorder, TableCell, TableColumn, TableLineStrokes, TableRow, AUTO_PAGE_NUMBER_MARKER,
     NEXT_PAGE_NUMBER_MARKER,
 };
 pub use styles::{
