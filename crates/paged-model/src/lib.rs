@@ -4664,3 +4664,102 @@ impl StyleSheet {
         acc
     }
 }
+
+// ---------------------------------------------------------------------------
+// Spread — a parsed spread / master-spread (pages + page items + groups). The
+// XML parsing (`parse_spread` + the private frame-builder state) stays in the
+// parser; the value struct lives in the model (N6).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Spread {
+    pub self_id: Option<String>,
+    /// `ItemTransform` on the `<Spread>` (or `<MasterSpread>`)
+    /// element. Per the IDML spec §10.3.3, this maps the spread's
+    /// inner coords into the document's pasteboard. InDesign limits
+    /// this to translation + 0/90/180/270 rotation. W1.9: the
+    /// renderer honours its rotation/scale (linear part) per page via
+    /// `BuiltPage::spread_transform` — composed into every page-item
+    /// emission and inverted by the canvas hit-tester so selection
+    /// stays in lockstep. A pure translation cancels against the
+    /// spread-inner page origin, so only the linear part has effect.
+    /// `None` ⇒ identity.
+    pub item_transform: Option<[f32; 6]>,
+    pub pages: Vec<Page>,
+    pub text_frames: Vec<TextFrame>,
+    /// Axis-aligned rectangles used as pure vector frames (no parent
+    /// story). A full Rectangle path can have corner radii etc. — we
+    /// treat it as a rect; higher-fidelity paths come with §10.1.
+    pub rectangles: Vec<Rectangle>,
+    /// Ellipses (`<Oval>`). Treated as the inscribed ellipse of the
+    /// `GeometricBounds` rect.
+    pub ovals: Vec<Oval>,
+    /// Straight lines (`<GraphicLine>`). The `GeometricBounds`
+    /// describe the line's bounding box; its endpoints are the
+    /// rect's top-left and bottom-right corners.
+    pub graphic_lines: Vec<GraphicLine>,
+    /// `<Polygon>` items. Real-world IDMLs use these for charts,
+    /// rosettes, and any non-rectangular flat shape. Today the
+    /// renderer treats them as their axis-aligned bounding box —
+    /// faithful only for axis-aligned simple polygons; complex
+    /// shapes (donut charts etc.) come with full path rasterisation
+    /// later in the roadmap.
+    pub polygons: Vec<Polygon>,
+    /// Number of text frames skipped because they were nested inside a
+    /// Group. Exposed so callers can flag lossy parses without reading
+    /// logs.
+    pub skipped_nested_frames: usize,
+    /// `<Group>` records, one per group element seen. Each entry
+    /// names the page items it wraps (TextFrame / Rectangle / Oval /
+    /// GraphicLine / Polygon / sub-groups) and the group-level
+    /// transparency settings (`<BlendingSetting>` / `<DropShadowSetting>`)
+    /// the IDML attached. Real-world IDMLs use a Group around several
+    /// shapes when the user wants a single Opacity / BlendMode / drop
+    /// shadow to apply uniformly to the cluster — the renderer
+    /// brackets the frame range with a transparency group and reuses
+    /// the per-frame paint pipeline inside.
+    ///
+    /// Outermost groups appear first; nested groups come later in the
+    /// vec. Child shape indices are recorded in the order the parser
+    /// encountered them.
+    pub groups: Vec<Group>,
+    /// Top-level page items in XML order. Group members live on the
+    /// corresponding `Group::members` list and are NOT duplicated here
+    /// — instead the outermost group surfaces here as a single
+    /// `FrameRef::Group(idx)`. The renderer uses this flat list to
+    /// drive cross-shape z-ordering (Q-10): items on a back ItemLayer
+    /// paint before items on a front layer regardless of the
+    /// per-shape XML order their backing `Vec<…>` records.
+    pub frames_in_order: Vec<FrameRef>,
+    /// `<Guide>` elements parsed off the spread (plan-2 §8.3 "ruler
+    /// guides"). Vertical guides have `orientation = Vertical` and a
+    /// page-local `location` on the x axis; horizontal guides
+    /// flip the axis. `page_index` is the zero-based index into the
+    /// spread's pages (matches IDML's `PageIndex` attribute). The
+    /// snap pass treats each guide on the moving frame's host page
+    /// as an extra target; the overlay renders them as cyan lines.
+    #[serde(default)]
+    pub guides: Vec<RulerGuide>,
+    /// Placed-image colour space + resolution InDesign baked onto each
+    /// `<Image>` element, keyed by the HOST frame's `Self` id
+    /// (Rectangle / Oval / Polygon). Kept as a side map rather than a
+    /// field on the frame structs so the metadata rides along without
+    /// expanding every frame literal (panels.md gaps 2-3). Empty when
+    /// no placed image carried `Space` / `ActualPpi` / `EffectivePpi`.
+    #[serde(default)]
+    pub image_metadata: std::collections::HashMap<String, ImageMetadata>,
+    /// `<MarginPreference>` per `<Page>`, keyed by the page's `Self`
+    /// id (panels.md gap 10). Side map for the same reason as
+    /// [`Spread::image_metadata`] — keeps `Page` literals untouched.
+    /// Empty when no page declared margins.
+    #[serde(default)]
+    pub page_margins: std::collections::HashMap<String, MarginPreference>,
+    /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
+    /// host item's `Self` id — IDML's native extension point (the
+    /// plugin-metadata carrier; InDesign preserves Labels verbatim).
+    /// Side map like [`Spread::image_metadata`] so the frame literals
+    /// stay untouched. The inner Vec preserves XML order; one entry
+    /// per `Key`.
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
+}

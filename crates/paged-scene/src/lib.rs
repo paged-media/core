@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    parse_graphic, parse_stylesheet, Bounds, CharacterRun, Container, Graphic, Paragraph,
-    ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
+    parse_graphic, parse_spread, parse_stylesheet, Bounds, CharacterRun, Container, Graphic,
+    Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -192,13 +192,13 @@ impl Document {
         // Master spreads parse first so the page → master link is
         // available downstream. The IDML schema for a `<MasterSpread>`
         // is identical to a `<Spread>` (same Page / TextFrame /
-        // Rectangle children), so we reuse `Spread::parse`.
+        // Rectangle children), so we reuse `parse_spread`.
         let mut master_spreads: HashMap<String, ParsedMasterSpread> = HashMap::new();
         for src in &container.designmap.master_spreads {
             let raw = container
                 .entry(src)
                 .ok_or_else(|| OpenError::MissingEntry(src.clone()))?;
-            let parsed = Spread::parse(raw)?;
+            let parsed = parse_spread(raw)?;
             let self_id = derive_master_id(src);
             master_spreads.insert(
                 self_id.clone(),
@@ -215,7 +215,7 @@ impl Document {
             let raw = container
                 .entry(&spread_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
-            let parsed = Spread::parse(raw)?;
+            let parsed = parse_spread(raw)?;
             spreads.push(ParsedSpread {
                 src: spread_ref.src.clone(),
                 spread: parsed,

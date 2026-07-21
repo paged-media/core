@@ -30,7 +30,6 @@
 //! y-axis grows downward from page origin).
 
 use quick_xml::events::Event;
-use serde::{Deserialize, Serialize};
 
 use crate::util::{attr, parse_f, parse_tint_attr};
 use crate::ParseError;
@@ -42,98 +41,7 @@ pub use paged_model::{
     MarginPreference, Page, RulerGuide,
 };
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Spread {
-    pub self_id: Option<String>,
-    /// `ItemTransform` on the `<Spread>` (or `<MasterSpread>`)
-    /// element. Per the IDML spec §10.3.3, this maps the spread's
-    /// inner coords into the document's pasteboard. InDesign limits
-    /// this to translation + 0/90/180/270 rotation. W1.9: the
-    /// renderer honours its rotation/scale (linear part) per page via
-    /// `BuiltPage::spread_transform` — composed into every page-item
-    /// emission and inverted by the canvas hit-tester so selection
-    /// stays in lockstep. A pure translation cancels against the
-    /// spread-inner page origin, so only the linear part has effect.
-    /// `None` ⇒ identity.
-    pub item_transform: Option<[f32; 6]>,
-    pub pages: Vec<Page>,
-    pub text_frames: Vec<TextFrame>,
-    /// Axis-aligned rectangles used as pure vector frames (no parent
-    /// story). A full Rectangle path can have corner radii etc. — we
-    /// treat it as a rect; higher-fidelity paths come with §10.1.
-    pub rectangles: Vec<Rectangle>,
-    /// Ellipses (`<Oval>`). Treated as the inscribed ellipse of the
-    /// `GeometricBounds` rect.
-    pub ovals: Vec<Oval>,
-    /// Straight lines (`<GraphicLine>`). The `GeometricBounds`
-    /// describe the line's bounding box; its endpoints are the
-    /// rect's top-left and bottom-right corners.
-    pub graphic_lines: Vec<GraphicLine>,
-    /// `<Polygon>` items. Real-world IDMLs use these for charts,
-    /// rosettes, and any non-rectangular flat shape. Today the
-    /// renderer treats them as their axis-aligned bounding box —
-    /// faithful only for axis-aligned simple polygons; complex
-    /// shapes (donut charts etc.) come with full path rasterisation
-    /// later in the roadmap.
-    pub polygons: Vec<Polygon>,
-    /// Number of text frames skipped because they were nested inside a
-    /// Group. Exposed so callers can flag lossy parses without reading
-    /// logs.
-    pub skipped_nested_frames: usize,
-    /// `<Group>` records, one per group element seen. Each entry
-    /// names the page items it wraps (TextFrame / Rectangle / Oval /
-    /// GraphicLine / Polygon / sub-groups) and the group-level
-    /// transparency settings (`<BlendingSetting>` / `<DropShadowSetting>`)
-    /// the IDML attached. Real-world IDMLs use a Group around several
-    /// shapes when the user wants a single Opacity / BlendMode / drop
-    /// shadow to apply uniformly to the cluster — the renderer
-    /// brackets the frame range with a transparency group and reuses
-    /// the per-frame paint pipeline inside.
-    ///
-    /// Outermost groups appear first; nested groups come later in the
-    /// vec. Child shape indices are recorded in the order the parser
-    /// encountered them.
-    pub groups: Vec<Group>,
-    /// Top-level page items in XML order. Group members live on the
-    /// corresponding `Group::members` list and are NOT duplicated here
-    /// — instead the outermost group surfaces here as a single
-    /// `FrameRef::Group(idx)`. The renderer uses this flat list to
-    /// drive cross-shape z-ordering (Q-10): items on a back ItemLayer
-    /// paint before items on a front layer regardless of the
-    /// per-shape XML order their backing `Vec<…>` records.
-    pub frames_in_order: Vec<FrameRef>,
-    /// `<Guide>` elements parsed off the spread (plan-2 §8.3 "ruler
-    /// guides"). Vertical guides have `orientation = Vertical` and a
-    /// page-local `location` on the x axis; horizontal guides
-    /// flip the axis. `page_index` is the zero-based index into the
-    /// spread's pages (matches IDML's `PageIndex` attribute). The
-    /// snap pass treats each guide on the moving frame's host page
-    /// as an extra target; the overlay renders them as cyan lines.
-    #[serde(default)]
-    pub guides: Vec<RulerGuide>,
-    /// Placed-image colour space + resolution InDesign baked onto each
-    /// `<Image>` element, keyed by the HOST frame's `Self` id
-    /// (Rectangle / Oval / Polygon). Kept as a side map rather than a
-    /// field on the frame structs so the metadata rides along without
-    /// expanding every frame literal (panels.md gaps 2-3). Empty when
-    /// no placed image carried `Space` / `ActualPpi` / `EffectivePpi`.
-    #[serde(default)]
-    pub image_metadata: std::collections::HashMap<String, ImageMetadata>,
-    /// `<MarginPreference>` per `<Page>`, keyed by the page's `Self`
-    /// id (panels.md gap 10). Side map for the same reason as
-    /// [`Spread::image_metadata`] — keeps `Page` literals untouched.
-    /// Empty when no page declared margins.
-    #[serde(default)]
-    pub page_margins: std::collections::HashMap<String, MarginPreference>,
-    /// Per-object `Properties/Label` `KeyValuePair`s, keyed by the
-    /// host item's `Self` id — IDML's native extension point (the
-    /// plugin-metadata carrier; InDesign preserves Labels verbatim).
-    /// Side map like [`Spread::image_metadata`] so the frame literals
-    /// stay untouched. The inner Vec preserves XML order; one entry
-    /// per `Key`.
-    #[serde(default)]
-    pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
-}
+pub use paged_model::Spread;
 
 // N5 — these pure model types now live in `paged-model`; re-exported here
 // so `paged_parse::*` and every dependent are unchanged.
@@ -552,1734 +460,1695 @@ fn bounds_from_anchors(anchors: &[PathAnchor]) -> Bounds {
     }
 }
 
-impl Spread {
-    pub fn parse(xml: &[u8]) -> Result<Self, ParseError> {
-        let mut reader = quick_xml::Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+pub fn parse_spread(xml: &[u8]) -> Result<Spread, ParseError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    reader.config_mut().trim_text(true);
 
-        let mut out = Spread::default();
-        // Stack of <Group> ItemTransforms encountered, outermost
-        // first. When a frame appears inside one or more groups, its
-        // effective spread-space transform is the composition of
-        // those group transforms with its own ItemTransform.
-        let mut group_transforms: Vec<Option<[f32; 6]>> = Vec::new();
-        // Stack of `<Group>` builders parallel to `group_transforms`.
-        // Each entry accumulates the group's members + transparency
-        // block until the closing tag fires, at which point the
-        // builder is finalised into `out.groups`. Sub-groups register
-        // themselves with the outer builder once they close, so the
-        // outer group's `members` can carry a `FrameRef::Group(idx)`.
-        let mut group_builders: Vec<GroupBuilder> = Vec::new();
-        let mut current_frame: Option<CurrentFrame> = None;
-        // Tracks the rectangle index whose `<GradientFeatherSetting>`
-        // is currently open, so nested `<GradientStop>` children can
-        // be appended to the right effects bag. Cleared on the
-        // matching close tag. `<GradientStop>` is also a child of
-        // `<Gradient>` swatches in graphic.rs — those live in a
-        // different parser entirely, so the state here can stay
-        // scoped to spread.rs.
-        let mut current_gradient_feather: Option<CurrentFrameKind> = None;
-        // Q-03: state for capturing inline `<Image><Properties><Contents>`
-        // base64 CDATA. `Some(frame_kind)` between `<Contents>` start and
-        // end while a frame is the active nested context; we append
-        // text / cdata events into `current_contents_buf` then
-        // base64-decode and stash on the parent shape at end-tag time.
-        // `<Contents>` only appears under image-bearing elements in
-        // spread.xml so we don't need to filter by parent tag.
-        let mut current_image_contents_target: Option<CurrentFrameKind> = None;
-        let mut current_contents_buf: Vec<u8> = Vec::new();
-        let mut buf = Vec::new();
+    let mut out = Spread::default();
+    // Stack of <Group> ItemTransforms encountered, outermost
+    // first. When a frame appears inside one or more groups, its
+    // effective spread-space transform is the composition of
+    // those group transforms with its own ItemTransform.
+    let mut group_transforms: Vec<Option<[f32; 6]>> = Vec::new();
+    // Stack of `<Group>` builders parallel to `group_transforms`.
+    // Each entry accumulates the group's members + transparency
+    // block until the closing tag fires, at which point the
+    // builder is finalised into `out.groups`. Sub-groups register
+    // themselves with the outer builder once they close, so the
+    // outer group's `members` can carry a `FrameRef::Group(idx)`.
+    let mut group_builders: Vec<GroupBuilder> = Vec::new();
+    let mut current_frame: Option<CurrentFrame> = None;
+    // Tracks the rectangle index whose `<GradientFeatherSetting>`
+    // is currently open, so nested `<GradientStop>` children can
+    // be appended to the right effects bag. Cleared on the
+    // matching close tag. `<GradientStop>` is also a child of
+    // `<Gradient>` swatches in graphic.rs — those live in a
+    // different parser entirely, so the state here can stay
+    // scoped to spread.rs.
+    let mut current_gradient_feather: Option<CurrentFrameKind> = None;
+    // Q-03: state for capturing inline `<Image><Properties><Contents>`
+    // base64 CDATA. `Some(frame_kind)` between `<Contents>` start and
+    // end while a frame is the active nested context; we append
+    // text / cdata events into `current_contents_buf` then
+    // base64-decode and stash on the parent shape at end-tag time.
+    // `<Contents>` only appears under image-bearing elements in
+    // spread.xml so we don't need to filter by parent tag.
+    let mut current_image_contents_target: Option<CurrentFrameKind> = None;
+    let mut current_contents_buf: Vec<u8> = Vec::new();
+    let mut buf = Vec::new();
 
-        // Register a freshly-opened frame with the innermost
-        // `<Group>` builder, if one is active. The builder records
-        // a `FrameRef` keyed by the frame's index in its backing
-        // vec — that index is stable for the rest of the parse
-        // (frames never get reordered after creation).
-        //
-        // Top-level frames (no group active) instead get appended to
-        // `out.frames_in_order`, which feeds the renderer's
-        // cross-shape z-order sort (Q-10).
-        //
-        // Registration happens at open time so self-closing
-        // `<Rectangle/>` etc. (which fire as `Event::Empty` and
-        // never visit the `End` arm) still get recorded. The
-        // close handler below unregisters frames that ultimately
-        // got dropped for missing bounds.
-        fn register_with_group(
-            out: &mut Spread,
-            group_builders: &mut [GroupBuilder],
-            frame_ref: FrameRef,
-        ) {
-            if let Some(b) = group_builders.last_mut() {
-                b.members.push(frame_ref);
-            } else {
-                out.frames_in_order.push(frame_ref);
+    // Register a freshly-opened frame with the innermost
+    // `<Group>` builder, if one is active. The builder records
+    // a `FrameRef` keyed by the frame's index in its backing
+    // vec — that index is stable for the rest of the parse
+    // (frames never get reordered after creation).
+    //
+    // Top-level frames (no group active) instead get appended to
+    // `out.frames_in_order`, which feeds the renderer's
+    // cross-shape z-order sort (Q-10).
+    //
+    // Registration happens at open time so self-closing
+    // `<Rectangle/>` etc. (which fire as `Event::Empty` and
+    // never visit the `End` arm) still get recorded. The
+    // close handler below unregisters frames that ultimately
+    // got dropped for missing bounds.
+    fn register_with_group(
+        out: &mut Spread,
+        group_builders: &mut [GroupBuilder],
+        frame_ref: FrameRef,
+    ) {
+        if let Some(b) = group_builders.last_mut() {
+            b.members.push(frame_ref);
+        } else {
+            out.frames_in_order.push(frame_ref);
+        }
+    }
+    fn unregister_last_in_group(
+        out: &mut Spread,
+        group_builders: &mut [GroupBuilder],
+        expected: FrameRef,
+    ) {
+        if let Some(b) = group_builders.last_mut() {
+            if b.members.last() == Some(&expected) {
+                b.members.pop();
+            }
+        } else if out.frames_in_order.last() == Some(&expected) {
+            out.frames_in_order.pop();
+        }
+    }
+
+    // Pop the just-closed frame from its backing vec when no
+    // bounds were ever supplied (neither GeometricBounds attr
+    // nor PathGeometry anchors). Preserves the prior "skip
+    // bounds-less frames" behaviour while letting the open-tag
+    // path stay simple.
+    fn drop_pending(out: &mut Spread, kind: CurrentFrameKind) {
+        match kind {
+            CurrentFrameKind::Text(i) => {
+                debug_assert_eq!(i + 1, out.text_frames.len());
+                out.text_frames.pop();
+            }
+            CurrentFrameKind::Rect(i) => {
+                debug_assert_eq!(i + 1, out.rectangles.len());
+                out.rectangles.pop();
+            }
+            CurrentFrameKind::Oval(i) => {
+                debug_assert_eq!(i + 1, out.ovals.len());
+                out.ovals.pop();
+            }
+            CurrentFrameKind::Line(i) => {
+                debug_assert_eq!(i + 1, out.graphic_lines.len());
+                out.graphic_lines.pop();
+            }
+            CurrentFrameKind::Polygon(i) => {
+                debug_assert_eq!(i + 1, out.polygons.len());
+                out.polygons.pop();
             }
         }
-        fn unregister_last_in_group(
-            out: &mut Spread,
-            group_builders: &mut [GroupBuilder],
-            expected: FrameRef,
-        ) {
-            if let Some(b) = group_builders.last_mut() {
-                if b.members.last() == Some(&expected) {
-                    b.members.pop();
-                }
-            } else if out.frames_in_order.last() == Some(&expected) {
-                out.frames_in_order.pop();
-            }
+    }
+    // Apply path-derived bounds to the just-closed frame.
+    fn set_pending_bounds(out: &mut Spread, kind: CurrentFrameKind, bounds: Bounds) {
+        match kind {
+            CurrentFrameKind::Text(i) => out.text_frames[i].bounds = bounds,
+            CurrentFrameKind::Rect(i) => out.rectangles[i].bounds = bounds,
+            CurrentFrameKind::Oval(i) => out.ovals[i].bounds = bounds,
+            CurrentFrameKind::Line(i) => out.graphic_lines[i].bounds = bounds,
+            CurrentFrameKind::Polygon(i) => out.polygons[i].bounds = bounds,
         }
+    }
 
-        // Pop the just-closed frame from its backing vec when no
-        // bounds were ever supplied (neither GeometricBounds attr
-        // nor PathGeometry anchors). Preserves the prior "skip
-        // bounds-less frames" behaviour while letting the open-tag
-        // path stay simple.
-        fn drop_pending(out: &mut Spread, kind: CurrentFrameKind) {
-            match kind {
-                CurrentFrameKind::Text(i) => {
-                    debug_assert_eq!(i + 1, out.text_frames.len());
-                    out.text_frames.pop();
+    loop {
+        let raw_event = reader.read_event_into(&mut buf)?;
+        // W1.21: a `<Image>` container fires `Start` (it has child
+        // <Properties>/<Link>/<ClippingPathSettings>); a self-closed
+        // image fires `Empty`. We need that distinction to balance
+        // `in_image_depth` against the matching `</Image>` End — a
+        // self-closed image has no End, so it must not increment.
+        let event_is_start = matches!(raw_event, Event::Start(_));
+        match raw_event {
+            Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
+                b"Spread" | b"MasterSpread" => {
+                    if out.self_id.is_none() {
+                        out.self_id = attr(&e, b"Self");
+                        out.item_transform =
+                            attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                    }
                 }
-                CurrentFrameKind::Rect(i) => {
-                    debug_assert_eq!(i + 1, out.rectangles.len());
-                    out.rectangles.pop();
+                b"Group" => {
+                    let t = attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                    group_transforms.push(t);
+                    group_builders.push(GroupBuilder {
+                        self_id: attr(&e, b"Self"),
+                        item_transform: t,
+                        members: Vec::new(),
+                        transparency: GroupTransparency::default(),
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                    });
                 }
-                CurrentFrameKind::Oval(i) => {
-                    debug_assert_eq!(i + 1, out.ovals.len());
-                    out.ovals.pop();
-                }
-                CurrentFrameKind::Line(i) => {
-                    debug_assert_eq!(i + 1, out.graphic_lines.len());
-                    out.graphic_lines.pop();
-                }
-                CurrentFrameKind::Polygon(i) => {
-                    debug_assert_eq!(i + 1, out.polygons.len());
-                    out.polygons.pop();
-                }
-            }
-        }
-        // Apply path-derived bounds to the just-closed frame.
-        fn set_pending_bounds(out: &mut Spread, kind: CurrentFrameKind, bounds: Bounds) {
-            match kind {
-                CurrentFrameKind::Text(i) => out.text_frames[i].bounds = bounds,
-                CurrentFrameKind::Rect(i) => out.rectangles[i].bounds = bounds,
-                CurrentFrameKind::Oval(i) => out.ovals[i].bounds = bounds,
-                CurrentFrameKind::Line(i) => out.graphic_lines[i].bounds = bounds,
-                CurrentFrameKind::Polygon(i) => out.polygons[i].bounds = bounds,
-            }
-        }
-
-        loop {
-            let raw_event = reader.read_event_into(&mut buf)?;
-            // W1.21: a `<Image>` container fires `Start` (it has child
-            // <Properties>/<Link>/<ClippingPathSettings>); a self-closed
-            // image fires `Empty`. We need that distinction to balance
-            // `in_image_depth` against the matching `</Image>` End — a
-            // self-closed image has no End, so it must not increment.
-            let event_is_start = matches!(raw_event, Event::Start(_));
-            match raw_event {
-                Event::Start(e) | Event::Empty(e) => match e.name().as_ref() {
-                    b"Spread" | b"MasterSpread" => {
-                        if out.self_id.is_none() {
-                            out.self_id = attr(&e, b"Self");
-                            out.item_transform =
-                                attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
+                b"Guide" => {
+                    // Plan-2 §8.3 ruler guides. Both `<Guide>`
+                    // and `<Empty Guide />` variants surface here.
+                    // The `Orientation` + `Location` attributes
+                    // are required for the guide to mean anything;
+                    // unparseable entries get dropped.
+                    let orientation = attr(&e, b"Orientation");
+                    let location = attr(&e, b"Location").and_then(|s| s.parse::<f32>().ok());
+                    if let (Some(orient), Some(loc)) = (orientation, location) {
+                        let orient = match orient.as_str() {
+                            "Vertical" => Some(GuideOrientation::Vertical),
+                            "Horizontal" => Some(GuideOrientation::Horizontal),
+                            _ => None,
+                        };
+                        let page_index = attr(&e, b"PageIndex")
+                            .and_then(|s| s.parse::<u32>().ok())
+                            .unwrap_or(0);
+                        if let Some(orient) = orient {
+                            out.guides.push(RulerGuide {
+                                orientation: orient,
+                                location: loc,
+                                page_index,
+                            });
                         }
                     }
-                    b"Group" => {
-                        let t = attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s));
-                        group_transforms.push(t);
-                        group_builders.push(GroupBuilder {
+                }
+                b"Page" => {
+                    if let Some(bounds) =
+                        attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
+                    {
+                        out.pages.push(Page {
                             self_id: attr(&e, b"Self"),
-                            item_transform: t,
-                            members: Vec::new(),
-                            transparency: GroupTransparency::default(),
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
+                            bounds,
+                            applied_master: attr(&e, b"AppliedMaster"),
+                            item_transform: attr(&e, b"ItemTransform")
+                                .and_then(|s| parse_matrix(&s)),
+                            master_page_transform: attr(&e, b"MasterPageTransform")
+                                .and_then(|s| parse_matrix(&s)),
+                            override_list: attr(&e, b"OverrideList")
+                                .map(|s| s.split_whitespace().map(str::to_string).collect())
+                                .unwrap_or_default(),
+                            name: attr(&e, b"Name"),
+                            show_master_items: attr(&e, b"ShowMasterItems")
+                                .and_then(|s| s.parse().ok()),
                         });
                     }
-                    b"Guide" => {
-                        // Plan-2 §8.3 ruler guides. Both `<Guide>`
-                        // and `<Empty Guide />` variants surface here.
-                        // The `Orientation` + `Location` attributes
-                        // are required for the guide to mean anything;
-                        // unparseable entries get dropped.
-                        let orientation = attr(&e, b"Orientation");
-                        let location = attr(&e, b"Location").and_then(|s| s.parse::<f32>().ok());
-                        if let (Some(orient), Some(loc)) = (orientation, location) {
-                            let orient = match orient.as_str() {
-                                "Vertical" => Some(GuideOrientation::Vertical),
-                                "Horizontal" => Some(GuideOrientation::Horizontal),
-                                _ => None,
-                            };
-                            let page_index = attr(&e, b"PageIndex")
-                                .and_then(|s| s.parse::<u32>().ok())
-                                .unwrap_or(0);
-                            if let Some(orient) = orient {
-                                out.guides.push(RulerGuide {
-                                    orientation: orient,
-                                    location: loc,
-                                    page_index,
+                }
+                b"MarginPreference" => {
+                    // `<MarginPreference>` is a child of the enclosing
+                    // `<Page>`; the most-recently-pushed page is its
+                    // host. Recorded in the spread's side map keyed by
+                    // the page `Self` id (panels.md gap 10). Pages with
+                    // no `Self` id (synthetic) can't be keyed, so skip.
+                    if let Some(host) = out.pages.last().and_then(|p| p.self_id.clone()) {
+                        let f = |k: &[u8]| attr(&e, k).and_then(|s| s.parse::<f32>().ok());
+                        out.page_margins.insert(
+                            host,
+                            MarginPreference {
+                                top: f(b"Top").unwrap_or(0.0),
+                                bottom: f(b"Bottom").unwrap_or(0.0),
+                                left: f(b"Left").unwrap_or(0.0),
+                                right: f(b"Right").unwrap_or(0.0),
+                                column_count: attr(&e, b"ColumnCount")
+                                    .and_then(|s| s.parse::<u32>().ok())
+                                    .unwrap_or(1),
+                                column_gutter: f(b"ColumnGutter").unwrap_or(0.0),
+                            },
+                        );
+                    }
+                }
+                b"TextFrame" => {
+                    let bounds_attr = attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                    let common = read_common_attrs(&e);
+                    let item_transform =
+                        effective_item_transform(&group_transforms, common.item_transform);
+                    out.text_frames.push(TextFrame {
+                        self_id: common.self_id,
+                        parent_story: attr(&e, b"ParentStory"),
+                        bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                        item_transform,
+                        fill_color: common.fill_color,
+                        fill_tint: common.fill_tint,
+                        stroke_color: common.stroke_color,
+                        stroke_weight: common.stroke_weight,
+                        stroke_type: common.stroke_type,
+                        stroke_gap_color: common.stroke_gap_color,
+                        stroke_gap_tint: common.stroke_gap_tint,
+                        stroke_dash: common.stroke_dash,
+                        drop_shadow: None,
+                        stroke_drop_shadow: None,
+                        next_text_frame: attr(&e, b"NextTextFrame"),
+                        vertical_justification: None,
+                        first_baseline_offset: None,
+                        minimum_first_baseline_offset: None,
+                        inset_spacing: None,
+                        auto_sizing: None,
+                        auto_sizing_reference_point: None,
+                        minimum_width_for_auto_sizing: None,
+                        minimum_height_for_auto_sizing: None,
+                        use_minimum_height_for_auto_sizing: None,
+                        column_count: None,
+                        column_gutter: None,
+                        column_balance: None,
+                        applied_object_style: common.applied_object_style,
+                        text_wrap: None,
+                        item_layer: common.item_layer,
+                        is_anchored: false,
+                        opacity: None,
+                        blend_mode: None,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        effects: None,
+                        gradient_fill_angle: common.gradient_fill_angle,
+                        gradient_fill_length: common.gradient_fill_length,
+                        gradient_stroke_angle: common.gradient_stroke_angle,
+                        gradient_stroke_length: common.gradient_stroke_length,
+                        applied_toc_style: attr(&e, b"AppliedTOCStyle"),
+                        overprint_fill: common.overprint_fill,
+                        overprint_stroke: common.overprint_stroke,
+                        nonprinting: common.nonprinting,
+                        visible: common.visible,
+                        locked: common.locked,
+                    });
+                    let idx = out.text_frames.len() - 1;
+                    register_with_group(&mut out, &mut group_builders, FrameRef::TextFrame(idx));
+                    current_frame = Some(CurrentFrame {
+                        kind: CurrentFrameKind::Text(idx),
+                        needs_bounds: bounds_attr.is_none(),
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        // Always retain Bezier path anchors so the
+                        // renderer can detect non-rectangular text
+                        // frame outlines (triangle, pentagon, …)
+                        // and clip layout to the actual polygon
+                        // interior rather than the AABB.
+                        keep_anchors: true,
+                        in_text_wrap: false,
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                        in_image_depth: 0,
+                        clip: None,
+                        in_clipping_path: false,
+                    });
+                }
+                b"Rectangle" => {
+                    let bounds_attr = attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                    let common = read_common_attrs(&e);
+                    let stroke = read_stroke_style_attrs(&e);
+                    let corner = read_corner_attrs(&e);
+                    let item_transform =
+                        effective_item_transform(&group_transforms, common.item_transform);
+                    out.rectangles.push(Rectangle {
+                        self_id: common.self_id,
+                        bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                        item_transform,
+                        fill_color: common.fill_color,
+                        fill_tint: common.fill_tint,
+                        stroke_color: common.stroke_color,
+                        stroke_weight: common.stroke_weight,
+                        drop_shadow: None,
+                        stroke_drop_shadow: None,
+                        image_link: None,
+                        image_bytes: None,
+                        image_clip: None,
+                        has_image_element: false,
+                        has_inline_pdf: false,
+                        image_item_transform: None,
+                        applied_object_style: common.applied_object_style,
+                        text_wrap: None,
+                        frame_fitting: None,
+                        stroke_type: common.stroke_type,
+                        stroke_alignment: stroke.stroke_alignment,
+                        end_cap: stroke.end_cap,
+                        end_join: stroke.end_join,
+                        miter_limit: stroke.miter_limit,
+                        stroke_gap_color: common.stroke_gap_color,
+                        stroke_gap_tint: common.stroke_gap_tint,
+                        stroke_dash: common.stroke_dash,
+                        item_layer: common.item_layer,
+                        corner_radius: corner.corner_radius,
+                        corner_option: corner.corner_option,
+                        corners: corner.corners,
+                        is_anchored: false,
+                        opacity: None,
+                        blend_mode: None,
+                        effects: None,
+                        gradient_fill_angle: common.gradient_fill_angle,
+                        gradient_fill_length: common.gradient_fill_length,
+                        gradient_stroke_angle: common.gradient_stroke_angle,
+                        gradient_stroke_length: common.gradient_stroke_length,
+                        text_paths: Vec::new(),
+                        overprint_fill: common.overprint_fill,
+                        overprint_stroke: common.overprint_stroke,
+                        nonprinting: common.nonprinting,
+                        visible: common.visible,
+                        locked: common.locked,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                    });
+                    let idx = out.rectangles.len() - 1;
+                    register_with_group(&mut out, &mut group_builders, FrameRef::Rectangle(idx));
+                    current_frame = Some(CurrentFrame {
+                        kind: CurrentFrameKind::Rect(idx),
+                        needs_bounds: bounds_attr.is_none(),
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        // Q-11: retain anchors so stylised
+                        // non-rectangular outlines (torn-paper,
+                        // multi-anchor) can route through
+                        // `Geometry::Polygon` instead of collapsing
+                        // to the AABB.
+                        keep_anchors: true,
+                        in_text_wrap: false,
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                        in_image_depth: 0,
+                        clip: None,
+                        in_clipping_path: false,
+                    });
+                }
+                b"Oval" => {
+                    let bounds_attr = attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                    let common = read_common_attrs(&e);
+                    let item_transform =
+                        effective_item_transform(&group_transforms, common.item_transform);
+                    out.ovals.push(Oval {
+                        self_id: common.self_id,
+                        bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                        item_transform,
+                        fill_color: common.fill_color,
+                        fill_tint: common.fill_tint,
+                        stroke_color: common.stroke_color,
+                        stroke_weight: common.stroke_weight,
+                        stroke_type: common.stroke_type,
+                        stroke_alignment: attr(&e, b"StrokeAlignment"),
+                        stroke_gap_color: common.stroke_gap_color,
+                        stroke_gap_tint: common.stroke_gap_tint,
+                        stroke_dash: common.stroke_dash,
+                        drop_shadow: None,
+                        stroke_drop_shadow: None,
+                        applied_object_style: common.applied_object_style,
+                        text_wrap: None,
+                        item_layer: common.item_layer,
+                        gradient_fill_angle: common.gradient_fill_angle,
+                        gradient_fill_length: common.gradient_fill_length,
+                        gradient_stroke_angle: common.gradient_stroke_angle,
+                        gradient_stroke_length: common.gradient_stroke_length,
+                        opacity: None,
+                        blend_mode: None,
+                        image_link: None,
+                        image_bytes: None,
+                        image_clip: None,
+                        has_image_element: false,
+                        has_inline_pdf: false,
+                        image_item_transform: None,
+                        effects: None,
+                        overprint_fill: common.overprint_fill,
+                        overprint_stroke: common.overprint_stroke,
+                        nonprinting: common.nonprinting,
+                        visible: common.visible,
+                        locked: common.locked,
+                    });
+                    let idx = out.ovals.len() - 1;
+                    register_with_group(&mut out, &mut group_builders, FrameRef::Oval(idx));
+                    current_frame = Some(CurrentFrame {
+                        kind: CurrentFrameKind::Oval(idx),
+                        needs_bounds: bounds_attr.is_none(),
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        keep_anchors: false,
+                        in_text_wrap: false,
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                        in_image_depth: 0,
+                        clip: None,
+                        in_clipping_path: false,
+                    });
+                }
+                b"StrokeTransparencySetting" => {
+                    // Drop shadows under this wrapper describe a
+                    // shadow cast by the frame's stroke — captured
+                    // separately so the renderer can gate emission
+                    // on stroke visibility.
+                    if let Some(cf) = current_frame.as_mut() {
+                        cf.stroke_transparency_depth += 1;
+                    } else if let Some(b) = group_builders.last_mut() {
+                        b.stroke_transparency_depth += 1;
+                    }
+                }
+                b"ContentTransparencySetting" => {
+                    // Drop shadows under this wrapper describe
+                    // content-only shadows that don't map onto our
+                    // single-shadow-per-frame model; skipped.
+                    if let Some(cf) = current_frame.as_mut() {
+                        cf.content_transparency_depth += 1;
+                    } else if let Some(b) = group_builders.last_mut() {
+                        b.content_transparency_depth += 1;
+                    }
+                }
+                b"DropShadowSetting" => {
+                    if let Some(setting) = parse_drop_shadow(&e) {
+                        // Only "Drop"/"Default" mode results in a
+                        // visible shadow. "None" means the shadow
+                        // is disabled even though the setting is
+                        // serialised.
+                        if setting.mode != "None" {
+                            if let Some(cf) = current_frame.as_ref() {
+                                if cf.content_transparency_depth > 0 {
+                                    // Content-only shadow — skip.
+                                } else if cf.stroke_transparency_depth > 0 {
+                                    // Stroke-only shadow — captured for
+                                    // conditional emission by the
+                                    // renderer.
+                                    match cf.kind {
+                                        CurrentFrameKind::Text(i) => {
+                                            out.text_frames[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Rect(i) => {
+                                            out.rectangles[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Oval(i) => {
+                                            out.ovals[i].stroke_drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Line(_)
+                                        | CurrentFrameKind::Polygon(_) => {
+                                            // GraphicLine + Polygon have
+                                            // no shadow fields today;
+                                            // ignore.
+                                        }
+                                    }
+                                } else {
+                                    match cf.kind {
+                                        CurrentFrameKind::Text(i) => {
+                                            out.text_frames[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Rect(i) => {
+                                            out.rectangles[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Oval(i) => {
+                                            out.ovals[i].drop_shadow = Some(setting);
+                                        }
+                                        CurrentFrameKind::Line(_)
+                                        | CurrentFrameKind::Polygon(_) => {
+                                            // GraphicLine + Polygon have
+                                            // no drop_shadow field today;
+                                            // ignore.
+                                        }
+                                    }
+                                }
+                            } else if let Some(b) = group_builders.last_mut() {
+                                // No frame is open but a `<Group>`
+                                // is — route the shadow to the
+                                // innermost group's transparency
+                                // block. Stroke-/content-only
+                                // wrappers around a group don't
+                                // map onto our model and are
+                                // skipped.
+                                if b.content_transparency_depth == 0
+                                    && b.stroke_transparency_depth == 0
+                                {
+                                    b.transparency.drop_shadow = Some(setting);
+                                }
+                            }
+                        }
+                    }
+                }
+                b"AnchoredObjectSetting" => {
+                    // Mark the current frame as an anchored object.
+                    // Renderer-side text-flow integration is
+                    // queued; today the flag is informational.
+                    if let Some(cf) = current_frame.as_ref() {
+                        match cf.kind {
+                            CurrentFrameKind::Text(i) => {
+                                out.text_frames[i].is_anchored = true;
+                            }
+                            CurrentFrameKind::Rect(i) => {
+                                out.rectangles[i].is_anchored = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                b"InnerShadowSetting"
+                | b"OuterGlowSetting"
+                | b"InnerGlowSetting"
+                | b"BevelAndEmbossSetting"
+                | b"SatinSetting"
+                | b"FeatherSetting"
+                | b"DirectionalFeatherSetting"
+                | b"GradientFeatherSetting" => {
+                    // Surface each effect's parameters onto the
+                    // current shape's effects bag, gated on the
+                    // `Applied="true"` flag — `Applied="false"` (or
+                    // absent) means the user disabled the effect
+                    // even though IDML still serialises the settings
+                    // for round-trip preservation. Q-04: extended
+                    // from Rectangle-only to all five shape kinds.
+                    if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
+                        let applied = attr(&e, b"Applied")
+                            .and_then(|s| s.parse::<bool>().ok())
+                            .unwrap_or(false);
+                        if !applied {
+                            // Effect is present but disabled; skip
+                            // the parameter capture entirely so the
+                            // renderer doesn't accidentally emit it.
+                            continue;
+                        }
+                        let Some(bag_slot) = effects_slot_mut(&mut out, kind) else {
+                            continue;
+                        };
+                        let bag = bag_slot.get_or_insert_with(Default::default);
+                        match e.name().as_ref() {
+                            b"InnerShadowSetting" => {
+                                bag.inner_shadow = Some(InnerShadowParams {
+                                    x_offset: parse_f(&e, b"XOffset"),
+                                    y_offset: parse_f(&e, b"YOffset"),
+                                    size: parse_f(&e, b"Size"),
+                                    opacity_pct: parse_f(&e, b"Opacity"),
+                                    effect_color: attr(&e, b"EffectColor"),
+                                    angle_deg: parse_f(&e, b"Angle"),
+                                    distance: parse_f(&e, b"Distance"),
+                                    choke_pct: parse_f(&e, b"ChokeAmount"),
+                                    blend_mode: attr(&e, b"BlendMode"),
+                                    noise_pct: parse_f(&e, b"Noise"),
+                                });
+                            }
+                            b"OuterGlowSetting" => {
+                                bag.outer_glow = Some(OuterGlowParams {
+                                    size: parse_f(&e, b"Size"),
+                                    opacity_pct: parse_f(&e, b"Opacity"),
+                                    effect_color: attr(&e, b"EffectColor"),
+                                    spread_pct: parse_f(&e, b"Spread"),
+                                    blend_mode: attr(&e, b"BlendMode"),
+                                    noise_pct: parse_f(&e, b"Noise"),
+                                });
+                            }
+                            b"InnerGlowSetting" => {
+                                bag.inner_glow = Some(InnerGlowParams {
+                                    size: parse_f(&e, b"Size"),
+                                    opacity_pct: parse_f(&e, b"Opacity"),
+                                    effect_color: attr(&e, b"EffectColor"),
+                                    choke_pct: parse_f(&e, b"ChokeAmount"),
+                                    blend_mode: attr(&e, b"BlendMode"),
+                                    source: attr(&e, b"Source"),
+                                    noise_pct: parse_f(&e, b"Noise"),
+                                });
+                            }
+                            b"BevelAndEmbossSetting" => {
+                                bag.bevel = Some(BevelEmbossParams {
+                                    depth_pct: parse_f(&e, b"Depth"),
+                                    size: parse_f(&e, b"Size"),
+                                    angle_deg: parse_f(&e, b"Angle"),
+                                    altitude_deg: parse_f(&e, b"Altitude"),
+                                    highlight_color: attr(&e, b"HighlightColor"),
+                                    shadow_color: attr(&e, b"ShadowColor"),
+                                    highlight_opacity_pct: parse_f(&e, b"HighlightOpacity"),
+                                    shadow_opacity_pct: parse_f(&e, b"ShadowOpacity"),
+                                    style: attr(&e, b"Style"),
+                                    direction: attr(&e, b"Direction"),
+                                    technique: attr(&e, b"Technique"),
+                                    soften: parse_f(&e, b"Soften"),
+                                });
+                            }
+                            b"SatinSetting" => {
+                                bag.satin = Some(SatinParams {
+                                    size: parse_f(&e, b"Size"),
+                                    angle_deg: parse_f(&e, b"Angle"),
+                                    distance: parse_f(&e, b"Distance"),
+                                    effect_color: attr(&e, b"EffectColor"),
+                                    opacity_pct: parse_f(&e, b"Opacity"),
+                                    blend_mode: attr(&e, b"BlendMode"),
+                                    invert: attr(&e, b"Invert")
+                                        .and_then(|s| s.parse::<bool>().ok()),
+                                });
+                            }
+                            b"FeatherSetting" => {
+                                bag.feather = Some(FeatherParams {
+                                    width: parse_f(&e, b"Width"),
+                                    corner_type: attr(&e, b"CornerType"),
+                                    noise_pct: parse_f(&e, b"Noise"),
+                                    choke_pct: parse_f(&e, b"ChokeAmount"),
+                                });
+                            }
+                            b"DirectionalFeatherSetting" => {
+                                bag.directional_feather = Some(DirectionalFeatherParams {
+                                    left_width: parse_f(&e, b"LeftWidth"),
+                                    right_width: parse_f(&e, b"RightWidth"),
+                                    top_width: parse_f(&e, b"TopWidth"),
+                                    bottom_width: parse_f(&e, b"BottomWidth"),
+                                    angle_deg: parse_f(&e, b"Angle"),
+                                    noise_pct: parse_f(&e, b"NoiseAmount"),
+                                    choke_pct: parse_f(&e, b"ChokeAmount"),
+                                    corner_type: attr(&e, b"CornerType"),
+                                });
+                            }
+                            b"GradientFeatherSetting" => {
+                                // InDesign uses `GradientStart`
+                                // (an "x y" pair) + `Length` +
+                                // `HiliteAngle` to describe the
+                                // gradient direction; the IDML
+                                // spec also accepts an explicit
+                                // `GradientEnd` pair. We accept
+                                // both shapes — the parser
+                                // computes the end point from
+                                // start + (Length × Angle) when
+                                // GradientEnd is missing so the
+                                // renderer sees one canonical
+                                // pair regardless of the source.
+                                let start_point = attr(&e, b"GradientStart")
+                                    .as_deref()
+                                    .and_then(parse_xy_pair);
+                                let end_point = attr(&e, b"GradientEnd")
+                                    .as_deref()
+                                    .and_then(parse_xy_pair)
+                                    .or_else(|| {
+                                        // `HiliteAngle` is the *highlight*
+                                        // ramp orientation, not the
+                                        // gradient axis direction —
+                                        // InDesign uses it for the
+                                        // radial-feather hilite preview
+                                        // and leaves the gradient axis
+                                        // horizontal (0°) when no
+                                        // dedicated angle attribute is
+                                        // serialised. Tied to the visible
+                                        // page-5 yellow→white feather in
+                                        // `manual-sample.idml`, where
+                                        // `HiliteAngle="-62.2"` paints a
+                                        // diagonal smudge instead of the
+                                        // expected left→right fade.
+                                        let s = start_point?;
+                                        let length = parse_f(&e, b"Length")?;
+                                        let angle = parse_f(&e, b"GradientAngle")
+                                            .or_else(|| parse_f(&e, b"Angle"))
+                                            .unwrap_or(0.0);
+                                        let rad = angle.to_radians();
+                                        let (sin, cos) = rad.sin_cos();
+                                        Some((s.0 + length * cos, s.1 - length * sin))
+                                    });
+                                bag.gradient_feather = Some(GradientFeatherParams {
+                                    gradient_type: attr(&e, b"Type"),
+                                    start_point,
+                                    end_point,
+                                    angle_deg: parse_f(&e, b"GradientAngle")
+                                        .or_else(|| parse_f(&e, b"Angle")),
+                                    stops: Vec::new(),
+                                });
+                                // Mark the current frame's gradient
+                                // feather as the open target so
+                                // nested `<GradientStop>` /
+                                // `<OpacityGradientStop>` children
+                                // can append to it. Cleared on the
+                                // close tag below. Q-04: tracks
+                                // CurrentFrameKind (not just rect
+                                // index) so non-Rectangle shapes
+                                // can host gradient feathers too.
+                                current_gradient_feather = Some(kind);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                b"GradientStop" | b"OpacityGradientStop" => {
+                    // Children of an open `<GradientFeatherSetting>`
+                    // define the alpha falloff. InDesign serialises
+                    // them as `<OpacityGradientStop Opacity="..."
+                    // Location="..." Midpoint="...">`; the IDML
+                    // spec also documents a `<GradientStop StopColor
+                    // ="..." Alpha="..." Location="..."
+                    // GradientStopMidpoint="...">` form. Both are
+                    // accepted — the alpha lands in `alpha_pct`
+                    // regardless of which attribute the IDML
+                    // actually used.
+                    //
+                    // `<GradientStop>` is also a child of
+                    // `<Gradient>` swatches in graphic.rs; that's
+                    // a separate parser file, so the routing here
+                    // only fires when a gradient-feather block is
+                    // actually open in the spread parser.
+                    if let Some(kind) = current_gradient_feather {
+                        if let Some(bag) = effects_slot_mut(&mut out, kind).and_then(|s| s.as_mut())
+                        {
+                            if let Some(gf) = bag.gradient_feather.as_mut() {
+                                let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
+                                // `Opacity` (OpacityGradientStop)
+                                // takes precedence; `Alpha`
+                                // (GradientStop spec form) falls
+                                // back; default 100 (fully opaque)
+                                // when neither is set.
+                                let alpha_pct = parse_f(&e, b"Opacity")
+                                    .or_else(|| parse_f(&e, b"Alpha"))
+                                    .unwrap_or(100.0);
+                                let midpoint_pct = parse_f(&e, b"GradientStopMidpoint")
+                                    .or_else(|| parse_f(&e, b"Midpoint"))
+                                    .unwrap_or(50.0);
+                                gf.stops.push(GradientFeatherStop {
+                                    stop_color: attr(&e, b"StopColor"),
+                                    location_pct,
+                                    alpha_pct,
+                                    midpoint_pct,
                                 });
                             }
                         }
                     }
-                    b"Page" => {
-                        if let Some(bounds) =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s))
-                        {
-                            out.pages.push(Page {
-                                self_id: attr(&e, b"Self"),
-                                bounds,
-                                applied_master: attr(&e, b"AppliedMaster"),
-                                item_transform: attr(&e, b"ItemTransform")
-                                    .and_then(|s| parse_matrix(&s)),
-                                master_page_transform: attr(&e, b"MasterPageTransform")
-                                    .and_then(|s| parse_matrix(&s)),
-                                override_list: attr(&e, b"OverrideList")
-                                    .map(|s| s.split_whitespace().map(str::to_string).collect())
-                                    .unwrap_or_default(),
-                                name: attr(&e, b"Name"),
-                                show_master_items: attr(&e, b"ShowMasterItems")
-                                    .and_then(|s| s.parse().ok()),
-                            });
-                        }
-                    }
-                    b"MarginPreference" => {
-                        // `<MarginPreference>` is a child of the enclosing
-                        // `<Page>`; the most-recently-pushed page is its
-                        // host. Recorded in the spread's side map keyed by
-                        // the page `Self` id (panels.md gap 10). Pages with
-                        // no `Self` id (synthetic) can't be keyed, so skip.
-                        if let Some(host) = out.pages.last().and_then(|p| p.self_id.clone()) {
-                            let f = |k: &[u8]| attr(&e, k).and_then(|s| s.parse::<f32>().ok());
-                            out.page_margins.insert(
-                                host,
-                                MarginPreference {
-                                    top: f(b"Top").unwrap_or(0.0),
-                                    bottom: f(b"Bottom").unwrap_or(0.0),
-                                    left: f(b"Left").unwrap_or(0.0),
-                                    right: f(b"Right").unwrap_or(0.0),
-                                    column_count: attr(&e, b"ColumnCount")
-                                        .and_then(|s| s.parse::<u32>().ok())
-                                        .unwrap_or(1),
-                                    column_gutter: f(b"ColumnGutter").unwrap_or(0.0),
-                                },
-                            );
-                        }
-                    }
-                    b"TextFrame" => {
-                        let bounds_attr =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let common = read_common_attrs(&e);
-                        let item_transform =
-                            effective_item_transform(&group_transforms, common.item_transform);
-                        out.text_frames.push(TextFrame {
-                            self_id: common.self_id,
-                            parent_story: attr(&e, b"ParentStory"),
-                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
-                            item_transform,
-                            fill_color: common.fill_color,
-                            fill_tint: common.fill_tint,
-                            stroke_color: common.stroke_color,
-                            stroke_weight: common.stroke_weight,
-                            stroke_type: common.stroke_type,
-                            stroke_gap_color: common.stroke_gap_color,
-                            stroke_gap_tint: common.stroke_gap_tint,
-                            stroke_dash: common.stroke_dash,
-                            drop_shadow: None,
-                            stroke_drop_shadow: None,
-                            next_text_frame: attr(&e, b"NextTextFrame"),
-                            vertical_justification: None,
-                            first_baseline_offset: None,
-                            minimum_first_baseline_offset: None,
-                            inset_spacing: None,
-                            auto_sizing: None,
-                            auto_sizing_reference_point: None,
-                            minimum_width_for_auto_sizing: None,
-                            minimum_height_for_auto_sizing: None,
-                            use_minimum_height_for_auto_sizing: None,
-                            column_count: None,
-                            column_gutter: None,
-                            column_balance: None,
-                            applied_object_style: common.applied_object_style,
-                            text_wrap: None,
-                            item_layer: common.item_layer,
-                            is_anchored: false,
-                            opacity: None,
-                            blend_mode: None,
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            effects: None,
-                            gradient_fill_angle: common.gradient_fill_angle,
-                            gradient_fill_length: common.gradient_fill_length,
-                            gradient_stroke_angle: common.gradient_stroke_angle,
-                            gradient_stroke_length: common.gradient_stroke_length,
-                            applied_toc_style: attr(&e, b"AppliedTOCStyle"),
-                            overprint_fill: common.overprint_fill,
-                            overprint_stroke: common.overprint_stroke,
-                            nonprinting: common.nonprinting,
-                            visible: common.visible,
-                            locked: common.locked,
-                        });
-                        let idx = out.text_frames.len() - 1;
-                        register_with_group(
-                            &mut out,
-                            &mut group_builders,
-                            FrameRef::TextFrame(idx),
-                        );
-                        current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Text(idx),
-                            needs_bounds: bounds_attr.is_none(),
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            // Always retain Bezier path anchors so the
-                            // renderer can detect non-rectangular text
-                            // frame outlines (triangle, pentagon, …)
-                            // and clip layout to the actual polygon
-                            // interior rather than the AABB.
-                            keep_anchors: true,
-                            in_text_wrap: false,
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
-                            in_image_depth: 0,
-                            clip: None,
-                            in_clipping_path: false,
-                        });
-                    }
-                    b"Rectangle" => {
-                        let bounds_attr =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let common = read_common_attrs(&e);
-                        let stroke = read_stroke_style_attrs(&e);
-                        let corner = read_corner_attrs(&e);
-                        let item_transform =
-                            effective_item_transform(&group_transforms, common.item_transform);
-                        out.rectangles.push(Rectangle {
-                            self_id: common.self_id,
-                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
-                            item_transform,
-                            fill_color: common.fill_color,
-                            fill_tint: common.fill_tint,
-                            stroke_color: common.stroke_color,
-                            stroke_weight: common.stroke_weight,
-                            drop_shadow: None,
-                            stroke_drop_shadow: None,
-                            image_link: None,
-                            image_bytes: None,
-                            image_clip: None,
-                            has_image_element: false,
-                            has_inline_pdf: false,
-                            image_item_transform: None,
-                            applied_object_style: common.applied_object_style,
-                            text_wrap: None,
-                            frame_fitting: None,
-                            stroke_type: common.stroke_type,
-                            stroke_alignment: stroke.stroke_alignment,
-                            end_cap: stroke.end_cap,
-                            end_join: stroke.end_join,
-                            miter_limit: stroke.miter_limit,
-                            stroke_gap_color: common.stroke_gap_color,
-                            stroke_gap_tint: common.stroke_gap_tint,
-                            stroke_dash: common.stroke_dash,
-                            item_layer: common.item_layer,
-                            corner_radius: corner.corner_radius,
-                            corner_option: corner.corner_option,
-                            corners: corner.corners,
-                            is_anchored: false,
-                            opacity: None,
-                            blend_mode: None,
-                            effects: None,
-                            gradient_fill_angle: common.gradient_fill_angle,
-                            gradient_fill_length: common.gradient_fill_length,
-                            gradient_stroke_angle: common.gradient_stroke_angle,
-                            gradient_stroke_length: common.gradient_stroke_length,
-                            text_paths: Vec::new(),
-                            overprint_fill: common.overprint_fill,
-                            overprint_stroke: common.overprint_stroke,
-                            nonprinting: common.nonprinting,
-                            visible: common.visible,
-                            locked: common.locked,
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                        });
-                        let idx = out.rectangles.len() - 1;
-                        register_with_group(
-                            &mut out,
-                            &mut group_builders,
-                            FrameRef::Rectangle(idx),
-                        );
-                        current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Rect(idx),
-                            needs_bounds: bounds_attr.is_none(),
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            // Q-11: retain anchors so stylised
-                            // non-rectangular outlines (torn-paper,
-                            // multi-anchor) can route through
-                            // `Geometry::Polygon` instead of collapsing
-                            // to the AABB.
-                            keep_anchors: true,
-                            in_text_wrap: false,
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
-                            in_image_depth: 0,
-                            clip: None,
-                            in_clipping_path: false,
-                        });
-                    }
-                    b"Oval" => {
-                        let bounds_attr =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let common = read_common_attrs(&e);
-                        let item_transform =
-                            effective_item_transform(&group_transforms, common.item_transform);
-                        out.ovals.push(Oval {
-                            self_id: common.self_id,
-                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
-                            item_transform,
-                            fill_color: common.fill_color,
-                            fill_tint: common.fill_tint,
-                            stroke_color: common.stroke_color,
-                            stroke_weight: common.stroke_weight,
-                            stroke_type: common.stroke_type,
-                            stroke_alignment: attr(&e, b"StrokeAlignment"),
-                            stroke_gap_color: common.stroke_gap_color,
-                            stroke_gap_tint: common.stroke_gap_tint,
-                            stroke_dash: common.stroke_dash,
-                            drop_shadow: None,
-                            stroke_drop_shadow: None,
-                            applied_object_style: common.applied_object_style,
-                            text_wrap: None,
-                            item_layer: common.item_layer,
-                            gradient_fill_angle: common.gradient_fill_angle,
-                            gradient_fill_length: common.gradient_fill_length,
-                            gradient_stroke_angle: common.gradient_stroke_angle,
-                            gradient_stroke_length: common.gradient_stroke_length,
-                            opacity: None,
-                            blend_mode: None,
-                            image_link: None,
-                            image_bytes: None,
-                            image_clip: None,
-                            has_image_element: false,
-                            has_inline_pdf: false,
-                            image_item_transform: None,
-                            effects: None,
-                            overprint_fill: common.overprint_fill,
-                            overprint_stroke: common.overprint_stroke,
-                            nonprinting: common.nonprinting,
-                            visible: common.visible,
-                            locked: common.locked,
-                        });
-                        let idx = out.ovals.len() - 1;
-                        register_with_group(&mut out, &mut group_builders, FrameRef::Oval(idx));
-                        current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Oval(idx),
-                            needs_bounds: bounds_attr.is_none(),
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            keep_anchors: false,
-                            in_text_wrap: false,
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
-                            in_image_depth: 0,
-                            clip: None,
-                            in_clipping_path: false,
-                        });
-                    }
-                    b"StrokeTransparencySetting" => {
-                        // Drop shadows under this wrapper describe a
-                        // shadow cast by the frame's stroke — captured
-                        // separately so the renderer can gate emission
-                        // on stroke visibility.
-                        if let Some(cf) = current_frame.as_mut() {
-                            cf.stroke_transparency_depth += 1;
-                        } else if let Some(b) = group_builders.last_mut() {
-                            b.stroke_transparency_depth += 1;
-                        }
-                    }
-                    b"ContentTransparencySetting" => {
-                        // Drop shadows under this wrapper describe
-                        // content-only shadows that don't map onto our
-                        // single-shadow-per-frame model; skipped.
-                        if let Some(cf) = current_frame.as_mut() {
-                            cf.content_transparency_depth += 1;
-                        } else if let Some(b) = group_builders.last_mut() {
-                            b.content_transparency_depth += 1;
-                        }
-                    }
-                    b"DropShadowSetting" => {
-                        if let Some(setting) = parse_drop_shadow(&e) {
-                            // Only "Drop"/"Default" mode results in a
-                            // visible shadow. "None" means the shadow
-                            // is disabled even though the setting is
-                            // serialised.
-                            if setting.mode != "None" {
-                                if let Some(cf) = current_frame.as_ref() {
-                                    if cf.content_transparency_depth > 0 {
-                                        // Content-only shadow — skip.
-                                    } else if cf.stroke_transparency_depth > 0 {
-                                        // Stroke-only shadow — captured for
-                                        // conditional emission by the
-                                        // renderer.
-                                        match cf.kind {
-                                            CurrentFrameKind::Text(i) => {
-                                                out.text_frames[i].stroke_drop_shadow =
-                                                    Some(setting);
-                                            }
-                                            CurrentFrameKind::Rect(i) => {
-                                                out.rectangles[i].stroke_drop_shadow =
-                                                    Some(setting);
-                                            }
-                                            CurrentFrameKind::Oval(i) => {
-                                                out.ovals[i].stroke_drop_shadow = Some(setting);
-                                            }
-                                            CurrentFrameKind::Line(_)
-                                            | CurrentFrameKind::Polygon(_) => {
-                                                // GraphicLine + Polygon have
-                                                // no shadow fields today;
-                                                // ignore.
-                                            }
-                                        }
-                                    } else {
-                                        match cf.kind {
-                                            CurrentFrameKind::Text(i) => {
-                                                out.text_frames[i].drop_shadow = Some(setting);
-                                            }
-                                            CurrentFrameKind::Rect(i) => {
-                                                out.rectangles[i].drop_shadow = Some(setting);
-                                            }
-                                            CurrentFrameKind::Oval(i) => {
-                                                out.ovals[i].drop_shadow = Some(setting);
-                                            }
-                                            CurrentFrameKind::Line(_)
-                                            | CurrentFrameKind::Polygon(_) => {
-                                                // GraphicLine + Polygon have
-                                                // no drop_shadow field today;
-                                                // ignore.
-                                            }
-                                        }
-                                    }
-                                } else if let Some(b) = group_builders.last_mut() {
-                                    // No frame is open but a `<Group>`
-                                    // is — route the shadow to the
-                                    // innermost group's transparency
-                                    // block. Stroke-/content-only
-                                    // wrappers around a group don't
-                                    // map onto our model and are
-                                    // skipped.
-                                    if b.content_transparency_depth == 0
-                                        && b.stroke_transparency_depth == 0
-                                    {
-                                        b.transparency.drop_shadow = Some(setting);
-                                    }
+                }
+                b"BlendingSetting" => {
+                    // Nested under <TransparencySetting>; we don't
+                    // track the wrapper because no other element
+                    // shares this name. Opacity is 0..=100;
+                    // BlendMode is a string (Normal / Multiply /
+                    // Screen / etc).
+                    let opacity = attr(&e, b"Opacity").and_then(|s| s.parse::<f32>().ok());
+                    let mode = attr(&e, b"BlendMode");
+                    if let Some(cf) = current_frame.as_ref() {
+                        match cf.kind {
+                            CurrentFrameKind::Rect(i) => {
+                                if opacity.is_some() {
+                                    out.rectangles[i].opacity = opacity;
+                                }
+                                if mode.is_some() {
+                                    out.rectangles[i].blend_mode = mode;
                                 }
                             }
-                        }
-                    }
-                    b"AnchoredObjectSetting" => {
-                        // Mark the current frame as an anchored object.
-                        // Renderer-side text-flow integration is
-                        // queued; today the flag is informational.
-                        if let Some(cf) = current_frame.as_ref() {
-                            match cf.kind {
-                                CurrentFrameKind::Text(i) => {
-                                    out.text_frames[i].is_anchored = true;
+                            CurrentFrameKind::Text(i) => {
+                                if opacity.is_some() {
+                                    out.text_frames[i].opacity = opacity;
                                 }
-                                CurrentFrameKind::Rect(i) => {
-                                    out.rectangles[i].is_anchored = true;
+                                if mode.is_some() {
+                                    out.text_frames[i].blend_mode = mode;
                                 }
-                                _ => {}
+                            }
+                            CurrentFrameKind::Oval(i) => {
+                                if opacity.is_some() {
+                                    out.ovals[i].opacity = opacity;
+                                }
+                                if mode.is_some() {
+                                    out.ovals[i].blend_mode = mode;
+                                }
+                            }
+                            CurrentFrameKind::Polygon(i) => {
+                                if opacity.is_some() {
+                                    out.polygons[i].opacity = opacity;
+                                }
+                                if mode.is_some() {
+                                    out.polygons[i].blend_mode = mode;
+                                }
+                            }
+                            _ => {
+                                // GraphicLines don't yet surface
+                                // opacity / blend_mode;
+                                // ignore until they do.
                             }
                         }
-                    }
-                    b"InnerShadowSetting"
-                    | b"OuterGlowSetting"
-                    | b"InnerGlowSetting"
-                    | b"BevelAndEmbossSetting"
-                    | b"SatinSetting"
-                    | b"FeatherSetting"
-                    | b"DirectionalFeatherSetting"
-                    | b"GradientFeatherSetting" => {
-                        // Surface each effect's parameters onto the
-                        // current shape's effects bag, gated on the
-                        // `Applied="true"` flag — `Applied="false"` (or
-                        // absent) means the user disabled the effect
-                        // even though IDML still serialises the settings
-                        // for round-trip preservation. Q-04: extended
-                        // from Rectangle-only to all five shape kinds.
-                        if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
-                            let applied = attr(&e, b"Applied")
-                                .and_then(|s| s.parse::<bool>().ok())
-                                .unwrap_or(false);
-                            if !applied {
-                                // Effect is present but disabled; skip
-                                // the parameter capture entirely so the
-                                // renderer doesn't accidentally emit it.
-                                continue;
-                            }
-                            let Some(bag_slot) = effects_slot_mut(&mut out, kind) else {
-                                continue;
-                            };
-                            let bag = bag_slot.get_or_insert_with(Default::default);
-                            match e.name().as_ref() {
-                                b"InnerShadowSetting" => {
-                                    bag.inner_shadow = Some(InnerShadowParams {
-                                        x_offset: parse_f(&e, b"XOffset"),
-                                        y_offset: parse_f(&e, b"YOffset"),
-                                        size: parse_f(&e, b"Size"),
-                                        opacity_pct: parse_f(&e, b"Opacity"),
-                                        effect_color: attr(&e, b"EffectColor"),
-                                        angle_deg: parse_f(&e, b"Angle"),
-                                        distance: parse_f(&e, b"Distance"),
-                                        choke_pct: parse_f(&e, b"ChokeAmount"),
-                                        blend_mode: attr(&e, b"BlendMode"),
-                                        noise_pct: parse_f(&e, b"Noise"),
-                                    });
-                                }
-                                b"OuterGlowSetting" => {
-                                    bag.outer_glow = Some(OuterGlowParams {
-                                        size: parse_f(&e, b"Size"),
-                                        opacity_pct: parse_f(&e, b"Opacity"),
-                                        effect_color: attr(&e, b"EffectColor"),
-                                        spread_pct: parse_f(&e, b"Spread"),
-                                        blend_mode: attr(&e, b"BlendMode"),
-                                        noise_pct: parse_f(&e, b"Noise"),
-                                    });
-                                }
-                                b"InnerGlowSetting" => {
-                                    bag.inner_glow = Some(InnerGlowParams {
-                                        size: parse_f(&e, b"Size"),
-                                        opacity_pct: parse_f(&e, b"Opacity"),
-                                        effect_color: attr(&e, b"EffectColor"),
-                                        choke_pct: parse_f(&e, b"ChokeAmount"),
-                                        blend_mode: attr(&e, b"BlendMode"),
-                                        source: attr(&e, b"Source"),
-                                        noise_pct: parse_f(&e, b"Noise"),
-                                    });
-                                }
-                                b"BevelAndEmbossSetting" => {
-                                    bag.bevel = Some(BevelEmbossParams {
-                                        depth_pct: parse_f(&e, b"Depth"),
-                                        size: parse_f(&e, b"Size"),
-                                        angle_deg: parse_f(&e, b"Angle"),
-                                        altitude_deg: parse_f(&e, b"Altitude"),
-                                        highlight_color: attr(&e, b"HighlightColor"),
-                                        shadow_color: attr(&e, b"ShadowColor"),
-                                        highlight_opacity_pct: parse_f(&e, b"HighlightOpacity"),
-                                        shadow_opacity_pct: parse_f(&e, b"ShadowOpacity"),
-                                        style: attr(&e, b"Style"),
-                                        direction: attr(&e, b"Direction"),
-                                        technique: attr(&e, b"Technique"),
-                                        soften: parse_f(&e, b"Soften"),
-                                    });
-                                }
-                                b"SatinSetting" => {
-                                    bag.satin = Some(SatinParams {
-                                        size: parse_f(&e, b"Size"),
-                                        angle_deg: parse_f(&e, b"Angle"),
-                                        distance: parse_f(&e, b"Distance"),
-                                        effect_color: attr(&e, b"EffectColor"),
-                                        opacity_pct: parse_f(&e, b"Opacity"),
-                                        blend_mode: attr(&e, b"BlendMode"),
-                                        invert: attr(&e, b"Invert")
-                                            .and_then(|s| s.parse::<bool>().ok()),
-                                    });
-                                }
-                                b"FeatherSetting" => {
-                                    bag.feather = Some(FeatherParams {
-                                        width: parse_f(&e, b"Width"),
-                                        corner_type: attr(&e, b"CornerType"),
-                                        noise_pct: parse_f(&e, b"Noise"),
-                                        choke_pct: parse_f(&e, b"ChokeAmount"),
-                                    });
-                                }
-                                b"DirectionalFeatherSetting" => {
-                                    bag.directional_feather = Some(DirectionalFeatherParams {
-                                        left_width: parse_f(&e, b"LeftWidth"),
-                                        right_width: parse_f(&e, b"RightWidth"),
-                                        top_width: parse_f(&e, b"TopWidth"),
-                                        bottom_width: parse_f(&e, b"BottomWidth"),
-                                        angle_deg: parse_f(&e, b"Angle"),
-                                        noise_pct: parse_f(&e, b"NoiseAmount"),
-                                        choke_pct: parse_f(&e, b"ChokeAmount"),
-                                        corner_type: attr(&e, b"CornerType"),
-                                    });
-                                }
-                                b"GradientFeatherSetting" => {
-                                    // InDesign uses `GradientStart`
-                                    // (an "x y" pair) + `Length` +
-                                    // `HiliteAngle` to describe the
-                                    // gradient direction; the IDML
-                                    // spec also accepts an explicit
-                                    // `GradientEnd` pair. We accept
-                                    // both shapes — the parser
-                                    // computes the end point from
-                                    // start + (Length × Angle) when
-                                    // GradientEnd is missing so the
-                                    // renderer sees one canonical
-                                    // pair regardless of the source.
-                                    let start_point = attr(&e, b"GradientStart")
-                                        .as_deref()
-                                        .and_then(parse_xy_pair);
-                                    let end_point = attr(&e, b"GradientEnd")
-                                        .as_deref()
-                                        .and_then(parse_xy_pair)
-                                        .or_else(|| {
-                                            // `HiliteAngle` is the *highlight*
-                                            // ramp orientation, not the
-                                            // gradient axis direction —
-                                            // InDesign uses it for the
-                                            // radial-feather hilite preview
-                                            // and leaves the gradient axis
-                                            // horizontal (0°) when no
-                                            // dedicated angle attribute is
-                                            // serialised. Tied to the visible
-                                            // page-5 yellow→white feather in
-                                            // `manual-sample.idml`, where
-                                            // `HiliteAngle="-62.2"` paints a
-                                            // diagonal smudge instead of the
-                                            // expected left→right fade.
-                                            let s = start_point?;
-                                            let length = parse_f(&e, b"Length")?;
-                                            let angle = parse_f(&e, b"GradientAngle")
-                                                .or_else(|| parse_f(&e, b"Angle"))
-                                                .unwrap_or(0.0);
-                                            let rad = angle.to_radians();
-                                            let (sin, cos) = rad.sin_cos();
-                                            Some((s.0 + length * cos, s.1 - length * sin))
-                                        });
-                                    bag.gradient_feather = Some(GradientFeatherParams {
-                                        gradient_type: attr(&e, b"Type"),
-                                        start_point,
-                                        end_point,
-                                        angle_deg: parse_f(&e, b"GradientAngle")
-                                            .or_else(|| parse_f(&e, b"Angle")),
-                                        stops: Vec::new(),
-                                    });
-                                    // Mark the current frame's gradient
-                                    // feather as the open target so
-                                    // nested `<GradientStop>` /
-                                    // `<OpacityGradientStop>` children
-                                    // can append to it. Cleared on the
-                                    // close tag below. Q-04: tracks
-                                    // CurrentFrameKind (not just rect
-                                    // index) so non-Rectangle shapes
-                                    // can host gradient feathers too.
-                                    current_gradient_feather = Some(kind);
-                                }
-                                _ => {}
-                            }
+                    } else if let Some(b) = group_builders.last_mut() {
+                        // No frame is open but a `<Group>` is —
+                        // route the BlendingSetting to the
+                        // innermost group's transparency block so
+                        // the renderer can bracket the group's
+                        // member range with a single opacity /
+                        // blend mode.
+                        if opacity.is_some() {
+                            b.transparency.opacity = opacity;
+                        }
+                        if mode.is_some() {
+                            b.transparency.blend_mode = mode;
                         }
                     }
-                    b"GradientStop" | b"OpacityGradientStop" => {
-                        // Children of an open `<GradientFeatherSetting>`
-                        // define the alpha falloff. InDesign serialises
-                        // them as `<OpacityGradientStop Opacity="..."
-                        // Location="..." Midpoint="...">`; the IDML
-                        // spec also documents a `<GradientStop StopColor
-                        // ="..." Alpha="..." Location="..."
-                        // GradientStopMidpoint="...">` form. Both are
-                        // accepted — the alpha lands in `alpha_pct`
-                        // regardless of which attribute the IDML
-                        // actually used.
-                        //
-                        // `<GradientStop>` is also a child of
-                        // `<Gradient>` swatches in graphic.rs; that's
-                        // a separate parser file, so the routing here
-                        // only fires when a gradient-feather block is
-                        // actually open in the spread parser.
-                        if let Some(kind) = current_gradient_feather {
-                            if let Some(bag) =
-                                effects_slot_mut(&mut out, kind).and_then(|s| s.as_mut())
-                            {
-                                if let Some(gf) = bag.gradient_feather.as_mut() {
-                                    let location_pct = parse_f(&e, b"Location").unwrap_or(0.0);
-                                    // `Opacity` (OpacityGradientStop)
-                                    // takes precedence; `Alpha`
-                                    // (GradientStop spec form) falls
-                                    // back; default 100 (fully opaque)
-                                    // when neither is set.
-                                    let alpha_pct = parse_f(&e, b"Opacity")
-                                        .or_else(|| parse_f(&e, b"Alpha"))
-                                        .unwrap_or(100.0);
-                                    let midpoint_pct = parse_f(&e, b"GradientStopMidpoint")
-                                        .or_else(|| parse_f(&e, b"Midpoint"))
-                                        .unwrap_or(50.0);
-                                    gf.stops.push(GradientFeatherStop {
-                                        stop_color: attr(&e, b"StopColor"),
-                                        location_pct,
-                                        alpha_pct,
-                                        midpoint_pct,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    b"BlendingSetting" => {
-                        // Nested under <TransparencySetting>; we don't
-                        // track the wrapper because no other element
-                        // shares this name. Opacity is 0..=100;
-                        // BlendMode is a string (Normal / Multiply /
-                        // Screen / etc).
-                        let opacity = attr(&e, b"Opacity").and_then(|s| s.parse::<f32>().ok());
-                        let mode = attr(&e, b"BlendMode");
-                        if let Some(cf) = current_frame.as_ref() {
-                            match cf.kind {
-                                CurrentFrameKind::Rect(i) => {
-                                    if opacity.is_some() {
-                                        out.rectangles[i].opacity = opacity;
-                                    }
-                                    if mode.is_some() {
-                                        out.rectangles[i].blend_mode = mode;
-                                    }
-                                }
-                                CurrentFrameKind::Text(i) => {
-                                    if opacity.is_some() {
-                                        out.text_frames[i].opacity = opacity;
-                                    }
-                                    if mode.is_some() {
-                                        out.text_frames[i].blend_mode = mode;
-                                    }
-                                }
-                                CurrentFrameKind::Oval(i) => {
-                                    if opacity.is_some() {
-                                        out.ovals[i].opacity = opacity;
-                                    }
-                                    if mode.is_some() {
-                                        out.ovals[i].blend_mode = mode;
-                                    }
-                                }
-                                CurrentFrameKind::Polygon(i) => {
-                                    if opacity.is_some() {
-                                        out.polygons[i].opacity = opacity;
-                                    }
-                                    if mode.is_some() {
-                                        out.polygons[i].blend_mode = mode;
-                                    }
-                                }
-                                _ => {
-                                    // GraphicLines don't yet surface
-                                    // opacity / blend_mode;
-                                    // ignore until they do.
-                                }
-                            }
-                        } else if let Some(b) = group_builders.last_mut() {
-                            // No frame is open but a `<Group>` is —
-                            // route the BlendingSetting to the
-                            // innermost group's transparency block so
-                            // the renderer can bracket the group's
-                            // member range with a single opacity /
-                            // blend mode.
-                            if opacity.is_some() {
-                                b.transparency.opacity = opacity;
-                            }
-                            if mode.is_some() {
-                                b.transparency.blend_mode = mode;
-                            }
-                        }
-                    }
-                    b"GeometryPathType" => {
-                        // Record the start of a new subpath. IDML's
-                        // `<PathGeometry>` may host multiple
-                        // `<GeometryPathType>` children to form a
-                        // compound path (e.g. a square with a hole);
-                        // capturing the boundary lets the renderer
-                        // emit one MoveTo/Close per contour rather
-                        // than joining them with a straight segment.
-                        // We only track this for shapes that retain
-                        // anchors (text frames / graphic lines /
-                        // polygons); for the others the field is
-                        // unused. The companion `PathOpen` flag lifts
-                        // here too so the renderer can skip auto-close
-                        // on open paths (P-15).
-                        if let Some(cf) = current_frame.as_mut() {
-                            if cf.in_clipping_path {
-                                // W1.21: a `<GeometryPathType>` under
-                                // `<ClippingPathSettings>` begins a clip
-                                // subpath. Compound clips (a star with a
-                                // punched centre) keep their holes via
-                                // these boundaries, exactly like frame
-                                // compound paths.
-                                if let Some(clip) = cf.clip.as_mut() {
-                                    clip.clip_subpath_starts.push(clip.clip_anchors.len());
-                                    let open = attr(&e, b"PathOpen")
-                                        .and_then(|s| s.parse::<bool>().ok())
-                                        .unwrap_or(false);
-                                    clip.clip_subpath_open.push(open);
-                                }
-                            } else if cf.in_image_depth == 0 && cf.keep_anchors {
-                                // The image's own `<PathGeometry>` (when
-                                // `in_image_depth > 0`) describes the
-                                // placed picture's native box, not the
-                                // frame's silhouette — skip it so a
-                                // Polygon host's outline isn't polluted.
-                                cf.subpath_starts.push(cf.anchors.len());
+                }
+                b"GeometryPathType" => {
+                    // Record the start of a new subpath. IDML's
+                    // `<PathGeometry>` may host multiple
+                    // `<GeometryPathType>` children to form a
+                    // compound path (e.g. a square with a hole);
+                    // capturing the boundary lets the renderer
+                    // emit one MoveTo/Close per contour rather
+                    // than joining them with a straight segment.
+                    // We only track this for shapes that retain
+                    // anchors (text frames / graphic lines /
+                    // polygons); for the others the field is
+                    // unused. The companion `PathOpen` flag lifts
+                    // here too so the renderer can skip auto-close
+                    // on open paths (P-15).
+                    if let Some(cf) = current_frame.as_mut() {
+                        if cf.in_clipping_path {
+                            // W1.21: a `<GeometryPathType>` under
+                            // `<ClippingPathSettings>` begins a clip
+                            // subpath. Compound clips (a star with a
+                            // punched centre) keep their holes via
+                            // these boundaries, exactly like frame
+                            // compound paths.
+                            if let Some(clip) = cf.clip.as_mut() {
+                                clip.clip_subpath_starts.push(clip.clip_anchors.len());
                                 let open = attr(&e, b"PathOpen")
                                     .and_then(|s| s.parse::<bool>().ok())
                                     .unwrap_or(false);
-                                cf.subpath_open.push(open);
+                                clip.clip_subpath_open.push(open);
                             }
+                        } else if cf.in_image_depth == 0 && cf.keep_anchors {
+                            // The image's own `<PathGeometry>` (when
+                            // `in_image_depth > 0`) describes the
+                            // placed picture's native box, not the
+                            // frame's silhouette — skip it so a
+                            // Polygon host's outline isn't polluted.
+                            cf.subpath_starts.push(cf.anchors.len());
+                            let open = attr(&e, b"PathOpen")
+                                .and_then(|s| s.parse::<bool>().ok())
+                                .unwrap_or(false);
+                            cf.subpath_open.push(open);
                         }
                     }
-                    b"KeyValuePair" => {
-                        // `Properties/Label` entry on the current page
-                        // item — the plugin-metadata carrier. Attach to
-                        // the OPEN frame's Self id (nested anchored
-                        // frames are skipped by this parser, so their
-                        // labels are ignored rather than mis-attached
-                        // to the host).
-                        if let Some(cf) = current_frame.as_ref() {
-                            let key = crate::util::attr_unescaped(&e, b"Key");
-                            let value = crate::util::attr_unescaped(&e, b"Value");
-                            if let (Some(key), Some(value)) = (key, value) {
-                                let self_id = match cf.kind {
-                                    CurrentFrameKind::Text(i) => {
-                                        out.text_frames.get(i).and_then(|f| f.self_id.clone())
-                                    }
-                                    CurrentFrameKind::Rect(i) => {
-                                        out.rectangles.get(i).and_then(|f| f.self_id.clone())
-                                    }
-                                    CurrentFrameKind::Oval(i) => {
-                                        out.ovals.get(i).and_then(|f| f.self_id.clone())
-                                    }
-                                    CurrentFrameKind::Line(i) => {
-                                        out.graphic_lines.get(i).and_then(|f| f.self_id.clone())
-                                    }
-                                    CurrentFrameKind::Polygon(i) => {
-                                        out.polygons.get(i).and_then(|f| f.self_id.clone())
-                                    }
-                                };
-                                if let Some(self_id) = self_id {
-                                    let entries = out.labels.entry(self_id).or_default();
-                                    match entries.iter_mut().find(|(k, _)| *k == key) {
-                                        Some(slot) => slot.1 = value,
-                                        None => entries.push((key, value)),
-                                    }
+                }
+                b"KeyValuePair" => {
+                    // `Properties/Label` entry on the current page
+                    // item — the plugin-metadata carrier. Attach to
+                    // the OPEN frame's Self id (nested anchored
+                    // frames are skipped by this parser, so their
+                    // labels are ignored rather than mis-attached
+                    // to the host).
+                    if let Some(cf) = current_frame.as_ref() {
+                        let key = crate::util::attr_unescaped(&e, b"Key");
+                        let value = crate::util::attr_unescaped(&e, b"Value");
+                        if let (Some(key), Some(value)) = (key, value) {
+                            let self_id = match cf.kind {
+                                CurrentFrameKind::Text(i) => {
+                                    out.text_frames.get(i).and_then(|f| f.self_id.clone())
+                                }
+                                CurrentFrameKind::Rect(i) => {
+                                    out.rectangles.get(i).and_then(|f| f.self_id.clone())
+                                }
+                                CurrentFrameKind::Oval(i) => {
+                                    out.ovals.get(i).and_then(|f| f.self_id.clone())
+                                }
+                                CurrentFrameKind::Line(i) => {
+                                    out.graphic_lines.get(i).and_then(|f| f.self_id.clone())
+                                }
+                                CurrentFrameKind::Polygon(i) => {
+                                    out.polygons.get(i).and_then(|f| f.self_id.clone())
+                                }
+                            };
+                            if let Some(self_id) = self_id {
+                                let entries = out.labels.entry(self_id).or_default();
+                                match entries.iter_mut().find(|(k, _)| *k == key) {
+                                    Some(slot) => slot.1 = value,
+                                    None => entries.push((key, value)),
                                 }
                             }
                         }
                     }
-                    b"PathPointType" => {
-                        // Accumulate path-anchor points so the close
-                        // tag can derive bounds when no
-                        // GeometricBounds attribute was present, and
-                        // so polygon rasterisation has the actual
-                        // Bezier control points to work with. Real-
-                        // world InDesign exports always serialise
-                        // geometry this way.
-                        if let Some(cf) = current_frame.as_mut() {
-                            if cf.in_clipping_path {
-                                // W1.21: route clip-path anchors into the
-                                // pending `ClippingPathSettings`. Same
-                                // anchor/handle shape as frame geometry,
-                                // but in the image's pixel space.
-                                if let Some(clip) = cf.clip.as_mut() {
-                                    if let Some(a) =
-                                        attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s))
-                                    {
-                                        let left = attr(&e, b"LeftDirection")
-                                            .and_then(|s| parse_xy_pair(&s))
-                                            .unwrap_or(a);
-                                        let right = attr(&e, b"RightDirection")
-                                            .and_then(|s| parse_xy_pair(&s))
-                                            .unwrap_or(a);
-                                        clip.clip_anchors.push(PathAnchor {
-                                            anchor: a,
-                                            left,
-                                            right,
-                                        });
-                                    }
-                                }
-                            } else if cf.in_image_depth == 0 && (cf.needs_bounds || cf.keep_anchors)
-                            {
-                                let anchor = attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s));
-                                if let Some(a) = anchor {
+                }
+                b"PathPointType" => {
+                    // Accumulate path-anchor points so the close
+                    // tag can derive bounds when no
+                    // GeometricBounds attribute was present, and
+                    // so polygon rasterisation has the actual
+                    // Bezier control points to work with. Real-
+                    // world InDesign exports always serialise
+                    // geometry this way.
+                    if let Some(cf) = current_frame.as_mut() {
+                        if cf.in_clipping_path {
+                            // W1.21: route clip-path anchors into the
+                            // pending `ClippingPathSettings`. Same
+                            // anchor/handle shape as frame geometry,
+                            // but in the image's pixel space.
+                            if let Some(clip) = cf.clip.as_mut() {
+                                if let Some(a) = attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s))
+                                {
                                     let left = attr(&e, b"LeftDirection")
                                         .and_then(|s| parse_xy_pair(&s))
                                         .unwrap_or(a);
                                     let right = attr(&e, b"RightDirection")
                                         .and_then(|s| parse_xy_pair(&s))
                                         .unwrap_or(a);
-                                    cf.anchors.push(PathAnchor {
+                                    clip.clip_anchors.push(PathAnchor {
                                         anchor: a,
                                         left,
                                         right,
                                     });
                                 }
                             }
+                        } else if cf.in_image_depth == 0 && (cf.needs_bounds || cf.keep_anchors) {
+                            let anchor = attr(&e, b"Anchor").and_then(|s| parse_xy_pair(&s));
+                            if let Some(a) = anchor {
+                                let left = attr(&e, b"LeftDirection")
+                                    .and_then(|s| parse_xy_pair(&s))
+                                    .unwrap_or(a);
+                                let right = attr(&e, b"RightDirection")
+                                    .and_then(|s| parse_xy_pair(&s))
+                                    .unwrap_or(a);
+                                cf.anchors.push(PathAnchor {
+                                    anchor: a,
+                                    left,
+                                    right,
+                                });
+                            }
                         }
                     }
-                    b"TextWrapPreference" => {
-                        // The wrap rect itself comes from the
-                        // enclosing shape's geometry; we just record
-                        // mode + offsets here. Offsets serialise as
-                        // a `TextWrapOffset` child element rather
-                        // than attributes, so the actual numbers
-                        // arrive a few events later (handled below).
-                        if let Some(cf) = current_frame.as_mut() {
-                            let mode = attr(&e, b"TextWrapMode")
+                }
+                b"TextWrapPreference" => {
+                    // The wrap rect itself comes from the
+                    // enclosing shape's geometry; we just record
+                    // mode + offsets here. Offsets serialise as
+                    // a `TextWrapOffset` child element rather
+                    // than attributes, so the actual numbers
+                    // arrive a few events later (handled below).
+                    if let Some(cf) = current_frame.as_mut() {
+                        let mode = attr(&e, b"TextWrapMode")
+                            .as_deref()
+                            .map(TextWrapMode::from_idml)
+                            .unwrap_or(TextWrapMode::None);
+                        let invert = attr(&e, b"Inverse")
+                            .or_else(|| attr(&e, b"Inverted"))
+                            .and_then(|s| s.parse::<bool>().ok());
+                        let kind = cf.kind;
+                        let prior_offsets = current_text_wrap_offsets(&out, kind);
+                        // W2.5 — preserve any contour info already
+                        // folded in (a `<ContourOption>` child can be
+                        // emitted before OR after — InDesign emits it
+                        // after, but the read is order-robust).
+                        let (prior_contour, prior_inside) = current_text_wrap_contour(&out, kind);
+                        apply_text_wrap(
+                            &mut out,
+                            kind,
+                            Some(TextWrap {
+                                mode,
+                                offsets: prior_offsets,
+                                invert,
+                                contour_type: prior_contour,
+                                include_inside_edges: prior_inside,
+                            }),
+                        );
+                        cf.in_text_wrap = true;
+                    }
+                }
+                b"TextWrapOffset" => {
+                    if let Some(cf) = current_frame.as_ref() {
+                        if cf.in_text_wrap {
+                            let offsets = [
+                                attr(&e, b"Top").and_then(|s| s.parse().ok()).unwrap_or(0.0),
+                                attr(&e, b"Left")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0.0),
+                                attr(&e, b"Bottom")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0.0),
+                                attr(&e, b"Right")
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0.0),
+                            ];
+                            set_text_wrap_offsets(&mut out, cf.kind, offsets);
+                        }
+                    }
+                }
+                // W2.5 — `<ContourOption>` child of
+                // `<TextWrapPreference>`: the contour source +
+                // include-inside-edges for `ContourTextWrap`.
+                b"ContourOption" => {
+                    if let Some(cf) = current_frame.as_ref() {
+                        if cf.in_text_wrap {
+                            let contour_type = attr(&e, b"ContourType")
                                 .as_deref()
-                                .map(TextWrapMode::from_idml)
-                                .unwrap_or(TextWrapMode::None);
-                            let invert = attr(&e, b"Inverse")
-                                .or_else(|| attr(&e, b"Inverted"))
+                                .map(ContourOptionType::from_idml);
+                            let include_inside = attr(&e, b"IncludeInsideEdges")
                                 .and_then(|s| s.parse::<bool>().ok());
-                            let kind = cf.kind;
-                            let prior_offsets = current_text_wrap_offsets(&out, kind);
-                            // W2.5 — preserve any contour info already
-                            // folded in (a `<ContourOption>` child can be
-                            // emitted before OR after — InDesign emits it
-                            // after, but the read is order-robust).
-                            let (prior_contour, prior_inside) =
-                                current_text_wrap_contour(&out, kind);
-                            apply_text_wrap(
-                                &mut out,
-                                kind,
-                                Some(TextWrap {
-                                    mode,
-                                    offsets: prior_offsets,
-                                    invert,
-                                    contour_type: prior_contour,
-                                    include_inside_edges: prior_inside,
-                                }),
-                            );
-                            cf.in_text_wrap = true;
+                            set_text_wrap_contour(&mut out, cf.kind, contour_type, include_inside);
                         }
                     }
-                    b"TextWrapOffset" => {
-                        if let Some(cf) = current_frame.as_ref() {
-                            if cf.in_text_wrap {
-                                let offsets = [
-                                    attr(&e, b"Top").and_then(|s| s.parse().ok()).unwrap_or(0.0),
-                                    attr(&e, b"Left")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0.0),
-                                    attr(&e, b"Bottom")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0.0),
-                                    attr(&e, b"Right")
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(0.0),
-                                ];
-                                set_text_wrap_offsets(&mut out, cf.kind, offsets);
-                            }
-                        }
-                    }
-                    // W2.5 — `<ContourOption>` child of
-                    // `<TextWrapPreference>`: the contour source +
-                    // include-inside-edges for `ContourTextWrap`.
-                    b"ContourOption" => {
-                        if let Some(cf) = current_frame.as_ref() {
-                            if cf.in_text_wrap {
-                                let contour_type = attr(&e, b"ContourType")
-                                    .as_deref()
-                                    .map(ContourOptionType::from_idml);
-                                let include_inside = attr(&e, b"IncludeInsideEdges")
-                                    .and_then(|s| s.parse::<bool>().ok());
-                                set_text_wrap_contour(
-                                    &mut out,
-                                    cf.kind,
-                                    contour_type,
-                                    include_inside,
-                                );
-                            }
-                        }
-                    }
-                    b"TextFramePreference" => {
-                        if let Some(CurrentFrameKind::Text(i)) =
-                            current_frame.as_ref().map(|cf| cf.kind)
+                }
+                b"TextFramePreference" => {
+                    if let Some(CurrentFrameKind::Text(i)) =
+                        current_frame.as_ref().map(|cf| cf.kind)
+                    {
+                        let f = &mut out.text_frames[i];
+                        if let Some(vj) = attr(&e, b"VerticalJustification")
+                            .as_deref()
+                            .and_then(VerticalJustification::from_idml)
                         {
-                            let f = &mut out.text_frames[i];
-                            if let Some(vj) = attr(&e, b"VerticalJustification")
-                                .as_deref()
-                                .and_then(VerticalJustification::from_idml)
-                            {
-                                f.vertical_justification = Some(vj);
-                            }
-                            if let Some(fbo) = attr(&e, b"FirstBaselineOffset")
-                                .as_deref()
-                                .and_then(FirstBaselineOffset::from_idml)
-                            {
-                                f.first_baseline_offset = Some(fbo);
-                            }
-                            if let Some(min_fbo) = attr(&e, b"MinimumFirstBaselineOffset")
-                                .and_then(|s| s.parse::<f32>().ok())
-                            {
-                                f.minimum_first_baseline_offset = Some(min_fbo);
-                            }
-                            if let Some(insets) =
-                                attr(&e, b"InsetSpacing").and_then(|s| parse_insets(&s))
-                            {
-                                f.inset_spacing = Some(insets);
-                            }
-                            if let Some(at) = attr(&e, b"AutoSizingType")
-                                .as_deref()
-                                .and_then(AutoSizingType::from_idml)
-                            {
-                                f.auto_sizing = Some(at);
-                            }
-                            if let Some(rp) = attr(&e, b"AutoSizingReferencePoint")
-                                .as_deref()
-                                .and_then(AutoSizingReferencePoint::from_idml)
-                            {
-                                f.auto_sizing_reference_point = Some(rp);
-                            }
-                            if let Some(min_w) = attr(&e, b"MinimumWidthForAutoSizing")
-                                .and_then(|s| s.parse::<f32>().ok())
-                            {
-                                f.minimum_width_for_auto_sizing = Some(min_w);
-                            }
-                            if let Some(min_h) = attr(&e, b"MinimumHeightForAutoSizing")
-                                .and_then(|s| s.parse::<f32>().ok())
-                            {
-                                f.minimum_height_for_auto_sizing = Some(min_h);
-                            }
-                            if let Some(use_min_h) = attr(&e, b"UseMinimumHeightForAutoSizing")
-                                .and_then(|s| s.parse::<bool>().ok())
-                            {
-                                f.use_minimum_height_for_auto_sizing = Some(use_min_h);
-                            }
-                            if let Some(cc) =
-                                attr(&e, b"TextColumnCount").and_then(|s| s.parse::<u32>().ok())
-                            {
-                                f.column_count = Some(cc);
-                            }
-                            if let Some(cg) =
-                                attr(&e, b"TextColumnGutter").and_then(|s| s.parse::<f32>().ok())
-                            {
-                                f.column_gutter = Some(cg);
-                            }
-                            if let Some(cb) = attr(&e, b"VerticalBalanceColumns")
-                                .and_then(|s| s.parse::<bool>().ok())
-                            {
-                                f.column_balance = Some(cb);
-                            }
+                            f.vertical_justification = Some(vj);
+                        }
+                        if let Some(fbo) = attr(&e, b"FirstBaselineOffset")
+                            .as_deref()
+                            .and_then(FirstBaselineOffset::from_idml)
+                        {
+                            f.first_baseline_offset = Some(fbo);
+                        }
+                        if let Some(min_fbo) = attr(&e, b"MinimumFirstBaselineOffset")
+                            .and_then(|s| s.parse::<f32>().ok())
+                        {
+                            f.minimum_first_baseline_offset = Some(min_fbo);
+                        }
+                        if let Some(insets) =
+                            attr(&e, b"InsetSpacing").and_then(|s| parse_insets(&s))
+                        {
+                            f.inset_spacing = Some(insets);
+                        }
+                        if let Some(at) = attr(&e, b"AutoSizingType")
+                            .as_deref()
+                            .and_then(AutoSizingType::from_idml)
+                        {
+                            f.auto_sizing = Some(at);
+                        }
+                        if let Some(rp) = attr(&e, b"AutoSizingReferencePoint")
+                            .as_deref()
+                            .and_then(AutoSizingReferencePoint::from_idml)
+                        {
+                            f.auto_sizing_reference_point = Some(rp);
+                        }
+                        if let Some(min_w) = attr(&e, b"MinimumWidthForAutoSizing")
+                            .and_then(|s| s.parse::<f32>().ok())
+                        {
+                            f.minimum_width_for_auto_sizing = Some(min_w);
+                        }
+                        if let Some(min_h) = attr(&e, b"MinimumHeightForAutoSizing")
+                            .and_then(|s| s.parse::<f32>().ok())
+                        {
+                            f.minimum_height_for_auto_sizing = Some(min_h);
+                        }
+                        if let Some(use_min_h) = attr(&e, b"UseMinimumHeightForAutoSizing")
+                            .and_then(|s| s.parse::<bool>().ok())
+                        {
+                            f.use_minimum_height_for_auto_sizing = Some(use_min_h);
+                        }
+                        if let Some(cc) =
+                            attr(&e, b"TextColumnCount").and_then(|s| s.parse::<u32>().ok())
+                        {
+                            f.column_count = Some(cc);
+                        }
+                        if let Some(cg) =
+                            attr(&e, b"TextColumnGutter").and_then(|s| s.parse::<f32>().ok())
+                        {
+                            f.column_gutter = Some(cg);
+                        }
+                        if let Some(cb) =
+                            attr(&e, b"VerticalBalanceColumns").and_then(|s| s.parse::<bool>().ok())
+                        {
+                            f.column_balance = Some(cb);
                         }
                     }
-                    b"Image" | b"EPSImage" | b"PDF" | b"ImportedPage" | b"Link" => {
-                        // IDML's image-bearing frame nests an
-                        // <Image> with a LinkResourceURI on the
-                        // element itself or on its <Link> child.
-                        // Both Rectangle and Polygon may host placed
-                        // images; routing here dispatches on the
-                        // open frame's kind.
-                        //
-                        // The image-element tags (Image / EPSImage /
-                        // PDF / ImportedPage) also flip
-                        // `has_image_element` so the renderer can
-                        // distinguish a plain colour swatch from an
-                        // image frame whose link failed to resolve
-                        // (Envato template placeholders) and stamp
-                        // InDesign's missing-image placeholder
-                        // instead of falling back to raw fill.
-                        let is_image_element = !matches!(e.name().as_ref(), b"Link");
-                        let is_pdf_element = matches!(e.name().as_ref(), b"PDF");
-                        // W1.21: entering an image container — its own
-                        // `<PathGeometry>` is the picture box, not the
-                        // frame outline, so suppress frame-anchor
-                        // accumulation until the matching `</Image>`.
-                        // Only `Start` (a container) bumps the depth;
-                        // a self-closed `<Link/>` / `<Image/>` does not.
-                        if is_image_element && event_is_start {
-                            if let Some(cf) = current_frame.as_mut() {
-                                cf.in_image_depth += 1;
+                }
+                b"Image" | b"EPSImage" | b"PDF" | b"ImportedPage" | b"Link" => {
+                    // IDML's image-bearing frame nests an
+                    // <Image> with a LinkResourceURI on the
+                    // element itself or on its <Link> child.
+                    // Both Rectangle and Polygon may host placed
+                    // images; routing here dispatches on the
+                    // open frame's kind.
+                    //
+                    // The image-element tags (Image / EPSImage /
+                    // PDF / ImportedPage) also flip
+                    // `has_image_element` so the renderer can
+                    // distinguish a plain colour swatch from an
+                    // image frame whose link failed to resolve
+                    // (Envato template placeholders) and stamp
+                    // InDesign's missing-image placeholder
+                    // instead of falling back to raw fill.
+                    let is_image_element = !matches!(e.name().as_ref(), b"Link");
+                    let is_pdf_element = matches!(e.name().as_ref(), b"PDF");
+                    // W1.21: entering an image container — its own
+                    // `<PathGeometry>` is the picture box, not the
+                    // frame outline, so suppress frame-anchor
+                    // accumulation until the matching `</Image>`.
+                    // Only `Start` (a container) bumps the depth;
+                    // a self-closed `<Link/>` / `<Image/>` does not.
+                    if is_image_element && event_is_start {
+                        if let Some(cf) = current_frame.as_mut() {
+                            cf.in_image_depth += 1;
+                        }
+                    }
+                    let element_uri = attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"));
+                    // Q-06: a `<PDF>` element with no link URI carries
+                    // its content as inline `<Contents>` CDATA we can't
+                    // decode. Flag it so the renderer renders the
+                    // frame's intrinsic FillColor instead of the
+                    // missing-image grey-X placeholder.
+                    let inline_pdf = is_pdf_element && element_uri.is_none();
+                    match current_frame.as_ref().map(|cf| cf.kind) {
+                        Some(CurrentFrameKind::Rect(i)) => {
+                            if is_image_element {
+                                out.rectangles[i].has_image_element = true;
+                            }
+                            if inline_pdf {
+                                out.rectangles[i].has_inline_pdf = true;
+                            }
+                            if let Some(uri) = element_uri {
+                                // First-write-wins so the outer <Image>
+                                // attribute beats the inner <Link>'s.
+                                if out.rectangles[i].image_link.is_none() {
+                                    out.rectangles[i].image_link = Some(uri);
+                                }
+                            }
+                            if e.name().as_ref() == b"Image" {
+                                if let Some(m) =
+                                    attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
+                                {
+                                    if out.rectangles[i].image_item_transform.is_none() {
+                                        out.rectangles[i].image_item_transform = Some(m);
+                                    }
+                                }
+                                let host = out.rectangles[i].self_id.clone();
+                                record_image_metadata(&mut out, host, &e);
                             }
                         }
-                        let element_uri =
-                            attr(&e, b"LinkResourceURI").or_else(|| attr(&e, b"href"));
-                        // Q-06: a `<PDF>` element with no link URI carries
-                        // its content as inline `<Contents>` CDATA we can't
-                        // decode. Flag it so the renderer renders the
-                        // frame's intrinsic FillColor instead of the
-                        // missing-image grey-X placeholder.
-                        let inline_pdf = is_pdf_element && element_uri.is_none();
-                        match current_frame.as_ref().map(|cf| cf.kind) {
-                            Some(CurrentFrameKind::Rect(i)) => {
-                                if is_image_element {
-                                    out.rectangles[i].has_image_element = true;
-                                }
-                                if inline_pdf {
-                                    out.rectangles[i].has_inline_pdf = true;
-                                }
-                                if let Some(uri) = element_uri {
-                                    // First-write-wins so the outer <Image>
-                                    // attribute beats the inner <Link>'s.
-                                    if out.rectangles[i].image_link.is_none() {
-                                        out.rectangles[i].image_link = Some(uri);
-                                    }
-                                }
-                                if e.name().as_ref() == b"Image" {
-                                    if let Some(m) =
-                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
-                                    {
-                                        if out.rectangles[i].image_item_transform.is_none() {
-                                            out.rectangles[i].image_item_transform = Some(m);
-                                        }
-                                    }
-                                    let host = out.rectangles[i].self_id.clone();
-                                    record_image_metadata(&mut out, host, &e);
+                        Some(CurrentFrameKind::Polygon(i)) => {
+                            if is_image_element {
+                                out.polygons[i].has_image_element = true;
+                            }
+                            if inline_pdf {
+                                out.polygons[i].has_inline_pdf = true;
+                            }
+                            if let Some(uri) = element_uri {
+                                if out.polygons[i].image_link.is_none() {
+                                    out.polygons[i].image_link = Some(uri);
                                 }
                             }
-                            Some(CurrentFrameKind::Polygon(i)) => {
-                                if is_image_element {
-                                    out.polygons[i].has_image_element = true;
-                                }
-                                if inline_pdf {
-                                    out.polygons[i].has_inline_pdf = true;
-                                }
-                                if let Some(uri) = element_uri {
-                                    if out.polygons[i].image_link.is_none() {
-                                        out.polygons[i].image_link = Some(uri);
+                            if e.name().as_ref() == b"Image" {
+                                if let Some(m) =
+                                    attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
+                                {
+                                    if out.polygons[i].image_item_transform.is_none() {
+                                        out.polygons[i].image_item_transform = Some(m);
                                     }
                                 }
-                                if e.name().as_ref() == b"Image" {
-                                    if let Some(m) =
-                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
-                                    {
-                                        if out.polygons[i].image_item_transform.is_none() {
-                                            out.polygons[i].image_item_transform = Some(m);
-                                        }
-                                    }
-                                    let host = out.polygons[i].self_id.clone();
-                                    record_image_metadata(&mut out, host, &e);
+                                let host = out.polygons[i].self_id.clone();
+                                record_image_metadata(&mut out, host, &e);
+                            }
+                        }
+                        Some(CurrentFrameKind::Oval(i)) => {
+                            if is_image_element {
+                                out.ovals[i].has_image_element = true;
+                            }
+                            if inline_pdf {
+                                out.ovals[i].has_inline_pdf = true;
+                            }
+                            if let Some(uri) = element_uri {
+                                if out.ovals[i].image_link.is_none() {
+                                    out.ovals[i].image_link = Some(uri);
                                 }
                             }
-                            Some(CurrentFrameKind::Oval(i)) => {
-                                if is_image_element {
-                                    out.ovals[i].has_image_element = true;
-                                }
-                                if inline_pdf {
-                                    out.ovals[i].has_inline_pdf = true;
-                                }
-                                if let Some(uri) = element_uri {
-                                    if out.ovals[i].image_link.is_none() {
-                                        out.ovals[i].image_link = Some(uri);
+                            if e.name().as_ref() == b"Image" {
+                                if let Some(m) =
+                                    attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
+                                {
+                                    if out.ovals[i].image_item_transform.is_none() {
+                                        out.ovals[i].image_item_transform = Some(m);
                                     }
                                 }
-                                if e.name().as_ref() == b"Image" {
-                                    if let Some(m) =
-                                        attr(&e, b"ItemTransform").and_then(|s| parse_matrix(&s))
-                                    {
-                                        if out.ovals[i].image_item_transform.is_none() {
-                                            out.ovals[i].image_item_transform = Some(m);
-                                        }
-                                    }
-                                    let host = out.ovals[i].self_id.clone();
-                                    record_image_metadata(&mut out, host, &e);
-                                }
+                                let host = out.ovals[i].self_id.clone();
+                                record_image_metadata(&mut out, host, &e);
                             }
+                        }
+                        _ => {}
+                    }
+                }
+                b"ClippingPathSettings" => {
+                    // W1.21: `<ClippingPathSettings>` nests inside the
+                    // open `<Image>`. Parse the type + knobs onto the
+                    // current frame's pending clip; any
+                    // `<PathGeometry>` child (UserModifiedPath) then
+                    // feeds `clip_anchors` while `in_clipping_path`
+                    // holds. A self-closed element (ClippingType="None"
+                    // with no geometry) still records the type so the
+                    // renderer knows there's no clip.
+                    if let Some(cf) = current_frame.as_mut() {
+                        let clipping_type =
+                            attr(&e, b"ClippingType").map(|s| ClippingType::from_idml(&s));
+                        let invert_path = attr(&e, b"InvertPath")
+                            .and_then(|s| s.parse::<bool>().ok())
+                            .unwrap_or(false);
+                        let include_inside_edges = attr(&e, b"IncludeInsideEdges")
+                            .and_then(|s| s.parse::<bool>().ok())
+                            .unwrap_or(false);
+                        let applied_path_name =
+                            attr(&e, b"AppliedPathName").filter(|s| !s.is_empty() && s != "$ID/");
+                        let threshold = attr(&e, b"Threshold").and_then(|s| s.parse::<f32>().ok());
+                        let tolerance = attr(&e, b"Tolerance").and_then(|s| s.parse::<f32>().ok());
+                        cf.clip = Some(ClippingPathSettings {
+                            clipping_type,
+                            invert_path,
+                            include_inside_edges,
+                            applied_path_name,
+                            threshold,
+                            tolerance,
+                            clip_anchors: Vec::new(),
+                            clip_subpath_starts: Vec::new(),
+                            clip_subpath_open: Vec::new(),
+                        });
+                        // Only a container (Start) hosts geometry; a
+                        // self-closed settings element has none.
+                        cf.in_clipping_path = event_is_start;
+                    }
+                }
+                b"Contents" => {
+                    // Q-03: enter the inline-image base64 capture
+                    // path when we're nested inside a frame.
+                    // `<Contents>` only appears under image-bearing
+                    // tags in spread.xml so this branch is safe
+                    // without a parent-tag filter.
+                    if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
+                        current_image_contents_target = Some(kind);
+                        current_contents_buf.clear();
+                    }
+                }
+                b"FrameFittingOption" => {
+                    // Attaches to the current Rectangle. Crops are
+                    // signed pt offsets — negative values grow the
+                    // image past the frame edge for FillProportionally
+                    // fits.
+                    if let Some(CurrentFrameKind::Rect(i)) =
+                        current_frame.as_ref().map(|cf| cf.kind)
+                    {
+                        out.rectangles[i].frame_fitting = Some(FrameFittingOption {
+                            left_crop: attr(&e, b"LeftCrop").and_then(|s| s.parse().ok()),
+                            top_crop: attr(&e, b"TopCrop").and_then(|s| s.parse().ok()),
+                            right_crop: attr(&e, b"RightCrop").and_then(|s| s.parse().ok()),
+                            bottom_crop: attr(&e, b"BottomCrop").and_then(|s| s.parse().ok()),
+                            fitting_on_empty_frame: attr(&e, b"FittingOnEmptyFrame"),
+                            reference_point: attr(&e, b"FittingAlignment"),
+                            auto_fit: attr(&e, b"AutoFit").and_then(|s| s.parse::<bool>().ok()),
+                        });
+                    }
+                }
+                b"TextPath" => {
+                    // `<TextPath>` attaches a story to the current
+                    // shape's path (Polygon / Rectangle /
+                    // GraphicLine). The shape's own
+                    // `<PathGeometry>` provides the curve geometry;
+                    // we only record the story reference plus a
+                    // few alignment knobs here.
+                    if let (Some(cf), Some(parent_story)) =
+                        (current_frame.as_ref(), attr(&e, b"ParentStory"))
+                    {
+                        let tp = TextPath {
+                            self_id: attr(&e, b"Self"),
+                            parent_story,
+                            path_alignment: attr(&e, b"PathAlignment"),
+                            path_type_alignment: attr(&e, b"PathTypeAlignment"),
+                            path_effect: attr(&e, b"PathEffect"),
+                            flip_path_effect: attr(&e, b"FlipPathEffect"),
+                            start_bracket: attr(&e, b"StartBracket").and_then(|s| s.parse().ok()),
+                            end_bracket: attr(&e, b"EndBracket").and_then(|s| s.parse().ok()),
+                        };
+                        match cf.kind {
+                            CurrentFrameKind::Polygon(i) => {
+                                out.polygons[i].text_paths.push(tp);
+                            }
+                            CurrentFrameKind::Rect(i) => {
+                                out.rectangles[i].text_paths.push(tp);
+                            }
+                            CurrentFrameKind::Line(i) => {
+                                out.graphic_lines[i].text_paths.push(tp);
+                            }
+                            // Oval / TextFrame don't host TextPath
+                            // in the IDML schema; ignore if seen.
                             _ => {}
                         }
                     }
-                    b"ClippingPathSettings" => {
-                        // W1.21: `<ClippingPathSettings>` nests inside the
-                        // open `<Image>`. Parse the type + knobs onto the
-                        // current frame's pending clip; any
-                        // `<PathGeometry>` child (UserModifiedPath) then
-                        // feeds `clip_anchors` while `in_clipping_path`
-                        // holds. A self-closed element (ClippingType="None"
-                        // with no geometry) still records the type so the
-                        // renderer knows there's no clip.
-                        if let Some(cf) = current_frame.as_mut() {
-                            let clipping_type =
-                                attr(&e, b"ClippingType").map(|s| ClippingType::from_idml(&s));
-                            let invert_path = attr(&e, b"InvertPath")
-                                .and_then(|s| s.parse::<bool>().ok())
-                                .unwrap_or(false);
-                            let include_inside_edges = attr(&e, b"IncludeInsideEdges")
-                                .and_then(|s| s.parse::<bool>().ok())
-                                .unwrap_or(false);
-                            let applied_path_name = attr(&e, b"AppliedPathName")
-                                .filter(|s| !s.is_empty() && s != "$ID/");
-                            let threshold =
-                                attr(&e, b"Threshold").and_then(|s| s.parse::<f32>().ok());
-                            let tolerance =
-                                attr(&e, b"Tolerance").and_then(|s| s.parse::<f32>().ok());
-                            cf.clip = Some(ClippingPathSettings {
-                                clipping_type,
-                                invert_path,
-                                include_inside_edges,
-                                applied_path_name,
-                                threshold,
-                                tolerance,
-                                clip_anchors: Vec::new(),
-                                clip_subpath_starts: Vec::new(),
-                                clip_subpath_open: Vec::new(),
-                            });
-                            // Only a container (Start) hosts geometry; a
-                            // self-closed settings element has none.
-                            cf.in_clipping_path = event_is_start;
+                }
+                b"GraphicLine" => {
+                    let bounds_attr = attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                    let common = read_common_attrs(&e);
+                    let item_transform =
+                        effective_item_transform(&group_transforms, common.item_transform);
+                    out.graphic_lines.push(GraphicLine {
+                        self_id: common.self_id,
+                        bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                        item_transform,
+                        stroke_color: common.stroke_color,
+                        stroke_weight: common.stroke_weight,
+                        stroke_type: common.stroke_type,
+                        end_join: attr(&e, b"EndJoin"),
+                        miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
+                        stroke_gap_color: common.stroke_gap_color,
+                        stroke_gap_tint: common.stroke_gap_tint,
+                        stroke_dash: common.stroke_dash,
+                        applied_object_style: common.applied_object_style,
+                        text_wrap: None,
+                        item_layer: common.item_layer,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        text_paths: Vec::new(),
+                        effects: None,
+                        overprint_stroke: common.overprint_stroke,
+                        nonprinting: common.nonprinting,
+                        visible: common.visible,
+                        locked: common.locked,
+                        start_arrow: attr(&e, b"LeftLineEnd")
+                            .map(|s| ArrowheadType::from_idml(&s))
+                            .unwrap_or(ArrowheadType::None),
+                        end_arrow: attr(&e, b"RightLineEnd")
+                            .map(|s| ArrowheadType::from_idml(&s))
+                            .unwrap_or(ArrowheadType::None),
+                        start_arrow_scale: attr(&e, b"LeftArrowHeadScale")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(100.0),
+                        end_arrow_scale: attr(&e, b"RightArrowHeadScale")
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(100.0),
+                    });
+                    let idx = out.graphic_lines.len() - 1;
+                    register_with_group(&mut out, &mut group_builders, FrameRef::GraphicLine(idx));
+                    current_frame = Some(CurrentFrame {
+                        kind: CurrentFrameKind::Line(idx),
+                        needs_bounds: bounds_attr.is_none(),
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        // Always retain Bezier path anchors for
+                        // graphic lines so a child <TextPath> can
+                        // flow text along the actual stroke.
+                        keep_anchors: true,
+                        in_text_wrap: false,
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                        in_image_depth: 0,
+                        clip: None,
+                        in_clipping_path: false,
+                    });
+                }
+                b"Polygon" => {
+                    let bounds_attr = attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
+                    let common = read_common_attrs(&e);
+                    let item_transform =
+                        effective_item_transform(&group_transforms, common.item_transform);
+                    out.polygons.push(Polygon {
+                        self_id: common.self_id,
+                        bounds: bounds_attr.unwrap_or(Bounds::ZERO),
+                        item_transform,
+                        fill_color: common.fill_color,
+                        fill_tint: common.fill_tint,
+                        stroke_color: common.stroke_color,
+                        stroke_weight: common.stroke_weight,
+                        stroke_type: common.stroke_type,
+                        stroke_alignment: attr(&e, b"StrokeAlignment"),
+                        end_join: attr(&e, b"EndJoin"),
+                        miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
+                        stroke_gap_color: common.stroke_gap_color,
+                        stroke_gap_tint: common.stroke_gap_tint,
+                        stroke_dash: common.stroke_dash,
+                        applied_object_style: common.applied_object_style,
+                        text_wrap: None,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        item_layer: common.item_layer,
+                        gradient_fill_angle: common.gradient_fill_angle,
+                        gradient_fill_length: common.gradient_fill_length,
+                        gradient_stroke_angle: common.gradient_stroke_angle,
+                        gradient_stroke_length: common.gradient_stroke_length,
+                        opacity: None,
+                        blend_mode: None,
+                        text_paths: Vec::new(),
+                        image_link: None,
+                        image_bytes: None,
+                        image_clip: None,
+                        has_image_element: false,
+                        has_inline_pdf: false,
+                        image_item_transform: None,
+                        effects: None,
+                        overprint_fill: common.overprint_fill,
+                        overprint_stroke: common.overprint_stroke,
+                        nonprinting: common.nonprinting,
+                        visible: common.visible,
+                        locked: common.locked,
+                    });
+                    let idx = out.polygons.len() - 1;
+                    register_with_group(&mut out, &mut group_builders, FrameRef::Polygon(idx));
+                    current_frame = Some(CurrentFrame {
+                        kind: CurrentFrameKind::Polygon(idx),
+                        needs_bounds: bounds_attr.is_none(),
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        subpath_open: Vec::new(),
+                        // Always retain Bezier path anchors for
+                        // polygons so the renderer can emit a
+                        // FillPath instead of a bbox FillRect.
+                        keep_anchors: true,
+                        in_text_wrap: false,
+                        stroke_transparency_depth: 0,
+                        content_transparency_depth: 0,
+                        in_image_depth: 0,
+                        clip: None,
+                        in_clipping_path: false,
+                    });
+                }
+                _ => {}
+            },
+            Event::End(e) => match e.name().as_ref() {
+                b"Group" if !group_transforms.is_empty() => {
+                    group_transforms.pop();
+                    if let Some(builder) = group_builders.pop() {
+                        let group = Group {
+                            self_id: builder.self_id,
+                            item_transform: builder.item_transform,
+                            members: builder.members,
+                            transparency: builder.transparency,
+                        };
+                        let group_idx = out.groups.len();
+                        out.groups.push(group);
+                        // Register this sub-group with the
+                        // enclosing group, if any, so the
+                        // outer's `members` list captures
+                        // sub-groups in document order. Top-level
+                        // groups (no outer) surface in
+                        // `frames_in_order` so the renderer's
+                        // cross-shape z-sort sees them once at
+                        // their XML position.
+                        if let Some(outer) = group_builders.last_mut() {
+                            outer.members.push(FrameRef::Group(group_idx));
+                        } else {
+                            out.frames_in_order.push(FrameRef::Group(group_idx));
                         }
                     }
-                    b"Contents" => {
-                        // Q-03: enter the inline-image base64 capture
-                        // path when we're nested inside a frame.
-                        // `<Contents>` only appears under image-bearing
-                        // tags in spread.xml so this branch is safe
-                        // without a parent-tag filter.
-                        if let Some(kind) = current_frame.as_ref().map(|cf| cf.kind) {
-                            current_image_contents_target = Some(kind);
-                            current_contents_buf.clear();
+                }
+                b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" | b"Polygon" => {
+                    // Finalize bounds from accumulated path
+                    // anchors when no GeometricBounds attribute
+                    // was present. If neither source produced
+                    // geometry, drop the placeholder frame so
+                    // downstream code never sees a zero-rect
+                    // ghost (matches the previous behaviour of
+                    // skipping bounds-less shapes).
+                    if let Some(cf) = current_frame.take() {
+                        // W1.21: flush the placed image's clipping
+                        // path onto the host shape. Written before the
+                        // bounds/drop logic — if the frame is dropped
+                        // (bounds-less ghost) the clip rides along into
+                        // the pop. Only Rectangle / Oval / Polygon host
+                        // images, so the other kinds carry no field.
+                        if let Some(clip) = cf.clip.clone() {
+                            match cf.kind {
+                                CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
+                                    out.rectangles[i].image_clip = Some(clip);
+                                }
+                                CurrentFrameKind::Oval(i) if i < out.ovals.len() => {
+                                    out.ovals[i].image_clip = Some(clip);
+                                }
+                                CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
+                                    out.polygons[i].image_clip = Some(clip);
+                                }
+                                _ => {}
+                            }
                         }
-                    }
-                    b"FrameFittingOption" => {
-                        // Attaches to the current Rectangle. Crops are
-                        // signed pt offsets — negative values grow the
-                        // image past the frame edge for FillProportionally
-                        // fits.
-                        if let Some(CurrentFrameKind::Rect(i)) =
-                            current_frame.as_ref().map(|cf| cf.kind)
-                        {
-                            out.rectangles[i].frame_fitting = Some(FrameFittingOption {
-                                left_crop: attr(&e, b"LeftCrop").and_then(|s| s.parse().ok()),
-                                top_crop: attr(&e, b"TopCrop").and_then(|s| s.parse().ok()),
-                                right_crop: attr(&e, b"RightCrop").and_then(|s| s.parse().ok()),
-                                bottom_crop: attr(&e, b"BottomCrop").and_then(|s| s.parse().ok()),
-                                fitting_on_empty_frame: attr(&e, b"FittingOnEmptyFrame"),
-                                reference_point: attr(&e, b"FittingAlignment"),
-                                auto_fit: attr(&e, b"AutoFit").and_then(|s| s.parse::<bool>().ok()),
-                            });
+                        if cf.needs_bounds {
+                            if cf.anchors.is_empty() {
+                                drop_pending(&mut out, cf.kind);
+                                // The frame was registered with
+                                // the open group at open time;
+                                // unregister now that it has been
+                                // discarded so the group's member
+                                // list never points to a stale
+                                // frame index.
+                                let frame_ref = match cf.kind {
+                                    CurrentFrameKind::Text(i) => FrameRef::TextFrame(i),
+                                    CurrentFrameKind::Rect(i) => FrameRef::Rectangle(i),
+                                    CurrentFrameKind::Oval(i) => FrameRef::Oval(i),
+                                    CurrentFrameKind::Line(i) => FrameRef::GraphicLine(i),
+                                    CurrentFrameKind::Polygon(i) => FrameRef::Polygon(i),
+                                };
+                                unregister_last_in_group(&mut out, &mut group_builders, frame_ref);
+                            } else {
+                                set_pending_bounds(
+                                    &mut out,
+                                    cf.kind,
+                                    bounds_from_anchors(&cf.anchors),
+                                );
+                            }
                         }
-                    }
-                    b"TextPath" => {
-                        // `<TextPath>` attaches a story to the current
-                        // shape's path (Polygon / Rectangle /
-                        // GraphicLine). The shape's own
-                        // `<PathGeometry>` provides the curve geometry;
-                        // we only record the story reference plus a
-                        // few alignment knobs here.
-                        if let (Some(cf), Some(parent_story)) =
-                            (current_frame.as_ref(), attr(&e, b"ParentStory"))
-                        {
-                            let tp = TextPath {
-                                self_id: attr(&e, b"Self"),
-                                parent_story,
-                                path_alignment: attr(&e, b"PathAlignment"),
-                                path_type_alignment: attr(&e, b"PathTypeAlignment"),
-                                path_effect: attr(&e, b"PathEffect"),
-                                flip_path_effect: attr(&e, b"FlipPathEffect"),
-                                start_bracket: attr(&e, b"StartBracket")
-                                    .and_then(|s| s.parse().ok()),
-                                end_bracket: attr(&e, b"EndBracket").and_then(|s| s.parse().ok()),
+                        // Polygons keep the curved-path data
+                        // even when GeometricBounds was set, so
+                        // the renderer can rasterise the actual
+                        // outline. GraphicLines keep them too so a
+                        // child <TextPath> can flow text along the
+                        // actual stroke (curved or multi-segment).
+                        if cf.keep_anchors && !cf.anchors.is_empty() {
+                            // Drop spurious subpath markers — a
+                            // subpath start at the very end of
+                            // the anchor list points to nothing,
+                            // and the canonical single-contour
+                            // case is encoded as `[]` (so callers
+                            // can keep using the slice as-is).
+                            // `subpath_open` stays parallel to
+                            // `subpath_starts`, so when we either
+                            // empty or shorten the latter we mirror
+                            // the truncation here (P-15).
+                            let (subpath_starts, subpath_open) = {
+                                let mut starts = cf.subpath_starts.clone();
+                                let mut opens = cf.subpath_open.clone();
+                                // Keep the indices that point at a
+                                // real anchor; trim the parallel
+                                // open flags by index so the two
+                                // arrays stay in step.
+                                let mut keep = vec![true; starts.len()];
+                                for (k, &s) in starts.iter().enumerate() {
+                                    if s >= cf.anchors.len() {
+                                        keep[k] = false;
+                                    }
+                                }
+                                let mut filtered_starts = Vec::with_capacity(starts.len());
+                                let mut filtered_open = Vec::with_capacity(opens.len());
+                                for k in 0..starts.len() {
+                                    if keep[k] {
+                                        filtered_starts.push(starts[k]);
+                                        filtered_open.push(opens.get(k).copied().unwrap_or(false));
+                                    }
+                                }
+                                starts = filtered_starts;
+                                opens = filtered_open;
+                                if starts.len() <= 1 {
+                                    // The legacy canonical form for
+                                    // a single contour. Surface the
+                                    // open flag onto a 1-element vec
+                                    // so the renderer can still see
+                                    // an open single contour.
+                                    let lone_open = opens.first().copied().unwrap_or(false);
+                                    if lone_open {
+                                        (Vec::new(), vec![true])
+                                    } else {
+                                        (Vec::new(), Vec::new())
+                                    }
+                                } else {
+                                    (starts, opens)
+                                }
                             };
                             match cf.kind {
-                                CurrentFrameKind::Polygon(i) => {
-                                    out.polygons[i].text_paths.push(tp);
+                                CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
+                                    out.polygons[i].anchors = cf.anchors;
+                                    out.polygons[i].subpath_starts = subpath_starts;
+                                    out.polygons[i].subpath_open = subpath_open;
                                 }
-                                CurrentFrameKind::Rect(i) => {
-                                    out.rectangles[i].text_paths.push(tp);
+                                CurrentFrameKind::Line(i) if i < out.graphic_lines.len() => {
+                                    out.graphic_lines[i].anchors = cf.anchors;
+                                    out.graphic_lines[i].subpath_starts = subpath_starts;
+                                    out.graphic_lines[i].subpath_open = subpath_open;
                                 }
-                                CurrentFrameKind::Line(i) => {
-                                    out.graphic_lines[i].text_paths.push(tp);
+                                CurrentFrameKind::Text(i) if i < out.text_frames.len() => {
+                                    out.text_frames[i].anchors = cf.anchors;
+                                    out.text_frames[i].subpath_starts = subpath_starts;
+                                    out.text_frames[i].subpath_open = subpath_open;
                                 }
-                                // Oval / TextFrame don't host TextPath
-                                // in the IDML schema; ignore if seen.
+                                CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
+                                    // Q-11: only stash when the
+                                    // outline is non-rectangular
+                                    // (>4 anchors). A plain 4-corner
+                                    // AABB is the existing default
+                                    // and skipping the stash here
+                                    // keeps `from_rectangle`'s
+                                    // legacy `Geometry::Rect` path.
+                                    if cf.anchors.len() > 4 {
+                                        out.rectangles[i].anchors = cf.anchors;
+                                        out.rectangles[i].subpath_starts = subpath_starts;
+                                        out.rectangles[i].subpath_open = subpath_open;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
-                    b"GraphicLine" => {
-                        let bounds_attr =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let common = read_common_attrs(&e);
-                        let item_transform =
-                            effective_item_transform(&group_transforms, common.item_transform);
-                        out.graphic_lines.push(GraphicLine {
-                            self_id: common.self_id,
-                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
-                            item_transform,
-                            stroke_color: common.stroke_color,
-                            stroke_weight: common.stroke_weight,
-                            stroke_type: common.stroke_type,
-                            end_join: attr(&e, b"EndJoin"),
-                            miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
-                            stroke_gap_color: common.stroke_gap_color,
-                            stroke_gap_tint: common.stroke_gap_tint,
-                            stroke_dash: common.stroke_dash,
-                            applied_object_style: common.applied_object_style,
-                            text_wrap: None,
-                            item_layer: common.item_layer,
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            text_paths: Vec::new(),
-                            effects: None,
-                            overprint_stroke: common.overprint_stroke,
-                            nonprinting: common.nonprinting,
-                            visible: common.visible,
-                            locked: common.locked,
-                            start_arrow: attr(&e, b"LeftLineEnd")
-                                .map(|s| ArrowheadType::from_idml(&s))
-                                .unwrap_or(ArrowheadType::None),
-                            end_arrow: attr(&e, b"RightLineEnd")
-                                .map(|s| ArrowheadType::from_idml(&s))
-                                .unwrap_or(ArrowheadType::None),
-                            start_arrow_scale: attr(&e, b"LeftArrowHeadScale")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(100.0),
-                            end_arrow_scale: attr(&e, b"RightArrowHeadScale")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(100.0),
-                        });
-                        let idx = out.graphic_lines.len() - 1;
-                        register_with_group(
-                            &mut out,
-                            &mut group_builders,
-                            FrameRef::GraphicLine(idx),
-                        );
-                        current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Line(idx),
-                            needs_bounds: bounds_attr.is_none(),
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            // Always retain Bezier path anchors for
-                            // graphic lines so a child <TextPath> can
-                            // flow text along the actual stroke.
-                            keep_anchors: true,
-                            in_text_wrap: false,
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
-                            in_image_depth: 0,
-                            clip: None,
-                            in_clipping_path: false,
-                        });
-                    }
-                    b"Polygon" => {
-                        let bounds_attr =
-                            attr(&e, b"GeometricBounds").and_then(|s| parse_bounds(&s));
-                        let common = read_common_attrs(&e);
-                        let item_transform =
-                            effective_item_transform(&group_transforms, common.item_transform);
-                        out.polygons.push(Polygon {
-                            self_id: common.self_id,
-                            bounds: bounds_attr.unwrap_or(Bounds::ZERO),
-                            item_transform,
-                            fill_color: common.fill_color,
-                            fill_tint: common.fill_tint,
-                            stroke_color: common.stroke_color,
-                            stroke_weight: common.stroke_weight,
-                            stroke_type: common.stroke_type,
-                            stroke_alignment: attr(&e, b"StrokeAlignment"),
-                            end_join: attr(&e, b"EndJoin"),
-                            miter_limit: attr(&e, b"MiterLimit").and_then(|s| s.parse().ok()),
-                            stroke_gap_color: common.stroke_gap_color,
-                            stroke_gap_tint: common.stroke_gap_tint,
-                            stroke_dash: common.stroke_dash,
-                            applied_object_style: common.applied_object_style,
-                            text_wrap: None,
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            item_layer: common.item_layer,
-                            gradient_fill_angle: common.gradient_fill_angle,
-                            gradient_fill_length: common.gradient_fill_length,
-                            gradient_stroke_angle: common.gradient_stroke_angle,
-                            gradient_stroke_length: common.gradient_stroke_length,
-                            opacity: None,
-                            blend_mode: None,
-                            text_paths: Vec::new(),
-                            image_link: None,
-                            image_bytes: None,
-                            image_clip: None,
-                            has_image_element: false,
-                            has_inline_pdf: false,
-                            image_item_transform: None,
-                            effects: None,
-                            overprint_fill: common.overprint_fill,
-                            overprint_stroke: common.overprint_stroke,
-                            nonprinting: common.nonprinting,
-                            visible: common.visible,
-                            locked: common.locked,
-                        });
-                        let idx = out.polygons.len() - 1;
-                        register_with_group(&mut out, &mut group_builders, FrameRef::Polygon(idx));
-                        current_frame = Some(CurrentFrame {
-                            kind: CurrentFrameKind::Polygon(idx),
-                            needs_bounds: bounds_attr.is_none(),
-                            anchors: Vec::new(),
-                            subpath_starts: Vec::new(),
-                            subpath_open: Vec::new(),
-                            // Always retain Bezier path anchors for
-                            // polygons so the renderer can emit a
-                            // FillPath instead of a bbox FillRect.
-                            keep_anchors: true,
-                            in_text_wrap: false,
-                            stroke_transparency_depth: 0,
-                            content_transparency_depth: 0,
-                            in_image_depth: 0,
-                            clip: None,
-                            in_clipping_path: false,
-                        });
-                    }
-                    _ => {}
-                },
-                Event::End(e) => match e.name().as_ref() {
-                    b"Group" if !group_transforms.is_empty() => {
-                        group_transforms.pop();
-                        if let Some(builder) = group_builders.pop() {
-                            let group = Group {
-                                self_id: builder.self_id,
-                                item_transform: builder.item_transform,
-                                members: builder.members,
-                                transparency: builder.transparency,
-                            };
-                            let group_idx = out.groups.len();
-                            out.groups.push(group);
-                            // Register this sub-group with the
-                            // enclosing group, if any, so the
-                            // outer's `members` list captures
-                            // sub-groups in document order. Top-level
-                            // groups (no outer) surface in
-                            // `frames_in_order` so the renderer's
-                            // cross-shape z-sort sees them once at
-                            // their XML position.
-                            if let Some(outer) = group_builders.last_mut() {
-                                outer.members.push(FrameRef::Group(group_idx));
-                            } else {
-                                out.frames_in_order.push(FrameRef::Group(group_idx));
-                            }
-                        }
-                    }
-                    b"TextFrame" | b"Rectangle" | b"Oval" | b"GraphicLine" | b"Polygon" => {
-                        // Finalize bounds from accumulated path
-                        // anchors when no GeometricBounds attribute
-                        // was present. If neither source produced
-                        // geometry, drop the placeholder frame so
-                        // downstream code never sees a zero-rect
-                        // ghost (matches the previous behaviour of
-                        // skipping bounds-less shapes).
-                        if let Some(cf) = current_frame.take() {
-                            // W1.21: flush the placed image's clipping
-                            // path onto the host shape. Written before the
-                            // bounds/drop logic — if the frame is dropped
-                            // (bounds-less ghost) the clip rides along into
-                            // the pop. Only Rectangle / Oval / Polygon host
-                            // images, so the other kinds carry no field.
-                            if let Some(clip) = cf.clip.clone() {
-                                match cf.kind {
-                                    CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
-                                        out.rectangles[i].image_clip = Some(clip);
-                                    }
-                                    CurrentFrameKind::Oval(i) if i < out.ovals.len() => {
-                                        out.ovals[i].image_clip = Some(clip);
-                                    }
-                                    CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
-                                        out.polygons[i].image_clip = Some(clip);
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            if cf.needs_bounds {
-                                if cf.anchors.is_empty() {
-                                    drop_pending(&mut out, cf.kind);
-                                    // The frame was registered with
-                                    // the open group at open time;
-                                    // unregister now that it has been
-                                    // discarded so the group's member
-                                    // list never points to a stale
-                                    // frame index.
-                                    let frame_ref = match cf.kind {
-                                        CurrentFrameKind::Text(i) => FrameRef::TextFrame(i),
-                                        CurrentFrameKind::Rect(i) => FrameRef::Rectangle(i),
-                                        CurrentFrameKind::Oval(i) => FrameRef::Oval(i),
-                                        CurrentFrameKind::Line(i) => FrameRef::GraphicLine(i),
-                                        CurrentFrameKind::Polygon(i) => FrameRef::Polygon(i),
-                                    };
-                                    unregister_last_in_group(
-                                        &mut out,
-                                        &mut group_builders,
-                                        frame_ref,
-                                    );
-                                } else {
-                                    set_pending_bounds(
-                                        &mut out,
-                                        cf.kind,
-                                        bounds_from_anchors(&cf.anchors),
-                                    );
-                                }
-                            }
-                            // Polygons keep the curved-path data
-                            // even when GeometricBounds was set, so
-                            // the renderer can rasterise the actual
-                            // outline. GraphicLines keep them too so a
-                            // child <TextPath> can flow text along the
-                            // actual stroke (curved or multi-segment).
-                            if cf.keep_anchors && !cf.anchors.is_empty() {
-                                // Drop spurious subpath markers — a
-                                // subpath start at the very end of
-                                // the anchor list points to nothing,
-                                // and the canonical single-contour
-                                // case is encoded as `[]` (so callers
-                                // can keep using the slice as-is).
-                                // `subpath_open` stays parallel to
-                                // `subpath_starts`, so when we either
-                                // empty or shorten the latter we mirror
-                                // the truncation here (P-15).
-                                let (subpath_starts, subpath_open) = {
-                                    let mut starts = cf.subpath_starts.clone();
-                                    let mut opens = cf.subpath_open.clone();
-                                    // Keep the indices that point at a
-                                    // real anchor; trim the parallel
-                                    // open flags by index so the two
-                                    // arrays stay in step.
-                                    let mut keep = vec![true; starts.len()];
-                                    for (k, &s) in starts.iter().enumerate() {
-                                        if s >= cf.anchors.len() {
-                                            keep[k] = false;
-                                        }
-                                    }
-                                    let mut filtered_starts = Vec::with_capacity(starts.len());
-                                    let mut filtered_open = Vec::with_capacity(opens.len());
-                                    for k in 0..starts.len() {
-                                        if keep[k] {
-                                            filtered_starts.push(starts[k]);
-                                            filtered_open
-                                                .push(opens.get(k).copied().unwrap_or(false));
-                                        }
-                                    }
-                                    starts = filtered_starts;
-                                    opens = filtered_open;
-                                    if starts.len() <= 1 {
-                                        // The legacy canonical form for
-                                        // a single contour. Surface the
-                                        // open flag onto a 1-element vec
-                                        // so the renderer can still see
-                                        // an open single contour.
-                                        let lone_open = opens.first().copied().unwrap_or(false);
-                                        if lone_open {
-                                            (Vec::new(), vec![true])
-                                        } else {
-                                            (Vec::new(), Vec::new())
-                                        }
-                                    } else {
-                                        (starts, opens)
-                                    }
-                                };
-                                match cf.kind {
-                                    CurrentFrameKind::Polygon(i) if i < out.polygons.len() => {
-                                        out.polygons[i].anchors = cf.anchors;
-                                        out.polygons[i].subpath_starts = subpath_starts;
-                                        out.polygons[i].subpath_open = subpath_open;
-                                    }
-                                    CurrentFrameKind::Line(i) if i < out.graphic_lines.len() => {
-                                        out.graphic_lines[i].anchors = cf.anchors;
-                                        out.graphic_lines[i].subpath_starts = subpath_starts;
-                                        out.graphic_lines[i].subpath_open = subpath_open;
-                                    }
-                                    CurrentFrameKind::Text(i) if i < out.text_frames.len() => {
-                                        out.text_frames[i].anchors = cf.anchors;
-                                        out.text_frames[i].subpath_starts = subpath_starts;
-                                        out.text_frames[i].subpath_open = subpath_open;
-                                    }
-                                    CurrentFrameKind::Rect(i) if i < out.rectangles.len() => {
-                                        // Q-11: only stash when the
-                                        // outline is non-rectangular
-                                        // (>4 anchors). A plain 4-corner
-                                        // AABB is the existing default
-                                        // and skipping the stash here
-                                        // keeps `from_rectangle`'s
-                                        // legacy `Geometry::Rect` path.
-                                        if cf.anchors.len() > 4 {
-                                            out.rectangles[i].anchors = cf.anchors;
-                                            out.rectangles[i].subpath_starts = subpath_starts;
-                                            out.rectangles[i].subpath_open = subpath_open;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    b"TextWrapPreference" => {
-                        if let Some(cf) = current_frame.as_mut() {
-                            cf.in_text_wrap = false;
-                        }
-                    }
-                    b"ClippingPathSettings" => {
-                        // W1.21: clip geometry capture ends here; the
-                        // pending `clip` is flushed onto the host shape at
-                        // frame close.
-                        if let Some(cf) = current_frame.as_mut() {
-                            cf.in_clipping_path = false;
-                        }
-                    }
-                    b"Image" | b"EPSImage" | b"ImportedPage" | b"PDF" => {
-                        // W1.21: leaving the image container restores
-                        // frame-anchor accumulation. Saturating so a
-                        // malformed/mismatched stream can't underflow.
-                        if let Some(cf) = current_frame.as_mut() {
-                            cf.in_image_depth = cf.in_image_depth.saturating_sub(1);
-                        }
-                    }
-                    b"StrokeTransparencySetting" => {
-                        if let Some(cf) = current_frame.as_mut() {
-                            if cf.stroke_transparency_depth > 0 {
-                                cf.stroke_transparency_depth -= 1;
-                            }
-                        } else if let Some(b) = group_builders.last_mut() {
-                            if b.stroke_transparency_depth > 0 {
-                                b.stroke_transparency_depth -= 1;
-                            }
-                        }
-                    }
-                    b"ContentTransparencySetting" => {
-                        if let Some(cf) = current_frame.as_mut() {
-                            if cf.content_transparency_depth > 0 {
-                                cf.content_transparency_depth -= 1;
-                            }
-                        } else if let Some(b) = group_builders.last_mut() {
-                            if b.content_transparency_depth > 0 {
-                                b.content_transparency_depth -= 1;
-                            }
-                        }
-                    }
-                    b"GradientFeatherSetting" => {
-                        // Close the gradient-feather scope so any
-                        // later `<GradientStop>` (e.g. inside a
-                        // `<Gradient>` swatch parsed in graphic.rs
-                        // — different file, but defensive here)
-                        // doesn't accidentally route to this rect.
-                        current_gradient_feather = None;
-                    }
-                    b"Contents" => {
-                        // Q-03: close the inline-image base64 capture.
-                        // Decode and stash on the parent shape; clear
-                        // state so a later sibling can't accidentally
-                        // route into the same buffer.
-                        if let Some(kind) = current_image_contents_target.take() {
-                            let decoded = decode_image_contents_base64(&current_contents_buf);
-                            current_contents_buf.clear();
-                            if let Some(bytes) = decoded {
-                                set_image_bytes(&mut out, kind, bytes);
-                            }
-                        }
-                    }
-                    _ => {}
-                },
-                Event::Text(t) if current_image_contents_target.is_some() => {
-                    // base64 CDATA can also arrive as Text events
-                    // (whitespace-padded between tags). Trim during
-                    // decode rather than at capture time.
-                    current_contents_buf.extend_from_slice(t.as_ref());
                 }
-                Event::CData(t) if current_image_contents_target.is_some() => {
-                    current_contents_buf.extend_from_slice(t.as_ref());
+                b"TextWrapPreference" => {
+                    if let Some(cf) = current_frame.as_mut() {
+                        cf.in_text_wrap = false;
+                    }
                 }
-                Event::Eof => break,
+                b"ClippingPathSettings" => {
+                    // W1.21: clip geometry capture ends here; the
+                    // pending `clip` is flushed onto the host shape at
+                    // frame close.
+                    if let Some(cf) = current_frame.as_mut() {
+                        cf.in_clipping_path = false;
+                    }
+                }
+                b"Image" | b"EPSImage" | b"ImportedPage" | b"PDF" => {
+                    // W1.21: leaving the image container restores
+                    // frame-anchor accumulation. Saturating so a
+                    // malformed/mismatched stream can't underflow.
+                    if let Some(cf) = current_frame.as_mut() {
+                        cf.in_image_depth = cf.in_image_depth.saturating_sub(1);
+                    }
+                }
+                b"StrokeTransparencySetting" => {
+                    if let Some(cf) = current_frame.as_mut() {
+                        if cf.stroke_transparency_depth > 0 {
+                            cf.stroke_transparency_depth -= 1;
+                        }
+                    } else if let Some(b) = group_builders.last_mut() {
+                        if b.stroke_transparency_depth > 0 {
+                            b.stroke_transparency_depth -= 1;
+                        }
+                    }
+                }
+                b"ContentTransparencySetting" => {
+                    if let Some(cf) = current_frame.as_mut() {
+                        if cf.content_transparency_depth > 0 {
+                            cf.content_transparency_depth -= 1;
+                        }
+                    } else if let Some(b) = group_builders.last_mut() {
+                        if b.content_transparency_depth > 0 {
+                            b.content_transparency_depth -= 1;
+                        }
+                    }
+                }
+                b"GradientFeatherSetting" => {
+                    // Close the gradient-feather scope so any
+                    // later `<GradientStop>` (e.g. inside a
+                    // `<Gradient>` swatch parsed in graphic.rs
+                    // — different file, but defensive here)
+                    // doesn't accidentally route to this rect.
+                    current_gradient_feather = None;
+                }
+                b"Contents" => {
+                    // Q-03: close the inline-image base64 capture.
+                    // Decode and stash on the parent shape; clear
+                    // state so a later sibling can't accidentally
+                    // route into the same buffer.
+                    if let Some(kind) = current_image_contents_target.take() {
+                        let decoded = decode_image_contents_base64(&current_contents_buf);
+                        current_contents_buf.clear();
+                        if let Some(bytes) = decoded {
+                            set_image_bytes(&mut out, kind, bytes);
+                        }
+                    }
+                }
                 _ => {}
+            },
+            Event::Text(t) if current_image_contents_target.is_some() => {
+                // base64 CDATA can also arrive as Text events
+                // (whitespace-padded between tags). Trim during
+                // decode rather than at capture time.
+                current_contents_buf.extend_from_slice(t.as_ref());
             }
-            buf.clear();
+            Event::CData(t) if current_image_contents_target.is_some() => {
+                current_contents_buf.extend_from_slice(t.as_ref());
+            }
+            Event::Eof => break,
+            _ => {}
         }
-        Ok(out)
+        buf.clear();
     }
+    Ok(out)
 }
 
 fn parse_bounds(s: &str) -> Option<Bounds> {
@@ -2536,7 +2405,7 @@ mod tests {
     <GraphicLine Self="gl3" GeometricBounds="10 430 110 630"/>
   </Spread>
 </idPkg:Spread>"#;
-        let s = Spread::parse(xml.as_bytes()).unwrap();
+        let s = parse_spread(xml.as_bytes()).unwrap();
         assert_eq!(s.graphic_lines.len(), 3);
         let gl1 = &s.graphic_lines[0];
         assert_eq!(gl1.start_arrow, ArrowheadType::CircleSolid);
@@ -2596,7 +2465,7 @@ mod tests {
     <Guide Self="g3" Orientation="Bogus" Location="50"/>
   </Spread>
 </idPkg:Spread>"#;
-        let s = Spread::parse(xml.as_bytes()).unwrap();
+        let s = parse_spread(xml.as_bytes()).unwrap();
         assert_eq!(s.guides.len(), 2, "bogus orientation should be dropped");
         assert!(matches!(
             s.guides[0].orientation,
@@ -2634,7 +2503,7 @@ mod tests {
     <Rectangle Self="u200" GeometricBounds="10 220 110 420" ItemTransform="1 0 0 1 0 0"/>
   </Spread>
 </idPkg:Spread>"#;
-        let s = Spread::parse(xml.as_bytes()).unwrap();
+        let s = parse_spread(xml.as_bytes()).unwrap();
         let labels = s.labels.get("u100").expect("u100 labelled");
         assert_eq!(
             labels,
@@ -2651,7 +2520,7 @@ mod tests {
 
     #[test]
     fn parses_pages_and_frames() {
-        let s = Spread::parse(TWO_PAGE_SPREAD).unwrap();
+        let s = parse_spread(TWO_PAGE_SPREAD).unwrap();
         assert_eq!(s.self_id.as_deref(), Some("spread1"));
         assert_eq!(s.pages.len(), 2);
         assert_eq!(s.pages[0].self_id.as_deref(), Some("p1"));
@@ -2680,7 +2549,7 @@ mod tests {
             <Page Self="p3" GeometricBounds="0 0 792 612"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.pages.len(), 3);
         assert_eq!(s.pages[0].show_master_items, Some(false));
         assert_eq!(s.pages[1].show_master_items, Some(true));
@@ -2710,7 +2579,7 @@ mod tests {
             <TextFrame Self="after" ParentStory="u3" GeometricBounds="0 0 100 200"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 3, "all frames lifted out of groups");
         assert_eq!(s.skipped_nested_frames, 0);
         assert_eq!(s.text_frames[0].self_id.as_deref(), Some("top"));
@@ -2741,7 +2610,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let f = &s.text_frames[0];
         assert_eq!(
             f.vertical_justification,
@@ -2767,7 +2636,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let f = &s.text_frames[0];
         assert_eq!(f.column_count, Some(3));
         assert_eq!(f.column_gutter, Some(14.0));
@@ -2793,7 +2662,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let r = &s.rectangles[0];
         assert_eq!(r.stroke_gap_color.as_deref(), Some("Color/Cyan"));
         assert_eq!(r.stroke_gap_tint, Some(60.0));
@@ -2820,7 +2689,7 @@ mod tests {
                        BottomLeftCornerOption="RoundedCorner" BottomLeftCornerRadius="19.84"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let r = &s.rectangles[0];
         // Top-left + top-right + bottom-right squared off explicitly.
         assert_eq!(r.corners[0].option, Some(CornerOption::None));
@@ -2850,7 +2719,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.rectangles.len(), 2);
         let r1 = &s.rectangles[0];
         assert_eq!(
@@ -2885,7 +2754,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(
             s.rectangles[0].image_bytes.as_deref(),
             Some(b"Hello, IDML!" as &[u8]),
@@ -2915,7 +2784,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let a = &s.text_frames[0];
         assert_eq!(a.auto_sizing, Some(AutoSizingType::WidthOnly));
         assert!(a.auto_sizing.unwrap().grows_width());
@@ -2949,7 +2818,7 @@ mod tests {
                        AppliedTOCStyle="TOCStyle/Main"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(
             s.text_frames[0].applied_toc_style.as_deref(),
             Some("TOCStyle/Main")
@@ -2968,7 +2837,7 @@ mod tests {
                        GeometricBounds="120 0 220 100"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 2);
         assert_eq!(s.text_frames[0].next_text_frame.as_deref(), Some("frameB"));
         assert!(s.text_frames[1].next_text_frame.is_none());
@@ -2984,7 +2853,7 @@ mod tests {
             </Group>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 1);
         assert!(
             s.text_frames[0].item_transform.is_none(),
@@ -3004,7 +2873,7 @@ mod tests {
             <Rectangle Self="r2" GeometricBounds="200 200 300 300"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 1);
         assert_eq!(s.rectangles.len(), 2);
         assert_eq!(s.rectangles[0].self_id.as_deref(), Some("r1"));
@@ -3024,7 +2893,7 @@ mod tests {
                        GradientStrokeAngle="-30" GradientStrokeLength="80"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let r = &s.rectangles[0];
         assert_eq!(r.gradient_fill_angle, Some(45.0));
         assert_eq!(r.gradient_fill_length, Some(120.0));
@@ -3048,7 +2917,7 @@ mod tests {
             <Rectangle Self="rect1" GeometricBounds="0 0 50 50"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 1);
         let shadow = s.text_frames[0]
             .drop_shadow
@@ -3083,7 +2952,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert!(s.text_frames[0].drop_shadow.is_none());
         let shadow = s.text_frames[0]
             .stroke_drop_shadow
@@ -3108,7 +2977,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert!(s.text_frames[0].drop_shadow.is_none());
         assert!(s.text_frames[0].stroke_drop_shadow.is_none());
     }
@@ -3128,7 +2997,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert!(s.text_frames[0].drop_shadow.is_none());
     }
 
@@ -3141,7 +3010,7 @@ mod tests {
             <Page Self="good" GeometricBounds="0 0 100 200"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.pages.len(), 1);
         assert_eq!(s.pages[0].self_id.as_deref(), Some("good"));
     }
@@ -3180,7 +3049,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 1, "frame must survive without GB");
         let f = &s.text_frames[0];
         // Bounding box of (-100,-50) and (200,150) → top=-50, left=-100,
@@ -3224,7 +3093,7 @@ mod tests {
             </GraphicLine>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.rectangles.len(), 1);
         assert_eq!(s.rectangles[0].bounds.width(), 40.0);
         assert_eq!(s.rectangles[0].bounds.height(), 60.0);
@@ -3249,7 +3118,7 @@ mod tests {
             <TextFrame Self="kept" ParentStory="u2" GeometricBounds="0 0 50 50"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames.len(), 1);
         assert_eq!(s.text_frames[0].self_id.as_deref(), Some("kept"));
     }
@@ -3274,7 +3143,7 @@ mod tests {
             <Page Self="legacy" GeometricBounds="0 0 792 612"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.pages.len(), 3);
         assert_eq!(
             s.pages[0].item_transform,
@@ -3311,7 +3180,7 @@ mod tests {
             </TextFrame>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.text_frames[0].bounds.right, 200.0);
         assert_eq!(s.text_frames[0].bounds.bottom, 100.0);
     }
@@ -3342,7 +3211,7 @@ mod tests {
             </Polygon>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 1);
         assert_eq!(s.polygons[0].text_paths.len(), 1);
         let tp = &s.polygons[0].text_paths[0];
@@ -3373,7 +3242,7 @@ mod tests {
             <Polygon Self="poly2" GeometricBounds="0 0 50 50"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 2);
         let p = &s.polygons[0];
         assert_eq!(p.image_link.as_deref(), Some("file:///tmp/photo.jpg"));
@@ -3412,7 +3281,7 @@ mod tests {
             <Rectangle Self="r3" GeometricBounds="100 0 150 50"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.rectangles.len(), 3);
         assert_eq!(s.groups.len(), 1);
         let g = &s.groups[0];
@@ -3460,7 +3329,7 @@ mod tests {
             </Group>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.groups.len(), 2);
         // Inner group closes first → at index 0.
         let inner = &s.groups[0];
@@ -3503,7 +3372,7 @@ mod tests {
             </Group>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert!(s.rectangles[0].opacity.is_none());
         assert!(s.rectangles[0].blend_mode.is_none());
         assert_eq!(s.groups.len(), 1);
@@ -3528,7 +3397,7 @@ mod tests {
             </Polygon>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(
             s.polygons[0].image_link.as_deref(),
             Some("file:///tmp/cat.png")
@@ -3558,7 +3427,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let bag = s.rectangles[0].effects.as_ref().expect("effects bag");
         let dir = bag
             .directional_feather
@@ -3591,7 +3460,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         // The effects bag may be absent entirely or have no
         // directional_feather; both are acceptable.
         let dir_present = s.rectangles[0]
@@ -3628,7 +3497,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let bag = s.rectangles[0].effects.as_ref().expect("effects bag");
         let gf = bag
             .gradient_feather
@@ -3679,7 +3548,7 @@ mod tests {
                 </Polygon>
               </Spread>
             </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 1);
         let p = &s.polygons[0];
         assert_eq!(p.anchors.len(), 8, "both contours' anchors are stored");
@@ -3718,7 +3587,7 @@ mod tests {
                 </Polygon>
               </Spread>
             </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 1);
         assert_eq!(s.polygons[0].subpath_open, vec![true]);
     }
@@ -3751,7 +3620,7 @@ mod tests {
                 </Polygon>
               </Spread>
             </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 1);
         assert_eq!(s.polygons[0].subpath_starts, vec![0, 2]);
         assert_eq!(s.polygons[0].subpath_open, vec![true, false]);
@@ -3778,7 +3647,7 @@ mod tests {
                 </Polygon>
               </Spread>
             </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         assert_eq!(s.polygons.len(), 1);
         assert!(
             s.polygons[0].subpath_starts.is_empty(),
@@ -3836,7 +3705,7 @@ mod tests {
                              OverprintStroke="true"/>
               </Spread>
             </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         // Rect r1: both flags true; r2: both false (defaults).
         assert!(s.rectangles[0].overprint_fill);
         assert!(s.rectangles[0].overprint_stroke);
@@ -3867,7 +3736,7 @@ mod tests {
             <Rectangle Self="r2" GeometricBounds="0 0 50 50" FillColor="Color/Red"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let meta = s.image_metadata.get("r1").expect("metadata for r1");
         assert_eq!(meta.space.as_deref(), Some("CMYK"), "$ID/ prefix stripped");
         assert!((meta.actual_ppi.unwrap() - 300.0).abs() < 1e-3);
@@ -3888,7 +3757,7 @@ mod tests {
             <Page Self="p2" GeometricBounds="0 0 792 612"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let m = s.page_margins.get("p1").expect("margins for p1");
         assert!((m.top - 36.0).abs() < 1e-3);
         assert!((m.bottom - 48.0).abs() < 1e-3);
@@ -3933,7 +3802,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let clip = s.rectangles[0]
             .image_clip
             .as_ref()
@@ -3987,7 +3856,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
         assert!(clip.include_inside_edges);
         assert_eq!(clip.clip_anchors.len(), 8);
@@ -4018,7 +3887,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
         assert!(clip.invert_path);
         assert!(clip.has_renderable_geometry());
@@ -4042,7 +3911,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
         assert_eq!(clip.clipping_type, Some(ClippingType::PhotoshopPath));
         assert!(clip.clip_anchors.is_empty());
@@ -4069,7 +3938,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let clip = s.rectangles[0].image_clip.as_ref().expect("clip parsed");
         assert_eq!(clip.clipping_type, Some(ClippingType::None));
         assert!(!clip.is_deferred_clip());
@@ -4105,7 +3974,7 @@ mod tests {
             </Polygon>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         // The polygon keeps its own triangle (3 anchors), not the
         // image's 4-corner box appended after it.
         assert_eq!(
@@ -4130,7 +3999,7 @@ mod tests {
             </Rectangle>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let tw = s.rectangles[0].text_wrap.expect("text_wrap parsed");
         assert_eq!(tw.mode, TextWrapMode::ContourTextWrap);
         assert_eq!(tw.contour_type, Some(ContourOptionType::DetectEdges));
@@ -4148,7 +4017,7 @@ mod tests {
             <Rectangle Self="default"/>
           </Spread>
         </idPkg:Spread>"#;
-        let s = Spread::parse(xml).unwrap();
+        let s = parse_spread(xml).unwrap();
         let hidden = s
             .rectangles
             .iter()
