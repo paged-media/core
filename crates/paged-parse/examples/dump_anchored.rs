@@ -25,7 +25,7 @@ fn main() {
         .nth(1)
         .expect("usage: dump_anchored <story.xml>");
     let bytes = fs::read(&path).expect("read story");
-    let s = paged_parse::Story::parse(&bytes).expect("parse story");
+    let s = paged_parse::parse_story(&bytes).expect("parse story");
     println!("story: {} paragraphs", s.paragraphs.len());
     for (i, p) in s.paragraphs.iter().enumerate() {
         if p.anchored_frames.is_empty() {

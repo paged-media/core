@@ -170,7 +170,7 @@ fn tables_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let story = paged_parse::Story::parse(xml).expect("Story::parse");
+        let story = paged_parse::parse_story(xml).expect("Story::parse");
         for p in &story.paragraphs {
             if let Some(table) = &p.table {
                 tables_found += 1;
@@ -468,7 +468,7 @@ fn markers_round_trips_through_parser() {
         .find(|(k, _)| k.starts_with("Stories/"))
         .map(|(_, v)| v)
         .expect("a story entry");
-    let story = paged_parse::Story::parse(story_xml).expect("Story::parse");
+    let story = paged_parse::parse_story(story_xml).expect("Story::parse");
     let runs: Vec<&paged_parse::CharacterRun> = story
         .paragraphs
         .iter()

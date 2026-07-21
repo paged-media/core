@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 
 use paged_parse::{
-    parse_graphic, parse_spread, parse_stylesheet, Bounds, CharacterRun, Container, Graphic,
-    Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
+    parse_graphic, parse_spread, parse_story, parse_stylesheet, Bounds, CharacterRun, Container,
+    Graphic, Paragraph, ParseError, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
 };
 
 pub mod anchors;
@@ -227,7 +227,7 @@ impl Document {
             let raw = container
                 .entry(&story_ref.src)
                 .ok_or_else(|| OpenError::MissingEntry(story_ref.src.clone()))?;
-            let parsed = Story::parse(raw)?;
+            let parsed = parse_story(raw)?;
             let self_id = derive_story_id(&story_ref.src);
             stories.push(ParsedStory {
                 src: story_ref.src.clone(),

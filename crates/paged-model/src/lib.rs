@@ -4763,3 +4763,33 @@ pub struct Spread {
     #[serde(default)]
     pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
 }
+
+// ---------------------------------------------------------------------------
+// Story — a parsed IDML story (paragraphs, runs, tables, footnotes, anchored
+// objects). The XML parsing (`parse_story` + the private Footnote/Table context)
+// stays in the parser; the value struct lives in the model (N6).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Story {
+    pub paragraphs: Vec<Paragraph>,
+    /// `<StoryPreference OpticalMarginAlignment="true">` enables
+    /// "hanging punctuation" — quotes, commas, periods, hyphens at
+    /// the edge of a column hang slightly outside the text rectangle
+    /// for a tighter visual alignment. The text shaper already
+    /// implements the hang via `paged_text::shape::apply_optical_margin`;
+    /// this flag tells the renderer to call it. `false` is the IDML
+    /// default.
+    pub optical_margin_alignment: bool,
+    /// `<StoryPreference OpticalMarginSize="12">` — bounds the hang
+    /// magnitude for glyphs smaller than this point size. InDesign
+    /// typically writes 12 (the body-copy point size). 0.0 means the
+    /// attribute was absent.
+    pub optical_margin_size: f32,
+    /// `<Story StoryDirection="VerticalWritingDirection">` — CJK
+    /// vertical-text mode. `None` when the attribute is absent (IDML
+    /// implicit default: horizontal). Parser-only today; the renderer
+    /// does not yet honour this — see docs/plan.md Tier 4 — CJK
+    /// Stage 3.
+    pub story_direction: Option<StoryDirection>,
+}
