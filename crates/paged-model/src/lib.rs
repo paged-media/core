@@ -26,6 +26,8 @@
 //! primitive. `paged-parse` re-exports everything moved here, so its dependents
 //! compile unchanged.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// An axis-aligned bounding box in points: `top`, `left`, `bottom`, `right`.
@@ -4457,5 +4459,55 @@ impl PlaceholderField {
             Some(v) => v.clone(),
             None => format!("<{}>", self.key),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Graphic container — the document's swatch palette. Owns the parsed
+// `<Color>`/`<Swatch>`/`<Gradient>`/`<ColorGroup>` tables + the pure lookup
+// helpers. The XML parsing (`parse_graphic` + the per-element parse helpers)
+// stays in the parser; this type is de-inherented (N6) so it can live in the
+// model with everything it holds.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Graphic {
+    /// All `<Color>` entries, keyed by `Self` (e.g. "Color/Red").
+    pub colors: BTreeMap<String, ColorEntry>,
+    /// Named `<Swatch>` entries — "None", "Paper", "Black", etc.
+    pub swatches: BTreeMap<String, SwatchEntry>,
+    /// `<Gradient>` swatches (linear / radial), keyed by `Self`
+    /// (e.g. "Gradient/Sky").
+    pub gradients: BTreeMap<String, GradientEntry>,
+    /// SDK Phase 5 (v1 sweep) — `<ColorGroup>` named groupings of
+    /// `Color` self_ids. The Color Groups panel surfaces them as
+    /// a way to organise the palette into themed families
+    /// ("Brand colours", "UI accents"). Empty when the document
+    /// declares no groups (the renderer doesn't branch on them).
+    pub color_groups: BTreeMap<String, ColorGroupEntry>,
+}
+
+impl Graphic {
+    /// Look up a colour by its `Self` id. Follows a `<Swatch>` indirection
+    /// one level if the id names a Swatch rather than a Color directly.
+    pub fn resolve(&self, id: &str) -> Option<&ColorEntry> {
+        if let Some(c) = self.colors.get(id) {
+            return Some(c);
+        }
+        let swatch = self.swatches.get(id)?;
+        let color_ref = swatch.color_ref.as_deref()?;
+        self.colors.get(color_ref)
+    }
+
+    /// Resolve a swatch's alpha channel (0..=1, 1 = fully opaque).
+    /// Used by the gradient-feather renderer when a `<GradientStop>`
+    /// in IDML spec form (`StopColor="Color/..."`) references a
+    /// `<Color>` swatch whose alpha defines the stop's opacity.
+    /// Returns `None` when the swatch carries no alpha (CMYK / RGB
+    /// without `AlphaPercentage`) — callers should treat that as
+    /// "opaque" and fall back to whatever inline alpha attribute the
+    /// stop carries (e.g. the IDML `Alpha` / `Opacity`).
+    pub fn resolve_alpha(&self, id: &str) -> Option<f32> {
+        self.resolve(id).and_then(|c| c.alpha)
     }
 }

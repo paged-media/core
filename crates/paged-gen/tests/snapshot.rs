@@ -203,7 +203,7 @@ fn gradients_round_trips_through_parser() {
         .entries
         .get("Resources/Graphic.xml")
         .expect("Resources/Graphic.xml must be present");
-    let graphic = paged_parse::Graphic::parse(graphic_xml).expect("Graphic::parse");
+    let graphic = paged_parse::parse_graphic(graphic_xml).expect("parse_graphic");
     assert_eq!(graphic.gradients.len(), 5);
 }
 
