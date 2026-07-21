@@ -3767,3 +3767,695 @@ fn merge_border(child: &mut ParagraphBorder, parent: &ParagraphBorder) {
         child.corners[i].radius = child.corners[i].radius.or(parent.corners[i].radius);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Story content value types — paragraphs, runs, tables (rows/cols/cells),
+// footnotes, index markers, anchored objects, placeholder fields, writing
+// direction (moved out of `paged-parse::story`; `Story` + `Story::parse` + all
+// the `parse_*` free fns + the private parser-state structs stay in the parser).
+// Paragraph's rule refs now resolve to the model-local ParagraphRule (N5).
+// ---------------------------------------------------------------------------
+/// IDML `StoryDirection` attribute — the writing-mode flag carried on
+/// `<Story>`. The IDML default is `HorizontalWritingDirection` (left-
+/// to-right body text). `VerticalWritingDirection` is the CJK vertical
+/// mode where lines stack top-to-bottom and columns advance right-to-
+/// left. The parser only captures this; the layout / renderer
+/// integration is queued (see docs/plan.md Tier 4 — CJK Stage 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoryDirection {
+    HorizontalWritingDirection,
+    VerticalWritingDirection,
+}
+impl StoryDirection {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "HorizontalWritingDirection" => Some(Self::HorizontalWritingDirection),
+            "VerticalWritingDirection" => Some(Self::VerticalWritingDirection),
+            _ => None,
+        }
+    }
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Paragraph {
+    pub paragraph_style: Option<String>,
+    /// `Justification` attribute from IDML, parsed into a typed
+    /// `Justification` enum at XML-read time. Unknown attribute
+    /// values become `None` (matches the pre-enum fallback in
+    /// `map_justification`, which mapped anything it didn't
+    /// recognise to `Left`).
+    pub justification: Option<Justification>,
+    /// `FirstLineIndent` in pt.
+    pub first_line_indent: Option<f32>,
+    /// `LeftIndent` in pt — the paragraph's left margin offset.
+    /// `None` ⇒ inherit from the applied paragraph style cascade.
+    /// W0.2: surfaced as a paragraph-scope mutate path; the renderer
+    /// resolves indents through the style cascade today, so this
+    /// per-paragraph override is parser+mutate only until the
+    /// composer reads it off the instance.
+    pub left_indent: Option<f32>,
+    /// `RightIndent` in pt — the paragraph's right margin offset.
+    /// `None` ⇒ inherit. W0.2: see [`Paragraph::left_indent`].
+    pub right_indent: Option<f32>,
+    /// `SpaceBefore` in pt.
+    pub space_before: Option<f32>,
+    /// `SpaceAfter` in pt.
+    pub space_after: Option<f32>,
+    /// `<TabList>` parsed from `<Properties>`. Empty when none is
+    /// declared on this paragraph (the cascade fills in from the
+    /// applied paragraph style if available).
+    pub tab_list: Vec<TabStop>,
+    /// `BulletsAndNumberingListType` local override —
+    /// `BulletList`, `NumberedList`, or `NoList`. `None` ⇒ inherit
+    /// from the applied paragraph style.
+    pub bullets_list_type: Option<String>,
+    /// Bullet glyph codepoint, parsed from
+    /// `<Properties><BulletChar BulletCharacterValue="…"/></Properties>`.
+    /// Acts as a local override of the cascaded paragraph style's
+    /// bullet character.
+    pub bullet_character: Option<u32>,
+    /// `NumberingExpression` template for `NumberedList` paragraphs
+    /// (e.g. `"^#.^t"`). W0.2: a local override surfaced by the
+    /// mutate API. `None` ⇒ inherit from the cascade. The renderer
+    /// reads the numbering expression off the resolved style today;
+    /// this per-paragraph override is parser+mutate only until the
+    /// composer reads it off the instance.
+    pub numbering_format: Option<String>,
+    /// W1.22 — `AppliedNumberingList="NumberingList/<id>"` local
+    /// override on the `<ParagraphStyleRange>`. `None` ⇒ inherit the
+    /// named list from the applied paragraph style cascade. The
+    /// `ParagraphAppliedNumberingList` mutate path writes this; the
+    /// renderer resolves it (instance-over-cascade) to find the
+    /// list's cross-story continuity flag.
+    pub applied_numbering_list: Option<String>,
+    /// `DropCapCharacters` count from `<ParagraphStyleRange>`. 0 ⇒ no
+    /// drop cap (the IDML default). Local override of the cascaded
+    /// paragraph style's drop-cap settings.
+    pub drop_cap_characters: u32,
+    /// `DropCapLines` — vertical extent of the drop cap in lines.
+    /// 0 ⇒ no drop cap.
+    pub drop_cap_lines: u32,
+    /// `DropCapDetail` — InDesign's per-paragraph side-bearing tweak
+    /// for drop caps. `0` is the default. Stored signed because the
+    /// IDML serialisation allows negative values.
+    pub drop_cap_detail: i32,
+    /// `Hyphenation` boolean override on the `<ParagraphStyleRange>`.
+    /// `None` ⇒ inherit (IDML default at the bottom of the cascade is
+    /// `true`). The composer keys hyphenation off the resolved style
+    /// today; W0.2 surfaces this per-paragraph override via the
+    /// mutate API.
+    pub hyphenation: Option<bool>,
+    /// `KeepLinesTogether` boolean — when `true`, InDesign tries to
+    /// keep all lines of the paragraph in the same column / frame.
+    /// `None` ⇒ inherit. Parser+mutate only (the frame-breaker does
+    /// not yet honour keep options).
+    pub keep_lines_together: Option<bool>,
+    /// `KeepWithNext` — the number of lines of the *following*
+    /// paragraph that InDesign keeps together with the end of this
+    /// one (IDML serialises a line count, not a boolean). `None` ⇒
+    /// inherit; `Some(0)` is the explicit "off". Parser+mutate only.
+    pub keep_with_next: Option<u32>,
+    /// `RuleAbove*` — the horizontal rule stroked above the first
+    /// line when `on` is true. W0.2: surfaced as a whole-struct
+    /// paragraph-scope mutate path. Defaults (all-`None`) mean "not
+    /// declared on this paragraph"; the cascade fills it in. Mirrors
+    /// the style-level [`ParagraphRule`].
+    pub rule_above: ParagraphRule,
+    /// `RuleBelow*` — the horizontal rule stroked below the last
+    /// line. W0.2: see [`Paragraph::rule_above`].
+    pub rule_below: ParagraphRule,
+    pub runs: Vec<CharacterRun>,
+    /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` (or
+    /// similar) reference. Identifies the set of CJK line-break
+    /// characters InDesign should respect for this paragraph. `None`
+    /// when absent. Parser-only today — the composer uses a built-in
+    /// "Hard Kinsoku" set when `KinsokuType` triggers enforcement
+    /// (see `paged_text::compose`).
+    pub kinsoku_set: Option<String>,
+    /// `KinsokuType` flavour controlling how the breaker reacts to a
+    /// no-start / no-end violation:
+    /// - `None` ⇒ no kinsoku enforcement
+    /// - `WordbreakWithJustification` ⇒ allow line-end whitespace
+    ///   stretch to absorb the violation
+    /// - `PushIn` ⇒ pull the offending character back onto the
+    ///   previous line (shrinks glue)
+    /// - `PushOut` ⇒ push the offending character to the next line
+    ///   (forces a break earlier)
+    ///
+    /// IDML default when absent: `None`. Parser captures the string
+    /// verbatim; the composer keys "any value present" → "apply
+    /// hard-kinsoku penalty" today, with finer flavour-specific
+    /// resolution queued.
+    pub kinsoku_type: Option<String>,
+    /// `MojikumiTable="MojikumiTable/$ID/PhotoshopMojikumiSet4"` (or
+    /// similar) reference. Drives the per-character-class inter-glyph
+    /// spacing rules (e.g. shrink the space before an opening
+    /// bracket if it follows a Hiragana). Parser-only — the renderer
+    /// does not yet implement Mojikumi spacing adjustments. See
+    /// docs/plan.md Tier 4 — CJK Stage 4.
+    pub mojikumi_table: Option<String>,
+    /// `MojikumiSet` — analogous to `MojikumiTable`, but the older
+    /// IDML attribute name some exporters still emit.
+    pub mojikumi_set: Option<String>,
+    /// Anchored frames declared as a child of any
+    /// `<CharacterStyleRange>` inside this paragraph (a `<TextFrame>`,
+    /// `<Rectangle>`, or `<Group>` nested directly under a
+    /// `<CharacterStyleRange>` is an inline-anchored object). The
+    /// renderer's text-flow integration is queued; today these
+    /// records carry the bounds + setting + a reference back to the
+    /// hosted story (for anchored TextFrames) so the renderer can
+    /// draw the frame at the anchor's baseline once the placement
+    /// pass lands. The frame's full transparency / fill / stroke is
+    /// intentionally NOT recursed into here — the parser punts on
+    /// nested transparency / image links inside an anchored frame
+    /// (trivial follow-up once the renderer needs it).
+    pub anchored_frames: Vec<AnchoredFrame>,
+    /// `<Table>` nested inside the paragraph's CharacterStyleRange.
+    /// When present, the paragraph is rendered as a table at the
+    /// current y_cursor; `runs` is typically empty for these.
+    /// Tables can't currently nest inside tables — only one per
+    /// paragraph.
+    pub table: Option<Table>,
+    /// `OverprintFill="true"` on the `<ParagraphStyleRange>`. None ⇒
+    /// inherit from the applied paragraph style cascade. Stage 3
+    /// honours this when a run inside the paragraph leaves its own
+    /// overprint unset.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue.
+    pub overprint_stroke: Option<bool>,
+    /// Phase 5 — `<Footnote>` elements anchored on this paragraph.
+    /// Each footnote carries its own self-contained paragraph stream
+    /// (the footnote body). The renderer's footnote placement pass
+    /// reads this to populate the per-page footnote pool. Empty for
+    /// the overwhelming majority of paragraphs (only the paragraphs
+    /// that host a `<Footnote>` anchor have entries).
+    pub footnotes: Vec<Footnote>,
+    /// Phase 5 — `<Topic>` references on this paragraph from
+    /// `<PageReference>` or `<IndexEntry>` markers. Each entry maps
+    /// to one place where this paragraph contributes to the index.
+    /// The renderer's index pass collects these across all
+    /// paragraphs and emits an alphabetized index story.
+    pub index_markers: Vec<IndexMarker>,
+}
+/// IDML `<Footnote>` — a self-contained paragraph stream anchored at
+/// a point inside a host paragraph. The renderer places footnotes in
+/// a per-page footnote pool at the bottom of the host frame.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Footnote {
+    pub self_id: Option<String>,
+    /// The footnote body, parsed identically to top-level story
+    /// paragraphs. Inherits the host story's character / paragraph
+    /// style cascade just like any other paragraph stream.
+    pub paragraphs: Vec<Paragraph>,
+}
+/// IDML index marker — a `<PageReference>` or `<IndexEntry>` element
+/// that records "this paragraph contributes to the index entry for
+/// `topic_name`". The renderer's resolution pass collects all
+/// markers, groups by topic, alphabetises, and emits an index story.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IndexMarker {
+    /// The indexed term. From the marker's `TopicName` attribute,
+    /// or — when only `AppliedTopic="Topic/<id>"` is present — the
+    /// resolver looks up the Topic table on the document and pulls
+    /// the topic's `Name` from there.
+    pub topic_name: String,
+    /// `AppliedTopic` reference (`Topic/<id>`) when present. Empty
+    /// when the marker carried only the inline `TopicName`.
+    pub applied_topic: Option<String>,
+    /// Optional sort override. IDML's `SortOrder` attribute.
+    pub sort_order: Option<String>,
+}
+/// One anchored frame declared inside a `<CharacterStyleRange>`. The
+/// frame carries its own geometry / transform and an
+/// `<AnchoredObjectSetting>` describing where it should land relative
+/// to the anchor character.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnchoredFrame {
+    pub frame_kind: AnchoredFrameKind,
+    pub self_id: Option<String>,
+    pub bounds: Option<Bounds>,
+    pub item_transform: Option<[f32; 6]>,
+    /// For anchored TextFrames: the `ParentStory` reference, so the
+    /// renderer can chase the story content. `None` for Rectangles
+    /// (which would carry an image link instead) and Groups (which
+    /// hold sub-items).
+    pub parent_story: Option<String>,
+    pub setting: Option<AnchoredObjectSetting>,
+    /// `FillColor` attribute on the frame's start tag. Mirrors the
+    /// spread-level Rectangle / TextFrame parsing in
+    /// `spread.rs::read_common_attrs`. `None` means inherit from the
+    /// applied object style cascade.
+    pub fill_color: Option<String>,
+    /// `StrokeColor` attribute on the frame's start tag.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` attribute, in points.
+    pub stroke_weight: Option<f32>,
+    /// `FillTint` percentage (0..=100).
+    pub fill_tint: Option<f32>,
+    /// `GradientFillAngle` in degrees.
+    pub gradient_fill_angle: Option<f32>,
+    /// `AppliedObjectStyle` reference (e.g. `ObjectStyle/$ID/[None]`).
+    pub applied_object_style: Option<String>,
+    /// `LinkResourceURI` from a nested `<Image>` (or its `<Link>`
+    /// child) — non-empty when the anchored Rectangle hosts a placed
+    /// image.
+    pub image_link: Option<String>,
+    /// `ItemTransform` on the nested `<Image>` element.
+    pub image_item_transform: Option<[f32; 6]>,
+    /// Children of an anchored Group, in z-order. Empty for non-Group
+    /// anchored frames.
+    pub children: Vec<AnchoredFrame>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnchoredFrameKind {
+    TextFrame,
+    Rectangle,
+    Group,
+}
+/// Mirrors IDML's `<AnchoredObjectSetting>` block. The renderer needs
+/// only the position + offset attributes to place the anchored frame;
+/// fancier kerning / spine-relative behaviour can land in follow-ups.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AnchoredObjectSetting {
+    /// `AnchoredPosition` — `InlinePosition`, `AbovePosition`, or
+    /// `Custom`. `None` ⇒ use the cascaded default (`InlinePosition`).
+    pub anchored_position: Option<String>,
+    /// `SpineRelative="true"` flips the offset direction on facing
+    /// pages. False is the IDML default.
+    pub spine_relative: bool,
+    /// `AnchorXoffset` in pt — horizontal nudge from the anchor
+    /// point. 0.0 when absent.
+    pub anchor_x_offset: f32,
+    /// `AnchorYoffset` in pt.
+    pub anchor_y_offset: f32,
+    /// `AnchorPoint` — `TopLeftAnchor`, `TopCenterAnchor`,
+    /// `TopRightAnchor`, `LeftCenterAnchor`, `CenterAnchor`,
+    /// `RightCenterAnchor`, `BottomLeftAnchor`, `BottomCenterAnchor`,
+    /// `BottomRightAnchor`. `None` ⇒ inherit from the cascade.
+    pub anchor_point: Option<String>,
+    /// `LockPosition="true"` pins the anchored frame to its current
+    /// page position; the user can't drag it.
+    pub lock_position: bool,
+    /// Phase 5 — `HorizontalReferencePoint` for Custom positioning:
+    /// `AnchorLocation` (default), `ColumnEdge`, `TextFrame`,
+    /// `PageMargins`, `PageEdge`. None ⇒ AnchorLocation.
+    pub horizontal_reference_point: Option<String>,
+    /// `HorizontalAlignment` — `LeftAlign` (default), `CenterAlign`,
+    /// `RightAlign`. Describes which side of the chosen reference
+    /// rectangle the anchor sits against.
+    pub horizontal_alignment: Option<String>,
+    /// `VerticalReferencePoint` for Custom positioning:
+    /// `LineBaseline` (default), `LineXHeight`, `LineCapHeight`,
+    /// `TopOfLeading`, `Column`, `TextFrame`, `PageMargins`,
+    /// `PageEdge`.
+    pub vertical_reference_point: Option<String>,
+    /// `VerticalAlignment` — `TopAlign`, `CenterAlign`, `BottomAlign`.
+    pub vertical_alignment: Option<String>,
+}
+/// `<Table>` element parsed from a Story. Cells reference rows /
+/// columns by their `Name` (the IDML index, "0"..n-1). Cells in
+/// `cells` are stored in document order — IDML serialises them
+/// column-major (all cells in column 0, then column 1, etc.).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Table {
+    pub self_id: Option<String>,
+    pub header_row_count: u32,
+    pub footer_row_count: u32,
+    pub body_row_count: u32,
+    pub column_count: u32,
+    /// `RepeatingHeader` flag — when the table breaks across a chain
+    /// of threaded text frames, the first `header_row_count` rows
+    /// duplicate at the top of every continuation frame. `None` means
+    /// the attribute was absent; IDML treats that as the default
+    /// ("Repeat" / true). `Some(false)` is the explicit "Once" / no-
+    /// repeat case.
+    pub repeating_header: Option<bool>,
+    /// `RepeatingFooter` analogue — the last `footer_row_count` rows
+    /// duplicate at the bottom of every frame except the last.
+    pub repeating_footer: Option<bool>,
+    /// `AppliedTableStyle="TableStyle/..."` reference. Currently
+    /// recorded; cell rendering uses TextTopInset etc. directly off
+    /// the cell rather than resolving styles.
+    pub applied_table_style: Option<String>,
+    pub rows: Vec<TableRow>,
+    pub columns: Vec<TableColumn>,
+    pub cells: Vec<TableCell>,
+    /// Direct outer-border attributes serialised on the `<Table>`
+    /// element itself. InDesign emits these on the Table when the
+    /// user customises borders without creating a TableStyle. They
+    /// take precedence over the `AppliedTableStyle`'s border
+    /// declarations.
+    pub border: TableBorder,
+    /// `StartRowStroke*` / `EndRowStroke*` describe the alternating
+    /// dividers between rows. Captured here for the renderer.
+    pub row_strokes: TableLineStrokes,
+    /// `StartColumnStroke*` / `EndColumnStroke*` analogue for column
+    /// dividers. Currently captured but not rendered.
+    pub column_strokes: TableLineStrokes,
+}
+/// Outer-table border attributes serialised directly on `<Table>`
+/// (vs. via an `AppliedTableStyle`). All fields optional — `None`
+/// means "fall through to the TableStyle cascade / default".
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableBorder {
+    pub top_color: Option<String>,
+    pub top_type: Option<String>,
+    pub top_weight: Option<f32>,
+    pub top_tint: Option<f32>,
+    pub top_gap_color: Option<String>,
+    pub top_gap_tint: Option<f32>,
+    pub bottom_color: Option<String>,
+    pub bottom_type: Option<String>,
+    pub bottom_weight: Option<f32>,
+    pub bottom_tint: Option<f32>,
+    pub bottom_gap_color: Option<String>,
+    pub bottom_gap_tint: Option<f32>,
+    pub left_color: Option<String>,
+    pub left_type: Option<String>,
+    pub left_weight: Option<f32>,
+    pub left_tint: Option<f32>,
+    pub left_gap_color: Option<String>,
+    pub left_gap_tint: Option<f32>,
+    pub right_color: Option<String>,
+    pub right_type: Option<String>,
+    pub right_weight: Option<f32>,
+    pub right_tint: Option<f32>,
+    pub right_gap_color: Option<String>,
+    pub right_gap_tint: Option<f32>,
+}
+/// Bag of `Start*Stroke*` / `End*Stroke*` attributes for either the
+/// row or column dimension. The "start" set kicks in for the first
+/// `start_count` lines, then "end" for `end_count`, alternating.
+/// Used for IDML's row / column dividers. All fields optional.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableLineStrokes {
+    pub start_count: Option<u32>,
+    pub start_color: Option<String>,
+    pub start_type: Option<String>,
+    pub start_weight: Option<f32>,
+    pub start_tint: Option<f32>,
+    pub start_gap_color: Option<String>,
+    pub start_gap_tint: Option<f32>,
+    pub end_count: Option<u32>,
+    pub end_color: Option<String>,
+    pub end_type: Option<String>,
+    pub end_weight: Option<f32>,
+    pub end_tint: Option<f32>,
+    pub end_gap_color: Option<String>,
+    pub end_gap_tint: Option<f32>,
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableRow {
+    pub self_id: Option<String>,
+    /// IDML index ("0" .. row_count - 1).
+    pub name: Option<String>,
+    pub single_row_height: Option<f32>,
+    pub minimum_height: Option<f32>,
+    /// `MaximumHeight` clamp. `None` means unbounded — the row may grow
+    /// to fit its tallest cell content. IDML defaults this to a large
+    /// sentinel (`8640pt`) when omitted; we keep it `None` and treat
+    /// missing as infinity at the call site.
+    pub maximum_height: Option<f32>,
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableColumn {
+    pub self_id: Option<String>,
+    pub name: Option<String>,
+    pub single_column_width: Option<f32>,
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TableCell {
+    pub self_id: Option<String>,
+    /// `Name="col:row"` (zero-indexed). The `row()` and `column()`
+    /// helpers parse this.
+    pub name: Option<String>,
+    pub row_span: u32,
+    pub column_span: u32,
+    pub text_top_inset: f32,
+    pub text_left_inset: f32,
+    pub text_bottom_inset: f32,
+    pub text_right_inset: f32,
+    pub applied_cell_style: Option<String>,
+    /// Per-cell edge-stroke overrides. IDML serialises every cell
+    /// boundary explicitly on the `<Cell>` element when a TableStyle
+    /// applies a divider style, even though the AppliedCellStyle is
+    /// `[None]`. Without honouring these, the row/column dividers
+    /// vanish entirely. `None` ⇒ inherit from the cell-style cascade.
+    pub top_edge_stroke_color: Option<String>,
+    pub top_edge_stroke_weight: Option<f32>,
+    pub top_edge_stroke_tint: Option<f32>,
+    pub bottom_edge_stroke_color: Option<String>,
+    pub bottom_edge_stroke_weight: Option<f32>,
+    pub bottom_edge_stroke_tint: Option<f32>,
+    pub left_edge_stroke_color: Option<String>,
+    pub left_edge_stroke_weight: Option<f32>,
+    pub left_edge_stroke_tint: Option<f32>,
+    pub right_edge_stroke_color: Option<String>,
+    pub right_edge_stroke_weight: Option<f32>,
+    pub right_edge_stroke_tint: Option<f32>,
+    /// Inline `FillColor="Color/..."` on the `<Cell>` element.
+    /// Wins over the cell-style cascade — used by header / body /
+    /// alternating-fill rows when the table doesn't carry an
+    /// AppliedTableStyle. `None` ⇒ inherit from the resolved cell
+    /// style.
+    pub fill_color: Option<String>,
+    /// `FirstBaselineOffset` enum (Ascent / Cap / Leading / Emboxed /
+    /// FixedHeight / etc). Drives where the first line of cell text
+    /// drops from the cell's top edge. Parsed for completeness; the
+    /// renderer currently uses Ascent semantics by default.
+    pub first_baseline_offset: Option<String>,
+    /// `MinimumFirstBaselineOffset` in pt — only honoured when
+    /// `first_baseline_offset` is `FixedHeight` (then the value
+    /// becomes the absolute pt drop). Parsed for cascade
+    /// completeness.
+    pub minimum_first_baseline_offset: Option<f32>,
+    /// IDML's per-cell diagonal stroke. The `Left` diagonal in IDML
+    /// goes top-left → bottom-right; the `Right` diagonal goes
+    /// top-right → bottom-left. Stored as a small bag because all
+    /// fields are optional and most cells have neither.
+    pub diagonal: CellDiagonal,
+    /// `RotationAngle` (degrees, clockwise) applied to the cell's
+    /// content. In practice InDesign quantises this to 0/90/180/270.
+    /// `None` ⇒ inherit from the cell-style cascade, then default 0.
+    /// Borders/fills are not rotated — only the cell content.
+    pub rotation_angle: Option<f32>,
+    /// `<Cell VerticalJustification="…">` enum string (`"TopAlign"`,
+    /// `"CenterAlign"`, `"BottomAlign"`, `"JustifyAlign"`). `None` ⇒
+    /// inherit from the cell-style cascade, then default Top. The
+    /// renderer currently lays cell content top-aligned; this field is
+    /// parsed + writable (W3.A1) so the value round-trips and the
+    /// cell-vertical-justify pass can honour it later.
+    pub vertical_justification: Option<String>,
+    /// Cell content — paragraphs, parsed identically to top-level
+    /// story paragraphs.
+    pub paragraphs: Vec<Paragraph>,
+}
+/// Mirrors IDML's diagonal-stroke attributes on `<Cell>`. `LeftLine*`
+/// describes the diagonal that drops from top-left to bottom-right;
+/// `RightLine*` describes the opposite diagonal. The renderer emits
+/// one `<GraphicLine>`-equivalent stroke per drawn diagonal.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CellDiagonal {
+    pub left_line_drawn: Option<bool>,
+    pub left_line_color: Option<String>,
+    pub left_line_weight: Option<f32>,
+    /// `LeftLineStrokeTint` percentage (0..=100). `None` ⇒ paint the
+    /// diagonal stroke swatch at full strength.
+    pub left_line_tint: Option<f32>,
+    pub right_line_drawn: Option<bool>,
+    pub right_line_color: Option<String>,
+    pub right_line_weight: Option<f32>,
+    /// `RightLineStrokeTint` percentage (0..=100).
+    pub right_line_tint: Option<f32>,
+    /// `DiagonalLineInFront` boolean — true means the diagonal paints
+    /// on top of cell content. The renderer emits diagonals after
+    /// content when this is true.
+    pub diagonal_in_front: Option<bool>,
+}
+impl TableCell {
+    /// Parse `(column, row)` from `Name`. Returns `None` if the
+    /// attribute is absent or doesn't match `col:row`.
+    pub fn coords(&self) -> Option<(u32, u32)> {
+        let name = self.name.as_deref()?;
+        let (c, r) = name.split_once(':')?;
+        Some((c.parse().ok()?, r.parse().ok()?))
+    }
+}
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CharacterRun {
+    pub character_style: Option<String>,
+    pub font: Option<String>,
+    pub font_style: Option<String>,
+    pub point_size: Option<f32>,
+    /// `FillColor="Color/..."` on the CharacterStyleRange; resolved
+    /// against `Graphic`.
+    pub fill_color: Option<String>,
+    /// `FillTint` percentage (0..=100). IDML semantics: 100% = use the
+    /// swatch at full strength, lower values blend toward paper white.
+    /// `-1` (or absent) means "use the swatch as-is" — translates to
+    /// `None`. The renderer applies the tint after CMYK→RGB so the
+    /// result matches InDesign's preview, where tints sit on top of
+    /// the colour-managed pipeline.
+    pub fill_tint: Option<f32>,
+    /// `Capitalization` value: `Normal | SmallCaps | AllCaps |
+    /// CapToSmallCap`. `None` ⇒ use the cascade. The renderer
+    /// uppercases the text before shaping when the resolved value is
+    /// `AllCaps` (or `SmallCaps`, until proper OT smcp lookup lands).
+    pub capitalization: Option<String>,
+    /// `BaselineShift` in pt. Positive lifts glyphs above the
+    /// baseline, negative drops them. Applied per-glyph at emit time.
+    pub baseline_shift: Option<f32>,
+    /// `HorizontalScale` percentage (100 = identity). Folded into the
+    /// glyph affine by [`CharacterRun::to_styled_run`] so the
+    /// shaper sees the requested glyph x-scale (P-08).
+    pub horizontal_scale: Option<f32>,
+    /// `VerticalScale` percentage (100 = identity). Parsed for future
+    /// per-glyph y-scale; not applied yet.
+    pub vertical_scale: Option<f32>,
+    /// `Skew` in degrees (positive = right-leaning). Folded into the
+    /// glyph affine alongside `HorizontalScale` (P-08).
+    pub skew: Option<f32>,
+    /// `Position` value (`Normal | Superscript | Subscript |
+    /// OTSuperscript | OTSubscript | OTNumerator | OTDenominator`).
+    /// Parsed for future scaling/baseline-shift application; not yet
+    /// honoured.
+    pub position: Option<String>,
+    /// `Tracking` in 1/1000 em (InDesign's unit — divide by 1000 to
+    /// get the em fraction that should be added to every glyph's
+    /// advance).
+    pub tracking: Option<f32>,
+    /// `Underline="true"` on the CharacterStyleRange.
+    pub underline: Option<bool>,
+    /// `StrikeThru="true"` on the CharacterStyleRange.
+    pub strikethru: Option<bool>,
+    /// Explicit `Leading` in pt. `None` ⇒ Auto leading
+    /// (`point_size × 1.2`). InDesign serialises `Leading` as a
+    /// number on the CharacterStyleRange, with magic `Auto` not
+    /// modelled here (we treat absence == Auto).
+    pub leading: Option<f32>,
+    /// `RubyFlag` — when `true`, this run carries ruby annotation
+    /// (small phonetic-guide text) above / beside the base run. The
+    /// parser captures the flag; full ruby layout (positioning the
+    /// annotation text, sizing it as a fraction of the base, etc.)
+    /// is queued. See docs/plan.md Tier 4 — CJK Stage 4.
+    pub ruby_flag: Option<bool>,
+    /// `RubyType` — `PerCharacter` / `GroupRuby`. Parser-only today.
+    pub ruby_type: Option<String>,
+    /// `RubyString` — the ruby annotation text itself.
+    pub ruby_string: Option<String>,
+    /// `KentenKind` — the emphasis-mark glyph for this run.
+    /// Parser-only — emphasis-mark rendering is queued (Tier 4 Stage 4).
+    pub kenten_kind: Option<String>,
+    /// `KentenCharacter` — codepoint to stamp when `kenten_kind == "Custom"`.
+    pub kenten_character: Option<String>,
+    /// `KentenFontSize` — emphasis-mark glyph size as a percentage.
+    pub kenten_font_size: Option<f32>,
+    /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
+    /// inherit from the applied character / paragraph style cascade.
+    /// Drives the renderer's Stage 3 darken composite when true.
+    pub overprint_fill: Option<bool>,
+    /// `OverprintStroke="true"` analogue (rare on text but parsed).
+    pub overprint_stroke: Option<bool>,
+    /// `StrokeColor` on the `<CharacterStyleRange>` — the paint used
+    /// to outline each glyph. None ⇒ inherit from the applied
+    /// character / paragraph style cascade; if still absent at the
+    /// bottom of the cascade the renderer treats the glyph as
+    /// fill-only (no outline). IDML stores "no stroke" as
+    /// `Swatch/None`; the parser normalises that to `None` for text
+    /// runs the same way object strokes do.
+    pub stroke_color: Option<String>,
+    /// `StrokeWeight` on the `<CharacterStyleRange>` in pt. Absent on
+    /// most runs because InDesign records the run's stroke weight
+    /// only when it differs from the document's `<TextDefault>`
+    /// value (which is 1pt for new documents). The renderer falls
+    /// back to 1pt at emit time when `stroke_color` resolves but
+    /// `stroke_weight` doesn't.
+    pub stroke_weight: Option<f32>,
+    /// Phase 4 typography — `Ligatures="true|false"` on the
+    /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
+    /// bottom of the cascade is `true` (InDesign's CharacterStyle
+    /// default).
+    pub ligatures_on: Option<bool>,
+    /// `KerningMethod="Metrics|Optical|None"` on the
+    /// `<CharacterStyleRange>`. None ⇒ inherit. Default at the
+    /// bottom of the cascade is `Metrics`.
+    pub kerning_method: Option<String>,
+    /// `AppliedLanguage="$ID/..."` on the `<CharacterStyleRange>` —
+    /// the run's language reference (drives hyphenation /
+    /// spell-check dictionaries). None ⇒ inherit from the applied
+    /// character / paragraph style cascade. Stored as the raw IDML
+    /// reference string; no renderer behaviour is keyed off it yet
+    /// (parser-only today), but the mutate API surfaces it so the
+    /// editor can author the value.
+    pub applied_language: Option<String>,
+    /// OpenType feature toggles as an opaque, space-separated tag
+    /// list (e.g. `"frac ordn ss01"`). The mutate API owns this as a
+    /// free-form authoring override string (parser leaves it `None`);
+    /// the *parsed* discrete IDML attributes live in [`Self::otf`].
+    pub otf_features: Option<String>,
+    /// Discrete OpenType feature toggles (`OTFFraction`, `OTFOrdinal`,
+    /// `OTFSwash`, `OTFDiscretionaryLigature`, `OTFFigureStyle`,
+    /// `OTFStylisticSets`, …) parsed off the `<CharacterStyleRange>`.
+    /// Each field `None` ⇒ inherit from the cascade. See [`OtfFeatures`].
+    pub otf: OtfFeatures,
+    /// Phase 5 — `AppliedConditions="Condition/A Condition/B"`.
+    /// Space-separated list of `<Condition>` references. Empty
+    /// means "no condition gating" (always visible). A run with
+    /// non-empty conditions is rendered iff every referenced
+    /// condition resolves to `Visible="true"` in the document's
+    /// `<Condition>` table.
+    pub applied_conditions: Vec<String>,
+    /// W1.4 — the `Self` of the enclosing `<HyperlinkTextSource>` (or
+    /// `<CrossReferenceSource>`) when this run sits inside one. IDML
+    /// serialises a hyperlink/cross-reference *source* span as a
+    /// wrapper element around the character ranges it covers; the
+    /// `<Hyperlink>` / `<CrossReference>` in the designmap references
+    /// it by `Source`. The renderer resolves the source id back to a
+    /// destination (URL / page) and emits a clickable region over the
+    /// run's glyph rect. `None` for the overwhelming majority of runs.
+    pub hyperlink_source: Option<String>,
+    /// W1.4 — the `AssociatedTextVariable` id (`TextVariable/<id>`)
+    /// when this run was produced by a `<TextVariableInstance>`. The
+    /// run's `text` carries InDesign's baked `ResultText`; the
+    /// renderer re-resolves the value per type at emit time (real page
+    /// count, document name, custom content, formatted dates) when it
+    /// can do better than the baked string, and falls back to
+    /// `ResultText` otherwise. `None` for ordinary text runs.
+    pub text_variable: Option<String>,
+    /// v43 (D-01) — plugin placeholder tag when this run IS a tagged
+    /// placeholder field (the paged.data anchor model). The run's
+    /// `text` always carries the field's *display* string (the cached
+    /// resolved value, or the visible `<key>` token while unresolved),
+    /// so layout/shaping treats it as ordinary run text — the same
+    /// "baked result text" posture as [`Self::text_variable`], except
+    /// nothing ever re-resolves it at emit time (the offline-forever
+    /// rule: the engine never calls the owning plugin to render).
+    /// `None` for ordinary text runs. The parser never sets this today;
+    /// placeholders enter via the mutate API (`InsertField`).
+    pub placeholder: Option<PlaceholderField>,
+    pub text: String,
+}
+/// v43 (D-01) — a plugin-owned tagged placeholder: a named,
+/// edit-surviving anchor inside a story's run list. `(plugin, key)` is
+/// the identity the owning plugin re-finds it by; `value` is the
+/// cached resolved display (`None` = not yet resolved → the run shows
+/// the `<key>` token).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceholderField {
+    /// The owning bundle's manifest id (host-stamped; e.g.
+    /// `media.paged.data`).
+    pub plugin: String,
+    /// Bundle-unique placeholder name (the binding's anchor).
+    pub key: String,
+    /// Last-resolved display value. `None` ⇒ unresolved.
+    pub value: Option<String>,
+}
+impl PlaceholderField {
+    /// The string the run renders: the cached value, or the visible
+    /// `<key>` token while unresolved.
+    pub fn display_text(&self) -> String {
+        match &self.value {
+            Some(v) => v.clone(),
+            None => format!("<{}>", self.key),
+        }
+    }
+}
