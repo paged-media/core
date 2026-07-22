@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 
-use paged_parse::{Bounds, DesignMap, Graphic, Spread, StyleSheet, TextFrame};
+use paged_model::{Bounds, DesignMap, Graphic, Spread, StyleSheet, TextFrame};
 use paged_scene::{Document, ParsedSpread};
 
 pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
@@ -84,7 +84,7 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
     ));
     // Pages need to exist so build_tree's "frames live under page 0"
     // assignment has a page to attach to.
-    spread.pages.push(paged_parse::Page {
+    spread.pages.push(paged_model::Page {
         self_id: Some("Page/u1".to_string()),
         name: Some("1".to_string()),
         bounds: Bounds {

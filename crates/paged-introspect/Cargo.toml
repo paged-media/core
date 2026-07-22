@@ -15,7 +15,7 @@ default = ["render"]
 render = ["dep:paged-renderer", "dep:image", "dep:paged-compose", "dep:anyhow"]
 
 [dependencies]
-paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-mutate = { path = "../paged-mutate" }
 paged-renderer = { path = "../paged-renderer", optional = true }
