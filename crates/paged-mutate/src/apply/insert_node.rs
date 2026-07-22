@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_parse::{FrameRef, Spread};
+use paged_model::{FrameRef, Spread};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -207,11 +207,11 @@ pub(super) fn apply_insert_node(
             ..
         } => {
             if !doc.stories.iter().any(|s| s.self_id == *id) {
-                let mut story = paged_parse::Story::default();
+                let mut story = paged_model::Story::default();
                 // One empty paragraph + run — the shape an empty parsed
                 // story has; the text ops' `locate()` needs ≥1 paragraph.
-                story.paragraphs.push(paged_parse::Paragraph {
-                    runs: vec![paged_parse::CharacterRun::default()],
+                story.paragraphs.push(paged_model::Paragraph {
+                    runs: vec![paged_model::CharacterRun::default()],
                     ..Default::default()
                 });
                 doc.stories.push(paged_scene::ParsedStory {

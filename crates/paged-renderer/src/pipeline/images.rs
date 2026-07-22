@@ -799,7 +799,7 @@ fn reversed_contour(sub: &[PathAnchor]) -> Vec<PathAnchor> {
 ///   to live within `[0, pixel_w] × [0, pixel_h]` (the image's own
 ///   PathGeometry extent).
 fn build_image_clip_path(
-    clip: &paged_parse::ClippingPathSettings,
+    clip: &paged_model::ClippingPathSettings,
     pixel_w: f32,
     pixel_h: f32,
 ) -> Option<PathData> {
@@ -913,11 +913,11 @@ fn build_image_clip_path(
 /// outline only.
 fn report_clip_deferred(
     page: &mut BuiltPage,
-    clip: &paged_parse::ClippingPathSettings,
+    clip: &paged_model::ClippingPathSettings,
     uri: Option<&str>,
     frame_id: Option<&str>,
 ) {
-    use paged_parse::ClippingType;
+    use paged_model::ClippingType;
     let detail = match clip.clipping_type {
         Some(ClippingType::PhotoshopPath) => "Photoshop 8BIM path",
         Some(ClippingType::AlphaChannel) => "alpha channel",
@@ -957,7 +957,7 @@ fn report_clip_deferred(
 /// already recorded).
 fn resolve_image_clip(
     page: &mut BuiltPage,
-    clip: Option<&paged_parse::ClippingPathSettings>,
+    clip: Option<&paged_model::ClippingPathSettings>,
     image_transform: Transform,
     pixel_w: f32,
     pixel_h: f32,
@@ -991,7 +991,7 @@ fn resolve_image_clip(
 /// renders frame-clipped only. A no-op when there's no clip.
 fn report_clip_for_untransformed_image(
     page: &mut BuiltPage,
-    clip: Option<&paged_parse::ClippingPathSettings>,
+    clip: Option<&paged_model::ClippingPathSettings>,
     uri: Option<&str>,
     frame_id: Option<&str>,
 ) {
@@ -1004,7 +1004,7 @@ fn report_clip_for_untransformed_image(
 #[cfg(test)]
 mod clip_geometry_tests {
     use super::*;
-    use paged_parse::{ClippingPathSettings, ClippingType};
+    use paged_model::{ClippingPathSettings, ClippingType};
 
     fn corner(x: f32, y: f32) -> PathAnchor {
         PathAnchor {

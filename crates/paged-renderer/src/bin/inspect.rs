@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use paged_parse::{graphic, Graphic};
+use paged_model::{to_linear_rgb, Graphic};
 use paged_renderer::{pipeline, Document, PipelineOptions};
 
 #[derive(Parser, Debug)]
@@ -1359,7 +1359,7 @@ fn describe_fill(fill_color: Option<&str>, palette: &Graphic) -> String {
     match palette.resolve(id) {
         Some(entry) => {
             let name = entry.name.as_deref().unwrap_or(&entry.self_id);
-            match graphic::to_linear_rgb(entry) {
+            match to_linear_rgb(entry) {
                 Some(rgb) => format!(
                     "{name} [{:?} rgb≈{:.2},{:.2},{:.2}]",
                     entry.space, rgb[0], rgb[1], rgb[2]

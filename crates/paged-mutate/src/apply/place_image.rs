@@ -67,7 +67,7 @@ pub(super) fn apply_place_image(
                     Some(f) => f.fitting_on_empty_frame = new_type,
                     None => {
                         if new_type.is_some() {
-                            rect.frame_fitting = Some(paged_parse::FrameFittingOption {
+                            rect.frame_fitting = Some(paged_model::FrameFittingOption {
                                 fitting_on_empty_frame: new_type,
                                 ..Default::default()
                             });

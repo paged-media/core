@@ -23,7 +23,7 @@ use paged_compose::{
     emit_glyph_slice, emit_glyph_slice_stroke, DisplayList, DropShadow, Paint, PathData,
     PathSegment, Rect, Transform, TtfOutliner,
 };
-use paged_parse::{Graphic, PathAnchor, TextFrame};
+use paged_model::{Graphic, PathAnchor, TextFrame};
 use paged_scene::Document;
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics};
@@ -92,7 +92,7 @@ pub(super) fn build_document_inner(
     // the frame-paint pass (the box stretches to fit) and the text-wrap
     // collection (neighbours wrap around the grown box) both see the
     // same extent. Only frames that actually grow get an entry.
-    let auto_sized_bounds: HashMap<String, paged_parse::Bounds> = document
+    let auto_sized_bounds: HashMap<String, paged_model::Bounds> = document
         .spreads
         .iter()
         .flat_map(|parsed| parsed.spread.text_frames.iter())
@@ -209,7 +209,7 @@ pub(super) fn build_document_inner(
             resource_tiles_needed: Vec::new(),
         });
         page_geometries.push(PageGeom {
-            bounds_in_spread: paged_parse::Bounds {
+            bounds_in_spread: paged_model::Bounds {
                 top: 0.0,
                 left: 0.0,
                 bottom: 792.0,
@@ -323,7 +323,7 @@ pub(super) fn build_document_inner(
         // "Master Page Overlay" feature actually does — without
         // routing, a master with both white-LEFT-page and navy-RIGHT-
         // page rectangles would stamp both onto every live page.
-        let master_page_bounds: Vec<paged_parse::Bounds> = master
+        let master_page_bounds: Vec<paged_model::Bounds> = master
             .spread
             .pages
             .iter()
@@ -369,7 +369,7 @@ pub(super) fn build_document_inner(
         // Pick the master page index that contains the centroid of
         // the given spread-coord bounds; falls back to the nearest
         // page so items hugging the centre line don't get dropped.
-        let master_page_for = |b: paged_parse::Bounds| -> usize {
+        let master_page_for = |b: paged_model::Bounds| -> usize {
             let cx = (b.left + b.right) * 0.5;
             let cy = (b.top + b.bottom) * 0.5;
             for (idx, mb) in master_page_bounds.iter().enumerate() {
@@ -401,7 +401,7 @@ pub(super) fn build_document_inner(
         let target_master = &master_page_bounds[local_master_page_idx];
         let target_master_area = (target_master.right - target_master.left).max(0.0)
             * (target_master.bottom - target_master.top).max(0.0);
-        let item_belongs = |b: paged_parse::Bounds| -> bool {
+        let item_belongs = |b: paged_model::Bounds| -> bool {
             if master_page_for(b) == local_master_page_idx {
                 return true;
             }
@@ -635,49 +635,49 @@ pub(super) fn build_document_inner(
         // `usize::MAX` as the sort key — combined with a stable sort
         // they stay where they were. The sort is a no-op when all
         // items resolve to the same layer-z (legacy behaviour).
-        let layer_z_of = |fr: paged_parse::FrameRef| -> usize {
+        let layer_z_of = |fr: paged_model::FrameRef| -> usize {
             let id = match fr {
-                paged_parse::FrameRef::TextFrame(i) => spread
+                paged_model::FrameRef::TextFrame(i) => spread
                     .text_frames
                     .get(i)
                     .and_then(|f| f.item_layer.as_deref()),
-                paged_parse::FrameRef::Rectangle(i) => spread
+                paged_model::FrameRef::Rectangle(i) => spread
                     .rectangles
                     .get(i)
                     .and_then(|f| f.item_layer.as_deref()),
-                paged_parse::FrameRef::Oval(i) => {
+                paged_model::FrameRef::Oval(i) => {
                     spread.ovals.get(i).and_then(|f| f.item_layer.as_deref())
                 }
-                paged_parse::FrameRef::GraphicLine(i) => spread
+                paged_model::FrameRef::GraphicLine(i) => spread
                     .graphic_lines
                     .get(i)
                     .and_then(|f| f.item_layer.as_deref()),
-                paged_parse::FrameRef::Polygon(i) => {
+                paged_model::FrameRef::Polygon(i) => {
                     spread.polygons.get(i).and_then(|f| f.item_layer.as_deref())
                 }
                 // Group: derive layer from the first leaf member with
                 // an ItemLayer. If none, treat as "no layer" (MAX).
-                paged_parse::FrameRef::Group(_) => None,
+                paged_model::FrameRef::Group(_) => None,
             };
             id.and_then(|s| layer_z_index.get(s).copied())
                 .unwrap_or(usize::MAX)
         };
-        let frames_ordered: Vec<paged_parse::FrameRef> = if spread.frames_in_order.is_empty() {
+        let frames_ordered: Vec<paged_model::FrameRef> = if spread.frames_in_order.is_empty() {
             // Legacy path: a parser revision predating
             // `frames_in_order` (or a spread carrying only frames the
             // parser couldn't classify) → fall through to the same
             // XML-vec walk as before. Builds a synthetic flat list by
             // concatenating the per-shape vecs in their historical
             // order.
-            let mut v: Vec<paged_parse::FrameRef> = Vec::new();
-            v.extend((0..spread.text_frames.len()).map(paged_parse::FrameRef::TextFrame));
-            v.extend((0..spread.rectangles.len()).map(paged_parse::FrameRef::Rectangle));
-            v.extend((0..spread.ovals.len()).map(paged_parse::FrameRef::Oval));
-            v.extend((0..spread.graphic_lines.len()).map(paged_parse::FrameRef::GraphicLine));
-            v.extend((0..spread.polygons.len()).map(paged_parse::FrameRef::Polygon));
+            let mut v: Vec<paged_model::FrameRef> = Vec::new();
+            v.extend((0..spread.text_frames.len()).map(paged_model::FrameRef::TextFrame));
+            v.extend((0..spread.rectangles.len()).map(paged_model::FrameRef::Rectangle));
+            v.extend((0..spread.ovals.len()).map(paged_model::FrameRef::Oval));
+            v.extend((0..spread.graphic_lines.len()).map(paged_model::FrameRef::GraphicLine));
+            v.extend((0..spread.polygons.len()).map(paged_model::FrameRef::Polygon));
             v
         } else {
-            let mut keyed: Vec<(usize, usize, paged_parse::FrameRef)> = spread
+            let mut keyed: Vec<(usize, usize, paged_model::FrameRef)> = spread
                 .frames_in_order
                 .iter()
                 .enumerate()
@@ -709,8 +709,8 @@ pub(super) fn build_document_inner(
         // Emit one FrameRef. Recurses through Group members so group
         // children render at the group's XML slot.
         fn emit_one(
-            fr: paged_parse::FrameRef,
-            spread: &paged_parse::Spread,
+            fr: paged_model::FrameRef,
+            spread: &paged_model::Spread,
             range: &std::ops::Range<usize>,
             local_geoms: &[PageGeom],
             pages: &mut [BuiltPage],
@@ -723,10 +723,10 @@ pub(super) fn build_document_inner(
             palette: &Graphic,
             options: &PipelineOptions,
             cmyk_xform: Option<&paged_color::IccTransform>,
-            auto_sized_bounds: &HashMap<String, paged_parse::Bounds>,
+            auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
         ) {
             match fr {
-                paged_parse::FrameRef::TextFrame(idx) => {
+                paged_model::FrameRef::TextFrame(idx) => {
                     let Some(frame) = spread.text_frames.get(idx) else {
                         return;
                     };
@@ -803,7 +803,7 @@ pub(super) fn build_document_inner(
                         );
                     }
                 }
-                paged_parse::FrameRef::Rectangle(idx) => {
+                paged_model::FrameRef::Rectangle(idx) => {
                     let Some(rect) = spread.rectangles.get(idx) else {
                         return;
                     };
@@ -887,7 +887,7 @@ pub(super) fn build_document_inner(
                         );
                     }
                 }
-                paged_parse::FrameRef::Oval(idx) => {
+                paged_model::FrameRef::Oval(idx) => {
                     let Some(oval) = spread.ovals.get(idx) else {
                         return;
                     };
@@ -952,7 +952,7 @@ pub(super) fn build_document_inner(
                         );
                     }
                 }
-                paged_parse::FrameRef::GraphicLine(idx) => {
+                paged_model::FrameRef::GraphicLine(idx) => {
                     let Some(line) = spread.graphic_lines.get(idx) else {
                         return;
                     };
@@ -1003,7 +1003,7 @@ pub(super) fn build_document_inner(
                         );
                     }
                 }
-                paged_parse::FrameRef::Polygon(idx) => {
+                paged_model::FrameRef::Polygon(idx) => {
                     let Some(poly) = spread.polygons.get(idx) else {
                         return;
                     };
@@ -1068,7 +1068,7 @@ pub(super) fn build_document_inner(
                         );
                     }
                 }
-                paged_parse::FrameRef::Group(gi) => {
+                paged_model::FrameRef::Group(gi) => {
                     if let Some(g) = spread.groups.get(gi) {
                         for &m in &g.members {
                             emit_one(
@@ -1548,7 +1548,7 @@ pub(super) fn build_document_inner(
         // paragraphs go through the standard paragraph-emission
         // path so they get full shaping, tab handling, applied
         // paragraph-style cascade resolution, etc.
-        let toc_paragraphs: Option<Vec<paged_parse::Paragraph>> = chain
+        let toc_paragraphs: Option<Vec<paged_model::Paragraph>> = chain
             .first()
             .and_then(|f| f.applied_toc_style.as_deref())
             .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
@@ -1578,7 +1578,7 @@ pub(super) fn build_document_inner(
         let chain_pages_for_post = chain_pages.clone();
         let is_vertical = matches!(
             parsed.story.story_direction,
-            Some(paged_parse::story::StoryDirection::VerticalWritingDirection)
+            Some(paged_model::StoryDirection::VerticalWritingDirection)
         );
 
         // W1.7 — footnote space reservation. Footnotes are discovered
@@ -1936,7 +1936,7 @@ pub(super) struct StoryEmitter<'a> {
     /// per-line walk; retained for future per-frame optimisations
     /// that read the head's bounds without indexing.
     #[allow(dead_code)]
-    pub(super) head_frame_spread: paged_parse::Bounds,
+    pub(super) head_frame_spread: paged_model::Bounds,
     /// Spread-coord wrap exclusion rectangles per chain index — the
     /// threaded-frame extension of `head_wrap_rects`. Each chain
     /// index `i` carries the wrap rectangles on chain[i]'s page.
@@ -1947,7 +1947,7 @@ pub(super) struct StoryEmitter<'a> {
     /// Spread-coord bounds for every frame in the chain. Same
     /// motivation as `chain_wrap_rects`: per-frame per-line wrap
     /// needs each frame's spread rect.
-    pub(super) chain_spread_bounds: Vec<paged_parse::Bounds>,
+    pub(super) chain_spread_bounds: Vec<paged_model::Bounds>,
     pub(super) frame_idx: usize,
     pub(super) y_cursor: i32,
     /// Leading (in 1/64 pt) of the most recently placed line (or
@@ -2196,7 +2196,7 @@ impl<'a> StoryEmitter<'a> {
             base
         };
         let len = chain.len();
-        let chain_spread_bounds: Vec<paged_parse::Bounds> = chain
+        let chain_spread_bounds: Vec<paged_model::Bounds> = chain
             .iter()
             .map(|f| transform_bounds(f.bounds, f.item_transform))
             .collect();
@@ -2371,7 +2371,7 @@ impl<'a> StoryEmitter<'a> {
 
     pub(super) fn emit_paragraph(
         &mut self,
-        paragraph: &paged_parse::Paragraph,
+        paragraph: &paged_model::Paragraph,
         pages: &mut [BuiltPage],
         total_stats: &mut PipelineStats,
     ) {
@@ -2387,7 +2387,7 @@ impl<'a> StoryEmitter<'a> {
             let Some(vj) = frame.vertical_justification else {
                 continue;
             };
-            if vj == paged_parse::VerticalJustification::Top {
+            if vj == paged_model::VerticalJustification::Top {
                 continue;
             }
             let frame_height_64 =
@@ -2401,7 +2401,7 @@ impl<'a> StoryEmitter<'a> {
             let reserved_64 = self.reserved_footnote_64.get(i).copied().unwrap_or(0);
             let usable_64 = (frame_height_64 - reserved_64).max(0);
             let slack_64 = (usable_64 - used_64).max(0);
-            if vj == paged_parse::VerticalJustification::Justify {
+            if vj == paged_model::VerticalJustification::Justify {
                 // JustifyAlign distributes the frame's slack as extra
                 // space between paragraphs (NOT inside a paragraph —
                 // that would distort leading). With < 2 paragraphs in
@@ -2430,8 +2430,8 @@ impl<'a> StoryEmitter<'a> {
                 continue;
             }
             let dy_64 = match vj {
-                paged_parse::VerticalJustification::Center => slack_64 / 2,
-                paged_parse::VerticalJustification::Bottom => slack_64,
+                paged_model::VerticalJustification::Center => slack_64 / 2,
+                paged_model::VerticalJustification::Bottom => slack_64,
                 _ => 0,
             };
             if dy_64 == 0 {
@@ -2734,9 +2734,9 @@ impl<'a> StoryEmitter<'a> {
 pub fn build_index_paragraphs(
     document: &Document,
     page_labels: &[String],
-) -> Vec<paged_parse::Paragraph> {
+) -> Vec<paged_model::Paragraph> {
     let entries = document.resolve_index();
-    let mut out: Vec<paged_parse::Paragraph> = Vec::with_capacity(entries.len());
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
     for entry in entries {
         let mut text = entry.topic.clone();
         if !entry.pages.is_empty() {
@@ -2752,13 +2752,13 @@ pub fn build_index_paragraphs(
                 text.push_str(&labels.join(", "));
             }
         }
-        let run = paged_parse::CharacterRun {
+        let run = paged_model::CharacterRun {
             text,
-            ..paged_parse::CharacterRun::default()
+            ..paged_model::CharacterRun::default()
         };
-        out.push(paged_parse::Paragraph {
+        out.push(paged_model::Paragraph {
             runs: vec![run],
-            ..paged_parse::Paragraph::default()
+            ..paged_model::Paragraph::default()
         });
     }
     out
@@ -2781,11 +2781,11 @@ pub fn build_index_paragraphs(
 /// frame (matches InDesign, which leaves the frame blank).
 pub(super) fn build_toc_paragraphs(
     document: &Document,
-    toc_style: &paged_parse::TOCStyleDef,
+    toc_style: &paged_model::TOCStyleDef,
     page_labels: &[String],
-) -> Vec<paged_parse::Paragraph> {
+) -> Vec<paged_model::Paragraph> {
     let entries = document.resolve_toc(toc_style);
-    let mut out: Vec<paged_parse::Paragraph> = Vec::with_capacity(entries.len());
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
     for entry in entries {
         // Expand the IDML tab token. Only `^t` is recognised
         // today — Adobe's full set (^m em-space, ^>, etc.) is
@@ -2807,14 +2807,14 @@ pub(super) fn build_toc_paragraphs(
             text.push_str(&separator);
             text.push_str(&label);
         }
-        let run = paged_parse::CharacterRun {
+        let run = paged_model::CharacterRun {
             text,
-            ..paged_parse::CharacterRun::default()
+            ..paged_model::CharacterRun::default()
         };
-        let paragraph = paged_parse::Paragraph {
+        let paragraph = paged_model::Paragraph {
             paragraph_style: entry.format_style,
             runs: vec![run],
-            ..paged_parse::Paragraph::default()
+            ..paged_model::Paragraph::default()
         };
         out.push(paragraph);
     }
@@ -2827,7 +2827,7 @@ pub(super) fn build_toc_paragraphs(
 /// the emitter state via `&mut StoryEmitter`.
 pub(super) fn emit_paragraph_into_chain(
     em: &mut StoryEmitter,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
@@ -2843,7 +2843,7 @@ pub(super) fn emit_paragraph_into_chain(
     // means "always visible"; the filter pass is a no-op when no run
     // carries any conditions (almost every paragraph).
     let paragraph_filtered_owned;
-    let paragraph: &paged_parse::Paragraph = {
+    let paragraph: &paged_model::Paragraph = {
         let has_conditions = paragraph
             .runs
             .iter()
@@ -2852,7 +2852,7 @@ pub(super) fn emit_paragraph_into_chain(
             paragraph
         } else {
             let conditions = &em.document.styles.conditions;
-            let filtered: Vec<paged_parse::CharacterRun> = paragraph
+            let filtered: Vec<paged_model::CharacterRun> = paragraph
                 .runs
                 .iter()
                 .filter(|r| {
@@ -2862,7 +2862,7 @@ pub(super) fn emit_paragraph_into_chain(
                 })
                 .cloned()
                 .collect();
-            paragraph_filtered_owned = paged_parse::Paragraph {
+            paragraph_filtered_owned = paged_model::Paragraph {
                 runs: filtered,
                 ..paragraph.clone()
             };
@@ -2877,7 +2877,7 @@ pub(super) fn emit_paragraph_into_chain(
     // list whose applied character styles already reflect the nested
     // overrides; no other code path needs to know about nested styles.
     let paragraph_owned;
-    let paragraph: &paged_parse::Paragraph = {
+    let paragraph: &paged_model::Paragraph = {
         let nested = &em
             .document
             .resolved_paragraph_attrs(paragraph)
@@ -2890,7 +2890,7 @@ pub(super) fn emit_paragraph_into_chain(
             if overlay.is_empty() {
                 paragraph
             } else {
-                paragraph_owned = paged_parse::Paragraph {
+                paragraph_owned = paged_model::Paragraph {
                     runs: split_runs_for_nested_styles(&paragraph.runs, &overlay),
                     ..paragraph.clone()
                 };
@@ -3227,19 +3227,19 @@ pub(super) fn emit_paragraph_into_chain(
             .unwrap_or_else(|_| current_page_str.clone())
     });
     let needs_page_subst = paragraph.runs.iter().any(|r| {
-        r.text.contains(paged_parse::AUTO_PAGE_NUMBER_MARKER)
-            || r.text.contains(paged_parse::NEXT_PAGE_NUMBER_MARKER)
+        r.text.contains(paged_model::AUTO_PAGE_NUMBER_MARKER)
+            || r.text.contains(paged_model::NEXT_PAGE_NUMBER_MARKER)
     }) || list_first_text
         .as_deref()
-        .is_some_and(|t| t.contains(paged_parse::AUTO_PAGE_NUMBER_MARKER));
+        .is_some_and(|t| t.contains(paged_model::AUTO_PAGE_NUMBER_MARKER));
     let page_substituted: Vec<String> = if needs_page_subst {
         paragraph
             .runs
             .iter()
             .map(|r| {
                 r.text
-                    .replace(paged_parse::AUTO_PAGE_NUMBER_MARKER, &current_page_str)
-                    .replace(paged_parse::NEXT_PAGE_NUMBER_MARKER, &next_page_str)
+                    .replace(paged_model::AUTO_PAGE_NUMBER_MARKER, &current_page_str)
+                    .replace(paged_model::NEXT_PAGE_NUMBER_MARKER, &next_page_str)
             })
             .collect()
     } else {
@@ -4060,7 +4060,7 @@ pub(super) fn emit_paragraph_into_chain(
     // Q-09: resolve RuleAbove / RuleBelow paint + geometry once per
     // paragraph. The per-line emit below stamps the line above the
     // first line (RuleAbove) or below the last line (RuleBelow).
-    let resolve_rule_paint = |r: &paged_parse::ParagraphRule| -> Option<Paint> {
+    let resolve_rule_paint = |r: &paged_model::ParagraphRule| -> Option<Paint> {
         if r.on != Some(true) {
             return None;
         }

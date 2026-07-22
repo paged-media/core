@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_parse::{Bounds, FrameRef, GraphicLine, Oval, Polygon, Rectangle, TextFrame};
+use paged_model::{Bounds, FrameRef, GraphicLine, Oval, Polygon, Rectangle, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -36,7 +36,7 @@ pub(super) fn find_path_anchors_mut<'a>(
     doc: &'a mut paged_scene::Document,
     node: &NodeId,
 ) -> Option<(
-    &'a mut Vec<paged_parse::PathAnchor>,
+    &'a mut Vec<paged_model::PathAnchor>,
     &'a mut Vec<usize>,
     &'a mut Vec<bool>,
 )> {
@@ -99,22 +99,42 @@ pub(super) fn find_path_bounds(doc: &paged_scene::Document, node: &NodeId) -> Op
     for parsed in doc.spreads.iter() {
         match node {
             NodeId::Polygon(_) => {
-                if let Some(p) = parsed.spread.polygons.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                if let Some(p) = parsed
+                    .spread
+                    .polygons
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
                     return Some(p.bounds);
                 }
             }
             NodeId::TextFrame(_) => {
-                if let Some(p) = parsed.spread.text_frames.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                if let Some(p) = parsed
+                    .spread
+                    .text_frames
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
                     return Some(p.bounds);
                 }
             }
             NodeId::Rectangle(_) => {
-                if let Some(p) = parsed.spread.rectangles.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                if let Some(p) = parsed
+                    .spread
+                    .rectangles
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
                     return Some(p.bounds);
                 }
             }
             NodeId::GraphicLine(_) => {
-                if let Some(p) = parsed.spread.graphic_lines.iter().find(|p| p.self_id.as_deref() == Some(raw)) {
+                if let Some(p) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
                     return Some(p.bounds);
                 }
             }
@@ -130,8 +150,8 @@ pub(super) fn find_path_bounds(doc: &paged_scene::Document, node: &NodeId) -> Op
 /// Geometrically identical to the renderer's empty-anchor fallback
 /// (`Geometry::Rect { rect: bbox }`), so a stroked/offset primitive frame
 /// matches how core already draws it.
-pub(super) fn bounds_to_rectangle_anchors(b: Bounds) -> Vec<paged_parse::PathAnchor> {
-    let corner = |x: f32, y: f32| paged_parse::PathAnchor {
+pub(super) fn bounds_to_rectangle_anchors(b: Bounds) -> Vec<paged_model::PathAnchor> {
+    let corner = |x: f32, y: f32| paged_model::PathAnchor {
         anchor: (x, y),
         left: (x, y),
         right: (x, y),
@@ -1090,7 +1110,7 @@ pub(crate) fn new_text_frame(
 pub(super) fn new_graphic_line(
     self_id: String,
     bounds: Bounds,
-    anchors: Vec<paged_parse::PathAnchor>,
+    anchors: Vec<paged_model::PathAnchor>,
     subpath_starts: Vec<usize>,
     subpath_open: Vec<bool>,
     stroke_color: Option<String>,
@@ -1120,8 +1140,8 @@ pub(super) fn new_graphic_line(
         nonprinting: false,
         visible: true,
         locked: false,
-        start_arrow: paged_parse::ArrowheadType::None,
-        end_arrow: paged_parse::ArrowheadType::None,
+        start_arrow: paged_model::ArrowheadType::None,
+        end_arrow: paged_model::ArrowheadType::None,
         start_arrow_scale: 100.0,
         end_arrow_scale: 100.0,
     }
@@ -1131,7 +1151,7 @@ pub(super) fn new_graphic_line(
 pub(super) fn new_polygon(
     self_id: String,
     bounds: Bounds,
-    anchors: Vec<paged_parse::PathAnchor>,
+    anchors: Vec<paged_model::PathAnchor>,
     subpath_starts: Vec<usize>,
     subpath_open: Vec<bool>,
     fill_color: Option<String>,
@@ -1342,7 +1362,7 @@ pub(super) fn find_table_mut<'a>(
     doc: &'a mut Document,
     story_id: &str,
     table_id: &str,
-) -> Option<&'a mut paged_parse::Table> {
+) -> Option<&'a mut paged_model::Table> {
     let (si, pi) = find_table_pos(doc, story_id, table_id)?;
     doc.stories[si].story.paragraphs[pi].table.as_mut()
 }
@@ -1405,7 +1425,7 @@ pub(super) fn apply_insert_table(
     doc.stories[si]
         .story
         .paragraphs
-        .push(paged_parse::Paragraph {
+        .push(paged_model::Paragraph {
             table: Some(table),
             ..Default::default()
         });
@@ -1745,7 +1765,7 @@ pub(super) fn apply_set_column_width(
 /// delete renumbers the affected axis. We rewrite names in place so the
 /// renderer's `coords()` lookups and our own re-addressing stay
 /// consistent.
-pub(super) fn set_cell_name(cell: &mut paged_parse::TableCell, col: u32, row: u32) {
+pub(super) fn set_cell_name(cell: &mut paged_model::TableCell, col: u32, row: u32) {
     cell.name = Some(format!("{col}:{row}"));
 }
 
@@ -1787,10 +1807,10 @@ pub(super) fn apply_insert_table_row(
     }
 
     // Build the new row + its cells.
-    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) = match restore {
+    let (new_row, new_cells): (paged_model::TableRow, Vec<paged_model::TableCell>) = match restore {
         Some(blob) => {
             let removed = parse_restore_blob(blob, story_id, table_id)?;
-            let mut cells: Vec<paged_parse::TableCell> =
+            let mut cells: Vec<paged_model::TableCell> =
                 removed.cells.iter().map(TableCellSpec::to_parse).collect();
             // Re-key the restored cells to the insertion row.
             for cell in &mut cells {
@@ -1806,12 +1826,12 @@ pub(super) fn apply_insert_table_row(
             (row, cells)
         }
         None => {
-            let row = paged_parse::TableRow {
+            let row = paged_model::TableRow {
                 name: Some(at.to_string()),
                 ..Default::default()
             };
-            let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
-                .map(|c| paged_parse::TableCell {
+            let cells: Vec<paged_model::TableCell> = (0..col_count as u32)
+                .map(|c| paged_model::TableCell {
                     name: Some(format!("{c}:{at}")),
                     row_span: 1,
                     column_span: 1,
@@ -1958,11 +1978,11 @@ pub(super) fn apply_insert_table_column(
         }
     }
 
-    let (new_col, new_cells): (paged_parse::TableColumn, Vec<paged_parse::TableCell>) =
+    let (new_col, new_cells): (paged_model::TableColumn, Vec<paged_model::TableCell>) =
         match restore {
             Some(blob) => {
                 let removed = parse_restore_blob(blob, story_id, table_id)?;
-                let mut cells: Vec<paged_parse::TableCell> =
+                let mut cells: Vec<paged_model::TableCell> =
                     removed.cells.iter().map(TableCellSpec::to_parse).collect();
                 for cell in &mut cells {
                     if let Some((_, r)) = cell.coords() {
@@ -1977,12 +1997,12 @@ pub(super) fn apply_insert_table_column(
                 (col, cells)
             }
             None => {
-                let col = paged_parse::TableColumn {
+                let col = paged_model::TableColumn {
                     name: Some(at.to_string()),
                     ..Default::default()
                 };
-                let cells: Vec<paged_parse::TableCell> = (0..row_count as u32)
-                    .map(|r| paged_parse::TableCell {
+                let cells: Vec<paged_model::TableCell> = (0..row_count as u32)
+                    .map(|r| paged_model::TableCell {
                         name: Some(format!("{at}:{r}")),
                         row_span: 1,
                         column_span: 1,
@@ -2135,10 +2155,10 @@ pub(super) fn apply_insert_band_row(
         }
     }
 
-    let (new_row, new_cells): (paged_parse::TableRow, Vec<paged_parse::TableCell>) = match restore {
+    let (new_row, new_cells): (paged_model::TableRow, Vec<paged_model::TableCell>) = match restore {
         Some(blob) => {
             let removed = parse_restore_blob(blob, story_id, table_id)?;
-            let mut cells: Vec<paged_parse::TableCell> =
+            let mut cells: Vec<paged_model::TableCell> =
                 removed.cells.iter().map(TableCellSpec::to_parse).collect();
             for cell in &mut cells {
                 if let Some((c, _)) = cell.coords() {
@@ -2153,12 +2173,12 @@ pub(super) fn apply_insert_band_row(
             (row, cells)
         }
         None => {
-            let row = paged_parse::TableRow {
+            let row = paged_model::TableRow {
                 name: Some(at.to_string()),
                 ..Default::default()
             };
-            let cells: Vec<paged_parse::TableCell> = (0..col_count as u32)
-                .map(|c| paged_parse::TableCell {
+            let cells: Vec<paged_model::TableCell> = (0..col_count as u32)
+                .map(|c| paged_model::TableCell {
                     name: Some(format!("{c}:{at}")),
                     row_span: 1,
                     column_span: 1,
@@ -2396,7 +2416,7 @@ pub(super) fn parse_restore_blob(
 
 /// W3.A1 — renumber `<Row>` `Name` attributes to their positional
 /// index after an insert / delete (IDML expects `Name="0".."n-1"`).
-pub(super) fn renumber_table_rows(table: &mut paged_parse::Table) {
+pub(super) fn renumber_table_rows(table: &mut paged_model::Table) {
     for (i, row) in table.rows.iter_mut().enumerate() {
         row.name = Some(i.to_string());
     }
@@ -2404,7 +2424,7 @@ pub(super) fn renumber_table_rows(table: &mut paged_parse::Table) {
 
 /// W3.A1 — renumber `<Column>` `Name` attributes after an insert /
 /// delete.
-pub(super) fn renumber_table_columns(table: &mut paged_parse::Table) {
+pub(super) fn renumber_table_columns(table: &mut paged_model::Table) {
     for (i, col) in table.columns.iter_mut().enumerate() {
         col.name = Some(i.to_string());
     }
@@ -2709,13 +2729,13 @@ pub(super) fn apply_insert_field(
     // marker to the first (or a new) paragraph.
     if !inserted {
         if story.paragraphs.is_empty() {
-            story.paragraphs.push(paged_parse::Paragraph::default());
+            story.paragraphs.push(paged_model::Paragraph::default());
         }
         let para = story.paragraphs.last_mut().expect("ensured above");
         if let Some(run) = para.runs.last_mut() {
             run.text.push(marker);
         } else {
-            let mut run = paged_parse::CharacterRun::default();
+            let mut run = paged_model::CharacterRun::default();
             run.text.push(marker);
             para.runs.push(run);
         }
@@ -2754,7 +2774,7 @@ fn insert_placeholder_run(
     value: &Option<String>,
 ) -> Result<AppliedOperation, OperationError> {
     let story = &mut doc.stories[story_idx].story;
-    let tag = paged_parse::PlaceholderField {
+    let tag = paged_model::PlaceholderField {
         plugin: plugin.to_string(),
         key: key.to_string(),
         value: value.clone(),
@@ -2828,10 +2848,10 @@ fn insert_placeholder_run(
         // (or a new) paragraph.
         None => {
             if story.paragraphs.is_empty() {
-                story.paragraphs.push(paged_parse::Paragraph::default());
+                story.paragraphs.push(paged_model::Paragraph::default());
             }
             let para = story.paragraphs.last_mut().expect("ensured above");
-            para.runs.push(paged_parse::CharacterRun {
+            para.runs.push(paged_model::CharacterRun {
                 text: display,
                 placeholder: Some(tag),
                 ..Default::default()
@@ -2960,7 +2980,7 @@ fn delete_placeholder_run(
 ) -> Result<AppliedOperation, OperationError> {
     let story = &mut doc.stories[story_idx].story;
     let mut char_cursor: u32 = 0;
-    let mut removed: Option<paged_parse::PlaceholderField> = None;
+    let mut removed: Option<paged_model::PlaceholderField> = None;
     'outer: for para in story.paragraphs.iter_mut() {
         let mut ri = 0;
         while ri < para.runs.len() {

@@ -15,7 +15,7 @@
 //! W1.8 — ruler guides must never appear in exported / printed output.
 //!
 //! `<Guide>` elements are an editor-canvas overlay only (the canvas
-//! draws them cyan; see `paged_parse::Spread::guides`). The render
+//! draws them cyan; see `paged_model::Spread::guides`). The render
 //! pipeline parses them but must NOT paint them into the page display
 //! list. This test renders two otherwise-identical spreads — one with
 //! three ruler guides, one without — and asserts the exported display

@@ -47,7 +47,7 @@ fn first_polygon(doc: &Document) -> String {
 
 type AnchorKey = ((f32, f32), (f32, f32), (f32, f32));
 
-/// `paged_parse::PathAnchor` derives no `PartialEq` — compare via
+/// `paged_model::PathAnchor` derives no `PartialEq` — compare via
 /// tuple keys.
 fn anchors_of(doc: &Document, id: &str) -> Vec<AnchorKey> {
     doc.spreads
@@ -416,7 +416,11 @@ fn outline_stroke_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
     );
     // Redo reproduces the outlined result.
     apply(&mut doc, &undone.inverse).expect("redo apply");
-    assert_eq!(rect_anchors_of(&doc, &id), after, "redo reproduces the outline");
+    assert_eq!(
+        rect_anchors_of(&doc, &id),
+        after,
+        "redo reproduces the outline"
+    );
 }
 
 #[test]

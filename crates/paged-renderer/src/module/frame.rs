@@ -20,7 +20,7 @@
 //! resolved view and emit through the geometry adapter.
 
 use paged_compose::{BlendMode, Paint, PathId, Rect, Transform};
-use paged_parse::{
+use paged_model::{
     DropShadowSetting, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame,
 };
 
@@ -84,7 +84,7 @@ pub(crate) struct ResolvedFrame<'a> {
     /// is non-empty, `corner_path_module` produces a 4-corner path
     /// instead of the symmetric one driven by `corner_radius` /
     /// `corner_option`.
-    pub corners: [paged_parse::CornerSpec; 4],
+    pub corners: [paged_model::CornerSpec; 4],
     pub applied_object_style: Option<&'a str>,
     /// `OverprintFill="true"` on the source shape. Flagged at adapter
     /// time so the fill module can route its emit through
@@ -148,7 +148,7 @@ pub(crate) enum Geometry<'a> {
 #[allow(dead_code)]
 pub(crate) struct RenderCtx<'a> {
     pub page: &'a mut BuiltPage,
-    pub palette: &'a paged_parse::Graphic,
+    pub palette: &'a paged_model::Graphic,
     pub cmyk_xform: Option<&'a paged_color::IccTransform>,
     pub fallback_paint: Paint,
     pub fallback_drop_shadow: Option<paged_compose::DropShadow>,
@@ -164,7 +164,7 @@ pub(crate) struct RenderCtx<'a> {
     pub stroke_path: Option<PathId>,
 }
 
-fn rect_from_bounds(b: paged_parse::Bounds) -> Rect {
+fn rect_from_bounds(b: paged_model::Bounds) -> Rect {
     Rect {
         x: b.left,
         y: b.top,
@@ -473,7 +473,7 @@ impl<'a> ResolvedFrame<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paged_parse::{Bounds, PathAnchor};
+    use paged_model::{Bounds, PathAnchor};
 
     fn rect_with_anchors(anchors: Vec<PathAnchor>) -> Rectangle {
         Rectangle {
@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn cycle4_track3_stroke_type_threads_from_oval_into_resolved_frame() {
-        use paged_parse::Oval;
+        use paged_model::Oval;
         let oval = Oval {
             self_id: None,
             bounds: Bounds {
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn cycle4_track3_stroke_type_threads_from_polygon_into_resolved_frame() {
-        use paged_parse::Polygon;
+        use paged_model::Polygon;
         let poly = Polygon {
             self_id: None,
             bounds: Bounds {
@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn cycle4_track3_stroke_type_threads_from_graphic_line_into_resolved_frame() {
-        use paged_parse::GraphicLine;
+        use paged_model::GraphicLine;
         let line = GraphicLine {
             self_id: None,
             bounds: Bounds {
@@ -844,8 +844,8 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
-            start_arrow: paged_parse::ArrowheadType::None,
-            end_arrow: paged_parse::ArrowheadType::None,
+            start_arrow: paged_model::ArrowheadType::None,
+            end_arrow: paged_model::ArrowheadType::None,
             start_arrow_scale: 100.0,
             end_arrow_scale: 100.0,
         };

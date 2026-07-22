@@ -92,7 +92,7 @@ where
     check_undone(&doc, &story_id);
 }
 
-fn story<'a>(doc: &'a Document, sid: &str) -> &'a paged_parse::Story {
+fn story<'a>(doc: &'a Document, sid: &str) -> &'a paged_model::Story {
     &doc.stories.iter().find(|s| s.self_id == sid).unwrap().story
 }
 

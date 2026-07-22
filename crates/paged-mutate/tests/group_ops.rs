@@ -24,8 +24,8 @@
 
 use std::path::PathBuf;
 
+use paged_model::FrameRef;
 use paged_mutate::{apply, GroupSpec, NodeId, Operation};
-use paged_parse::FrameRef;
 use paged_renderer::pipeline::{build_document, PipelineOptions};
 use paged_scene::Document;
 
@@ -40,7 +40,7 @@ fn fixture_bytes() -> Vec<u8> {
 }
 
 /// Resolve a leaf FrameRef to a NodeId within a spread.
-fn node_for(spread: &paged_parse::Spread, r: FrameRef) -> Option<NodeId> {
+fn node_for(spread: &paged_model::Spread, r: FrameRef) -> Option<NodeId> {
     Some(match r {
         FrameRef::TextFrame(i) => NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?),
         FrameRef::Rectangle(i) => NodeId::Rectangle(spread.rectangles.get(i)?.self_id.clone()?),
@@ -420,7 +420,7 @@ fn close6(a: [f32; 6], b: [f32; 6]) -> bool {
 }
 
 /// Effective `item_transform` of a leaf NodeId on a spread.
-fn leaf_transform(spread: &paged_parse::Spread, node: &NodeId) -> Option<[f32; 6]> {
+fn leaf_transform(spread: &paged_model::Spread, node: &NodeId) -> Option<[f32; 6]> {
     let id = node.self_id();
     match node {
         NodeId::TextFrame(_) => spread

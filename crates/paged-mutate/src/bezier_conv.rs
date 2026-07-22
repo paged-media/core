@@ -45,7 +45,7 @@
 
 use flo_curves::bezier::path::SimpleBezierPath;
 use flo_curves::Coord2;
-use paged_parse::PathAnchor;
+use paged_model::PathAnchor;
 
 /// Convert one idml subpath (slice of contiguous PathAnchors that
 /// form a single contour) to a flo_curves `SimpleBezierPath`. The

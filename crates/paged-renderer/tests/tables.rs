@@ -691,8 +691,8 @@ fn edited_cell_paragraphs_relayout_into_more_lines() {
             .iter_mut()
             .find(|c| c.coords() == Some((0, 0)))
             .unwrap();
-        c.paragraphs.push(paged_parse::Paragraph {
-            runs: vec![paged_parse::CharacterRun {
+        c.paragraphs.push(paged_model::Paragraph {
+            runs: vec![paged_model::CharacterRun {
                 text: "second".into(),
                 font: Some("Inter".into()),
                 ..Default::default()

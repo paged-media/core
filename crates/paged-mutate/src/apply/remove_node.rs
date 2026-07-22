@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_parse::FrameRef;
+use paged_model::FrameRef;
 use paged_scene::Document;
 
 use crate::error::OperationError;

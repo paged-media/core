@@ -649,10 +649,10 @@ pub(super) fn apply_set_property(
         ) => {
             let new_val = expect_text(path, value)?;
             let parsed = if new_val.is_empty() {
-                paged_parse::ArrowheadType::None
+                paged_model::ArrowheadType::None
             } else {
-                match paged_parse::ArrowheadType::from_idml(&new_val) {
-                    paged_parse::ArrowheadType::Other => {
+                match paged_model::ArrowheadType::from_idml(&new_val) {
+                    paged_model::ArrowheadType::Other => {
                         return Err(OperationError::InvalidValue {
                             node: node.clone(),
                             path,
@@ -670,7 +670,7 @@ pub(super) fn apply_set_property(
                 &mut line.end_arrow
             };
             let prev = match *slot {
-                paged_parse::ArrowheadType::None => String::new(),
+                paged_model::ArrowheadType::None => String::new(),
                 t => t.as_idml().to_string(),
             };
             *slot = parsed;
@@ -709,8 +709,8 @@ pub(super) fn apply_set_property(
             if new_val.is_empty() {
                 *tw = None;
             } else {
-                *tw = Some(paged_parse::TextWrap {
-                    mode: paged_parse::TextWrapMode::from_idml(&new_val),
+                *tw = Some(paged_model::TextWrap {
+                    mode: paged_model::TextWrapMode::from_idml(&new_val),
                     offsets: prev_offsets,
                     invert: prev_invert,
                     contour_type: prev_contour,
@@ -739,13 +739,13 @@ pub(super) fn apply_set_property(
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let prev_mode = tw
                 .map(|t| t.mode)
-                .unwrap_or(paged_parse::TextWrapMode::None);
+                .unwrap_or(paged_model::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
             // W2.5 — preserve contour-option knobs through an offset set.
             let prev_contour = tw.and_then(|t| t.contour_type);
             let prev_inside = tw.and_then(|t| t.include_inside_edges);
-            *tw = Some(paged_parse::TextWrap {
+            *tw = Some(paged_model::TextWrap {
                 mode: prev_mode,
                 offsets: new_offsets,
                 invert: prev_invert,
@@ -784,16 +784,16 @@ pub(super) fn apply_set_property(
                 .unwrap_or_default();
             let prev_mode = tw
                 .map(|t| t.mode)
-                .unwrap_or(paged_parse::TextWrapMode::None);
+                .unwrap_or(paged_model::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
             let prev_inside = tw.and_then(|t| t.include_inside_edges);
             let new_contour = if new_val.is_empty() {
                 None
             } else {
-                Some(paged_parse::ContourOptionType::from_idml(&new_val))
+                Some(paged_model::ContourOptionType::from_idml(&new_val))
             };
-            *tw = Some(paged_parse::TextWrap {
+            *tw = Some(paged_model::TextWrap {
                 mode: prev_mode,
                 offsets: prev_offsets,
                 invert: prev_invert,
@@ -822,11 +822,11 @@ pub(super) fn apply_set_property(
             let prev = tw.and_then(|t| t.include_inside_edges).unwrap_or(false);
             let prev_mode = tw
                 .map(|t| t.mode)
-                .unwrap_or(paged_parse::TextWrapMode::None);
+                .unwrap_or(paged_model::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             let prev_invert = tw.and_then(|t| t.invert);
             let prev_contour = tw.and_then(|t| t.contour_type);
-            *tw = Some(paged_parse::TextWrap {
+            *tw = Some(paged_model::TextWrap {
                 mode: prev_mode,
                 offsets: prev_offsets,
                 invert: prev_invert,
@@ -1760,7 +1760,7 @@ pub(super) fn apply_set_property(
                 .as_ref()
                 .map(|f| (f.reference_point.clone(), f.auto_fit))
                 .unwrap_or((None, None));
-            rect.frame_fitting = Some(paged_parse::FrameFittingOption {
+            rect.frame_fitting = Some(paged_model::FrameFittingOption {
                 top_crop: Some(new_bounds[0]),
                 left_crop: Some(new_bounds[1]),
                 bottom_crop: Some(new_bounds[2]),
@@ -1814,7 +1814,7 @@ pub(super) fn apply_set_property(
             {
                 rect.frame_fitting = None;
             } else {
-                rect.frame_fitting = Some(paged_parse::FrameFittingOption {
+                rect.frame_fitting = Some(paged_model::FrameFittingOption {
                     top_crop: prev_top,
                     left_crop: prev_left,
                     bottom_crop: prev_bottom,
@@ -2016,7 +2016,7 @@ pub(super) fn apply_set_property(
             frame.vertical_justification = if new_val.is_empty() {
                 None
             } else {
-                paged_parse::VerticalJustification::from_idml(&new_val)
+                paged_model::VerticalJustification::from_idml(&new_val)
             };
             (
                 Value::Text(prev.to_string()),
@@ -2037,7 +2037,7 @@ pub(super) fn apply_set_property(
             frame.auto_sizing = if new_val.is_empty() {
                 None
             } else {
-                paged_parse::AutoSizingType::from_idml(&new_val)
+                paged_model::AutoSizingType::from_idml(&new_val)
             };
             (
                 Value::Text(prev.to_string()),
@@ -2058,7 +2058,7 @@ pub(super) fn apply_set_property(
             frame.first_baseline_offset = if new_val.is_empty() {
                 None
             } else {
-                paged_parse::FirstBaselineOffset::from_idml(&new_val)
+                paged_model::FirstBaselineOffset::from_idml(&new_val)
             };
             (
                 Value::Text(prev.to_string()),
@@ -2084,12 +2084,12 @@ pub(super) fn apply_set_property(
             let prev = tw.and_then(|t| t.invert).unwrap_or(false);
             let prev_mode = tw
                 .map(|t| t.mode)
-                .unwrap_or(paged_parse::TextWrapMode::None);
+                .unwrap_or(paged_model::TextWrapMode::None);
             let prev_offsets = tw.map(|t| t.offsets).unwrap_or([0.0; 4]);
             // W2.5 — preserve contour-option knobs through an invert set.
             let prev_contour = tw.and_then(|t| t.contour_type);
             let prev_inside = tw.and_then(|t| t.include_inside_edges);
-            *tw = Some(paged_parse::TextWrap {
+            *tw = Some(paged_model::TextWrap {
                 mode: prev_mode,
                 offsets: prev_offsets,
                 invert: Some(new_val),
@@ -2317,7 +2317,7 @@ pub(super) fn apply_set_property(
             rect.corners[i].option = if new_val.is_empty() {
                 None
             } else {
-                paged_parse::CornerOption::from_idml(&new_val)
+                paged_model::CornerOption::from_idml(&new_val)
             };
             (
                 Value::Text(prev.to_string()),

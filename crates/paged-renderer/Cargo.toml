@@ -33,7 +33,7 @@ name = "inspect_e2e"
 required-features = ["mutate-roundtrip"]
 
 [dependencies]
-paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-flow = { path = "../paged-flow" }
 paged-text = { path = "../paged-text" }

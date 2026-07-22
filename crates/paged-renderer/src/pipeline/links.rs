@@ -20,7 +20,7 @@
 //! A `<TextVariableInstance>` in a story carries InDesign's baked
 //! `ResultText` (the value the document last composed) plus an
 //! `AssociatedTextVariable` id. The parser splits each instance into
-//! its own [`paged_parse::CharacterRun`] tagged with `text_variable`.
+//! its own [`paged_model::CharacterRun`] tagged with `text_variable`.
 //! At paragraph emit, [`resolve_variable`] re-resolves the value per
 //! the variable's `VariableType` when it can do better than the stale
 //! baked string — mirroring how the auto-page-number marker is
@@ -67,7 +67,7 @@
 use std::collections::HashMap;
 
 use paged_compose::LinkTarget;
-use paged_parse::{DesignMap, HyperlinkDestinationKind, NumberingStyle, Section};
+use paged_model::{DesignMap, HyperlinkDestinationKind, NumberingStyle, Section};
 
 use super::datefmt::{self, DateParts};
 use super::DocumentClock;
@@ -241,7 +241,7 @@ pub(crate) fn resolve_variable(
 /// W1.18a — format a date variable: apply its `date_format` token
 /// pattern to `date`. An absent / empty pattern uses a documented
 /// ISO-ish default so the slot is self-describing rather than blank.
-fn format_date_var(var: &paged_parse::TextVariable, date: DateParts) -> String {
+fn format_date_var(var: &paged_model::TextVariable, date: DateParts) -> String {
     let pattern = var
         .date_format
         .as_deref()
@@ -348,7 +348,7 @@ pub(crate) fn resolve_link_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paged_parse::{Hyperlink, HyperlinkDestination, TextVariable};
+    use paged_model::{Hyperlink, HyperlinkDestination, TextVariable};
 
     fn designmap_with(vars: Vec<TextVariable>) -> DesignMap {
         DesignMap {

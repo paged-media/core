@@ -47,12 +47,10 @@ use paged_compose::{
     InnerGlow as ComposeInnerGlow, InnerShadow as ComposeInnerShadow,
     OuterGlow as ComposeOuterGlow, Paint, PathId, Rect, Satin as ComposeSatin, Transform,
 };
-use paged_parse::{
-    spread::{
-        BevelEmbossParams, DirectionalFeatherParams, FeatherParams, FrameEffects,
-        GradientFeatherParams, InnerGlowParams, InnerShadowParams, OuterGlowParams, SatinParams,
-    },
-    Graphic,
+use paged_model::{
+    BevelEmbossParams, DirectionalFeatherParams, FeatherParams, FrameEffects,
+    GradientFeatherParams, Graphic, InnerGlowParams, InnerShadowParams, OuterGlowParams,
+    SatinParams,
 };
 
 use crate::pipeline::{blend_mode_from_idml, color_id_to_paint_with_list, BuiltPage};

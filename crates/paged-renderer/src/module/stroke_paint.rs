@@ -25,7 +25,7 @@
 //! geometry adapter's unit-rect convention.
 
 use paged_compose::{PathId, Stroke, Transform};
-use paged_parse::Graphic;
+use paged_model::Graphic;
 
 use super::geometry::{emit_stroked, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};

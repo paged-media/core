@@ -26,8 +26,8 @@ use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation};
 /// attribute spelling so an inverse op round-trips through
 /// `NumberingStyle::from_idml`. (`NumberingStyle::as_str` yields the
 /// editor's lower-camel wire name, which `from_idml` does NOT accept.)
-pub(super) fn numbering_style_to_idml(s: paged_parse::NumberingStyle) -> &'static str {
-    use paged_parse::NumberingStyle::*;
+pub(super) fn numbering_style_to_idml(s: paged_model::NumberingStyle) -> &'static str {
+    use paged_model::NumberingStyle::*;
     match s {
         Arabic => "Arabic",
         UpperRoman => "UpperRoman",
@@ -68,15 +68,15 @@ pub(super) fn apply_insert_section(
     if sections.iter().any(|s| s.self_id == id) {
         return Err(OperationError::DuplicateNodeId { id });
     }
-    let section = paged_parse::Section {
+    let section = paged_model::Section {
         self_id: id.clone(),
         page_start: Some(at_page.to_string()),
         continue_numbering: false,
         start_at,
         numbering_style: numbering_style
             .as_deref()
-            .map(paged_parse::NumberingStyle::from_idml)
-            .unwrap_or(paged_parse::NumberingStyle::Arabic),
+            .map(paged_model::NumberingStyle::from_idml)
+            .unwrap_or(paged_model::NumberingStyle::Arabic),
         section_prefix: prefix.clone(),
         marker: None,
         include_prefix: prefix.is_some(),
@@ -123,7 +123,7 @@ pub(super) fn apply_edit_section(
         section.include_prefix = p.is_some();
     }
     if let Some(style) = &numbering_style {
-        section.numbering_style = paged_parse::NumberingStyle::from_idml(style);
+        section.numbering_style = paged_model::NumberingStyle::from_idml(style);
     }
     if let Some(s) = &start_at {
         section.start_at = *s;

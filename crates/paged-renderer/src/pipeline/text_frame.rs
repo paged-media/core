@@ -17,7 +17,7 @@
 use super::*;
 
 use paged_compose::{emit_glyph_slice, Color, DropShadow, Paint, Rect, Transform, TtfOutliner};
-use paged_parse::{Graphic, TextFrame};
+use paged_model::{Graphic, TextFrame};
 use paged_scene::Document;
 
 use crate::module::{Geometry, ResolvedFrame};
@@ -474,7 +474,7 @@ pub(super) fn build_perline_wrap_widths(
 /// spread-coord position. Identity (`None`) is the no-op. Used by
 /// the text-emission path so glyphs land where the frame actually
 /// sits in spread coords rather than at its inner-coord origin.
-pub(super) fn frame_spread_top_left(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> (f32, f32) {
+pub(super) fn frame_spread_top_left(b: paged_model::Bounds, m: Option<[f32; 6]>) -> (f32, f32) {
     match m {
         Some(m) => apply_matrix(&m, b.left, b.top),
         None => (b.left, b.top),
@@ -492,7 +492,7 @@ pub(super) fn is_layer_visible(document: &Document, layer_ref: Option<&str>) -> 
     paged_scene::layer_render_visible(&document.designmap, layer_ref)
 }
 
-pub(super) fn page_for_frame(frame: &paged_parse::Bounds, pages: &[PageGeom]) -> Option<usize> {
+pub(super) fn page_for_frame(frame: &paged_model::Bounds, pages: &[PageGeom]) -> Option<usize> {
     let cx = (frame.left + frame.right) * 0.5;
     let cy = (frame.top + frame.bottom) * 0.5;
     pages.iter().position(|p| {
@@ -644,9 +644,9 @@ pub(super) fn estimate_auto_sizing_line_count(
 pub(super) fn compute_auto_sized_bounds(
     document: &Document,
     frame: &TextFrame,
-) -> Option<paged_parse::Bounds> {
+) -> Option<paged_model::Bounds> {
     let at = frame.auto_sizing?;
-    if matches!(at, paged_parse::AutoSizingType::Off) {
+    if matches!(at, paged_model::AutoSizingType::Off) {
         return None;
     }
     let authored = frame.bounds;
@@ -690,7 +690,7 @@ pub(super) fn compute_auto_sized_bounds(
     // to both so the box scales uniformly (InDesign's "Proportionally").
     if matches!(
         at,
-        paged_parse::AutoSizingType::HeightAndWidthProportionally
+        paged_model::AutoSizingType::HeightAndWidthProportionally
     ) && authored_w > 0.0
         && authored_h > 0.0
     {
@@ -712,7 +712,7 @@ pub(super) fn compute_auto_sized_bounds(
     // delta to top/bottom per the pinned point. Default TopLeftPoint:
     // grow right + down (top-left pinned), matching Phase A's downward
     // line placement.
-    use paged_parse::AutoSizingReferencePoint as RP;
+    use paged_model::AutoSizingReferencePoint as RP;
     let rp = frame
         .auto_sizing_reference_point
         .unwrap_or(RP::TopLeftPoint);
@@ -731,7 +731,7 @@ pub(super) fn compute_auto_sized_bounds(
         RP::CenterLeftPoint | RP::CenterPoint | RP::CenterRightPoint => 0.5,
         RP::BottomLeftPoint | RP::BottomCenterPoint | RP::BottomRightPoint => 1.0,
     };
-    Some(paged_parse::Bounds {
+    Some(paged_model::Bounds {
         left: authored.left - dw * left_frac,
         right: authored.right + dw * (1.0 - left_frac),
         top: authored.top - dh * top_frac,
@@ -759,7 +759,7 @@ pub(super) fn auto_sizing_line_height_pt(document: &Document, frame: &TextFrame)
 }
 
 pub(super) fn pages_overlapping_frame(
-    frame: &paged_parse::Bounds,
+    frame: &paged_model::Bounds,
     pages: &[PageGeom],
 ) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
@@ -784,7 +784,7 @@ pub(super) fn emit_text_frame_into(
     fallback: Paint,
     cmyk_xform: Option<&paged_color::IccTransform>,
     drop_shadow: Option<DropShadow>,
-    auto_sized_bounds: Option<paged_parse::Bounds>,
+    auto_sized_bounds: Option<paged_model::Bounds>,
 ) {
     let mut resolved = ResolvedFrame::from_text_frame(frame);
     // W1.7 Phase B: an AutoSizing frame paints its fill / stroke to the
@@ -978,7 +978,7 @@ pub(super) fn first_baseline_for_frame(
         .unwrap_or(0);
     let pt_to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
     let em_fraction_to_64 = |frac: f32| pt_to_64(point_size * frac);
-    use paged_parse::FirstBaselineOffset as F;
+    use paged_model::FirstBaselineOffset as F;
     let policy_offset_64 = match frame.first_baseline_offset {
         Some(F::CapHeight) => em_fraction_to_64(
             metrics
@@ -1070,14 +1070,14 @@ pub(super) fn first_baseline_for_frame(
 pub(super) fn apply_vertical_writing_rotation(
     pages: &mut [BuiltPage],
     pre_counts: &[usize],
-    chain: &[&paged_parse::TextFrame],
+    chain: &[&paged_model::TextFrame],
     chain_pages: &[usize],
 ) {
     use std::collections::BTreeMap;
     // For each page that hosted this story, look up the first
     // chain frame on that page. We pivot around that frame's
     // top-left and translate by the frame's width.
-    let mut frame_for_page: BTreeMap<usize, &paged_parse::TextFrame> = BTreeMap::new();
+    let mut frame_for_page: BTreeMap<usize, &paged_model::TextFrame> = BTreeMap::new();
     for (i, &page_idx) in chain_pages.iter().enumerate() {
         frame_for_page.entry(page_idx).or_insert(chain[i]);
     }
@@ -1172,7 +1172,7 @@ pub(super) fn frame_outer_transform(
 pub(super) fn emit_frame_scene_layer(
     page: &mut BuiltPage,
     self_id: Option<&str>,
-    bounds: paged_parse::Bounds,
+    bounds: paged_model::Bounds,
     inset: Option<[f32; 4]>,
     item_transform: Option<[f32; 6]>,
     registry: Option<&std::collections::HashMap<String, paged_compose::SceneLayer>>,
@@ -1277,7 +1277,7 @@ pub(super) fn emit_frame_scene_layer(
 pub(super) fn emit_frame_resource_tiles(
     page: &mut BuiltPage,
     self_id: Option<&str>,
-    bounds: paged_parse::Bounds,
+    bounds: paged_model::Bounds,
     inset: Option<[f32; 4]>,
     item_transform: Option<[f32; 6]>,
     registry: Option<

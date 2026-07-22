@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_parse::Spread;
+use paged_model::Spread;
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -30,7 +30,7 @@ use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation, Pr
 /// Lossless undo capture for `RemovePage`: the whole hosting spread
 /// (every page item included) plus its position in `doc.spreads` and
 /// its manifest src. Serialized to JSON inside the inverse Operation
-/// so the op stays wire-shaped; `paged_parse::Spread` derives
+/// so the op stays wire-shaped; `paged_model::Spread` derives
 /// `Serialize`+`Deserialize` for exactly this round-trip.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct SpreadRestore {
@@ -93,7 +93,7 @@ pub(super) fn mint_spread_page_ids(doc: &Document) -> (String, String) {
 pub(super) fn find_page_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
-) -> Option<&'a mut paged_parse::Page> {
+) -> Option<&'a mut paged_model::Page> {
     for parsed in &mut doc.spreads {
         if let Some(p) = parsed
             .spread
@@ -216,7 +216,7 @@ pub(super) fn apply_insert_page(
         return Err(OperationError::DuplicateNodeId { id: sid });
     }
 
-    let page = paged_parse::Page {
+    let page = paged_model::Page {
         self_id: Some(pid.clone()),
         bounds: bounds_from_array(ref_bounds),
         applied_master: master_id.map(str::to_string),

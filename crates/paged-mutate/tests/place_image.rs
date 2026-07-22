@@ -66,7 +66,7 @@ fn open_doc() -> Document {
     Document::open(&idml_with_frames()).expect("open synthetic IDML")
 }
 
-fn rect<'a>(doc: &'a Document, id: &str) -> &'a paged_parse::Rectangle {
+fn rect<'a>(doc: &'a Document, id: &str) -> &'a paged_model::Rectangle {
     doc.spreads
         .iter()
         .flat_map(|s| s.spread.rectangles.iter())

@@ -43,7 +43,7 @@ use kurbo::{
     BezPath, CubicBez, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point,
     Stroke as KurboStroke, StrokeOpts,
 };
-use paged_parse::PathAnchor;
+use paged_model::PathAnchor;
 
 /// Stroke joins the wire/ops layer can request. Mirrors IDML's
 /// stroke-join vocabulary (miter/round/bevel).

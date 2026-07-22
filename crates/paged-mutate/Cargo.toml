@@ -11,7 +11,7 @@ description = "Operation-based mutation channel for the Paged scene graph. Typed
 workspace = true
 
 [dependencies]
-paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 serde = { workspace = true }
 # Lossless style-delete undo serialises the captured StyleDef to JSON

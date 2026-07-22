@@ -85,7 +85,7 @@ impl<'a> AlternatingFillAxis<'a> {
 #[allow(clippy::needless_range_loop)]
 pub(super) fn emit_table_into_chain(
     em: &mut StoryEmitter,
-    table: &paged_parse::Table,
+    table: &paged_model::Table,
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
@@ -590,7 +590,7 @@ pub(super) fn emit_table_into_chain(
     //
     // Build a (col, template_row) → cell index map so the inner
     // loop is O(1) per cell rather than O(cells × physical_rows).
-    let mut cell_by_origin: std::collections::HashMap<(u32, u32), &paged_parse::TableCell> =
+    let mut cell_by_origin: std::collections::HashMap<(u32, u32), &paged_model::TableCell> =
         std::collections::HashMap::with_capacity(table.cells.len());
     for cell in &table.cells {
         if let Some(coords) = cell.coords() {
@@ -1328,7 +1328,7 @@ struct ResolvedLineStroke {
     end_count: usize,
 }
 
-fn resolve_table_line_strokes(decl: &paged_parse::TableLineStrokes) -> ResolvedLineStroke {
+fn resolve_table_line_strokes(decl: &paged_model::TableLineStrokes) -> ResolvedLineStroke {
     let start_type = decl.start_type.clone();
     let start_color_raw = decl.start_color.clone();
     let has_decl = start_type.is_some()
@@ -1594,7 +1594,7 @@ fn emit_table_vertical_edge(
 #[allow(clippy::too_many_arguments)]
 fn emit_nested_table_inline(
     em: &mut StoryEmitter,
-    table: &paged_parse::Table,
+    table: &paged_model::Table,
     origin_x: f32,
     origin_y: f32,
     max_width_pt: f32,
@@ -1811,7 +1811,7 @@ fn emit_nested_table_inline(
 /// the same per-column inner width the emit pass would see.
 fn measure_nested_table_height(
     em: &StoryEmitter,
-    table: &paged_parse::Table,
+    table: &paged_model::Table,
     max_width_pt: f32,
 ) -> f32 {
     if table.cells.is_empty() || table.columns.is_empty() || table.rows.is_empty() {
@@ -1877,7 +1877,7 @@ fn measure_nested_table_height(
 /// `MinimumHeight` so a 0 is safely absorbed.
 fn measure_cell_paragraph(
     em: &StoryEmitter,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     column_width_pt: f32,
 ) -> f32 {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
@@ -2028,7 +2028,7 @@ fn measure_cell_paragraph(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_cell_paragraph(
     em: &mut StoryEmitter,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     target_page: usize,
     origin_pt: (f32, f32),
     column_width_pt: f32,

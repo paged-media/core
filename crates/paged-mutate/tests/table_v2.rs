@@ -108,7 +108,7 @@ fn open_doc() -> Document {
 }
 
 /// Borrow the parsed `<Table>` for assertions.
-fn table(doc: &Document) -> &paged_parse::Table {
+fn table(doc: &Document) -> &paged_model::Table {
     doc.stories
         .iter()
         .flat_map(|s| s.story.paragraphs.iter())
@@ -117,7 +117,7 @@ fn table(doc: &Document) -> &paged_parse::Table {
 }
 
 /// Borrow the cell originating at `(col, row)`.
-fn cell(doc: &Document, col: u32, row: u32) -> &paged_parse::TableCell {
+fn cell(doc: &Document, col: u32, row: u32) -> &paged_model::TableCell {
     table(doc)
         .cells
         .iter()
@@ -580,7 +580,7 @@ fn find_table<'a>(
     doc: &'a Document,
     story_id: &str,
     table_id: &str,
-) -> Option<&'a paged_parse::Table> {
+) -> Option<&'a paged_model::Table> {
     doc.stories
         .iter()
         .find(|s| s.self_id == story_id)?

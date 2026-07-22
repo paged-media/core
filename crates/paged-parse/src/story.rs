@@ -49,15 +49,7 @@ pub use paged_model::{
 
 pub use paged_model::{Justification, OtfFeatures, TabStop};
 
-/// Private-use Unicode codepoint placed inline by the story parser
-/// where IDML carries `<?ACE 18?>` (auto current-page-number).
-/// Renderers substitute this with the live page's number / Name
-/// at emit time. Picked from the U+E0xx Tag block — outside any
-/// rendered glyph plane, never produced by real text.
-pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
-/// Same idea for `<?ACE 19?>` (next-page-number marker; used in
-/// "continued on page" footers).
-pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
+pub use paged_model::{AUTO_PAGE_NUMBER_MARKER, NEXT_PAGE_NUMBER_MARKER};
 
 pub use paged_model::Story;
 

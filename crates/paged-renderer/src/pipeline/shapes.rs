@@ -265,7 +265,7 @@ fn push_circle_contour(
 #[allow(clippy::too_many_arguments)]
 fn emit_arrowhead(
     page: &mut BuiltPage,
-    kind: paged_parse::ArrowheadType,
+    kind: paged_model::ArrowheadType,
     tip: (f32, f32),
     dir: (f32, f32),
     stroke_width: f32,
@@ -274,7 +274,7 @@ fn emit_arrowhead(
     transform: Transform,
 ) {
     use paged_compose::PathSegment::*;
-    use paged_parse::ArrowheadType as A;
+    use paged_model::ArrowheadType as A;
     if !kind.draws() || stroke_width <= 0.0 {
         return;
     }
@@ -1115,9 +1115,9 @@ fn frame_gap_override<'a>(
 pub(crate) fn classify_stroke_style<'a>(
     stroke_type: Option<&str>,
     weight: f32,
-    stroke_styles: &'a std::collections::BTreeMap<String, paged_parse::StrokeStyleDef>,
+    stroke_styles: &'a std::collections::BTreeMap<String, paged_model::StrokeStyleDef>,
 ) -> StrokeStyleClass<'a> {
-    use paged_parse::StrokeStyleKind as K;
+    use paged_model::StrokeStyleKind as K;
     let Some(name) = stroke_type else {
         return StrokeStyleClass::Plain {
             gap_color: None,
@@ -1192,7 +1192,7 @@ pub(crate) fn classify_stroke_style<'a>(
 /// the stripe centreline measured from the stroke's *upper* edge
 /// (i.e. `-weight/2` … `+weight/2` once recentred by the caller).
 /// Zero-width stripes are dropped.
-fn stripe_rules_from_def(stripes: &[paged_parse::StripeDef], weight: f32) -> Vec<(f32, f32)> {
+fn stripe_rules_from_def(stripes: &[paged_model::StripeDef], weight: f32) -> Vec<(f32, f32)> {
     stripes
         .iter()
         .filter(|s| s.width > 1e-4)
@@ -1206,8 +1206,8 @@ fn stripe_rules_from_def(stripes: &[paged_parse::StripeDef], weight: f32) -> Vec
 
 /// Built-in striped stroke styles InDesign ships, expressed as a stripe
 /// table (left/width fractions of the total weight). Ordered top→bottom.
-fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_parse::StripeDef>> {
-    use paged_parse::StripeDef as S;
+fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_model::StripeDef>> {
+    use paged_model::StripeDef as S;
     let v = match name {
         "Thick - Thin" | "Thick-Thin" | "ThickThin" => vec![
             S {
@@ -1470,7 +1470,7 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
     // `…Corner`-suffixed value (W1.8: this was why a `Beveled` rect fell
     // back to the plain axis-aligned rect with no corner geometry).
     // Every non-`None` option consumes the radius.
-    match option.and_then(paged_parse::CornerOption::from_idml) {
+    match option.and_then(paged_model::CornerOption::from_idml) {
         Some(opt) if opt.rounds() => Some(r),
         _ => None,
     }
@@ -1486,7 +1486,7 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
 pub(crate) fn per_corner_radii(
     corner_radius: Option<f32>,
     corner_option: Option<&str>,
-    corners: &[paged_parse::CornerSpec; 4],
+    corners: &[paged_model::CornerSpec; 4],
 ) -> [Option<f32>; 4] {
     let fallback = corner_radius_from(corner_radius, corner_option);
     let mut out = [None; 4];
@@ -1533,7 +1533,7 @@ pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> paged_compose::PathD
     corner_rect_path(
         rect,
         [Some(radius); 4],
-        [paged_parse::CornerOption::Rounded; 4],
+        [paged_model::CornerOption::Rounded; 4],
     )
 }
 
@@ -1543,12 +1543,12 @@ pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> paged_compose::PathD
 /// corner is square (`None`).
 pub(crate) fn per_corner_kinds(
     corner_option: Option<&str>,
-    corners: &[paged_parse::CornerSpec; 4],
-) -> [paged_parse::CornerOption; 4] {
+    corners: &[paged_model::CornerSpec; 4],
+) -> [paged_model::CornerOption; 4] {
     let global = corner_option
-        .and_then(paged_parse::CornerOption::from_idml)
-        .unwrap_or(paged_parse::CornerOption::None);
-    let mut out = [paged_parse::CornerOption::None; 4];
+        .and_then(paged_model::CornerOption::from_idml)
+        .unwrap_or(paged_model::CornerOption::None);
+    let mut out = [paged_model::CornerOption::None; 4];
     for (i, spec) in corners.iter().enumerate() {
         out[i] = spec.option.unwrap_or(global);
     }
@@ -1572,10 +1572,10 @@ pub(crate) fn per_corner_kinds(
 pub(crate) fn corner_rect_path(
     rect: Rect,
     radii: [Option<f32>; 4],
-    kinds: [paged_parse::CornerOption; 4],
+    kinds: [paged_model::CornerOption; 4],
 ) -> paged_compose::PathData {
     use paged_compose::PathSegment::*;
-    use paged_parse::CornerOption;
+    use paged_model::CornerOption;
     const KAPPA: f32 = 0.552_284_8;
     let max_r = rect.w.min(rect.h) * 0.5;
     // Effective radius: 0 when the corner is square (`None` kind) or
@@ -2138,7 +2138,7 @@ mod tests {
 #[cfg(test)]
 mod stroke_style_class_tests {
     use super::*;
-    use paged_parse::{StripeDef, StrokeStyleDef, StrokeStyleKind as K};
+    use paged_model::{StripeDef, StrokeStyleDef, StrokeStyleKind as K};
     use std::collections::BTreeMap;
 
     fn styles(defs: Vec<StrokeStyleDef>) -> BTreeMap<String, StrokeStyleDef> {

@@ -96,7 +96,7 @@ fn open_doc() -> Document {
 
 /// Read the anchored frame's `AnchoredObjectSetting` back out of the
 /// document for assertions.
-fn setting(doc: &Document) -> &paged_parse::AnchoredObjectSetting {
+fn setting(doc: &Document) -> &paged_model::AnchoredObjectSetting {
     doc.stories
         .iter()
         .flat_map(|s| s.story.paragraphs.iter())

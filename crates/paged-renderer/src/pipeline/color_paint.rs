@@ -145,7 +145,7 @@ pub fn color_id_to_paint(
             });
         }
     }
-    if let Some([r, g, b]) = graphic::to_linear_rgb(entry) {
+    if let Some([r, g, b]) = to_linear_rgb(entry) {
         return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
     }
     // Concept 2 — Lab swatches. `to_linear_rgb` is the parse
@@ -159,8 +159,8 @@ pub fn color_id_to_paint(
 /// Lab(D50) swatch → solid paint, or None when the entry isn't a
 /// 3-channel Lab colour. Shared by the direct resolver above and
 /// the canvas-side preview path.
-pub fn lab_entry_to_paint(entry: &paged_parse::graphic::ColorEntry) -> Option<Paint> {
-    if entry.space != paged_parse::graphic::ColorSpace::Lab || entry.value.len() != 3 {
+pub fn lab_entry_to_paint(entry: &paged_model::ColorEntry) -> Option<Paint> {
+    if entry.space != paged_model::ColorSpace::Lab || entry.value.len() != 3 {
         return None;
     }
     let paged_color::LinearRgb([r, g, b]) =
@@ -435,7 +435,7 @@ pub fn color_id_to_paint_with_list_dir(
         // `R_unit = 2·√(w² + h²) / (w + h)`. When the caller can't
         // supply the bbox (text-frame strokes etc.) we fall back to
         // the legacy centred-on-(0.5, 0.5) / √½ unit-rect default.
-        if matches!(grad.kind, paged_parse::GradientKind::Radial) {
+        if matches!(grad.kind, paged_model::GradientKind::Radial) {
             // Centre at (0, 1) of the unit-rect (= bottom-left of
             // the path in InDesign coords) with radius equal to the
             // longer bbox dimension. Empirically matches what
@@ -486,7 +486,7 @@ pub fn color_id_to_paint_with_list_dir(
     } = paint
     {
         if let Some(entry) = palette.resolve(id) {
-            if entry.model == paged_parse::ColorModel::Spot && entry.effective_cmyk().is_some() {
+            if entry.model == paged_model::ColorModel::Spot && entry.effective_cmyk().is_some() {
                 let cmyk_alt_unit = entry.effective_cmyk().unwrap();
                 let to_8 = |v: f32| (v.clamp(0.0, 100.0) * 2.55).round() as u8;
                 let alt_8 = [
@@ -568,7 +568,7 @@ impl RunStrokePicker {
 }
 
 pub fn build_run_paint_picker(
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     palette: &Graphic,
     default: Paint,
 ) -> RunPaintPicker {
@@ -581,7 +581,7 @@ pub fn build_run_paint_picker(
 /// naive CMYK→sRGB approximation in `graphic::to_linear_rgb`, undoing
 /// the work of building the transform.
 pub fn build_run_paint_picker_with_cmyk(
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
     default: Paint,
@@ -629,7 +629,7 @@ pub fn build_run_paint_picker_with_cmyk(
 /// fresh InDesign document (the parser doesn't surface TextDefault as
 /// its own node yet; 1pt is the InDesign-published default).
 pub(super) fn build_run_stroke_picker(
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
@@ -661,7 +661,7 @@ pub(super) fn build_run_stroke_picker(
 }
 
 pub(super) fn build_run_paint_picker_resolved(
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
@@ -752,7 +752,7 @@ pub(crate) fn stroke_for(
     end_cap: Option<&str>,
     end_join: Option<&str>,
     miter_limit: Option<f32>,
-    stroke_styles: Option<&std::collections::BTreeMap<String, paged_parse::StrokeStyleDef>>,
+    stroke_styles: Option<&std::collections::BTreeMap<String, paged_model::StrokeStyleDef>>,
     dash_override: &[f32],
 ) -> Stroke {
     let mut s = Stroke::new(width);
@@ -785,7 +785,7 @@ pub(crate) fn stroke_for(
     // slot directly without the `* w` scaling below.
     if let Some(styles) = stroke_styles {
         if let Some(def) = styles.get(name) {
-            use paged_parse::StrokeStyleKind as K;
+            use paged_model::StrokeStyleKind as K;
             match def.kind {
                 K::Dashed if !def.pattern.is_empty() => {
                     s.dash = paged_compose::DashPattern::from_slice(&def.pattern);
@@ -957,12 +957,12 @@ mod tests {
     /// fallthrough.
     #[test]
     fn lab_entry_resolves_to_a_solid_paint() {
-        let entry = paged_parse::graphic::ColorEntry {
+        let entry = paged_model::ColorEntry {
             self_id: "Color/lab".into(),
             name: None,
-            space: paged_parse::graphic::ColorSpace::Lab,
+            space: paged_model::ColorSpace::Lab,
             value: vec![50.0, 29.5, 5.2],
-            model: paged_parse::graphic::ColorModel::Process,
+            model: paged_model::ColorModel::Process,
             alternate_space: None,
             alternate_value: vec![],
             tint: None,
@@ -976,8 +976,8 @@ mod tests {
             other => panic!("expected solid, got {other:?}"),
         }
         // Non-Lab entries fall through (the pre-existing paths own them).
-        let cmyk = paged_parse::graphic::ColorEntry {
-            space: paged_parse::graphic::ColorSpace::Cmyk,
+        let cmyk = paged_model::ColorEntry {
+            space: paged_model::ColorSpace::Cmyk,
             value: vec![0.0, 0.0, 0.0, 100.0],
             ..entry
         };

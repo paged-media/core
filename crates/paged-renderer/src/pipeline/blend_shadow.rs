@@ -18,7 +18,7 @@
 use super::*;
 
 use paged_compose::{Color, DropShadow, Transform};
-use paged_parse::Graphic;
+use paged_model::Graphic;
 
 use crate::module::ResolvedFrame;
 
@@ -88,7 +88,7 @@ pub(crate) fn pop_blend_group(page: &mut BuiltPage) {
 /// when the frame carries none. Returns `None` for fully-transparent
 /// shadows so callers don't emit a no-op.
 pub(crate) fn resolve_frame_shadow(
-    frame_shadow: Option<&paged_parse::DropShadowSetting>,
+    frame_shadow: Option<&paged_model::DropShadowSetting>,
     fallback: Option<DropShadow>,
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
@@ -102,7 +102,7 @@ pub(crate) fn resolve_frame_shadow(
 /// The parser already drops `Mode="None"` settings, so we only have
 /// to filter out fully-transparent shadows here.
 pub(super) fn convert_setting_to_shadow(
-    setting: &paged_parse::DropShadowSetting,
+    setting: &paged_model::DropShadowSetting,
     palette: &Graphic,
     cmyk_xform: Option<&paged_color::IccTransform>,
 ) -> Option<DropShadow> {

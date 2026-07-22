@@ -20,7 +20,7 @@
 //! the fill is transparent.
 
 use paged_compose::{BlendMode, Paint, PathId, Rect, Transform};
-use paged_parse::Graphic;
+use paged_model::Graphic;
 
 use super::geometry::{emit_filled, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
