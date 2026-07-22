@@ -398,7 +398,7 @@ fn apply_pathfinder(
     //    handles the "no anchors → bounds rectangle" fallback in
     //    its callers; for Pathfinder we read anchors directly
     //    since the result IS a path replacement.
-    let mut inputs: Vec<(Vec<paged_parse::PathAnchor>, Vec<usize>)> =
+    let mut inputs: Vec<(Vec<paged_model::PathAnchor>, Vec<usize>)> =
         Vec::with_capacity(1 + others.len());
     for node in std::iter::once(kept).chain(others.iter()) {
         let (anchors, starts) = read_path(doc, node)?;
@@ -461,8 +461,8 @@ fn apply_pathfinder(
 fn read_path(
     doc: &Document,
     node: &NodeId,
-) -> Result<(Vec<paged_parse::PathAnchor>, Vec<usize>), OperationError> {
-    use paged_parse::PathAnchor;
+) -> Result<(Vec<paged_model::PathAnchor>, Vec<usize>), OperationError> {
+    use paged_model::PathAnchor;
     let raw = node.self_id();
     for parsed in &doc.spreads {
         match node {
@@ -538,8 +538,8 @@ fn read_path(
     Err(OperationError::NodeNotFound(node.clone()))
 }
 
-fn rect_anchors_from_bounds(b: paged_parse::Bounds) -> Vec<paged_parse::PathAnchor> {
-    use paged_parse::PathAnchor;
+fn rect_anchors_from_bounds(b: paged_model::Bounds) -> Vec<paged_model::PathAnchor> {
+    use paged_model::PathAnchor;
     let (t, l, r, btm) = (b.top, b.left, b.right, b.bottom);
     let corner = |x: f32, y: f32| PathAnchor {
         anchor: (x, y),
@@ -553,8 +553,8 @@ fn rect_anchors_from_bounds(b: paged_parse::Bounds) -> Vec<paged_parse::PathAnch
 mod tests {
     use super::*;
 
-    fn run_with(text: &str) -> paged_parse::CharacterRun {
-        paged_parse::CharacterRun {
+    fn run_with(text: &str) -> paged_model::CharacterRun {
+        paged_model::CharacterRun {
             text: text.to_string(),
             ..Default::default()
         }

@@ -141,7 +141,7 @@ impl FontTable {
             // surface through the outer story paragraph list).
             fn harvest_keys(
                 document: &Document,
-                paragraph: &paged_parse::Paragraph,
+                paragraph: &paged_model::Paragraph,
                 keys: &mut std::collections::HashSet<(String, Option<String>)>,
             ) {
                 for run in &paragraph.runs {
@@ -183,7 +183,7 @@ impl FontTable {
         let mut face_keys: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         let mut id_to_bytes: HashMap<u32, Bytes> = HashMap::new();
         let harvest_face_keys =
-            |paragraph: &paged_parse::Paragraph,
+            |paragraph: &paged_model::Paragraph,
              face_keys: &mut std::collections::HashSet<(u32, u32)>,
              id_to_bytes: &mut HashMap<u32, Bytes>| {
                 // Inner walk: handle both top-level paragraphs and
@@ -192,7 +192,7 @@ impl FontTable {
                     document: &Document,
                     cache: &HashMap<(String, Option<String>), Bytes>,
                     fallback: &Option<Bytes>,
-                    paragraph: &paged_parse::Paragraph,
+                    paragraph: &paged_model::Paragraph,
                     face_keys: &mut std::collections::HashSet<(u32, u32)>,
                     id_to_bytes: &mut HashMap<u32, Bytes>,
                 ) {

@@ -93,8 +93,8 @@ pub(super) fn apply_character_property(
         }
 
         // Rebuild this paragraph's runs vec, splitting as needed.
-        let original_runs: Vec<paged_parse::CharacterRun> = para.runs.drain(..).collect();
-        let mut new_runs: Vec<paged_parse::CharacterRun> =
+        let original_runs: Vec<paged_model::CharacterRun> = para.runs.drain(..).collect();
+        let mut new_runs: Vec<paged_model::CharacterRun> =
             Vec::with_capacity(original_runs.len() * 2);
         let mut local_offset: u32 = 0;
 

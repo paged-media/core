@@ -43,7 +43,7 @@
 use std::collections::HashMap;
 
 use paged_compose::{DisplayCommand, Rect, Transform};
-use paged_parse::{FrameRef, Group, Spread};
+use paged_model::{FrameRef, Group, Spread};
 
 use crate::pipeline::{blend_mode_from_idml, BuiltPage};
 

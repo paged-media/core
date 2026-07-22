@@ -36,7 +36,7 @@ use paged_compose::{
 /// over headlines vs. body text reads at proportional weight.
 pub(super) fn emit_kenten_for_line(
     line: &paged_text::layout::LaidOutLine,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     frame_origin_pt: (f32, f32),
     list: &mut DisplayList,
@@ -125,7 +125,7 @@ pub(super) fn emit_kenten_for_line(
 ///   base char N which the MVP skips.
 pub(super) fn emit_ruby_for_line(
     line: &paged_text::layout::LaidOutLine,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     font_bytes: &[u8],
     frame_origin_pt: (f32, f32),

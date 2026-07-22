@@ -44,7 +44,7 @@
 use paged_compose::{
     emit_drop_shadow_rect_transformed, DisplayCommand, DropShadow, PathId, Rect, Transform,
 };
-use paged_parse::{DropShadowSetting, Graphic};
+use paged_model::{DropShadowSetting, Graphic};
 
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{

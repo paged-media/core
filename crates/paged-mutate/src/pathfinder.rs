@@ -28,7 +28,7 @@
 //! depth bounded.
 
 use flo_curves::bezier::path::{path_add, path_intersect, path_sub, SimpleBezierPath};
-use paged_parse::PathAnchor;
+use paged_model::PathAnchor;
 
 use crate::bezier_conv::{flo_to_idml_path, idml_path_to_flo};
 

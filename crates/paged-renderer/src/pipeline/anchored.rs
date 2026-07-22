@@ -36,7 +36,7 @@ pub struct AnchoredImageEmit {
     /// `AnchoredFrame` (which lives inside the parsed Story tree). We
     /// only need image_link / image_item_transform / self_id for the
     /// rectangle synthesis below, so the clone is cheap.
-    pub af: paged_parse::AnchoredFrame,
+    pub af: paged_model::AnchoredFrame,
 }
 
 /// Hard cap on `anchored_recursion_depth`. Real-world IDMLs nest at
@@ -131,7 +131,7 @@ pub(super) struct PageMarginBox {
 /// the parser surfaces image_link on AnchoredFrame.
 pub(super) fn emit_anchored_frames_for_paragraph(
     em: &mut StoryEmitter,
-    paragraph: &paged_parse::Paragraph,
+    paragraph: &paged_model::Paragraph,
     pages: &mut [BuiltPage],
     line_metrics: LineRefMetrics,
     margin_box: Option<PageMarginBox>,
@@ -304,9 +304,9 @@ pub(super) fn emit_anchored_frames_for_paragraph(
 /// rectangle's width: `LeftAlign` keeps the left, `CenterAlign`
 /// centers, `RightAlign` snaps to the right.
 fn horizontal_reference_x(
-    setting: Option<&paged_parse::AnchoredObjectSetting>,
+    setting: Option<&paged_model::AnchoredObjectSetting>,
     para_origin_x: f32,
-    frame: &paged_parse::TextFrame,
+    frame: &paged_model::TextFrame,
     page: &BuiltPage,
     column_x_shift_pt: f32,
     margin_box: Option<PageMarginBox>,
@@ -404,9 +404,9 @@ fn align_in_span(near: f32, far: f32, alignment: &str) -> f32 {
 ///   host page declared no margins.
 /// - `PageEdge`: page bounds.
 fn vertical_reference_y(
-    setting: Option<&paged_parse::AnchoredObjectSetting>,
+    setting: Option<&paged_model::AnchoredObjectSetting>,
     baseline_y_pt: f32,
-    frame: &paged_parse::TextFrame,
+    frame: &paged_model::TextFrame,
     page: &BuiltPage,
     para_origin_y: f32,
     line_metrics: LineRefMetrics,
@@ -515,7 +515,7 @@ fn resolve_custom_anchor_pos(
 /// caller offsets these by the child's bounds delta within the group.
 fn emit_one_anchored_frame(
     em: &mut StoryEmitter,
-    af: &paged_parse::AnchoredFrame,
+    af: &paged_model::AnchoredFrame,
     target_page: usize,
     place_x: f32,
     place_y: f32,
@@ -524,7 +524,7 @@ fn emit_one_anchored_frame(
     let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
     let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
     match af.frame_kind {
-        paged_parse::AnchoredFrameKind::Rectangle | paged_parse::AnchoredFrameKind::TextFrame => {
+        paged_model::AnchoredFrameKind::Rectangle | paged_model::AnchoredFrameKind::TextFrame => {
             // Rectangles AND TextFrames render the frame's box +
             // fill / stroke through the same `emit_rectangle_into`
             // pipeline used by spread-level Rectangles. TextFrames
@@ -564,7 +564,7 @@ fn emit_one_anchored_frame(
                     af: af.clone(),
                 });
             }
-            if matches!(af.frame_kind, paged_parse::AnchoredFrameKind::TextFrame) {
+            if matches!(af.frame_kind, paged_model::AnchoredFrameKind::TextFrame) {
                 if let Some(story_id) = af.parent_story.as_deref() {
                     if frame_w > 0.0 && frame_h > 0.0 {
                         emit_anchored_textframe_story(
@@ -582,7 +582,7 @@ fn emit_one_anchored_frame(
                 }
             }
         }
-        paged_parse::AnchoredFrameKind::Group => {
+        paged_model::AnchoredFrameKind::Group => {
             // Recurse through the group's children. The group's own
             // ItemTransform (typically a pure translate of the form
             // `[1 0 0 1 tx ty]`) shifts every child by `(tx, ty)` in
@@ -633,7 +633,7 @@ fn emit_one_anchored_frame(
 /// `-spread_origin` and lands the geometry back on `(place_x, place_y)`.
 fn emit_anchored_rect_via_pipeline(
     em: &StoryEmitter,
-    af: &paged_parse::AnchoredFrame,
+    af: &paged_model::AnchoredFrame,
     target_page: usize,
     place_x: f32,
     place_y: f32,
@@ -642,7 +642,7 @@ fn emit_anchored_rect_via_pipeline(
     pages: &mut [BuiltPage],
 ) {
     let (ox, oy) = pages[target_page].spread_origin;
-    let bounds = paged_parse::Bounds {
+    let bounds = paged_model::Bounds {
         top: place_y + oy,
         left: place_x + ox,
         bottom: place_y + oy + h,
@@ -730,7 +730,7 @@ fn emit_anchored_rect_via_pipeline(
 /// rectangle's solid fill.
 pub(super) fn emit_anchored_rect_image(
     page: &mut BuiltPage,
-    af: &paged_parse::AnchoredFrame,
+    af: &paged_model::AnchoredFrame,
     place_x: f32,
     place_y: f32,
     w: f32,
@@ -740,7 +740,7 @@ pub(super) fn emit_anchored_rect_image(
     decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
 ) {
     let (ox, oy) = page.spread_origin;
-    let bounds = paged_parse::Bounds {
+    let bounds = paged_model::Bounds {
         top: place_y + oy,
         left: place_x + ox,
         bottom: place_y + oy + h,
@@ -822,7 +822,7 @@ pub(super) fn emit_anchored_rect_image(
 /// inner story flows edge-to-edge inside the frame's bounds.
 pub(super) fn emit_anchored_textframe_story<'a>(
     em: &mut StoryEmitter<'a>,
-    af: &paged_parse::AnchoredFrame,
+    af: &paged_model::AnchoredFrame,
     story_id: &str,
     target_page: usize,
     place_x: f32,
@@ -850,7 +850,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
     // stroke, but here driving the StoryEmitter rather than
     // `emit_rectangle_into`.
     let (ox, oy) = pages[target_page].spread_origin;
-    let bounds = paged_parse::Bounds {
+    let bounds = paged_model::Bounds {
         top: place_y + oy,
         left: place_x + ox,
         bottom: place_y + oy + h,

@@ -29,8 +29,8 @@ use paged_compose::{
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphOutliner,
     Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
-use paged_parse::{
-    graphic, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame, TextPath,
+use paged_model::{
+    to_linear_rgb, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame, TextPath,
 };
 use paged_scene::Document;
 
@@ -652,7 +652,7 @@ pub struct EmittedFootnote {
     /// `<Footnote Self="...">` id, when present.
     pub footnote_self_id: Option<String>,
     /// Footnote body paragraphs, exactly as parsed.
-    pub paragraphs: Vec<paged_parse::Paragraph>,
+    pub paragraphs: Vec<paged_model::Paragraph>,
     /// Page-local pt rect of the host frame's content area at
     /// capture time. The footnote-pool emit pass uses this to know
     /// where to lay out the body text at the bottom of the frame.
@@ -929,7 +929,7 @@ pub struct PipelineStats {
 /// `Name`, this reproduces the historical 1-based body-page fallback
 /// exactly (`current_number == pages.len() + 1`).
 struct SectionWalk<'a> {
-    sections: &'a [paged_parse::designmap::Section],
+    sections: &'a [paged_model::Section],
     /// page `Self` → index into `sections` for the section starting there.
     starts: HashMap<&'a str, usize>,
     active: Option<usize>,
@@ -940,7 +940,7 @@ struct SectionWalk<'a> {
 }
 
 impl<'a> SectionWalk<'a> {
-    fn new(sections: &'a [paged_parse::designmap::Section]) -> Self {
+    fn new(sections: &'a [paged_model::Section]) -> Self {
         let mut starts = HashMap::new();
         for (i, s) in sections.iter().enumerate() {
             if let Some(ps) = s.page_start.as_deref() {
@@ -980,7 +980,7 @@ impl<'a> SectionWalk<'a> {
         let style = self
             .active
             .map(|si| self.sections[si].numbering_style)
-            .unwrap_or(paged_parse::designmap::NumberingStyle::Arabic);
+            .unwrap_or(paged_model::NumberingStyle::Arabic);
         let mut label = style.format(self.current_number);
         if let Some(sec) = self.active.map(|si| &self.sections[si]) {
             if sec.include_prefix {
@@ -1044,7 +1044,7 @@ pub fn build_document(
         && dm.hyperlink_destinations.iter().any(|d| {
             matches!(
                 &d.kind,
-                paged_parse::HyperlinkDestinationKind::TextAnchor(_)
+                paged_model::HyperlinkDestinationKind::TextAnchor(_)
             )
         });
     if !has_running_header && !has_text_anchor_dest {

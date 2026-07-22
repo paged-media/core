@@ -64,7 +64,7 @@ pub(super) fn apply_insert_guide(
         .iter()
         .position(|p| p.spread.self_id.as_deref() == Some(spread_id))
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(spread_id.to_string())))?;
-    let guide = paged_parse::RulerGuide {
+    let guide = paged_model::RulerGuide {
         orientation: orientation.to_parse(),
         location: position,
         page_index,

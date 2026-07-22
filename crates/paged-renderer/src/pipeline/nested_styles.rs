@@ -28,7 +28,7 @@
 /// byte range of the paragraph text that the override character style
 /// should apply to. `byte_range.start` is inclusive; `byte_range.end`
 /// is exclusive. `applied_character_style` mirrors
-/// [`paged_parse::NestedStyle::applied_character_style`].
+/// [`paged_model::NestedStyle::applied_character_style`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestedStyleApplication {
     pub byte_range: std::ops::Range<usize>,
@@ -49,7 +49,7 @@ pub struct NestedStyleApplication {
 /// short paragraphs.
 pub fn compute_nested_style_overlay(
     paragraph_text: &str,
-    nested_styles: &[paged_parse::NestedStyle],
+    nested_styles: &[paged_model::NestedStyle],
 ) -> Vec<NestedStyleApplication> {
     if nested_styles.is_empty() || paragraph_text.is_empty() {
         return Vec::new();
@@ -88,11 +88,11 @@ pub fn compute_nested_style_overlay(
 pub(super) fn find_nested_end(
     text: &str,
     start: usize,
-    delimiter: &paged_parse::NestedDelimiter,
+    delimiter: &paged_model::NestedDelimiter,
     repetition: i32,
     inclusive: bool,
 ) -> usize {
-    use paged_parse::NestedDelimiter as D;
+    use paged_model::NestedDelimiter as D;
     let bytes = text.as_bytes();
     let slice = &text[start..];
     // For Words / Sentences / Characters the count is the number of
@@ -240,9 +240,9 @@ pub(super) fn find_class_end<F: Fn(char) -> bool>(
 /// split run are cloned from the source run — only the override
 /// `character_style` differs.
 pub fn split_runs_for_nested_styles(
-    runs: &[paged_parse::CharacterRun],
+    runs: &[paged_model::CharacterRun],
     overlay: &[NestedStyleApplication],
-) -> Vec<paged_parse::CharacterRun> {
+) -> Vec<paged_model::CharacterRun> {
     if overlay.is_empty() {
         return runs.to_vec();
     }
@@ -250,7 +250,7 @@ pub fn split_runs_for_nested_styles(
     // position?" Sparse: only the bytes covered by some overlay range
     // are touched. We build it as a sorted Vec of (range, style) and
     // do binary search per-run-byte during splitting.
-    let mut out: Vec<paged_parse::CharacterRun> = Vec::with_capacity(runs.len());
+    let mut out: Vec<paged_model::CharacterRun> = Vec::with_capacity(runs.len());
     let mut cursor: usize = 0; // paragraph-byte position of the next run.
     for run in runs {
         let run_start = cursor;

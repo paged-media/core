@@ -74,7 +74,7 @@ pub fn position_adjusted_metrics(
 pub fn shaping_features_from(
     ligatures_on: Option<bool>,
     kerning_method: Option<&str>,
-    otf: &paged_parse::OtfFeatures,
+    otf: &paged_model::OtfFeatures,
 ) -> paged_text::ShapingFeatures {
     use paged_text::KerningMethod as K;
     paged_text::ShapingFeatures {
@@ -102,8 +102,8 @@ pub fn shaping_features_from(
     }
 }
 
-pub fn map_justification(j: Option<paged_parse::Justification>) -> paged_text::Alignment {
-    use paged_parse::Justification as J;
+pub fn map_justification(j: Option<paged_model::Justification>) -> paged_text::Alignment {
+    use paged_model::Justification as J;
     match j {
         Some(J::RightAlign) | Some(J::RightJustified) | Some(J::AwayFromBindingSide) => {
             paged_text::Alignment::Right

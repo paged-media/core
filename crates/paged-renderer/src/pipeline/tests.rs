@@ -73,7 +73,7 @@ fn position_adjusted_metrics_composes_explicit_baseline_shift() {
 
 #[test]
 fn stroke_for_custom_styles_dashed_dotted_striped_wavy() {
-    use paged_parse::{StrokeStyleDef, StrokeStyleKind as K};
+    use paged_model::{StrokeStyleDef, StrokeStyleKind as K};
     let mk = |kind, pattern: &[f32]| {
         let mut m = std::collections::BTreeMap::new();
         m.insert(
@@ -114,7 +114,7 @@ fn stroke_for_custom_styles_dashed_dotted_striped_wavy() {
 /// the named style. An empty override falls back to the style.
 #[test]
 fn stroke_for_instance_dash_override_wins_over_style_pattern() {
-    use paged_parse::{StrokeStyleDef, StrokeStyleKind as K};
+    use paged_model::{StrokeStyleDef, StrokeStyleKind as K};
     let mut styles = std::collections::BTreeMap::new();
     styles.insert(
         "S".to_string(),
@@ -738,8 +738,8 @@ fn gradient_endpoints_length_without_dims_falls_through_to_default() {
     approx(e, (1.0, 0.5));
 }
 
-fn anchor_at(x: f32, y: f32) -> paged_parse::PathAnchor {
-    paged_parse::PathAnchor {
+fn anchor_at(x: f32, y: f32) -> paged_model::PathAnchor {
+    paged_model::PathAnchor {
         anchor: (x, y),
         left: (x, y),
         right: (x, y),
@@ -1023,13 +1023,13 @@ fn stroke_alignment_offset_center_and_none_return_zero() {
 // "02" markers per visible line.
 #[test]
 fn split_paragraph_at_breaks_drops_trailing_newline_only_sub_paragraph() {
-    let run = paged_parse::CharacterRun {
+    let run = paged_model::CharacterRun {
         text: "01\n".to_string(),
-        ..paged_parse::CharacterRun::default()
+        ..paged_model::CharacterRun::default()
     };
-    let paragraph = paged_parse::Paragraph {
+    let paragraph = paged_model::Paragraph {
         runs: vec![run],
-        ..paged_parse::Paragraph::default()
+        ..paged_model::Paragraph::default()
     };
     let subs = split_paragraph_at_breaks(&paragraph);
     assert_eq!(
@@ -1046,17 +1046,17 @@ fn split_paragraph_at_breaks_drops_trailing_newline_only_sub_paragraph() {
 // the tail of `split_paragraph_at_breaks` must collapse it.
 #[test]
 fn split_paragraph_at_breaks_drops_trailing_all_newline_run_after_visible() {
-    let visible = paged_parse::CharacterRun {
+    let visible = paged_model::CharacterRun {
         text: "01".to_string(),
-        ..paged_parse::CharacterRun::default()
+        ..paged_model::CharacterRun::default()
     };
-    let nl_only = paged_parse::CharacterRun {
+    let nl_only = paged_model::CharacterRun {
         text: "\n\n".to_string(),
-        ..paged_parse::CharacterRun::default()
+        ..paged_model::CharacterRun::default()
     };
-    let paragraph = paged_parse::Paragraph {
+    let paragraph = paged_model::Paragraph {
         runs: vec![visible, nl_only],
-        ..paged_parse::Paragraph::default()
+        ..paged_model::Paragraph::default()
     };
     let subs = split_paragraph_at_breaks(&paragraph);
     // Two `\n` after visible content used to seed two empty
@@ -1215,11 +1215,11 @@ fn track_1a_oversized_jpeg_routes_through_streaming_decoder() {
 
 fn ns(
     style: &str,
-    delim: paged_parse::NestedDelimiter,
+    delim: paged_model::NestedDelimiter,
     rep: i32,
     inc: bool,
-) -> paged_parse::NestedStyle {
-    paged_parse::NestedStyle {
+) -> paged_model::NestedStyle {
+    paged_model::NestedStyle {
         applied_character_style: style.into(),
         delimiter: delim,
         repetition: rep,
@@ -1238,7 +1238,7 @@ fn nested_overlay_characters_simple() {
         "abcdef",
         &[ns(
             "S/Bold",
-            paged_parse::NestedDelimiter::Characters,
+            paged_model::NestedDelimiter::Characters,
             3,
             true,
         )],
@@ -1253,7 +1253,7 @@ fn nested_overlay_words_inclusive_captures_trailing_space() {
     // "the quick brown" — Words=1 inclusive should cover "the ".
     let ov = compute_nested_style_overlay(
         "the quick brown",
-        &[ns("S/Lead", paged_parse::NestedDelimiter::Words, 1, true)],
+        &[ns("S/Lead", paged_model::NestedDelimiter::Words, 1, true)],
     );
     assert_eq!(ov.len(), 1);
     assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the ");
@@ -1263,7 +1263,7 @@ fn nested_overlay_words_inclusive_captures_trailing_space() {
 fn nested_overlay_words_exclusive_excludes_space() {
     let ov = compute_nested_style_overlay(
         "the quick brown",
-        &[ns("S/Lead", paged_parse::NestedDelimiter::Words, 1, false)],
+        &[ns("S/Lead", paged_model::NestedDelimiter::Words, 1, false)],
     );
     assert_eq!(ov.len(), 1);
     assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the");
@@ -1275,7 +1275,7 @@ fn nested_overlay_char_delimiter_until_colon() {
         "Heading: body copy",
         &[ns(
             "S/Bold",
-            paged_parse::NestedDelimiter::Char(':'),
+            paged_model::NestedDelimiter::Char(':'),
             1,
             true,
         )],
@@ -1291,8 +1291,8 @@ fn nested_overlay_chained_entries_consume_in_order() {
     let ov = compute_nested_style_overlay(
         "abcdefghijk",
         &[
-            ns("S/A", paged_parse::NestedDelimiter::Characters, 3, true),
-            ns("S/B", paged_parse::NestedDelimiter::Characters, 5, true),
+            ns("S/A", paged_model::NestedDelimiter::Characters, 3, true),
+            ns("S/B", paged_model::NestedDelimiter::Characters, 5, true),
         ],
     );
     assert_eq!(ov.len(), 2);
@@ -1308,7 +1308,7 @@ fn nested_overlay_stops_at_end_of_text() {
         "abc",
         &[ns(
             "S/X",
-            paged_parse::NestedDelimiter::Characters,
+            paged_model::NestedDelimiter::Characters,
             100,
             true,
         )],
@@ -1322,7 +1322,7 @@ fn nested_overlay_stops_at_end_of_text() {
 fn nested_overlay_skips_unknown_delimiter() {
     let ov = compute_nested_style_overlay(
         "hello",
-        &[ns("S/X", paged_parse::NestedDelimiter::Unknown, 1, true)],
+        &[ns("S/X", paged_model::NestedDelimiter::Unknown, 1, true)],
     );
     // Unknown delimiter yields a zero-length match → no override
     // emitted, no cursor advance.
@@ -1333,13 +1333,13 @@ fn nested_overlay_skips_unknown_delimiter() {
 fn nested_overlay_zero_repetition_is_noop() {
     let ov = compute_nested_style_overlay(
         "hello world",
-        &[ns("S/X", paged_parse::NestedDelimiter::Words, 0, true)],
+        &[ns("S/X", paged_model::NestedDelimiter::Words, 0, true)],
     );
     assert!(ov.is_empty());
 }
 
-fn mk_run(text: &str, style: Option<&str>) -> paged_parse::CharacterRun {
-    paged_parse::CharacterRun {
+fn mk_run(text: &str, style: Option<&str>) -> paged_model::CharacterRun {
+    paged_model::CharacterRun {
         character_style: style.map(String::from),
         text: text.into(),
         ..Default::default()
@@ -1415,16 +1415,16 @@ fn split_runs_overlay_spanning_two_runs_splits_both() {
 
 // ── Phase 5 — conditional text filter ─────────────────────────
 
-fn cond_run(text: &str, conditions: &[&str]) -> paged_parse::CharacterRun {
-    paged_parse::CharacterRun {
+fn cond_run(text: &str, conditions: &[&str]) -> paged_model::CharacterRun {
+    paged_model::CharacterRun {
         text: text.into(),
         applied_conditions: conditions.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     }
 }
 
-fn cond(id: &str, visible: bool) -> paged_parse::ConditionDef {
-    paged_parse::ConditionDef {
+fn cond(id: &str, visible: bool) -> paged_model::ConditionDef {
+    paged_model::ConditionDef {
         self_id: id.into(),
         visible: Some(visible),
         ..Default::default()
@@ -1436,9 +1436,9 @@ fn cond(id: &str, visible: bool) -> paged_parse::ConditionDef {
 /// constructing a full Document, while still exercising the
 /// "all conditions visible ⇒ keep; any invisible ⇒ drop" rule.
 fn filter_by_conditions(
-    runs: &[paged_parse::CharacterRun],
-    table: &std::collections::BTreeMap<String, paged_parse::ConditionDef>,
-) -> Vec<paged_parse::CharacterRun> {
+    runs: &[paged_model::CharacterRun],
+    table: &std::collections::BTreeMap<String, paged_model::ConditionDef>,
+) -> Vec<paged_model::CharacterRun> {
     runs.iter()
         .filter(|r| {
             r.applied_conditions
@@ -1510,7 +1510,7 @@ fn nested_overlay_digit_class() {
     // First 3 digits in mixed text.
     let ov = compute_nested_style_overlay(
         "a1b2c3d4",
-        &[ns("S/Num", paged_parse::NestedDelimiter::AnyDigit, 3, true)],
+        &[ns("S/Num", paged_model::NestedDelimiter::AnyDigit, 3, true)],
     );
     assert_eq!(ov.len(), 1);
     assert_eq!(&"a1b2c3d4"[ov[0].byte_range.clone()], "a1b2c3");
@@ -1697,10 +1697,10 @@ fn missing_image_link_emits_diagnostic() {
 fn test_section(
     self_id: &str,
     page_start: &str,
-    style: paged_parse::designmap::NumberingStyle,
+    style: paged_model::NumberingStyle,
     start_at: u32,
-) -> paged_parse::designmap::Section {
-    paged_parse::designmap::Section {
+) -> paged_model::Section {
+    paged_model::Section {
         self_id: self_id.to_string(),
         page_start: Some(page_start.to_string()),
         continue_numbering: false,
@@ -1714,7 +1714,7 @@ fn test_section(
 
 #[test]
 fn section_walk_computes_roman_then_arabic_labels() {
-    use paged_parse::designmap::NumberingStyle;
+    use paged_model::NumberingStyle;
     let sections = vec![
         test_section("sec1", "p1", NumberingStyle::LowerRoman, 1),
         test_section("sec2", "p3", NumberingStyle::Arabic, 1),
@@ -2465,7 +2465,7 @@ fn graphic_line_arrowhead_emits_fill() {
 #[test]
 fn corner_rect_path_shapes_per_kind() {
     use paged_compose::PathSegment::{CubicTo, LineTo};
-    use paged_parse::CornerOption;
+    use paged_model::CornerOption;
     let rect = paged_compose::Rect {
         x: 0.0,
         y: 0.0,
@@ -2517,7 +2517,7 @@ fn inset_and_inverse_corners_are_distinct_geometry() {
     // Inverse Rounded (smooth concave arc) must NOT collapse onto
     // the same path. A naive "Inset = quarter-circle cut inward"
     // implementation made them byte-identical.
-    use paged_parse::CornerOption;
+    use paged_model::CornerOption;
     let rect = paged_compose::Rect {
         x: 0.0,
         y: 0.0,
@@ -2540,7 +2540,7 @@ fn corner_rect_path_every_option_emits_closed_continuous_geometry() {
     // rect's bounds with no NaNs — the regression guard for the
     // Inset / Fancy calibration.
     use paged_compose::PathSegment;
-    use paged_parse::CornerOption;
+    use paged_model::CornerOption;
     let rect = paged_compose::Rect {
         x: 10.0,
         y: 20.0,
@@ -2635,7 +2635,7 @@ fn inset_corner_folds_in_to_the_rounding_centre() {
     // land at `m = (r, r)` and the segment endpoints on the edges at
     // `(0, r)` (incoming) and `(r, 0)` (outgoing).
     use paged_compose::PathSegment::LineTo;
-    use paged_parse::CornerOption;
+    use paged_model::CornerOption;
     let rect = paged_compose::Rect {
         x: 0.0,
         y: 0.0,
@@ -2696,7 +2696,7 @@ fn color_lerp_midpoint_is_average() {
 
 #[test]
 fn section_walk_applies_prefix() {
-    use paged_parse::designmap::{NumberingStyle, Section};
+    use paged_model::{NumberingStyle, Section};
     let sections = vec![Section {
         self_id: "sec".into(),
         page_start: Some("p1".into()),

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use paged_compose::{emit_glyph_slice, emit_line, Color, DisplayList, Paint, Stroke, TtfOutliner};
-use paged_parse::{Graphic, TextFrame};
+use paged_model::{Graphic, TextFrame};
 use paged_scene::Document;
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};

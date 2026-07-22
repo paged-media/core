@@ -261,7 +261,7 @@ pub(super) fn set_para_text_field(
 pub(super) fn set_para_rule_field(
     path: PropertyPath,
     value: &Value,
-    slot: &mut paged_parse::styles::ParagraphRule,
+    slot: &mut paged_model::ParagraphRule,
 ) -> Result<(Value, Value), OperationError> {
     let Value::ParagraphRule(new_spec) = value else {
         return Err(OperationError::TypeMismatch {
@@ -272,7 +272,7 @@ pub(super) fn set_para_rule_field(
     let prev = crate::operation::ParagraphRuleSpec::from_parse(slot);
     *slot = match new_spec {
         Some(spec) => spec.to_parse(),
-        None => paged_parse::styles::ParagraphRule::default(),
+        None => paged_model::ParagraphRule::default(),
     };
     Ok((
         Value::ParagraphRule(Some(prev)),
@@ -281,7 +281,7 @@ pub(super) fn set_para_rule_field(
 }
 
 pub(super) fn apply_paragraph_field(
-    para: &mut paged_parse::Paragraph,
+    para: &mut paged_model::Paragraph,
     path: PropertyPath,
     value: &Value,
 ) -> Result<(Value, Value), OperationError> {
@@ -355,7 +355,7 @@ pub(super) fn apply_paragraph_field(
             para.justification = if new_val.is_empty() {
                 None
             } else {
-                match paged_parse::Justification::from_idml(new_val) {
+                match paged_model::Justification::from_idml(new_val) {
                     Some(j) => Some(j),
                     None => {
                         return Err(OperationError::InvalidValue {
@@ -480,9 +480,9 @@ pub(super) fn apply_paragraph_field(
 /// the caller is responsible for that constraint; this function
 /// produces undefined byte boundaries otherwise.
 pub(super) fn split_run_at(
-    run: paged_parse::CharacterRun,
+    run: paged_model::CharacterRun,
     char_idx: u32,
-) -> (paged_parse::CharacterRun, paged_parse::CharacterRun) {
+) -> (paged_model::CharacterRun, paged_model::CharacterRun) {
     // Find the byte position of the char_idx'th character. char_indices
     // yields each char's byte offset; chars past the end map to the
     // string's total byte length.
@@ -507,10 +507,10 @@ pub(super) fn split_run_at(
 /// inverse re-applies the prior string and round-trips a prior-`None`
 /// back to `None`. `field` selects the run field by `&mut` reference.
 pub(super) fn set_run_text_field(
-    run: &mut paged_parse::CharacterRun,
+    run: &mut paged_model::CharacterRun,
     path: PropertyPath,
     value: &Value,
-    field: impl FnOnce(&mut paged_parse::CharacterRun) -> &mut Option<String>,
+    field: impl FnOnce(&mut paged_model::CharacterRun) -> &mut Option<String>,
 ) -> Result<(Value, Value), OperationError> {
     let Value::Text(new_val) = value else {
         return Err(OperationError::TypeMismatch {
@@ -532,10 +532,10 @@ pub(super) fn set_run_text_field(
 /// `Value::Length`. `Length(None)` clears the override; the captured
 /// prior `Option<f32>` round-trips bytewise through the inverse.
 pub(super) fn set_run_length_field(
-    run: &mut paged_parse::CharacterRun,
+    run: &mut paged_model::CharacterRun,
     path: PropertyPath,
     value: &Value,
-    field: impl FnOnce(&mut paged_parse::CharacterRun) -> &mut Option<f32>,
+    field: impl FnOnce(&mut paged_model::CharacterRun) -> &mut Option<f32>,
 ) -> Result<(Value, Value), OperationError> {
     let Value::Length(new_val) = value else {
         return Err(OperationError::TypeMismatch {
@@ -555,11 +555,11 @@ pub(super) fn set_run_length_field(
 /// explicit prior round-trips bytewise; a prior-`None` undoes to
 /// `Some(false)` (the `Value::Bool` wire shape carries no `None`).
 pub(super) fn set_run_bool_field(
-    run: &mut paged_parse::CharacterRun,
+    run: &mut paged_model::CharacterRun,
     path: PropertyPath,
     value: &Value,
     default: bool,
-    field: impl FnOnce(&mut paged_parse::CharacterRun) -> &mut Option<bool>,
+    field: impl FnOnce(&mut paged_model::CharacterRun) -> &mut Option<bool>,
 ) -> Result<(Value, Value), OperationError> {
     let Value::Bool(new_val) = value else {
         return Err(OperationError::TypeMismatch {
@@ -583,7 +583,7 @@ pub(super) fn set_run_bool_field(
 /// what was set so downstream logging can attribute correctly even
 /// when the caller passes through e.g. `Length(None)`.
 pub(super) fn apply_character_field_on_run(
-    run: &mut paged_parse::CharacterRun,
+    run: &mut paged_model::CharacterRun,
     path: PropertyPath,
     value: &Value,
 ) -> Result<(Value, Value), OperationError> {

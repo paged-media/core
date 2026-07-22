@@ -166,7 +166,7 @@ mod tests {
 
     use crate::operation::PathAnchorSpec;
     use crate::path_math::smooth_handles_from_neighbours;
-    use paged_parse::{
+    use paged_model::{
         Bounds, DesignMap, FrameRef, Graphic, PathAnchor, Polygon, Spread, StyleSheet,
         TextFrame as ParsedTextFrame,
     };
@@ -615,9 +615,9 @@ mod tests {
         project.undo().unwrap().expect("undo delete");
         let e = &project.document().palette.colors["Color/Pantone"];
         assert_eq!(e.name.as_deref(), Some("PANTONE 286"));
-        assert_eq!(e.space, paged_parse::ColorSpace::Lab);
-        assert_eq!(e.model, paged_parse::ColorModel::Spot);
-        assert_eq!(e.alternate_space, Some(paged_parse::ColorSpace::Cmyk));
+        assert_eq!(e.space, paged_model::ColorSpace::Lab);
+        assert_eq!(e.model, paged_model::ColorModel::Spot);
+        assert_eq!(e.alternate_space, Some(paged_model::ColorSpace::Cmyk));
         assert_eq!(e.alternate_value, vec![100.0, 75.0, 0.0, 0.0]);
         assert_eq!(e.tint, Some(80.0));
     }
@@ -743,7 +743,7 @@ mod tests {
                 .unwrap();
             s.point_size = Some(42.0);
             s.space_before = Some(12.0);
-            s.justification = Some(paged_parse::story::Justification::CenterAlign);
+            s.justification = Some(paged_model::Justification::CenterAlign);
         }
         project
             .apply(Operation::DeleteParagraphStyle {
@@ -761,7 +761,7 @@ mod tests {
         assert_eq!(s.space_before, Some(12.0));
         assert_eq!(
             s.justification,
-            Some(paged_parse::story::Justification::CenterAlign)
+            Some(paged_model::Justification::CenterAlign)
         );
     }
 
@@ -927,11 +927,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             project.document().palette.gradients["Gradient/Sunset"].kind,
-            paged_parse::GradientKind::Radial
+            paged_model::GradientKind::Radial
         );
         project.undo().unwrap().expect("undo edit");
         let g = &project.document().palette.gradients["Gradient/Sunset"];
-        assert_eq!(g.kind, paged_parse::GradientKind::Linear);
+        assert_eq!(g.kind, paged_model::GradientKind::Linear);
         assert_eq!(g.stops.len(), 2);
         assert_eq!(g.stops[0].midpoint_pct, Some(40.0));
         // Delete then undo recreates.
@@ -1168,7 +1168,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             project.document().styles.paragraph_styles["ParagraphStyle/H1"].justification,
-            Some(paged_parse::story::Justification::CenterAlign)
+            Some(paged_model::Justification::CenterAlign)
         );
         // Undo justification, then point size — both revert.
         project.undo().unwrap().expect("undo justification");
@@ -1880,13 +1880,13 @@ mod tests {
                 right: 110.0,
             },
         ));
-        spread.groups.push(paged_parse::Group {
+        spread.groups.push(paged_model::Group {
             self_id: Some("Group/g1".to_string()),
             members: vec![
-                paged_parse::FrameRef::TextFrame(0),
-                paged_parse::FrameRef::TextFrame(1),
+                paged_model::FrameRef::TextFrame(0),
+                paged_model::FrameRef::TextFrame(1),
             ],
-            transparency: paged_parse::GroupTransparency::default(),
+            transparency: paged_model::GroupTransparency::default(),
             item_transform: group_xform,
         });
         Document {
@@ -2194,7 +2194,7 @@ mod tests {
     /// Punch-list (rides v35): the same pair on a GraphicLine.
     #[test]
     fn graphic_line_stroke_miter_and_join_round_trip() {
-        use paged_parse::{Bounds, GraphicLine};
+        use paged_model::{Bounds, GraphicLine};
         let mut spread = Spread {
             self_id: Some("Spread/u_main".to_string()),
             ..Default::default()
@@ -2228,8 +2228,8 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
-            start_arrow: paged_parse::ArrowheadType::None,
-            end_arrow: paged_parse::ArrowheadType::None,
+            start_arrow: paged_model::ArrowheadType::None,
+            end_arrow: paged_model::ArrowheadType::None,
             start_arrow_scale: 100.0,
             end_arrow_scale: 100.0,
         });
@@ -2609,7 +2609,7 @@ mod tests {
             ..Default::default()
         };
         let mut designmap = DesignMap::default();
-        designmap.layers.push(paged_parse::Layer {
+        designmap.layers.push(paged_model::Layer {
             self_id: self_id.to_string(),
             name: Some("Body".to_string()),
             visible: true,
@@ -2642,7 +2642,7 @@ mod tests {
         }
     }
 
-    fn layer_of(project: &Project) -> &paged_parse::Layer {
+    fn layer_of(project: &Project) -> &paged_model::Layer {
         &project.document().designmap.layers[0]
     }
 
@@ -2705,7 +2705,7 @@ mod tests {
         let mut project = {
             let doc = document_with_one_layer("ua");
             let mut p = Project::new(doc);
-            p.document_mut().designmap.layers.push(paged_parse::Layer {
+            p.document_mut().designmap.layers.push(paged_model::Layer {
                 self_id: "ub".to_string(),
                 name: Some("Guides".to_string()),
                 visible: true,
@@ -2908,7 +2908,7 @@ mod tests {
     /// Used to exercise the character-property apply arm + the
     /// whole-run-only constraint.
     fn document_with_one_story(story_id: &str) -> Document {
-        use paged_parse::{CharacterRun, Paragraph, Story};
+        use paged_model::{CharacterRun, Paragraph, Story};
 
         let mk_run = |text: &str| CharacterRun {
             text: text.to_string(),
@@ -3327,7 +3327,7 @@ mod tests {
     /// other frame is gone. One Cmd-Z restores both.
     #[test]
     fn pathfinder_subtract_round_trips_via_operation() {
-        use paged_parse::Spread;
+        use paged_model::Spread;
         let mut project = Project::new(Document {
             source: None,
             designmap: DesignMap::default(),
@@ -3408,7 +3408,7 @@ mod tests {
     /// + subpath_starts so undo round-trips bytewise.
     #[test]
     fn frame_path_replacement_round_trips() {
-        use paged_parse::PathAnchor;
+        use paged_model::PathAnchor;
         let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
         // Seed three anchors so the prior state is observable.
         {
@@ -3707,7 +3707,7 @@ mod tests {
         let tw = project.document().spreads[0].spread.text_frames[0]
             .text_wrap
             .expect("text_wrap should now be Some");
-        assert_eq!(tw.mode, paged_parse::TextWrapMode::BoundingBoxTextWrap);
+        assert_eq!(tw.mode, paged_model::TextWrapMode::BoundingBoxTextWrap);
         assert_eq!(tw.offsets, [0.0; 4]);
 
         // Set offsets — must preserve mode.
@@ -3721,7 +3721,7 @@ mod tests {
         let tw = project.document().spreads[0].spread.text_frames[0]
             .text_wrap
             .expect("text_wrap should still be Some");
-        assert_eq!(tw.mode, paged_parse::TextWrapMode::BoundingBoxTextWrap);
+        assert_eq!(tw.mode, paged_model::TextWrapMode::BoundingBoxTextWrap);
         assert_eq!(tw.offsets, [6.0, 6.0, 6.0, 6.0]);
 
         // Undo the mode-set: the inverse carries the prior mode
@@ -3769,10 +3769,10 @@ mod tests {
             .expect("text_wrap present");
         assert_eq!(
             tw.contour_type,
-            Some(paged_parse::ContourOptionType::DetectEdges)
+            Some(paged_model::ContourOptionType::DetectEdges)
         );
         // Mode preserved through the contour-type write.
-        assert_eq!(tw.mode, paged_parse::TextWrapMode::ContourTextWrap);
+        assert_eq!(tw.mode, paged_model::TextWrapMode::ContourTextWrap);
 
         // Set include-inside-edges → preserves contour type + mode.
         let applied_ie = project
@@ -3788,7 +3788,7 @@ mod tests {
         assert_eq!(tw.include_inside_edges, Some(true));
         assert_eq!(
             tw.contour_type,
-            Some(paged_parse::ContourOptionType::DetectEdges)
+            Some(paged_model::ContourOptionType::DetectEdges)
         );
 
         // Undo include-inside → restores Some(false) (prior was None,
@@ -3875,7 +3875,7 @@ mod tests {
         let story = &project.document().stories[0].story;
         assert_eq!(
             story.paragraphs[0].justification,
-            Some(paged_parse::Justification::CenterAlign)
+            Some(paged_model::Justification::CenterAlign)
         );
         // Inverse restores None.
         crate::apply(project.document_mut(), &applied.inverse).expect("undo");
@@ -3920,7 +3920,7 @@ mod tests {
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
                 spread: {
-                    paged_parse::Spread {
+                    paged_model::Spread {
                         self_id: Some("Spread/u_main".to_string()),
                         ..Default::default()
                     }
@@ -3983,7 +3983,7 @@ mod tests {
             spreads: vec![ParsedSpread {
                 src: "Spreads/syn.xml".to_string(),
                 spread: {
-                    paged_parse::Spread {
+                    paged_model::Spread {
                         self_id: Some("Spread/u_main".to_string()),
                         ..Default::default()
                     }
@@ -4025,7 +4025,7 @@ mod tests {
             .expect("apply");
         assert_eq!(
             project.document().spreads[0].spread.graphic_lines[0].end_arrow,
-            paged_parse::ArrowheadType::Triangle
+            paged_model::ArrowheadType::Triangle
         );
         // Undo restores None via the empty-Text inverse.
         assert!(matches!(
@@ -4038,7 +4038,7 @@ mod tests {
         crate::apply(project.document_mut(), &applied.inverse).expect("undo");
         assert_eq!(
             project.document().spreads[0].spread.graphic_lines[0].end_arrow,
-            paged_parse::ArrowheadType::None
+            paged_model::ArrowheadType::None
         );
 
         // Start arrowhead: set then clear with "" — the inverse of the
@@ -4059,7 +4059,7 @@ mod tests {
             .expect("clear start");
         assert_eq!(
             project.document().spreads[0].spread.graphic_lines[0].start_arrow,
-            paged_parse::ArrowheadType::None
+            paged_model::ArrowheadType::None
         );
         assert!(matches!(
             &cleared.inverse,
@@ -4287,7 +4287,7 @@ mod tests {
     fn register_host_frame(project: &mut Project, story_id: &str, frame_self_id: &str) {
         let frame = crate::apply::new_text_frame(
             frame_self_id.to_string(),
-            paged_parse::Bounds::ZERO,
+            paged_model::Bounds::ZERO,
             None,
         );
         project
@@ -5320,7 +5320,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             p.document().spreads[0].spread.text_frames[0].vertical_justification,
-            Some(paged_parse::VerticalJustification::Center)
+            Some(paged_model::VerticalJustification::Center)
         );
         // Reflow classification — vertical justify shifts every line.
         assert_eq!(applied.invalidation.text_reflow.len(), 1);
@@ -5339,7 +5339,7 @@ mod tests {
             |d| {
                 assert_eq!(
                     d.spreads[0].spread.text_frames[0].auto_sizing,
-                    Some(paged_parse::AutoSizingType::HeightOnly)
+                    Some(paged_model::AutoSizingType::HeightOnly)
                 )
             },
         );
@@ -5353,7 +5353,7 @@ mod tests {
             |d| {
                 assert_eq!(
                     d.spreads[0].spread.text_frames[0].first_baseline_offset,
-                    Some(paged_parse::FirstBaselineOffset::CapHeight)
+                    Some(paged_model::FirstBaselineOffset::CapHeight)
                 )
             },
         );
@@ -5605,7 +5605,7 @@ mod tests {
                 // bottom_left is index 3 in IDML corners[4] order.
                 assert_eq!(
                     d.spreads[0].spread.rectangles[0].corners[3].option,
-                    Some(paged_parse::CornerOption::Rounded)
+                    Some(paged_model::CornerOption::Rounded)
                 )
             },
         );
@@ -6157,8 +6157,8 @@ mod tests {
     mod w05 {
         use super::*;
         use crate::operation::{FieldKind, GuideOrientationSpec, StyleScope};
-        use paged_parse::styles::ConditionSetDef;
-        use paged_parse::{Bounds, CharacterRun, ConditionDef, Paragraph, Spread, Story};
+        use paged_model::ConditionSetDef;
+        use paged_model::{Bounds, CharacterRun, ConditionDef, Paragraph, Spread, Story};
         use paged_scene::ParsedStory;
         use std::collections::BTreeMap;
 
@@ -6191,8 +6191,8 @@ mod tests {
             f
         }
 
-        fn page(self_id: &str) -> paged_parse::Page {
-            paged_parse::Page {
+        fn page(self_id: &str) -> paged_model::Page {
+            paged_model::Page {
                 self_id: Some(self_id.to_string()),
                 bounds: Bounds {
                     top: 0.0,
@@ -6672,7 +6672,7 @@ mod tests {
             };
             assert_eq!(
                 p.document().designmap.sections[0].numbering_style,
-                paged_parse::NumberingStyle::UpperRoman
+                paged_model::NumberingStyle::UpperRoman
             );
             // Edit it.
             p.apply(Operation::EditSection {
@@ -6684,14 +6684,14 @@ mod tests {
             .expect("edit section");
             assert_eq!(
                 p.document().designmap.sections[0].numbering_style,
-                paged_parse::NumberingStyle::Arabic
+                paged_model::NumberingStyle::Arabic
             );
             assert_eq!(p.document().designmap.sections[0].start_at, Some(5));
             // Undo the edit restores UpperRoman + prefix.
             p.undo().expect("undo edit");
             assert_eq!(
                 p.document().designmap.sections[0].numbering_style,
-                paged_parse::NumberingStyle::UpperRoman
+                paged_model::NumberingStyle::UpperRoman
             );
             assert_eq!(
                 p.document().designmap.sections[0].section_prefix.as_deref(),
@@ -6749,7 +6749,7 @@ mod tests {
 
     mod tables {
         use super::*;
-        use paged_parse::{Story, Table, TableCell, TableColumn, TableRow};
+        use paged_model::{Story, Table, TableCell, TableColumn, TableRow};
 
         /// A document whose story `Story/t1` holds a single 2×2 table
         /// `Table/tbl1` (one host paragraph carrying the table). Cells
@@ -6816,7 +6816,7 @@ mod tests {
                 ],
                 ..Default::default()
             };
-            let host = paged_parse::Paragraph {
+            let host = paged_model::Paragraph {
                 table: Some(table),
                 ..Default::default()
             };

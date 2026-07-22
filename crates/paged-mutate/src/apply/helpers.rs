@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-use paged_parse::{GraphicLine, Polygon, Rectangle, TextFrame};
+use paged_model::{GraphicLine, Polygon, Rectangle, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -73,7 +73,7 @@ pub(super) fn find_graphic_line_mut<'a>(
 pub(super) fn find_oval_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
-) -> Option<&'a mut paged_parse::Oval> {
+) -> Option<&'a mut paged_model::Oval> {
     for parsed in &mut doc.spreads {
         if let Some(o) = parsed
             .spread
@@ -140,11 +140,11 @@ pub(super) fn find_rectangle_mut<'a>(
 pub(super) fn find_anchored_setting_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
-) -> Option<&'a mut paged_parse::AnchoredObjectSetting> {
+) -> Option<&'a mut paged_model::AnchoredObjectSetting> {
     fn in_frames<'b>(
-        frames: &'b mut [paged_parse::AnchoredFrame],
+        frames: &'b mut [paged_model::AnchoredFrame],
         self_id: &str,
-    ) -> Option<&'b mut paged_parse::AnchoredObjectSetting> {
+    ) -> Option<&'b mut paged_model::AnchoredObjectSetting> {
         for frame in frames.iter_mut() {
             if frame.self_id.as_deref() == Some(self_id) {
                 return Some(frame.setting.get_or_insert_with(Default::default));
@@ -170,8 +170,8 @@ pub(super) fn find_anchored_setting_mut<'a>(
 // non-injective for some variants, so we name the canonical string
 // explicitly rather than reusing a parse helper). -----------------
 
-pub(super) fn vj_as_idml(v: paged_parse::VerticalJustification) -> &'static str {
-    use paged_parse::VerticalJustification as V;
+pub(super) fn vj_as_idml(v: paged_model::VerticalJustification) -> &'static str {
+    use paged_model::VerticalJustification as V;
     match v {
         V::Top => "TopAlign",
         V::Center => "CenterAlign",
@@ -180,8 +180,8 @@ pub(super) fn vj_as_idml(v: paged_parse::VerticalJustification) -> &'static str 
     }
 }
 
-pub(super) fn auto_sizing_as_idml(v: paged_parse::AutoSizingType) -> &'static str {
-    use paged_parse::AutoSizingType as A;
+pub(super) fn auto_sizing_as_idml(v: paged_model::AutoSizingType) -> &'static str {
+    use paged_model::AutoSizingType as A;
     match v {
         A::Off => "Off",
         A::HeightOnly => "HeightOnly",
@@ -191,8 +191,8 @@ pub(super) fn auto_sizing_as_idml(v: paged_parse::AutoSizingType) -> &'static st
     }
 }
 
-pub(super) fn first_baseline_as_idml(v: paged_parse::FirstBaselineOffset) -> &'static str {
-    use paged_parse::FirstBaselineOffset as F;
+pub(super) fn first_baseline_as_idml(v: paged_model::FirstBaselineOffset) -> &'static str {
+    use paged_model::FirstBaselineOffset as F;
     match v {
         F::AscentOffset => "AscentOffset",
         F::CapHeight => "CapHeight",
@@ -203,8 +203,8 @@ pub(super) fn first_baseline_as_idml(v: paged_parse::FirstBaselineOffset) -> &'s
     }
 }
 
-pub(super) fn corner_option_as_idml(v: paged_parse::CornerOption) -> &'static str {
-    use paged_parse::CornerOption as C;
+pub(super) fn corner_option_as_idml(v: paged_model::CornerOption) -> &'static str {
+    use paged_model::CornerOption as C;
     match v {
         C::None => "None",
         C::Rounded => "RoundedCorner",
@@ -375,7 +375,7 @@ pub(super) fn find_overprint_stroke_mut<'a>(
 pub(super) fn find_group_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
-) -> Option<&'a mut paged_parse::Group> {
+) -> Option<&'a mut paged_model::Group> {
     for parsed in &mut doc.spreads {
         for group in &mut parsed.spread.groups {
             if group.self_id.as_deref() == Some(self_id) {
@@ -390,8 +390,8 @@ pub(super) fn find_group_mut<'a>(
 /// for the toggle-on case + per-field editors that write into a
 /// prior-None state. Values mirror InDesign's "Drop Shadow"
 /// preset (multiply blend, ~3pt offset, ~30% opacity).
-pub(super) fn default_drop_shadow() -> paged_parse::DropShadowSetting {
-    paged_parse::DropShadowSetting {
+pub(super) fn default_drop_shadow() -> paged_model::DropShadowSetting {
+    paged_model::DropShadowSetting {
         mode: "Drop".to_string(),
         x_offset: 3.0,
         y_offset: 3.0,
@@ -418,8 +418,8 @@ pub(super) fn frame_style_hint(node: &NodeId) -> InvalidationHint {
 // presets for each effect (Multiply/Screen blend, 75% opacity, the
 // 120°/19° light angles, 5 pt sizes, …).
 
-pub(super) fn default_inner_shadow() -> paged_parse::InnerShadowParams {
-    paged_parse::InnerShadowParams {
+pub(super) fn default_inner_shadow() -> paged_model::InnerShadowParams {
+    paged_model::InnerShadowParams {
         x_offset: None,
         y_offset: None,
         size: Some(5.0),
@@ -433,8 +433,8 @@ pub(super) fn default_inner_shadow() -> paged_parse::InnerShadowParams {
     }
 }
 
-pub(super) fn default_outer_glow() -> paged_parse::OuterGlowParams {
-    paged_parse::OuterGlowParams {
+pub(super) fn default_outer_glow() -> paged_model::OuterGlowParams {
+    paged_model::OuterGlowParams {
         size: Some(5.0),
         opacity_pct: Some(75.0),
         effect_color: None,
@@ -444,8 +444,8 @@ pub(super) fn default_outer_glow() -> paged_parse::OuterGlowParams {
     }
 }
 
-pub(super) fn default_inner_glow() -> paged_parse::InnerGlowParams {
-    paged_parse::InnerGlowParams {
+pub(super) fn default_inner_glow() -> paged_model::InnerGlowParams {
+    paged_model::InnerGlowParams {
         size: Some(5.0),
         opacity_pct: Some(75.0),
         effect_color: None,
@@ -456,8 +456,8 @@ pub(super) fn default_inner_glow() -> paged_parse::InnerGlowParams {
     }
 }
 
-pub(super) fn default_bevel() -> paged_parse::BevelEmbossParams {
-    paged_parse::BevelEmbossParams {
+pub(super) fn default_bevel() -> paged_model::BevelEmbossParams {
+    paged_model::BevelEmbossParams {
         depth_pct: Some(100.0),
         size: Some(5.0),
         angle_deg: Some(120.0),
@@ -473,8 +473,8 @@ pub(super) fn default_bevel() -> paged_parse::BevelEmbossParams {
     }
 }
 
-pub(super) fn default_satin() -> paged_parse::SatinParams {
-    paged_parse::SatinParams {
+pub(super) fn default_satin() -> paged_model::SatinParams {
+    paged_model::SatinParams {
         size: Some(14.0),
         angle_deg: Some(19.0),
         distance: Some(11.0),
@@ -485,8 +485,8 @@ pub(super) fn default_satin() -> paged_parse::SatinParams {
     }
 }
 
-pub(super) fn default_feather() -> paged_parse::FeatherParams {
-    paged_parse::FeatherParams {
+pub(super) fn default_feather() -> paged_model::FeatherParams {
+    paged_model::FeatherParams {
         width: Some(5.0),
         corner_type: Some("Diffusion".to_string()),
         noise_pct: Some(0.0),
@@ -494,8 +494,8 @@ pub(super) fn default_feather() -> paged_parse::FeatherParams {
     }
 }
 
-pub(super) fn default_directional_feather() -> paged_parse::DirectionalFeatherParams {
-    paged_parse::DirectionalFeatherParams {
+pub(super) fn default_directional_feather() -> paged_model::DirectionalFeatherParams {
+    paged_model::DirectionalFeatherParams {
         left_width: Some(5.0),
         right_width: Some(5.0),
         top_width: Some(5.0),
@@ -515,7 +515,7 @@ pub(super) fn default_directional_feather() -> paged_parse::DirectionalFeatherPa
 pub(super) fn find_drop_shadow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::DropShadowSetting> {
+) -> Option<&'a mut paged_model::DropShadowSetting> {
     let raw = node.self_id();
     for parsed in &mut doc.spreads {
         match node {
@@ -560,7 +560,7 @@ pub(super) fn find_drop_shadow_mut<'a>(
 pub(super) fn find_text_wrap_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut Option<paged_parse::TextWrap>> {
+) -> Option<&'a mut Option<paged_model::TextWrap>> {
     let raw = node.self_id();
     for parsed in &mut doc.spreads {
         match node {
@@ -867,7 +867,7 @@ pub(super) fn node_exists(doc: &Document, node: &NodeId) -> bool {
 pub(super) fn find_layer_mut<'a>(
     doc: &'a mut Document,
     self_id: &str,
-) -> Option<&'a mut paged_parse::Layer> {
+) -> Option<&'a mut paged_model::Layer> {
     doc.designmap
         .layers
         .iter_mut()
@@ -912,7 +912,7 @@ pub(super) fn expect_gradient_feather(
 pub(super) fn find_frame_effects_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::FrameEffects> {
+) -> Option<&'a mut paged_model::FrameEffects> {
     match node {
         NodeId::TextFrame(id) => {
             find_text_frame_mut(doc, id).map(|f| f.effects.get_or_insert_with(Default::default))
@@ -936,7 +936,7 @@ pub(super) fn find_frame_effects_mut<'a>(
 pub(super) fn find_inner_shadow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::InnerShadowParams> {
+) -> Option<&'a mut paged_model::InnerShadowParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(
         effects
@@ -948,7 +948,7 @@ pub(super) fn find_inner_shadow_mut<'a>(
 pub(super) fn find_outer_glow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::OuterGlowParams> {
+) -> Option<&'a mut paged_model::OuterGlowParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(effects.outer_glow.get_or_insert_with(default_outer_glow))
 }
@@ -956,7 +956,7 @@ pub(super) fn find_outer_glow_mut<'a>(
 pub(super) fn find_inner_glow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::InnerGlowParams> {
+) -> Option<&'a mut paged_model::InnerGlowParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(effects.inner_glow.get_or_insert_with(default_inner_glow))
 }
@@ -964,7 +964,7 @@ pub(super) fn find_inner_glow_mut<'a>(
 pub(super) fn find_bevel_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::BevelEmbossParams> {
+) -> Option<&'a mut paged_model::BevelEmbossParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(effects.bevel.get_or_insert_with(default_bevel))
 }
@@ -972,7 +972,7 @@ pub(super) fn find_bevel_mut<'a>(
 pub(super) fn find_satin_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::SatinParams> {
+) -> Option<&'a mut paged_model::SatinParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(effects.satin.get_or_insert_with(default_satin))
 }
@@ -980,7 +980,7 @@ pub(super) fn find_satin_mut<'a>(
 pub(super) fn find_feather_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::FeatherParams> {
+) -> Option<&'a mut paged_model::FeatherParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(effects.feather.get_or_insert_with(default_feather))
 }
@@ -988,7 +988,7 @@ pub(super) fn find_feather_mut<'a>(
 pub(super) fn find_directional_feather_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
-) -> Option<&'a mut paged_parse::DirectionalFeatherParams> {
+) -> Option<&'a mut paged_model::DirectionalFeatherParams> {
     let effects = find_frame_effects_mut(doc, node)?;
     Some(
         effects

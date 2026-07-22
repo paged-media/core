@@ -26,7 +26,7 @@
 //! the duration of the resolved-frame view so the borrowed strings
 //! it owns survive long enough for the modules to consume them.
 
-use paged_parse::ResolvedObject;
+use paged_model::ResolvedObject;
 use paged_scene::Document;
 
 use super::{Geometry, ResolvedFrame};

@@ -16,7 +16,7 @@
 
 use super::*;
 
-use paged_parse::TextFrame;
+use paged_model::TextFrame;
 
 /// Measure-only pass for one cell paragraph: shapes + lays out at
 /// `column_width_pt` and returns the vertical extent the paragraph

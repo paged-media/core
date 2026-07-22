@@ -18,7 +18,7 @@ use super::*;
 use std::collections::HashMap;
 
 use paged_compose::{DisplayList, GlyphCacheKey, GlyphOutliner, Transform};
-use paged_parse::PathAnchor;
+use paged_model::PathAnchor;
 use paged_scene::Document;
 
 /// Resolve the host page's `<MarginPreference>` margin box into a
@@ -56,7 +56,7 @@ pub(super) fn resolve_page_margin_box(
 /// document so the master pass can read back per-page state
 /// (MasterPageTransform).
 pub(super) struct PageGeom {
-    pub(super) bounds_in_spread: paged_parse::Bounds,
+    pub(super) bounds_in_spread: paged_model::Bounds,
     pub(super) applied_master: Option<String>,
     pub(super) host_spread_idx: usize,
     pub(super) local_page_idx: usize,
@@ -174,7 +174,7 @@ pub(super) fn spread_linear_transform(m: Option<[f32; 6]>) -> Transform {
     }
 }
 
-pub(crate) fn transform_bounds(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> paged_parse::Bounds {
+pub(crate) fn transform_bounds(b: paged_model::Bounds, m: Option<[f32; 6]>) -> paged_model::Bounds {
     let Some(m) = m else { return b };
     let corners = [
         apply_matrix(&m, b.left, b.top),
@@ -202,7 +202,7 @@ pub(crate) fn transform_bounds(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> p
             max_y = y;
         }
     }
-    paged_parse::Bounds {
+    paged_model::Bounds {
         top: min_y,
         left: min_x,
         bottom: max_y,
@@ -218,7 +218,7 @@ pub(crate) fn transform_bounds(b: paged_parse::Bounds, m: Option<[f32; 6]>) -> p
 /// actual angled edges instead of its much wider unrotated AABB.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct WrapShape {
-    pub(super) bounds: paged_parse::Bounds,
+    pub(super) bounds: paged_model::Bounds,
     pub(super) corners: [(f32, f32); 4],
 }
 
@@ -229,11 +229,11 @@ impl WrapShape {
     /// transform applies so the polygon stays aligned with the host's
     /// rotation (offset is in inner-coord points, same as InDesign).
     pub(super) fn from_inner(
-        b: paged_parse::Bounds,
+        b: paged_model::Bounds,
         m: Option<[f32; 6]>,
         offsets: [f32; 4],
     ) -> Self {
-        let inner = paged_parse::Bounds {
+        let inner = paged_model::Bounds {
             top: b.top - offsets[0],
             left: b.left - offsets[1],
             bottom: b.bottom + offsets[2],
@@ -273,7 +273,7 @@ impl WrapShape {
                 max_y = y;
             }
         }
-        let bounds = paged_parse::Bounds {
+        let bounds = paged_model::Bounds {
             top: min_y,
             left: min_x,
             bottom: max_y,
@@ -360,7 +360,7 @@ pub(super) fn compose_outer_matrix(outer: Transform, inner: Option<[f32; 6]>) ->
 pub(super) fn collect_wrap_rects_per_page(
     document: &Document,
     spread_page_ranges: &[std::ops::Range<usize>],
-    auto_sized_bounds: &HashMap<String, paged_parse::Bounds>,
+    auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
 ) -> Vec<Vec<WrapShape>> {
     let total_pages: usize = spread_page_ranges.last().map(|r| r.end).unwrap_or(0);
     let mut out: Vec<Vec<WrapShape>> = (0..total_pages).map(|_| Vec::new()).collect();
@@ -370,13 +370,13 @@ pub(super) fn collect_wrap_rects_per_page(
             continue;
         }
         // Local page bounds for centroid containment routing.
-        let page_bounds: Vec<paged_parse::Bounds> = parsed
+        let page_bounds: Vec<paged_model::Bounds> = parsed
             .spread
             .pages
             .iter()
             .map(|p| transform_bounds(p.bounds, p.item_transform))
             .collect();
-        let route = |aabb: paged_parse::Bounds| -> Option<usize> {
+        let route = |aabb: paged_model::Bounds| -> Option<usize> {
             let cx = (aabb.left + aabb.right) * 0.5;
             let cy = (aabb.top + aabb.bottom) * 0.5;
             page_bounds
@@ -384,9 +384,9 @@ pub(super) fn collect_wrap_rects_per_page(
                 .position(|b| cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom)
         };
         let push = |out: &mut Vec<Vec<WrapShape>>,
-                    inner_bounds: paged_parse::Bounds,
+                    inner_bounds: paged_model::Bounds,
                     item_transform: Option<[f32; 6]>,
-                    wrap: paged_parse::TextWrap| {
+                    wrap: paged_model::TextWrap| {
             if !wrap.mode.is_active() {
                 return;
             }
@@ -401,8 +401,8 @@ pub(super) fn collect_wrap_rects_per_page(
             // matters worse.
             if !matches!(
                 wrap.mode,
-                paged_parse::TextWrapMode::BoundingBoxTextWrap
-                    | paged_parse::TextWrapMode::ContourTextWrap
+                paged_model::TextWrapMode::BoundingBoxTextWrap
+                    | paged_model::TextWrapMode::ContourTextWrap
             ) {
                 return;
             }
@@ -467,7 +467,7 @@ pub(super) fn is_none_swatch_id(id: &str) -> bool {
     // Concept 2 — routed through the shared reserved-swatch
     // classifier; behaviour identical (plus the `Color/None`
     // spelling the canvas-side sites match).
-    paged_parse::graphic::ReservedSwatch::is_none(id)
+    paged_model::ReservedSwatch::is_none(id)
 }
 
 /// True when an `Option<String>` FillColor on a page item should be
@@ -555,13 +555,13 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 /// accumulate extra leading. `tab_list` and other paragraph
 /// metadata copy through unchanged.
 pub(super) fn split_paragraph_at_breaks(
-    paragraph: &paged_parse::Paragraph,
-) -> Vec<paged_parse::Paragraph> {
+    paragraph: &paged_model::Paragraph,
+) -> Vec<paged_model::Paragraph> {
     // Walk runs in order; for each run, split text at '\n' and
     // emit the leading segment into the in-progress sub-paragraph,
     // then close the sub-paragraph and start a new one.
-    let mut subs: Vec<paged_parse::Paragraph> = Vec::new();
-    let mut current = paged_parse::Paragraph {
+    let mut subs: Vec<paged_model::Paragraph> = Vec::new();
+    let mut current = paged_model::Paragraph {
         paragraph_style: paragraph.paragraph_style.clone(),
         justification: paragraph.justification,
         first_line_indent: paragraph.first_line_indent,
@@ -636,7 +636,7 @@ pub(super) fn split_paragraph_at_breaks(
                 // Close the current sub-paragraph and start a new
                 // one. Discard empty sub-paragraphs (consecutive
                 // `\n`s, common at the end of bullet lists).
-                let mut next = paged_parse::Paragraph {
+                let mut next = paged_model::Paragraph {
                     paragraph_style: paragraph.paragraph_style.clone(),
                     justification: paragraph.justification,
                     first_line_indent: paragraph.first_line_indent,
@@ -725,7 +725,7 @@ pub(super) fn split_paragraph_at_breaks(
         // Defensive: the original was all `\n`s. Return a single
         // empty paragraph to keep the upstream loop's stat
         // bookkeeping consistent without rendering anything.
-        subs.push(paged_parse::Paragraph {
+        subs.push(paged_model::Paragraph {
             paragraph_style: paragraph.paragraph_style.clone(),
             justification: paragraph.justification,
             first_line_indent: paragraph.first_line_indent,

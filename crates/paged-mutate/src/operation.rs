@@ -1461,7 +1461,7 @@ impl PropertyPath {
     }
 }
 
-/// Track J — wire-shape mirror of `paged_parse::PathAnchor`. The
+/// Track J — wire-shape mirror of `paged_model::PathAnchor`. The
 /// parse-side type doesn't carry `Deserialize`/`PartialEq`/`Tsify`,
 /// and the mutate API needs all three so this Op crosses the wasm
 /// boundary. The field shapes match exactly: `anchor` is the
@@ -1477,15 +1477,15 @@ pub struct PathAnchorSpec {
 }
 
 impl PathAnchorSpec {
-    pub fn from_parse(a: &paged_parse::PathAnchor) -> Self {
+    pub fn from_parse(a: &paged_model::PathAnchor) -> Self {
         Self {
             anchor: [a.anchor.0, a.anchor.1],
             left: [a.left.0, a.left.1],
             right: [a.right.0, a.right.1],
         }
     }
-    pub fn to_parse(&self) -> paged_parse::PathAnchor {
-        paged_parse::PathAnchor {
+    pub fn to_parse(&self) -> paged_model::PathAnchor {
+        paged_model::PathAnchor {
             anchor: (self.anchor[0], self.anchor[1]),
             left: (self.left[0], self.left[1]),
             right: (self.right[0], self.right[1]),
@@ -1493,7 +1493,7 @@ impl PathAnchorSpec {
     }
 }
 
-/// Editor-ops — wire mirror of `paged_parse::GradientFeatherStop`
+/// Editor-ops — wire mirror of `paged_model::GradientFeatherStop`
 /// (the AST type predates `PartialEq`/`Tsify`; the mirror keeps the
 /// op wire-shaped, the `PathAnchorSpec` precedent).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
@@ -1508,7 +1508,7 @@ pub struct GradientFeatherStopSpec {
     pub midpoint_pct: f32,
 }
 
-/// Editor-ops — wire mirror of `paged_parse::GradientFeatherParams`.
+/// Editor-ops — wire mirror of `paged_model::GradientFeatherParams`.
 /// Whole-struct authoring (kind + axis + stop LIST change together;
 /// `Value` has no generic list form, so the drop-shadow per-field
 /// shape doesn't fit). The renderer already draws this effect; only
@@ -1532,7 +1532,7 @@ pub struct GradientFeatherSpec {
 }
 
 impl GradientFeatherSpec {
-    pub fn from_parse(p: &paged_parse::GradientFeatherParams) -> Self {
+    pub fn from_parse(p: &paged_model::GradientFeatherParams) -> Self {
         Self {
             gradient_type: p.gradient_type.clone(),
             start_point: p.start_point.map(|(x, y)| [x, y]),
@@ -1550,8 +1550,8 @@ impl GradientFeatherSpec {
                 .collect(),
         }
     }
-    pub fn to_parse(&self) -> paged_parse::GradientFeatherParams {
-        paged_parse::GradientFeatherParams {
+    pub fn to_parse(&self) -> paged_model::GradientFeatherParams {
+        paged_model::GradientFeatherParams {
             gradient_type: self.gradient_type.clone(),
             start_point: self.start_point.map(|[x, y]| (x, y)),
             end_point: self.end_point.map(|[x, y]| (x, y)),
@@ -1559,7 +1559,7 @@ impl GradientFeatherSpec {
             stops: self
                 .stops
                 .iter()
-                .map(|s| paged_parse::GradientFeatherStop {
+                .map(|s| paged_model::GradientFeatherStop {
                     stop_color: s.stop_color.clone(),
                     location_pct: s.location_pct,
                     alpha_pct: s.alpha_pct,
@@ -1570,7 +1570,7 @@ impl GradientFeatherSpec {
     }
 }
 
-/// W0.2 — wire mirror of `paged_parse::styles::ParagraphRule` (the
+/// W0.2 — wire mirror of `paged_model::ParagraphRule` (the
 /// AST type predates `Tsify`; the mirror keeps the op wire-shaped,
 /// the `GradientFeatherSpec` precedent). Carries every field the
 /// parser models so the whole-struct `ParagraphRuleAbove` /
@@ -1598,7 +1598,7 @@ pub struct ParagraphRuleSpec {
 }
 
 impl ParagraphRuleSpec {
-    pub fn from_parse(p: &paged_parse::styles::ParagraphRule) -> Self {
+    pub fn from_parse(p: &paged_model::ParagraphRule) -> Self {
         Self {
             on: p.on,
             color: p.color.clone(),
@@ -1610,8 +1610,8 @@ impl ParagraphRuleSpec {
             width: p.width.clone(),
         }
     }
-    pub fn to_parse(&self) -> paged_parse::styles::ParagraphRule {
-        paged_parse::styles::ParagraphRule {
+    pub fn to_parse(&self) -> paged_model::ParagraphRule {
+        paged_model::ParagraphRule {
             on: self.on,
             color: self.color.clone(),
             tint: self.tint,
@@ -1624,7 +1624,7 @@ impl ParagraphRuleSpec {
     }
 }
 
-/// W0.2 — wire mirror of `paged_parse::TabStop`. The `ParagraphTabStops`
+/// W0.2 — wire mirror of `paged_model::TabStop`. The `ParagraphTabStops`
 /// path replaces the paragraph's whole `<TabList>` in one op; `Value`
 /// has no per-element list-edit form, so the UI sends the full new
 /// stop list (the gradient-feather stop-list precedent).
@@ -1642,7 +1642,7 @@ pub struct TabStopSpec {
 }
 
 impl TabStopSpec {
-    pub fn from_parse(t: &paged_parse::TabStop) -> Self {
+    pub fn from_parse(t: &paged_model::TabStop) -> Self {
         Self {
             position: t.position,
             alignment: t.alignment.clone(),
@@ -1650,8 +1650,8 @@ impl TabStopSpec {
             leader: t.leader.clone(),
         }
     }
-    pub fn to_parse(&self) -> paged_parse::TabStop {
-        paged_parse::TabStop {
+    pub fn to_parse(&self) -> paged_model::TabStop {
+        paged_model::TabStop {
             position: self.position,
             alignment: self.alignment.clone(),
             alignment_character: self.alignment_character.clone(),
@@ -1674,7 +1674,7 @@ impl TabStopSpec {
 pub type TableLineRestoreJson = String;
 
 /// W3.A1 — `Deserialize`-able mirror of the round-trippable fields of a
-/// `paged_parse::TableCell`, used inside the `DeleteTable{Row,Column}`
+/// `paged_model::TableCell`, used inside the `DeleteTable{Row,Column}`
 /// restore blob. Captures the cell's structure + style (spans, insets,
 /// fill, applied style, vertical justification). **Does NOT carry the
 /// cell's `paragraphs`** — cell text content is out-of-band of the
@@ -1698,7 +1698,7 @@ pub struct TableCellSpec {
 }
 
 impl TableCellSpec {
-    pub fn from_parse(c: &paged_parse::TableCell) -> Self {
+    pub fn from_parse(c: &paged_model::TableCell) -> Self {
         Self {
             name: c.name.clone(),
             row_span: c.row_span,
@@ -1712,8 +1712,8 @@ impl TableCellSpec {
             vertical_justification: c.vertical_justification.clone(),
         }
     }
-    pub fn to_parse(&self) -> paged_parse::TableCell {
-        paged_parse::TableCell {
+    pub fn to_parse(&self) -> paged_model::TableCell {
+        paged_model::TableCell {
             name: self.name.clone(),
             row_span: self.row_span.max(1),
             column_span: self.column_span.max(1),
@@ -1729,7 +1729,7 @@ impl TableCellSpec {
     }
 }
 
-/// W3.A1 — `Deserialize`-able mirror of a `paged_parse::TableRow`'s
+/// W3.A1 — `Deserialize`-able mirror of a `paged_model::TableRow`'s
 /// round-trippable fields, for the `DeleteTableRow` restore blob.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableRowSpec {
@@ -1740,7 +1740,7 @@ pub struct TableRowSpec {
 }
 
 impl TableRowSpec {
-    pub fn from_parse(r: &paged_parse::TableRow) -> Self {
+    pub fn from_parse(r: &paged_model::TableRow) -> Self {
         Self {
             name: r.name.clone(),
             single_row_height: r.single_row_height,
@@ -1748,8 +1748,8 @@ impl TableRowSpec {
             maximum_height: r.maximum_height,
         }
     }
-    pub fn to_parse(&self) -> paged_parse::TableRow {
-        paged_parse::TableRow {
+    pub fn to_parse(&self) -> paged_model::TableRow {
+        paged_model::TableRow {
             name: self.name.clone(),
             single_row_height: self.single_row_height,
             minimum_height: self.minimum_height,
@@ -1759,7 +1759,7 @@ impl TableRowSpec {
     }
 }
 
-/// W3.A1 — `Deserialize`-able mirror of a `paged_parse::TableColumn`,
+/// W3.A1 — `Deserialize`-able mirror of a `paged_model::TableColumn`,
 /// for the `DeleteTableColumn` restore blob.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableColumnSpec {
@@ -1768,14 +1768,14 @@ pub struct TableColumnSpec {
 }
 
 impl TableColumnSpec {
-    pub fn from_parse(c: &paged_parse::TableColumn) -> Self {
+    pub fn from_parse(c: &paged_model::TableColumn) -> Self {
         Self {
             name: c.name.clone(),
             single_column_width: c.single_column_width,
         }
     }
-    pub fn to_parse(&self) -> paged_parse::TableColumn {
-        paged_parse::TableColumn {
+    pub fn to_parse(&self) -> paged_model::TableColumn {
+        paged_model::TableColumn {
             name: self.name.clone(),
             single_column_width: self.single_column_width,
             ..Default::default()
@@ -2150,7 +2150,7 @@ pub enum NodeSpec {
     /// `NodeId::Story`). Unlike the frame arms there is NO
     /// `item_transform`: a table is in-story content (it hangs off
     /// `Paragraph::table`), not a page item with its own affine. The
-    /// apply layer builds a `paged_parse::Table` of `rows × cols` empty
+    /// apply layer builds a `paged_model::Table` of `rows × cols` empty
     /// `TableCell`s (coordinate `Name="col:row"`), sets the header /
     /// footer band counts, and applies the per-column / per-row sizing.
     /// `column_widths` / `row_heights` are pt; a short / empty vec leaves
@@ -2220,13 +2220,13 @@ impl NodeSpec {
         }
     }
 
-    /// S-03 — build a `paged_parse::Table` of `rows × cols` empty cells
+    /// S-03 — build a `paged_model::Table` of `rows × cols` empty cells
     /// from a `NodeSpec::Table`. Cells are keyed `Name="col:row"` (the
     /// IDML convention, column-major document order). Header / footer
     /// band counts and per-line sizing are honoured; the body row count
     /// is the rows not covered by a band. Panics if called on a
     /// non-table spec (apply only calls it inside the Table arm).
-    pub fn to_parse_table(&self) -> paged_parse::Table {
+    pub fn to_parse_table(&self) -> paged_model::Table {
         let NodeSpec::Table {
             self_id,
             rows,
@@ -2246,25 +2246,25 @@ impl NodeSpec {
         let footer = (*footer_rows).min(rows.saturating_sub(header));
         let body = rows.saturating_sub(header).saturating_sub(footer);
 
-        let parse_rows: Vec<paged_parse::TableRow> = (0..rows)
-            .map(|r| paged_parse::TableRow {
+        let parse_rows: Vec<paged_model::TableRow> = (0..rows)
+            .map(|r| paged_model::TableRow {
                 name: Some(r.to_string()),
                 single_row_height: row_heights.get(r as usize).copied(),
                 ..Default::default()
             })
             .collect();
-        let parse_columns: Vec<paged_parse::TableColumn> = (0..cols)
-            .map(|c| paged_parse::TableColumn {
+        let parse_columns: Vec<paged_model::TableColumn> = (0..cols)
+            .map(|c| paged_model::TableColumn {
                 name: Some(c.to_string()),
                 single_column_width: column_widths.get(c as usize).copied(),
                 ..Default::default()
             })
             .collect();
         // Column-major document order: all cells in column 0, then 1, ….
-        let mut cells: Vec<paged_parse::TableCell> = Vec::with_capacity((rows * cols) as usize);
+        let mut cells: Vec<paged_model::TableCell> = Vec::with_capacity((rows * cols) as usize);
         for c in 0..cols {
             for r in 0..rows {
-                cells.push(paged_parse::TableCell {
+                cells.push(paged_model::TableCell {
                     name: Some(format!("{c}:{r}")),
                     row_span: 1,
                     column_span: 1,
@@ -2272,7 +2272,7 @@ impl NodeSpec {
                 });
             }
         }
-        paged_parse::Table {
+        paged_model::Table {
             self_id: Some(self_id.clone()),
             header_row_count: header,
             footer_row_count: footer,
@@ -2287,7 +2287,7 @@ impl NodeSpec {
 }
 
 /// Wire-format description of a colour swatch (`<Color>`), mirroring
-/// the editable fields of `paged_parse::ColorEntry` with primitive,
+/// the editable fields of `paged_model::ColorEntry` with primitive,
 /// `Deserialize`-able types (the AST `ColorEntry` is `Serialize`-only).
 /// Carried by the swatch-collection mutations so create / edit /
 /// delete-undo are lossless. `space` / `model` / `alternate_space` are
@@ -2406,7 +2406,7 @@ pub struct GradientSpec {
 }
 
 /// W1.22 (engine gap 22) — wire description of a `<NumberingList>`
-/// resource, mirroring `paged_parse::styles::NumberingListDef`. The
+/// resource, mirroring `paged_model::NumberingListDef`. The
 /// CRUD ops (`CreateNumberingList` / `EditNumberingList` /
 /// `DeleteNumberingList`) carry this. `self_id` is minted
 /// (`NumberingList/u<n>`) when absent on create; echoed resolved in
@@ -3169,7 +3169,7 @@ pub enum StyleScope {
 /// built-ins (single private-use marker chars the renderer
 /// substitutes); v43 (D-01) adds the plugin `Placeholder` — a tagged,
 /// edit-surviving anchor run whose text is the field's cached display
-/// value (see `paged_parse::PlaceholderField`).
+/// value (see `paged_model::PlaceholderField`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
@@ -3192,7 +3192,7 @@ pub enum FieldKind {
 impl FieldKind {
     /// The Unicode marker char the parser uses to represent this field
     /// in a story's flattened text (mirrors
-    /// `paged_parse::story::AUTO_PAGE_NUMBER_MARKER` etc.). `None` for
+    /// `paged_model::AUTO_PAGE_NUMBER_MARKER` etc.). `None` for
     /// `Placeholder` — that field is a tagged run carrying its display
     /// text, not a single substituted marker char.
     pub fn marker_char(&self) -> Option<char> {
@@ -3206,7 +3206,7 @@ impl FieldKind {
     }
 }
 
-/// W0.5 — wire mirror of `paged_parse::GuideOrientation`
+/// W0.5 — wire mirror of `paged_model::GuideOrientation`
 /// (which is `Deserialize` but lives in the parse crate; kept here so
 /// the operation wire type doesn't depend on the parser's
 /// serialization shape).
@@ -3219,16 +3219,16 @@ pub enum GuideOrientationSpec {
 }
 
 impl GuideOrientationSpec {
-    pub fn to_parse(self) -> paged_parse::GuideOrientation {
+    pub fn to_parse(self) -> paged_model::GuideOrientation {
         match self {
-            GuideOrientationSpec::Vertical => paged_parse::GuideOrientation::Vertical,
-            GuideOrientationSpec::Horizontal => paged_parse::GuideOrientation::Horizontal,
+            GuideOrientationSpec::Vertical => paged_model::GuideOrientation::Vertical,
+            GuideOrientationSpec::Horizontal => paged_model::GuideOrientation::Horizontal,
         }
     }
-    pub fn from_parse(o: paged_parse::GuideOrientation) -> Self {
+    pub fn from_parse(o: paged_model::GuideOrientation) -> Self {
         match o {
-            paged_parse::GuideOrientation::Vertical => GuideOrientationSpec::Vertical,
-            paged_parse::GuideOrientation::Horizontal => GuideOrientationSpec::Horizontal,
+            paged_model::GuideOrientation::Vertical => GuideOrientationSpec::Vertical,
+            paged_model::GuideOrientation::Horizontal => GuideOrientationSpec::Horizontal,
         }
     }
 }

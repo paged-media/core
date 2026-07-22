@@ -93,7 +93,7 @@ pub(super) fn apply_insert_layer(
     };
     layers.insert(
         clamped,
-        paged_parse::Layer {
+        paged_model::Layer {
             self_id: self_id.clone(),
             name: Some(name.to_string()),
             visible: true,
@@ -188,21 +188,21 @@ pub(super) fn apply_remove_layer(
 // re-resolves the palette) — there's no finer per-NodeId palette hint.
 
 /// Build a `ColorEntry` from a wire `SwatchSpec` at a resolved id.
-pub(super) fn color_entry_from_spec(self_id: String, spec: &SwatchSpec) -> paged_parse::ColorEntry {
-    paged_parse::ColorEntry {
+pub(super) fn color_entry_from_spec(self_id: String, spec: &SwatchSpec) -> paged_model::ColorEntry {
+    paged_model::ColorEntry {
         self_id,
         name: spec.name.clone(),
-        space: paged_parse::ColorSpace::from_attr(&spec.space),
+        space: paged_model::ColorSpace::from_attr(&spec.space),
         value: spec.value.clone(),
         model: spec
             .model
             .as_deref()
-            .map(paged_parse::ColorModel::from_attr)
-            .unwrap_or(paged_parse::ColorModel::Process),
+            .map(paged_model::ColorModel::from_attr)
+            .unwrap_or(paged_model::ColorModel::Process),
         alternate_space: spec
             .alternate_space
             .as_deref()
-            .map(paged_parse::ColorSpace::from_attr),
+            .map(paged_model::ColorSpace::from_attr),
         alternate_value: spec.alternate_value.clone(),
         tint: spec.tint,
         alpha: spec.alpha,
@@ -212,7 +212,7 @@ pub(super) fn color_entry_from_spec(self_id: String, spec: &SwatchSpec) -> paged
 /// Capture a `ColorEntry` back into a `SwatchSpec` (for lossless
 /// inverses). `self_id` is carried so a delete→undo recreates the
 /// swatch at its original id.
-pub(super) fn swatch_spec_from_entry(entry: &paged_parse::ColorEntry) -> SwatchSpec {
+pub(super) fn swatch_spec_from_entry(entry: &paged_model::ColorEntry) -> SwatchSpec {
     SwatchSpec {
         self_id: Some(entry.self_id.clone()),
         name: entry.name.clone(),
@@ -336,34 +336,34 @@ pub(super) fn apply_delete_swatch(
 // Same shape as swatches (typed spec ↔ entry; create/edit/delete with
 // lossless inverses), over `doc.palette.gradients` / `.color_groups`.
 
-pub(super) fn gradient_kind_from_attr(s: &str) -> paged_parse::GradientKind {
+pub(super) fn gradient_kind_from_attr(s: &str) -> paged_model::GradientKind {
     match s {
-        "Linear" => paged_parse::GradientKind::Linear,
-        "Radial" => paged_parse::GradientKind::Radial,
-        _ => paged_parse::GradientKind::Unknown,
+        "Linear" => paged_model::GradientKind::Linear,
+        "Radial" => paged_model::GradientKind::Radial,
+        _ => paged_model::GradientKind::Unknown,
     }
 }
 
-pub(super) fn gradient_kind_as_attr(k: paged_parse::GradientKind) -> &'static str {
+pub(super) fn gradient_kind_as_attr(k: paged_model::GradientKind) -> &'static str {
     match k {
-        paged_parse::GradientKind::Linear => "Linear",
-        paged_parse::GradientKind::Radial => "Radial",
-        paged_parse::GradientKind::Unknown => "Unknown",
+        paged_model::GradientKind::Linear => "Linear",
+        paged_model::GradientKind::Radial => "Radial",
+        paged_model::GradientKind::Unknown => "Unknown",
     }
 }
 
 pub(super) fn gradient_entry_from_spec(
     self_id: String,
     spec: &GradientSpec,
-) -> paged_parse::GradientEntry {
-    paged_parse::GradientEntry {
+) -> paged_model::GradientEntry {
+    paged_model::GradientEntry {
         self_id,
         name: spec.name.clone(),
         kind: gradient_kind_from_attr(&spec.kind),
         stops: spec
             .stops
             .iter()
-            .map(|s| paged_parse::GradientStopRef {
+            .map(|s| paged_model::GradientStopRef {
                 stop_color: s.stop_color.clone(),
                 location_pct: s.location_pct,
                 midpoint_pct: s.midpoint_pct,
@@ -372,7 +372,7 @@ pub(super) fn gradient_entry_from_spec(
     }
 }
 
-pub(super) fn gradient_spec_from_entry(entry: &paged_parse::GradientEntry) -> GradientSpec {
+pub(super) fn gradient_spec_from_entry(entry: &paged_model::GradientEntry) -> GradientSpec {
     GradientSpec {
         self_id: Some(entry.self_id.clone()),
         name: entry.name.clone(),
@@ -427,10 +427,10 @@ pub(super) fn mint_group_id(doc: &paged_scene::Document) -> String {
 
 /// Resolve a leaf-member NodeId to its `FrameRef` within `spread`.
 pub(super) fn leaf_frame_ref(
-    spread: &paged_parse::Spread,
+    spread: &paged_model::Spread,
     node: &NodeId,
-) -> Option<paged_parse::FrameRef> {
-    use paged_parse::FrameRef;
+) -> Option<paged_model::FrameRef> {
+    use paged_model::FrameRef;
     let find = |id: &str, ids: Vec<Option<&str>>| -> Option<usize> {
         ids.iter().position(|s| *s == Some(id))
     };
@@ -484,10 +484,10 @@ pub(super) fn leaf_frame_ref(
 /// extending `leaf_frame_ref` with `NodeId::Group` so `createGroup`
 /// can nest an existing group (group-of-groups).
 pub(super) fn member_frame_ref(
-    spread: &paged_parse::Spread,
+    spread: &paged_model::Spread,
     node: &NodeId,
-) -> Option<paged_parse::FrameRef> {
-    use paged_parse::FrameRef;
+) -> Option<paged_model::FrameRef> {
+    use paged_model::FrameRef;
     match node {
         NodeId::Group(id) => spread
             .groups
@@ -503,10 +503,10 @@ pub(super) fn member_frame_ref(
 /// resolver `apply_dissolve_group` used in v1). Returns `None` for an
 /// id-less frame.
 pub(super) fn node_for_frame_ref(
-    spread: &paged_parse::Spread,
-    r: paged_parse::FrameRef,
+    spread: &paged_model::Spread,
+    r: paged_model::FrameRef,
 ) -> Option<NodeId> {
-    use paged_parse::FrameRef;
+    use paged_model::FrameRef;
     Some(match r {
         FrameRef::TextFrame(i) => NodeId::TextFrame(spread.text_frames.get(i)?.self_id.clone()?),
         FrameRef::Rectangle(i) => NodeId::Rectangle(spread.rectangles.get(i)?.self_id.clone()?),
@@ -682,7 +682,7 @@ pub(super) fn apply_create_group(
     doc: &mut paged_scene::Document,
     spec: &GroupSpec,
 ) -> Result<AppliedOperation, OperationError> {
-    use paged_parse::FrameRef;
+    use paged_model::FrameRef;
 
     let invalid = |reason: String| OperationError::InvalidValue {
         node: NodeId::Group(spec.self_id.clone().unwrap_or_default()),
@@ -827,7 +827,7 @@ pub(super) fn apply_create_group(
             .collect();
         ordered.sort_by_key(|(pos, _)| *pos);
         let members_in_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
-        spread.groups.push(paged_parse::Group {
+        spread.groups.push(paged_model::Group {
             self_id: Some(self_id.clone()),
             members: members_in_order.clone(),
             transparency: Default::default(),
@@ -869,7 +869,7 @@ pub(super) fn apply_create_group(
         let earliest = ordered[0].0;
         let members_doc_order: Vec<FrameRef> = ordered.iter().map(|(_, r)| *r).collect();
         let slots: Vec<u32> = ordered.iter().map(|(pos, _)| *pos as u32).collect();
-        spread.groups.push(paged_parse::Group {
+        spread.groups.push(paged_model::Group {
             self_id: Some(self_id.clone()),
             members: members_doc_order.clone(),
             transparency: Default::default(),
@@ -924,7 +924,7 @@ pub(super) fn apply_dissolve_group(
     group_id: &str,
     restore_slots: Option<&[u32]>,
 ) -> Result<AppliedOperation, OperationError> {
-    use paged_parse::FrameRef;
+    use paged_model::FrameRef;
 
     let node = NodeId::Group(group_id.to_string());
     let invalid = |reason: String| OperationError::InvalidValue {
@@ -1113,7 +1113,7 @@ pub(super) fn apply_set_group_transform(
     prev_arg: Option<[f32; 6]>,
 ) -> Result<AppliedOperation, OperationError> {
     use crate::path_math::{affine_multiply, group_rebase_delta, AFFINE_IDENTITY};
-    use paged_parse::FrameRef;
+    use paged_model::FrameRef;
 
     let node = NodeId::Group(group_id.to_string());
 
@@ -1174,7 +1174,7 @@ pub(super) fn apply_set_group_transform(
     let mut leaves: Vec<FrameRef> = Vec::new();
     let mut nested_groups: Vec<usize> = Vec::new();
     fn walk(
-        spread: &paged_parse::Spread,
+        spread: &paged_model::Spread,
         gi: usize,
         leaves: &mut Vec<FrameRef>,
         nested_groups: &mut Vec<usize>,
@@ -1373,8 +1373,8 @@ pub(super) fn apply_delete_gradient(
 pub(super) fn color_group_entry_from_spec(
     self_id: String,
     spec: &ColorGroupSpec,
-) -> paged_parse::graphic::ColorGroupEntry {
-    paged_parse::graphic::ColorGroupEntry {
+) -> paged_model::ColorGroupEntry {
+    paged_model::ColorGroupEntry {
         self_id,
         name: spec.name.clone(),
         members: spec.members.clone(),
@@ -1496,8 +1496,8 @@ pub(super) fn apply_delete_color_group(
 pub(super) fn numbering_list_def_from_spec(
     self_id: String,
     spec: &NumberingListSpec,
-) -> paged_parse::styles::NumberingListDef {
-    paged_parse::styles::NumberingListDef {
+) -> paged_model::NumberingListDef {
+    paged_model::NumberingListDef {
         self_id,
         name: spec.name.clone(),
         continue_across_stories: spec.continue_across_stories,
@@ -1506,7 +1506,7 @@ pub(super) fn numbering_list_def_from_spec(
 }
 
 pub(super) fn numbering_list_spec_from_def(
-    def: &paged_parse::styles::NumberingListDef,
+    def: &paged_model::NumberingListDef,
 ) -> NumberingListSpec {
     NumberingListSpec {
         self_id: Some(def.self_id.clone()),
@@ -1775,7 +1775,7 @@ macro_rules! style_crud {
 }
 
 style_crud!(
-    paged_parse::styles::ParagraphStyleDef,
+    paged_model::ParagraphStyleDef,
     paragraph_styles,
     "ParagraphStyle",
     apply_create_paragraph_style,
@@ -1788,7 +1788,7 @@ style_crud!(
 );
 
 style_crud!(
-    paged_parse::styles::CharacterStyleDef,
+    paged_model::CharacterStyleDef,
     character_styles,
     "CharacterStyle",
     apply_create_character_style,
@@ -1801,7 +1801,7 @@ style_crud!(
 );
 
 style_crud!(
-    paged_parse::styles::ObjectStyleDef,
+    paged_model::ObjectStyleDef,
     object_styles,
     "ObjectStyle",
     apply_create_object_style,
@@ -1814,7 +1814,7 @@ style_crud!(
 );
 
 style_crud!(
-    paged_parse::styles::CellStyleDef,
+    paged_model::CellStyleDef,
     cell_styles,
     "CellStyle",
     apply_create_cell_style,
@@ -1827,7 +1827,7 @@ style_crud!(
 );
 
 style_crud!(
-    paged_parse::styles::TableStyleDef,
+    paged_model::TableStyleDef,
     table_styles,
     "TableStyle",
     apply_create_table_style,
@@ -1855,7 +1855,7 @@ pub(super) fn style_node_marker(style_id: &str) -> NodeId {
 }
 
 pub(super) fn set_paragraph_style_field(
-    def: &mut paged_parse::styles::ParagraphStyleDef,
+    def: &mut paged_model::ParagraphStyleDef,
     path: PropertyPath,
     value: &Value,
     style_id: &str,
@@ -1922,7 +1922,7 @@ pub(super) fn set_paragraph_style_field(
                     .map(|j| j.as_idml().to_string())
                     .unwrap_or_default(),
             );
-            def.justification = paged_parse::story::Justification::from_idml(s);
+            def.justification = paged_model::Justification::from_idml(s);
             Ok(prior)
         }
         // styles.next-style (W1.22) — set the paragraph style's
@@ -1945,7 +1945,7 @@ pub(super) fn set_paragraph_style_field(
 }
 
 pub(super) fn set_character_style_field(
-    def: &mut paged_parse::styles::CharacterStyleDef,
+    def: &mut paged_model::CharacterStyleDef,
     path: PropertyPath,
     value: &Value,
     style_id: &str,

@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_parse::FrameRef;
+use paged_model::FrameRef;
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -168,7 +168,7 @@ pub(super) fn insert_captured(
         doc.stories[si]
             .story
             .paragraphs
-            .push(paged_parse::Paragraph {
+            .push(paged_model::Paragraph {
                 table: Some(table),
                 ..Default::default()
             });

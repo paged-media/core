@@ -37,7 +37,7 @@
 
 use std::collections::HashMap;
 
-use paged_parse::{Bounds, DesignMap, Graphic, Page, Spread, StyleSheet};
+use paged_model::{Bounds, DesignMap, Graphic, Page, Spread, StyleSheet};
 use paged_renderer::pipeline::{self, PipelineOptions};
 use paged_scene::{Document, ParsedSpread};
 
