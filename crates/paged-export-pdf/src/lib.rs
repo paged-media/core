@@ -315,7 +315,7 @@ impl FontByteSource for paged_renderer::FontTable {
 /// so the scene palette + the CMM ride along.
 pub struct ExportInput<'a> {
     pub doc: &'a paged_renderer::BuiltDocument,
-    pub palette: &'a paged_parse::graphic::Graphic,
+    pub palette: &'a paged_model::Graphic,
     /// `None` ⇒ text stays as vector outlines (no font embedding).
     pub fonts: Option<&'a dyn FontByteSource>,
     pub cmm: &'a dyn paged_color::Cmm,

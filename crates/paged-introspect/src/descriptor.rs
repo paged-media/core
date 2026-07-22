@@ -985,7 +985,7 @@ fn describe_rectangle(document: &Document, self_id: &str) -> Vec<PropertyDescrip
 fn find_text_frame<'a>(
     document: &'a Document,
     self_id: &str,
-) -> Option<&'a paged_parse::TextFrame> {
+) -> Option<&'a paged_model::TextFrame> {
     document
         .spreads
         .iter()
@@ -993,7 +993,7 @@ fn find_text_frame<'a>(
         .find(|f| f.self_id.as_deref() == Some(self_id))
 }
 
-fn find_rectangle<'a>(document: &'a Document, self_id: &str) -> Option<&'a paged_parse::Rectangle> {
+fn find_rectangle<'a>(document: &'a Document, self_id: &str) -> Option<&'a paged_model::Rectangle> {
     document
         .spreads
         .iter()

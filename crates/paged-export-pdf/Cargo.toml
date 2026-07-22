@@ -14,7 +14,7 @@ workspace = true
 paged-compose = { path = "../paged-compose" }
 paged-renderer = { path = "../paged-renderer", default-features = false }
 paged-color = { path = "../paged-color" }
-paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 pdf-writer = "0.15"
 subsetter = "0.2"
 xmp-writer = "0.3"

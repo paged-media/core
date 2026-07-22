@@ -726,10 +726,10 @@ fn paged_set_group_transform_moves_the_group_as_a_unit() {
             let spread = &parsed.spread;
             for g in &spread.groups {
                 if let Some(gid) = &g.self_id {
-                    if let Some(paged_parse::FrameRef::Rectangle(i)) = g
+                    if let Some(paged_model::FrameRef::Rectangle(i)) = g
                         .members
                         .iter()
-                        .find(|m| matches!(m, paged_parse::FrameRef::Rectangle(_)))
+                        .find(|m| matches!(m, paged_model::FrameRef::Rectangle(_)))
                     {
                         if let Some(r) = spread.rectangles.get(*i) {
                             if let Some(rid) = &r.self_id {
@@ -854,7 +854,10 @@ fn paged_insert_text_frame_mutates_the_scene() {
     let result = execute_script(&mut model, &source);
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
-        result.output.iter().any(|l| l.contains("[log] frame textFrame:")),
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] frame textFrame:")),
         "insertTextFrame should return the new textFrame:<id> address; got {:?}",
         result.output
     );
@@ -962,7 +965,10 @@ fn paged_delete_element_removes_a_frame() {
     );
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
-        result.output.iter().any(|l| l.contains("[log] del true true")),
+        result
+            .output
+            .iter()
+            .any(|l| l.contains("[log] del true true")),
         "deleteElement should remove the frame: {:?}",
         result.output
     );
@@ -1092,7 +1098,10 @@ fn paged_set_element_selection_is_reflected_by_paged_selection() {
     assert!(result.error.is_none(), "{:?}", result.error);
     let line = result.output.into_iter().next().expect("no output line");
     let parsed: Vec<ElementId> = serde_json::from_str(&line).expect("selection JSON parses");
-    assert_eq!(parsed, vec![ElementId::TextFrame(TEXT_FRAME_ID.to_string())]);
+    assert_eq!(
+        parsed,
+        vec![ElementId::TextFrame(TEXT_FRAME_ID.to_string())]
+    );
 }
 
 #[test]
@@ -1132,10 +1141,7 @@ fn paged_insert_oval_and_line_return_addresses() {
     );
     assert!(result.error.is_none(), "{:?}", result.error);
     assert!(
-        result
-            .output
-            .iter()
-            .any(|l| l.contains("[log] oval oval:")),
+        result.output.iter().any(|l| l.contains("[log] oval oval:")),
         "insertOval must return an oval: address: {:?}",
         result.output
     );

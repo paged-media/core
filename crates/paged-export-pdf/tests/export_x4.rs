@@ -70,7 +70,7 @@ fn find_cmyk_profile() -> Option<Vec<u8>> {
 struct Built {
     doc: paged_renderer::BuiltDocument,
     fonts: FontTable,
-    palette: paged_parse::graphic::Graphic,
+    palette: paged_model::Graphic,
 }
 
 fn build_fixture(name: &str, font: &Option<Vec<u8>>) -> Option<Built> {
