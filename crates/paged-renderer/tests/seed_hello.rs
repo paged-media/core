@@ -31,7 +31,7 @@ use std::io::Write;
 use std::path::Path;
 
 use paged_compose::Color;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn pack_seed(seed_dir: &Path) -> Vec<u8> {
@@ -87,7 +87,7 @@ fn seed_dir() -> std::path::PathBuf {
 #[test]
 fn seed_hello_parses_and_carries_two_pages() {
     let bytes = pack_seed(&seed_dir());
-    let document = Document::open(&bytes).expect("open seed IDML");
+    let document = paged_parse::import_idml_doc(&bytes).expect("open seed IDML");
 
     assert_eq!(document.spreads.len(), 2, "two <Spread>s in the manifest");
     assert_eq!(document.stories.len(), 2, "two <Story>s in the manifest");
@@ -113,7 +113,7 @@ fn seed_hello_parses_and_carries_two_pages() {
 #[test]
 fn seed_hello_builds_multi_page_display_list() {
     let bytes = pack_seed(&seed_dir());
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&document, &opts).unwrap();
@@ -142,7 +142,7 @@ fn seed_hello_builds_multi_page_display_list() {
 #[test]
 fn seed_hello_renders_and_passes_self_diff() {
     let bytes = pack_seed(&seed_dir());
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
     let (built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
@@ -205,7 +205,7 @@ fn seed_hello_renders_and_passes_self_diff() {
 #[test]
 fn seed_hello_matches_golden_snapshot() {
     let bytes = pack_seed(&seed_dir());
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_built, images) =
         pipeline::render_document(&document, &opts, 144.0, Color::WHITE).unwrap();

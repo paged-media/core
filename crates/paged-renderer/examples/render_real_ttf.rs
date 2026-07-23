@@ -25,7 +25,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use paged_compose::Color;
-use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn main() -> anyhow::Result<()> {
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, font);
 
-    let document = Document::open(&build_idml())?;
+    let document = paged_parse::import_idml_doc(&build_idml())?;
     let opts = PipelineOptions {
         assets: Some(&resolver),
         ..PipelineOptions::default()

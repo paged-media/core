@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 
 use paged_gen::samples::conditions;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 
 fn read_font(name: &str) -> Vec<u8> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
@@ -53,7 +53,7 @@ fn glyph_text(page: &paged_renderer::BuiltPage) -> String {
 fn build() -> paged_renderer::BuiltDocument {
     let sample = conditions::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let font = read_font("Inter.ttf");
     let opts = PipelineOptions {
         font: Some(&font),

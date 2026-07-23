@@ -28,9 +28,7 @@
 use std::path::PathBuf;
 
 use paged_compose::DisplayCommand;
-use paged_renderer::{
-    diagnostics::DiagnosticCode, pipeline, BytesResolver, Document, PipelineOptions,
-};
+use paged_renderer::{diagnostics::DiagnosticCode, pipeline, BytesResolver, PipelineOptions};
 
 const PAGE_W_PT: f32 = 595.276;
 const PAGE_H_PT: f32 = 841.890;
@@ -77,7 +75,7 @@ fn glyph_placements(cmds: &[DisplayCommand]) -> Vec<GlyphPlacement> {
 fn build() -> pipeline::BuiltDocument {
     let sample = paged_gen::samples::text_on_path::build();
     let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let document = Document::open(&bytes).expect("Document::open");
+    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));

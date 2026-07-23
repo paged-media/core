@@ -34,6 +34,7 @@ required-features = ["mutate-roundtrip"]
 
 [dependencies]
 paged-model = { path = "../paged-model" }
+paged-parse = { path = "../paged-parse" }
 paged-scene = { path = "../paged-scene" }
 paged-flow = { path = "../paged-flow" }
 paged-text = { path = "../paged-text" }

@@ -11,7 +11,6 @@ description = "Resolved scene graph: spreads, pages, frames, stories, flattened 
 workspace = true
 
 [dependencies]
-paged-parse = { path = "../paged-parse" }
 paged-model = { path = "../paged-model" }
 paged-flow = { path = "../paged-flow" }
 paged-composition = { path = "../paged-composition" }
@@ -21,5 +20,6 @@ serde = { workspace = true }
 blake3 = "1"
 
 [dev-dependencies]
+paged-parse = { path = "../paged-parse" }
 serde_json = "1"
 zip = { workspace = true }

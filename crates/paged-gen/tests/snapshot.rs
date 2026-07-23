@@ -694,7 +694,7 @@ fn text_overset_fires_overset_diagnostic() {
         return;
     };
     let bytes = paged_gen::write_idml(&paged_gen::samples::text_overset::build()).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let opts = paged_renderer::pipeline::PipelineOptions {
         font: Some(&font),
         ..Default::default()
@@ -771,7 +771,7 @@ fn text_autosize_grows_box_and_excludes_neighbour() {
         return;
     };
     let bytes = paged_gen::write_idml(&paged_gen::samples::text_autosize::build()).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let opts = paged_renderer::pipeline::PipelineOptions {
         font: Some(&font),
         ..Default::default()
@@ -811,7 +811,7 @@ fn text_autosize_grows_box_and_excludes_neighbour() {
     let mut control_sample = paged_gen::samples::text_autosize::build();
     patch_clear_autosizing(&mut control_sample);
     let control = paged_renderer::pipeline::build_document(
-        &paged_scene::Document::open(&paged_gen::write_idml(&control_sample).unwrap()).unwrap(),
+        &paged_parse::import_idml_doc(&paged_gen::write_idml(&control_sample).unwrap()).unwrap(),
         &opts,
     )
     .expect("build control");
@@ -914,7 +914,7 @@ fn links_broken_round_trips_through_parser() {
 #[test]
 fn links_broken_missing_and_ok_classification() {
     let bytes = paged_gen::write_idml(&paged_gen::samples::links_broken::build()).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     // No `assets` resolver and no `font`: the inline images still
     // resolve from their embedded bytes; the link-only frames cannot.
     let opts = paged_renderer::pipeline::PipelineOptions::default();
@@ -950,7 +950,7 @@ fn footnotes_round_trips_through_parser() {
     assert_eq!(fo.rule_width, Some(140.0));
     assert_eq!(fo.rule_color.as_deref(), Some("Color/Black"));
 
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let footnote_count: usize = doc
         .stories
         .iter()
@@ -977,7 +977,7 @@ fn conditions_round_trips_through_parser() {
     use paged_gen::samples::conditions;
     let sample = conditions::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
 
     let cond = &doc.styles.conditions;
     assert_eq!(
@@ -1066,7 +1066,7 @@ fn swatches_round_trips_colors_groups_tint_and_swatch() {
 
     let sample = swatches::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let g = &doc.palette;
 
     // Both spot inks resolve to a CMYK alternate (the renderer previews
@@ -1144,7 +1144,7 @@ fn navigation_round_trips_toc_index_bookmarks_and_xref() {
     use paged_gen::samples::navigation;
     let sample = navigation::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
 
     // TOC style + its single heading-pickup entry.
     let toc = doc
@@ -1235,7 +1235,7 @@ fn styles_cascade_round_trips_next_style_list_cells_tables_otf_hyphenation() {
     use paged_gen::samples::styles_cascade as sc;
     let sample = sc::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let styles = &doc.styles;
 
     // (1) next-style chain: Title → Subtitle → Body.
@@ -1326,7 +1326,7 @@ fn layout_round_trips_margins_columns_guides_and_spread_xform() {
     // it back and assert each layout knob survives.
     let sample = paged_gen::samples::layout::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.spreads.len(), 6, "six layout pages");
 
     // Page 0 — asymmetric 3-column margin grid + two boundary guides.
@@ -1400,7 +1400,7 @@ fn nested_groups_round_trips_group_of_groups() {
     use paged_parse::FrameRef;
     let sample = paged_gen::samples::nested_groups::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.spreads.len(), 2, "two nested-group pages");
 
     for (i, ps) in doc.spreads.iter().enumerate() {
@@ -1447,7 +1447,7 @@ fn text_carries_emphasis_style_and_typography_pages() {
     use paged_gen::samples::text::EMPHASIS_STYLE_ID;
     let sample = paged_gen::samples::text::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     // 13 original + 6 W2.1 pages.
     assert_eq!(doc.spreads.len(), 19, "13 original + 6 typography pages");
 
@@ -1503,7 +1503,7 @@ fn preflight_round_trips_overset_and_missing_font() {
     // run's AppliedFont so the Fonts panel can flag it.
     use paged_gen::samples::preflight::MISSING_FAMILY;
     let bytes = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
     // The missing family is referenced by a run's AppliedFont.
@@ -1549,13 +1549,9 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
     // effective PPI at/above the 150-ppi preflight floor (no lo-res
     // badge). Parse + build to assert both.
     let bytes = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
-    let doc = paged_scene::Document::open(&bytes).expect("Document::open");
+    let (doc, source) = paged_parse::import_idml(&bytes).expect("import_idml");
     assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
-    let source = doc
-        .source
-        .as_ref()
-        .expect("imported doc has a source archive");
     let spread_path = source
         .entries
         .keys()

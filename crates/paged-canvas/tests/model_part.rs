@@ -55,13 +55,9 @@ fn model_part_round_trips_through_the_paged_container() {
         .read_model_part()
         .expect("document.pgm present + deserializes after reload");
 
-    // Native reconstruct carries no raw source archive...
-    assert!(
-        reconstructed.source.is_none(),
-        "native reconstruct must not carry the raw source archive"
-    );
-
-    // ...and renders identically to the reloaded, source-parsed scene.
+    // Native reconstruct carries no raw source archive by construction — the
+    // scene `Document` has no archive field at all (N9); it just renders
+    // identically to the reloaded, source-parsed scene.
     let from_pgm = pipeline::build_document(&reconstructed, &PipelineOptions::default())
         .expect("build reconstructed");
     let from_source = pipeline::build_document(reloaded.scene(), &PipelineOptions::default())

@@ -228,7 +228,6 @@ pub fn build() -> Sample {
 mod tests {
     use super::*;
     use paged_renderer::pipeline;
-    use paged_scene::Document;
 
     /// The generated package parses, and its shared `<NumberingList>`
     /// resource carries the `continue` variant's flag. Also asserts the
@@ -237,7 +236,7 @@ mod tests {
     #[test]
     fn numbering_sample_emits_shared_list_and_builds() {
         let bytes = crate::package::write_idml(&build()).unwrap();
-        let doc = Document::open(&bytes).unwrap();
+        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
         let list = doc
             .styles
             .numbering_lists

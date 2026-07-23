@@ -32,12 +32,6 @@ use paged_model::{
     Bounds, CharacterRun, DesignMap, Graphic, Paragraph, Spread, Story, StoryRef, StyleSheet,
     TOCStyleDef, TextFrame,
 };
-// The IDML-adapter surface paged-scene still consumes (the import orchestrator +
-// the raw source archive). These migrate to `idml-import` in the next N9 slice.
-use paged_parse::{
-    open_source_archive, parse_designmap, parse_graphic, parse_spread, parse_story,
-    parse_stylesheet, ParseError, SourceArchive,
-};
 
 pub mod anchors;
 pub mod layer;
@@ -58,14 +52,6 @@ pub use value::Value;
 /// `Document` reconstructs from native bytes with no `open_source_archive`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
-    /// Raw IDML source archive (carry-through only — mimetype + entry blobs).
-    /// `None` for a natively-created or pure-native-reconstructed document that
-    /// has no IDML origin; `Some` only after an IDML import (or when the load
-    /// sniff re-attaches the sibling archive). `#[serde(skip)]` — the raw
-    /// archive never rides in the native `.pgm` (N7). The structured manifest
-    /// lives in `designmap`, not here.
-    #[serde(skip)]
-    pub source: Option<SourceArchive>,
     /// Structured `designmap.xml` manifest — spread/story order, layers,
     /// sections, hyperlinks, doc preferences. Parsed from the source archive at
     /// import; the model's truth (no longer wrapped in the raw `SourceArchive`).
@@ -180,100 +166,6 @@ fn content_box_geometry(
 }
 
 impl Document {
-    /// Parse every resource the manifest points at. Missing spreads
-    /// or stories produce an [`OpenError::MissingEntry`] — the parse
-    /// layer's tolerant behaviour (skipping entries without an
-    /// archive match) is lifted here to a structured error.
-    pub fn open(bytes: &[u8]) -> Result<Self, OpenError> {
-        Self::from_container(open_source_archive(bytes)?)
-    }
-
-    /// Build a document from an already-opened [`SourceArchive`] by parsing its
-    /// source parts (Stories / Spreads / Resources).
-    ///
-    /// The import path — used by [`Document::open`] and as the fallback when a
-    /// `.paged` container carries no native model part (`document.pgm`). The
-    /// native reconstruct (deserialize the model, skip the source parse) lives
-    /// one layer up — in the canvas load sniff over `paged-store` — because
-    /// `paged-scene` cannot depend on the codec.
-    pub fn from_container(container: SourceArchive) -> Result<Self, OpenError> {
-        // The structured manifest is parsed here (not in `open_source_archive`) so
-        // the raw source archive carries no model data (N7).
-        let designmap = parse_designmap(&container.designmap_raw)?;
-        let palette = match container.entry("Resources/Graphic.xml") {
-            Some(raw) => parse_graphic(raw)?,
-            None => Graphic::default(),
-        };
-        let styles = match container.entry("Resources/Styles.xml") {
-            Some(raw) => parse_stylesheet(raw)?,
-            None => StyleSheet::default(),
-        };
-
-        // Master spreads parse first so the page → master link is
-        // available downstream. The IDML schema for a `<MasterSpread>`
-        // is identical to a `<Spread>` (same Page / TextFrame /
-        // Rectangle children), so we reuse `parse_spread`.
-        let mut master_spreads: HashMap<String, ParsedMasterSpread> = HashMap::new();
-        for src in &designmap.master_spreads {
-            let raw = container
-                .entry(src)
-                .ok_or_else(|| OpenError::MissingEntry(src.clone()))?;
-            let parsed = parse_spread(raw)?;
-            let self_id = derive_master_id(src);
-            master_spreads.insert(
-                self_id.clone(),
-                ParsedMasterSpread {
-                    src: src.clone(),
-                    self_id,
-                    spread: parsed,
-                },
-            );
-        }
-
-        let mut spreads = Vec::with_capacity(designmap.spreads.len());
-        for spread_ref in &designmap.spreads {
-            let raw = container
-                .entry(&spread_ref.src)
-                .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
-            let parsed = parse_spread(raw)?;
-            spreads.push(ParsedSpread {
-                src: spread_ref.src.clone(),
-                spread: parsed,
-            });
-        }
-
-        let mut stories = Vec::with_capacity(designmap.stories.len());
-        for story_ref in &designmap.stories {
-            let raw = container
-                .entry(&story_ref.src)
-                .ok_or_else(|| OpenError::MissingEntry(story_ref.src.clone()))?;
-            let parsed = parse_story(raw)?;
-            let self_id = derive_story_id(&story_ref.src);
-            stories.push(ParsedStory {
-                src: story_ref.src.clone(),
-                self_id,
-                story: parsed,
-            });
-        }
-
-        let mut document = Document {
-            source: Some(container),
-            designmap,
-            palette,
-            spreads,
-            stories,
-            master_spreads,
-            // The three derived caches are rebuilt from the primary fields
-            // below (and on native deserialize — they are `#[serde(skip)]`).
-            frame_for_story: HashMap::new(),
-            text_frame_index: HashMap::new(),
-            styles,
-            anchors: Vec::new(),
-        };
-        document.rebuild_indexes();
-        Ok(document)
-    }
-
     /// Rebuild the derived caches (`frame_for_story`, `text_frame_index`,
     /// `anchors`) purely from the primary `spreads` / `stories` fields.
     ///
@@ -544,16 +436,6 @@ impl Document {
             }
         }
         comp
-    }
-
-    /// Bytes of a sub-resource in the underlying container (fonts,
-    /// linked images, ICC profiles — anything the manifest or frames
-    /// reference but that `Document` doesn't parse itself).
-    pub fn entry(&self, path: &str) -> Option<&[u8]> {
-        self.source
-            .as_ref()
-            .and_then(|s| s.entry(path))
-            .map(|b| b.as_ref())
     }
 
     /// Resolve a run's effective character-level attributes by
@@ -1608,14 +1490,6 @@ pub struct ResolvedParagraphAttrs {
     pub nested_styles: Vec<paged_model::NestedStyle>,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum OpenError {
-    #[error("manifest lists {0} but archive has no such entry")]
-    MissingEntry(String),
-    #[error("parse: {0}")]
-    Parse(#[from] ParseError),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1758,7 +1632,7 @@ mod tests {
 
     #[test]
     fn flow_chain_projects_the_frame_chain() {
-        let doc = Document::open(&pack_threaded_idml()).unwrap();
+        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
 
         // The flow chain is a faithful projection of the frame chain:
         // same order, ids = frame Self ids, flow id = story id.
@@ -1786,7 +1660,7 @@ mod tests {
 
     #[test]
     fn flow_chain_for_unknown_story_is_empty() {
-        let doc = Document::open(&pack_threaded_idml()).unwrap();
+        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
         let flow = doc.flow_chain("does-not-exist");
         assert_eq!(flow.flow, paged_flow::FlowId::new("does-not-exist"));
         assert!(flow.is_empty());
@@ -1794,7 +1668,7 @@ mod tests {
 
     #[test]
     fn to_composition_preserves_the_flow_arrangement() {
-        let doc = Document::open(&pack_threaded_idml()).unwrap();
+        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
         let comp = doc.to_composition();
 
         // One print surface + the single page.
@@ -1964,7 +1838,7 @@ mod tests {
             ("mid", "ParagraphStyle/Heading2", "Setup"),
             ("tail", "ParagraphStyle/Heading1", "Results"),
         ]);
-        let doc = Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let toc = toc_style_with_two_entries();
         let entries = doc.resolve_toc(&toc);
         assert_eq!(entries.len(), 4, "{:?}", entries);
@@ -1994,7 +1868,7 @@ mod tests {
     #[test]
     fn resolve_toc_respects_page_number_off_flag() {
         let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
-        let doc = Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let mut toc = toc_style_with_two_entries();
         toc.entries[0].page_number = Some("NoPageNumber".to_string());
         let entries = doc.resolve_toc(&toc);
@@ -2005,7 +1879,7 @@ mod tests {
     #[test]
     fn resolve_toc_uses_default_separator_when_absent() {
         let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
-        let doc = Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let mut toc = toc_style_with_two_entries();
         toc.entries[0].separator = None;
         let entries = doc.resolve_toc(&toc);
@@ -2025,7 +1899,7 @@ mod tests {
             ("banana", "Banana", 2),
             ("apple-3", "Apple", 0), // duplicate page → dedup
         ]);
-        let doc = Document::open(&xml).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&xml).expect("open IDML");
         let entries = doc.resolve_index();
         // Two topics; Apple sorts before Banana case-insensitively.
         assert_eq!(entries.len(), 2);

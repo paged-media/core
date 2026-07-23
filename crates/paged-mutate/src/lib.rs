@@ -242,7 +242,6 @@ mod tests {
         ));
 
         Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -1689,7 +1688,6 @@ mod tests {
         ]);
 
         Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![
@@ -1890,7 +1888,6 @@ mod tests {
             item_transform: group_xform,
         });
         Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2039,7 +2036,6 @@ mod tests {
             .polygons
             .push(polygon_with_anchors(self_id, anchors, subpath_starts));
         let doc = Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2234,7 +2230,6 @@ mod tests {
             end_arrow_scale: 100.0,
         });
         let doc = Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2618,7 +2613,6 @@ mod tests {
             parent_id: None,
         });
         Document {
-            source: None,
             designmap,
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -2933,7 +2927,6 @@ mod tests {
         };
 
         Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: Vec::new(),
@@ -3329,7 +3322,6 @@ mod tests {
     fn pathfinder_subtract_round_trips_via_operation() {
         use paged_model::Spread;
         let mut project = Project::new(Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -3914,7 +3906,6 @@ mod tests {
     #[test]
     fn frame_stroke_end_cap_round_trips_on_rectangle() {
         let mut project = Project::new(Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -3977,7 +3968,6 @@ mod tests {
     #[test]
     fn frame_stroke_arrowheads_round_trip_on_graphic_line() {
         let mut project = Project::new(Document {
-            source: None,
             designmap: DesignMap::default(),
             palette: Graphic::default(),
             spreads: vec![ParsedSpread {
@@ -6164,7 +6154,6 @@ mod tests {
 
         fn base_doc() -> Document {
             Document {
-                source: None,
                 designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: Vec::new(),
@@ -6829,7 +6818,6 @@ mod tests {
             frame_for_story.insert("Story/t1".to_string(), frame);
 
             Document {
-                source: None,
                 designmap: DesignMap::default(),
                 palette: Graphic::default(),
                 spreads: vec![ParsedSpread {

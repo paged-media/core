@@ -57,7 +57,7 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 use paged_canvas::channel::Mutation;
 use paged_canvas::{CanvasModel, CanvasOptions};
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 
 /// Load the license-clear Inter face the text fixtures declare. Same
 /// corpus path the layout-cache integration test uses.
@@ -98,7 +98,9 @@ fn bench_build_document(c: &mut Criterion) {
     let mut group = c.benchmark_group("build_document");
     for name in ["text", "tables"] {
         let idml = fixture(name);
-        let scene = Document::open(&idml).expect("parse bench fixture");
+        let scene = paged_parse::import_idml(&idml)
+            .expect("parse bench fixture")
+            .0;
         group.bench_function(name, |b| {
             b.iter(|| {
                 let options = PipelineOptions {

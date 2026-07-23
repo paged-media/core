@@ -27,7 +27,7 @@
 use std::io::Write;
 
 use paged_compose::Color;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 /// Build a synthetic two-page IDML where:
@@ -95,7 +95,7 @@ fn build_spot_tint_idml() -> Vec<u8> {
 #[test]
 fn spot_color_at_half_tint_renders_lighter_than_full_tint() {
     let bytes = build_spot_tint_idml();
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
 

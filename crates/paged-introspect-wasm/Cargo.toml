@@ -21,6 +21,7 @@ default = ["render"]
 render = ["paged-introspect/render"]
 
 [dependencies]
+paged-parse = { path = "../paged-parse" }
 paged-scene = { path = "../paged-scene" }
 paged-introspect = { path = "../paged-introspect", default-features = false }
 paged-mutate = { path = "../paged-mutate" }

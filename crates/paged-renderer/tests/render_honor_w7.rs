@@ -33,7 +33,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use paged_compose::DisplayCommand;
-use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn font_dir() -> PathBuf {
@@ -121,7 +121,7 @@ fn glyph_affines(cmds: &[DisplayCommand]) -> Vec<[f32; 6]> {
 }
 
 fn build_page_commands(resolver: &BytesResolver, bytes: &[u8]) -> Vec<DisplayCommand> {
-    let document = Document::open(bytes).unwrap();
+    let document = paged_parse::import_idml_doc(bytes).unwrap();
     let built = pipeline::build_document(&document, &opts(resolver)).unwrap();
     built.pages[0].list.commands.clone()
 }
@@ -315,7 +315,7 @@ fn build_effect_rect(effects_xml: &str) -> Vec<u8> {
 /// Build the display list for an effect-rect and return its commands.
 fn effect_rect_commands(effects_xml: &str) -> Vec<DisplayCommand> {
     let bytes = build_effect_rect(effects_xml);
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     built.pages[0].list.commands.clone()
 }
@@ -468,7 +468,7 @@ fn frame_outer_glow_default_color_is_white_not_black() {
     // blend is a no-op (`screen(base, 0) = base`). The fix defaults
     // glows to WHITE.
     let bytes = build_glow_rect(true, "");
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let glow = built.pages[0].list.commands.iter().find_map(|c| match c {
         DisplayCommand::OuterGlow { params, .. } => Some(*params),
@@ -483,7 +483,7 @@ fn frame_outer_glow_default_color_is_white_not_black() {
 
     // Sanity: a disabled glow emits no command at all.
     let off = build_glow_rect(false, "");
-    let off_doc = Document::open(&off).unwrap();
+    let off_doc = paged_parse::import_idml_doc(&off).unwrap();
     let off_built = pipeline::build_document(&off_doc, &PipelineOptions::default()).unwrap();
     assert!(
         !off_built.pages[0]

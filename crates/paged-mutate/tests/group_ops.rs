@@ -123,7 +123,7 @@ fn fill_translations(doc: &Document, page_idx: usize) -> Vec<(f32, f32)> {
 
 #[test]
 fn create_group_is_z_order_neutral_and_round_trips() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let (si, members) = adjacent_leaf_pair(&doc);
     let before_order = order_snapshot(&doc, si);
     let before_paint = command_stream_digest(&doc);
@@ -205,7 +205,7 @@ fn create_group_is_z_order_neutral_and_round_trips() {
 
 #[test]
 fn scattered_members_collect_deterministically_and_undo_is_exact() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // First spread whose two leaves are NOT adjacent (something sits
     // between them in z-order).
     let (si, members) = doc
@@ -279,7 +279,7 @@ fn scattered_members_collect_deterministically_and_undo_is_exact() {
 
 #[test]
 fn dissolve_parsed_group_round_trips_with_index_fixup() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // First spread with a TOP-LEVEL flat group (members all leaves).
     let mut target: Option<(usize, String)> = None;
     'outer: for (si, parsed) in doc.spreads.iter().enumerate() {
@@ -331,7 +331,7 @@ fn dissolve_parsed_group_round_trips_with_index_fixup() {
 
 #[test]
 fn atomic_rejections_leave_the_document_untouched() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let (si, members) = two_ungrouped_leaves(&doc);
     let before = order_snapshot(&doc, si);
 
@@ -476,7 +476,7 @@ fn group_plus_leaf(doc: &Document) -> Option<(usize, String, NodeId)> {
 
 #[test]
 fn nested_create_round_trips_and_restores_prior_structure() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // NESTED create: group an EXISTING top-level group G1 together with
     // a top-level leaf into a new outer group G2 (group-of-groups).
     let Some((si, g1_id, leaf)) = group_plus_leaf(&doc) else {
@@ -579,7 +579,7 @@ fn nested_create_round_trips_and_restores_prior_structure() {
 fn group_transform_moves_members_hit_and_render_agree_and_undo_restores() {
     use paged_mutate::path_math::affine_multiply;
 
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // Group two adjacent leaves so we own a group with a known member
     // set, then transform the GROUP and verify each member's effective
     // transform composed the delta.
@@ -672,7 +672,7 @@ fn group_transform_moves_members_hit_and_render_agree_and_undo_restores() {
 
 #[test]
 fn nested_dissolve_splices_into_parent_geometry_invariant() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // Find a NESTED parsed group: a group G that is a member of some
     // parent group P. The geometry-groups fixture's variant 4 builds a
     // 3-deep outer→middle→inner stack, so such a group exists.
@@ -805,7 +805,7 @@ fn renderer_paints_group_members_at_the_composed_transform() {
     // renderer emits for that page shifts by exactly the group delta —
     // i.e. the members paint at the composed transform, and undo paints
     // them back.
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // Pick the first spread whose top-level item is a single group with
     // leaf members (variant 1 — "identity · two-rects").
     let (si, group_id) = doc
@@ -902,7 +902,7 @@ fn renderer_paints_group_members_at_the_composed_transform() {
 /// materialises the table from the kind vecs first.
 #[test]
 fn create_group_on_empty_frames_in_order_materialises_and_succeeds() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     // Capture members BEFORE clearing — the helper reads frames_in_order.
     let (si, members) = two_ungrouped_leaves(&doc);
     let groups_before = doc.spreads[si].spread.groups.len();

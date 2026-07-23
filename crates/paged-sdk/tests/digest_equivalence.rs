@@ -24,7 +24,7 @@
 
 use std::path::PathBuf;
 
-use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, PipelineOptions};
 
 fn fixture(name: &str) -> Option<Vec<u8>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -54,7 +54,7 @@ fn viewer_build_matches_stock_build_document_for_every_page() {
             eprintln!("fixture {name} absent — skipped");
             continue;
         };
-        let document = Document::open(&bytes).expect("open fixture");
+        let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
 
         let viewer =
             paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
@@ -87,7 +87,7 @@ fn digest_is_order_and_content_sensitive() {
         eprintln!("fixture absent — skipped");
         return;
     };
-    let document = Document::open(&bytes).expect("open fixture");
+    let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
     let built =
         paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
 

@@ -940,6 +940,11 @@ impl From<&pipeline::PipelineStats> for DocumentStats {
 pub struct CanvasModel {
     doc_id: String,
     pub(crate) scene: Document,
+    /// The raw IDML source archive this model was imported from (mimetype +
+    /// decompressed entries), or `None` for a natively-created / native-only
+    /// document. Held here rather than on the scene `Document` so the model
+    /// stays IDML-free (N9); the parts door reads container parts from it.
+    pub(crate) source_archive: Option<paged_parse::SourceArchive>,
     /// W3.B2 — the IDML bytes this model was parsed from, retained so
     /// `export_idml` can hand them to `paged_write::write_idml` as the
     /// carry-through source package (it patches only the model-owned
@@ -1222,7 +1227,9 @@ impl CanvasModel {
         // (`Document::from_container` — the import-adapter path). The real
         // container is kept either way, so the parts door still serves every
         // other container part.
-        let scene = {
+        // The raw source archive rides on the CanvasModel (below), not on the
+        // scene `Document` — the model no longer carries the IDML archive (N9).
+        let (scene, source_archive) = {
             let container = paged_parse::open_source_archive(bytes)
                 .map_err(|e| LoadError::Parse(e.to_string()))?;
             match container
@@ -1234,20 +1241,23 @@ impl CanvasModel {
                 // returns None) falls back to the IDML import — a stale `.pgm`
                 // is never a hard load error (ADR-022 Q2).
                 Some(pgm) => match paged_store::from_bytes(&pgm) {
-                    Some(mut doc) => {
-                        // The native part is the model truth (including its
-                        // structured designmap); attach the real source archive
-                        // (raw carry-through bytes) so the parts door still
-                        // serves every other container part and IDML export can
-                        // still carry through.
-                        doc.source = Some(container);
-                        doc
-                    }
-                    None => Document::from_container(container)
-                        .map_err(|e| LoadError::Parse(e.to_string()))?,
+                    // The native part is the model truth (including its
+                    // structured designmap); keep the real source archive
+                    // (raw carry-through bytes) beside it so the parts door still
+                    // serves every other container part and IDML export can
+                    // still carry through.
+                    Some(doc) => (doc, Some(container)),
+                    None => (
+                        paged_parse::import_idml_archive(&container)
+                            .map_err(|e| LoadError::Parse(e.to_string()))?,
+                        Some(container),
+                    ),
                 },
-                None => Document::from_container(container)
-                    .map_err(|e| LoadError::Parse(e.to_string()))?,
+                None => (
+                    paged_parse::import_idml_archive(&container)
+                        .map_err(|e| LoadError::Parse(e.to_string()))?,
+                    Some(container),
+                ),
             }
         };
         phase_log("CanvasModel::load parse", t_parse);
@@ -1366,6 +1376,7 @@ impl CanvasModel {
         Ok(Self {
             doc_id,
             scene,
+            source_archive,
             // W3.B2 — retain the source package for save-back. One
             // compressed copy; replaced wholesale on the next load.
             source_idml: bytes.to_vec(),
@@ -3359,8 +3370,7 @@ impl CanvasModel {
         if let Some(b) = self.paged_parts.get(path) {
             return Some(b.clone());
         }
-        self.scene
-            .source
+        self.source_archive
             .as_ref()
             .and_then(|s| s.entries.get(path))
             .map(|b| b.to_vec())
@@ -3370,7 +3380,7 @@ impl CanvasModel {
     /// container and the live overlay), restricted to the `paged/` namespace.
     pub fn list_paged_parts(&self, prefix: &str) -> Vec<String> {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        if let Some(source) = &self.scene.source {
+        if let Some(source) = &self.source_archive {
             for k in source.entries.keys() {
                 if k.starts_with(paged_write::PAGED_PREFIX) && k.starts_with(prefix) {
                     names.insert(k.clone());

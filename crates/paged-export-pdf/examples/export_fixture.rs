@@ -20,7 +20,6 @@ use paged_export_pdf::{
     export_pdf, ExportInkSettings, ExportInput, ExportOptions, ExportProfiles, PdfStandard,
 };
 use paged_renderer::pipeline::{self, FontTable, PipelineOptions};
-use paged_scene::Document;
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -33,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     let profile = args.next().map(std::fs::read).transpose()?;
 
     let bytes = std::fs::read(&idml)?;
-    let document = Document::open(&bytes)?;
+    let document = paged_parse::import_idml_doc(&bytes)?;
     let font = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
     )

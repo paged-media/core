@@ -30,7 +30,7 @@
 use std::io::Write;
 
 use paged_compose::Color;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 /// Sample the centre of the foreground rectangle (where it overlaps
@@ -115,7 +115,7 @@ fn overprint_fill_darkens_top_color_against_bottom_color() {
         zip.write_all(spread_xml.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
 
-        let document = Document::open(&bytes).unwrap();
+        let document = paged_parse::import_idml_doc(&bytes).unwrap();
         let opts = PipelineOptions::default();
         let (_built, images) =
             pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
