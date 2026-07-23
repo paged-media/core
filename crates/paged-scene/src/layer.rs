@@ -47,7 +47,7 @@
 
 use std::collections::HashMap;
 
-use paged_parse::DesignMap;
+use paged_model::DesignMap;
 
 /// True iff `layer_id` AND every ancestor layer (via `parent_id`) is
 /// visible-and-printable. A layer nested inside a hidden or
@@ -208,7 +208,7 @@ pub fn layer_z(designmap: &DesignMap, item_layer_ref: Option<&str>) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paged_parse::designmap::Layer;
+    use paged_model::Layer;
 
     fn dm(layers: Vec<Layer>) -> DesignMap {
         DesignMap {

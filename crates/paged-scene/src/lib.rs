@@ -28,10 +28,15 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
+use paged_model::{
+    Bounds, CharacterRun, DesignMap, Graphic, Paragraph, Spread, Story, StoryRef, StyleSheet,
+    TOCStyleDef, TextFrame,
+};
+// The IDML-adapter surface paged-scene still consumes (the import orchestrator +
+// the raw source archive). These migrate to `idml-import` in the next N9 slice.
 use paged_parse::{
     open_source_archive, parse_designmap, parse_graphic, parse_spread, parse_story,
-    parse_stylesheet, Bounds, CharacterRun, DesignMap, Graphic, Paragraph, ParseError,
-    SourceArchive, Spread, Story, StoryRef, StyleSheet, TOCStyleDef, TextFrame,
+    parse_stylesheet, ParseError, SourceArchive,
 };
 
 pub mod anchors;
@@ -760,7 +765,7 @@ impl Document {
     /// into the topic accumulator. Pulled out so the table-cell
     /// loop can reuse it.
     fn collect_index_markers_from_paragraph(
-        paragraph: &paged_parse::Paragraph,
+        paragraph: &paged_model::Paragraph,
         host_page: Option<usize>,
         by_topic: &mut BTreeMap<String, IndexEntry>,
     ) {
@@ -894,7 +899,7 @@ impl Document {
 /// `None` if no page contains the centroid — caller defaults to the
 /// first page.
 fn page_index_for_bounds(
-    pages: &[paged_parse::Page],
+    pages: &[paged_model::Page],
     bounds: Bounds,
     item_transform: Option<[f32; 6]>,
 ) -> Option<usize> {
@@ -930,8 +935,8 @@ fn paragraph_plain_text(p: &Paragraph) -> String {
     let mut buf = String::new();
     for run in &p.runs {
         for ch in run.text.chars() {
-            if ch == paged_parse::AUTO_PAGE_NUMBER_MARKER
-                || ch == paged_parse::NEXT_PAGE_NUMBER_MARKER
+            if ch == paged_model::AUTO_PAGE_NUMBER_MARKER
+                || ch == paged_model::NEXT_PAGE_NUMBER_MARKER
             {
                 continue;
             }
@@ -1033,7 +1038,7 @@ impl ResolvedRunAttrs {
     }
 
     /// Fill any unset field from a resolved character style.
-    pub fn merge_below_character(&mut self, c: &paged_parse::ResolvedCharacter) {
+    pub fn merge_below_character(&mut self, c: &paged_model::ResolvedCharacter) {
         if self.font.is_none() {
             self.font = c.font.clone();
         }
@@ -1090,7 +1095,7 @@ impl ResolvedRunAttrs {
     /// Fill any unset field from a resolved paragraph style.
     /// Run-level can pull font / size / fill out of paragraph
     /// styles but not the paragraph-only knobs.
-    pub fn merge_below_paragraph(&mut self, p: &paged_parse::ResolvedParagraph) {
+    pub fn merge_below_paragraph(&mut self, p: &paged_model::ResolvedParagraph) {
         if self.font.is_none() {
             self.font = p.font.clone();
         }
@@ -1195,7 +1200,7 @@ impl ResolvedParagraphAttrs {
     }
 
     /// Fill any unset field from a resolved paragraph style.
-    pub fn merge_below(&mut self, p: &paged_parse::ResolvedParagraph) {
+    pub fn merge_below(&mut self, p: &paged_model::ResolvedParagraph) {
         self.justification = self.justification.or(p.justification);
         self.first_line_indent = self.first_line_indent.or(p.first_line_indent);
         // FINDING #7.2 — fall back to the cascaded style indents.
@@ -1303,7 +1308,7 @@ impl ResolvedParagraphAttrs {
     }
 }
 
-fn merge_rule_attrs(c: &mut paged_parse::ParagraphRule, p: &paged_parse::ParagraphRule) {
+fn merge_rule_attrs(c: &mut paged_model::ParagraphRule, p: &paged_model::ParagraphRule) {
     c.on = c.on.or(p.on);
     if c.color.is_none() {
         c.color = p.color.clone();
@@ -1318,7 +1323,7 @@ fn merge_rule_attrs(c: &mut paged_parse::ParagraphRule, p: &paged_parse::Paragra
     }
 }
 
-fn merge_border_attrs(c: &mut paged_parse::ParagraphBorder, p: &paged_parse::ParagraphBorder) {
+fn merge_border_attrs(c: &mut paged_model::ParagraphBorder, p: &paged_model::ParagraphBorder) {
     c.on = c.on.or(p.on);
     if c.color.is_none() {
         c.color = p.color.clone();
@@ -1340,7 +1345,7 @@ fn merge_border_attrs(c: &mut paged_parse::ParagraphBorder, p: &paged_parse::Par
 
 /// Derive a Story's `Self` id from its manifest src. Turns
 /// "Stories/Story_uXX.xml" → "uXX"; returns the stem otherwise.
-fn hash_bounds(h: &mut blake3::Hasher, b: &paged_parse::Bounds) {
+fn hash_bounds(h: &mut blake3::Hasher, b: &paged_model::Bounds) {
     h.update(&b.top.to_le_bytes());
     h.update(&b.left.to_le_bytes());
     h.update(&b.bottom.to_le_bytes());
@@ -1463,14 +1468,14 @@ pub struct ResolvedRunAttrs {
     /// character level only, so there is no paragraph-style fallback.
     /// The renderer maps the resolved bag to rustybuzz feature tags via
     /// `paged_text::ShapingFeatures`.
-    pub otf: paged_parse::OtfFeatures,
+    pub otf: paged_model::OtfFeatures,
 }
 
 /// Effective paragraph-level attributes after walking the cascade
 /// (direct > applied paragraph style).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedParagraphAttrs {
-    pub justification: Option<paged_parse::Justification>,
+    pub justification: Option<paged_model::Justification>,
     pub first_line_indent: Option<f32>,
     /// FINDING #7.2 — `LeftIndent` / `RightIndent` in pt. The
     /// paragraph's left/right margin offsets: the renderer narrows the
@@ -1482,7 +1487,7 @@ pub struct ResolvedParagraphAttrs {
     pub right_indent: Option<f32>,
     pub space_before: Option<f32>,
     pub space_after: Option<f32>,
-    pub tab_list: Vec<paged_parse::TabStop>,
+    pub tab_list: Vec<paged_model::TabStop>,
     /// `BulletsAndNumberingListType` (BulletList / NumberedList /
     /// NoList). The renderer only consumes BulletList today.
     pub bullets_list_type: Option<String>,
@@ -1535,7 +1540,7 @@ pub struct ResolvedParagraphAttrs {
     /// `HyphenationZone` in pt from the cascaded paragraph style.
     /// Suppresses hyphenation for words that would otherwise start
     /// within this distance of the right margin. `None`/`0` ⇒ no zone
-    /// restriction. See [`paged_parse::ResolvedParagraph::hyphenation_zone`].
+    /// restriction. See [`paged_model::ResolvedParagraph::hyphenation_zone`].
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
@@ -1589,18 +1594,18 @@ pub struct ResolvedParagraphAttrs {
     /// Cascaded `OverprintStroke` flag.
     pub overprint_stroke: Option<bool>,
     /// Q-09: cascaded paragraph-shading parameters.
-    pub shading: paged_parse::ParagraphShading,
+    pub shading: paged_model::ParagraphShading,
     /// Q-09: cascaded horizontal rule above the first line.
-    pub rule_above: paged_parse::ParagraphRule,
+    pub rule_above: paged_model::ParagraphRule,
     /// Q-09: cascaded horizontal rule below the last line.
-    pub rule_below: paged_parse::ParagraphRule,
+    pub rule_below: paged_model::ParagraphRule,
     /// Q-09: cascaded rectangular paragraph border.
-    pub border: paged_parse::ParagraphBorder,
+    pub border: paged_model::ParagraphBorder,
     /// Phase 4 typography — cascaded `<NestedStyle>` entries from the
     /// applied paragraph style. The renderer walks the paragraph
     /// text against this list to override the character style on
     /// leading byte ranges.
-    pub nested_styles: Vec<paged_parse::NestedStyle>,
+    pub nested_styles: Vec<paged_model::NestedStyle>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1614,7 +1619,7 @@ pub enum OpenError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paged_parse::{TOCStyleDef, TOCStyleEntryDef};
+    use paged_model::{TOCStyleDef, TOCStyleEntryDef};
     use std::io::Write;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -2133,7 +2138,7 @@ mod tests {
 
     #[test]
     fn character_style_fill_color_wins_over_paragraph_style() {
-        use paged_parse::{CharacterStyleDef, ParagraphStyleDef, StyleSheet};
+        use paged_model::{CharacterStyleDef, ParagraphStyleDef, StyleSheet};
 
         let mut styles = StyleSheet::default();
         styles.paragraph_styles.insert(
