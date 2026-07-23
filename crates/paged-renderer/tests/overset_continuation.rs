@@ -98,7 +98,7 @@ fn build_single_frame_idml(text: &str, frame_h: f32) -> Vec<u8> {
 }
 
 fn build(bytes: &[u8]) -> pipeline::BuiltDocument {
-    let document = paged_parse::import_idml_doc(bytes).unwrap();
+    let document = idml_import::import_idml_doc(bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {

@@ -63,7 +63,7 @@ fn idml_with_frames() -> Vec<u8> {
 }
 
 fn open_doc() -> Document {
-    paged_parse::import_idml_doc(&idml_with_frames()).expect("open synthetic IDML")
+    idml_import::import_idml_doc(&idml_with_frames()).expect("open synthetic IDML")
 }
 
 fn rect<'a>(doc: &'a Document, id: &str) -> &'a paged_model::Rectangle {

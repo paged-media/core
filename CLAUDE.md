@@ -12,7 +12,7 @@ versioned display list, rasterises through tiny-skia (CPU, default) or
 Vello (wgpu/GPU). Public APIs target both native and WASM.
 
 ```
-paged-parse → paged-scene → paged-text → paged-compose → paged-gpu
+idml-import → paged-scene → paged-text → paged-compose → paged-gpu
                                               ↘ paged-renderer (top)
                                                    ↘ paged-fidelity (diff)
 ```
@@ -61,7 +61,7 @@ touched. `Cargo.lock` **is** tracked here (reproducible public build).
 
 ## Layout
 
-- `crates/paged-parse/` — ZIP + XML → AST. Container, designmap, spreads
+- `crates/idml-import/` — ZIP + XML → AST. Container, designmap, spreads
   (TextFrame / Rectangle / Oval / Polygon / GraphicLine / Group), stories,
   graphic, gradients, ItemTransform, NextTextFrame, TextFramePreference,
   tabs, Image, styles + BasedOn cascade, bullets/numbering. Parses

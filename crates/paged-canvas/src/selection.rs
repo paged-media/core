@@ -57,7 +57,7 @@ use tsify_next::Tsify;
 /// ## The two-stream addressing model
 ///
 /// Table-cell text is stored out of band on `Table.cells[].paragraphs`
-/// (see `paged_parse`), disjoint from `Story.paragraphs`. So a content
+/// (see `idml_import`), disjoint from `Story.paragraphs`. So a content
 /// address needs to say *which* paragraph stream its byte offsets index:
 ///
 /// - `ContentSelection.cell == None` — offsets are story-local bytes

@@ -35,7 +35,7 @@ use crate::util::{attr, parse_f, parse_tint_attr};
 use crate::ParseError;
 
 // N5 — these pure model types now live in `paged-model`; re-exported here
-// so `paged_parse::*` and every dependent are unchanged.
+// so `idml_import::*` and every dependent are unchanged.
 pub use paged_model::{
     ArrowheadType, CornerOption, CornerSpec, FrameRef, Group, GroupTransparency, GuideOrientation,
     MarginPreference, Page, RulerGuide,
@@ -44,7 +44,7 @@ pub use paged_model::{
 pub use paged_model::Spread;
 
 // N5 — these pure model types now live in `paged-model`; re-exported here
-// so `paged_parse::*` and every dependent are unchanged.
+// so `idml_import::*` and every dependent are unchanged.
 pub use paged_model::{
     BevelEmbossParams, ClippingPathSettings, ContourOptionType, DirectionalFeatherParams,
     FeatherParams, FrameEffects, FrameFittingOption, GradientFeatherParams, GradientFeatherStop,
@@ -53,14 +53,14 @@ pub use paged_model::{
 };
 
 // N5 — these pure model types now live in `paged-model`; re-exported here
-// so `paged_parse::*` and every dependent are unchanged.
+// so `idml_import::*` and every dependent are unchanged.
 pub use paged_model::{
     AutoSizingReferencePoint, AutoSizingType, ClippingType, DropShadowSetting, FirstBaselineOffset,
     ImageMetadata, VerticalJustification,
 };
 
 // N5 — `Bounds` now lives in `paged-model` (the Paged-owned model); re-exported
-// here so `paged_parse::Bounds` and every dependent are unchanged.
+// here so `idml_import::Bounds` and every dependent are unchanged.
 pub use paged_model::Bounds;
 
 /// Identifies the most recently opened shape element so child

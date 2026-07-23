@@ -66,7 +66,7 @@ fn viewer_session_load_opens_container_and_builds_pages() {
         eprintln!("fixture geometry-groups.idml absent — skipped");
         return;
     };
-    let document = paged_parse::import_idml_doc(&bytes).expect("open IDML container");
+    let document = idml_import::import_idml_doc(&bytes).expect("open IDML container");
     let built =
         paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
     assert!(
@@ -104,7 +104,7 @@ fn viewer_session_imports_full_package_across_feature_fixtures() {
             eprintln!("fixture {name} absent — skipped");
             continue;
         };
-        let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
+        let document = idml_import::import_idml_doc(&bytes).expect("open fixture");
         let built = paged_sdk::viewer_build(&document, None, &BytesResolver::new())
             .unwrap_or_else(|e| panic!("{name}: viewer_build failed: {e}"));
         assert!(
@@ -131,7 +131,7 @@ fn viewer_session_pipeline_produces_renderable_display_list() {
         eprintln!("fixture absent — skipped");
         return;
     };
-    let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
+    let document = idml_import::import_idml_doc(&bytes).expect("open fixture");
     let built =
         paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
     let total_commands: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
@@ -154,7 +154,7 @@ fn viewer_session_page_layout_stacks_pages_with_constant_gap() {
         eprintln!("fixture absent — skipped");
         return;
     };
-    let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
+    let document = idml_import::import_idml_doc(&bytes).expect("open fixture");
     let built =
         paged_sdk::viewer_build(&document, None, &BytesResolver::new()).expect("viewer_build");
     assert!(built.pages.len() >= 2, "need ≥2 pages to test stacking");
@@ -203,7 +203,7 @@ fn viewer_session_page_layout_stacks_pages_with_constant_gap() {
 fn viewer_session_load_reports_errors_without_panicking() {
     // Random non-zip bytes: `Document::open` must Err, not panic.
     let garbage = b"this is definitely not an IDML package".to_vec();
-    let opened = paged_parse::import_idml_doc(&garbage);
+    let opened = idml_import::import_idml_doc(&garbage);
     assert!(
         opened.is_err(),
         "opening non-IDML bytes must return Err (the diagnostics 'open' code), not Ok/panic"
@@ -211,7 +211,7 @@ fn viewer_session_load_reports_errors_without_panicking() {
 
     // Empty input is likewise a clean error.
     assert!(
-        paged_parse::import_idml_doc(&[]).is_err(),
+        idml_import::import_idml_doc(&[]).is_err(),
         "opening empty bytes must return Err, not panic"
     );
 
@@ -219,7 +219,7 @@ fn viewer_session_load_reports_errors_without_panicking() {
     if let Some(mut bytes) = fixture("geometry-groups.idml") {
         bytes.truncate(bytes.len() / 2);
         assert!(
-            paged_parse::import_idml_doc(&bytes).is_err(),
+            idml_import::import_idml_doc(&bytes).is_err(),
             "a truncated IDML must return Err, not panic"
         );
     }
@@ -269,7 +269,7 @@ fn viewer_session_register_font_keys_and_is_consulted_on_load() {
     // bare build for a fixture that references no registered face
     // (registration is additive, never destructive).
     if let Some(bytes) = fixture("text.idml") {
-        let document = paged_parse::import_idml_doc(&bytes).expect("open fixture");
+        let document = idml_import::import_idml_doc(&bytes).expect("open fixture");
         let with_fonts =
             paged_sdk::viewer_build(&document, None, &fonts).expect("viewer_build with fonts");
         let bare = paged_sdk::viewer_build(&document, None, &BytesResolver::new())

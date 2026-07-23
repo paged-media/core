@@ -15,7 +15,7 @@
 //! In-engine blank-document synthesis for File ▸ New.
 //!
 //! The wasm worker exposes no "new empty document" entry, and the only
-//! IDML writer ([`paged_write::write_idml`]) *patches an existing
+//! IDML writer ([`idml_export::write_idml`]) *patches an existing
 //! package* — so a brand-new document has nothing to patch. Rather than
 //! hand-build the resolved [`paged_scene::Document`] graph (which would
 //! also leave `source_idml` empty and break save-back), a blank document
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn blank_idml_parses_to_one_page() {
         let bytes = blank_idml(612.0, 792.0);
-        let doc = paged_parse::import_idml(&bytes)
+        let doc = idml_import::import_idml(&bytes)
             .expect("blank IDML must parse")
             .0;
         // One spread, one page, no stories (truly empty body).

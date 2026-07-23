@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/paged-model",
-    "crates/paged-parse",
+    "crates/idml-import",
     "crates/paged-flow",
     "crates/paged-composition",
     "crates/paged-composition-render",
@@ -18,7 +18,7 @@ members = [
     "crates/paged-introspect",
     "crates/paged-introspect-wasm",
     "crates/paged-gen",
-    "crates/paged-write",
+    "crates/idml-export",
     "crates/paged-store",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",

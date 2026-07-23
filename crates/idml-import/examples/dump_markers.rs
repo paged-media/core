@@ -23,16 +23,16 @@ fn main() {
         .expect("usage: dump_markers <idml>")
         .into();
     let bytes = std::fs::read(&path).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).unwrap();
+    let container = idml_import::open_source_archive(&bytes).unwrap();
     for (name, raw) in container.entries.iter() {
         if !name.starts_with("Stories/") || !name.ends_with(".xml") {
             continue;
         }
-        let story = paged_parse::parse_story(raw).unwrap();
+        let story = idml_import::parse_story(raw).unwrap();
         for p in &story.paragraphs {
             for r in &p.runs {
-                if r.text.contains(paged_parse::AUTO_PAGE_NUMBER_MARKER)
-                    || r.text.contains(paged_parse::NEXT_PAGE_NUMBER_MARKER)
+                if r.text.contains(idml_import::AUTO_PAGE_NUMBER_MARKER)
+                    || r.text.contains(idml_import::NEXT_PAGE_NUMBER_MARKER)
                 {
                     println!("{name}  text={:?}", r.text);
                 }

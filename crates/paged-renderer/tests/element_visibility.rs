@@ -85,7 +85,7 @@ fn render_fg(fg_visible: bool) -> [u8; 4] {
     zip.write_all(spread_xml.as_bytes()).unwrap();
     let bytes = zip.finish().unwrap().into_inner();
 
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
     // Page 100×100 at 72 dpi → 100 px; fg rect (20,20)..(80,80); centre (50,50).

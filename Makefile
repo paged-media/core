@@ -120,7 +120,7 @@ check-wasm:
 	cargo check --target $(WASM_TARGET) -p paged-canvas-wasm --features gpu
 	cargo check --target $(WASM_TARGET) -p paged-introspect-wasm
 	cargo check --target $(WASM_TARGET) -p paged-sdk --features gpu
-	cargo check --target $(WASM_TARGET) -p paged-write
+	cargo check --target $(WASM_TARGET) -p idml-export
 
 # Headless wasm test lane: scripts/test-wasm.sh runs the wasm-bindgen
 # tests node-hosted (W0.8).

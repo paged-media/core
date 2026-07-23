@@ -25,7 +25,7 @@
 //! Both are serialised here from the in-memory model, in the same
 //! vocabulary [`crate::rewrite`] writes when patching (its emit helpers
 //! are reused directly), wrapped in the standard `idPkg` part envelope
-//! our own parser reads back (`paged_parse::Story::parse` /
+//! our own parser reads back (`idml_import::Story::parse` /
 //! `Spread::parse`). The new entries are then REFERENCED by a minimal
 //! `designmap.xml` insertion ([`patch_designmap`]) — an unmutated
 //! document never reaches this module, so its designmap round-trips
@@ -36,7 +36,7 @@ use std::io::Cursor;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::{CharacterRun, Spread, Story};
+use idml_import::{CharacterRun, Spread, Story};
 
 use crate::rewrite;
 

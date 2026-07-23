@@ -1607,6 +1607,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
+name = "idml-export"
+version = "0.0.0"
+dependencies = [
+ "idml-import",
+ "paged-gen",
+ "paged-mutate",
+ "paged-scene",
+ "quick-xml",
+ "serde_json",
+ "thiserror 2.0.18",
+ "zip",
+]
+
+[[package]]
+name = "idml-import"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "paged-model",
+ "paged-scene",
+ "quick-xml",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2355,6 +2384,8 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "criterion",
+ "idml-export",
+ "idml-import",
  "image",
  "js-sys",
  "paged-color",
@@ -2364,12 +2395,10 @@ dependencies = [
  "paged-gen",
  "paged-model",
  "paged-mutate",
- "paged-parse",
  "paged-renderer",
  "paged-scene",
  "paged-store",
  "paged-text",
- "paged-write",
  "rustybuzz 0.18.0",
  "serde",
  "serde_json",
@@ -2459,13 +2488,13 @@ dependencies = [
  "bytes",
  "clap",
  "flate2",
+ "idml-import",
  "image",
  "lopdf",
  "paged-color",
  "paged-compose",
  "paged-gen",
  "paged-model",
- "paged-parse",
  "paged-renderer",
  "paged-scene",
  "pdf-writer",
@@ -2504,8 +2533,8 @@ dependencies = [
  "base64",
  "blake3",
  "clap",
+ "idml-import",
  "paged-compose",
- "paged-parse",
  "paged-renderer",
  "paged-scene",
  "quick-xml",
@@ -2553,10 +2582,10 @@ name = "paged-introspect-wasm"
 version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
+ "idml-import",
  "js-sys",
  "paged-introspect",
  "paged-mutate",
- "paged-parse",
  "paged-scene",
  "serde",
  "serde_json",
@@ -2577,10 +2606,10 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "flo_curves",
+ "idml-import",
  "kurbo 0.11.3",
  "paged-compose",
  "paged-model",
- "paged-parse",
  "paged-renderer",
  "paged-scene",
  "serde",
@@ -2592,21 +2621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "paged-parse"
-version = "0.0.0"
-dependencies = [
- "base64",
- "bytes",
- "paged-model",
- "paged-scene",
- "quick-xml",
- "serde",
- "thiserror 2.0.18",
- "tracing",
- "zip",
-]
-
-[[package]]
 name = "paged-renderer"
 version = "0.0.0"
 dependencies = [
@@ -2614,6 +2628,8 @@ dependencies = [
  "bytes",
  "clap",
  "flate2",
+ "idml-export",
+ "idml-import",
  "image",
  "jpeg-decoder",
  "paged-color",
@@ -2624,10 +2640,8 @@ dependencies = [
  "paged-gpu",
  "paged-model",
  "paged-mutate",
- "paged-parse",
  "paged-scene",
  "paged-text",
- "paged-write",
  "resvg",
  "rustybuzz 0.18.0",
  "serde",
@@ -2658,10 +2672,10 @@ name = "paged-scene"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "idml-import",
  "paged-composition",
  "paged-flow",
  "paged-model",
- "paged-parse",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2688,10 +2702,10 @@ name = "paged-sdk"
 version = "0.0.0"
 dependencies = [
  "console_error_panic_hook",
+ "idml-import",
  "js-sys",
  "paged-compose",
  "paged-gpu",
- "paged-parse",
  "paged-renderer",
  "serde",
  "tsify-next",
@@ -2704,8 +2718,8 @@ dependencies = [
 name = "paged-store"
 version = "0.0.0"
 dependencies = [
+ "idml-import",
  "paged-gen",
- "paged-parse",
  "paged-renderer",
  "paged-scene",
  "serde",
@@ -2726,20 +2740,6 @@ dependencies = [
  "ttf-parser 0.24.1",
  "unicode-bidi",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "paged-write"
-version = "0.0.0"
-dependencies = [
- "paged-gen",
- "paged-mutate",
- "paged-parse",
- "paged-scene",
- "quick-xml",
- "serde_json",
- "thiserror 2.0.18",
- "zip",
 ]
 
 [[package]]

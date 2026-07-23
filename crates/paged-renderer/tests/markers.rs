@@ -46,7 +46,7 @@ fn glyph_text(page: &paged_renderer::BuiltPage) -> String {
 fn build_markers() -> paged_renderer::BuiltDocument {
     let sample = paged_gen::samples::markers::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let font = read_font("Inter.ttf");
     let opts = PipelineOptions {

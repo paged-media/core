@@ -69,7 +69,7 @@ where
     U: Fn(&Document, &str),
 {
     let bytes = fixture_bytes();
-    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open document");
+    let mut doc = idml_import::import_idml_doc(&bytes).expect("open document");
     let story_id = long_single_run_story(&doc);
 
     let applied = apply(

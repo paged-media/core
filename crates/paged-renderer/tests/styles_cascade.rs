@@ -79,12 +79,12 @@ fn cascade_pages_render_and_otf_features_change_the_raster() {
 
     // OTF ON.
     let on_doc =
-        paged_parse::import_idml_doc(&paged_gen::write_idml(&sc::build()).unwrap()).unwrap();
+        idml_import::import_idml_doc(&paged_gen::write_idml(&sc::build()).unwrap()).unwrap();
     let (built_on, on_imgs) =
         pipeline::render_document(&on_doc, &opts, 144.0, Color::WHITE).unwrap();
     // OTF OFF control.
     let off_doc =
-        paged_parse::import_idml_doc(&paged_gen::write_idml(&sc::build_otf_off()).unwrap())
+        idml_import::import_idml_doc(&paged_gen::write_idml(&sc::build_otf_off()).unwrap())
             .unwrap();
     let (_built_off, off_imgs) =
         pipeline::render_document(&off_doc, &opts, 144.0, Color::WHITE).unwrap();

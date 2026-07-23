@@ -60,14 +60,14 @@ pub struct MarkerResources {
 }
 
 /// A document-level `<Layer>` (z-order band). Mirrors
-/// `paged_parse::designmap::Layer`.
+/// `idml_import::designmap::Layer`.
 pub struct LayerDef {
     pub self_id: String,
     pub name: String,
 }
 
 /// W4.8 — a document-level `<Bookmark>` (a named anchor pointing at a
-/// hyperlink destination). Mirrors `paged_parse::designmap::Bookmark`.
+/// hyperlink destination). Mirrors `idml_import::designmap::Bookmark`.
 pub struct BookmarkDef {
     pub self_id: String,
     pub name: String,
@@ -77,7 +77,7 @@ pub struct BookmarkDef {
 }
 
 /// W4.8 — a document-level `<Topic>` for the index. Mirrors
-/// `paged_parse::designmap::IndexTopic`.
+/// `idml_import::designmap::IndexTopic`.
 pub struct IndexTopicDef {
     pub self_id: String,
     pub name: String,

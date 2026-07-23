@@ -127,7 +127,7 @@ fn build_idml(spread_xform: &str, master_xform: &str) -> Vec<u8> {
 /// All `FillPath` transforms in document order, paired with their solid
 /// paint colour (so we can pick the body/black vs master/grey rect).
 fn fill_transforms(bytes: &[u8]) -> Vec<(Color, [f32; 6])> {
-    let document = paged_parse::import_idml_doc(bytes).unwrap();
+    let document = idml_import::import_idml_doc(bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     page.list

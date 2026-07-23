@@ -74,7 +74,7 @@ fn count_fills_at(
 fn build_masters() -> paged_renderer::pipeline::BuiltDocument {
     let sample = paged_gen::samples::masters::build();
     let bytes = paged_gen::write_idml(&sample).expect("write masters idml");
-    let doc = paged_parse::import_idml_doc(&bytes).expect("open masters idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("open masters idml");
     let options = paged_renderer::pipeline::PipelineOptions::default();
     paged_renderer::pipeline::build_document(&doc, &options).expect("build masters")
 }

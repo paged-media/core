@@ -17,7 +17,7 @@
 //! [`Cmm`] is the ONLY surface panels / the renderer / (later) the
 //! PDF exporter see; the lcms2-vs-qcms split stays inside this
 //! crate. The trait operates on [`WorkingColor`] — a thin adapter
-//! over the resolved channels of `paged_parse::ColorEntry` (the
+//! over the resolved channels of `idml_import::ColorEntry` (the
 //! IDML-faithful model stays canonical; this is NOT a new colour
 //! type system).
 //!
@@ -231,7 +231,7 @@ impl IccCmm {
     }
 
     /// The naive CMYK→linear-RGB fallback — byte-for-byte the math
-    /// `paged_parse::graphic::to_linear_rgb` has always used, so an
+    /// `idml_import::graphic::to_linear_rgb` has always used, so an
     /// unconfigured pipeline stays bit-identical.
     fn naive_cmyk(c: Cmyk) -> LinearRgb {
         let cv = c.c / 100.0;
@@ -338,7 +338,7 @@ impl ExportDestination {
 }
 
 /// sRGB EOTF decode — identical constants to
-/// `paged_parse::graphic::srgb_to_linear` (duplicated by design:
+/// `idml_import::graphic::srgb_to_linear` (duplicated by design:
 /// parse must not depend on this crate, and the renderer needs the
 /// same curve from both).
 pub(crate) fn srgb_to_linear(c: f32) -> f32 {

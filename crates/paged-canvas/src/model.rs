@@ -944,9 +944,9 @@ pub struct CanvasModel {
     /// decompressed entries), or `None` for a natively-created / native-only
     /// document. Held here rather than on the scene `Document` so the model
     /// stays IDML-free (N9); the parts door reads container parts from it.
-    pub(crate) source_archive: Option<paged_parse::SourceArchive>,
+    pub(crate) source_archive: Option<idml_import::SourceArchive>,
     /// W3.B2 — the IDML bytes this model was parsed from, retained so
-    /// `export_idml` can hand them to `paged_write::write_idml` as the
+    /// `export_idml` can hand them to `idml_export::write_idml` as the
     /// carry-through source package (it patches only the model-owned
     /// Spreads/Stories and copies every other entry verbatim, so it
     /// needs the original ZIP container, not just the parsed scene).
@@ -1230,7 +1230,7 @@ impl CanvasModel {
         // The raw source archive rides on the CanvasModel (below), not on the
         // scene `Document` — the model no longer carries the IDML archive (N9).
         let (scene, source_archive) = {
-            let container = paged_parse::open_source_archive(bytes)
+            let container = idml_import::open_source_archive(bytes)
                 .map_err(|e| LoadError::Parse(e.to_string()))?;
             match container
                 .entry(paged_store::DOCUMENT_PGM_PATH)
@@ -1248,13 +1248,13 @@ impl CanvasModel {
                     // still carry through.
                     Some(doc) => (doc, Some(container)),
                     None => (
-                        paged_parse::import_idml_archive(&container)
+                        idml_import::import_idml_archive(&container)
                             .map_err(|e| LoadError::Parse(e.to_string()))?,
                         Some(container),
                     ),
                 },
                 None => (
-                    paged_parse::import_idml_archive(&container)
+                    idml_import::import_idml_archive(&container)
                         .map_err(|e| LoadError::Parse(e.to_string()))?,
                     Some(container),
                 ),
@@ -3329,14 +3329,14 @@ impl CanvasModel {
 
     /// W3.B2 — re-serialize the (possibly-mutated) scene back into an
     /// IDML package for save-back. Hands the retained source bytes to
-    /// the carry-through writer (`paged_write::write_idml`), which
+    /// the carry-through writer (`idml_export::write_idml`), which
     /// patches only the model-owned Spreads/Stories and copies every
     /// other entry verbatim — so an unmutated document round-trips
     /// byte-identically and a mutated one differs only in the entries
     /// the edit touched. The model holds a `paged_scene::Document`,
     /// which is exactly the `&Document` the writer takes.
-    pub fn export_idml(&self) -> Result<Vec<u8>, paged_write::WriteError> {
-        paged_write::write_idml(&self.scene, &self.source_idml)
+    pub fn export_idml(&self) -> Result<Vec<u8>, idml_export::WriteError> {
+        idml_export::write_idml(&self.scene, &self.source_idml)
     }
 
     // ---- `.paged` container parts (the `host.parts` SDK door, engine side) ----
@@ -3350,10 +3350,10 @@ impl CanvasModel {
     /// caller identity is known; this engine method enforces only the
     /// `paged/` boundary.)
     pub fn set_paged_part(&mut self, path: String, bytes: Vec<u8>) -> Result<(), String> {
-        if !path.starts_with(paged_write::PAGED_PREFIX) {
+        if !path.starts_with(idml_export::PAGED_PREFIX) {
             return Err(format!(
                 "paged part path must start with `{}` (got {path:?})",
-                paged_write::PAGED_PREFIX
+                idml_export::PAGED_PREFIX
             ));
         }
         self.paged_parts.insert(path, bytes);
@@ -3364,7 +3364,7 @@ impl CanvasModel {
     /// container. Restricted to the `paged/` namespace (the parts door never
     /// serves IDML parts or `manifest.json`).
     pub fn get_paged_part(&self, path: &str) -> Option<Vec<u8>> {
-        if !path.starts_with(paged_write::PAGED_PREFIX) {
+        if !path.starts_with(idml_export::PAGED_PREFIX) {
             return None;
         }
         if let Some(b) = self.paged_parts.get(path) {
@@ -3382,7 +3382,7 @@ impl CanvasModel {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         if let Some(source) = &self.source_archive {
             for k in source.entries.keys() {
-                if k.starts_with(paged_write::PAGED_PREFIX) && k.starts_with(prefix) {
+                if k.starts_with(idml_export::PAGED_PREFIX) && k.starts_with(prefix) {
                     names.insert(k.clone());
                 }
             }
@@ -3398,7 +3398,7 @@ impl CanvasModel {
     /// Export the document as a `.paged` container (valid IDML + the plugin
     /// `paged/` parts + a refreshed `manifest.json`). `paged_protocol` stamps
     /// the manifest for the data-loss guard / reader-version checks.
-    pub fn export_paged(&self, paged_protocol: u32) -> Result<Vec<u8>, paged_write::WriteError> {
+    pub fn export_paged(&self, paged_protocol: u32) -> Result<Vec<u8>, idml_export::WriteError> {
         // N4 — auto-embed a fresh native model part so every saved `.paged`
         // loads native-first (the load sniff reconstructs from it with no source
         // parse). The IDML parts remain as the derived projection; the model
@@ -3412,7 +3412,7 @@ impl CanvasModel {
         if let Ok(pgm) = paged_store::to_bytes(self.scene()) {
             parts.insert(paged_store::DOCUMENT_PGM_PATH.to_string(), pgm);
         }
-        paged_write::write_paged(&self.scene, &self.source_idml, &parts, paged_protocol)
+        idml_export::write_paged(&self.scene, &self.source_idml, &parts, paged_protocol)
     }
 
     /// S7 — the composition (`document.pgd`) **derived** from the current IDML

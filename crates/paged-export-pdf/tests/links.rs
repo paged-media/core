@@ -32,7 +32,7 @@ fn fallback_font() -> Vec<u8> {
 fn export_markers_pdf() -> Vec<u8> {
     let sample = paged_gen::samples::markers::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let font = fallback_font();
 
     let mut opts = PipelineOptions {

@@ -200,7 +200,7 @@ mod wasm {
         /// the built document and resets the current page to 0. Returns
         /// structured diagnostics; does not throw on recoverable problems.
         pub fn load(&mut self, idml: &[u8], font: Option<Box<[u8]>>) -> Diagnostics {
-            let document = match paged_parse::import_idml_doc(idml) {
+            let document = match idml_import::import_idml_doc(idml) {
                 Ok(d) => d,
                 Err(e) => return Diagnostics::error("open", &format!("open IDML: {e}")),
             };

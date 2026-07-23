@@ -55,7 +55,7 @@ fn glyph_text(page: &paged_renderer::BuiltPage) -> String {
 fn build_with_clock(clock: DocumentClock) -> paged_renderer::BuiltDocument {
     let sample = paged_gen::samples::variables::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let font = read_font("Inter.ttf");
     let opts = PipelineOptions {
         font: Some(&font),
@@ -262,7 +262,7 @@ fn destination_page_index(doc: &paged_renderer::BuiltDocument) -> Option<u32> {
 fn build_moved_with_clock(clock: DocumentClock) -> paged_renderer::BuiltDocument {
     let sample = paged_gen::samples::variables::build_moved();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let font = read_font("Inter.ttf");
     let opts = PipelineOptions {
         font: Some(&font),

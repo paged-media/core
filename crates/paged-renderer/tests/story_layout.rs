@@ -101,7 +101,7 @@ fn build_single_paragraph_idml(text: &str, applied_font: &str, point_size: f32) 
 #[test]
 fn single_line_story_captures_one_line_with_clusters() {
     let bytes = build_single_paragraph_idml("Hello, IDML world.", "Inter", 36.0);
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -170,7 +170,7 @@ fn story_layout_is_empty_when_no_font_loaded() {
     // No font in the resolver → shaping skipped → glyphs vector
     // empty → no per-line capture. story_layout returns nothing.
     let bytes = build_single_paragraph_idml("Hello.", "Inter", 12.0);
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default(); // no assets
     let built = pipeline::build_document(&document, &opts).unwrap();
     assert!(
@@ -182,7 +182,7 @@ fn story_layout_is_empty_when_no_font_loaded() {
 #[test]
 fn story_layout_lookup_unknown_story_returns_empty() {
     let bytes = build_single_paragraph_idml("Hello.", "Inter", 12.0);
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -196,7 +196,7 @@ fn story_layout_lookup_unknown_story_returns_empty() {
 #[test]
 fn story_layout_frame_id_matches_self_attribute() {
     let bytes = build_single_paragraph_idml("Hi.", "Inter", 20.0);
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {

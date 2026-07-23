@@ -32,7 +32,7 @@ use paged_renderer::Document;
 
 fn open() -> Document {
     let bytes = paged_gen::write_idml(&navigation::build()).unwrap();
-    paged_parse::import_idml_doc(&bytes).unwrap()
+    idml_import::import_idml_doc(&bytes).unwrap()
 }
 
 #[test]

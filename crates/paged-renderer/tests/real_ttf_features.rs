@@ -126,7 +126,7 @@ fn build_per_run_idml() -> Vec<u8> {
 
 #[test]
 fn per_run_font_switch_uses_both_fonts() {
-    let document = paged_parse::import_idml_doc(&build_per_run_idml()).unwrap();
+    let document = idml_import::import_idml_doc(&build_per_run_idml()).unwrap();
 
     // Variant A: Inter for run 1, Lora for run 2.
     let mut a = BytesResolver::new();
@@ -229,7 +229,7 @@ fn build_threaded_text_idml() -> Vec<u8> {
 #[test]
 fn threaded_story_inks_both_frames() {
     let bytes = build_threaded_text_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -334,8 +334,8 @@ fn underline_adds_ink_relative_to_plain_run() {
         ..PipelineOptions::default()
     };
 
-    let plain_doc = paged_parse::import_idml_doc(&build_underline_idml(false)).unwrap();
-    let underlined_doc = paged_parse::import_idml_doc(&build_underline_idml(true)).unwrap();
+    let plain_doc = idml_import::import_idml_doc(&build_underline_idml(false)).unwrap();
+    let underlined_doc = idml_import::import_idml_doc(&build_underline_idml(true)).unwrap();
 
     let (_, plain_imgs) =
         pipeline::render_document(&plain_doc, &opts, 144.0, Color::WHITE).unwrap();
@@ -433,7 +433,7 @@ fn vertical_justify_top_center_bottom_lands_in_distinct_bands() {
 
     let render = |vj: &str| -> f32 {
         let bytes = build_vj_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
         ink_centroid_y(&imgs[0], 80).expect("VJ render must produce ink")
     };
@@ -547,7 +547,7 @@ fn vertical_justify_distribute_spans_top_to_bottom() {
 
     let render = |vj: &str| -> (u32, u32) {
         let bytes = build_vj_three_paragraph_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
         ink_extent_y(&imgs[0], 80).expect("VJ render must produce ink")
     };
@@ -590,7 +590,7 @@ fn vertical_justify_distribute_single_paragraph_matches_top() {
 
     let render = |vj: &str| -> f32 {
         let bytes = build_vj_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
         ink_centroid_y(&imgs[0], 80).expect("VJ render must produce ink")
     };
@@ -675,7 +675,7 @@ fn vertical_justify_distribute_overflow_matches_top() {
 
     let render = |vj: &str| -> f32 {
         let bytes = build_vj_overflow_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
         ink_centroid_y(&imgs[0], 80).expect("VJ render must produce ink")
     };
@@ -809,7 +809,7 @@ fn vertical_justify_distribute_threaded_per_frame() {
     // Frame B occupies x = 320..560 pt = 640..1120 px at 144 dpi.
     let render = |vj: &str| -> ((u32, u32), (u32, u32)) {
         let bytes = build_vj_threaded_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let (_, imgs) = pipeline::render_document(&doc, &opts, 144.0, Color::WHITE).unwrap();
         let a = ink_extent_y_in_band_x(&imgs[0], 80, 560, 80).expect("frame A must carry ink");
         let b = ink_extent_y_in_band_x(&imgs[0], 640, 1120, 80)
@@ -981,8 +981,8 @@ fn bulleted_paragraph_emits_extra_glyphs_and_ink() {
     });
     let bullet_bytes = build_bullet_idml();
 
-    let plain_doc = paged_parse::import_idml_doc(&plain_bytes).unwrap();
-    let bullet_doc = paged_parse::import_idml_doc(&bullet_bytes).unwrap();
+    let plain_doc = idml_import::import_idml_doc(&plain_bytes).unwrap();
+    let bullet_doc = idml_import::import_idml_doc(&bullet_bytes).unwrap();
 
     let (plain_built, plain_imgs) =
         pipeline::render_document(&plain_doc, &opts, 144.0, Color::WHITE).unwrap();

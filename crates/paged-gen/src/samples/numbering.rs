@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn numbering_sample_emits_shared_list_and_builds() {
         let bytes = crate::package::write_idml(&build()).unwrap();
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let list = doc
             .styles
             .numbering_lists

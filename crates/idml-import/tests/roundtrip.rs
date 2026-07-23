@@ -21,7 +21,7 @@
 
 use std::io::Write;
 
-use paged_parse::open_source_archive;
+use idml_import::open_source_archive;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn build_idml() -> Vec<u8> {
@@ -72,7 +72,7 @@ fn opens_synthetic_idml_and_extracts_manifest() {
     );
     // The structured manifest is parsed from the source archive's raw bytes
     // (it no longer lives on SourceArchive — N7).
-    let designmap = paged_parse::parse_designmap(&container.designmap_raw).expect("designmap");
+    let designmap = idml_import::parse_designmap(&container.designmap_raw).expect("designmap");
     assert_eq!(designmap.spreads.len(), 1);
     assert_eq!(designmap.stories.len(), 1);
     assert_eq!(designmap.master_spreads.len(), 1);

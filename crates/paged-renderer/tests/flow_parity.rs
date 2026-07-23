@@ -118,7 +118,7 @@ How vexingly quick daft zebras jump.";
 #[test]
 fn protocol_reproduces_emitter_frame_assignment() {
     let bytes = build_threaded_idml(TEXT);
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
