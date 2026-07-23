@@ -34,7 +34,7 @@ required-features = ["mutate-roundtrip"]
 
 [dependencies]
 paged-model = { path = "../paged-model" }
-idml-import = { path = "../idml-import" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "d3b84e84327ac626717c079f69ed36a65f2c27bf" }
 paged-scene = { path = "../paged-scene" }
 paged-flow = { path = "../paged-flow" }
 paged-text = { path = "../paged-text" }
@@ -44,7 +44,7 @@ paged-gpu = { path = "../paged-gpu", default-features = false }
 # W3.B2 — IDML save-back, used by the `paged-inspect --roundtrip`
 # conformance hook. Lightweight (idml-import + paged-scene + zip +
 # quick-xml, all already in the dep graph), no native-only deps.
-idml-export = { path = "../idml-export" }
+idml-export = { git = "https://github.com/paged-media/plugin-publish", rev = "d3b84e84327ac626717c079f69ed36a65f2c27bf" }
 # W4.14 — the operation surface, used by the `paged-inspect
 # --mutate-roundtrip` conformance hook (the bin applies one typed
 # Operation, saves, and re-verifies it survived). paged-mutate carries
