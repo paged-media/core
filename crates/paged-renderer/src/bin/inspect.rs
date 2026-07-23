@@ -77,7 +77,7 @@ struct Args {
     #[arg(long)]
     column_width_pt: Option<f32>,
     /// W3.B2 — IDML save-back round-trip check. Parse the input,
-    /// re-serialise it through `paged_write::write_idml`, re-parse the
+    /// re-serialise it through `idml_export::write_idml`, re-parse the
     /// result, and compare: (a) per-entry byte-identity, (b) parsed
     /// model stats (spreads / stories / frames / run text), (c) the
     /// rendered page hashes (CPU backend). Prints a compact JSON report
@@ -91,7 +91,7 @@ struct Args {
     /// ONE typed `paged_mutate` Operation against a target picked from the
     /// document (first TextFrame else first Rectangle / first non-empty
     /// story / a non-`[None]` palette swatch), re-serialise through
-    /// `paged_write::write_idml`, re-open, and verify (a) the mutated
+    /// `idml_export::write_idml`, re-open, and verify (a) the mutated
     /// value SURVIVED the round-trip and (b) the rest of the structure
     /// (spread / story / frame counts, run text) matches the mutated
     /// model. Prints a single JSON line `{"applied","survived",
@@ -209,7 +209,7 @@ fn main() -> Result<()> {
 
     // The importer now lives in `paged-parse` (the IDML adapter) and returns the
     // raw source archive alongside the model — the model no longer carries it (N9).
-    let (document, source_archive) = paged_parse::import_idml(&bytes).context("open IDML")?;
+    let (document, source_archive) = idml_import::import_idml(&bytes).context("open IDML")?;
     let palette = &document.palette;
 
     if !args.json {
@@ -624,7 +624,7 @@ fn package_entries(idml: &[u8]) -> Result<std::collections::BTreeMap<String, Vec
 /// document's own embedded images, so the comparison is apples-to-apples.
 fn render_page_hashes(
     doc: &Document,
-    source: &paged_parse::SourceArchive,
+    source: &idml_import::SourceArchive,
     dpi: f32,
 ) -> Result<Vec<[u8; 32]>> {
     // Harvest the document's own embedded images so placed-content URIs
@@ -710,8 +710,8 @@ fn hash_rgba(raw: &[u8]) -> [u8; 32] {
 fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     use serde_json::json;
 
-    let (doc, doc_source) = paged_parse::import_idml(original).context("open input IDML")?;
-    let written = paged_write::write_idml(&doc, original).context("write_idml")?;
+    let (doc, doc_source) = idml_import::import_idml(original).context("open input IDML")?;
+    let written = idml_export::write_idml(&doc, original).context("write_idml")?;
 
     // (a) Per-entry byte-identity tally.
     let src = package_entries(original)?;
@@ -726,7 +726,7 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     }
 
     // (b) Re-parse + parsed-model stats equality.
-    let reparse = paged_parse::import_idml(&written);
+    let reparse = idml_import::import_idml(&written);
     let (reparsed_ok, stats_match) = match &reparse {
         Ok((re, _)) => (true, ModelStats::of(&doc) == ModelStats::of(re)),
         Err(_) => (false, false),
@@ -870,7 +870,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
     use paged_mutate::{NodeId, Operation, Project, PropertyPath, Value};
     use serde_json::json;
 
-    let (doc, _source) = paged_parse::import_idml(original).context("open input IDML")?;
+    let (doc, _source) = idml_import::import_idml(original).context("open input IDML")?;
 
     // Each arm yields (op, target_self_id, verify-closure, note). `target`
     // being `None` is the n/a path: no target for this mutation → exit 0
@@ -1063,7 +1063,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
 
     // Save the mutated model back through the writer. A write failure is
     // also a genuine bug → exit 1.
-    let written = match paged_write::write_idml(project.document(), original) {
+    let written = match idml_export::write_idml(project.document(), original) {
         Ok(w) => w,
         Err(e) => {
             let report = json!({
@@ -1082,7 +1082,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
     };
 
     // Re-open the written package. A reparse failure is a genuine bug.
-    let reparsed = match paged_parse::import_idml(&written) {
+    let reparsed = match idml_import::import_idml(&written) {
         Ok((re, _)) => re,
         Err(e) => {
             let report = json!({

@@ -75,7 +75,7 @@ mod wasm {
         /// Open an IDML by bytes.
         #[wasm_bindgen(constructor)]
         pub fn new(idml: &[u8]) -> Result<Inspector, JsError> {
-            let document = paged_parse::import_idml_doc(idml)
+            let document = idml_import::import_idml_doc(idml)
                 .map_err(|e| JsError::new(&format!("open IDML: {e}")))?;
             Ok(Inspector {
                 project: Rc::new(RefCell::new(Project::new(document))),

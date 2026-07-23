@@ -20,6 +20,6 @@ serde = { workspace = true }
 blake3 = "1"
 
 [dev-dependencies]
-paged-parse = { path = "../paged-parse" }
+idml-import = { path = "../idml-import" }
 serde_json = "1"
 zip = { workspace = true }

@@ -96,7 +96,7 @@ fn axis_aligned_fills(cmds: &[DisplayCommand]) -> Vec<(f32, f32, f32, f32)> {
 fn custom_anchored_frame_snaps_to_textframe_top_right() {
     let sample = paged_gen::samples::anchored::build();
     let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let document = idml_import::import_idml_doc(&bytes).expect("Document::open");
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));
@@ -193,7 +193,7 @@ fn open_sans_metrics() -> (f32, f32, f32, f32) {
 fn build_anchored() -> paged_renderer::pipeline::BuiltDocument {
     let sample = paged_gen::samples::anchored::build();
     let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let document = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let mut resolver = BytesResolver::new();
     resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));
     let opts = PipelineOptions {

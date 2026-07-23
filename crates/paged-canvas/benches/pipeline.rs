@@ -98,7 +98,7 @@ fn bench_build_document(c: &mut Criterion) {
     let mut group = c.benchmark_group("build_document");
     for name in ["text", "tables"] {
         let idml = fixture(name);
-        let scene = paged_parse::import_idml(&idml)
+        let scene = idml_import::import_idml(&idml)
             .expect("parse bench fixture")
             .0;
         group.bench_function(name, |b| {

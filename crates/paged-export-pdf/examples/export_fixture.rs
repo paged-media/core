@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     let profile = args.next().map(std::fs::read).transpose()?;
 
     let bytes = std::fs::read(&idml)?;
-    let document = paged_parse::import_idml_doc(&bytes)?;
+    let document = idml_import::import_idml_doc(&bytes)?;
     let font = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
     )

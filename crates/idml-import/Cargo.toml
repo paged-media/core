@@ -1,5 +1,5 @@
 [package]
-name = "paged-parse"
+name = "idml-import"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 paged-scene = { path = "../paged-scene" }
 # N5 — the Paged model types live here (parser depends on the model, imports
-# into it). paged-parse re-exports them so its dependents are untouched.
+# into it). idml-import re-exports them so its dependents are untouched.
 paged-model = { path = "../paged-model" }
 thiserror = { workspace = true }
 bytes = { workspace = true }

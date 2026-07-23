@@ -86,7 +86,7 @@ fn build_minimal_idml() -> Vec<u8> {
 #[test]
 fn build_produces_display_list_and_page_dimensions() {
     let bytes = build_minimal_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
     let built = pipeline::build(&document, &opts).unwrap();
@@ -105,7 +105,7 @@ fn build_produces_display_list_and_page_dimensions() {
 #[test]
 fn build_document_emits_one_page_with_correct_geometry() {
     let bytes = build_minimal_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&document, &opts).unwrap();
@@ -121,7 +121,7 @@ fn build_document_emits_one_page_with_correct_geometry() {
 #[test]
 fn render_fills_frame_with_resolved_paint() {
     let bytes = build_minimal_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let opts = PipelineOptions::default();
     let (built, img) = pipeline::render(&document, &opts, 72.0, Color::WHITE).unwrap();
@@ -220,7 +220,7 @@ fn linear_gradient_fills_left_to_right_by_default() {
     // direction; gradient_fill_angle != 0 rotates the line through
     // the rect centre per `color_id_to_paint_with_list_dir`.
     let bytes = build_gradient_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
 
@@ -261,7 +261,7 @@ fn linear_gradient_rotated_90_degrees_runs_vertically() {
     // so the two together reject a hardcoded direction in either
     // orientation.
     let bytes = build_gradient_idml_with_angle(Some(90.0));
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
     let img = &images[0];
@@ -295,7 +295,7 @@ fn linear_gradient_rotated_90_degrees_runs_vertically() {
 #[test]
 fn frame_drop_shadow_paints_offset_pixels() {
     let bytes = build_minimal_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions {
         frame_drop_shadow: Some(paged_compose::DropShadow {
             offset_x: 6.0,
@@ -449,7 +449,7 @@ impl paged_renderer::AssetResolver for CountingResolver {
 #[test]
 fn asset_resolver_is_consulted_for_every_distinct_font() {
     let bytes = build_multi_font_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut br = paged_renderer::BytesResolver::new();
     // Register fake bytes — the test only checks that the resolver
@@ -533,7 +533,7 @@ fn build_translated_idml() -> Vec<u8> {
 #[test]
 fn item_transform_translation_moves_rendered_frame() {
     let bytes = build_translated_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
     let img = &images[0];
@@ -615,7 +615,7 @@ fn green_pixel_png() -> Vec<u8> {
 #[test]
 fn rectangle_image_link_decodes_and_blits() {
     let bytes = build_image_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut br = paged_renderer::BytesResolver::new();
     br.add_image("logo.png", green_pixel_png());
@@ -703,7 +703,7 @@ fn image_content_transform_changes_emitted_image_command_with_real_image() {
     };
 
     let image_transform = |bytes: &[u8]| -> Transform {
-        let document = paged_parse::import_idml_doc(bytes).unwrap();
+        let document = idml_import::import_idml_doc(bytes).unwrap();
         let built = pipeline::build_document(&document, &opts).unwrap();
         built.pages[0]
             .list
@@ -789,7 +789,7 @@ fn build_threaded_idml() -> Vec<u8> {
 #[test]
 fn frame_chain_walks_next_text_frame_links() {
     let bytes = build_threaded_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let chain = document.frame_chain("u10");
     assert_eq!(chain.len(), 3, "frameA → frameB → frameC");
     assert_eq!(chain[0].self_id.as_deref(), Some("frameA"));
@@ -800,7 +800,7 @@ fn frame_chain_walks_next_text_frame_links() {
 #[test]
 fn threaded_story_renders_without_panic() {
     let bytes = build_threaded_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     // No font registered → text is skipped per the resolver fallback,
     // but the chain construction + per-frame emission plumbing must
     // still run cleanly. Smoke test for the threading refactor.
@@ -936,7 +936,7 @@ fn cross_shape_same_layer_preserves_xml_order() {
     // Q-10 safeguard: with both rects on the same layer the sort
     // must be a no-op. XML order (Blue first, Red second) wins.
     let bytes = build_same_layer_rects_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&document, &opts).unwrap();
     let fills: Vec<&Paint> = built.pages[0]
@@ -966,7 +966,7 @@ fn cross_shape_item_layer_z_order_back_emits_before_front() {
     // layer) — the renderer must invert that so Red's FillPath comes
     // first in the page command list and Blue's comes second.
     let bytes = build_layered_rects_idml();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&document, &opts).unwrap();
     assert_eq!(built.pages.len(), 1);
@@ -1146,7 +1146,7 @@ fn text_frame_triangle_path_fills_real_outline_not_aabb() {
     // pipeline (the legacy `build` short-circuits every frame to its
     // AABB rect and never reaches `emit_text_frame_into`).
     let tri_bytes = idml_with_text_frame_path(&[(20.0, 20.0), (180.0, 20.0), (100.0, 120.0)]);
-    let tri_doc = paged_parse::import_idml_doc(&tri_bytes).unwrap();
+    let tri_doc = idml_import::import_idml_doc(&tri_bytes).unwrap();
     let tri_built = pipeline::build_document(&tri_doc, &PipelineOptions::default()).unwrap();
     let tri_page = &tri_built.pages[0];
     assert!(
@@ -1158,7 +1158,7 @@ fn text_frame_triangle_path_fills_real_outline_not_aabb() {
     // curved polygon path. No triangle-shaped outline appears.
     let rect_bytes =
         idml_with_text_frame_path(&[(20.0, 20.0), (180.0, 20.0), (180.0, 120.0), (20.0, 120.0)]);
-    let rect_doc = paged_parse::import_idml_doc(&rect_bytes).unwrap();
+    let rect_doc = idml_import::import_idml_doc(&rect_bytes).unwrap();
     let rect_built = pipeline::build_document(&rect_doc, &PipelineOptions::default()).unwrap();
     let rect_page = &rect_built.pages[0];
     assert!(

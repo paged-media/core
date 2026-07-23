@@ -34,8 +34,8 @@ fn sha256(bytes: &[u8]) -> String {
 
 /// Parse the structured manifest from a source archive (it no longer lives
 /// on `SourceArchive` — N7).
-fn dm(c: &paged_parse::SourceArchive) -> paged_parse::DesignMap {
-    paged_parse::parse_designmap(&c.designmap_raw).expect("designmap")
+fn dm(c: &idml_import::SourceArchive) -> idml_import::DesignMap {
+    idml_import::parse_designmap(&c.designmap_raw).expect("designmap")
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn geometry_zip_shape_mimetype_first() {
 fn strokes_fills_round_trips_through_parser() {
     let sample = paged_gen::samples::strokes_fills::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(
         dm(&container).spreads.len(),
         sample.spreads.len(),
@@ -90,7 +90,7 @@ fn text_emit_is_byte_deterministic() {
 fn text_round_trips_through_parser() {
     let sample = paged_gen::samples::text::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
@@ -106,7 +106,7 @@ fn text_advanced_emit_is_byte_deterministic() {
 fn text_advanced_round_trips_through_parser() {
     let sample = paged_gen::samples::text_advanced::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
@@ -122,7 +122,7 @@ fn layers_z_emit_is_byte_deterministic() {
 fn layers_z_round_trips_through_parser() {
     let sample = paged_gen::samples::layers_z::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // The two <Layer> definitions parse onto the document.
     assert_eq!(dm(&container).layers.len(), 2);
@@ -139,7 +139,7 @@ fn effects_emit_is_byte_deterministic() {
 fn effects_round_trips_through_parser() {
     let sample = paged_gen::samples::effects::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     assert_eq!(dm(&container).stories.len(), sample.stories.len());
 }
@@ -162,7 +162,7 @@ fn tables_emit_is_byte_deterministic() {
 fn tables_round_trips_through_parser() {
     let sample = paged_gen::samples::tables::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every body story must parse a Table out of its host paragraph.
     let mut tables_found = 0;
@@ -176,7 +176,7 @@ fn tables_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let story = paged_parse::parse_story(xml).expect("Story::parse");
+        let story = idml_import::parse_story(xml).expect("Story::parse");
         for p in &story.paragraphs {
             if let Some(table) = &p.table {
                 tables_found += 1;
@@ -202,14 +202,14 @@ fn tables_round_trips_through_parser() {
 fn gradients_round_trips_through_parser() {
     let sample = paged_gen::samples::gradients::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // The Graphic.xml must register all five gradient swatches.
     let graphic_xml = container
         .entries
         .get("Resources/Graphic.xml")
         .expect("Resources/Graphic.xml must be present");
-    let graphic = paged_parse::parse_graphic(graphic_xml).expect("parse_graphic");
+    let graphic = idml_import::parse_graphic(graphic_xml).expect("parse_graphic");
     assert_eq!(graphic.gradients.len(), 5);
 }
 
@@ -218,7 +218,7 @@ fn geometry_round_trips_through_parser() {
     let sample = paged_gen::samples::geometry::build();
     let expected = sample.spreads.len();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), expected);
     assert_eq!(dm(&container).stories.len(), expected);
     assert_eq!(dm(&container).master_spreads.len(), expected);
@@ -251,7 +251,7 @@ fn geometry_groups_emit_is_byte_deterministic() {
 fn geometry_groups_round_trips_through_parser() {
     let sample = paged_gen::samples::geometry_groups::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
 }
 
@@ -266,7 +266,7 @@ fn transparency_emit_is_byte_deterministic() {
 fn transparency_round_trips_through_parser() {
     let sample = paged_gen::samples::transparency::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     assert_eq!(dm(&container).stories.len(), sample.stories.len());
     // Every page must round-trip its TransparencySetting payload —
@@ -280,7 +280,7 @@ fn transparency_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
+        let spread = idml_import::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.drop_shadow.is_some() {
                 shadows += 1;
@@ -320,7 +320,7 @@ fn text_wrap_emit_is_byte_deterministic() {
 fn text_wrap_round_trips_through_parser() {
     let sample = paged_gen::samples::text_wrap::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread must surface a `<TextWrapPreference>` on at least
     // one rectangle — the obstacle. Stays decoupled from the wrap
@@ -331,7 +331,7 @@ fn text_wrap_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
+        let spread = idml_import::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.text_wrap.is_some() {
                 wraps_found += 1;
@@ -356,7 +356,7 @@ fn text_in_shape_emit_is_byte_deterministic() {
 fn text_in_shape_text_frames_carry_non_rectangular_path_geometry() {
     let sample = paged_gen::samples::text_in_shape::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     let mut shaped_frames = 0;
     let mut compound_frames = 0;
     for entry_path in container.entries.keys() {
@@ -364,7 +364,7 @@ fn text_in_shape_text_frames_carry_non_rectangular_path_geometry() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
+        let spread = idml_import::parse_spread(xml).expect("Spread::parse");
         for tf in &spread.text_frames {
             // A non-rectangular outline has more than the 4 plain-rect
             // corner anchors OR carries explicit Bezier handles.
@@ -404,7 +404,7 @@ fn anchored_emit_is_byte_deterministic() {
 fn anchored_round_trips_through_parser() {
     let sample = paged_gen::samples::anchored::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread's host body story must contain at least one
     // `<AnchoredObjectSetting>` element nested inside a
@@ -419,7 +419,7 @@ fn anchored_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
+        let spread = idml_import::parse_spread(xml).expect("Spread::parse");
         for f in &spread.text_frames {
             if f.is_anchored {
                 anchored_found += 1;
@@ -450,7 +450,7 @@ fn markers_emit_is_byte_deterministic() {
 fn markers_round_trips_through_parser() {
     let sample = paged_gen::samples::markers::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     // 2 spreads (body page + link-target page), 1 story.
     assert_eq!(dm(&container).spreads.len(), 2);
     assert_eq!(dm(&container).stories.len(), 1);
@@ -473,8 +473,8 @@ fn markers_round_trips_through_parser() {
         .find(|(k, _)| k.starts_with("Stories/"))
         .map(|(_, v)| v)
         .expect("a story entry");
-    let story = paged_parse::parse_story(story_xml).expect("Story::parse");
-    let runs: Vec<&paged_parse::CharacterRun> = story
+    let story = idml_import::parse_story(story_xml).expect("Story::parse");
+    let runs: Vec<&idml_import::CharacterRun> = story
         .paragraphs
         .iter()
         .flat_map(|p| p.runs.iter())
@@ -502,7 +502,7 @@ fn variables_emit_is_byte_deterministic() {
 fn variables_round_trips_through_parser() {
     let sample = paged_gen::samples::variables::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     let dm = &dm(&container);
     // Four variables (creation date / chapter / running-header / output
     // date), one section, one xref hyperlink + its text-anchor
@@ -527,13 +527,13 @@ fn variables_round_trips_through_parser() {
     // The section carries the UpperRoman numbering + start 2.
     assert_eq!(
         dm.sections[0].numbering_style,
-        paged_parse::NumberingStyle::UpperRoman
+        idml_import::NumberingStyle::UpperRoman
     );
     assert_eq!(dm.sections[0].start_at, Some(2));
     // The xref destination is a text anchor (story-targeting).
     assert!(matches!(
         &dm.hyperlink_destinations[0].kind,
-        paged_parse::HyperlinkDestinationKind::TextAnchor(_)
+        idml_import::HyperlinkDestinationKind::TextAnchor(_)
     ));
 }
 
@@ -548,7 +548,7 @@ fn images_emit_is_byte_deterministic() {
 fn images_round_trips_through_parser() {
     let sample = paged_gen::samples::images::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), sample.spreads.len());
     // Every spread's Rectangle must surface a placed-image link via
     // the parser, and every spread's FrameFittingOption must round-
@@ -562,7 +562,7 @@ fn images_round_trips_through_parser() {
             continue;
         }
         let xml = &container.entries[entry_path];
-        let spread = paged_parse::parse_spread(xml).expect("Spread::parse");
+        let spread = idml_import::parse_spread(xml).expect("Spread::parse");
         for r in &spread.rectangles {
             if r.image_link.is_some() {
                 images_found += 1;
@@ -595,10 +595,10 @@ fn image_clipping_emit_is_byte_deterministic() {
 
 #[test]
 fn image_clipping_round_trips_clipping_path_settings() {
-    use paged_parse::ClippingType;
+    use idml_import::ClippingType;
     let sample = paged_gen::samples::image_clipping::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
 
     let mut user_paths_with_geometry = 0;
     let mut deferred = 0;
@@ -608,7 +608,7 @@ fn image_clipping_round_trips_clipping_path_settings() {
             continue;
         }
         let spread =
-            paged_parse::parse_spread(&container.entries[entry_path]).expect("Spread::parse");
+            idml_import::parse_spread(&container.entries[entry_path]).expect("Spread::parse");
         for r in &spread.rectangles {
             if let Some(clip) = &r.image_clip {
                 if clip.has_renderable_geometry() {
@@ -656,7 +656,7 @@ fn text_overset_emit_is_byte_deterministic() {
 fn text_overset_round_trips_through_parser() {
     let sample = paged_gen::samples::text_overset::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), 2, "two pages");
     // The threaded chain on page 2 must surface a `NextTextFrame` link
     // on its head frame (parse-level proof the threading round-trips).
@@ -665,7 +665,7 @@ fn text_overset_round_trips_through_parser() {
         if !entry_path.starts_with("Spreads/") {
             continue;
         }
-        let spread = paged_parse::parse_spread(&container.entries[entry_path]).expect("Spread");
+        let spread = idml_import::parse_spread(&container.entries[entry_path]).expect("Spread");
         for f in &spread.text_frames {
             if let Some(next) = f.next_text_frame.as_deref() {
                 if next != "n" {
@@ -694,7 +694,7 @@ fn text_overset_fires_overset_diagnostic() {
         return;
     };
     let bytes = paged_gen::write_idml(&paged_gen::samples::text_overset::build()).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let opts = paged_renderer::pipeline::PipelineOptions {
         font: Some(&font),
         ..Default::default()
@@ -726,14 +726,14 @@ fn text_autosize_emit_is_byte_deterministic() {
 fn text_autosize_round_trips_through_parser() {
     let sample = paged_gen::samples::text_autosize::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), 1, "one page");
     let spread_path = container
         .entries
         .keys()
         .find(|p| p.starts_with("Spreads/"))
         .expect("a spread entry");
-    let spread = paged_parse::parse_spread(&container.entries[spread_path]).expect("Spread");
+    let spread = idml_import::parse_spread(&container.entries[spread_path]).expect("Spread");
     let autosizing: Vec<_> = spread
         .text_frames
         .iter()
@@ -743,12 +743,12 @@ fn text_autosize_round_trips_through_parser() {
     let head = autosizing[0];
     assert_eq!(
         head.auto_sizing,
-        Some(paged_parse::AutoSizingType::HeightOnly),
+        Some(idml_import::AutoSizingType::HeightOnly),
         "headline frame must round-trip HeightOnly"
     );
     assert_eq!(
         head.auto_sizing_reference_point,
-        Some(paged_parse::AutoSizingReferencePoint::TopLeftPoint),
+        Some(idml_import::AutoSizingReferencePoint::TopLeftPoint),
     );
     // The frame also carries a text wrap (so the grown box excludes the
     // neighbour).
@@ -771,7 +771,7 @@ fn text_autosize_grows_box_and_excludes_neighbour() {
         return;
     };
     let bytes = paged_gen::write_idml(&paged_gen::samples::text_autosize::build()).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let opts = paged_renderer::pipeline::PipelineOptions {
         font: Some(&font),
         ..Default::default()
@@ -811,7 +811,7 @@ fn text_autosize_grows_box_and_excludes_neighbour() {
     let mut control_sample = paged_gen::samples::text_autosize::build();
     patch_clear_autosizing(&mut control_sample);
     let control = paged_renderer::pipeline::build_document(
-        &paged_parse::import_idml_doc(&paged_gen::write_idml(&control_sample).unwrap()).unwrap(),
+        &idml_import::import_idml_doc(&paged_gen::write_idml(&control_sample).unwrap()).unwrap(),
         &opts,
     )
     .expect("build control");
@@ -861,7 +861,7 @@ fn links_broken_emit_is_byte_deterministic() {
 fn links_broken_round_trips_through_parser() {
     let sample = paged_gen::samples::links_broken::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     assert_eq!(dm(&container).spreads.len(), 1, "single page");
 
     let spread_path = container
@@ -870,7 +870,7 @@ fn links_broken_round_trips_through_parser() {
         .find(|k| k.starts_with("Spreads/"))
         .expect("a spread entry")
         .clone();
-    let spread = paged_parse::parse_spread(&container.entries[&spread_path]).expect("Spread");
+    let spread = idml_import::parse_spread(&container.entries[&spread_path]).expect("Spread");
 
     // Four image-bearing rectangles, all with a link URI.
     let with_link = spread
@@ -914,7 +914,7 @@ fn links_broken_round_trips_through_parser() {
 #[test]
 fn links_broken_missing_and_ok_classification() {
     let bytes = paged_gen::write_idml(&paged_gen::samples::links_broken::build()).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     // No `assets` resolver and no `font`: the inline images still
     // resolve from their embedded bytes; the link-only frames cannot.
     let opts = paged_renderer::pipeline::PipelineOptions::default();
@@ -943,14 +943,14 @@ fn footnotes_round_trips_through_parser() {
     // bodies on the host paragraph.
     let sample = paged_gen::samples::footnotes::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = paged_parse::open_source_archive(&bytes).expect("open_source_archive");
+    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     let fo = &dm(&container).footnote_options;
     assert!(fo.present, "FootnoteOption must round-trip");
     assert_eq!(fo.rule_on, Some(true));
     assert_eq!(fo.rule_width, Some(140.0));
     assert_eq!(fo.rule_color.as_deref(), Some("Color/Black"));
 
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let footnote_count: usize = doc
         .stories
         .iter()
@@ -977,7 +977,7 @@ fn conditions_round_trips_through_parser() {
     use paged_gen::samples::conditions;
     let sample = conditions::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
 
     let cond = &doc.styles.conditions;
     assert_eq!(
@@ -1061,12 +1061,12 @@ fn swatches_round_trips_colors_groups_tint_and_swatch() {
     // CMYK alternates), the standalone `TintValue="50"` on the half
     // swatch, the mixed-ink swatch's fallback alternate, the colour
     // group membership, and the swatch alias's wrapped colour.
+    use idml_import::graphic::ColorModel;
     use paged_gen::samples::swatches;
-    use paged_parse::graphic::ColorModel;
 
     let sample = swatches::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let g = &doc.palette;
 
     // Both spot inks resolve to a CMYK alternate (the renderer previews
@@ -1144,7 +1144,7 @@ fn navigation_round_trips_toc_index_bookmarks_and_xref() {
     use paged_gen::samples::navigation;
     let sample = navigation::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
 
     // TOC style + its single heading-pickup entry.
     let toc = doc
@@ -1159,7 +1159,7 @@ fn navigation_round_trips_toc_index_bookmarks_and_xref() {
     );
 
     // Two `<PageReference>` index markers on the body paragraph.
-    let markers: Vec<&paged_parse::story::IndexMarker> = doc
+    let markers: Vec<&idml_import::story::IndexMarker> = doc
         .stories
         .iter()
         .flat_map(|s| s.story.paragraphs.iter())
@@ -1235,7 +1235,7 @@ fn styles_cascade_round_trips_next_style_list_cells_tables_otf_hyphenation() {
     use paged_gen::samples::styles_cascade as sc;
     let sample = sc::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let styles = &doc.styles;
 
     // (1) next-style chain: Title → Subtitle → Body.
@@ -1280,7 +1280,7 @@ fn styles_cascade_round_trips_next_style_list_cells_tables_otf_hyphenation() {
     );
 
     // (4) OTF features: the three runs carry the discrete feature flags.
-    let otf: Vec<&paged_parse::story::OtfFeatures> = doc
+    let otf: Vec<&idml_import::story::OtfFeatures> = doc
         .stories
         .iter()
         .flat_map(|s| s.story.paragraphs.iter())
@@ -1326,7 +1326,7 @@ fn layout_round_trips_margins_columns_guides_and_spread_xform() {
     // it back and assert each layout knob survives.
     let sample = paged_gen::samples::layout::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.spreads.len(), 6, "six layout pages");
 
     // Page 0 — asymmetric 3-column margin grid + two boundary guides.
@@ -1397,10 +1397,10 @@ fn nested_groups_round_trips_group_of_groups() {
     // GROUPS (not leaf shapes). Parse it back and assert the outer group
     // holds sub-groups, and the sub-groups hold the leaf rects — the
     // group-of-groups shape geometry-groups' single-rect nesting lacks.
-    use paged_parse::FrameRef;
+    use idml_import::FrameRef;
     let sample = paged_gen::samples::nested_groups::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.spreads.len(), 2, "two nested-group pages");
 
     for (i, ps) in doc.spreads.iter().enumerate() {
@@ -1447,7 +1447,7 @@ fn text_carries_emphasis_style_and_typography_pages() {
     use paged_gen::samples::text::EMPHASIS_STYLE_ID;
     let sample = paged_gen::samples::text::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     // 13 original + 6 W2.1 pages.
     assert_eq!(doc.spreads.len(), 19, "13 original + 6 typography pages");
 
@@ -1503,7 +1503,7 @@ fn preflight_round_trips_overset_and_missing_font() {
     // run's AppliedFont so the Fonts panel can flag it.
     use paged_gen::samples::preflight::MISSING_FAMILY;
     let bytes = paged_gen::write_idml(&paged_gen::samples::preflight::build()).unwrap();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
     // The missing family is referenced by a run's AppliedFont.
@@ -1549,7 +1549,7 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
     // effective PPI at/above the 150-ppi preflight floor (no lo-res
     // badge). Parse + build to assert both.
     let bytes = paged_gen::write_idml(&paged_gen::samples::links_ok::build()).unwrap();
-    let (doc, source) = paged_parse::import_idml(&bytes).expect("import_idml");
+    let (doc, source) = idml_import::import_idml(&bytes).expect("import_idml");
     assert_eq!(doc.designmap.spreads.len(), 1, "single page");
 
     let spread_path = source
@@ -1558,7 +1558,7 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
         .find(|k| k.starts_with("Spreads/"))
         .expect("a spread entry")
         .clone();
-    let spread = paged_parse::parse_spread(&source.entries[&spread_path]).expect("Spread::parse");
+    let spread = idml_import::parse_spread(&source.entries[&spread_path]).expect("Spread::parse");
 
     // Two image rectangles, both inline-embedded (resolve "ok").
     let with_inline = spread

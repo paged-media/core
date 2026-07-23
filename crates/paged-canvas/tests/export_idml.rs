@@ -14,7 +14,7 @@
 
 //! W3.B2 — the worker-side IDML save-back, exercised headlessly (no
 //! wasm). `CanvasModel::export_idml` hands the retained source bytes to
-//! `paged_write::write_idml`; the wasm dispatch is a thin map around
+//! `idml_export::write_idml`; the wasm dispatch is a thin map around
 //! exactly this call. Two guarantees:
 //!
 //! 1. An **unmutated** load → export round-trips byte-identically to the
@@ -123,7 +123,7 @@ fn unmutated_export_is_byte_identical_to_source() {
     );
 
     // And it is, of course, still a parseable IDML.
-    paged_parse::import_idml(&exported)
+    idml_import::import_idml(&exported)
         .expect("exported package re-parses")
         .0;
 }
@@ -155,7 +155,7 @@ fn mutated_export_reparses_with_the_mutation_present() {
     );
 
     // Re-parse: the new bounds are present, story text untouched.
-    let re = paged_parse::import_idml(&exported)
+    let re = idml_import::import_idml(&exported)
         .expect("mutated export re-parses")
         .0;
     let (top, left, bottom, right) = frame_bounds(&re);

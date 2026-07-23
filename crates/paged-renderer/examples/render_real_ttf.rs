@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, font);
 
-    let document = paged_parse::import_idml_doc(&build_idml())?;
+    let document = idml_import::import_idml_doc(&build_idml())?;
     let opts = PipelineOptions {
         assets: Some(&resolver),
         ..PipelineOptions::default()

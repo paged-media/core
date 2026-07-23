@@ -284,7 +284,7 @@ impl ClipPathSpec {
 
 /// `<TextPath>` child of a host shape — attaches a story so its text
 /// flows along the shape's path rather than filling a column. Mirrors
-/// `paged_parse::spread::TextPath`; only the attributes the renderer
+/// `idml_import::spread::TextPath`; only the attributes the renderer
 /// reads are emitted.
 pub struct TextPathChild {
     pub self_id: String,
@@ -512,7 +512,7 @@ pub struct TextFramePref {
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
-/// Mirrors `paged_parse::TextWrap` shape — mode + four offsets.
+/// Mirrors `idml_import::TextWrap` shape — mode + four offsets.
 #[derive(Clone)]
 pub struct TextWrap {
     /// `TextWrapMode` enum string: `"None"`, `"BoundingBoxTextWrap"`,

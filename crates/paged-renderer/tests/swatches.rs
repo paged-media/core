@@ -50,7 +50,7 @@ fn centre_rgb(img: &image::RgbaImage) -> (f32, f32, f32) {
 #[test]
 fn tint_swatch_resolves_lighter_than_full_ink() {
     let bytes = paged_gen::write_idml(&swatches::build()).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
     let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
 

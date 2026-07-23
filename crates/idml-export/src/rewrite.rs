@@ -136,7 +136,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::{Bounds, CharacterRun, PathAnchor, Spread, Story, TableCell, TextFrame};
+use idml_import::{Bounds, CharacterRun, PathAnchor, Spread, Story, TableCell, TextFrame};
 
 /// Mirror of `paged_gen::xml::format_f32`: round to 4 decimals, drop
 /// trailing zeros + a dangling `.`, normalise `-0` to `0`. Kept as a
@@ -180,7 +180,7 @@ fn parse_matrix(s: &str) -> Option<[f32; 6]> {
 }
 
 /// `a ∘ b` — compose two affine matrices, byte-for-byte matching
-/// `paged_parse`'s `compose_matrix` (apply `b` first, then `a`). Used to
+/// `idml_import`'s `compose_matrix` (apply `b` first, then `a`). Used to
 /// rebuild the group-transform accumulation the parser composes into a
 /// group member's `item_transform`, so the writer can invert it back to
 /// the on-disk member transform (W1.15 lane 4).
@@ -450,7 +450,7 @@ struct ModelGeometry {
     /// Flat anchor list across all contours (model order).
     anchors: Vec<PathAnchor>,
     /// Per-contour start offsets into `anchors` (see
-    /// [`paged_parse::Polygon::subpath_starts`]). Empty ⇒ one contour.
+    /// [`idml_import::Polygon::subpath_starts`]). Empty ⇒ one contour.
     subpath_starts: Vec<usize>,
     /// Model AABB. For a `FrameBounds` edit the anchors stay stale while
     /// this moves, so a divergence here (with unchanged anchors) means
@@ -560,9 +560,9 @@ fn model_geometry(
     name: &[u8],
     self_id: &str,
     frames: &std::collections::HashMap<&str, &TextFrame>,
-    rectangles: &[paged_parse::Rectangle],
-    polygons: &[paged_parse::Polygon],
-    graphic_lines: &[paged_parse::GraphicLine],
+    rectangles: &[idml_import::Rectangle],
+    polygons: &[idml_import::Polygon],
+    graphic_lines: &[idml_import::GraphicLine],
 ) -> Option<ModelGeometry> {
     match name {
         b"TextFrame" => frames.get(self_id).map(|f| ModelGeometry {
@@ -1033,10 +1033,10 @@ pub(crate) fn write_inserted_items(
 /// group (and its sub-groups) so inserted-item emission skips them.
 fn collect_group_member_ids<'a>(
     spread: &'a Spread,
-    group: &'a paged_parse::Group,
+    group: &'a idml_import::Group,
     out: &mut std::collections::HashSet<&'a str>,
 ) {
-    use paged_parse::FrameRef;
+    use idml_import::FrameRef;
     for m in &group.members {
         match *m {
             FrameRef::TextFrame(i) => {
@@ -1643,10 +1643,10 @@ fn resolve_item_transform(
 fn patch_spread_item(
     e: &BytesStart,
     frames: &std::collections::HashMap<&str, &TextFrame>,
-    rectangles: &[paged_parse::Rectangle],
-    ovals: &[paged_parse::Oval],
-    polygons: &[paged_parse::Polygon],
-    graphic_lines: &[paged_parse::GraphicLine],
+    rectangles: &[idml_import::Rectangle],
+    ovals: &[idml_import::Oval],
+    polygons: &[idml_import::Polygon],
+    graphic_lines: &[idml_import::GraphicLine],
     group_accum: Option<Option<[f32; 6]>>,
 ) -> Result<Option<BytesStart<'static>>, quick_xml::Error> {
     let name = e.name();
@@ -1803,12 +1803,12 @@ struct VectorItem {
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
     nonprinting: bool,
-    bounds: paged_parse::Bounds,
+    bounds: idml_import::Bounds,
     /// v43 — `LeftLineEnd` / `RightLineEnd`. `None` for the kinds that
     /// don't carry the fields (Rectangle / Oval / Polygon), so their
     /// source attributes pass through verbatim.
-    start_arrow: Option<paged_parse::ArrowheadType>,
-    end_arrow: Option<paged_parse::ArrowheadType>,
+    start_arrow: Option<idml_import::ArrowheadType>,
+    end_arrow: Option<idml_import::ArrowheadType>,
 }
 
 fn patch_vector_item(
@@ -1869,9 +1869,9 @@ fn frame_attr_patch(
     stroke_weight: Option<f32>,
     next: Option<&Option<String>>,
     nonprinting: bool,
-    bounds: paged_parse::Bounds,
-    start_arrow: Option<paged_parse::ArrowheadType>,
-    end_arrow: Option<paged_parse::ArrowheadType>,
+    bounds: idml_import::Bounds,
+    start_arrow: Option<idml_import::ArrowheadType>,
+    end_arrow: Option<idml_import::ArrowheadType>,
 ) -> Option<Patch> {
     match key {
         b"ItemTransform" if !patch_tx => None,
@@ -1920,8 +1920,8 @@ fn frame_attr_extras(
     stroke_weight: Option<f32>,
     next: Option<&str>,
     nonprinting: bool,
-    start_arrow: Option<paged_parse::ArrowheadType>,
-    end_arrow: Option<paged_parse::ArrowheadType>,
+    start_arrow: Option<idml_import::ArrowheadType>,
+    end_arrow: Option<idml_import::ArrowheadType>,
 ) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     if patch_tx {
@@ -1962,8 +1962,8 @@ fn frame_attr_extras(
 /// attribute survives verbatim. So does `Other` (an out-of-vocabulary
 /// source token the parse layer couldn't keep): patching it would
 /// clobber a spelling we can't reproduce.
-fn arrow_patch(v: Option<paged_parse::ArrowheadType>) -> Option<Patch> {
-    use paged_parse::ArrowheadType as A;
+fn arrow_patch(v: Option<idml_import::ArrowheadType>) -> Option<Patch> {
+    use idml_import::ArrowheadType as A;
     match v {
         None | Some(A::Other) => None,
         Some(A::None) => Some(Patch::Remove),
@@ -2010,7 +2010,7 @@ fn collect_story_cells(story: &Story) -> std::collections::HashMap<&str, &TableC
 /// Collect a table's cells (by `Self`) and recurse into any table nested
 /// in a cell's paragraph.
 fn collect_table_cells<'a>(
-    table: &'a paged_parse::Table,
+    table: &'a idml_import::Table,
     out: &mut std::collections::HashMap<&'a str, &'a TableCell>,
 ) {
     for cell in &table.cells {
@@ -2066,7 +2066,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
     // W1.8 — depth of open `<Footnote>` elements. A footnote is a
     // self-contained paragraph stream anchored mid-run; the parser keeps
     // its body on `paragraph.footnotes[].paragraphs`, NOT on the story's
-    // top-level `paragraphs` (see `paged_parse::story`'s footnote stack).
+    // top-level `paragraphs` (see `idml_import::story`'s footnote stack).
     // So the story-level positional cursors must NOT advance inside a
     // footnote, and the footnote's own `<ParagraphStyleRange>` /
     // `<CharacterStyleRange>` / `<Content>` must NOT patch against the
@@ -2346,8 +2346,7 @@ pub fn rewrite_story(original: &[u8], story: &Story) -> Result<Vec<u8>, quick_xm
                         // cursors (a nested table's cell pops back to its
                         // host cell; a top-level cell pops back to None) so
                         // siblings + post-table markup patch correctly.
-                        let (cc, cd, cp, cr) =
-                            cell_stack.pop().unwrap_or((None, 0, -1, -1));
+                        let (cc, cd, cp, cr) = cell_stack.pop().unwrap_or((None, 0, -1, -1));
                         current_cell = cc;
                         cell_depth = cd;
                         cell_para_idx = cp;
@@ -2488,7 +2487,7 @@ pub(crate) fn write_run_content(
 
 fn patch_paragraph_range(
     e: &BytesStart,
-    para: Option<&paged_parse::Paragraph>,
+    para: Option<&idml_import::Paragraph>,
 ) -> Result<BytesStart<'static>, quick_xml::Error> {
     let style = para.and_then(|p| p.paragraph_style.clone());
     let extras: Vec<(&str, String)> = match &style {

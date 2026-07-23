@@ -45,7 +45,7 @@ fn inter_font() -> Vec<u8> {
 
 fn build() -> pipeline::BuiltDocument {
     let bytes = paged_gen::write_idml(&paged_gen::samples::layout::build()).expect("write_idml");
-    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
+    let document = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let font = inter_font();
     let opts = PipelineOptions {
         font: Some(&font),

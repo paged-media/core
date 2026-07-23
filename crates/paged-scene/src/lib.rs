@@ -1632,7 +1632,7 @@ mod tests {
 
     #[test]
     fn flow_chain_projects_the_frame_chain() {
-        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
+        let doc = idml_import::import_idml_doc(&pack_threaded_idml()).unwrap();
 
         // The flow chain is a faithful projection of the frame chain:
         // same order, ids = frame Self ids, flow id = story id.
@@ -1660,7 +1660,7 @@ mod tests {
 
     #[test]
     fn flow_chain_for_unknown_story_is_empty() {
-        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
+        let doc = idml_import::import_idml_doc(&pack_threaded_idml()).unwrap();
         let flow = doc.flow_chain("does-not-exist");
         assert_eq!(flow.flow, paged_flow::FlowId::new("does-not-exist"));
         assert!(flow.is_empty());
@@ -1668,7 +1668,7 @@ mod tests {
 
     #[test]
     fn to_composition_preserves_the_flow_arrangement() {
-        let doc = paged_parse::import_idml_doc(&pack_threaded_idml()).unwrap();
+        let doc = idml_import::import_idml_doc(&pack_threaded_idml()).unwrap();
         let comp = doc.to_composition();
 
         // One print surface + the single page.
@@ -1838,7 +1838,7 @@ mod tests {
             ("mid", "ParagraphStyle/Heading2", "Setup"),
             ("tail", "ParagraphStyle/Heading1", "Results"),
         ]);
-        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
         let toc = toc_style_with_two_entries();
         let entries = doc.resolve_toc(&toc);
         assert_eq!(entries.len(), 4, "{:?}", entries);
@@ -1868,7 +1868,7 @@ mod tests {
     #[test]
     fn resolve_toc_respects_page_number_off_flag() {
         let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
-        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
         let mut toc = toc_style_with_two_entries();
         toc.entries[0].page_number = Some("NoPageNumber".to_string());
         let entries = doc.resolve_toc(&toc);
@@ -1879,7 +1879,7 @@ mod tests {
     #[test]
     fn resolve_toc_uses_default_separator_when_absent() {
         let bytes = pack_toc_idml(&[("intro", "ParagraphStyle/Heading1", "Foreword")]);
-        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
         let mut toc = toc_style_with_two_entries();
         toc.entries[0].separator = None;
         let entries = doc.resolve_toc(&toc);
@@ -1899,7 +1899,7 @@ mod tests {
             ("banana", "Banana", 2),
             ("apple-3", "Apple", 0), // duplicate page → dedup
         ]);
-        let doc = paged_parse::import_idml_doc(&xml).expect("open IDML");
+        let doc = idml_import::import_idml_doc(&xml).expect("open IDML");
         let entries = doc.resolve_index();
         // Two topics; Apple sorts before Banana case-insensitively.
         assert_eq!(entries.len(), 2);

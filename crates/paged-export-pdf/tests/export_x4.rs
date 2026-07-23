@@ -74,7 +74,7 @@ struct Built {
 
 fn build_fixture(name: &str, font: &Option<Vec<u8>>) -> Option<Built> {
     let bytes = fixture_bytes(name)?;
-    let document = paged_parse::import_idml_doc(&bytes).ok()?;
+    let document = idml_import::import_idml_doc(&bytes).ok()?;
     let mut opts = PipelineOptions {
         collect_glyph_runs: true,
         ..Default::default()
@@ -102,7 +102,7 @@ fn build_fixture(name: &str, font: &Option<Vec<u8>>) -> Option<Built> {
 /// a `paged-gen` sample without depending on the gitignored
 /// corpus/generated fixtures).
 fn build_from_bytes(bytes: &[u8], font: &Option<Vec<u8>>) -> Option<Built> {
-    let document = paged_parse::import_idml_doc(bytes).ok()?;
+    let document = idml_import::import_idml_doc(bytes).ok()?;
     let mut opts = PipelineOptions {
         collect_glyph_runs: true,
         ..Default::default()

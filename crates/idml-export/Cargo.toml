@@ -1,5 +1,5 @@
 [package]
-name = "paged-write"
+name = "idml-export"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,10 @@ description = "Export re-serialization (save-back). Carry-through writer: copies
 workspace = true
 
 [dependencies]
-paged-parse = { path = "../paged-parse" }
+idml-import = { path = "../idml-import" }
 paged-scene = { path = "../paged-scene" }
 thiserror = { workspace = true }
-# Same wasm-compatible config paged-parse reads zips with: default
+# Same wasm-compatible config idml-import reads zips with: default
 # features off + deflate only. No native-only deps so the crate
 # builds for wasm32 too (the save-back path runs in the editor/SDK).
 zip = { workspace = true }

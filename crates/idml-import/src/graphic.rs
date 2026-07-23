@@ -34,7 +34,7 @@
 //! The swatch-palette value types (`ColorEntry`, `Gradient*`, `Color*`,
 //! `ReservedSwatch`, the colour math) live in `paged-model`; this module
 //! owns only the `Graphic` container + the XML parsing and re-exports the
-//! types so `paged_parse::graphic::*` keeps resolving.
+//! types so `idml_import::graphic::*` keeps resolving.
 
 use quick_xml::events::Event;
 

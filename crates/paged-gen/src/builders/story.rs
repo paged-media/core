@@ -104,7 +104,7 @@ pub struct Paragraph {
 }
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
-/// the column's left edge. Mirrors `paged_parse::story::TabStop`.
+/// the column's left edge. Mirrors `idml_import::story::TabStop`.
 pub struct TabStop {
     pub position_pt: f32,
     /// IDML alignment string — `"LeftAlign"`, `"RightAlign"`,
@@ -347,10 +347,7 @@ impl Paragraph {
 
     /// Attach extra `<ParagraphStyleRange>` attributes (the escape hatch
     /// for rules/shading/border). Returns `self` for chaining off `plain`.
-    pub fn with_para_attrs(
-        mut self,
-        attrs: Vec<(&'static str, &'static str)>,
-    ) -> Self {
+    pub fn with_para_attrs(mut self, attrs: Vec<(&'static str, &'static str)>) -> Self {
         self.extra_paragraph_attrs = attrs;
         self
     }
@@ -574,7 +571,7 @@ pub fn write_story(s: &Story) -> Vec<u8> {
 
 /// Emit a run's text body. Tabs (`\t`) become `<Tab/>` empty elements
 /// between `<Content>` segments — matching how IDML serialises tabs
-/// and how `paged_parse` rebuilds the run text. Newlines (`\n`) become
+/// and how `idml_import` rebuilds the run text. Newlines (`\n`) become
 /// `<Br/>` line breaks for the same reason.
 fn write_run_content(b: &mut XmlBuilder, text: &str) {
     if text.is_empty() {

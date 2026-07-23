@@ -104,7 +104,7 @@ fn table_idml() -> Vec<u8> {
 }
 
 fn open_doc() -> Document {
-    paged_parse::import_idml_doc(&table_idml()).expect("fixture must open")
+    idml_import::import_idml_doc(&table_idml()).expect("fixture must open")
 }
 
 /// Borrow the parsed `<Table>` for assertions.
@@ -572,7 +572,7 @@ fn empty_story_idml() -> Vec<u8> {
 }
 
 fn open_empty_story_doc() -> Document {
-    paged_parse::import_idml_doc(&empty_story_idml()).expect("empty-story fixture must open")
+    idml_import::import_idml_doc(&empty_story_idml()).expect("empty-story fixture must open")
 }
 
 /// Locate the table identified by `table_id` in `story_id`, if present.

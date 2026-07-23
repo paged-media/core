@@ -19,7 +19,7 @@ cpu = ["paged-renderer/cpu"]
 
 [dependencies]
 paged-renderer = { path = "../paged-renderer", default-features = false }
-paged-parse = { path = "../paged-parse" }
+idml-import = { path = "../idml-import" }
 paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-compose = { path = "../paged-compose" }
@@ -27,11 +27,11 @@ paged-text = { path = "../paged-text" }
 paged-mutate = { path = "../paged-mutate" }
 paged-color = { path = "../paged-color" }
 paged-export-pdf = { path = "../paged-export-pdf" }
-# W3.B2 — IDML save-back. paged-write deps only paged-parse +
+# W3.B2 — IDML save-back. idml-export deps only idml-import +
 # paged-scene, so this introduces no cycle; both are wasm-clean
 # (no native-only deps), so the export path compiles into the wasm
 # worker too.
-paged-write = { path = "../paged-write" }
+idml-export = { path = "../idml-export" }
 # S7 — persist the composition (`document.pgd`) into the `.paged` container.
 # paged-composition is a pure leaf (paged-flow + serde, no IDML/render), so
 # it is wasm-clean and introduces no cycle.
@@ -59,7 +59,7 @@ unicode-segmentation = "1"
 # paged-text; wasm-clean.
 rustybuzz = "0.18"
 # File ▸ New — synthesise a blank IDML package (see `blank.rs`). Same
-# zip writer paged-parse reads + paged-write emits; wasm-clean (both
+# zip writer idml-import reads + idml-export emits; wasm-clean (both
 # already ship it into the wasm worker), so this adds no new wasm dep.
 zip = { workspace = true }
 

@@ -26,7 +26,7 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
     // reconstruct path below never touches IDML.
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build())
         .expect("generate fixture idml");
-    let doc = paged_parse::import_idml_doc(&idml).expect("import fixture");
+    let doc = idml_import::import_idml_doc(&idml).expect("import fixture");
 
     // Native round-trip: model -> bytes -> model (no open_source_archive).
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
@@ -68,7 +68,7 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
 fn incompatible_format_version_is_rejected() {
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build())
         .expect("generate fixture idml");
-    let doc = paged_parse::import_idml_doc(&idml).expect("import fixture");
+    let doc = idml_import::import_idml_doc(&idml).expect("import fixture");
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
 
     // Current version round-trips.

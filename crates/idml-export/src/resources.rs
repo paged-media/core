@@ -35,8 +35,8 @@ use std::io::Cursor;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use paged_parse::graphic::{ColorEntry, GradientEntry, GradientKind, Graphic};
-use paged_parse::styles::{CharacterStyleDef, ParagraphStyleDef, StyleSheet};
+use idml_import::graphic::{ColorEntry, GradientEntry, GradientKind, Graphic};
+use idml_import::styles::{CharacterStyleDef, ParagraphStyleDef, StyleSheet};
 
 use crate::rewrite::{escape_attr, format_f32};
 

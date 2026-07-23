@@ -58,7 +58,7 @@ fn gradient_paint_count(commands: &[DisplayCommand]) -> usize {
 #[test]
 fn gradient_assignment_round_trips_to_a_gradient_paint() {
     let bytes = fixture_bytes();
-    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open document");
+    let mut doc = idml_import::import_idml_doc(&bytes).expect("open document");
 
     // First rectangle in the document — the assignment target.
     let (rect_id, prev_fill) = doc

@@ -25,7 +25,7 @@ to flow back. See [`LICENSE.md`](./LICENSE.md), [`LICENSE`](./LICENSE), and
 
 ```
 idml bytes
- └─ paged-parse     ZIP + designmap + spreads + stories + graphic → AST
+ └─ idml-import     ZIP + designmap + spreads + stories + graphic → AST
      └─ paged-scene    owned Document (palette, spreads, stories, threading)
          └─ paged-text     rustybuzz shaping + Knuth–Plass compose + layout
              └─ paged-compose  display list (FillPath / StrokePath / Image /
@@ -51,7 +51,7 @@ named; the published artifact is the SDK.
 
 | crate | role |
 |-------|------|
-| `paged-parse` | ZIP + XML → typed AST (container, designmap, spreads, stories, graphic, styles + cascade, paths) |
+| `idml-import` | ZIP + XML → typed AST (container, designmap, spreads, stories, graphic, styles + cascade, paths) |
 | `paged-scene` | `Document::open`; cascade resolution, frame-for-story, frame chaining |
 | `paged-text` | shaping (rustybuzz), Knuth–Plass compose, multi-font layout, hyphenation, tabs |
 | `paged-color` | ICC transforms (lcms2 native; naive fallback on wasm32) |

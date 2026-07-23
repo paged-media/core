@@ -105,7 +105,7 @@ fn entries(idml: &[u8]) -> BTreeMap<String, Vec<u8>> {
 fn unmutated_round_trip_is_byte_identical_per_entry() {
     for &name in SAMPLES {
         let original = build_sample(name);
-        let doc = paged_parse::import_idml_doc(&original)
+        let doc = idml_import::import_idml_doc(&original)
             .unwrap_or_else(|e| panic!("{name}: open: {e:?}"));
         let out = write_idml(&doc, &original).unwrap_or_else(|e| panic!("{name}: write: {e:?}"));
 
@@ -131,10 +131,10 @@ fn unmutated_round_trip_is_byte_identical_per_entry() {
 fn unmutated_round_trip_reparses_to_same_model_stats() {
     for &name in SAMPLES {
         let original = build_sample(name);
-        let doc = paged_parse::import_idml_doc(&original).unwrap();
+        let doc = idml_import::import_idml_doc(&original).unwrap();
         let out = write_idml(&doc, &original).unwrap();
         let re =
-            paged_parse::import_idml_doc(&out).unwrap_or_else(|e| panic!("{name}: reparse: {e:?}"));
+            idml_import::import_idml_doc(&out).unwrap_or_else(|e| panic!("{name}: reparse: {e:?}"));
 
         assert_eq!(doc.spreads.len(), re.spreads.len(), "{name}: spread count");
         assert_eq!(doc.stories.len(), re.stories.len(), "{name}: story count");
@@ -145,7 +145,7 @@ fn unmutated_round_trip_reparses_to_same_model_stats() {
 
         // Story text content is preserved verbatim.
         for (a, b) in doc.stories.iter().zip(re.stories.iter()) {
-            let text = |s: &paged_parse::Story| -> String {
+            let text = |s: &idml_import::Story| -> String {
                 s.paragraphs
                     .iter()
                     .flat_map(|p| p.runs.iter())
@@ -164,7 +164,7 @@ fn unmutated_round_trip_reparses_to_same_model_stats() {
 fn unmutated_round_trip_whole_package_is_byte_identical() {
     for &name in SAMPLES {
         let original = build_sample(name);
-        let doc = paged_parse::import_idml_doc(&original).unwrap();
+        let doc = idml_import::import_idml_doc(&original).unwrap();
         let out = write_idml(&doc, &original).unwrap();
         assert_eq!(
             original, out,
@@ -211,7 +211,7 @@ fn paged_namespace_part_survives_a_mutated_write() {
 
     // The injected package still parses (the paged/ part is ignored by the
     // IDML reader — not referenced from designmap.xml).
-    let doc = paged_parse::import_idml_doc(&injected).expect("open .paged-shaped package");
+    let doc = idml_import::import_idml_doc(&injected).expect("open .paged-shaped package");
 
     // Apply a REAL mutation so the writer takes the patch path for a spread
     // (not the trivial byte-identical short-circuit).
@@ -249,7 +249,7 @@ fn paged_namespace_part_survives_a_mutated_write() {
         .get(part_path)
         .expect("paged/ part dropped by the writer");
     assert_eq!(survived, &part_body, "paged/ part bytes diverged on write");
-    paged_parse::import_idml_doc(&out).expect("written .paged re-opens");
+    idml_import::import_idml_doc(&out).expect("written .paged re-opens");
 }
 
 /// `write_paged` appends the model-held `paged/` parts + a `manifest.json`
@@ -257,7 +257,7 @@ fn paged_namespace_part_survives_a_mutated_write() {
 #[test]
 fn write_paged_appends_new_parts_and_manifest() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     parts.insert(
@@ -290,7 +290,7 @@ fn write_paged_appends_new_parts_and_manifest() {
         &vec![1u8, 2, 3, 4]
     );
     // mimetype is still first + the package re-opens as valid IDML.
-    paged_parse::import_idml_doc(&out).expect("written .paged re-opens");
+    idml_import::import_idml_doc(&out).expect("written .paged re-opens");
 }
 
 /// The IDML-parts hash IGNORES `paged/` parts (so editing plugin data does
@@ -299,7 +299,7 @@ fn write_paged_appends_new_parts_and_manifest() {
 #[test]
 fn write_paged_idml_hash_excludes_paged_parts_but_tracks_idml_changes() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let mut a: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     a.insert("paged/x/1/spec.json".to_string(), b"AAA".to_vec());
@@ -307,7 +307,7 @@ fn write_paged_idml_hash_excludes_paged_parts_but_tracks_idml_changes() {
     b.insert("paged/x/1/spec.json".to_string(), b"BBBBBBBBB".to_vec());
     let out_a = write_paged(&doc, &original, &a, 50).unwrap();
     let out_b = write_paged(
-        &paged_parse::import_idml_doc(&original).unwrap(),
+        &idml_import::import_idml_doc(&original).unwrap(),
         &original,
         &b,
         50,
@@ -338,7 +338,7 @@ fn write_paged_idml_hash_excludes_paged_parts_but_tracks_idml_changes() {
         .find(|id| Some(id.as_str()) != orig_fill.as_deref())
         .cloned()
         .expect("a second swatch");
-    let mut project = Project::new(paged_parse::import_idml_doc(&original).unwrap());
+    let mut project = Project::new(idml_import::import_idml_doc(&original).unwrap());
     project
         .apply(Operation::SetProperty {
             node: NodeId::Rectangle(rect_id),
@@ -378,7 +378,7 @@ fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
         br#"{"hello":"world"}"#,
     );
 
-    let doc = paged_parse::import_idml_doc(&seeded).expect("open multi-plugin .paged");
+    let doc = idml_import::import_idml_doc(&seeded).expect("open multi-plugin .paged");
 
     // THIS build knows only its own plugin: it writes one part, protocol 50.
     let mut mine: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -420,7 +420,7 @@ fn write_paged_preserves_unknown_third_party_data_and_manifest_fields() {
         serde_json::json!(42),
         "unknown future field preserved"
     );
-    paged_parse::import_idml_doc(&out).expect("written multi-plugin .paged re-opens");
+    idml_import::import_idml_doc(&out).expect("written multi-plugin .paged re-opens");
 }
 
 /// The manifest carries a `parts` INDEX (§7/§8): one entry per `paged/`
@@ -434,7 +434,7 @@ fn write_paged_records_a_parts_index_with_plugin_and_hash() {
     // Seed an existing third-party part so the index covers BOTH the
     // carried-through part and this build's new one.
     let seeded = inject_entry(&original, "paged/com.acme.widget/9/data.bin", &[1u8, 2, 3]);
-    let doc = paged_parse::import_idml_doc(&seeded).unwrap();
+    let doc = idml_import::import_idml_doc(&seeded).unwrap();
 
     let mut parts: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     parts.insert(
@@ -479,7 +479,7 @@ fn write_paged_records_a_parts_index_with_plugin_and_hash() {
         br#"{"v":1,"data":{"changed":true}}"#.to_vec(),
     );
     let out2 = write_paged(
-        &paged_parse::import_idml_doc(&seeded).unwrap(),
+        &idml_import::import_idml_doc(&seeded).unwrap(),
         &seeded,
         &parts2,
         51,
@@ -520,7 +520,7 @@ fn first_text_frame(doc: &Document) -> Option<String> {
 fn mutated_frame_fill_color_saves_and_neighbours_survive() {
     let name = "geometry";
     let original = build_sample(name);
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     // Pick a rectangle to recolor (geometry sample is rectangle-rich).
     let (spread_idx, rect_id, orig_fill, orig_stroke) = doc
@@ -565,7 +565,7 @@ fn mutated_frame_fill_color_saves_and_neighbours_survive() {
         .expect("apply fill");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let rect = re.spreads[spread_idx]
         .spread
@@ -603,7 +603,7 @@ fn mutated_frame_fill_color_saves_and_neighbours_survive() {
 fn mutated_text_fill_color_saves_and_text_survives() {
     let name = "text";
     let original = build_sample(name);
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     // Find a story with at least one run; capture its first run's text.
     let (story_idx, story_id, run_text) = doc
@@ -636,7 +636,7 @@ fn mutated_text_fill_color_saves_and_text_survives() {
         .expect("apply character fill");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let story = &re.stories[story_idx].story;
     // First run now carries the new fill.
@@ -662,7 +662,7 @@ fn mutated_text_fill_color_saves_and_text_survives() {
 fn mutated_item_transform_saves() {
     let name = "geometry";
     let original = build_sample(name);
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let frame_id = first_text_frame(&doc).expect("a text frame");
 
     let m = [1.0, 0.0, 0.0, 1.0, 33.0, 44.0];
@@ -676,7 +676,7 @@ fn mutated_item_transform_saves() {
         .expect("apply transform");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     let frame = re
         .spreads
         .iter()
@@ -694,7 +694,7 @@ fn mutated_item_transform_saves() {
 #[test]
 fn mutate_then_undo_round_trips_byte_identical() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let frame_id = first_text_frame(&doc).expect("frame");
 
     let mut project = Project::new(doc);
@@ -719,7 +719,7 @@ fn plugin_metadata_round_trips_through_write() {
     let envelope =
         r#"{"v":1,"engine":{"blitz":"0.3.0-alpha.4"},"data":{"source":"<b>hi & \"bye\"</b>"}}"#;
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let rect_id = doc
         .spreads
         .iter()
@@ -744,7 +744,7 @@ fn plugin_metadata_round_trips_through_write() {
     // Write → reparse → the label is there, value byte-equal (incl.
     // the XML-escaped quotes/ampersands inside the JSON envelope).
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     let labels = re
         .spreads
         .iter()
@@ -771,7 +771,7 @@ fn plugin_metadata_round_trips_through_write() {
         })
         .expect("delete metadata");
     let out2 = write_idml(project2.document(), &out).expect("write 2");
-    let re2 = paged_parse::import_idml_doc(&out2).expect("reparse 2");
+    let re2 = idml_import::import_idml_doc(&out2).expect("reparse 2");
     assert!(
         re2.spreads
             .iter()
@@ -780,7 +780,7 @@ fn plugin_metadata_round_trips_through_write() {
     );
 
     // Undo (exact restoration) → byte-identical write.
-    let doc3 = paged_parse::import_idml_doc(&original).unwrap();
+    let doc3 = idml_import::import_idml_doc(&original).unwrap();
     let mut project3 = Project::new(doc3);
     project3
         .apply(Operation::SetProperty {
@@ -804,7 +804,7 @@ fn plugin_metadata_round_trips_through_write() {
 #[test]
 fn plugin_metadata_write_gates_reject_cleanly() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let rect_id = doc
         .spreads
         .iter()
@@ -880,7 +880,7 @@ fn first_multi_content_run(doc: &Document) -> Option<(usize, usize, usize)> {
 #[test]
 fn mutated_multi_content_text_saves_with_tab_structure() {
     let original = build_sample("text-advanced");
-    let mut doc = paged_parse::import_idml_doc(&original).unwrap();
+    let mut doc = idml_import::import_idml_doc(&original).unwrap();
     let (si, pi, ri) = first_multi_content_run(&doc).expect("a multi-Content run");
 
     // Sanity: the source run really is tab-split.
@@ -894,7 +894,7 @@ fn mutated_multi_content_text_saves_with_tab_structure() {
 
     let out = write_idml(&doc, &original).expect("write");
     assert_ne!(original, out, "a multi-Content text edit must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     // The edited run re-parses to the new text WITH the tabs preserved
     // (proves the `<Content>…</Content><Tab/>…` structure was rebuilt,
@@ -917,12 +917,12 @@ fn mutated_multi_content_text_saves_with_tab_structure() {
 #[test]
 fn mutated_run_with_newline_saves_br_structure() {
     let original = build_sample("text-advanced");
-    let mut doc = paged_parse::import_idml_doc(&original).unwrap();
+    let mut doc = idml_import::import_idml_doc(&original).unwrap();
     let (si, pi, ri) = first_multi_content_run(&doc).expect("a multi-Content run");
 
     doc.stories[si].story.paragraphs[pi].runs[ri].text = "line one\nline two".to_string();
     let out = write_idml(&doc, &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let got = &re.stories[si].story.paragraphs[pi].runs[ri].text;
     assert_eq!(
@@ -938,7 +938,7 @@ fn mutated_run_with_newline_saves_br_structure() {
 #[test]
 fn unmutated_multi_content_story_is_byte_identical() {
     let original = build_sample("text-advanced");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let out = write_idml(&doc, &original).expect("write");
 
     let src = entries(&original);
@@ -967,7 +967,7 @@ fn unmutated_multi_content_story_is_byte_identical() {
 #[test]
 fn mutated_frame_bounds_on_path_geometry_rect_saves() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     // A geometry-sample rectangle carries its outline as a
     // `<PathPointArray>` (anchors empty in the model = the 4-corner AABB
@@ -1004,7 +1004,7 @@ fn mutated_frame_bounds_on_path_geometry_rect_saves() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "a path-geometry bounds edit must save");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let rect = re.spreads[spread_idx]
         .spread
@@ -1060,7 +1060,7 @@ fn mutated_frame_path_point_round_trips_through_save() {
     use paged_mutate::{PathPointAddress, PathPointRole};
 
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     // A geometry text frame keeps its 4 corner anchors in the model.
     let (spread_idx, frame_id, base) = doc
@@ -1095,7 +1095,7 @@ fn mutated_frame_path_point_round_trips_through_save() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "a path-point edit must save");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let frame = re.spreads[spread_idx]
         .spread
@@ -1125,7 +1125,7 @@ fn path_point_mutate_then_undo_round_trips_byte_identical() {
     use paged_mutate::{PathPointAddress, PathPointRole};
 
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let frame_id = doc
         .spreads
         .iter()
@@ -1179,7 +1179,7 @@ fn first_spread_id(doc: &Document) -> String {
 #[test]
 fn inserted_rectangle_saves_and_reparses() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let spread_id = first_spread_id(&doc);
     let spread_idx = doc
         .spreads
@@ -1211,7 +1211,7 @@ fn inserted_rectangle_saves_and_reparses() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "an insert must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let rect = re.spreads[spread_idx]
         .spread
@@ -1258,7 +1258,7 @@ fn inserted_rectangle_saves_and_reparses() {
 #[test]
 fn inserted_text_frame_saves_as_text_frame() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let spread_id = first_spread_id(&doc);
     let spread_idx = doc
         .spreads
@@ -1287,7 +1287,7 @@ fn inserted_text_frame_saves_as_text_frame() {
         .expect("insert text frame");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     assert_eq!(
         re.spreads[spread_idx].spread.text_frames.len(),
         before + 1,
@@ -1308,7 +1308,7 @@ fn inserted_text_frame_saves_as_text_frame() {
 #[test]
 fn removed_rectangle_drops_from_xml() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let (spread_idx, rect_id) = doc
         .spreads
@@ -1333,7 +1333,7 @@ fn removed_rectangle_drops_from_xml() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "a remove must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     assert!(
         re.spreads[spread_idx]
             .spread
@@ -1355,7 +1355,7 @@ fn removed_rectangle_drops_from_xml() {
 #[test]
 fn structural_edit_then_undo_round_trips_byte_identical() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let spread_id = first_spread_id(&doc);
     let rect_id = doc
         .spreads
@@ -1384,7 +1384,7 @@ fn structural_edit_then_undo_round_trips_byte_identical() {
     assert_eq!(original, out1, "insert→undo is a no-op write");
 
     // Remove → undo.
-    let doc2 = paged_parse::import_idml_doc(&original).unwrap();
+    let doc2 = idml_import::import_idml_doc(&original).unwrap();
     let mut p2 = Project::new(doc2);
     p2.apply(Operation::RemoveNode {
         node: NodeId::Rectangle(rect_id),
@@ -1408,7 +1408,7 @@ use paged_mutate::SwatchSpec;
 #[test]
 fn created_swatch_saves_to_graphic_and_reparses() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let mut project = Project::new(doc);
     project
@@ -1429,7 +1429,7 @@ fn created_swatch_saves_to_graphic_and_reparses() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "a new swatch must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let color = re
         .palette
@@ -1459,7 +1459,7 @@ fn created_swatch_saves_to_graphic_and_reparses() {
 #[test]
 fn created_swatch_then_undo_round_trips_byte_identical() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let mut project = Project::new(doc);
     project
         .apply(Operation::CreateSwatch {
@@ -1487,7 +1487,7 @@ fn created_swatch_then_undo_round_trips_byte_identical() {
 #[test]
 fn created_paragraph_style_saves_to_styles_and_reparses() {
     let original = build_sample("text");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let mut project = Project::new(doc);
     project
@@ -1501,7 +1501,7 @@ fn created_paragraph_style_saves_to_styles_and_reparses() {
 
     let out = write_idml(project.document(), &original).expect("write");
     assert_ne!(original, out, "a new style must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let style = re
         .styles
@@ -1529,7 +1529,7 @@ fn created_paragraph_style_saves_to_styles_and_reparses() {
 #[test]
 fn created_character_style_saves_to_styles() {
     let original = build_sample("text");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let mut project = Project::new(doc);
     project
         .apply(Operation::CreateCharacterStyle {
@@ -1540,7 +1540,7 @@ fn created_character_style_saves_to_styles() {
         })
         .expect("create character style");
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     let style = re
         .styles
         .character_styles
@@ -1557,7 +1557,7 @@ fn created_character_style_saves_to_styles() {
 #[test]
 fn created_frame_with_new_swatch_and_style_round_trips() {
     let original = build_sample("text");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let spread_id = first_spread_id(&doc);
     let spread_idx = doc
         .spreads
@@ -1610,7 +1610,7 @@ fn created_frame_with_new_swatch_and_style_round_trips() {
         .expect("frame");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     // The new swatch resolves.
     let swatch = re
@@ -1679,7 +1679,7 @@ fn first_table_cell_with_text(doc: &Document) -> Option<(usize, usize, usize, St
 #[test]
 fn table_cell_text_change_writes_back() {
     let original = build_sample("tables");
-    let mut doc = paged_parse::import_idml_doc(&original).unwrap();
+    let mut doc = idml_import::import_idml_doc(&original).unwrap();
     let (si, pi, ci, cell_id, old_text) =
         first_table_cell_with_text(&doc).expect("a table cell with text");
 
@@ -1705,7 +1705,7 @@ fn table_cell_text_change_writes_back() {
 
     let out = write_idml(&doc, &original).expect("write");
     assert_ne!(original, out, "a cell-text edit must change bytes");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     // The edited cell re-parses with the new text.
     let cell = re.stories[si].story.paragraphs[pi]
@@ -1742,7 +1742,7 @@ fn table_cell_text_change_writes_back() {
         .iter()
         .find(|c| c.self_id == other.self_id)
         .unwrap();
-    let other_text = |c: &paged_parse::TableCell| -> String {
+    let other_text = |c: &idml_import::TableCell| -> String {
         c.paragraphs
             .iter()
             .flat_map(|cp| cp.runs.iter())
@@ -1765,7 +1765,7 @@ fn table_cell_unchanged_round_trips_byte_identical() {
     // write must leave every Stories/* entry byte-identical (the cell
     // pass-through is now active but value-driven).
     let original = build_sample("tables");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let out = write_idml(&doc, &original).expect("write");
     let src = entries(&original);
     let dst = entries(&out);
@@ -1788,7 +1788,7 @@ fn table_cell_unchanged_round_trips_byte_identical() {
 /// composed_item_transform)` for a rectangle that is a member of a group
 /// (the `geometry-groups` sample's spread 0 wraps two rects in a group).
 fn first_group_member_rect(doc: &Document) -> Option<(usize, String, [f32; 6])> {
-    use paged_parse::FrameRef;
+    use idml_import::FrameRef;
     for (si, s) in doc.spreads.iter().enumerate() {
         for g in &s.spread.groups {
             for m in &g.members {
@@ -1812,7 +1812,7 @@ fn first_group_member_rect(doc: &Document) -> Option<(usize, String, [f32; 6])> 
 #[test]
 fn group_member_transform_writes_back() {
     let original = build_sample("geometry-groups");
-    let mut doc = paged_parse::import_idml_doc(&original).unwrap();
+    let mut doc = idml_import::import_idml_doc(&original).unwrap();
     let (spread_idx, rect_id, base) =
         first_group_member_rect(&doc).expect("a group-member rectangle");
 
@@ -1834,7 +1834,7 @@ fn group_member_transform_writes_back() {
 
     let out = write_idml(&doc, &original).expect("write");
     assert_ne!(original, out, "a group-member transform edit must save");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     let rect = re.spreads[spread_idx]
         .spread
@@ -1882,7 +1882,7 @@ fn group_member_transform_unchanged_round_trips_byte_identical() {
     // unmutated write must leave every Spreads/* entry byte-identical
     // even though the group-member transform recovery is now active.
     let original = build_sample("geometry-groups");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let out = write_idml(&doc, &original).expect("write");
     let src = entries(&original);
     let dst = entries(&out);
@@ -1907,7 +1907,7 @@ fn group_member_transform_unchanged_round_trips_byte_identical() {
 #[test]
 fn inserted_page_mid_document_keeps_order_and_existing_entries() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let before_spreads = doc.spreads.len();
     // Address the first page so InsertPage has a valid `after_page_id`
     // (the minted spread then lands at index 1 — between existing ones).
@@ -1957,7 +1957,7 @@ fn inserted_page_mid_document_keeps_order_and_existing_entries() {
     assert_eq!(added.len(), 1, "one added entry: {added:?}");
 
     // Re-open: the inserted page survives AT ITS POSITION (index 1).
-    let re = paged_parse::import_idml_doc(&out).expect("output re-parses");
+    let re = idml_import::import_idml_doc(&out).expect("output re-parses");
     assert_eq!(re.spreads.len(), before_spreads + 1, "spread count");
     assert_eq!(
         re.spreads[1].spread.self_id.as_deref(),
@@ -1984,7 +1984,7 @@ fn inserted_page_mid_document_keeps_order_and_existing_entries() {
 #[test]
 fn footnote_story_round_trips_without_losing_pages() {
     let original = build_sample("footnotes");
-    let doc = paged_parse::import_idml_doc(&original).expect("open footnotes");
+    let doc = idml_import::import_idml_doc(&original).expect("open footnotes");
 
     // Sanity: the fixture has a page and a footnote-bearing host story.
     let pages_before: usize = doc.spreads.iter().map(|s| s.spread.pages.len()).sum();
@@ -2003,7 +2003,7 @@ fn footnote_story_round_trips_without_losing_pages() {
     let out = write_idml(&doc, &original).expect("write must not crash");
 
     // The pages survive the round-trip (the regression: page_count → 0).
-    let re = paged_parse::import_idml_doc(&out).expect("written package re-parses");
+    let re = idml_import::import_idml_doc(&out).expect("written package re-parses");
     let pages_after: usize = re.spreads.iter().map(|s| s.spread.pages.len()).sum();
     assert_eq!(
         pages_after, pages_before,
@@ -2061,7 +2061,7 @@ fn footnote_story_round_trips_without_losing_pages() {
 #[test]
 fn inserted_text_frame_with_minted_story_survives_export() {
     let original = build_sample("text");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let spread_id = doc.spreads[0].spread.self_id.clone().expect("spread id");
     let position = doc.spreads[0].spread.text_frames.len();
     let n_stories = doc.stories.len();
@@ -2099,7 +2099,7 @@ fn inserted_text_frame_with_minted_story_survives_export() {
     }
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     // The story survived — under the sanitized id the entry stem
     // re-derives (`Story/unew` → `Story_unew`).
@@ -2171,7 +2171,7 @@ fn inserted_text_frame_with_minted_story_survives_export() {
 #[test]
 fn inserted_page_spread_survives_export() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
     let n_spreads = doc.spreads.len();
     let ref_bounds = doc.spreads.last().unwrap().spread.pages[0].bounds;
 
@@ -2212,7 +2212,7 @@ fn inserted_page_spread_survives_export() {
         .expect("insert rectangle on new page");
 
     let out = write_idml(project.document(), &original).expect("write");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
 
     assert_eq!(re.spreads.len(), n_spreads + 1, "spread count");
     // The minted spread is still LAST (designmap order = page order).
@@ -2272,7 +2272,7 @@ fn inserted_page_spread_survives_export() {
 #[test]
 fn inserted_then_removed_page_round_trips_byte_identical() {
     let original = build_sample("geometry");
-    let doc = paged_parse::import_idml_doc(&original).unwrap();
+    let doc = idml_import::import_idml_doc(&original).unwrap();
 
     let mut project = Project::new(doc);
     let applied = project
@@ -2346,10 +2346,10 @@ fn graphic_line_line_ends_write_back() {
 
     // Unmutated: byte-identical (the CircleSolidArrowHead Set patch
     // re-emits the exact source token).
-    let doc = paged_parse::import_idml_doc(&original).expect("open");
+    let doc = idml_import::import_idml_doc(&original).expect("open");
     assert_eq!(
         doc.spreads[0].spread.graphic_lines[0].start_arrow,
-        paged_parse::ArrowheadType::CircleSolid
+        idml_import::ArrowheadType::CircleSolid
     );
     let out = write_idml(&doc, &original).expect("write unmutated");
     assert_eq!(entries(&original), entries(&out), "unmutated round-trip");
@@ -2357,7 +2357,7 @@ fn graphic_line_line_ends_write_back() {
     // Mutate: add an end arrowhead (attr absent in source → extras
     // lane), clear the start arrowhead (→ Patch::Remove), and insert a
     // fresh line that gets arrowheads before save.
-    let mut project = Project::new(paged_parse::import_idml_doc(&original).unwrap());
+    let mut project = Project::new(idml_import::import_idml_doc(&original).unwrap());
     project
         .apply(Operation::SetProperty {
             node: NodeId::GraphicLine("gl1".to_string()),
@@ -2398,14 +2398,14 @@ fn graphic_line_line_ends_write_back() {
         .expect("set inserted arrow");
 
     let out = write_idml(project.document(), &original).expect("write mutated");
-    let re = paged_parse::import_idml_doc(&out).expect("reparse");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
     let lines = &re.spreads[0].spread.graphic_lines;
     let gl1 = lines
         .iter()
         .find(|l| l.self_id.as_deref() == Some("gl1"))
         .expect("gl1 present");
-    assert_eq!(gl1.start_arrow, paged_parse::ArrowheadType::None);
-    assert_eq!(gl1.end_arrow, paged_parse::ArrowheadType::Triangle);
+    assert_eq!(gl1.start_arrow, idml_import::ArrowheadType::None);
+    assert_eq!(gl1.end_arrow, idml_import::ArrowheadType::Triangle);
     assert_eq!(
         gl1.stroke_weight,
         Some(2.0),
@@ -2415,6 +2415,6 @@ fn graphic_line_line_ends_write_back() {
         .iter()
         .find(|l| l.self_id.as_deref() == Some("gl2"))
         .expect("inserted gl2 present");
-    assert_eq!(gl2.start_arrow, paged_parse::ArrowheadType::Barbed);
-    assert_eq!(gl2.end_arrow, paged_parse::ArrowheadType::None);
+    assert_eq!(gl2.start_arrow, idml_import::ArrowheadType::Barbed);
+    assert_eq!(gl2.end_arrow, idml_import::ArrowheadType::None);
 }

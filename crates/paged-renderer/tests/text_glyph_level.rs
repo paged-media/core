@@ -179,7 +179,7 @@ fn build_two_run_idml(font_a: &str, font_b: &str) -> Vec<u8> {
 #[test]
 fn per_run_font_switch_emits_two_path_id_groups_in_order() {
     let bytes = build_two_run_idml("Inter", "Lora");
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -291,7 +291,7 @@ fn build_threaded_idml() -> Vec<u8> {
 #[test]
 fn threaded_story_glyphs_land_in_both_frames_with_monotonic_baselines() {
     let bytes = build_threaded_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -431,12 +431,12 @@ fn underline_emits_horizontal_stroke_below_baseline() {
     };
 
     let plain = pipeline::build_document(
-        &paged_parse::import_idml_doc(&build_decoration_idml("", "Underline")).unwrap(),
+        &idml_import::import_idml_doc(&build_decoration_idml("", "Underline")).unwrap(),
         &opts,
     )
     .unwrap();
     let under = pipeline::build_document(
-        &paged_parse::import_idml_doc(&build_decoration_idml(r#" Underline="true""#, "Underline"))
+        &idml_import::import_idml_doc(&build_decoration_idml(r#" Underline="true""#, "Underline"))
             .unwrap(),
         &opts,
     )
@@ -487,13 +487,13 @@ fn strikethrough_emits_horizontal_stroke_above_baseline() {
     };
 
     let strike = pipeline::build_document(
-        &paged_parse::import_idml_doc(&build_decoration_idml(r#" StrikeThru="true""#, "Strike"))
+        &idml_import::import_idml_doc(&build_decoration_idml(r#" StrikeThru="true""#, "Strike"))
             .unwrap(),
         &opts,
     )
     .unwrap();
     let both = pipeline::build_document(
-        &paged_parse::import_idml_doc(&build_decoration_idml(
+        &idml_import::import_idml_doc(&build_decoration_idml(
             r#" StrikeThru="true" Underline="true""#,
             "Both",
         ))
@@ -582,7 +582,7 @@ fn vertical_justify_shifts_first_glyph_baseline_by_distinct_amounts() {
 
     let first_glyph_y = |vj: &str| -> f32 {
         let bytes = build_vj_idml(vj);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let built = pipeline::build_document(&doc, &opts).unwrap();
         let xys = glyph_xys(&built.pages[0].list.commands);
         assert!(!xys.is_empty(), "VJ {vj} must emit glyphs");
@@ -662,7 +662,7 @@ fn bullet_glyph_precedes_content_glyphs_at_inherited_scale() {
     };
 
     // U+2022 = BULLET
-    let bullet_doc = paged_parse::import_idml_doc(&build_bullet_idml(0x2022)).unwrap();
+    let bullet_doc = idml_import::import_idml_doc(&build_bullet_idml(0x2022)).unwrap();
     let bullet_built = pipeline::build_document(&bullet_doc, &opts).unwrap();
     let bullet_xys = glyph_xys(&bullet_built.pages[0].list.commands);
 
@@ -696,7 +696,7 @@ fn bullet_glyph_precedes_content_glyphs_at_inherited_scale() {
 </idPkg:Story>"#,
         );
     });
-    let plain_doc = paged_parse::import_idml_doc(&plain_bytes).unwrap();
+    let plain_doc = idml_import::import_idml_doc(&plain_bytes).unwrap();
     let plain_built = pipeline::build_document(&plain_doc, &opts).unwrap();
     let plain_xys = glyph_xys(&plain_built.pages[0].list.commands);
 
@@ -810,7 +810,7 @@ fn bullet_character_style_paints_bullet_differently_from_content() {
         ..PipelineOptions::default()
     };
 
-    let doc = paged_parse::import_idml_doc(&build_bullet_with_character_style_idml()).unwrap();
+    let doc = idml_import::import_idml_doc(&build_bullet_with_character_style_idml()).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
 
     // Collect every glyph FillPath in emit order. The filter mirrors
@@ -924,7 +924,7 @@ fn numbered_list_emits_three_distinct_counter_prefixes() {
         ..PipelineOptions::default()
     };
 
-    let doc = paged_parse::import_idml_doc(&build_numbered_list_idml()).unwrap();
+    let doc = idml_import::import_idml_doc(&build_numbered_list_idml()).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let xys = glyph_xys(&built.pages[0].list.commands);
 
@@ -1115,7 +1115,7 @@ fn numbering_expression_substitution_produces_more_glyphs_per_paragraph() {
             <Content>X</Content>
           </CharacterStyleRange>
         </ParagraphStyleRange>"#;
-    let doc = paged_parse::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
+    let doc = idml_import::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
     assert!(
@@ -1163,7 +1163,7 @@ fn numbering_start_at_5_emits_5_glyph_not_1_glyph() {
             <Content>X</Content>
           </CharacterStyleRange>
         </ParagraphStyleRange>"#;
-    let doc = paged_parse::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
+    let doc = idml_import::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
     assert!(
@@ -1218,7 +1218,7 @@ fn numbering_continue_resumes_count_across_non_numbered_paragraph() {
             <Content>C</Content>
           </CharacterStyleRange>
         </ParagraphStyleRange>"#;
-    let doc = paged_parse::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
+    let doc = idml_import::import_idml_doc(&build_numbering_idml(paragraphs)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
     assert!(
@@ -1252,7 +1252,7 @@ fn numbering_continue_resumes_count_across_non_numbered_paragraph() {
             <Content>C</Content>
           </CharacterStyleRange>
         </ParagraphStyleRange>"#;
-    let doc = paged_parse::import_idml_doc(&build_numbering_idml(reset_paragraphs)).unwrap();
+    let doc = idml_import::import_idml_doc(&build_numbering_idml(reset_paragraphs)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
     let reset_leading = rows[2][0].1;
@@ -1357,7 +1357,7 @@ fn two_story_marker_glyphs(continue_across: bool) -> (u32, u32) {
         ..PipelineOptions::default()
     };
     let doc =
-        paged_parse::import_idml_doc(&build_two_story_numbering_idml(continue_across)).unwrap();
+        idml_import::import_idml_doc(&build_two_story_numbering_idml(continue_across)).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     let rows = glyphs_by_baseline(&built.pages[0].list.commands);
     // Buckets are baseline-sorted top→bottom: rows[0] = story A item 1
@@ -1472,7 +1472,7 @@ fn tab_stop_leader_dots_tile_across_the_gap() {
     // segment near the 400 pt stop, frame origin 40, so ending near
     // x ≈ 440) must contain many `.` glyphs.
     let bytes_with = build_toc_leader_idml(r#" Leader=".""#);
-    let doc_with = paged_parse::import_idml_doc(&bytes_with).unwrap();
+    let doc_with = idml_import::import_idml_doc(&bytes_with).unwrap();
     let built_with = pipeline::build_document(&doc_with, &opts).unwrap();
     let cmds_with = &built_with.pages[0].list.commands;
 
@@ -1490,7 +1490,7 @@ fn tab_stop_leader_dots_tile_across_the_gap() {
     // in the gap. The tab still snaps "Page 3" to the right, so the
     // gap is structurally the same width.
     let bytes_without = build_toc_leader_idml("");
-    let doc_without = paged_parse::import_idml_doc(&bytes_without).unwrap();
+    let doc_without = idml_import::import_idml_doc(&bytes_without).unwrap();
     let built_without = pipeline::build_document(&doc_without, &opts).unwrap();
     let cmds_without = &built_without.pages[0].list.commands;
     let no_leader_count = glyphs_in_x_range(cmds_without, 130.0, 380.0);
@@ -1592,7 +1592,7 @@ fn build_table_header_replay_idml() -> Vec<u8> {
 #[test]
 fn threaded_table_replays_header_row_at_top_of_each_frame() {
     let bytes = build_table_header_replay_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -1734,7 +1734,7 @@ fn build_table_row_growth_idml() -> Vec<u8> {
 #[test]
 fn table_row_grows_to_fit_content_when_single_row_height_too_small() {
     let bytes = build_table_row_growth_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -1856,7 +1856,7 @@ fn glyph_signature(cmds: &[DisplayCommand]) -> Vec<(u32, i64, i64)> {
 #[test]
 fn face_cache_multi_paragraph_render_is_deterministic_and_reuses_glyphs() {
     let bytes = build_many_paragraph_idml(20);
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -2026,7 +2026,7 @@ fn build_toc_idml() -> Vec<u8> {
 #[test]
 fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
     let bytes = build_toc_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -2213,7 +2213,7 @@ fn build_rotated_text_idml() -> Vec<u8> {
 #[test]
 fn rotated_text_frame_emits_glyphs_along_rotated_axis() {
     let bytes = build_rotated_text_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -2323,7 +2323,7 @@ fn build_master_full_bleed_idml() -> Vec<u8> {
 #[test]
 fn master_full_bleed_rectangle_reaches_both_body_pages() {
     let bytes = build_master_full_bleed_idml();
-    let doc = paged_parse::import_idml_doc(&bytes).expect("open synthetic master IDML");
+    let doc = idml_import::import_idml_doc(&bytes).expect("open synthetic master IDML");
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&doc, &opts).expect("build document");
 
@@ -2385,12 +2385,12 @@ fn horizontal_scale_folds_into_glyph_advance_and_affine() {
         ..PipelineOptions::default()
     };
     let baseline_bytes = build_decoration_idml("", content);
-    let baseline_doc = paged_parse::import_idml_doc(&baseline_bytes).unwrap();
+    let baseline_doc = idml_import::import_idml_doc(&baseline_bytes).unwrap();
     let baseline_built = pipeline::build_document(&baseline_doc, &opts()).unwrap();
     let baseline_xs = glyph_xs(&baseline_built.pages[0]);
 
     let stretched_bytes = build_decoration_idml(" HorizontalScale=\"200\"", content);
-    let stretched_doc = paged_parse::import_idml_doc(&stretched_bytes).unwrap();
+    let stretched_doc = idml_import::import_idml_doc(&stretched_bytes).unwrap();
     let stretched_built = pipeline::build_document(&stretched_doc, &opts()).unwrap();
     let stretched_xs = glyph_xs(&stretched_built.pages[0]);
     let stretched_affines = glyph_affines(&stretched_built.pages[0]);
@@ -2492,7 +2492,7 @@ fn per_run_fill_color_on_character_style_range_paints_run_specific_colour() {
         put(zip, "Spreads/Spread_sp1.xml", spread);
         put(zip, "Stories/Story_u10.xml", story);
     });
-    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -2585,7 +2585,7 @@ fn cycle4_q07_positive_tracking_widens_emitted_glyph_advances() {
 
     let glyphs_at_tracking = |t: i32| -> Vec<(f32, f32, f32)> {
         let bytes = build_tracking_idml(t);
-        let doc = paged_parse::import_idml_doc(&bytes).unwrap();
+        let doc = idml_import::import_idml_doc(&bytes).unwrap();
         let built = pipeline::build_document(&doc, &opts).unwrap();
         glyph_xys(&built.pages[0].list.commands)
     };
@@ -2618,8 +2618,8 @@ fn cycle4_q07_negative_tracking_tightens_emitted_glyph_advances() {
 
     let bytes_pos = build_tracking_idml(0);
     let bytes_neg = build_tracking_idml(-100);
-    let doc_pos = paged_parse::import_idml_doc(&bytes_pos).unwrap();
-    let doc_neg = paged_parse::import_idml_doc(&bytes_neg).unwrap();
+    let doc_pos = idml_import::import_idml_doc(&bytes_pos).unwrap();
+    let doc_neg = idml_import::import_idml_doc(&bytes_neg).unwrap();
     let built_pos = pipeline::build_document(&doc_pos, &opts).unwrap();
     let built_neg = pipeline::build_document(&doc_neg, &opts).unwrap();
 

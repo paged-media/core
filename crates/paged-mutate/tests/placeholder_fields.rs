@@ -82,7 +82,7 @@ fn two_story_idml() -> Vec<u8> {
 }
 
 fn open_doc() -> Document {
-    paged_parse::import_idml_doc(&two_story_idml()).expect("open synthetic IDML")
+    idml_import::import_idml_doc(&two_story_idml()).expect("open synthetic IDML")
 }
 
 /// The story's flattened char-space text (sum of run texts — the same

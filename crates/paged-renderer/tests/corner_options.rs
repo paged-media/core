@@ -23,7 +23,7 @@ use paged_compose::{DisplayCommand, PathSegment};
 fn build_corners() -> paged_renderer::pipeline::BuiltDocument {
     let sample = paged_gen::samples::corners::build();
     let bytes = paged_gen::write_idml(&sample).expect("write corners idml");
-    let doc = paged_parse::import_idml_doc(&bytes).expect("open corners idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("open corners idml");
     let options = paged_renderer::pipeline::PipelineOptions::default();
     paged_renderer::pipeline::build_document(&doc, &options).expect("build corners")
 }

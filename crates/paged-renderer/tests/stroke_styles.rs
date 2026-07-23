@@ -99,7 +99,7 @@ fn build_idml(rect_attrs: &str, stroke_style_xml: &str) -> Vec<u8> {
 }
 
 fn built_commands(bytes: &[u8]) -> Vec<DisplayCommand> {
-    let document = paged_parse::import_idml_doc(bytes).unwrap();
+    let document = idml_import::import_idml_doc(bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     built.pages[0].list.commands.clone()
 }
@@ -116,7 +116,7 @@ fn stroke_paths(cmds: &[DisplayCommand]) -> Vec<&DisplayCommand> {
 /// stroke-alignment inset live in the transform, so the page-space
 /// bounds are what reflect the alignment shift.
 fn stroke_path_bounds(bytes: &[u8]) -> (f32, f32, f32, f32) {
-    let document = paged_parse::import_idml_doc(bytes).unwrap();
+    let document = idml_import::import_idml_doc(bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let (path_id, transform) = page
@@ -206,7 +206,7 @@ fn wavy_stroke_emits_a_polyline_strokepath() {
         r#"StrokeColor="Color/Black" StrokeWeight="10" StrokeType="StrokeStyle/Wavy""#,
         style,
     );
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let strokes = stroke_paths(&page.list.commands);
@@ -236,7 +236,7 @@ fn gap_color_dash_emits_under_stroke_plus_dash() {
         r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/GapDash""#,
         style,
     );
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let strokes = stroke_paths(&page.list.commands);
@@ -278,7 +278,7 @@ fn gap_tint_lightens_the_rendered_gap_colour() {
             r#"StrokeColor="Color/Black" StrokeWeight="8" StrokeType="StrokeStyle/GapDash""#,
             &style,
         );
-        let document = paged_parse::import_idml_doc(&bytes).unwrap();
+        let document = idml_import::import_idml_doc(&bytes).unwrap();
         let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
         let page = &built.pages[0];
         let strokes = stroke_paths(&page.list.commands);
@@ -329,7 +329,7 @@ fn frame_gap_color_overrides_style_def_gap_color() {
            GapColor="Color/Black" GapTint="100""#,
         style,
     );
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let strokes = stroke_paths(&page.list.commands);
@@ -740,7 +740,7 @@ fn polygon_sharp_corner_bevels_past_miter_limit() {
             r#"StrokeColor="Color/Black" StrokeWeight="22" EndJoin="MiterEndJoin" MiterLimit="{miter}""#
         );
         let bytes = build_spike_polygon_idml(&attrs);
-        let document = paged_parse::import_idml_doc(&bytes).unwrap();
+        let document = idml_import::import_idml_doc(&bytes).unwrap();
         let opts = PipelineOptions::default();
         let (_built, images) =
             pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();

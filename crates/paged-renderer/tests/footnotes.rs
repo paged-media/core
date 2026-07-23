@@ -40,7 +40,7 @@ fn read_font(name: &str) -> Vec<u8> {
 fn build_footnotes() -> paged_renderer::BuiltDocument {
     let sample = paged_gen::samples::footnotes::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = paged_parse::import_idml_doc(&bytes).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
 
     let font = read_font("OpenSans.ttf");
     let opts = PipelineOptions {
