@@ -77,7 +77,7 @@ fn model() -> CanvasModel {
     CanvasModel::load("doc1", &small_idml(), CanvasOptions::default()).expect("load")
 }
 
-fn poly_anchor(m: &CanvasModel, id: &str, idx: usize) -> paged_parse::PathAnchor {
+fn poly_anchor(m: &CanvasModel, id: &str, idx: usize) -> paged_model::PathAnchor {
     m.scene()
         .spreads
         .iter()

@@ -1651,7 +1651,7 @@ pub struct PathAnchorTriple {
     pub right: [f32; 2],
 }
 
-/// Track M — wire-shape mirror of `paged_parse::Layer`. Surfaces
+/// Track M — wire-shape mirror of `paged_model::Layer`. Surfaces
 /// everything the Layers panel needs without leaking parse-side
 /// fields the wasm boundary doesn't understand. `z` is the layer's
 /// zero-based index in `designmap.layers` (top-first, matching the

@@ -20,6 +20,7 @@ cpu = ["paged-renderer/cpu"]
 [dependencies]
 paged-renderer = { path = "../paged-renderer", default-features = false }
 paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-compose = { path = "../paged-compose" }
 paged-text = { path = "../paged-text" }

@@ -446,12 +446,12 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> paged_mutate:
 /// appear as children. Returns `None` for empty / unresolvable
 /// references.
 fn frame_to_tree_node(
-    spread: &paged_parse::Spread,
-    fr: paged_parse::FrameRef,
+    spread: &paged_model::Spread,
+    fr: paged_model::FrameRef,
 ) -> Option<crate::channel::SceneTreeNode> {
     use crate::channel::SceneTreeNode;
     use crate::element_selection::ElementId;
-    use paged_parse::FrameRef;
+    use paged_model::FrameRef;
     match fr {
         FrameRef::TextFrame(i) => spread.text_frames.get(i).and_then(|f| {
             let id = f.self_id.clone()?;
@@ -521,9 +521,9 @@ fn frame_to_tree_node(
 /// box folded in. `None` when the group is empty / unresolvable. Used
 /// by the Group read-side descriptor so the layers/tree panel can show
 /// a group's extent and the inspector can pivot scale/rotate gestures.
-fn group_union_aabb(spread: &paged_parse::Spread, group_idx: usize) -> Option<paged_parse::Bounds> {
-    use paged_parse::{Bounds, FrameRef};
-    fn leaf_box(spread: &paged_parse::Spread, r: FrameRef) -> Option<Bounds> {
+fn group_union_aabb(spread: &paged_model::Spread, group_idx: usize) -> Option<paged_model::Bounds> {
+    use paged_model::{Bounds, FrameRef};
+    fn leaf_box(spread: &paged_model::Spread, r: FrameRef) -> Option<Bounds> {
         let (bounds, it) = match r {
             FrameRef::TextFrame(i) => spread
                 .text_frames
@@ -545,7 +545,7 @@ fn group_union_aabb(spread: &paged_parse::Spread, group_idx: usize) -> Option<pa
         // oriented (bounds × item_transform) box in spread space.
         Some(crate::hit::transform_bbox(bounds, it))
     }
-    fn walk(spread: &paged_parse::Spread, gi: usize, acc: &mut Option<Bounds>) {
+    fn walk(spread: &paged_model::Spread, gi: usize, acc: &mut Option<Bounds>) {
         let Some(group) = spread.groups.get(gi) else {
             return;
         };
@@ -600,8 +600,8 @@ fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
 // (private there); the inspector needs the same canonical strings so
 // the snapshot round-trips through `apply`. ----------------------
 
-fn vertical_justification_idml(v: paged_parse::VerticalJustification) -> &'static str {
-    use paged_parse::VerticalJustification as V;
+fn vertical_justification_idml(v: paged_model::VerticalJustification) -> &'static str {
+    use paged_model::VerticalJustification as V;
     match v {
         V::Top => "TopAlign",
         V::Center => "CenterAlign",
@@ -610,8 +610,8 @@ fn vertical_justification_idml(v: paged_parse::VerticalJustification) -> &'stati
     }
 }
 
-fn auto_sizing_idml(v: paged_parse::AutoSizingType) -> &'static str {
-    use paged_parse::AutoSizingType as A;
+fn auto_sizing_idml(v: paged_model::AutoSizingType) -> &'static str {
+    use paged_model::AutoSizingType as A;
     match v {
         A::Off => "Off",
         A::HeightOnly => "HeightOnly",
@@ -621,8 +621,8 @@ fn auto_sizing_idml(v: paged_parse::AutoSizingType) -> &'static str {
     }
 }
 
-fn first_baseline_idml(v: paged_parse::FirstBaselineOffset) -> &'static str {
-    use paged_parse::FirstBaselineOffset as F;
+fn first_baseline_idml(v: paged_model::FirstBaselineOffset) -> &'static str {
+    use paged_model::FirstBaselineOffset as F;
     match v {
         F::AscentOffset => "AscentOffset",
         F::CapHeight => "CapHeight",
@@ -633,8 +633,8 @@ fn first_baseline_idml(v: paged_parse::FirstBaselineOffset) -> &'static str {
     }
 }
 
-fn corner_option_idml(v: paged_parse::CornerOption) -> &'static str {
-    use paged_parse::CornerOption as C;
+fn corner_option_idml(v: paged_model::CornerOption) -> &'static str {
+    use paged_model::CornerOption as C;
     match v {
         C::None => "None",
         C::Rounded => "RoundedCorner",
@@ -672,7 +672,7 @@ fn decompose_flip_v(m: Option<[f32; 6]>) -> bool {
 /// `blend_mode` slot (the `<BlendingSetting>` Opacity half is already
 /// surfaced as `FrameOpacity`).
 fn effect_property_entries(
-    effects: Option<&paged_parse::FrameEffects>,
+    effects: Option<&paged_model::FrameEffects>,
     blend_mode: Option<&str>,
 ) -> Vec<crate::channel::PropertyEntry> {
     use crate::channel::PropertyEntry;
@@ -1519,8 +1519,8 @@ impl CanvasModel {
                 ruler_guides.push(RulerGuideWire {
                     page_id: PageId(sid),
                     orientation: match g.orientation {
-                        paged_parse::GuideOrientation::Vertical => GuideOrientationWire::Vertical,
-                        paged_parse::GuideOrientation::Horizontal => {
+                        paged_model::GuideOrientation::Vertical => GuideOrientationWire::Vertical,
+                        paged_model::GuideOrientation::Horizontal => {
                             GuideOrientationWire::Horizontal
                         }
                     },
@@ -1731,7 +1731,7 @@ impl CanvasModel {
                 .palette
                 .colors
                 .get(spot_id)
-                .is_some_and(|c| c.model == paged_parse::graphic::ColorModel::Spot);
+                .is_some_and(|c| c.model == paged_model::ColorModel::Spot);
             if !is_spot {
                 return Err(crate::channel::WorkerError::NotImplemented {
                     what: format!("{spot_id:?} is not a spot swatch"),
@@ -3055,7 +3055,7 @@ impl CanvasModel {
     /// is read from the now-mutated scene. `None` when the id doesn't
     /// resolve.
     pub(crate) fn frame_content_box(&self, frame_id: &str) -> Option<[f32; 4]> {
-        let to_arr = |b: &paged_parse::spread::Bounds| [b.top, b.left, b.bottom, b.right];
+        let to_arr = |b: &paged_model::Bounds| [b.top, b.left, b.bottom, b.right];
         for parsed in &self.scene.spreads {
             let s = &parsed.spread;
             if let Some(f) = s
@@ -3529,8 +3529,8 @@ impl CanvasModel {
         id: &crate::element_selection::ElementId,
     ) -> Option<crate::channel::ElementProperties> {
         use crate::channel::{ElementProperties, PropertyEntry};
+        use paged_model::{AnchoredFrame, AnchoredObjectSetting};
         use paged_mutate::{PropertyPath, Value};
-        use paged_parse::{AnchoredFrame, AnchoredObjectSetting};
 
         let raw = id.raw_id();
 
@@ -4380,7 +4380,7 @@ impl CanvasModel {
                     .position(|g| g.self_id.as_deref() == Some(raw))
                     .map(|gi| {
                         let g = &spread.groups[gi];
-                        let bounds = group_union_aabb(spread, gi).unwrap_or(paged_parse::Bounds {
+                        let bounds = group_union_aabb(spread, gi).unwrap_or(paged_model::Bounds {
                             top: 0.0,
                             left: 0.0,
                             bottom: 0.0,
@@ -4550,14 +4550,14 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeStartArrowhead,
                                 value: Some(Value::Text(match l.start_arrow {
-                                    paged_parse::ArrowheadType::None => String::new(),
+                                    paged_model::ArrowheadType::None => String::new(),
                                     t => t.as_idml().to_string(),
                                 })),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeEndArrowhead,
                                 value: Some(Value::Text(match l.end_arrow {
-                                    paged_parse::ArrowheadType::None => String::new(),
+                                    paged_model::ArrowheadType::None => String::new(),
                                     t => t.as_idml().to_string(),
                                 })),
                             },
@@ -4686,9 +4686,9 @@ impl CanvasModel {
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
-        let mut rule_aboves: Vec<paged_parse::styles::ParagraphRule> = Vec::new();
-        let mut rule_belows: Vec<paged_parse::styles::ParagraphRule> = Vec::new();
-        let mut tab_lists: Vec<Vec<paged_parse::TabStop>> = Vec::new();
+        let mut rule_aboves: Vec<paged_model::ParagraphRule> = Vec::new();
+        let mut rule_belows: Vec<paged_model::ParagraphRule> = Vec::new();
+        let mut tab_lists: Vec<Vec<paged_model::TabStop>> = Vec::new();
 
         let mut char_offset: u32 = 0;
         for para in &story.paragraphs {
@@ -4975,7 +4975,7 @@ impl CanvasModel {
 
     /// W3.A1 — locate a `<Table>` by `(story_id, table_id)` for the
     /// inspector read-side. Returns the host paragraph's table ref.
-    fn find_table_read(&self, story_id: &str, table_id: &str) -> Option<&paged_parse::Table> {
+    fn find_table_read(&self, story_id: &str, table_id: &str) -> Option<&paged_model::Table> {
         let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
         story.story.paragraphs.iter().find_map(|p| {
             p.table
@@ -5147,10 +5147,10 @@ impl CanvasModel {
     /// `docs/paged/panel-catalog-and-sdk-extension.md` §5.1.
     pub fn swatches(&self) -> Vec<crate::channel::SwatchSummary> {
         use crate::channel::SwatchSummary;
-        use paged_parse::ColorModel;
+        use paged_model::ColorModel;
         let mut out = Vec::with_capacity(self.scene.palette.colors.len());
         for (self_id, color) in self.scene.palette.colors.iter() {
-            let kind = match paged_parse::graphic::ReservedSwatch::classify(self_id) {
+            let kind = match paged_model::ReservedSwatch::classify(self_id) {
                 Some(r) => r.label(),
                 None => match color.model {
                     ColorModel::Process => "process",
@@ -5208,7 +5208,7 @@ impl CanvasModel {
     /// string the panel can render directly. None when the swatch
     /// id doesn't resolve.
     pub fn color_preview(&self, swatch_id: &str) -> Option<crate::channel::ColorPreview> {
-        use paged_parse::graphic::ColorModel;
+        use paged_model::ColorModel;
         let color = self.scene.palette.colors.get(swatch_id)?;
         let model = match color.model {
             ColorModel::Process => "process",
@@ -5216,7 +5216,7 @@ impl CanvasModel {
             ColorModel::MixedInk => "mixedInk",
             ColorModel::Unknown => "unknown",
         };
-        let model_str = match paged_parse::graphic::ReservedSwatch::classify(swatch_id) {
+        let model_str = match paged_model::ReservedSwatch::classify(swatch_id) {
             Some(r) => r.label(),
             None => model,
         };
@@ -5263,11 +5263,11 @@ impl CanvasModel {
             out_of_gamut,
             space: Some(
                 match color.space {
-                    paged_parse::graphic::ColorSpace::Cmyk => "CMYK",
-                    paged_parse::graphic::ColorSpace::Rgb => "RGB",
-                    paged_parse::graphic::ColorSpace::Lab => "LAB",
-                    paged_parse::graphic::ColorSpace::Gray => "Gray",
-                    paged_parse::graphic::ColorSpace::Unknown => "Unknown",
+                    paged_model::ColorSpace::Cmyk => "CMYK",
+                    paged_model::ColorSpace::Rgb => "RGB",
+                    paged_model::ColorSpace::Lab => "LAB",
+                    paged_model::ColorSpace::Gray => "Gray",
+                    paged_model::ColorSpace::Unknown => "Unknown",
                 }
                 .to_string(),
             ),
@@ -5309,10 +5309,10 @@ impl CanvasModel {
                     .map(|(gi, g)| GuideSummary {
                         id: format!("Guide/{spread_self}/{gi}"),
                         orientation: match g.orientation {
-                            paged_parse::GuideOrientation::Vertical => {
+                            paged_model::GuideOrientation::Vertical => {
                                 GuideOrientationWire::Vertical
                             }
-                            paged_parse::GuideOrientation::Horizontal => {
+                            paged_model::GuideOrientation::Horizontal => {
                                 GuideOrientationWire::Horizontal
                             }
                         },
@@ -5341,7 +5341,7 @@ impl CanvasModel {
         let bleed = self.scene.designmap.document_preference;
         // Build page-self-id → MarginPreference once across all
         // spreads (each spread carries its own pages' margins).
-        let mut margins: std::collections::HashMap<&str, &paged_parse::MarginPreference> =
+        let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
         for parsed in &self.scene.spreads {
             for (pid, m) in &parsed.spread.page_margins {
@@ -5740,7 +5740,7 @@ impl CanvasModel {
         let summary = |self_id: String,
                        host_kind: &str,
                        uri: String,
-                       meta: Option<&paged_parse::ImageMetadata>| {
+                       meta: Option<&paged_model::ImageMetadata>| {
             LinkSummary {
                 status: if missing.contains(&self_id) {
                     "missing"
@@ -5845,7 +5845,7 @@ impl CanvasModel {
     /// `kind` is the IDML `Type` attribute — `"linear"` / `"radial"`.
     pub fn gradients(&self) -> Vec<crate::channel::GradientSummary> {
         use crate::channel::GradientSummary;
-        use paged_parse::GradientKind;
+        use paged_model::GradientKind;
         self.scene
             .palette
             .gradients
@@ -5870,7 +5870,7 @@ impl CanvasModel {
     /// resolved through the active CMM, so the ramp editor paints
     /// faithfully under the current working space.
     pub fn gradient_detail(&self, gradient_id: &str) -> Option<crate::channel::GradientDetail> {
-        use paged_parse::GradientKind;
+        use paged_model::GradientKind;
         let g = self.scene.palette.gradients.get(gradient_id)?;
         let kind = match g.kind {
             GradientKind::Linear => "linear",
@@ -5916,7 +5916,7 @@ impl CanvasModel {
     /// swatches and unknown spaces are skipped.
     pub fn export_ase(&self, group_id: Option<&str>) -> Vec<u8> {
         use paged_color::ase::{AseEntry, AseGroup, AseKind, AseLibrary, AseSpace};
-        use paged_parse::graphic::{ColorModel, ColorSpace};
+        use paged_model::{ColorModel, ColorSpace};
         let entry_of = |id: &str| -> Option<AseEntry> {
             // Reserved swatches aren't exchange material.
             if matches!(
@@ -5987,7 +5987,7 @@ impl CanvasModel {
             .palette
             .colors
             .iter()
-            .filter(|(_, c)| c.model == paged_parse::graphic::ColorModel::Spot)
+            .filter(|(_, c)| c.model == paged_model::ColorModel::Spot)
             .map(|(id, c)| {
                 let setting = self.ink_settings.get(id);
                 crate::channel::InkSummary {
@@ -6134,7 +6134,7 @@ impl CanvasModel {
     /// eagerly; the panel can re-fetch on `mutationApplied`.
     pub fn scene_tree(&self) -> Vec<crate::channel::SceneTreeNode> {
         use crate::channel::SceneTreeNode;
-        use paged_parse::FrameRef;
+        use paged_model::FrameRef;
         let mut spread_nodes = Vec::with_capacity(self.scene.spreads.len());
         for (si, parsed) in self.scene.spreads.iter().enumerate() {
             let spread = &parsed.spread;
@@ -6197,46 +6197,46 @@ impl CanvasModel {
             };
             // Recurse via a worklist instead of true recursion so we
             // don't blow the stack on pathological group nesting.
-            let mut stack: Vec<&paged_parse::Group> = vec![group];
+            let mut stack: Vec<&paged_model::Group> = vec![group];
             while let Some(g) = stack.pop() {
                 for member in &g.members {
                     match *member {
-                        paged_parse::FrameRef::TextFrame(i) => {
+                        paged_model::FrameRef::TextFrame(i) => {
                             if let Some(f) = spread.text_frames.get(i) {
                                 if let Some(id) = f.self_id.as_deref() {
                                     out.push(ElementId::TextFrame(id.to_string()));
                                 }
                             }
                         }
-                        paged_parse::FrameRef::Rectangle(i) => {
+                        paged_model::FrameRef::Rectangle(i) => {
                             if let Some(f) = spread.rectangles.get(i) {
                                 if let Some(id) = f.self_id.as_deref() {
                                     out.push(ElementId::Rectangle(id.to_string()));
                                 }
                             }
                         }
-                        paged_parse::FrameRef::Oval(i) => {
+                        paged_model::FrameRef::Oval(i) => {
                             if let Some(f) = spread.ovals.get(i) {
                                 if let Some(id) = f.self_id.as_deref() {
                                     out.push(ElementId::Oval(id.to_string()));
                                 }
                             }
                         }
-                        paged_parse::FrameRef::Polygon(i) => {
+                        paged_model::FrameRef::Polygon(i) => {
                             if let Some(f) = spread.polygons.get(i) {
                                 if let Some(id) = f.self_id.as_deref() {
                                     out.push(ElementId::Polygon(id.to_string()));
                                 }
                             }
                         }
-                        paged_parse::FrameRef::GraphicLine(i) => {
+                        paged_model::FrameRef::GraphicLine(i) => {
                             if let Some(f) = spread.graphic_lines.get(i) {
                                 if let Some(id) = f.self_id.as_deref() {
                                     out.push(ElementId::GraphicLine(id.to_string()));
                                 }
                             }
                         }
-                        paged_parse::FrameRef::Group(i) => {
+                        paged_model::FrameRef::Group(i) => {
                             if let Some(nested) = spread.groups.get(i) {
                                 stack.push(nested);
                             }
@@ -6295,7 +6295,7 @@ impl CanvasModel {
         cell: Option<&crate::selection::TextCellAddr>,
     ) -> Option<String> {
         let story = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
-        let paragraphs: &[paged_parse::Paragraph] = match cell {
+        let paragraphs: &[paged_model::Paragraph] = match cell {
             None => &story.story.paragraphs,
             Some(addr) => {
                 let table = story
@@ -6370,7 +6370,7 @@ impl CanvasModel {
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;
-                let resolved: Option<(paged_parse::Bounds, Option<[f32; 6]>, bool)> = match id {
+                let resolved: Option<(paged_model::Bounds, Option<[f32; 6]>, bool)> = match id {
                     ElementId::TextFrame(_) => spread
                         .text_frames
                         .iter()
@@ -6491,12 +6491,12 @@ impl CanvasModel {
     ) -> Option<crate::channel::PathAnchorsResult> {
         use crate::channel::{PathAnchorTriple, PathAnchorsResult};
         use crate::element_selection::ElementId;
-        use paged_parse::PathAnchor;
+        use paged_model::PathAnchor;
 
         // Resolved per-frame path geometry borrowed from the scene:
         // (bounds, item_transform, anchors, subpath_starts, subpath_open).
         type FramePathGeom<'a> = (
-            paged_parse::Bounds,
+            paged_model::Bounds,
             Option<[f32; 6]>,
             &'a [PathAnchor],
             &'a [usize],
@@ -6626,10 +6626,10 @@ impl CanvasModel {
         if table.anchors.is_empty() {
             return None;
         }
-        let anchors: Vec<paged_parse::PathAnchor> = table
+        let anchors: Vec<paged_model::PathAnchor> = table
             .anchors
             .iter()
-            .map(|a| paged_parse::PathAnchor {
+            .map(|a| paged_model::PathAnchor {
                 anchor: (a.anchor[0], a.anchor[1]),
                 left: (a.left[0], a.left[1]),
                 right: (a.right[0], a.right[1]),
@@ -6729,11 +6729,11 @@ impl CanvasModel {
         self.use_standard_lab_for_spots
     }
 
-    pub fn document_preference(&self) -> paged_parse::DocumentPreference {
+    pub fn document_preference(&self) -> paged_model::DocumentPreference {
         self.scene.designmap.document_preference
     }
 
-    pub fn palette(&self) -> &paged_parse::graphic::Graphic {
+    pub fn palette(&self) -> &paged_model::Graphic {
         &self.scene.palette
     }
 
@@ -7144,7 +7144,7 @@ impl CanvasModel {
         alternate_space: Option<&str>,
         alternate_value: Option<&[f32]>,
     ) -> (String, Option<[f32; 4]>, bool) {
-        use paged_parse::graphic::{ColorEntry, ColorModel, ColorSpace};
+        use paged_model::{ColorEntry, ColorModel, ColorSpace};
         let parse_space = |s: &str| match s {
             "CMYK" | "cmyk" => ColorSpace::Cmyk,
             "RGB" | "rgb" => ColorSpace::Rgb,
@@ -7251,7 +7251,7 @@ fn phase_elapsed_ms(start: std::time::Instant) -> f64 {
 /// exact swatch semantics the renderer uses); non-CMYK spaces map
 /// directly. `None` = unresolvable (e.g. a spot with no CMYK
 /// alternate and a non-Lab primary).
-fn working_color_of(entry: &paged_parse::graphic::ColorEntry) -> Option<paged_color::WorkingColor> {
+fn working_color_of(entry: &paged_model::ColorEntry) -> Option<paged_color::WorkingColor> {
     working_color_of_with(entry, false)
 }
 
@@ -7260,12 +7260,12 @@ fn working_color_of(entry: &paged_parse::graphic::ColorEntry) -> Option<paged_co
 /// Lab resolves device-independently instead of via its CMYK
 /// alternate.
 fn working_color_of_with(
-    entry: &paged_parse::graphic::ColorEntry,
+    entry: &paged_model::ColorEntry,
     use_standard_lab_for_spots: bool,
 ) -> Option<paged_color::WorkingColor> {
-    use paged_parse::graphic::ColorSpace;
+    use paged_model::ColorSpace;
     if use_standard_lab_for_spots
-        && entry.model == paged_parse::graphic::ColorModel::Spot
+        && entry.model == paged_model::ColorModel::Spot
         && entry.space == ColorSpace::Lab
         && entry.value.len() == 3
     {

@@ -33,8 +33,8 @@
 //! display-list build composes — only worth the complexity once
 //! per-update rebuild perf hits a wall.
 
+use paged_model::Bounds;
 use paged_mutate::{NodeId, NodeSpec, Operation, PropertyPath, Value};
-use paged_parse::Bounds;
 use paged_renderer::PageId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -302,7 +302,7 @@ pub struct NodeSnapshot {
     /// Empty for non-Polygon shapes. Used by `PathEdit` so the
     /// preview can recompute the new point from snapshot + delta on
     /// every update.
-    pub(crate) path_anchors: Vec<paged_parse::PathAnchor>,
+    pub(crate) path_anchors: Vec<paged_model::PathAnchor>,
 }
 
 /// One active gesture. Lives on `CanvasModel`. Only one gesture is
@@ -536,8 +536,8 @@ impl CanvasModel {
                     };
                     let entry = guides_by_page.entry(sid).or_default();
                     match g.orientation {
-                        paged_parse::GuideOrientation::Vertical => entry.0.push(g.location),
-                        paged_parse::GuideOrientation::Horizontal => entry.1.push(g.location),
+                        paged_model::GuideOrientation::Vertical => entry.0.push(g.location),
+                        paged_model::GuideOrientation::Horizontal => entry.1.push(g.location),
                     }
                 }
             }
@@ -857,7 +857,7 @@ impl CanvasModel {
                     return Ok(NodeSnapshot {
                         id: id.clone(),
                         node_id: NodeId::Group(raw.to_string()),
-                        bounds: paged_parse::Bounds {
+                        bounds: paged_model::Bounds {
                             top: 0.0,
                             left: 0.0,
                             bottom: 0.0,
@@ -915,32 +915,32 @@ impl CanvasModel {
             };
             for fr in &g.members {
                 let member_id = match fr {
-                    paged_parse::FrameRef::TextFrame(idx) => s
+                    paged_model::FrameRef::TextFrame(idx) => s
                         .text_frames
                         .get(*idx)
                         .and_then(|f| f.self_id.clone())
                         .map(ElementId::TextFrame),
-                    paged_parse::FrameRef::Rectangle(idx) => s
+                    paged_model::FrameRef::Rectangle(idx) => s
                         .rectangles
                         .get(*idx)
                         .and_then(|r| r.self_id.clone())
                         .map(ElementId::Rectangle),
-                    paged_parse::FrameRef::Oval(idx) => s
+                    paged_model::FrameRef::Oval(idx) => s
                         .ovals
                         .get(*idx)
                         .and_then(|o| o.self_id.clone())
                         .map(ElementId::Oval),
-                    paged_parse::FrameRef::GraphicLine(idx) => s
+                    paged_model::FrameRef::GraphicLine(idx) => s
                         .graphic_lines
                         .get(*idx)
                         .and_then(|l| l.self_id.clone())
                         .map(ElementId::GraphicLine),
-                    paged_parse::FrameRef::Polygon(idx) => s
+                    paged_model::FrameRef::Polygon(idx) => s
                         .polygons
                         .get(*idx)
                         .and_then(|p| p.self_id.clone())
                         .map(ElementId::Polygon),
-                    paged_parse::FrameRef::Group(idx) => s
+                    paged_model::FrameRef::Group(idx) => s
                         .groups
                         .get(*idx)
                         .and_then(|g| g.self_id.clone())
@@ -1159,7 +1159,7 @@ fn compute_node_mutation(
                 snap.path_anchors
                     .get(address.index)
                     .copied()
-                    .unwrap_or(paged_parse::PathAnchor {
+                    .unwrap_or(paged_model::PathAnchor {
                         anchor: (0.0, 0.0),
                         left: (0.0, 0.0),
                         right: (0.0, 0.0),
@@ -1496,7 +1496,7 @@ fn collect_sibling_frames(
 /// Track K — does a parsed spread host the frame identified by
 /// `raw_id`? Walks every per-kind vec until one is found. Returns
 /// false for unknown ids.
-fn spread_contains_frame(spread: &paged_parse::Spread, raw_id: &str) -> bool {
+fn spread_contains_frame(spread: &paged_model::Spread, raw_id: &str) -> bool {
     if spread
         .text_frames
         .iter()

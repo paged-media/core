@@ -39,7 +39,7 @@
 //! run topologies.
 
 use crate::selection::TextCellAddr;
-use paged_parse::CharacterRun;
+use paged_model::CharacterRun;
 use paged_scene::Document;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -139,7 +139,7 @@ fn find_paragraphs_mut<'a>(
     doc: &'a mut Document,
     story_id: &str,
     cell: &Option<TextCellAddr>,
-) -> Result<&'a mut Vec<paged_parse::Paragraph>, TextOpError> {
+) -> Result<&'a mut Vec<paged_model::Paragraph>, TextOpError> {
     let story = find_story_mut(doc, story_id)?;
     match cell {
         None => Ok(&mut story.paragraphs),
@@ -153,10 +153,10 @@ fn find_paragraphs_mut<'a>(
 /// generic "address not found") when the table or cell is absent —
 /// e.g. an edit aimed at a stale cell after the table shape changed.
 fn find_cell_paragraphs_mut<'a>(
-    story: &'a mut paged_parse::Story,
+    story: &'a mut paged_model::Story,
     story_id: &str,
     addr: &TextCellAddr,
-) -> Result<&'a mut Vec<paged_parse::Paragraph>, TextOpError> {
+) -> Result<&'a mut Vec<paged_model::Paragraph>, TextOpError> {
     for para in story.paragraphs.iter_mut() {
         let Some(table) = para.table.as_mut() else {
             continue;
@@ -200,7 +200,7 @@ fn apply_insert_text(
     // but the index is 0` panic the sheet cell-pour hit. Seed one empty
     // paragraph so the first write into a new cell has a stream to land in.
     if paragraphs.is_empty() {
-        paragraphs.push(paged_parse::Paragraph::default());
+        paragraphs.push(paged_model::Paragraph::default());
     }
 
     // Phase 3 Gap-D: split text on `\n`. Each segment becomes a
@@ -255,7 +255,7 @@ fn apply_insert_text(
 
 /// Insert plain (no-newline) text at `offset`. Internal helper —
 /// caller guarantees no `\n` in `seg`.
-fn insert_one_segment(paragraphs: &mut [paged_parse::Paragraph], offset: u32, seg: &str) {
+fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, seg: &str) {
     if seg.is_empty() {
         return;
     }
@@ -305,7 +305,7 @@ fn insert_one_segment(paragraphs: &mut [paged_parse::Paragraph], offset: u32, se
 /// Inherits the original paragraph's style attributes (the only
 /// thing IDML's paragraph carries that's level-affecting — runs keep
 /// their own character styles intact).
-fn split_paragraph_at(paragraphs: &mut Vec<paged_parse::Paragraph>, offset: u32) {
+fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32) {
     let target = locate(paragraphs, offset);
     let (paragraph_idx, run_idx, byte_in_run) = match target {
         Locate::InRun {
@@ -317,7 +317,7 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_parse::Paragraph>, offset: u32)
             // Split at the end of the paragraph — the new paragraph
             // is empty.
             let para = &paragraphs[paragraph_idx];
-            let new_para = paged_parse::Paragraph {
+            let new_para = paged_model::Paragraph {
                 paragraph_style: para.paragraph_style.clone(),
                 ..Default::default()
             };
@@ -346,7 +346,7 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_parse::Paragraph>, offset: u32)
         para.runs.pop();
     }
     let style = para.paragraph_style.clone();
-    let new_para = paged_parse::Paragraph {
+    let new_para = paged_model::Paragraph {
         paragraph_style: style,
         runs: tail_runs,
         ..Default::default()
@@ -477,7 +477,7 @@ fn apply_delete_range(
 /// Convert a stream-local offset to (paragraph_idx, byte-within-paragraph).
 /// `AtParagraphBreak` resolves to the START of the next paragraph
 /// (which matches the offset's logical position past the break).
-fn locate_para_local(paragraphs: &[paged_parse::Paragraph], offset: u32) -> (usize, usize) {
+fn locate_para_local(paragraphs: &[paged_model::Paragraph], offset: u32) -> (usize, usize) {
     match locate(paragraphs, offset) {
         Locate::InRun {
             paragraph_idx,
@@ -502,7 +502,7 @@ fn locate_para_local(paragraphs: &[paged_parse::Paragraph], offset: u32) -> (usi
 /// Sum of run text bytes that precede `target_run` in `para`'s run
 /// list. Returns `usize::MAX` if `target_run` isn't in the list
 /// (defensive — shouldn't happen since the caller iterates `para.runs`).
-fn run_text_total_before(para: &paged_parse::Paragraph, target_run: &CharacterRun) -> usize {
+fn run_text_total_before(para: &paged_model::Paragraph, target_run: &CharacterRun) -> usize {
     let mut total: usize = 0;
     for r in &para.runs {
         if std::ptr::eq(r, target_run) {
@@ -516,7 +516,7 @@ fn run_text_total_before(para: &paged_parse::Paragraph, target_run: &CharacterRu
 /// Take the tail of `para`'s runs starting at byte `from`. The
 /// returned vec is freshly allocated; the source paragraph is read
 /// only.
-fn capture_tail_runs(para: &paged_parse::Paragraph, from: usize) -> Vec<CharacterRun> {
+fn capture_tail_runs(para: &paged_model::Paragraph, from: usize) -> Vec<CharacterRun> {
     let mut out: Vec<CharacterRun> = Vec::new();
     let mut acc: usize = 0;
     for run in &para.runs {
@@ -535,7 +535,7 @@ fn capture_tail_runs(para: &paged_parse::Paragraph, from: usize) -> Vec<Characte
 }
 
 /// Truncate `para`'s runs to keep only bytes `[0..keep)`.
-fn truncate_paragraph_to(para: &mut paged_parse::Paragraph, keep: usize) {
+fn truncate_paragraph_to(para: &mut paged_model::Paragraph, keep: usize) {
     let mut acc: usize = 0;
     let mut split_at: Option<(usize, usize)> = None; // (run_idx, local)
     for (i, run) in para.runs.iter().enumerate() {
@@ -577,7 +577,7 @@ enum Locate {
 fn find_story_mut<'a>(
     doc: &'a mut Document,
     story_id: &str,
-) -> Result<&'a mut paged_parse::Story, TextOpError> {
+) -> Result<&'a mut paged_model::Story, TextOpError> {
     doc.stories
         .iter_mut()
         .find(|s| s.self_id == story_id)
@@ -589,7 +589,7 @@ fn find_story_mut<'a>(
 /// contract: sum of run bytes + one synthetic `\n` per inter-paragraph
 /// boundary. Works for the body flow and for a cell's `paragraphs`
 /// alike (the contract is stream-local — W1.13).
-fn paragraphs_byte_len(paragraphs: &[paged_parse::Paragraph]) -> u32 {
+fn paragraphs_byte_len(paragraphs: &[paged_model::Paragraph]) -> u32 {
     let mut total: u32 = 0;
     for (i, p) in paragraphs.iter().enumerate() {
         if i > 0 {
@@ -602,7 +602,7 @@ fn paragraphs_byte_len(paragraphs: &[paged_parse::Paragraph]) -> u32 {
     total
 }
 
-fn locate(paragraphs: &[paged_parse::Paragraph], story_offset: u32) -> Locate {
+fn locate(paragraphs: &[paged_model::Paragraph], story_offset: u32) -> Locate {
     let mut consumed: u32 = 0;
     for (pi, p) in paragraphs.iter().enumerate() {
         let para_byte_len: u32 = p.runs.iter().map(|r| r.text.len() as u32).sum();
@@ -643,7 +643,7 @@ fn locate(paragraphs: &[paged_parse::Paragraph], story_offset: u32) -> Locate {
 }
 
 fn splice_paragraph(
-    para: &mut paged_parse::Paragraph,
+    para: &mut paged_model::Paragraph,
     local_start: usize,
     local_end: usize,
     recovered: &mut String,
@@ -672,7 +672,7 @@ fn splice_paragraph(
 /// coalesce adjacent runs whose **every** style field is identical.
 /// Without this, repeated edits fragment a paragraph into many
 /// effectively-identical runs and break determinism hashing.
-fn merge_adjacent_runs_in_target(paragraphs: &mut [paged_parse::Paragraph], story_offset: u32) {
+fn merge_adjacent_runs_in_target(paragraphs: &mut [paged_model::Paragraph], story_offset: u32) {
     // Find the target paragraph.
     let mut consumed: u32 = 0;
     let mut target: Option<usize> = None;
@@ -947,7 +947,7 @@ mod tests {
 
     // ---- W1.13 — cell text editing (apply-level unit tests) --------
 
-    use paged_parse::{Paragraph, Story, Table, TableCell};
+    use paged_model::{Paragraph, Story, Table, TableCell};
     use paged_scene::{Document, ParsedStory};
 
     /// Build a single-cell text paragraph carrying `text`.
