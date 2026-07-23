@@ -1609,10 +1609,9 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 [[package]]
 name = "idml-export"
 version = "0.0.0"
+source = "git+https://github.com/paged-media/plugin-publish?rev=d3b84e84327ac626717c079f69ed36a65f2c27bf#d3b84e84327ac626717c079f69ed36a65f2c27bf"
 dependencies = [
  "idml-import",
- "paged-gen",
- "paged-mutate",
  "paged-scene",
  "quick-xml",
  "serde_json",
@@ -1623,6 +1622,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
+source = "git+https://github.com/paged-media/plugin-publish?rev=d3b84e84327ac626717c079f69ed36a65f2c27bf#d3b84e84327ac626717c079f69ed36a65f2c27bf"
 dependencies = [
  "base64",
  "bytes",

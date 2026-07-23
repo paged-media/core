@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/paged-model",
-    "crates/idml-import",
     "crates/paged-flow",
     "crates/paged-composition",
     "crates/paged-composition-render",
@@ -18,7 +17,6 @@ members = [
     "crates/paged-introspect",
     "crates/paged-introspect-wasm",
     "crates/paged-gen",
-    "crates/idml-export",
     "crates/paged-store",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",
@@ -67,3 +65,16 @@ wasm-bindgen = "0.2"
 # in `make bench`. Declared at the workspace level so any crate that
 # grows a bench picks the same pin.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+# N10.2 — the IDML adapter (idml-import/idml-export) now lives in the public
+# paged-media/plugin-publish repo and is git-depended back into the engine.
+# The adapter git-deps the shared model crates from THIS repo; Cargo would
+# otherwise treat those git copies as distinct from core's local crates
+# (path source != git source), so `import_idml`'s Document wouldn't be core's
+# Document. This [patch] redirects the adapter's git deps on core's own model
+# crates back to the local sources, unifying crate identity.
+[patch."https://github.com/paged-media/core"]
+paged-model = { path = "crates/paged-model" }
+paged-scene = { path = "crates/paged-scene" }
+paged-flow = { path = "crates/paged-flow" }
+paged-composition = { path = "crates/paged-composition" }
