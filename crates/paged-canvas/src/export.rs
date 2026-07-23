@@ -61,7 +61,7 @@ impl FontByteSource for OwnedFontBytes {
 pub struct CanvasExportSession {
     built: paged_renderer::BuiltDocument,
     fonts: OwnedFontBytes,
-    palette: paged_parse::graphic::Graphic,
+    palette: paged_model::Graphic,
     cmm: paged_color::IccCmm,
     cmyk_working: Option<Vec<u8>>,
     output_intent: Option<Vec<u8>>,

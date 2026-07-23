@@ -47,7 +47,7 @@
 
 use std::collections::HashMap;
 
-use paged_parse::{Bounds, FrameRef, Group, Spread};
+use paged_model::{Bounds, FrameRef, Group, Spread};
 use paged_renderer::{BuiltDocument, BuiltPage, LineLayout, PageId};
 
 use crate::channel::HitFilter;

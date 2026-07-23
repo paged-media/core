@@ -539,8 +539,8 @@ mod tests {
     use super::*;
     use crate::element_selection::ElementId;
     use crate::gesture::{GestureHandle, GestureModifiers, GestureType, NodeSnapshot};
+    use paged_model::Bounds;
     use paged_mutate::NodeId;
-    use paged_parse::Bounds;
 
     fn snap_for(bounds: Bounds, kind: &str, id: &str) -> NodeSnapshot {
         NodeSnapshot {

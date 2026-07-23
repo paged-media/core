@@ -112,7 +112,7 @@ fn insert_frame_creates_rectangle_and_reports_created_id() {
     // Registered in the z-order table (on top).
     assert!(matches!(
         spread.frames_in_order.last(),
-        Some(paged_parse::FrameRef::Rectangle(_)),
+        Some(paged_model::FrameRef::Rectangle(_)),
     ));
 }
 
