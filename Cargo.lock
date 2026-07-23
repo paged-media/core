@@ -2654,6 +2654,7 @@ dependencies = [
  "blake3",
  "paged-composition",
  "paged-flow",
+ "paged-model",
  "paged-parse",
  "serde",
  "serde_json",

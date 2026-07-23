@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 paged-parse = { path = "../paged-parse" }
+paged-model = { path = "../paged-model" }
 paged-flow = { path = "../paged-flow" }
 paged-composition = { path = "../paged-composition" }
 thiserror = { workspace = true }
