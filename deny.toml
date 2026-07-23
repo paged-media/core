@@ -6,15 +6,20 @@
 version = 2
 # RUSTSEC advisories: fail on vulnerabilities; add IDs here to ignore
 # with a justification once triaged.
-# All three below are UNMAINTAINED advisories (not vulnerabilities) — no
+# All four below are UNMAINTAINED advisories (not vulnerabilities) — no
 # known issue, the crates work. They're allow-listed until the upstream
 # tree drops them (the first two are transitive proc-macro deps via the
 # wgpu/Vello lineage; tsify-next is the wire-type generator — migrating
-# to `tsify` is a tracked follow-up, not a CI blocker).
+# to `tsify` is a tracked follow-up, not a CI blocker). ttf-parser is a
+# transitive dep of our SVG lane (resvg → usvg → fontdb → ttf-parser); the
+# advisory has "no safe upgrade available" (the recommended `skrifa` swap
+# must land upstream in resvg first), so it's allow-listed until then.
 ignore = [
     "RUSTSEC-2024-0436", # paste — unmaintained
     "RUSTSEC-2024-0370", # proc-macro-error — unmaintained
     "RUSTSEC-2025-0048", # tsify-next — unmaintained (use tsify)
+    "RUSTSEC-2026-0192", # ttf-parser — unmaintained (via resvg; no safe upgrade, awaits upstream skrifa migration)
+    "RUSTSEC-2026-0206", # rustybuzz — unmaintained (via resvg/usvg; no safe upgrade available)
 ]
 
 [licenses]

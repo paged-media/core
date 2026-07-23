@@ -41,6 +41,6 @@ required-features = ["cli"]
 
 [dev-dependencies]
 anyhow = { workspace = true }
-lopdf = "0.41"
+lopdf = "0.42"
 paged-scene = { path = "../paged-scene" }
 paged-gen = { path = "../paged-gen" }
