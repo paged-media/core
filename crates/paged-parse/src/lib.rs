@@ -150,3 +150,111 @@ impl SourceArchive {
         self.entries.get(path)
     }
 }
+
+/// Error assembling a [`paged_scene::Document`] from an IDML package via
+/// [`import_idml`]. (Moved here with the import orchestrator — N9.)
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("manifest lists {0} but archive has no such entry")]
+    MissingEntry(String),
+    #[error("parse: {0}")]
+    Parse(#[from] ParseError),
+}
+
+/// Import an IDML package into a [`paged_scene::Document`] + its raw
+/// [`SourceArchive`]. The IDML *import orchestrator* — moved out of
+/// `paged-scene` (N9) so the model no longer parses IDML: it opens the archive,
+/// parses the `designmap.xml` manifest + every referenced Spread/Story/Resource
+/// part, assembles the `Document` (which carries NO raw archive — that rides
+/// separately), and returns both. The caller decides where the archive lives
+/// (the canvas holds it for the parts door + IDML re-export).
+pub fn import_idml(bytes: &[u8]) -> Result<(paged_scene::Document, SourceArchive), OpenError> {
+    let archive = open_source_archive(bytes)?;
+    let document = import_idml_archive(&archive)?;
+    Ok((document, archive))
+}
+
+/// Convenience over [`import_idml`] for callers that only want the model and
+/// don't need the raw source archive (most tests + tools). Drop-in for the old
+/// `Document::open`.
+pub fn import_idml_doc(bytes: &[u8]) -> Result<paged_scene::Document, OpenError> {
+    import_idml(bytes).map(|(doc, _archive)| doc)
+}
+
+/// Parse a [`paged_scene::Document`] from an already-opened [`SourceArchive`]
+/// (no re-unzip). The caller keeps the archive (e.g. the canvas load sniff,
+/// which opened it to check for the native `document.pgm` part first).
+pub fn import_idml_archive(archive: &SourceArchive) -> Result<paged_scene::Document, OpenError> {
+    use std::collections::HashMap;
+
+    // The structured manifest is parsed here (not in `open_source_archive`) so
+    // the raw source archive carries no model data (N7).
+    let designmap = parse_designmap(&archive.designmap_raw)?;
+    let palette = match archive.entry("Resources/Graphic.xml") {
+        Some(raw) => parse_graphic(raw)?,
+        None => Graphic::default(),
+    };
+    let styles = match archive.entry("Resources/Styles.xml") {
+        Some(raw) => parse_stylesheet(raw)?,
+        None => StyleSheet::default(),
+    };
+
+    // Master spreads parse first so the page → master link is available
+    // downstream. A `<MasterSpread>` has the same schema as a `<Spread>`.
+    let mut master_spreads: HashMap<String, paged_scene::ParsedMasterSpread> = HashMap::new();
+    for src in &designmap.master_spreads {
+        let raw = archive
+            .entry(src)
+            .ok_or_else(|| OpenError::MissingEntry(src.clone()))?;
+        let parsed = parse_spread(raw)?;
+        let self_id = paged_scene::derive_master_id(src);
+        master_spreads.insert(
+            self_id.clone(),
+            paged_scene::ParsedMasterSpread {
+                src: src.clone(),
+                self_id,
+                spread: parsed,
+            },
+        );
+    }
+
+    let mut spreads = Vec::with_capacity(designmap.spreads.len());
+    for spread_ref in &designmap.spreads {
+        let raw = archive
+            .entry(&spread_ref.src)
+            .ok_or_else(|| OpenError::MissingEntry(spread_ref.src.clone()))?;
+        let parsed = parse_spread(raw)?;
+        spreads.push(paged_scene::ParsedSpread {
+            src: spread_ref.src.clone(),
+            spread: parsed,
+        });
+    }
+
+    let mut stories = Vec::with_capacity(designmap.stories.len());
+    for story_ref in &designmap.stories {
+        let raw = archive
+            .entry(&story_ref.src)
+            .ok_or_else(|| OpenError::MissingEntry(story_ref.src.clone()))?;
+        let parsed = parse_story(raw)?;
+        let self_id = paged_scene::derive_story_id(&story_ref.src);
+        stories.push(paged_scene::ParsedStory {
+            src: story_ref.src.clone(),
+            self_id,
+            story: parsed,
+        });
+    }
+
+    let mut document = paged_scene::Document {
+        designmap,
+        palette,
+        spreads,
+        stories,
+        master_spreads,
+        frame_for_story: HashMap::new(),
+        text_frame_index: HashMap::new(),
+        styles,
+        anchors: Vec::new(),
+    };
+    document.rebuild_indexes();
+    Ok(document)
+}

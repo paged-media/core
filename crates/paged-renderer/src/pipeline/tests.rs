@@ -1605,7 +1605,7 @@ fn nested_table_inside_cell_emits_grid_commands() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
@@ -1672,7 +1672,7 @@ fn missing_image_link_emits_diagnostic() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
     let missing: Vec<_> = built
@@ -1826,7 +1826,7 @@ fn table_column_dividers_emit_extra_edges() {
     let font = inter_font_bytes();
     let count = |table_attrs: &str| -> usize {
         let bytes = build_single_table_idml(table_attrs, "");
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             ..PipelineOptions::default()
@@ -1853,7 +1853,7 @@ fn cell_rotation_rotates_content() {
     let font = inter_font_bytes();
     let max_b = |cell_attrs: &str| -> f32 {
         let bytes = build_single_table_idml("", cell_attrs);
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             ..PipelineOptions::default()
@@ -1936,7 +1936,7 @@ fn autosize_height_prevents_overset_drop() {
         zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
         zip.write_all(story.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             ..PipelineOptions::default()
@@ -2043,7 +2043,7 @@ fn hyphenation_zone_is_noop_for_justified_but_active_for_ragged() {
         zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
         zip.write_all(story.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             collect_breaks: true,
@@ -2190,7 +2190,7 @@ fn autosize_phase_b_grows_box_and_shifts_neighbour_wrap() {
         zip.start_file("Stories/Story_b.xml", deflated).unwrap();
         zip.write_all(story_b.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             collect_breaks: true,
@@ -2319,7 +2319,7 @@ fn autosize_phase_b_reference_point_anchors_box_growth() {
         zip.start_file("Stories/Story_a.xml", deflated).unwrap();
         zip.write_all(story_a.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let options = PipelineOptions {
             font: Some(&font),
             ..PipelineOptions::default()
@@ -2437,7 +2437,7 @@ fn graphic_line_arrowhead_emits_fill() {
         zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
         zip.write_all(spread.as_bytes()).unwrap();
         let bytes = zip.finish().unwrap().into_inner();
-        let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+        let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
         let built = build_document(&doc, &PipelineOptions::default()).expect("build");
         built.pages[0]
             .list
@@ -2767,7 +2767,7 @@ fn vertical_writing_rotates_emitted_commands() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
@@ -2859,7 +2859,7 @@ fn ruby_annotation_emits_above_base_run() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
@@ -2933,7 +2933,7 @@ fn kenten_marks_emit_above_each_glyph() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
@@ -3023,7 +3023,7 @@ fn footnotes_are_captured_onto_their_host_page() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
@@ -3145,7 +3145,7 @@ fn footnote_pool_reserves_space_below_body_text() {
     // (frame content bottom − pool height). Before W1.7 the pool
     // was a pure overlay and body lines ran straight through it.
     let bytes = footnote_reserve_idml(3, true);
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let font_bytes = inter_font_bytes();
     let options = PipelineOptions {
         font: Some(&font_bytes),
@@ -3210,11 +3210,12 @@ fn footnote_reserve_loop_converges_and_pushes_text_up() {
         ..PipelineOptions::default()
     };
 
-    let with_doc = paged_scene::Document::open(&footnote_reserve_idml(3, true)).expect("open with");
+    let with_doc =
+        paged_parse::import_idml_doc(&footnote_reserve_idml(3, true)).expect("open with");
     let with_built = build_document(&with_doc, &options).expect("build with footnotes");
 
     let without_doc =
-        paged_scene::Document::open(&footnote_reserve_idml(3, false)).expect("open without");
+        paged_parse::import_idml_doc(&footnote_reserve_idml(3, false)).expect("open without");
     let without_built = build_document(&without_doc, &options).expect("build without");
 
     let count_body = |b: &BuiltDocument| {
@@ -3251,9 +3252,9 @@ fn no_footnote_frame_is_byte_identical() {
     };
     let bytes = footnote_reserve_idml(0, false);
 
-    let doc_a = paged_scene::Document::open(&bytes).expect("open a");
+    let doc_a = paged_parse::import_idml_doc(&bytes).expect("open a");
     let built_a = build_document(&doc_a, &options).expect("build a");
-    let doc_b = paged_scene::Document::open(&bytes).expect("open b");
+    let doc_b = paged_parse::import_idml_doc(&bytes).expect("open b");
     let built_b = build_document(&doc_b, &options).expect("build b");
 
     assert!(
@@ -3331,7 +3332,7 @@ fn build_index_paragraphs_emits_topic_tab_pages() {
     )
     .unwrap();
     let bytes = zip.finish().unwrap().into_inner();
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
 
     let page_labels = vec!["1".to_string()];
     let paragraphs = build_index_paragraphs(&doc, &page_labels);
@@ -3461,7 +3462,7 @@ fn user_modified_clip_emits_extra_pushclip_around_image() {
           </PathPointArray></GeometryPathType></PathGeometry>
         </ClippingPathSettings>"#;
     let bytes = build_clip_idml(clip);
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
 
     let (push_clips, images, clip_paths) = clip_command_summary(&built);
@@ -3511,7 +3512,7 @@ fn invert_clip_path_punches_bbox_with_two_contours() {
           </PathPointArray></GeometryPathType></PathGeometry>
         </ClippingPathSettings>"#;
     let bytes = build_clip_idml(clip);
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
 
     let (push_clips, images, clip_paths) = clip_command_summary(&built);
@@ -3551,7 +3552,7 @@ fn compound_clip_path_keeps_hole_contour() {
           </PathGeometry>
         </ClippingPathSettings>"#;
     let bytes = build_clip_idml(clip);
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
 
     let (_, images, clip_paths) = clip_command_summary(&built);
@@ -3574,7 +3575,7 @@ fn photoshop_clip_path_defers_with_diagnostic() {
     let clip = r#"<ClippingPathSettings ClippingType="PhotoshopPath" InvertPath="false"
               IncludeInsideEdges="false" AppliedPathName="Path 1"/>"#;
     let bytes = build_clip_idml(clip);
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
 
     let (push_clips, images, _) = clip_command_summary(&built);
@@ -3602,7 +3603,7 @@ fn no_clipping_path_keeps_single_frame_clip() {
     // one PushClip (the frame) and emits no defer diagnostic — the
     // clipping path is purely additive.
     let bytes = build_clip_idml("");
-    let doc = paged_scene::Document::open(&bytes).expect("open IDML");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open IDML");
     let built = build_document(&doc, &PipelineOptions::default()).expect("build");
 
     let (push_clips, images, _) = clip_command_summary(&built);

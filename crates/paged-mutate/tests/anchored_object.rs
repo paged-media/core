@@ -91,7 +91,7 @@ fn idml_with_anchored_frame() -> Vec<u8> {
 }
 
 fn open_doc() -> Document {
-    Document::open(&idml_with_anchored_frame()).expect("fixture must open")
+    paged_parse::import_idml_doc(&idml_with_anchored_frame()).expect("fixture must open")
 }
 
 /// Read the anchored frame's `AnchoredObjectSetting` back out of the

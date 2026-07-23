@@ -19,7 +19,6 @@
 //! digests.
 
 use paged_renderer::pipeline::{self, PipelineOptions};
-use paged_scene::Document;
 
 #[test]
 fn model_round_trips_through_native_bytes_and_renders_identically() {
@@ -27,18 +26,15 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
     // reconstruct path below never touches IDML.
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build())
         .expect("generate fixture idml");
-    let doc = Document::open(&idml).expect("import fixture");
+    let doc = paged_parse::import_idml_doc(&idml).expect("import fixture");
 
     // Native round-trip: model -> bytes -> model (no open_source_archive).
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
     let doc2 = paged_store::from_bytes(&bytes).expect("reconstruct from .pgm");
 
-    // The reconstructed model carries NO raw IDML source archive (it is
-    // `#[serde(skip)]`, so `source` deserializes to `None`) yet is fully usable.
-    assert!(
-        doc2.source.is_none(),
-        "native reconstruct must not carry the raw IDML archive"
-    );
+    // The reconstructed model carries NO raw IDML source archive by construction
+    // — the scene `Document` has no archive field at all (N9) — yet is fully
+    // usable.
     assert_eq!(
         doc.spreads.len(),
         doc2.spreads.len(),
@@ -72,7 +68,7 @@ fn model_round_trips_through_native_bytes_and_renders_identically() {
 fn incompatible_format_version_is_rejected() {
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build())
         .expect("generate fixture idml");
-    let doc = Document::open(&idml).expect("import fixture");
+    let doc = paged_parse::import_idml_doc(&idml).expect("import fixture");
     let bytes = paged_store::to_bytes(&doc).expect("serialize to .pgm");
 
     // Current version round-trips.

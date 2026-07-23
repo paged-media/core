@@ -81,7 +81,7 @@ fn assert_round_trip(doc: &mut Document, id: &str, op: Operation) {
 
 #[test]
 fn outline_stroke_round_trips() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     assert_round_trip(
         &mut doc,
@@ -113,7 +113,7 @@ fn outline_stroke_variable_round_trips_or_rejects_cleanly() {
     // design (multi-subpath — the fixture polygon is `[0,4]`) it returns
     // a clean `InvalidValue`, never a panic or silent corruption. (Same
     // accept-or-reject-cleanly shape as `offset_path_…` below.)
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     let op = Operation::SetProperty {
         node: NodeId::Polygon(id.clone()),
@@ -150,7 +150,7 @@ fn outline_stroke_variable_round_trips_or_rejects_cleanly() {
 fn simplify_path_removes_a_redundant_anchor_and_round_trips() {
     use paged_mutate::operation::PathAnchorSpec;
 
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     let minimal = anchors_of(&doc, &id);
 
@@ -206,7 +206,7 @@ fn simplify_path_removes_a_redundant_anchor_and_round_trips() {
 
 #[test]
 fn offset_path_round_trips_or_rejects_cleanly() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     let op = Operation::SetProperty {
         node: NodeId::Polygon(id.clone()),
@@ -243,7 +243,7 @@ fn offset_path_round_trips_or_rejects_cleanly() {
 
 #[test]
 fn unknown_join_is_a_clean_invalid_value() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     let err = apply(
         &mut doc,
@@ -282,7 +282,7 @@ fn polygon_fill_and_stroke_set_property_round_trips() {
             .clone()
     }
 
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let id = first_polygon(&doc);
     let before = polygon_fill(&doc, &id);
 
@@ -382,7 +382,7 @@ fn make_primitive_rect(doc: &mut Document, id: &str) {
 
 #[test]
 fn outline_stroke_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
-    let mut doc = Document::open(&strokes_fills_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&strokes_fills_bytes()).expect("open");
     let id = first_rectangle(&doc);
     make_primitive_rect(&mut doc, &id);
     assert!(
@@ -425,7 +425,7 @@ fn outline_stroke_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
 
 #[test]
 fn offset_path_synthesizes_rect_from_bounds_for_a_primitive_rectangle() {
-    let mut doc = Document::open(&strokes_fills_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&strokes_fills_bytes()).expect("open");
     let id = first_rectangle(&doc);
     make_primitive_rect(&mut doc, &id);
     assert!(rect_anchors_of(&doc, &id).is_empty());

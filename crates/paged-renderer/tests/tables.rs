@@ -133,7 +133,7 @@ fn build_table_idml(styles_body: &str, table_attrs: &str, cell00_attrs: &str) ->
 /// the legacy `pipeline::build` which only paints frame rectangles.
 /// Returns page 0's display-list commands.
 fn build_commands(bytes: &[u8]) -> Vec<DisplayCommand> {
-    let document = Document::open(bytes).unwrap();
+    let document = paged_parse::import_idml_doc(bytes).unwrap();
     let opts = PipelineOptions::default();
     let built = pipeline::build_document(&document, &opts).unwrap();
     built.pages[0].list.commands.clone()
@@ -338,7 +338,7 @@ fn min_glyph_ty(cmds: &[DisplayCommand]) -> f32 {
 
 fn build_vjust_commands(vjust: Option<&str>, paragraphs: &str) -> Vec<DisplayCommand> {
     let bytes = build_vjust_table_idml(vjust, paragraphs);
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
@@ -618,7 +618,7 @@ fn build_cell_text_table_idml() -> Vec<u8> {
 }
 
 fn build_cell_doc() -> Document {
-    Document::open(&build_cell_text_table_idml()).unwrap()
+    paged_parse::import_idml_doc(&build_cell_text_table_idml()).unwrap()
 }
 
 fn build_with_fonts(document: &Document) -> paged_renderer::BuiltDocument {
@@ -718,7 +718,7 @@ fn edited_cell_paragraphs_relayout_into_more_lines() {
 #[test]
 fn generated_tables_v2_justify_cell_distributes_paragraphs() {
     let bytes = paged_gen::write_idml(&paged_gen::samples::tables::build()).expect("write_idml");
-    let document = Document::open(&bytes).expect("Document::open");
+    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let built = build_with_fonts_doc(&document);
 
     // The v2 variant is the 12th (0-based 11) page; its body story holds

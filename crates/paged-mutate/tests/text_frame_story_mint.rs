@@ -72,7 +72,7 @@ fn insert_frame_op(doc: &Document) -> Operation {
 
 #[test]
 fn fresh_insert_mints_a_parent_story() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let stories_before = doc.stories.len();
     let op = insert_frame_op(&doc);
     apply(&mut doc, &op).expect("insert");
@@ -94,7 +94,7 @@ fn fresh_insert_mints_a_parent_story() {
 
 #[test]
 fn delete_then_undo_reattaches_the_same_story() {
-    let mut doc = Document::open(&fixture_bytes()).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&fixture_bytes()).expect("open");
     let op = insert_frame_op(&doc);
     apply(&mut doc, &op).expect("insert");
     let sid = frame_story(&doc, "TextFrame/mint-test").expect("minted");

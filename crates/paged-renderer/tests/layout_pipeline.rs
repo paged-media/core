@@ -29,7 +29,7 @@
 use std::path::PathBuf;
 
 use paged_compose::DisplayCommand;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 
 const PAGE_ROTATE_15: usize = 4;
 const PAGE_SCALE_125: usize = 5;
@@ -45,7 +45,7 @@ fn inter_font() -> Vec<u8> {
 
 fn build() -> pipeline::BuiltDocument {
     let bytes = paged_gen::write_idml(&paged_gen::samples::layout::build()).expect("write_idml");
-    let document = Document::open(&bytes).expect("Document::open");
+    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let font = inter_font();
     let opts = PipelineOptions {
         font: Some(&font),

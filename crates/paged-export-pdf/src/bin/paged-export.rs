@@ -74,7 +74,7 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let bytes = std::fs::read(&args.file)?;
-    let document = Document::open(&bytes)?;
+    let document = paged_parse::import_idml_doc(&bytes)?;
     let font = args.font.as_ref().map(std::fs::read).transpose()?;
     let profile = args.profile.as_ref().map(std::fs::read).transpose()?;
     if args.pdfx4 && profile.is_none() {

@@ -26,7 +26,6 @@ use std::path::PathBuf;
 use paged_compose::{DisplayCommand, Paint};
 use paged_mutate::{apply, GradientSpec, GradientStopSpec, NodeId, Operation, PropertyPath, Value};
 use paged_renderer::pipeline::{build_document, PipelineOptions};
-use paged_scene::Document;
 
 fn fixture_bytes() -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -59,7 +58,7 @@ fn gradient_paint_count(commands: &[DisplayCommand]) -> usize {
 #[test]
 fn gradient_assignment_round_trips_to_a_gradient_paint() {
     let bytes = fixture_bytes();
-    let mut doc = Document::open(&bytes).expect("open document");
+    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open document");
 
     // First rectangle in the document — the assignment target.
     let (rect_id, prev_fill) = doc

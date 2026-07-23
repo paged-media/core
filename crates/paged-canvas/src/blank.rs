@@ -168,7 +168,9 @@ mod tests {
     #[test]
     fn blank_idml_parses_to_one_page() {
         let bytes = blank_idml(612.0, 792.0);
-        let doc = paged_scene::Document::open(&bytes).expect("blank IDML must parse");
+        let doc = paged_parse::import_idml(&bytes)
+            .expect("blank IDML must parse")
+            .0;
         // One spread, one page, no stories (truly empty body).
         assert_eq!(doc.spreads.len(), 1);
         assert_eq!(doc.spreads[0].spread.pages.len(), 1);

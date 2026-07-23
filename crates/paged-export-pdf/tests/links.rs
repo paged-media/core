@@ -22,7 +22,6 @@ use paged_export_pdf::{
     export_pdf, ExportInkSettings, ExportInput, ExportOptions, ExportProfiles, PdfStandard,
 };
 use paged_renderer::pipeline::{self, FontTable, PipelineOptions};
-use paged_scene::Document;
 
 fn fallback_font() -> Vec<u8> {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -33,7 +32,7 @@ fn fallback_font() -> Vec<u8> {
 fn export_markers_pdf() -> Vec<u8> {
     let sample = paged_gen::samples::markers::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
     let font = fallback_font();
 
     let mut opts = PipelineOptions {

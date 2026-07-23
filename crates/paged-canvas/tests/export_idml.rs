@@ -123,7 +123,9 @@ fn unmutated_export_is_byte_identical_to_source() {
     );
 
     // And it is, of course, still a parseable IDML.
-    Document::open(&exported).expect("exported package re-parses");
+    paged_parse::import_idml(&exported)
+        .expect("exported package re-parses")
+        .0;
 }
 
 #[test]
@@ -153,7 +155,9 @@ fn mutated_export_reparses_with_the_mutation_present() {
     );
 
     // Re-parse: the new bounds are present, story text untouched.
-    let re = Document::open(&exported).expect("mutated export re-parses");
+    let re = paged_parse::import_idml(&exported)
+        .expect("mutated export re-parses")
+        .0;
     let (top, left, bottom, right) = frame_bounds(&re);
     assert!((top - new_bounds.0).abs() < 1e-3, "top: {top}");
     assert!((left - new_bounds.1).abs() < 1e-3, "left: {left}");

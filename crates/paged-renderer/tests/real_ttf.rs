@@ -27,7 +27,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use paged_compose::{Color, DisplayCommand};
-use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, PipelineOptions};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn font_dir() -> PathBuf {
@@ -115,7 +115,7 @@ fn count_dark_pixels(img: &image::RgbaImage, threshold: u8) -> usize {
 #[test]
 fn real_ttf_shapes_outlines_and_rasterises_glyphs() {
     let bytes = build_text_idml("Inter", None, 36.0);
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
@@ -174,7 +174,7 @@ fn real_ttf_shapes_outlines_and_rasterises_glyphs() {
 #[test]
 fn real_ttf_render_is_byte_deterministic() {
     let bytes = build_text_idml("Lora", None, 24.0);
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
 
     let mut resolver = BytesResolver::new();
     resolver.add_font("Lora", None, read_font("Lora.ttf"));
@@ -204,7 +204,7 @@ fn different_fonts_produce_different_pixel_output() {
     // not. A real shape → outline → raster path is the only way the
     // pages diverge.
     let bytes = build_text_idml("FixtureFont", None, 36.0);
-    let document = Document::open(&bytes).unwrap();
+    let document = paged_parse::import_idml_doc(&bytes).unwrap();
 
     let mut sans = BytesResolver::new();
     sans.add_font("FixtureFont", None, read_font("Inter.ttf"));

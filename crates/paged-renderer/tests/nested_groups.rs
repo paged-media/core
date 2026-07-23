@@ -25,7 +25,7 @@
 //! groups' rotation (off-diagonal terms non-zero).
 
 use paged_compose::DisplayCommand;
-use paged_renderer::{pipeline, Document, PipelineOptions};
+use paged_renderer::{pipeline, PipelineOptions};
 
 const LEAF_W_PT: f32 = 60.0;
 const LEAF_H_PT: f32 = 40.0;
@@ -36,7 +36,7 @@ const PAGE_SCALE_OUTER: usize = 1;
 fn build() -> pipeline::BuiltDocument {
     let bytes =
         paged_gen::write_idml(&paged_gen::samples::nested_groups::build()).expect("write_idml");
-    let document = Document::open(&bytes).expect("Document::open");
+    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     // No fonts needed — the only label text would shape away, and the
     // leaf rects (the feature) emit fills regardless.
     let opts = PipelineOptions::default();

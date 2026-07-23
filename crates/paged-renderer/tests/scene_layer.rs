@@ -51,7 +51,7 @@ fn one_fill_layer() -> SceneLayer {
 
 fn sample_doc() -> Document {
     let idml = paged_gen::write_idml(&paged_gen::samples::text::build()).unwrap();
-    Document::open(&idml).unwrap()
+    paged_parse::import_idml_doc(&idml).unwrap()
 }
 
 fn first_text_frame_id(doc: &Document) -> String {

@@ -44,7 +44,6 @@ use paged_scene::{Document, ParsedSpread};
 #[test]
 fn build_document_accepts_a_hand_constructed_empty_document() {
     let document = Document {
-        source: None,
         designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: Vec::new(),
@@ -89,7 +88,6 @@ fn build_document_accepts_a_hand_constructed_single_page_document() {
     });
 
     let document = Document {
-        source: None,
         designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: vec![ParsedSpread {

@@ -97,17 +97,11 @@ fn load_prefers_the_native_model_part_over_the_source_parts() {
 fn plain_source_still_loads_via_the_parse_path() {
     let idml = paged_gen::write_idml(&paged_gen::samples::geometry::build()).expect("gen fixture");
     let direct = CanvasModel::load("d", &idml, CanvasOptions::default()).expect("load source");
-    assert!(
-        direct
-            .scene()
-            .source
-            .as_ref()
-            .is_some_and(|s| !s.entries.is_empty()),
-        "the parse path keeps the raw source archive"
-    );
+    // The parse path retains the raw source archive on the CanvasModel (not the
+    // scene Document — N9); the observable is that it loads + renders.
     assert!(
         !digests(&direct).is_empty(),
-        "must render at least one page"
+        "the parse path must load and render at least one page"
     );
 }
 

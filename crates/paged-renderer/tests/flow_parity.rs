@@ -32,7 +32,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use paged_flow::{run_flow, Overset};
-use paged_renderer::{pipeline, BytesResolver, Document, LineLayout, PipelineOptions, TextFlow};
+use paged_renderer::{pipeline, BytesResolver, LineLayout, PipelineOptions, TextFlow};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 fn font_dir() -> PathBuf {
@@ -118,7 +118,7 @@ How vexingly quick daft zebras jump.";
 #[test]
 fn protocol_reproduces_emitter_frame_assignment() {
     let bytes = build_threaded_idml(TEXT);
-    let doc = Document::open(&bytes).unwrap();
+    let doc = paged_parse::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {

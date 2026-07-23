@@ -100,7 +100,6 @@ pub fn document_with_one_textframe(self_id: &str) -> Document {
         show_master_items: None,
     });
     Document {
-        source: None,
         designmap: DesignMap::default(),
         palette: Graphic::default(),
         spreads: vec![ParsedSpread {

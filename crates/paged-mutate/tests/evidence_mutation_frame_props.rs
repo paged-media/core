@@ -64,7 +64,7 @@ fn rect_opacity(doc: &Document, rect_id: &str) -> Option<f32> {
 #[test]
 fn evid_frame_opacity_writes_percent_and_inverse_restores() {
     let bytes = fixture_bytes();
-    let mut doc = Document::open(&bytes).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let (rect_id, _) = first_rectangle(&doc);
     let prev = rect_opacity(&doc, &rect_id);
 
@@ -98,7 +98,7 @@ fn evid_frame_opacity_writes_percent_and_inverse_restores() {
 #[test]
 fn evid_plugin_metadata_label_round_trips_with_was_absent_inverse() {
     let bytes = fixture_bytes();
-    let mut doc = Document::open(&bytes).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let (rect_id, si) = first_rectangle(&doc);
     let key = "x-paged:demo";
     let envelope = r#"{"v":1,"data":{"note":"hello"}}"#;
@@ -154,7 +154,7 @@ fn evid_plugin_metadata_label_round_trips_with_was_absent_inverse() {
 #[test]
 fn evid_plugin_metadata_rejects_foreign_namespace_and_bad_envelope() {
     let bytes = fixture_bytes();
-    let mut doc = Document::open(&bytes).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let (rect_id, _) = first_rectangle(&doc);
 
     let foreign = apply(
@@ -196,7 +196,7 @@ fn evid_plugin_metadata_rejects_foreign_namespace_and_bad_envelope() {
 #[test]
 fn evid_plugin_metadata_caller_gate_blocks_foreign_namespace() {
     let bytes = fixture_bytes();
-    let mut doc = Document::open(&bytes).expect("open");
+    let mut doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let (rect_id, _) = first_rectangle(&doc);
     let envelope = r#"{"v":1,"data":{}}"#.to_string();
 

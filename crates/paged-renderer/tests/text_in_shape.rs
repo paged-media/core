@@ -29,7 +29,7 @@
 use std::path::PathBuf;
 
 use paged_renderer::pipeline::LineLayout;
-use paged_renderer::{pipeline, BytesResolver, Document, PipelineOptions};
+use paged_renderer::{pipeline, BytesResolver, PipelineOptions};
 use paged_text::FrameShape;
 
 const PAGE_W_PT: f32 = 595.276;
@@ -48,7 +48,7 @@ fn read_font(name: &str) -> Vec<u8> {
 fn build() -> pipeline::BuiltDocument {
     let sample = paged_gen::samples::text_in_shape::build();
     let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let document = Document::open(&bytes).expect("Document::open");
+    let document = paged_parse::import_idml_doc(&bytes).expect("Document::open");
     let mut resolver = BytesResolver::new();
     resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));
     let opts = PipelineOptions {

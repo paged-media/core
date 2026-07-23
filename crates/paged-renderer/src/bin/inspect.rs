@@ -207,19 +207,14 @@ fn main() -> Result<()> {
         std::process::exit(if report.exit_ok { 0 } else { 1 });
     }
 
-    let document = Document::open(&bytes).context("open IDML")?;
+    // The importer now lives in `paged-parse` (the IDML adapter) and returns the
+    // raw source archive alongside the model — the model no longer carries it (N9).
+    let (document, source_archive) = paged_parse::import_idml(&bytes).context("open IDML")?;
     let palette = &document.palette;
 
     if !args.json {
         println!("file          {}", args.file.display());
-        println!(
-            "mimetype      {}",
-            document
-                .source
-                .as_ref()
-                .map(|s| s.mimetype.as_str())
-                .unwrap_or("(no source archive)")
-        );
+        println!("mimetype      {}", source_archive.mimetype);
         if let Some(v) = document.designmap.dom_version.as_deref() {
             println!("DOMVersion    {v}");
         }
@@ -369,12 +364,9 @@ fn main() -> Result<()> {
     // *.png, embedded JPEGs, etc.). Indexes by full archive path AND
     // by basename — IDML LinkResourceURIs are commonly absolute paths
     // baked at packaging time and we just want to match the basename.
-    let embedded_images: Vec<(String, bytes::Bytes)> = document
-        .source
-        .as_ref()
-        .map(|s| &s.entries)
-        .into_iter()
-        .flatten()
+    let embedded_images: Vec<(String, bytes::Bytes)> = source_archive
+        .entries
+        .iter()
         .filter(|(name, _)| is_image_path(name))
         .map(|(name, bytes)| (name.clone(), bytes.clone()))
         .collect();
@@ -505,6 +497,7 @@ fn main() -> Result<()> {
         let payload = build_json_report(
             &args,
             &document,
+            source_archive.mimetype.as_str(),
             palette,
             &built,
             total_cmds,
@@ -629,15 +622,16 @@ fn package_entries(idml: &[u8]) -> Result<std::collections::BTreeMap<String, Vec
 /// `build_document` → `paged_gpu::rasterize` (CPU backend). Both sides
 /// of the round-trip are rendered with identical options + each
 /// document's own embedded images, so the comparison is apples-to-apples.
-fn render_page_hashes(doc: &Document, dpi: f32) -> Result<Vec<[u8; 32]>> {
+fn render_page_hashes(
+    doc: &Document,
+    source: &paged_parse::SourceArchive,
+    dpi: f32,
+) -> Result<Vec<[u8; 32]>> {
     // Harvest the document's own embedded images so placed-content URIs
     // pointing inside the package resolve (same logic as the main flow).
-    let embedded: Vec<(String, bytes::Bytes)> = doc
-        .source
-        .as_ref()
-        .map(|s| &s.entries)
-        .into_iter()
-        .flatten()
+    let embedded: Vec<(String, bytes::Bytes)> = source
+        .entries
+        .iter()
         .filter(|(name, _)| is_image_path(name))
         .map(|(name, bytes)| (name.clone(), bytes.clone()))
         .collect();
@@ -716,7 +710,7 @@ fn hash_rgba(raw: &[u8]) -> [u8; 32] {
 fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     use serde_json::json;
 
-    let doc = Document::open(original).context("open input IDML")?;
+    let (doc, doc_source) = paged_parse::import_idml(original).context("open input IDML")?;
     let written = paged_write::write_idml(&doc, original).context("write_idml")?;
 
     // (a) Per-entry byte-identity tally.
@@ -732,18 +726,18 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     }
 
     // (b) Re-parse + parsed-model stats equality.
-    let reparse = Document::open(&written);
+    let reparse = paged_parse::import_idml(&written);
     let (reparsed_ok, stats_match) = match &reparse {
-        Ok(re) => (true, ModelStats::of(&doc) == ModelStats::of(re)),
+        Ok((re, _)) => (true, ModelStats::of(&doc) == ModelStats::of(re)),
         Err(_) => (false, false),
     };
 
     // (c) Render both → per-page hash equality. Only attempted when the
     // re-parse succeeded (no doc to render otherwise).
     let (pages_identical, page_count) = match &reparse {
-        Ok(re) => {
-            let a = render_page_hashes(&doc, dpi)?;
-            let b = render_page_hashes(re, dpi)?;
+        Ok((re, re_source)) => {
+            let a = render_page_hashes(&doc, &doc_source, dpi)?;
+            let b = render_page_hashes(re, re_source, dpi)?;
             (a.len() == b.len() && a == b, a.len())
         }
         Err(_) => (false, 0),
@@ -876,7 +870,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
     use paged_mutate::{NodeId, Operation, Project, PropertyPath, Value};
     use serde_json::json;
 
-    let doc = Document::open(original).context("open input IDML")?;
+    let (doc, _source) = paged_parse::import_idml(original).context("open input IDML")?;
 
     // Each arm yields (op, target_self_id, verify-closure, note). `target`
     // being `None` is the n/a path: no target for this mutation → exit 0
@@ -1088,8 +1082,8 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
     };
 
     // Re-open the written package. A reparse failure is a genuine bug.
-    let reparsed = match Document::open(&written) {
-        Ok(re) => re,
+    let reparsed = match paged_parse::import_idml(&written) {
+        Ok((re, _)) => re,
         Err(e) => {
             let report = json!({
                 "mutation": mutation,
@@ -1140,6 +1134,7 @@ fn run_mutate_roundtrip(original: &[u8], mutation: &str) -> Result<MutateRoundtr
 fn build_json_report(
     args: &Args,
     document: &Document,
+    mimetype: &str,
     palette: &Graphic,
     built: &pipeline::BuiltDocument,
     total_cmds: usize,
@@ -1219,7 +1214,7 @@ fn build_json_report(
 
     json!({
         "file": args.file,
-        "mimetype": document.source.as_ref().map(|s| s.mimetype.as_str()),
+        "mimetype": mimetype,
         "dom_version": document.designmap.dom_version,
         "manifest": {
             "spreads": document.designmap.spreads.len(),

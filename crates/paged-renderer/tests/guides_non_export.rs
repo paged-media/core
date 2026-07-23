@@ -92,7 +92,7 @@ fn idml_with_guides(include_guides: bool) -> Vec<u8> {
 
 fn render_command_count(include_guides: bool) -> usize {
     let bytes = idml_with_guides(include_guides);
-    let doc = paged_scene::Document::open(&bytes).expect("open guide idml");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open guide idml");
     let options = paged_renderer::pipeline::PipelineOptions::default();
     let built = paged_renderer::pipeline::build_document(&doc, &options).expect("build");
     built.pages[0].list.commands.len()
@@ -104,7 +104,7 @@ fn guides_are_parsed_but_not_present_in_render_path() {
     // test would catch a parser regression that silently drops them and
     // makes the with/without comparison trivially pass).
     let bytes = idml_with_guides(true);
-    let doc = paged_scene::Document::open(&bytes).expect("open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let guide_count: usize = doc.spreads.iter().map(|s| s.spread.guides.len()).sum();
     assert_eq!(guide_count, 3, "the fixture should parse three guides");
 }
@@ -129,7 +129,7 @@ fn exported_page_has_no_guide_orientation_strokes() {
     // whose path spans (near) the full page height/width — the
     // rectangle's 160×80 outline never does.
     let bytes = idml_with_guides(true);
-    let doc = paged_scene::Document::open(&bytes).expect("open");
+    let doc = paged_parse::import_idml_doc(&bytes).expect("open");
     let options = paged_renderer::pipeline::PipelineOptions::default();
     let built = paged_renderer::pipeline::build_document(&doc, &options).expect("build");
     let page = &built.pages[0];
