@@ -299,6 +299,11 @@ fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_sel
     if let paged_mutate::Operation::CreateGroup { spec } = op {
         return spec.self_id.clone().map(ElementId::Group);
     }
+    // v52 — an inserted anchored frame is a Rectangle; report its minted id so
+    // the caller can address it (e.g. offset the anchor after placement).
+    if let paged_mutate::Operation::InsertAnchoredFrame { self_id, .. } = op {
+        return Some(ElementId::Rectangle(self_id.clone()));
+    }
     // Protocol v34 — a batch reports its LAST creating child (the id
     // the batch-created sentinel resolved to), so insert-with-
     // metadata flows still get a `createdId` to select.
@@ -2707,6 +2712,24 @@ impl CanvasModel {
                     row_heights: row_heights.clone(),
                 },
                 z_slot: None,
+            }),
+            // v52 — inline anchored image. Mints the frame self id (mirrors
+            // InsertTable) so the outcome's `created_id` addresses it for a
+            // follow-up (e.g. AnchoredXOffset). The renderer draws its
+            // `image_uri` inline via the existing anchored-Rectangle path.
+            Mutation::InsertAnchoredFrame {
+                story_id,
+                offset,
+                width,
+                height,
+                image_uri,
+            } => Some(Operation::InsertAnchoredFrame {
+                story_id: story_id.clone(),
+                offset: *offset,
+                width: *width,
+                height: *height,
+                image_uri: image_uri.clone(),
+                self_id: self.mint_page_item_id_with_offset(mint_offset),
             }),
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
                 from: from.clone(),

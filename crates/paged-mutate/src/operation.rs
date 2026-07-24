@@ -2850,6 +2850,31 @@ pub enum Operation {
         offset: u32,
         field: FieldKind,
     },
+    /// v52 — insert an image-bearing anchored Rectangle into a story,
+    /// anchored at the paragraph containing character `offset`. Sizes the
+    /// frame `width`×`height` pt and sets `image_uri` as the frame's image
+    /// link (the renderer's existing anchored-Rectangle image path, see
+    /// `paged-renderer` `anchored.rs`, draws it inline). `self_id` is minted
+    /// by the wire layer so the outcome can report a `createdId`. The inverse
+    /// is a `RemoveAnchoredFrame` of that id. This is the CREATE door the
+    /// anchored-object model always lacked (parse + render + property edits
+    /// already existed).
+    InsertAnchoredFrame {
+        story_id: String,
+        offset: u32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        image_uri: Option<String>,
+        self_id: String,
+    },
+    /// v52 — inverse-only companion to `InsertAnchoredFrame`: remove the
+    /// anchored frame `self_id` from whichever paragraph of `story_id` holds
+    /// it. The inverse re-inserts it (carrying its size + image link).
+    RemoveAnchoredFrame {
+        story_id: String,
+        self_id: String,
+    },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char
     /// `offset` (offsets come fresh from the

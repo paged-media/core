@@ -333,7 +333,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // serialises the document as a `.paged` package (valid IDML + the paged/ parts
 // + manifest.json). Additive — a new editor SENDS messages an older worker
 // can't deserialise, so the minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(51);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(52);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2736,6 +2736,20 @@ pub enum Mutation {
         offset: u32,
         field: paged_mutate::operation::FieldKind,
     },
+    /// v52 — insert an image-bearing anchored Rectangle into a story, anchored
+    /// at the paragraph containing character `offset`, sized `width`×`height`
+    /// pt, with `image_uri` as its image link. The model mints the frame's
+    /// self id and surfaces it as the outcome's `createdId`. Backs an inline
+    /// image placed in the text flow (paged.doc); the existing anchored-frame
+    /// render path (`paged-renderer` `anchored.rs`) draws it inline.
+    InsertAnchoredFrame {
+        story_id: String,
+        offset: u32,
+        width: f32,
+        height: f32,
+        #[serde(default)]
+        image_uri: Option<String>,
+    },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
     /// from `RequestDocumentPlaceholders`). `value: null` returns the
@@ -3446,6 +3460,7 @@ impl Mutation {
             Self::DeleteRange { .. } => "DeleteRange",
             Self::ApplyStyle { .. } => "ApplyStyle",
             Self::InsertField { .. } => "InsertField",
+            Self::InsertAnchoredFrame { .. } => "InsertAnchoredFrame",
             Self::SetFieldValue { .. } => "SetFieldValue",
             Self::PlaceImage { .. } => "PlaceImage",
             Self::ReplaceImageBytes { .. } => "ReplaceImageBytes",
@@ -3967,8 +3982,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v51() {
-        assert_eq!(PROTOCOL_VERSION.0, 51);
+    fn protocol_version_is_v52() {
+        assert_eq!(PROTOCOL_VERSION.0, 52);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

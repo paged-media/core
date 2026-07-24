@@ -2943,6 +2943,45 @@ mod tests {
         }
     }
 
+    /// v52 — `InsertAnchoredFrame` places an inline image-bearing anchored
+    /// Rectangle on the paragraph containing the offset, and its inverse
+    /// (`RemoveAnchoredFrame`) undoes it.
+    #[test]
+    fn insert_anchored_frame_places_inline_image_and_undo_removes_it() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // Offset 3 lands in para1 ("Hello world"); para2 ("!") is untouched.
+        let applied = project
+            .apply(Operation::InsertAnchoredFrame {
+                story_id: "Story/u1".to_string(),
+                offset: 3,
+                width: 100.0,
+                height: 80.0,
+                image_uri: Some("data:image/png;base64,AAAA".to_string()),
+                self_id: "Rectangle/img1".to_string(),
+            })
+            .unwrap();
+
+        {
+            let story = &project.document().stories[0].story;
+            assert_eq!(story.paragraphs[0].anchored_frames.len(), 1);
+            let af = &story.paragraphs[0].anchored_frames[0];
+            assert_eq!(af.self_id.as_deref(), Some("Rectangle/img1"));
+            assert_eq!(af.frame_kind, paged_model::AnchoredFrameKind::Rectangle);
+            assert_eq!(af.image_link.as_deref(), Some("data:image/png;base64,AAAA"));
+            // setting: None ⇒ the renderer defaults to InlinePosition.
+            assert!(af.setting.is_none());
+            let b = af.bounds.unwrap();
+            assert_eq!(b.right - b.left, 100.0);
+            assert_eq!(b.bottom - b.top, 80.0);
+            assert!(story.paragraphs[1].anchored_frames.is_empty());
+        }
+
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert!(project.document().stories[0].story.paragraphs[0]
+            .anchored_frames
+            .is_empty());
+    }
+
     /// Happy path: a SetProperty against a `StoryRange` covering the
     /// first run [0, 6) sets the new font size and returns an inverse
     /// that restores the prior value.

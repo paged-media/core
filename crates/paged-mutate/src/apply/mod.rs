@@ -230,6 +230,25 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             offset,
             field,
         } => apply_delete_field(doc, story_id, *offset, field),
+        Operation::InsertAnchoredFrame {
+            story_id,
+            offset,
+            width,
+            height,
+            image_uri,
+            self_id,
+        } => anchored_frame::apply_insert_anchored_frame(
+            doc,
+            story_id,
+            *offset,
+            *width,
+            *height,
+            image_uri.as_deref(),
+            self_id,
+        ),
+        Operation::RemoveAnchoredFrame { story_id, self_id } => {
+            anchored_frame::apply_remove_anchored_frame(doc, story_id, self_id)
+        }
         Operation::SetFieldValue {
             story_id,
             offset,
@@ -601,6 +620,7 @@ mod tests {
 // calls every other helper) — purely a file-layout change, net-zero
 // behaviour. The named re-export keeps `crate::apply::new_*` stable for
 // lib.rs's callers.
+mod anchored_frame;
 mod batch_page;
 mod character;
 mod conditions;
