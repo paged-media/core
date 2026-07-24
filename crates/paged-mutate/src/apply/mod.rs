@@ -249,6 +249,42 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
         Operation::RemoveAnchoredFrame { story_id, self_id } => {
             anchored_frame::apply_remove_anchored_frame(doc, story_id, self_id)
         }
+        Operation::InsertHyperlink {
+            story_id,
+            start,
+            end,
+            url,
+            source_id,
+            dest_id,
+            hyperlink_id,
+        } => hyperlink::apply_insert_hyperlink(
+            doc,
+            story_id,
+            *start,
+            *end,
+            url,
+            source_id,
+            dest_id,
+            hyperlink_id,
+        ),
+        Operation::RemoveHyperlink {
+            story_id,
+            start,
+            end,
+            url,
+            source_id,
+            dest_id,
+            hyperlink_id,
+        } => hyperlink::apply_remove_hyperlink(
+            doc,
+            story_id,
+            *start,
+            *end,
+            url,
+            source_id,
+            dest_id,
+            hyperlink_id,
+        ),
         Operation::SetFieldValue {
             story_id,
             offset,
@@ -627,6 +663,7 @@ mod conditions;
 mod duplicate_page;
 mod guides;
 mod helpers;
+mod hyperlink;
 mod insert_node;
 mod layer;
 mod master;

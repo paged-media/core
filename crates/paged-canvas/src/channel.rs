@@ -333,7 +333,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // serialises the document as a `.paged` package (valid IDML + the paged/ parts
 // + manifest.json). Additive — a new editor SENDS messages an older worker
 // can't deserialise, so the minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(52);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(53);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2750,6 +2750,20 @@ pub enum Mutation {
         #[serde(default)]
         image_uri: Option<String>,
     },
+    /// v53 — the hyperlink CREATE door: make the story range `[start, end)`
+    /// (contiguous char offsets, the `ApplyStyle` address space) a native
+    /// clickable link to `url`. The model mints the three cross-referencing
+    /// ids a link needs (a `HyperlinkTextSource` tag, a `Hyperlink`, and a
+    /// `HyperlinkURLDestination`) and registers them, so the renderer's
+    /// existing link resolution makes the span clickable. Undoable in one
+    /// step (inverse drops the tag + the two designmap resources). Backs
+    /// paged.doc's `w:hyperlink` runs.
+    InsertHyperlink {
+        story_id: String,
+        start: u32,
+        end: u32,
+        url: String,
+    },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
     /// from `RequestDocumentPlaceholders`). `value: null` returns the
@@ -3461,6 +3475,7 @@ impl Mutation {
             Self::ApplyStyle { .. } => "ApplyStyle",
             Self::InsertField { .. } => "InsertField",
             Self::InsertAnchoredFrame { .. } => "InsertAnchoredFrame",
+            Self::InsertHyperlink { .. } => "InsertHyperlink",
             Self::SetFieldValue { .. } => "SetFieldValue",
             Self::PlaceImage { .. } => "PlaceImage",
             Self::ReplaceImageBytes { .. } => "ReplaceImageBytes",
@@ -3982,8 +3997,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v52() {
-        assert_eq!(PROTOCOL_VERSION.0, 52);
+    fn protocol_version_is_v53() {
+        assert_eq!(PROTOCOL_VERSION.0, 53);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

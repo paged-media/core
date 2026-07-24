@@ -2875,6 +2875,40 @@ pub enum Operation {
         story_id: String,
         self_id: String,
     },
+    /// v53 — the hyperlink CREATE door. Tag the runs of `story_id` in
+    /// `[start, end)` (contiguous char offsets — the `apply::character`
+    /// address space) with `source_id`, and register the two designmap
+    /// resources a native clickable link needs: a `Hyperlink` (whose
+    /// `source` is `source_id`, `destination` is `dest_id`) and a
+    /// `HyperlinkDestination::Url(url)` under `dest_id`. All three ids are
+    /// minted by the wire layer (mirroring `InsertAnchoredFrame`); the
+    /// renderer's existing `links.rs` resolution (run → `Hyperlink.source`
+    /// → `destination` → URL) then makes the span clickable. The
+    /// hyperlink-object model (parse + render) already existed; this is the
+    /// CREATE mutation it lacked. Inverse: `RemoveHyperlink`.
+    InsertHyperlink {
+        story_id: String,
+        start: u32,
+        end: u32,
+        url: String,
+        source_id: String,
+        dest_id: String,
+        hyperlink_id: String,
+    },
+    /// v53 — inverse-only companion to `InsertHyperlink`: clear the
+    /// `hyperlink_source == source_id` tag from every run of `story_id` and
+    /// drop the `Hyperlink`/`HyperlinkDestination` addressed by
+    /// `hyperlink_id`/`dest_id`. The inverse re-creates the link (carrying
+    /// the span it was tagged over + the URL).
+    RemoveHyperlink {
+        story_id: String,
+        start: u32,
+        end: u32,
+        url: String,
+        source_id: String,
+        dest_id: String,
+        hyperlink_id: String,
+    },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char
     /// `offset` (offsets come fresh from the

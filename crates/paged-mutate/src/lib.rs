@@ -2982,6 +2982,68 @@ mod tests {
             .is_empty());
     }
 
+    #[test]
+    fn insert_hyperlink_tags_range_registers_resources_and_undo_removes_them() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        // para1 runs: "Hello " [0,6) + "world" [6,11); para2 "!" [11,12).
+        // Link [0,5) = "Hello" — splits run0 into "Hello" (tagged) + " ".
+        let applied = project
+            .apply(Operation::InsertHyperlink {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 5,
+                url: "https://paged.media".to_string(),
+                source_id: "HyperlinkTextSource/u9".to_string(),
+                dest_id: "HyperlinkURLDestination/u9".to_string(),
+                hyperlink_id: "Hyperlink/u9".to_string(),
+            })
+            .unwrap();
+
+        {
+            let doc = project.document();
+            let runs = &doc.stories[0].story.paragraphs[0].runs;
+            assert_eq!(runs[0].text, "Hello");
+            assert_eq!(
+                runs[0].hyperlink_source.as_deref(),
+                Some("HyperlinkTextSource/u9")
+            );
+            assert_eq!(runs[1].text, " ");
+            assert_eq!(runs[1].hyperlink_source, None);
+            // The two designmap resources the renderer resolves through.
+            let hl = doc
+                .designmap
+                .hyperlinks
+                .iter()
+                .find(|h| h.self_id == "Hyperlink/u9")
+                .expect("Hyperlink registered");
+            assert_eq!(hl.source.as_deref(), Some("HyperlinkTextSource/u9"));
+            assert_eq!(
+                hl.destination.as_deref(),
+                Some("HyperlinkURLDestination/u9")
+            );
+            let dest = doc
+                .designmap
+                .hyperlink_destinations
+                .iter()
+                .find(|d| d.self_id == "HyperlinkURLDestination/u9")
+                .expect("destination registered");
+            assert!(matches!(
+                &dest.kind,
+                paged_model::HyperlinkDestinationKind::Url(u) if u == "https://paged.media"
+            ));
+        }
+
+        // Undo: source tag cleared + both resources dropped.
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let doc = project.document();
+        assert!(doc.stories[0].story.paragraphs[0]
+            .runs
+            .iter()
+            .all(|r| r.hyperlink_source.is_none()));
+        assert!(doc.designmap.hyperlinks.is_empty());
+        assert!(doc.designmap.hyperlink_destinations.is_empty());
+    }
+
     /// Happy path: a SetProperty against a `StoryRange` covering the
     /// first run [0, 6) sets the new font size and returns an inverse
     /// that restores the prior value.

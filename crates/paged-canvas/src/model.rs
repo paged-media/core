@@ -2731,6 +2731,27 @@ impl CanvasModel {
                 image_uri: image_uri.clone(),
                 self_id: self.mint_page_item_id_with_offset(mint_offset),
             }),
+            Mutation::InsertHyperlink {
+                story_id,
+                start,
+                end,
+                url,
+            } => {
+                // A native link needs three cross-referencing ids. One minted
+                // suffix keyed under three distinct designmap namespaces keeps
+                // them collision-free (the run tag, the Hyperlink, and its URL
+                // destination), mirroring how IDML names the trio.
+                let base = self.mint_page_item_id_with_offset(mint_offset);
+                Some(Operation::InsertHyperlink {
+                    story_id: story_id.clone(),
+                    start: *start,
+                    end: *end,
+                    url: url.clone(),
+                    source_id: format!("HyperlinkTextSource/{base}"),
+                    dest_id: format!("HyperlinkURLDestination/{base}"),
+                    hyperlink_id: format!("Hyperlink/{base}"),
+                })
+            }
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
                 from: from.clone(),
                 to: to.clone(),

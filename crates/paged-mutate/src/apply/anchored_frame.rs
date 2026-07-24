@@ -32,10 +32,14 @@ use paged_scene::Document;
 
 use super::path_topology::reflow_hint_for_story;
 
-/// The paragraph index in `story` whose text range contains story character
-/// `offset`; clamps to the last paragraph when `offset` is past the end.
-/// Paragraph boundaries count one break character between paragraphs (the same
-/// running-offset convention as `apply::paragraph`).
+/// The paragraph index in `story` whose `[start, end)` char range contains
+/// story character `offset`; clamps to the last paragraph when `offset` is at
+/// or past the end. CONTIGUOUS char offsets — the same address space as
+/// `paged_mutate::apply::character` / `apply::paragraph` (no synthetic break
+/// character between paragraphs), so the frame anchors at the offset a
+/// contiguous char pour computes. NOTE: this is deliberately NOT the
+/// `mutate::locate` / `InsertText` byte+`\n` address space — the range-styling
+/// apply ops this door sits beside walk char-contiguous, so it matches them.
 fn paragraph_for_offset(story: &paged_model::Story, offset: u32) -> Option<usize> {
     if story.paragraphs.is_empty() {
         return None;
@@ -47,11 +51,11 @@ fn paragraph_for_offset(story: &paged_model::Story, offset: u32) -> Option<usize
             .iter()
             .map(|r| r.text.chars().count() as u32)
             .sum();
-        let end = char_offset + chars;
-        if offset <= end {
+        let para_end = char_offset + chars;
+        if offset < para_end {
             return Some(i);
         }
-        char_offset = end + 1; // the inter-paragraph break
+        char_offset = para_end; // contiguous — no inter-paragraph break char
     }
     Some(story.paragraphs.len() - 1)
 }
