@@ -219,7 +219,8 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             end,
             style,
             scope,
-        } => apply_apply_style(doc, story_id, *start, *end, style, *scope),
+            cell,
+        } => apply_apply_style(doc, story_id, *start, *end, style, *scope, cell.as_ref()),
         Operation::InsertField {
             story_id,
             offset,
@@ -656,6 +657,35 @@ mod tests {
 // calls every other helper) — purely a file-layout change, net-zero
 // behaviour. The named re-export keeps `crate::apply::new_*` stable for
 // lib.rs's callers.
+/// v55 — the paragraph stream a range op addresses: the story body (`cell:
+/// None`) or a table cell's own paragraphs. A `<Table>` hangs off a host
+/// paragraph's `table` field and the cell is matched by `(col, row)` — the same
+/// resolution `paged_canvas::mutate::find_cell_paragraphs_mut` does for text
+/// ops. `None` when the table or cell doesn't resolve (e.g. a stale address
+/// after the table shape changed).
+fn cell_paragraphs_mut<'a>(
+    story: &'a mut paged_model::Story,
+    cell: Option<&crate::operation::CellAddr>,
+) -> Option<&'a mut Vec<paged_model::Paragraph>> {
+    let Some(addr) = cell else {
+        return Some(&mut story.paragraphs);
+    };
+    for para in story.paragraphs.iter_mut() {
+        let Some(table) = para.table.as_mut() else {
+            continue;
+        };
+        if table.self_id.as_deref() != Some(addr.table_id.as_str()) {
+            continue;
+        }
+        for c in table.cells.iter_mut() {
+            if c.coords() == Some((addr.col, addr.row)) {
+                return Some(&mut c.paragraphs);
+            }
+        }
+    }
+    None
+}
+
 mod anchored_frame;
 mod batch_page;
 mod character;

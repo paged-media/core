@@ -1557,6 +1557,7 @@ mod tests {
                 end: 5,
                 style: "ParagraphStyle/Body".to_string(),
                 scope: crate::operation::StyleScope::Paragraph,
+                cell: None,
             },
             Operation::InsertField {
                 story_id: "Story/u1".to_string(),
@@ -6431,6 +6432,7 @@ mod tests {
                     end: 6,
                     style: "ParagraphStyle/Heading".to_string(),
                     scope: StyleScope::Paragraph,
+                    cell: None,
                 })
                 .expect("apply style");
             assert_eq!(
@@ -6456,6 +6458,7 @@ mod tests {
                     end: 6,
                     style: "CharacterStyle/Emph".to_string(),
                     scope: StyleScope::Character,
+                    cell: None,
                 })
                 .expect("apply char style");
             assert_eq!(
@@ -6951,6 +6954,77 @@ mod tests {
                 .iter()
                 .find(|c| c.coords() == Some((col, row)))
                 .expect("cell present")
+        }
+
+        /// v55 — a cell-qualified ApplyStyle styles the CELL's own runs, leaving
+        /// the body story untouched (the gap that forced table cell text to pour
+        /// at the default formatting).
+        #[test]
+        fn apply_style_with_a_cell_addr_styles_only_that_cell() {
+            use paged_model::{CharacterRun, Paragraph as MParagraph};
+
+            let mut doc = document_with_table();
+            // Give cell 0:0 some text, and the body paragraph a run too.
+            {
+                let table = doc.stories[0].story.paragraphs[0].table.as_mut().unwrap();
+                let c = table
+                    .cells
+                    .iter_mut()
+                    .find(|c| c.coords() == Some((0, 0)))
+                    .unwrap();
+                let mut para = MParagraph::default();
+                para.runs.push(CharacterRun {
+                    text: "cell text".to_string(),
+                    ..CharacterRun::default()
+                });
+                c.paragraphs.push(para);
+            }
+            let mut project = Project::new(doc);
+
+            project
+                .apply(Operation::ApplyStyle {
+                    story_id: "Story/t1".to_string(),
+                    start: 0,
+                    end: 4,
+                    style: "CharacterStyle/Emph".to_string(),
+                    scope: crate::operation::StyleScope::Character,
+                    cell: Some(crate::operation::CellAddr {
+                        table_id: "Table/tbl1".to_string(),
+                        row: 0,
+                        col: 0,
+                    }),
+                })
+                .expect("cell-scoped applyStyle applies");
+
+            let table = table_of(project.document());
+            let c = table
+                .cells
+                .iter()
+                .find(|c| c.coords() == Some((0, 0)))
+                .unwrap();
+            // The first 4 chars split off and carry the style.
+            assert_eq!(c.paragraphs[0].runs[0].text, "cell");
+            assert_eq!(
+                c.paragraphs[0].runs[0].character_style.as_deref(),
+                Some("CharacterStyle/Emph")
+            );
+            assert_eq!(c.paragraphs[0].runs[1].text, " text");
+            assert_eq!(c.paragraphs[0].runs[1].character_style, None);
+            // An unknown cell address is a clean error, not a panic.
+            assert!(project
+                .apply(Operation::ApplyStyle {
+                    story_id: "Story/t1".to_string(),
+                    start: 0,
+                    end: 1,
+                    style: "CharacterStyle/Emph".to_string(),
+                    scope: crate::operation::StyleScope::Character,
+                    cell: Some(crate::operation::CellAddr {
+                        table_id: "Table/nope".to_string(),
+                        row: 9,
+                        col: 9,
+                    }),
+                })
+                .is_err());
         }
 
         #[test]

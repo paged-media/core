@@ -1136,6 +1136,9 @@ fn paged_apply_style(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         end,
         style,
         scope,
+        // The script surface addresses body ranges; cell-qualified styling (v55)
+        // is reached through the wire op, not `paged.applyStyle`.
+        cell: None,
     };
     Ok(JsValue::from(with_model(|m| {
         m.apply_mutation(&mutation).is_ok()

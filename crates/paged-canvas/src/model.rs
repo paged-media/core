@@ -2766,12 +2766,18 @@ impl CanvasModel {
                 end,
                 style,
                 scope,
+                cell,
             } => Some(Operation::ApplyStyle {
                 story_id: story_id.clone(),
                 start: *start,
                 end: *end,
                 style: style.clone(),
                 scope: *scope,
+                cell: cell.as_ref().map(|c| paged_mutate::operation::CellAddr {
+                    table_id: c.table_id.clone(),
+                    row: c.row,
+                    col: c.col,
+                }),
             }),
             Mutation::InsertField {
                 story_id,

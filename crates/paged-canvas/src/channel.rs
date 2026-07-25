@@ -333,7 +333,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // serialises the document as a `.paged` package (valid IDML + the paged/ parts
 // + manifest.json). Additive — a new editor SENDS messages an older worker
 // can't deserialise, so the minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(54);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(55);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2797,6 +2797,12 @@ pub enum Mutation {
         end: u32,
         style: String,
         scope: paged_mutate::operation::StyleScope,
+        /// v55 — cell qualifier (additive). `None` / absent ⇒ `[start, end)` is a
+        /// story-local BODY range; `Some` ⇒ a cell-local range into the named
+        /// table cell's own paragraphs. Mirrors `InsertText.cell`, and closes the
+        /// gap where cell text could only carry default formatting.
+        #[serde(default)]
+        cell: Option<crate::selection::TextCellAddr>,
     },
     /// W0.5 — insert a field marker (page-number etc.) at a story
     /// offset. Routes to `Operation::InsertField`. v43 (D-01): `field`
@@ -3945,6 +3951,7 @@ mod tests {
                 end: 5,
                 style: "ParagraphStyle/Body".into(),
                 scope: paged_mutate::operation::StyleScope::Paragraph,
+                cell: None,
             },
             Mutation::InsertField {
                 story_id: "Story/u1".into(),
@@ -4070,8 +4077,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v54() {
-        assert_eq!(PROTOCOL_VERSION.0, 54);
+    fn protocol_version_is_v55() {
+        assert_eq!(PROTOCOL_VERSION.0, 55);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

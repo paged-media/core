@@ -2828,6 +2828,12 @@ pub enum Operation {
         /// `ParagraphStyle/<id>` or `CharacterStyle/<id>` ref.
         style: String,
         scope: StyleScope,
+        /// v55 — cell qualifier. `None` ⇒ `[start, end)` addresses the story's
+        /// BODY paragraphs; `Some` ⇒ it addresses the named table cell's own
+        /// paragraph stream (cell-local offsets), mirroring `InsertText.cell`.
+        /// Closes the "cell text can only pour at the default formatting" gap.
+        #[serde(default)]
+        cell: Option<CellAddr>,
     },
     /// W0.5 — insert a field marker (e.g. the auto current-page-number
     /// marker, U+E018) into a story at a character offset. v1 supports
@@ -3214,6 +3220,18 @@ pub enum Operation {
 }
 
 /// W0.5 — character- vs paragraph-level style application for
+/// v55 — a table-cell address for cell-qualified range ops. Mirrors
+/// `paged_canvas::selection::TextCellAddr` (which paged-mutate cannot depend on:
+/// paged-canvas depends on THIS crate, not the other way round).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellAddr {
+    /// The hosting `<Table>`'s `Self` id.
+    pub table_id: String,
+    pub row: u32,
+    pub col: u32,
+}
+
 /// [`Operation::ApplyStyle`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi)]

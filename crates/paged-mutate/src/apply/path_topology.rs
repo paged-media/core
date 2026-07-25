@@ -2599,6 +2599,7 @@ pub(super) fn apply_unlink_frames(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_apply_style(
     doc: &mut Document,
     story_id: &str,
@@ -2606,6 +2607,7 @@ pub(super) fn apply_apply_style(
     end: u32,
     style: &str,
     scope: StyleScope,
+    cell: Option<&crate::operation::CellAddr>,
 ) -> Result<AppliedOperation, OperationError> {
     // Delegate to the existing run/paragraph splitter via the
     // AppliedCharacterStyle / AppliedParagraphStyle property paths. The
@@ -2620,18 +2622,20 @@ pub(super) fn apply_apply_style(
     };
     let value = Value::Text(style.to_string());
     let applied = match scope {
-        StyleScope::Character => apply_character_property(
+        StyleScope::Character => super::character::apply_character_property_in(
             doc,
             story_id,
+            cell,
             start,
             end,
             &node,
             PropertyPath::AppliedCharacterStyle,
             &value,
         )?,
-        StyleScope::Paragraph => apply_paragraph_property(
+        StyleScope::Paragraph => super::paragraph::apply_paragraph_property_in(
             doc,
             story_id,
+            cell,
             start,
             end,
             &node,
@@ -2646,6 +2650,7 @@ pub(super) fn apply_apply_style(
             end,
             style: style.to_string(),
             scope,
+            cell: cell.cloned(),
         },
         inverse: applied.inverse,
         invalidation: applied.invalidation,

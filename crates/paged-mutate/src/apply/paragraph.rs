@@ -43,6 +43,22 @@ pub(super) fn apply_paragraph_property(
     path: PropertyPath,
     value: &Value,
 ) -> Result<AppliedOperation, OperationError> {
+    apply_paragraph_property_in(doc, story_id, None, start, end, node, path, value)
+}
+
+/// As [`apply_paragraph_property`], but `cell` may redirect the range to a table
+/// cell's own paragraph stream (v55) instead of the story body.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_paragraph_property_in(
+    doc: &mut Document,
+    story_id: &str,
+    cell: Option<&crate::operation::CellAddr>,
+    start: u32,
+    end: u32,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
     if start >= end {
         return Err(OperationError::InvalidValue {
             node: node.clone(),
@@ -57,11 +73,12 @@ pub(super) fn apply_paragraph_property(
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
 
-    let story = &mut doc.stories[story_idx].story;
+    let paragraphs = super::cell_paragraphs_mut(&mut doc.stories[story_idx].story, cell)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
     let mut inverse_ops: Vec<Operation> = Vec::new();
     let mut char_offset: u32 = 0;
 
-    for para in story.paragraphs.iter_mut() {
+    for para in paragraphs.iter_mut() {
         let para_chars: u32 = para
             .runs
             .iter()
