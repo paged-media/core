@@ -6080,6 +6080,48 @@ impl CanvasModel {
             .collect()
     }
 
+    /// DOC-03 (v54) — a story's full content: paragraphs → runs → text + applied
+    /// styles + direct character overrides, or `None` when `story_id` doesn't
+    /// resolve. Mirrors the `stories()` walk but emits text + formatting instead
+    /// of counts, so a content plugin can read an edited document back (diff +
+    /// save). Field names mirror `paged_model::CharacterRun`/`Paragraph`.
+    pub fn story_content(&self, story_id: &str) -> Option<crate::channel::StoryContent> {
+        let s = self.scene.stories.iter().find(|s| s.self_id == story_id)?;
+        let paragraphs = s
+            .story
+            .paragraphs
+            .iter()
+            .map(|para| {
+                let runs = para
+                    .runs
+                    .iter()
+                    .map(|run| crate::channel::RunContent {
+                        text: run.text.clone(),
+                        character_style: run.character_style.clone(),
+                        font: run.font.clone(),
+                        font_style: run.font_style.clone(),
+                        point_size: run.point_size,
+                        fill_color: run.fill_color.clone(),
+                        underline: run.underline,
+                        strikethru: run.strikethru,
+                        capitalization: run.capitalization.clone(),
+                        baseline_shift: run.baseline_shift,
+                        position: run.position.clone(),
+                        tracking: run.tracking,
+                    })
+                    .collect();
+                crate::channel::ParagraphContent {
+                    paragraph_style: para.paragraph_style.clone(),
+                    runs,
+                }
+            })
+            .collect();
+        Some(crate::channel::StoryContent {
+            self_id: s.self_id.clone(),
+            paragraphs,
+        })
+    }
+
     /// SDK Phase 5 (D1) — generic document-collection dispatcher per
     /// `panel-catalog-and-sdk-extension.md` §5.1 + plan Task B.
     /// Routes the requested `CollectionName` to the per-collection
@@ -7752,6 +7794,48 @@ mod tests {
             .find(|f| f.family == "Nonexistent Face")
             .expect("font row");
         assert!(f.is_missing, "unregistered family must be flagged missing");
+    }
+
+    #[test]
+    fn story_content_reports_runs_text_and_applied_styles() {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("META-INF/container.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#).unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><Document Self="d1"><idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/><idPkg:Story src="Stories/Story_u10.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/></Document>"#).unwrap();
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Spread Self="s1"><Page Self="p1" GeometricBounds="0 0 792 612"/><TextFrame Self="f1" ParentStory="u10" GeometricBounds="40 40 700 500"/></Spread></idPkg:Spread>"#).unwrap();
+        zip.start_file("Stories/Story_u10.xml", opts).unwrap();
+        zip.write_all(br#"<?xml version="1.0"?><idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"><Story Self="u10"><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange AppliedCharacterStyle="CharacterStyle/Emph" PointSize="12" FillColor="Color/Red" FontStyle="Bold"><Content>Hello </Content></CharacterStyleRange><CharacterStyleRange><Content>world</Content></CharacterStyleRange></ParagraphStyleRange></Story></idPkg:Story>"#).unwrap();
+        zip.finish().unwrap();
+        let bytes = buf;
+
+        let model = CanvasModel::load("doc-content", &bytes, CanvasOptions::default()).unwrap();
+        let content = model.story_content("u10").expect("story u10");
+        assert_eq!(content.self_id, "u10");
+        assert_eq!(content.paragraphs.len(), 1);
+        let para = &content.paragraphs[0];
+        assert_eq!(para.paragraph_style.as_deref(), Some("ParagraphStyle/Body"));
+        assert_eq!(para.runs.len(), 2);
+        assert_eq!(para.runs[0].text, "Hello ");
+        assert_eq!(
+            para.runs[0].character_style.as_deref(),
+            Some("CharacterStyle/Emph")
+        );
+        assert_eq!(para.runs[0].point_size, Some(12.0));
+        assert_eq!(para.runs[0].font_style.as_deref(), Some("Bold"));
+        assert_eq!(para.runs[0].fill_color.as_deref(), Some("Color/Red"));
+        assert_eq!(para.runs[1].text, "world");
+        assert_eq!(para.runs[1].character_style, None);
+        // Unknown story id → None.
+        assert!(model.story_content("nope").is_none());
     }
 
     #[test]

@@ -494,6 +494,15 @@ impl WorkerCore {
                 let bounds = model.paragraph_bounds(&story_id, cell.as_ref(), offset);
                 WorkerToMainKind::ParagraphBoundsResult { bounds }
             }
+            MainToWorkerKind::RequestStoryContent { story_id } => {
+                let Some(model) = self.model.as_ref() else {
+                    reply!(WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    });
+                };
+                let content = model.story_content(&story_id);
+                WorkerToMainKind::StoryContentResult { content }
+            }
             MainToWorkerKind::Undo => {
                 if self.model.is_none() {
                     reply!(WorkerToMainKind::MutationFailed {

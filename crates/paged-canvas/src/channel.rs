@@ -333,7 +333,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // serialises the document as a `.paged` package (valid IDML + the paged/ parts
 // + manifest.json). Additive — a new editor SENDS messages an older worker
 // can't deserialise, so the minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(53);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(54);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -725,6 +725,13 @@ pub enum MainToWorkerKind {
     /// whose `links` is empty when the story doesn't resolve or hosts no
     /// frame.
     RequestFrameChain { story_id: String },
+    /// DOC-03 (v54) — read a story's full CONTENT (paragraphs → runs → text +
+    /// applied styles + direct character overrides). Pure READ over
+    /// `CanvasModel::story_content`. Backs a content plugin reading an edited
+    /// document back to diff + save (paged.doc edited save-back). Reply:
+    /// `StoryContentResult` whose `content` is `None` when the story id doesn't
+    /// resolve.
+    RequestStoryContent { story_id: String },
     /// v42 (C-5 / I-04) — read the ORIGINAL encoded bytes (PSD / JPEG /
     /// PNG file) of the placed image hosted by the frame `element_id`, so
     /// a plugin (paged.image) can ingest a document's placed asset into
@@ -1234,6 +1241,12 @@ pub enum WorkerToMainKind {
     ParagraphBoundsResult {
         #[serde(default)]
         bounds: Option<crate::geometry::ParagraphBounds>,
+    },
+    /// DOC-03 (v54) — `RequestStoryContent` reply. `None` when the story id
+    /// doesn't resolve.
+    StoryContentResult {
+        #[serde(default)]
+        content: Option<StoryContent>,
     },
     /// Phase 3 Item 7 — undo applied. `undone_seq` is the
     /// `applied_seq` of the mutation that was reversed.
@@ -2541,6 +2554,66 @@ pub struct StorySummary {
     /// older client that ignores it still reads the `overset` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overset_at: Option<OversetAt>,
+}
+
+/// DOC-03 (v54) — a story's full CONTENT: its paragraphs, each with its runs'
+/// text + applied styles + direct character overrides. Where `StorySummary` gives
+/// counts, this gives the text and formatting a content plugin needs to read an
+/// edited document back (e.g. paged.doc diffs it against its import baseline to
+/// drive edited save-back). Surfaced by `CanvasModel::story_content()`; read via
+/// `RequestStoryContent { story_id }` → `StoryContentResult`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryContent {
+    /// IDML `Self` id (`Story/u123`).
+    pub self_id: String,
+    /// Paragraphs in body order.
+    pub paragraphs: Vec<ParagraphContent>,
+}
+
+/// DOC-03 — one paragraph's applied style + its runs.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ParagraphContent {
+    /// The applied paragraph style id, if any (`w:pStyle` equivalent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_style: Option<String>,
+    pub runs: Vec<RunContent>,
+}
+
+/// DOC-03 — one run's text + its applied character style + its DIRECT character
+/// overrides (each `None` = inherit). A run styled only through an applied style
+/// carries just `character_style`; direct editor formatting shows in the override
+/// fields. Field names mirror `paged_model::CharacterRun`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct RunContent {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strikethru: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capitalization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_shift: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<f32>,
 }
 
 /// Inspector P1 — one node in the scene tree. Children are nested
@@ -3997,8 +4070,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v53() {
-        assert_eq!(PROTOCOL_VERSION.0, 53);
+    fn protocol_version_is_v54() {
+        assert_eq!(PROTOCOL_VERSION.0, 54);
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and
