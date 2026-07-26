@@ -55,9 +55,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                          # licenses + advisories + sources
 ```
 
-`cargo fmt --all` is **not** kept clean across the workspace — running it
-produces ~1000-line drifts on unrelated files. Format only files you've
-touched. `Cargo.lock` **is** tracked here (reproducible public build).
+`cargo fmt --all` **is** clean across the workspace — keep it that way. CI
+gates it (`ci.yml`'s `fmt` step), so an unformatted file fails the build.
+
+This rule used to say the opposite ("do not run it, it drifts ~1000 lines on
+unrelated files"), and everyone hand-formatted single files to work around it.
+The claim decayed: by 2026-07-26 the real drift was 9 files / 68 hunks, while
+the fmt step had been failing on EVERY run of `main` for weeks — so core's CI
+carried a permanently-red gate nobody could act on, which is precisely how the
+nextest evidence artifacts went unnoticed for a month. The 9 files were
+formatted in one mechanical pass; the workaround is retired.
+
+`Cargo.lock` **is** tracked here (reproducible public build).
 
 ## Layout
 

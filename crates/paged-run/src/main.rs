@@ -77,9 +77,16 @@ const DOC_ID: &str = "paged-run";
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 enum Request {
-    Load { path: String },
-    NewBlank { width: f32, height: f32 },
-    RunScript { source: String },
+    Load {
+        path: String,
+    },
+    NewBlank {
+        width: f32,
+        height: f32,
+    },
+    RunScript {
+        source: String,
+    },
     Inspect,
     Pages,
     Digest,
@@ -90,7 +97,10 @@ enum Request {
         dpi: f32,
         out: String,
     },
-    Export { format: String, out: String },
+    Export {
+        format: String,
+        out: String,
+    },
     Quit,
 }
 
@@ -125,7 +135,10 @@ fn main() -> Result<()> {
         let req: Request = match serde_json::from_str(line) {
             Ok(req) => req,
             Err(e) => {
-                emit(&mut stdout, &json!({"ok": false, "error": format!("bad request: {e}")}))?;
+                emit(
+                    &mut stdout,
+                    &json!({"ok": false, "error": format!("bad request: {e}")}),
+                )?;
                 continue;
             }
         };
@@ -218,9 +231,7 @@ fn handle(model: &mut Option<CanvasModel>, req: Request) -> Result<Value> {
             let mut page_digests = serde_json::Map::new();
             let mut combined: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a basis
             for page_id in m.page_ids() {
-                let digest = m
-                    .display_list_for_page(page_id)
-                    .map_or(0, |dl| dl.digest());
+                let digest = m.display_list_for_page(page_id).map_or(0, |dl| dl.digest());
                 combined = combined.wrapping_mul(0x0000_0100_0000_01b3) ^ digest;
                 page_digests.insert(page_id.0.clone(), json!(digest));
             }
@@ -258,9 +269,7 @@ fn handle(model: &mut Option<CanvasModel>, req: Request) -> Result<Value> {
                 "paged" => m
                     .export_paged(paged_canvas::channel::PROTOCOL_VERSION.0)
                     .map_err(|e| anyhow!("export paged: {e}"))?,
-                other => {
-                    return Err(anyhow!("unsupported export format '{other}' (idml|paged)"))
-                }
+                other => return Err(anyhow!("unsupported export format '{other}' (idml|paged)")),
             };
             let byte_count = bytes.len();
             std::fs::write(&out, &bytes).with_context(|| format!("write {out}"))?;
@@ -272,12 +281,16 @@ fn handle(model: &mut Option<CanvasModel>, req: Request) -> Result<Value> {
 
 /// Borrow the loaded document immutably, or error if none is loaded yet.
 fn doc_ref(model: &Option<CanvasModel>) -> Result<&CanvasModel> {
-    model.as_ref().ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
+    model
+        .as_ref()
+        .ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
 }
 
 /// Borrow the loaded document mutably, or error if none is loaded yet.
 fn doc_mut(model: &mut Option<CanvasModel>) -> Result<&mut CanvasModel> {
-    model.as_mut().ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
+    model
+        .as_mut()
+        .ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
 }
 
 /// Lower-case hex encoding for the canonical state hash.
@@ -301,7 +314,9 @@ fn resolve_page(model: &CanvasModel, page: &Value) -> Result<PageId> {
     };
     match page {
         Value::Number(n) => {
-            let i = n.as_u64().ok_or_else(|| anyhow!("page index must be a non-negative integer"))?;
+            let i = n
+                .as_u64()
+                .ok_or_else(|| anyhow!("page index must be a non-negative integer"))?;
             by_index(i as usize)
         }
         Value::String(s) => {
@@ -316,6 +331,8 @@ fn resolve_page(model: &CanvasModel, page: &Value) -> Result<PageId> {
                 }
             }
         }
-        _ => Err(anyhow!("`page` must be an index (number) or a page-id string")),
+        _ => Err(anyhow!(
+            "`page` must be an index (number) or a page-id string"
+        )),
     }
 }

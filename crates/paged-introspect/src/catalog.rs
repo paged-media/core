@@ -357,14 +357,20 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("frameInsetSpacing", P::FrameInsetSpacing),
     ("paragraphJustification", P::ParagraphJustification),
     ("paragraphStyleNextStyle", P::ParagraphStyleNextStyle),
-    ("paragraphAppliedNumberingList", P::ParagraphAppliedNumberingList),
+    (
+        "paragraphAppliedNumberingList",
+        P::ParagraphAppliedNumberingList,
+    ),
     ("frameStrokeEndCap", P::FrameStrokeEndCap),
     ("frameStrokeStartArrowhead", P::FrameStrokeStartArrowhead),
     ("frameStrokeEndArrowhead", P::FrameStrokeEndArrowhead),
     ("frameTextWrapMode", P::FrameTextWrapMode),
     ("frameTextWrapOffsets", P::FrameTextWrapOffsets),
     ("frameTextWrapContourType", P::FrameTextWrapContourType),
-    ("frameTextWrapContourIncludeInside", P::FrameTextWrapContourIncludeInside),
+    (
+        "frameTextWrapContourIncludeInside",
+        P::FrameTextWrapContourIncludeInside,
+    ),
     ("frameFittingCrops", P::FrameFittingCrops),
     ("frameFittingType", P::FrameFittingType),
     ("frameDropShadow", P::FrameDropShadow),
@@ -384,7 +390,10 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("textFrameColumnCount", P::TextFrameColumnCount),
     ("textFrameColumnGutter", P::TextFrameColumnGutter),
     ("textFrameColumnBalance", P::TextFrameColumnBalance),
-    ("textFrameVerticalJustification", P::TextFrameVerticalJustification),
+    (
+        "textFrameVerticalJustification",
+        P::TextFrameVerticalJustification,
+    ),
     ("textFrameAutoSizing", P::TextFrameAutoSizing),
     ("textFrameFirstBaseline", P::TextFrameFirstBaseline),
     ("frameTextWrapInvert", P::TextWrapInvert),
@@ -399,12 +408,24 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("frameStrokeDashArray", P::FrameStrokeDashArray),
     ("frameCornerOptionTopLeft", P::FrameCornerOptionTopLeft),
     ("frameCornerOptionTopRight", P::FrameCornerOptionTopRight),
-    ("frameCornerOptionBottomLeft", P::FrameCornerOptionBottomLeft),
-    ("frameCornerOptionBottomRight", P::FrameCornerOptionBottomRight),
+    (
+        "frameCornerOptionBottomLeft",
+        P::FrameCornerOptionBottomLeft,
+    ),
+    (
+        "frameCornerOptionBottomRight",
+        P::FrameCornerOptionBottomRight,
+    ),
     ("frameCornerRadiusTopLeft", P::FrameCornerRadiusTopLeft),
     ("frameCornerRadiusTopRight", P::FrameCornerRadiusTopRight),
-    ("frameCornerRadiusBottomLeft", P::FrameCornerRadiusBottomLeft),
-    ("frameCornerRadiusBottomRight", P::FrameCornerRadiusBottomRight),
+    (
+        "frameCornerRadiusBottomLeft",
+        P::FrameCornerRadiusBottomLeft,
+    ),
+    (
+        "frameCornerRadiusBottomRight",
+        P::FrameCornerRadiusBottomRight,
+    ),
     ("frameRotationAngle", P::FrameRotationAngle),
     ("frameScaleX", P::FrameScaleX),
     ("frameScaleY", P::FrameScaleY),
@@ -463,13 +484,34 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("frameFeatherNoise", P::FrameFeatherNoise),
     ("frameFeatherChoke", P::FrameFeatherChoke),
     ("frameDirectionalFeather", P::FrameDirectionalFeatherEnabled),
-    ("frameDirectionalFeatherLeftWidth", P::FrameDirectionalFeatherLeftWidth),
-    ("frameDirectionalFeatherRightWidth", P::FrameDirectionalFeatherRightWidth),
-    ("frameDirectionalFeatherTopWidth", P::FrameDirectionalFeatherTopWidth),
-    ("frameDirectionalFeatherBottomWidth", P::FrameDirectionalFeatherBottomWidth),
-    ("frameDirectionalFeatherAngle", P::FrameDirectionalFeatherAngle),
-    ("frameDirectionalFeatherNoise", P::FrameDirectionalFeatherNoise),
-    ("frameDirectionalFeatherChoke", P::FrameDirectionalFeatherChoke),
+    (
+        "frameDirectionalFeatherLeftWidth",
+        P::FrameDirectionalFeatherLeftWidth,
+    ),
+    (
+        "frameDirectionalFeatherRightWidth",
+        P::FrameDirectionalFeatherRightWidth,
+    ),
+    (
+        "frameDirectionalFeatherTopWidth",
+        P::FrameDirectionalFeatherTopWidth,
+    ),
+    (
+        "frameDirectionalFeatherBottomWidth",
+        P::FrameDirectionalFeatherBottomWidth,
+    ),
+    (
+        "frameDirectionalFeatherAngle",
+        P::FrameDirectionalFeatherAngle,
+    ),
+    (
+        "frameDirectionalFeatherNoise",
+        P::FrameDirectionalFeatherNoise,
+    ),
+    (
+        "frameDirectionalFeatherChoke",
+        P::FrameDirectionalFeatherChoke,
+    ),
     ("frameBlendMode", P::FrameBlendMode),
     ("cellFillColor", P::CellFillColor),
     ("cellFillTint", P::CellFillTint),
@@ -497,9 +539,15 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("anchorPoint", P::AnchorPoint),
     ("anchoredXOffset", P::AnchoredXOffset),
     ("anchoredYOffset", P::AnchoredYOffset),
-    ("anchoredHorizontalReference", P::AnchoredHorizontalReference),
+    (
+        "anchoredHorizontalReference",
+        P::AnchoredHorizontalReference,
+    ),
     ("anchoredVerticalReference", P::AnchoredVerticalReference),
-    ("anchoredHorizontalAlignment", P::AnchoredHorizontalAlignment),
+    (
+        "anchoredHorizontalAlignment",
+        P::AnchoredHorizontalAlignment,
+    ),
     ("anchoredVerticalAlignment", P::AnchoredVerticalAlignment),
     ("anchoredSpineRelative", P::AnchoredSpineRelative),
     ("anchoredLockPosition", P::AnchoredLockPosition),
@@ -513,8 +561,18 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
 /// [`PROPERTY_PATHS`] for the `settable_path` that mutates each — a test asserts
 /// every cited path resolves, so the IDML⇄scripting cross-links can't dangle.
 fn elements() -> Vec<ElementType> {
-    const fn attr(name: &'static str, type_hint: &'static str, settable_path: Option<&'static str>, summary: &'static str) -> ElementAttr {
-        ElementAttr { name, type_hint, settable_path, summary }
+    const fn attr(
+        name: &'static str,
+        type_hint: &'static str,
+        settable_path: Option<&'static str>,
+        summary: &'static str,
+    ) -> ElementAttr {
+        ElementAttr {
+            name,
+            type_hint,
+            settable_path,
+            summary,
+        }
     }
     vec![
         ElementType {
@@ -673,7 +731,12 @@ mod tests {
         for el in elements() {
             for a in &el.attributes {
                 if let Some(path) = a.settable_path {
-                    assert!(lookup_path(path).is_some(), "{}.{} cites unknown settable path '{path}'", el.name, a.name);
+                    assert!(
+                        lookup_path(path).is_some(),
+                        "{}.{} cites unknown settable path '{path}'",
+                        el.name,
+                        a.name
+                    );
                 }
             }
         }

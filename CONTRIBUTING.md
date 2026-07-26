@@ -29,8 +29,9 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Do **not** run `cargo fmt --all` across the whole workspace — it produces
-large drifts on unrelated files. Format only the files you touched.
+Run `cargo fmt --all` before you push — the workspace is format-clean and CI
+gates it. (This used to say the opposite, because the workspace had drifted;
+the 9 remaining files were formatted in one pass on 2026-07-26.)
 
 ## Fidelity gate
 

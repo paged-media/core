@@ -47,7 +47,10 @@ fn paged_pages_yields_a_usable_page_id__feat__scripting_page_enumeration() {
 console.log('count', pages.length, 'id', pages[0].selfId);"#,
     );
     assert!(out.contains("count 1"), "{out}");
-    assert!(out.contains("id usp"), "expected a non-empty page selfId; {out}");
+    assert!(
+        out.contains("id usp"),
+        "expected a non-empty page selfId; {out}"
+    );
 }
 
 /// scripting.author-returns-id — insert fns return the created element address
@@ -63,8 +66,14 @@ console.log('created', frame);
 const sel = JSON.parse(paged.selection());
 console.log('selected', sel.length, sel[0] ? sel[0].kind + ':' + sel[0].id : 'none');"#,
     );
-    assert!(out.contains("created textFrame:"), "insert should return a textFrame:<id>; {out}");
-    assert!(out.contains("selected 1 textFrame:"), "the new frame should be auto-selected; {out}");
+    assert!(
+        out.contains("created textFrame:"),
+        "insert should return a textFrame:<id>; {out}"
+    );
+    assert!(
+        out.contains("selected 1 textFrame:"),
+        "the new frame should be auto-selected; {out}"
+    );
 }
 
 /// scripting.full-mutation-surface — the wider authoring surface is callable
@@ -87,10 +96,22 @@ console.log('table', table, 'row', paged.insertTableRow(sid, table, 1));
 const st = paged.createParagraphStyle({ name: 'Body' });
 console.log('style', st, 'renamed', paged.renameParagraphStyle(st, 'Body Copy'));"#,
     );
-    assert!(out.contains("deleted true"), "deleteElement should apply; {out}");
-    assert!(out.contains("row true"), "insertTableRow should apply; {out}");
-    assert!(out.contains("style ParagraphStyle/"), "createParagraphStyle should mint an id; {out}");
-    assert!(out.contains("renamed true"), "renameParagraphStyle should apply; {out}");
+    assert!(
+        out.contains("deleted true"),
+        "deleteElement should apply; {out}"
+    );
+    assert!(
+        out.contains("row true"),
+        "insertTableRow should apply; {out}"
+    );
+    assert!(
+        out.contains("style ParagraphStyle/"),
+        "createParagraphStyle should mint an id; {out}"
+    );
+    assert!(
+        out.contains("renamed true"),
+        "renameParagraphStyle should apply; {out}"
+    );
 }
 
 /// scripting.visible-results (model half) — a paged.set mutation lands in the
@@ -108,8 +129,15 @@ const f = paged.insertFrame(pid, [72, 72, 200, 200]);
 paged.set(f, 'frameFillColor', 'Color/Black');
 console.log('fill', paged.get(f, 'frameFillColor'));"#,
     );
-    assert!(out.contains("Color/Black"), "the fill write should read back; {out}");
-    assert_ne!(before, m.current_state_hash(), "the mutation must change the scene state");
+    assert!(
+        out.contains("Color/Black"),
+        "the fill write should read back; {out}"
+    );
+    assert_ne!(
+        before,
+        m.current_state_hash(),
+        "the mutation must change the scene state"
+    );
 }
 
 /// scripting.docs-playground-seeds — the docs playground's named seed preludes
@@ -156,6 +184,9 @@ if (typeof paged.insertTable === "function") { paged.insertTable(sid, { rows: 3,
         assert!(r.error.is_none(), "seed `{name}` errored: {:?}", r.error);
         // A seed must leave addressable content behind.
         let tree = execute_script(&mut m, "console.log(paged.tree());");
-        assert!(tree.output.join("").contains("Frame"), "seed `{name}` placed no frame");
+        assert!(
+            tree.output.join("").contains("Frame"),
+            "seed `{name}` placed no frame"
+        );
     }
 }

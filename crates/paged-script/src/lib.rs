@@ -582,11 +582,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("pathPointCurveType"),
             3,
         )
-        .function(
-            guarded(paged_path_point_set),
-            js_string!("pathPointSet"),
-            4,
-        )
+        .function(guarded(paged_path_point_set), js_string!("pathPointSet"), 4)
         .function(guarded(paged_path_open_at), js_string!("pathOpenAt"), 2)
         .function(
             guarded(paged_outline_stroke),
@@ -1075,8 +1071,8 @@ fn paged_insert_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     if !ok {
         return Ok(JsValue::null());
     }
-    let new_id =
-        with_model(|m| m.pages().into_iter().find(|p| !before.contains(&p.self_id))).map(|p| p.self_id);
+    let new_id = with_model(|m| m.pages().into_iter().find(|p| !before.contains(&p.self_id)))
+        .map(|p| p.self_id);
     Ok(match new_id {
         Some(s) => JsValue::from(js_string!(s)),
         None => JsValue::null(),
@@ -1218,9 +1214,7 @@ fn collection_self_ids(name: CollectionName) -> std::collections::HashSet<String
             .and_then(|v| {
                 v.as_array().map(|a| {
                     a.iter()
-                        .filter_map(|e| {
-                            e.get("selfId").and_then(|s| s.as_str()).map(String::from)
-                        })
+                        .filter_map(|e| e.get("selfId").and_then(|s| s.as_str()).map(String::from))
                         .collect()
                 })
             })
@@ -1321,11 +1315,7 @@ fn opt_string(value: &JsValue, ctx: &mut Context) -> Option<String> {
 }
 
 /// Optional non-empty string property of a JS object.
-fn prop_string(
-    obj: &boa_engine::object::JsObject,
-    key: &str,
-    ctx: &mut Context,
-) -> Option<String> {
+fn prop_string(obj: &boa_engine::object::JsObject, key: &str, ctx: &mut Context) -> Option<String> {
     let v = obj.get(js_string!(key), ctx).ok()?;
     opt_string(&v, ctx)
 }
@@ -1390,18 +1380,12 @@ fn paged_delete_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
 /// `paged.duplicatePage(pageId)` — duplicate a single-page spread after
 /// the source (`Mutation::DuplicatePage`). Returns the new page `selfId`
 /// (recovered by diffing `pages()`, like `insertPage`), or `null`.
-fn paged_duplicate_page(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_duplicate_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let page = args
         .get_or_undefined(0)
         .to_string(ctx)?
         .to_std_string_escaped();
-    let mutation = Mutation::DuplicatePage {
-        page: PageId(page),
-    };
+    let mutation = Mutation::DuplicatePage { page: PageId(page) };
     let before: std::collections::HashSet<String> =
         with_model(|m| m.pages().into_iter().map(|p| p.self_id).collect());
     if !with_model(|m| m.apply_mutation(&mutation).is_ok()) {
@@ -1454,11 +1438,7 @@ fn paged_apply_master_to_page(
 /// `paged.deleteElement(id)` — delete a page item (`Mutation::DeleteFrame`).
 /// Accepts the `kind:id` address or a bare self id; groups are removed via
 /// `dissolveGroup`, not here.
-fn paged_delete_element(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_delete_element(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -1470,11 +1450,7 @@ fn paged_delete_element(
 
 /// `paged.dissolveGroup(groupId)` — ungroup; members return to the
 /// group's paint slot (`Mutation::DissolveGroup`).
-fn paged_dissolve_group(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_dissolve_group(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -1686,11 +1662,7 @@ fn paged_path_point_curve_type(
 
 /// `paged.pathPointSet(elemId, index, role, [x,y])` — write one Bezier
 /// handle (`role` = `"anchor"|"left"|"right"`; `Mutation::PathPointSet`).
-fn paged_path_point_set(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_path_point_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -1729,11 +1701,7 @@ fn paged_path_open_at(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
 
 /// `paged.outlineStroke(elemId, width, cap, join, miter)` — replace the
 /// path with its stroke-expansion outline (`Mutation::OutlineStroke`).
-fn paged_outline_stroke(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_outline_stroke(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -1820,7 +1788,11 @@ fn paged_pathfinder_boolean(
     let Some(kind) = from_js::<paged_mutate::PathfinderKind>(args.get_or_undefined(2), ctx) else {
         return Ok(JsValue::from(false));
     };
-    Ok(apply_bool(&Mutation::PathfinderBoolean { kept, others, kind }))
+    Ok(apply_bool(&Mutation::PathfinderBoolean {
+        kept,
+        others,
+        kind,
+    }))
 }
 
 // ---------------------------------------------------- fields & images
@@ -1935,11 +1907,7 @@ fn paged_insert_table(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
 
 /// `paged.setRowHeight(storyId, tableId, row, height?)` — set/clear a row
 /// height in pt (`Mutation::SetRowHeight`).
-fn paged_set_row_height(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_set_row_height(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let story_id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -2090,7 +2058,10 @@ fn paged_insert_header_row(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::InsertHeaderRow { story_id, table_id }))
+    Ok(apply_bool(&Mutation::InsertHeaderRow {
+        story_id,
+        table_id,
+    }))
 }
 
 /// `paged.removeHeaderRow(storyId, tableId)` — remove the first header row
@@ -2108,7 +2079,10 @@ fn paged_remove_header_row(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::RemoveHeaderRow { story_id, table_id }))
+    Ok(apply_bool(&Mutation::RemoveHeaderRow {
+        story_id,
+        table_id,
+    }))
 }
 
 /// `paged.insertFooterRow(storyId, tableId)` — insert a footer-band row
@@ -2126,7 +2100,10 @@ fn paged_insert_footer_row(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::InsertFooterRow { story_id, table_id }))
+    Ok(apply_bool(&Mutation::InsertFooterRow {
+        story_id,
+        table_id,
+    }))
 }
 
 /// `paged.removeFooterRow(storyId, tableId)` — remove the last footer row
@@ -2144,7 +2121,10 @@ fn paged_remove_footer_row(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::RemoveFooterRow { story_id, table_id }))
+    Ok(apply_bool(&Mutation::RemoveFooterRow {
+        story_id,
+        table_id,
+    }))
 }
 
 /// `paged.setCellSpan(storyId, tableId, row, col, rowSpan, columnSpan)` —
@@ -2221,7 +2201,10 @@ fn paged_rename_paragraph_style(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::RenameParagraphStyle { style_id, name }))
+    Ok(apply_bool(&Mutation::RenameParagraphStyle {
+        style_id,
+        name,
+    }))
 }
 
 /// `paged.deleteParagraphStyle(styleId)` (`Mutation::DeleteParagraphStyle`).
@@ -2268,7 +2251,10 @@ fn paged_rename_character_style(
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
-    Ok(apply_bool(&Mutation::RenameCharacterStyle { style_id, name }))
+    Ok(apply_bool(&Mutation::RenameCharacterStyle {
+        style_id,
+        name,
+    }))
 }
 
 /// `paged.deleteCharacterStyle(styleId)`.
@@ -2434,8 +2420,7 @@ fn paged_set_style_property(
     args: &[JsValue],
     ctx: &mut Context,
 ) -> JsResult<JsValue> {
-    let Some(collection) =
-        from_js::<paged_mutate::StyleCollection>(args.get_or_undefined(0), ctx)
+    let Some(collection) = from_js::<paged_mutate::StyleCollection>(args.get_or_undefined(0), ctx)
     else {
         return Ok(JsValue::from(false));
     };
@@ -2472,8 +2457,7 @@ fn paged_create_numbering_list(
     args: &[JsValue],
     ctx: &mut Context,
 ) -> JsResult<JsValue> {
-    let Some(spec) =
-        from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(0), ctx)
+    let Some(spec) = from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(0), ctx)
     else {
         return Ok(JsValue::null());
     };
@@ -2493,8 +2477,7 @@ fn paged_edit_numbering_list(
         .get_or_undefined(0)
         .to_string(ctx)?
         .to_std_string_escaped();
-    let Some(spec) =
-        from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(1), ctx)
+    let Some(spec) = from_js::<paged_mutate::NumberingListSpec>(args.get_or_undefined(1), ctx)
     else {
         return Ok(JsValue::from(false));
     };
@@ -2518,11 +2501,7 @@ fn paged_delete_numbering_list(
 
 /// `paged.insertSection(pageId, {prefix?,style?,start?})` — anchor a
 /// `<Section>` at a page (`Mutation::InsertSection`).
-fn paged_insert_section(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_insert_section(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let page = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -2585,11 +2564,7 @@ fn paged_edit_section(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
 }
 
 /// `paged.deleteSection(sectionId)` (`Mutation::DeleteSection`).
-fn paged_delete_section(
-    _this: &JsValue,
-    args: &[JsValue],
-    ctx: &mut Context,
-) -> JsResult<JsValue> {
+fn paged_delete_section(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let section_id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -2611,7 +2586,10 @@ fn paged_set_condition_visible(
         .to_string(ctx)?
         .to_std_string_escaped();
     let visible = args.get_or_undefined(1).to_boolean();
-    Ok(apply_bool(&Mutation::SetConditionVisible { condition, visible }))
+    Ok(apply_bool(&Mutation::SetConditionVisible {
+        condition,
+        visible,
+    }))
 }
 
 /// `paged.activateConditionSet(setId)` (`Mutation::ActivateConditionSet`).
@@ -3657,7 +3635,10 @@ fn element_id_address_of(obj: &boa_engine::object::JsObject, ctx: &mut Context) 
 /// Render a JS array as `[addr, addr, …]` iff every element is
 /// `ElementId`-shaped; otherwise `None` (so the caller falls back to JSON
 /// and non-element arrays keep their compact-JSON formatting).
-fn render_element_id_array(obj: &boa_engine::object::JsObject, ctx: &mut Context) -> Option<String> {
+fn render_element_id_array(
+    obj: &boa_engine::object::JsObject,
+    ctx: &mut Context,
+) -> Option<String> {
     let len = obj.get(js_string!("length"), ctx).ok()?.as_number()? as usize;
     if len == 0 {
         return None;
@@ -3790,10 +3771,22 @@ mod tests {
     #[test]
     fn known_mappings_are_stable() {
         use paged_mutate::PropertyPath as P;
-        assert_eq!(parse_property_path("characterFontSize"), Some(P::CharacterFontSize));
-        assert_eq!(parse_property_path("frameBevel"), Some(P::FrameBevelEnabled));
-        assert_eq!(parse_property_path("frameTextWrapInvert"), Some(P::TextWrapInvert));
-        assert_eq!(parse_property_path("frameInnerGlow"), Some(P::FrameInnerGlowEnabled));
+        assert_eq!(
+            parse_property_path("characterFontSize"),
+            Some(P::CharacterFontSize)
+        );
+        assert_eq!(
+            parse_property_path("frameBevel"),
+            Some(P::FrameBevelEnabled)
+        );
+        assert_eq!(
+            parse_property_path("frameTextWrapInvert"),
+            Some(P::TextWrapInvert)
+        );
+        assert_eq!(
+            parse_property_path("frameInnerGlow"),
+            Some(P::FrameInnerGlowEnabled)
+        );
         assert_eq!(parse_property_path("notARealPath"), None);
     }
 }
