@@ -173,7 +173,10 @@ fn first_story_id(m: &mut CanvasModel) -> String {
 }
 
 fn page_count(m: &mut CanvasModel) -> usize {
-    read(m, "paged.pages()").as_array().map(Vec::len).unwrap_or(0)
+    read(m, "paged.pages()")
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0)
 }
 
 /// The `name` field of each row of a `paged.*` collection read.
@@ -402,7 +405,10 @@ console.log('sections:', JSON.parse(paged.collection('sections')).length);"#,
     let sections = read(&mut m, "paged.collection('sections')");
     let rows = sections.as_array().expect("sections array");
     assert_eq!(rows.len(), 2, "front-matter + body sections");
-    let starts: Vec<i64> = rows.iter().filter_map(|s| s["startPageIndex"].as_i64()).collect();
+    let starts: Vec<i64> = rows
+        .iter()
+        .filter_map(|s| s["startPageIndex"].as_i64())
+        .collect();
     assert!(
         starts.contains(&0) && starts.contains(&1),
         "sections start at page 0 and page 1, got {starts:?}"
@@ -698,7 +704,11 @@ console.log('chars', before, '→', JSON.parse(paged.stories())[0].characterCoun
     let after = read(&mut m, "paged.stories()")[0]["characterCount"]
         .as_i64()
         .unwrap();
-    assert_eq!(before - after, 7, "deleting the 'Heading' word drops 7 chars");
+    assert_eq!(
+        before - after,
+        7,
+        "deleting the 'Heading' word drops 7 chars"
+    );
 }
 
 #[test]
@@ -985,7 +995,11 @@ console.log('sent to back →', paged.layerMove(bg.selfId, 0));"#,
 const id = JSON.parse(paged.layers()).find(function (l) { return l.name === 'Scratch'; }).selfId;
 console.log('removed →', paged.layerRemove(id));"#,
         );
-        assert!(output_has(&r, "removed → true"), "layer-remove: {:?}", r.output);
+        assert!(
+            output_has(&r, "removed → true"),
+            "layer-remove: {:?}",
+            r.output
+        );
         let names = collection_names(&mut m, "paged.layers()");
         assert!(
             !names.iter().any(|n| n == "Scratch"),

@@ -123,9 +123,7 @@ fn unmutated_export_is_byte_identical_to_source() {
     );
 
     // And it is, of course, still a parseable IDML.
-    idml_import::import_idml(&exported)
-        .expect("exported package re-parses")
-        .0;
+    let _ = idml_import::import_idml(&exported).expect("exported package re-parses");
 }
 
 #[test]

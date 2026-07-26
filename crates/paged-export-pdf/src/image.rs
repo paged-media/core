@@ -114,8 +114,12 @@ pub fn write_image(
     // Downsampling (off by default): when the placed resolution
     // exceeds the target, resample and embed Flate — the DCT
     // passthrough is skipped for that image.
-    let downsample_to =
-        downsample_target(img.width, img.height, placed_size_pt, options.downsample_ppi);
+    let downsample_to = downsample_target(
+        img.width,
+        img.height,
+        placed_size_pt,
+        options.downsample_ppi,
+    );
 
     // DCT passthrough — the original bytes, verbatim.
     if downsample_to.is_none() && !img.encoded.is_empty() && is_jpeg(&img.encoded) {

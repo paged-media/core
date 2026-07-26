@@ -60,13 +60,22 @@ fn ndjson_session_roundtrip() {
     // 1. Handshake.
     let hello = recv(&mut stdout);
     assert_eq!(hello["ready"], json!(true), "greeting: {hello}");
-    assert!(hello["protocol"].is_number(), "greeting carries protocol: {hello}");
+    assert!(
+        hello["protocol"].is_number(),
+        "greeting carries protocol: {hello}"
+    );
 
     // 2. new-blank → a US-Letter page.
-    send(&mut stdin, json!({"cmd": "new-blank", "width": 612.0, "height": 792.0}));
+    send(
+        &mut stdin,
+        json!({"cmd": "new-blank", "width": 612.0, "height": 792.0}),
+    );
     let blank = recv(&mut stdout);
     assert_eq!(blank["ok"], json!(true), "new-blank: {blank}");
-    assert!(blank["pageCount"].as_u64().unwrap() >= 1, "has a page: {blank}");
+    assert!(
+        blank["pageCount"].as_u64().unwrap() >= 1,
+        "has a page: {blank}"
+    );
 
     // 3. digest is deterministic across repeated calls.
     send(&mut stdin, json!({"cmd": "digest"}));
@@ -75,7 +84,10 @@ fn ndjson_session_roundtrip() {
     send(&mut stdin, json!({"cmd": "digest"}));
     let d2 = recv(&mut stdout);
     assert_eq!(d1["combined"], d2["combined"], "digest is deterministic");
-    assert_eq!(d1["stateHash"], d2["stateHash"], "state hash is deterministic");
+    assert_eq!(
+        d1["stateHash"], d2["stateHash"],
+        "state hash is deterministic"
+    );
 
     // 4. run-script: console output is captured; no error.
     send(
@@ -84,7 +96,11 @@ fn ndjson_session_roundtrip() {
     );
     let run = recv(&mut stdout);
     assert_eq!(run["ok"], json!(true), "run-script ok: {run}");
-    assert_eq!(run["result"]["error"], Value::Null, "no script error: {run}");
+    assert_eq!(
+        run["result"]["error"],
+        Value::Null,
+        "no script error: {run}"
+    );
     // console.log lines are captured with a `[log] ` prefix.
     let output = run["result"]["output"].as_array().unwrap();
     assert!(
@@ -95,16 +111,25 @@ fn ndjson_session_roundtrip() {
     );
 
     // 5. a script error is reported, and the session SURVIVES it.
-    send(&mut stdin, json!({"cmd": "run-script", "source": "this is not valid js ("}));
+    send(
+        &mut stdin,
+        json!({"cmd": "run-script", "source": "this is not valid js ("}),
+    );
     let err = recv(&mut stdout);
     assert_eq!(err["ok"], json!(false), "script error surfaces: {err}");
-    assert!(err["result"]["error"].is_string(), "error text present: {err}");
+    assert!(
+        err["result"]["error"].is_string(),
+        "error text present: {err}"
+    );
 
     // 6. inspect returns structured state.
     send(&mut stdin, json!({"cmd": "inspect"}));
     let insp = recv(&mut stdout);
     assert_eq!(insp["ok"], json!(true), "inspect: {insp}");
-    assert!(insp["sceneTree"].is_array(), "sceneTree is an array: {insp}");
+    assert!(
+        insp["sceneTree"].is_array(),
+        "sceneTree is an array: {insp}"
+    );
     assert!(insp["meta"].is_object(), "meta is an object: {insp}");
 
     // 7. export idml → non-empty bytes on disk.
@@ -114,14 +139,23 @@ fn ndjson_session_roundtrip() {
     );
     let exp = recv(&mut stdout);
     assert_eq!(exp["ok"], json!(true), "export idml: {exp}");
-    assert!(exp["bytes"].as_u64().unwrap() > 0, "export produced bytes: {exp}");
+    assert!(
+        exp["bytes"].as_u64().unwrap() > 0,
+        "export produced bytes: {exp}"
+    );
     assert!(idml_out.exists(), "idml written to disk");
 
     // 8. the exported IDML re-loads (round-trip).
-    send(&mut stdin, json!({"cmd": "load", "path": idml_out.to_str().unwrap()}));
+    send(
+        &mut stdin,
+        json!({"cmd": "load", "path": idml_out.to_str().unwrap()}),
+    );
     let reload = recv(&mut stdout);
     assert_eq!(reload["ok"], json!(true), "reload exported idml: {reload}");
-    assert!(reload["pageCount"].as_u64().unwrap() >= 1, "reload has a page: {reload}");
+    assert!(
+        reload["pageCount"].as_u64().unwrap() >= 1,
+        "reload has a page: {reload}"
+    );
 
     // 9. render page 0 (CPU path) → a non-empty PNG.
     send(
@@ -130,9 +164,14 @@ fn ndjson_session_roundtrip() {
     );
     let render = recv(&mut stdout);
     assert_eq!(render["ok"], json!(true), "render: {render}");
-    assert!(render["widthPx"].as_u64().unwrap() > 0, "render has width: {render}");
     assert!(
-        std::fs::metadata(&png_out).map(|m| m.len() > 0).unwrap_or(false),
+        render["widthPx"].as_u64().unwrap() > 0,
+        "render has width: {render}"
+    );
+    assert!(
+        std::fs::metadata(&png_out)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false),
         "png written and non-empty"
     );
 
@@ -156,8 +195,15 @@ fn commands_before_load_error_cleanly() {
 
     send(&mut stdin, json!({"cmd": "inspect"}));
     let resp = recv(&mut stdout);
-    assert_eq!(resp["ok"], json!(false), "inspect before load errors: {resp}");
-    assert!(resp["error"].as_str().unwrap().contains("no document loaded"));
+    assert_eq!(
+        resp["ok"],
+        json!(false),
+        "inspect before load errors: {resp}"
+    );
+    assert!(resp["error"]
+        .as_str()
+        .unwrap()
+        .contains("no document loaded"));
 
     // a malformed request is reported but does not kill the session
     send(&mut stdin, json!({"cmd": "not-a-real-command"}));
@@ -165,7 +211,10 @@ fn commands_before_load_error_cleanly() {
     assert_eq!(bad["ok"], json!(false), "unknown cmd errors: {bad}");
 
     // session still alive afterwards
-    send(&mut stdin, json!({"cmd": "new-blank", "width": 200.0, "height": 200.0}));
+    send(
+        &mut stdin,
+        json!({"cmd": "new-blank", "width": 200.0, "height": 200.0}),
+    );
     let ok = recv(&mut stdout);
     assert_eq!(ok["ok"], json!(true), "session survives prior errors: {ok}");
 
@@ -186,21 +235,38 @@ fn describe_emits_the_capability_catalog() {
     send(&mut stdin, json!({"cmd": "describe"}));
     let resp = recv(&mut stdout);
     assert_eq!(resp["ok"], json!(true), "describe: {resp}");
-    assert!(resp["protocol"].is_number(), "carries the engine protocol: {resp}");
+    assert!(
+        resp["protocol"].is_number(),
+        "carries the engine protocol: {resp}"
+    );
 
     let cat = &resp["catalog"];
-    let host_fns = cat["hostFunctions"].as_array().expect("hostFunctions array");
+    let host_fns = cat["hostFunctions"]
+        .as_array()
+        .expect("hostFunctions array");
     assert!(host_fns.len() >= 20, "expected the full host-fn surface");
     // The authoring fns the agent needs are advertised.
-    for needle in ["paged.insertText", "paged.insertTextFrame", "paged.applyStyle", "paged.set"] {
+    for needle in [
+        "paged.insertText",
+        "paged.insertTextFrame",
+        "paged.applyStyle",
+        "paged.set",
+    ] {
         assert!(
             host_fns.iter().any(|f| f["name"] == needle),
             "missing host fn {needle} in catalog"
         );
     }
     // The full settable-path vocabulary (179) is present.
-    let paths = cat["settablePaths"].as_array().expect("settablePaths array");
-    assert_eq!(paths.len(), 179, "settable path count drifted: {}", paths.len());
+    let paths = cat["settablePaths"]
+        .as_array()
+        .expect("settablePaths array");
+    assert_eq!(
+        paths.len(),
+        179,
+        "settable path count drifted: {}",
+        paths.len()
+    );
     assert!(paths.iter().any(|p| p == "characterFontSize"));
     // Id grammar + constraints are non-empty.
     assert!(!cat["idGrammar"].as_array().unwrap().is_empty());
