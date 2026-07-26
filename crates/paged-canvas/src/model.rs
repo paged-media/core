@@ -600,6 +600,18 @@ fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     }
 }
 
+/// The story a logged mutation touched, when it touched one. A batch
+/// reports the FIRST story any child edited — the reply carries a
+/// single `affected_story_id`, and a mixed batch in practice pours into
+/// one story (the caller batches to make one document edit atomic).
+fn story_id_of_logged(entry: &LoggedMutation) -> Option<String> {
+    match entry {
+        LoggedMutation::Text { inverse, .. } => Some(story_id_of_text_op(inverse).to_string()),
+        LoggedMutation::Frame(_) => None,
+        LoggedMutation::Composite(children) => children.iter().find_map(story_id_of_logged),
+    }
+}
+
 // ---- W0.3 — read-side enum→IDML-string mirrors + transform
 // decompose. The mutate layer owns the write-side `*_as_idml`
 // (private there); the inspector needs the same canonical strings so
@@ -1213,6 +1225,13 @@ pub enum LoggedMutation {
     /// Frame / structural mutation routed through `paged_mutate::apply`.
     /// The `AppliedOperation` already pairs op + inverse + invalidation.
     Frame(paged_mutate::AppliedOperation),
+    /// One `Mutation::Batch` whose children did NOT all belong to the
+    /// same lane — see `apply_mixed_batch`. Holds each child's own log
+    /// entry in APPLIED order, so undo replays their inverses in
+    /// reverse and redo replays their forward ops in order. Collapsing
+    /// them into one record is what makes a batch ONE undo step for the
+    /// user, which is the whole reason a plugin batches.
+    Composite(Vec<LoggedMutation>),
 }
 
 impl CanvasModel {
@@ -1845,6 +1864,17 @@ impl CanvasModel {
                 reflow,
             });
         }
+        // A Batch that reaches HERE could not translate as a whole: at
+        // least one child is a text edit, which has no
+        // `paged_mutate::Operation` form. Before this arm existed the
+        // batch fell into the text match below and was rejected
+        // `NotImplemented { what: "Mutation::Batch" }` — so a plugin
+        // pouring text with any styling in the same batch got NOTHING
+        // applied and no indication which child was at fault (RFI C-14,
+        // hit by paged.doc's first live run: an empty frame, silently).
+        if let Mutation::Batch { ops } = mutation {
+            return self.apply_mixed_batch(ops);
+        }
         let text_op: crate::mutate::TextOp = match mutation {
             Mutation::InsertText {
                 story_id,
@@ -1939,6 +1969,147 @@ impl CanvasModel {
             page_structure_changed: false,
             reflow: None,
         })
+    }
+
+    /// Apply a `Batch` whose children span BOTH mutation lanes — the
+    /// `paged_mutate::Operation` lane (frames, styles, structure) and
+    /// the `crate::mutate::TextOp` lane (InsertText / DeleteRange).
+    ///
+    /// The lanes cannot be merged at translation time, because text
+    /// edits have no `Operation` form; so this applies each child
+    /// through the ordinary single-mutation dispatch (whichever lane it
+    /// belongs to) and then COLLAPSES the per-child log records into
+    /// one `Composite` entry. That is what makes the batch one undo
+    /// step — the reason a caller batched in the first place.
+    ///
+    /// ATOMICITY: on a child failure every already-applied child is
+    /// reversed, newest first, so the batch is all-or-nothing and the
+    /// error names the child that failed. The rollback replays the same
+    /// inverses undo would, through the same lanes.
+    ///
+    /// NOT YET: children each trigger their own rebuild, so an N-child
+    /// batch rebuilds N times where one would do. Correctness first —
+    /// this path previously applied nothing at all. Folding the rebuild
+    /// to the end needs the per-lane apply split from the rebuild it
+    /// currently drives.
+    fn apply_mixed_batch(
+        &mut self,
+        ops: &[Mutation],
+    ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        let log_base = self.applied_log.len();
+        let mut created_id = None;
+        let mut page_structure_changed = false;
+
+        for (i, child) in ops.iter().enumerate() {
+            match self.apply_mutation(child) {
+                Ok(outcome) => {
+                    // The batch reports the LAST id minted by any child,
+                    // matching the single-mutation contract (the editor
+                    // selects the fresh element).
+                    if outcome.created_id.is_some() {
+                        created_id = outcome.created_id;
+                    }
+                    page_structure_changed |= outcome.page_structure_changed;
+                }
+                Err(err) => {
+                    // Reverse what landed, newest first, then report
+                    // WHICH child failed — a bare "batch failed" is what
+                    // made the original rejection so hard to diagnose.
+                    let applied: Vec<LoggedMutation> = self
+                        .applied_log
+                        .drain(log_base..)
+                        .map(|rec| rec.kind)
+                        .collect();
+                    for entry in applied.into_iter().rev() {
+                        self.revert_logged(&entry);
+                    }
+                    let _ = self.rebuild_after_mutation();
+                    return Err(crate::channel::WorkerError::NotImplemented {
+                        what: format!(
+                            "Mutation::Batch child {i} ({}): {err:?} — batch rolled back",
+                            child.discriminant()
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Collapse the children's records into ONE undo entry.
+        let entries: Vec<LoggedMutation> = self
+            .applied_log
+            .drain(log_base..)
+            .map(|rec| rec.kind)
+            .collect();
+        let applied_seq = self.bump_applied_seq();
+        if !entries.is_empty() {
+            self.push_applied(AppliedRecord {
+                applied_seq,
+                kind: LoggedMutation::Composite(entries),
+            });
+        }
+        self.redo_log.clear();
+
+        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        Ok(MutationOutcome {
+            applied_seq,
+            page_ids,
+            // As for frame mutations: the inverse lives on the log, not
+            // in the reply.
+            inverse: crate::mutate::TextOp::InsertText {
+                story_id: String::new(),
+                offset: 0,
+                text: String::new(),
+                cell: None,
+            },
+            created_id,
+            page_structure_changed,
+            reflow: None,
+        })
+    }
+
+    /// Replay one logged mutation FORWARD against the scene, returning
+    /// the record to re-log (its inverse is re-captured, because a text
+    /// op's inverse depends on the state it ran against). The redo
+    /// counterpart of `revert_logged`; does not rebuild.
+    fn replay_logged(&mut self, entry: &LoggedMutation) -> Option<LoggedMutation> {
+        Some(match entry {
+            LoggedMutation::Text { op, .. } => {
+                let applied = crate::mutate::apply(&mut self.scene, op).ok()?;
+                LoggedMutation::Text {
+                    op: op.clone(),
+                    inverse: applied.inverse,
+                }
+            }
+            LoggedMutation::Frame(prev) => {
+                LoggedMutation::Frame(paged_mutate::apply(&mut self.scene, &prev.op).ok()?)
+            }
+            LoggedMutation::Composite(children) => {
+                let mut replayed = Vec::with_capacity(children.len());
+                for child in children {
+                    replayed.push(self.replay_logged(child)?);
+                }
+                LoggedMutation::Composite(replayed)
+            }
+        })
+    }
+
+    /// Replay one logged mutation's INVERSE against the scene — the
+    /// step undo and batch-rollback share. Does not rebuild; the caller
+    /// rebuilds once when the whole reversal is done.
+    fn revert_logged(&mut self, entry: &LoggedMutation) {
+        match entry {
+            LoggedMutation::Text { inverse, .. } => {
+                let _ = crate::mutate::apply(&mut self.scene, inverse);
+            }
+            LoggedMutation::Frame(applied) => {
+                let _ = paged_mutate::apply(&mut self.scene, &applied.inverse);
+            }
+            LoggedMutation::Composite(children) => {
+                for child in children.iter().rev() {
+                    self.revert_logged(child);
+                }
+            }
+        }
     }
 
     /// Phase B — convert a channel `Mutation` into an
@@ -3213,6 +3384,14 @@ impl CanvasModel {
                 let _ = paged_mutate::apply(&mut self.scene, &applied.inverse).ok()?;
                 None
             }
+            // One batch = one undo step: reverse its children newest
+            // first, the same order `apply_mixed_batch` rolls back in.
+            LoggedMutation::Composite(children) => {
+                for child in children.iter().rev() {
+                    self.revert_logged(child);
+                }
+                children.iter().find_map(story_id_of_logged)
+            }
         };
         // Perf-MasterText + Perf-BodyStory — undo replays an inverse
         // through the same scene paths as the forward commit, so the
@@ -3256,6 +3435,17 @@ impl CanvasModel {
             LoggedMutation::Frame(prev_applied) => {
                 let applied = paged_mutate::apply(&mut self.scene, &prev_applied.op).ok()?;
                 (LoggedMutation::Frame(applied), None)
+            }
+            // Redo replays the children FORWARD, in the order they were
+            // originally applied, and re-captures their inverses (a
+            // text op's inverse depends on the state it ran against).
+            LoggedMutation::Composite(children) => {
+                let mut replayed = Vec::with_capacity(children.len());
+                for child in children {
+                    replayed.push(self.replay_logged(child)?);
+                }
+                let sid = replayed.iter().find_map(story_id_of_logged);
+                (LoggedMutation::Composite(replayed), sid)
             }
         };
         // Perf-MasterText + Perf-BodyStory — same invariant as undo():

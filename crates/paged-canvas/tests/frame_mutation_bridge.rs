@@ -116,6 +116,7 @@ fn resize_frame_routes_through_idml_mutate_and_logs() {
             ));
         }
         LoggedMutation::Text { .. } => panic!("expected Frame entry, got Text"),
+        LoggedMutation::Composite(_) => panic!("expected Frame entry, got Composite"),
     }
 }
 
@@ -234,6 +235,7 @@ fn move_frame_routes_through_idml_mutate_and_round_trips() {
             ));
         }
         LoggedMutation::Text { .. } => panic!("expected Frame entry, got Text"),
+        LoggedMutation::Composite(_) => panic!("expected Frame entry, got Composite"),
     }
 
     // invert (undo) restores the identity transform.
@@ -265,4 +267,113 @@ fn rectangle_resize_also_bridges() {
         .find(|r| r.self_id.as_deref() == Some("r1"))
         .expect("rect found");
     assert!((rect.bounds.top - 60.0_f32).abs() < 1e-3);
+}
+
+/// Read a story's concatenated run text from the live scene.
+fn story_text(model: &CanvasModel, story_id: &str) -> String {
+    model
+        .scene()
+        .stories
+        .iter()
+        .find(|s| s.self_id == story_id)
+        .expect("story")
+        .story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .map(|r| r.text.as_str())
+        .collect()
+}
+
+/// RFI C-14 — a `Batch` MIXING a text edit with an element edit applies.
+///
+/// Text and element mutations live in different lanes: `Batch` translates its
+/// children to `paged_mutate::Operation`s, and InsertText/DeleteRange have no
+/// Operation form. A mixed batch therefore failed translation as a WHOLE and
+/// was rejected `NotImplemented { what: "Mutation::Batch" }` — nothing applied,
+/// no indication which child was to blame. Any plugin pouring text with styling
+/// in one atomic edit hit this (paged.doc's first live run: an empty frame).
+#[test]
+fn batch_mixing_text_and_frame_ops_applies_as_one_undo_step() {
+    let bytes = small_idml();
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+    let before = story_text(&model, "story1");
+    assert_eq!(before, "Hello world");
+
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertText {
+                    story_id: "story1".into(),
+                    offset: 5,
+                    text: ",".into(),
+                    cell: None,
+                },
+                Mutation::ResizeFrame {
+                    frame_id: "tf1".into(),
+                    bounds: (110.0, 110.0, 410.0, 410.0),
+                },
+                Mutation::InsertText {
+                    story_id: "story1".into(),
+                    offset: 12,
+                    text: "!".into(),
+                    cell: None,
+                },
+            ],
+        })
+        .expect("a mixed batch applies");
+
+    // Every child landed …
+    assert_eq!(story_text(&model, "story1"), "Hello, world!");
+    // … and the batch is ONE undo step, not three — the reason a caller
+    // batches at all.
+    assert_eq!(model.applied_log_len(), 1);
+
+    // Undo reverses the whole batch in one go.
+    model.undo().expect("undo the batch");
+    assert_eq!(story_text(&model, "story1"), "Hello world");
+    assert_eq!(model.applied_log_len(), 0);
+
+    // …and redo replays it, inverses re-captured against the restored state.
+    model.redo().expect("redo the batch");
+    assert_eq!(story_text(&model, "story1"), "Hello, world!");
+    assert_eq!(model.applied_log_len(), 1);
+}
+
+/// A failing child rolls the WHOLE batch back — nothing half-applied — and the
+/// error names the child, which the old blanket "Mutation::Batch" never did.
+#[test]
+fn mixed_batch_rolls_back_when_a_child_fails() {
+    let bytes = small_idml();
+    let mut model = CanvasModel::load("doc1", &bytes, CanvasOptions::default()).expect("load");
+
+    let err = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertText {
+                    story_id: "story1".into(),
+                    offset: 5,
+                    text: ",".into(),
+                    cell: None,
+                },
+                // No such story — this child cannot apply.
+                Mutation::InsertText {
+                    story_id: "nope".into(),
+                    offset: 0,
+                    text: "x".into(),
+                    cell: None,
+                },
+            ],
+        })
+        .expect_err("the batch must fail");
+
+    let msg = format!("{err:?}");
+    assert!(msg.contains("child 1"), "the error names the child: {msg}");
+    // The first child's insert was reversed: the story is untouched.
+    assert_eq!(story_text(&model, "story1"), "Hello world");
+    assert_eq!(
+        model.applied_log_len(),
+        0,
+        "nothing logged for a failed batch"
+    );
 }
