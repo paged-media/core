@@ -48,6 +48,41 @@ pub(super) fn polygon_path_from_anchors(
 /// against the indexed order of contours (the `i`th true ⇒ `i`th
 /// contour open); a shorter slice / empty slice means every contour
 /// is closed (legacy behaviour).
+/// Materialise a path's contour ranges from its `subpath_starts`.
+/// Default (`[]` or `[0]`) = one contour covering the whole anchor
+/// list. Otherwise each entry begins a new contour at that index,
+/// ending where the next one starts (or at `len` for the last entry).
+/// Out-of-range and duplicate offsets are filtered defensively — every
+/// contour gets at least one anchor or is dropped.
+///
+/// Shared by the plain path builder and B-23's corner-effected polygon
+/// builder so the two can never disagree about where a contour begins.
+pub(crate) fn contour_ranges(len: usize, subpath_starts: &[usize]) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    if subpath_starts.len() <= 1 {
+        ranges.push((0, len));
+        return ranges;
+    }
+    let mut starts: Vec<usize> = subpath_starts
+        .iter()
+        .copied()
+        .filter(|&s| s < len)
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.first() != Some(&0) {
+        starts.insert(0, 0);
+    }
+    for i in 0..starts.len() {
+        let lo = starts[i];
+        let hi = starts.get(i + 1).copied().unwrap_or(len);
+        if hi > lo {
+            ranges.push((lo, hi));
+        }
+    }
+    ranges
+}
+
 pub(crate) fn polygon_path_from_anchors_with_open(
     anchors: &[PathAnchor],
     subpath_starts: &[usize],
@@ -58,34 +93,7 @@ pub(crate) fn polygon_path_from_anchors_with_open(
             segments: Vec::new(),
         };
     }
-    // Materialise subpath ranges. Default ([] or [0]) = one contour
-    // covering the whole anchor list. Otherwise each entry begins a
-    // new contour at that index, ending where the next one starts
-    // (or at `anchors.len()` for the last entry). Out-of-range and
-    // duplicate offsets are filtered defensively — every contour
-    // gets at least one anchor or is dropped.
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    if subpath_starts.len() <= 1 {
-        ranges.push((0, anchors.len()));
-    } else {
-        let mut starts: Vec<usize> = subpath_starts
-            .iter()
-            .copied()
-            .filter(|&s| s < anchors.len())
-            .collect();
-        starts.sort_unstable();
-        starts.dedup();
-        if starts.first() != Some(&0) {
-            starts.insert(0, 0);
-        }
-        for i in 0..starts.len() {
-            let lo = starts[i];
-            let hi = starts.get(i + 1).copied().unwrap_or(anchors.len());
-            if hi > lo {
-                ranges.push((lo, hi));
-            }
-        }
-    }
+    let ranges = contour_ranges(anchors.len(), subpath_starts);
     let mut segs = Vec::with_capacity(anchors.len() * 2 + ranges.len() * 2);
     for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
         let sub = &anchors[lo..hi];
@@ -132,6 +140,26 @@ pub(crate) fn polygon_path_from_anchors_with_open(
     PathData { segments: segs }
 }
 
+/// B-23 — the outline a polygon actually paints: its anchor path with
+/// the uniform corner effect applied when one is resolved, otherwise the
+/// plain anchor path. One helper so the fill, the stroke-alignment base
+/// and the B-18 container clip can never disagree about the outline.
+pub(crate) fn polygon_outline_path(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+    corner: Option<(paged_model::CornerOption, f32)>,
+) -> PathData {
+    if let Some((kind, radius)) = corner {
+        if let Some(p) =
+            super::shapes::corner_polygon_path(anchors, subpath_starts, subpath_open, kind, radius)
+        {
+            return p;
+        }
+    }
+    polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open)
+}
+
 /// Polygon emit. When the polygon carries `<PathPointType>` anchors
 /// (real-world InDesign export shape) we build a curved FillPath
 /// from them; otherwise fall back to drawing the AABB so synthetic
@@ -176,6 +204,14 @@ pub(super) fn emit_polygon_into(
     // unit-rect/ellipse primitives. The adapter collapsed anchor-
     // less polygons into `Geometry::Rect` already, so this only fires
     // for the curved-path case.
+    // B-23: the polygon's corner effect (if any) is resolved once and
+    // reused by the fill path, the stroke-alignment base path, and the
+    // effects path — they must all describe the same outline.
+    let corner = super::shapes::uniform_corner(
+        resolved.corner_radius,
+        resolved.corner_option,
+        &resolved.corners,
+    );
     let path_id = if let Geometry::Polygon {
         anchors,
         subpath_starts,
@@ -183,7 +219,7 @@ pub(super) fn emit_polygon_into(
         ..
     } = &resolved.geometry
     {
-        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        let path = polygon_outline_path(anchors, subpath_starts, subpath_open, corner);
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
@@ -219,7 +255,7 @@ pub(super) fn emit_polygon_into(
         ..
     } = &resolved.geometry
     {
-        let base = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        let base = polygon_outline_path(anchors, subpath_starts, subpath_open, corner);
         super::shapes::aligned_outline_path(&base, resolved.stroke_alignment, poly_weight).map(
             |p| {
                 let seed = resolved

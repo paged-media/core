@@ -79,6 +79,18 @@ pub(super) fn apply_set_property(
         ) => {
             return apply_path_open_at(doc, node, value);
         }
+        // Wave B — the inverse gesture of PathOpenAt: close an open
+        // subpath (merge coincident endpoints back, or just stop
+        // being open). Same kind fan-out + snapshot inverse.
+        (
+            NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::ClosePath,
+        ) => {
+            return apply_close_path(doc, node, value);
+        }
         (
             NodeId::Polygon(_)
             | NodeId::TextFrame(_)
@@ -2298,23 +2310,69 @@ pub(super) fn apply_set_property(
             )
         }
 
-        // ============ W0.3 — per-corner option + radius (Rectangle) ===
+        // ====== W0.3 — per-corner option + radius (Rectangle+Polygon) =
+        // B-23 (RFI plugin-platform) — CLOSED for Polygon 2026-08-03.
+        // The full lockstep sequence shipped: plugin-publish's
+        // `idml-import` reads the corner vocabulary off `<Polygon>`
+        // (same attribute names as `<Rectangle>`) and its `idml-export`
+        // patches them back byte-preservingly;
+        // `paged_model::Polygon` grew `corner_radius` /
+        // `corner_option` / `corners` (serde-defaulted); these arms
+        // write both kinds through `find_corners_mut`; and the
+        // corner-effect geometry was generalised out of the
+        // rect-specific `corner_rect_path` into
+        // `pipeline::shapes::push_corner_segments`, which
+        // `corner_polygon_path` applies at every straight-line corner
+        // of every closed polygon contour (true tangent-circle
+        // construction — it reduces to the identical rect math at 90°).
+        //
+        // NAMED RESIDUALS (deliberate, evidence-backed — see the
+        // addressing note on `paged_model::Polygon::corners`):
+        //   * Only the TopLeft slot (falling back to the global
+        //     `CornerOption`/`CornerRadius` pair) drives polygon
+        //     GEOMETRY; the other three are stored, mutable and
+        //     round-tripped but rect-only as *addressing*. IDML has no
+        //     per-name mapping for a polygon with N ≠ 4 corners and the
+        //     real-export corpus never relies on one.
+        //   * Oval / TextFrame / GraphicLine / Group carry the same
+        //     attributes on disk (the corpus has 16 / 16 / 21 / 28
+        //     `CornerRadius` occurrences) but have no model fields, so
+        //     a corner write on those kinds is still an honest
+        //     `UnsupportedProperty`. Ovals have no corners to round;
+        //     TextFrame/GraphicLine would be the next lockstep pass.
+        //   * Corner effects apply to CLOSED contours with ≥ 3 anchors;
+        //     an open contour (IDML `PathOpen="true"`) keeps its raw
+        //     outline — matching InDesign, where a two-point open path
+        //     inheriting `RoundedCorner` from an object style shows
+        //     nothing.
+        //   * A SMOOTH spline junction (non-degenerate Bezier handles)
+        //     is never treated as a corner; the effect only cuts where
+        //     two straight edges meet.
+        //   * All five options (Rounded / Inverse / Bevel / Inset /
+        //     Fancy) render on polygons because the shared emitter is
+        //     kind-agnostic — but `Inset` and `Fancy` carry the same
+        //     "approximation pending reference-PDF calibration" caveat
+        //     they already carry for rectangles.
+        //   * The polygon corner attributes are NOT surfaced through
+        //     `paged-canvas`'s property descriptor yet (it still
+        //     enumerates the corner slots for rectangles only) — an
+        //     editor-panel wiring task, not a kernel gap.
         (
-            NodeId::Rectangle(id),
+            NodeId::Rectangle(_) | NodeId::Polygon(_),
             PropertyPath::FrameCornerOptionTopLeft
             | PropertyPath::FrameCornerOptionTopRight
             | PropertyPath::FrameCornerOptionBottomLeft
             | PropertyPath::FrameCornerOptionBottomRight,
         ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
-                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let i = corner_index(path);
-            let prev = rect.corners[i]
+            let corners = find_corners_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = corners[i]
                 .option
                 .map(corner_option_as_idml)
                 .unwrap_or_default();
-            rect.corners[i].option = if new_val.is_empty() {
+            corners[i].option = if new_val.is_empty() {
                 None
             } else {
                 paged_model::CornerOption::from_idml(&new_val)
@@ -2328,18 +2386,18 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::Rectangle(id),
+            NodeId::Rectangle(_) | NodeId::Polygon(_),
             PropertyPath::FrameCornerRadiusTopLeft
             | PropertyPath::FrameCornerRadiusTopRight
             | PropertyPath::FrameCornerRadiusBottomLeft
             | PropertyPath::FrameCornerRadiusBottomRight,
         ) => {
             let new_val = expect_length(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
-                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let i = corner_index(path);
-            let prev = rect.corners[i].radius;
-            rect.corners[i].radius = new_val;
+            let corners = find_corners_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = corners[i].radius;
+            corners[i].radius = new_val;
             (
                 Value::Length(prev),
                 InvalidationHint {

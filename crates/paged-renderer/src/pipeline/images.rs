@@ -272,10 +272,19 @@ pub(super) fn emit_polygon_image(
     // `subpath_open` so open contours don't get auto-closed when used
     // as an image clip (P-15).
     let clip_path_id = if !poly.anchors.is_empty() {
-        let path = polygon_path_from_anchors_with_open(
+        // B-23: the image masks to the outline the polygon PAINTS, so a
+        // rounded-corner polygon crops its placed image along the
+        // rounded edge. Shares the fill path's cache key, so the two
+        // must build the same geometry.
+        let path = super::text_path::polygon_outline_path(
             &poly.anchors,
             &poly.subpath_starts,
             &poly.subpath_open,
+            super::shapes::uniform_corner(
+                poly.corner_radius,
+                poly.corner_option.as_deref(),
+                &poly.corners,
+            ),
         );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),

@@ -101,6 +101,7 @@ pub enum PropertyPathJson {
     OutlineStrokeVariable,
     OffsetPath,
     SimplifyPath,
+    ClosePath,
     PageBounds,
     FrameGradientFeather,
     CharacterFontFamily,
@@ -335,6 +336,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::OutlineStrokeVariable => PropertyPathJson::OutlineStrokeVariable,
             PropertyPath::OffsetPath => PropertyPathJson::OffsetPath,
             PropertyPath::SimplifyPath => PropertyPathJson::SimplifyPath,
+            PropertyPath::ClosePath => PropertyPathJson::ClosePath,
             PropertyPath::PageBounds => PropertyPathJson::PageBounds,
             PropertyPath::FrameGradientFeather => PropertyPathJson::FrameGradientFeather,
             PropertyPath::CharacterFontFamily => PropertyPathJson::CharacterFontFamily,
@@ -607,6 +609,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::OutlineStrokeVariable => PropertyPath::OutlineStrokeVariable,
             PropertyPathJson::OffsetPath => PropertyPath::OffsetPath,
             PropertyPathJson::SimplifyPath => PropertyPath::SimplifyPath,
+            PropertyPathJson::ClosePath => PropertyPath::ClosePath,
             PropertyPathJson::PageBounds => PropertyPath::PageBounds,
             PropertyPathJson::FrameGradientFeather => PropertyPath::FrameGradientFeather,
             PropertyPathJson::CharacterFontFamily => PropertyPath::CharacterFontFamily,
@@ -876,6 +879,7 @@ impl From<Value> for AuthoredValue {
             | Value::OutlineStrokeVariable { .. }
             | Value::OffsetPath { .. }
             | Value::SimplifyPath { .. }
+            | Value::ClosePath { .. }
             | Value::GradientFeather(_)
             // W0.2 — whole-struct / whole-list paragraph payloads,
             // like the gradient-feather struct: no scalar

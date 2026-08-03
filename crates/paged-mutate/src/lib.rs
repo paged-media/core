@@ -2011,6 +2011,9 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         }
     }
 

@@ -294,6 +294,24 @@ pub(super) fn find_miter_limit_mut<'a>(
     }
 }
 
+/// B-23 — locate the `corners: [CornerSpec; 4]` array. Carried by the
+/// two kinds whose model parses the IDML corner vocabulary: Rectangle
+/// (four bounding-box corners, the four names address them exactly)
+/// and Polygon (N path corners — the names are stored + round-tripped,
+/// but only slot 0 drives geometry; see `paged_model::Polygon::corners`).
+/// Oval / TextFrame / GraphicLine carry the attributes on disk too but
+/// have no model fields yet, so they stay `UnsupportedProperty`.
+pub(super) fn find_corners_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut [paged_model::CornerSpec; 4]> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.corners),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.corners),
+        _ => None,
+    }
+}
+
 /// Punch-list (rides v35) — locate the `end_join: Option<String>` field.
 /// Same kinds as [`find_miter_limit_mut`] (the two are an IDML pair).
 pub(super) fn find_end_join_mut<'a>(

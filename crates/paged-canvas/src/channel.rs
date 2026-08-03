@@ -333,7 +333,30 @@ export type WorkerToMain = WorkerToMainKind & {
 // serialises the document as a `.paged` package (valid IDML + the paged/ parts
 // + manifest.json). Additive — a new editor SENDS messages an older worker
 // can't deserialise, so the minor bumps; the handshake catches a stale pair.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(55);
+//
+// v52–v55 (doc doors + cell styling): see the per-variant doc comments —
+// v52 `InsertAnchoredFrame`, v53 `InsertHyperlink`, v54
+// `RequestStoryContent`, v55 `ApplyStyle.cell`.
+//
+// v56 (Wave B — path topology): two new `Mutation`s — `ClosePath
+// { elementId, subpath? }` (close an open subpath; the inverse gesture of
+// the `PathOpenAt` scissors cut, merging coincident endpoints back) and
+// `JoinPaths { elementId, otherId }` (weld two open single-contour path
+// elements at their nearest endpoints and delete the other; both-pairs-
+// coincident inputs close into a ring; rides `Operation::JoinPaths`, the
+// PathfinderBoolean-style internal Batch whose single undo restores both
+// elements). Additive — a new editor SENDS mutations an older worker can't
+// deserialise, so the minor bumps; the handshake catches a stale pair.
+//
+// v56 also carries B-18 (nested content / paste-into, same unpublished
+// batch — nothing shipped between, so no extra bump): `PasteInto
+// { containerId, childId }` nests an existing top-level page item inside
+// a container Rectangle / Oval / Polygon (the renderer clips it by the
+// container's outline; geometry preserved in document space) and
+// `ReleaseFrom { childId }` pops it back out, world transform preserved.
+// Both ride the same-named `Operation`s; each is one undo step (exact
+// z-slot / child-index restore).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(56);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3101,6 +3124,47 @@ pub enum Mutation {
         element_id: crate::element_selection::ElementId,
         tolerance: f32,
     },
+    /// v56 (Wave B) — close an OPEN subpath of a path element: the
+    /// inverse gesture of `PathOpenAt`'s scissors cut. `subpath`
+    /// picks the contour by index; omit for the default — the
+    /// single/last open subpath. Coincident endpoints (the
+    /// duplicated pair a cut leaves) merge back into one anchor;
+    /// endpoints apart gain the implicit straight closing edge.
+    ClosePath {
+        element_id: crate::element_selection::ElementId,
+        #[serde(default)]
+        subpath: Option<u32>,
+    },
+    /// v56 (Wave B) — weld two OPEN single-contour path elements
+    /// into one (InDesign's Join): connect the NEAREST endpoints of
+    /// `element_id` and `other_id` (appending the other's anchors in
+    /// the matching orientation), then delete `other_id`. If both
+    /// endpoint pairs are coincident the result closes into a ring.
+    /// Non-path / closed / multi-contour inputs are rejected with an
+    /// honest error (no-op). One undo step restores both elements
+    /// (the same Batch machinery `PathfinderBoolean` rides).
+    JoinPaths {
+        element_id: crate::element_selection::ElementId,
+        other_id: crate::element_selection::ElementId,
+    },
+    /// v56 (B-18) — InDesign paste-into: nest an existing TOP-LEVEL
+    /// page item inside a container Rectangle / Oval / Polygon. The
+    /// child keeps its document-space geometry (nothing moves on
+    /// canvas) and renders clipped by the container's outline. Rides
+    /// `Operation::PasteInto`; one undo pops the child back to its
+    /// exact stacking slot. Grouped / already-nested children and
+    /// non-container hosts are rejected with an honest error.
+    PasteInto {
+        container_id: crate::element_selection::ElementId,
+        child_id: crate::element_selection::ElementId,
+    },
+    /// v56 (B-18) — the inverse gesture: pop a pasted-in child back
+    /// to top level (stacks on top), world transform preserved.
+    /// Rides `Operation::ReleaseFrom`; one undo re-nests at the same
+    /// child index.
+    ReleaseFrom {
+        child_id: crate::element_selection::ElementId,
+    },
     /// B-04 (protocol v32) — group page items on one spread.
     /// Reference-based and z-order-neutral (the group takes the
     /// earliest member's paint slot). Reply carries the minted group
@@ -3582,6 +3646,10 @@ impl Mutation {
             Self::OutlineStroke { .. } => "OutlineStroke",
             Self::OffsetPath { .. } => "OffsetPath",
             Self::SimplifyPath { .. } => "SimplifyPath",
+            Self::ClosePath { .. } => "ClosePath",
+            Self::JoinPaths { .. } => "JoinPaths",
+            Self::PasteInto { .. } => "PasteInto",
+            Self::ReleaseFrom { .. } => "ReleaseFrom",
             Self::CreateGroup { .. } => "CreateGroup",
             Self::DissolveGroup { .. } => "DissolveGroup",
             Self::SetGroupTransform { .. } => "SetGroupTransform",
@@ -4077,8 +4145,106 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v55() {
-        assert_eq!(PROTOCOL_VERSION.0, 55);
+    fn protocol_version_is_v56() {
+        assert_eq!(PROTOCOL_VERSION.0, 56);
+    }
+
+    /// v56 (Wave B) — `ClosePath` / `JoinPaths` wire shapes. The tag is
+    /// the camelCase op name; `subpath` is optional (absent = default =
+    /// the single/last open subpath) so older callers' payloads stay
+    /// deserialisable; `elementId` / `otherId` ride the same tagged
+    /// `ElementId` shape every path op uses.
+    #[test]
+    fn v56_close_path_and_join_paths_wire_shapes_round_trip() {
+        use crate::element_selection::ElementId;
+
+        let close = Mutation::ClosePath {
+            element_id: ElementId::Polygon("poly1".into()),
+            subpath: None,
+        };
+        let json = serde_json::to_string(&close).unwrap();
+        assert!(json.contains("\"op\":\"closePath\""), "tag missing: {json}");
+        assert!(json.contains("\"elementId\":"), "{json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Mutation::ClosePath { subpath: None, .. }));
+        // `subpath` omitted entirely still deserialises (serde default).
+        let no_subpath: Mutation = serde_json::from_str(
+            r#"{"op":"closePath","args":{"elementId":{"kind":"polygon","id":"poly1"}}}"#,
+        )
+        .expect("subpath is optional on the wire");
+        assert!(matches!(
+            no_subpath,
+            Mutation::ClosePath { subpath: None, .. }
+        ));
+        // Explicit subpath index round-trips.
+        let close_1 = Mutation::ClosePath {
+            element_id: ElementId::Polygon("poly1".into()),
+            subpath: Some(1),
+        };
+        let json = serde_json::to_string(&close_1).unwrap();
+        assert!(json.contains("\"subpath\":1"), "{json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            Mutation::ClosePath {
+                subpath: Some(1),
+                ..
+            }
+        ));
+
+        let join = Mutation::JoinPaths {
+            element_id: ElementId::Polygon("polyA".into()),
+            other_id: ElementId::GraphicLine("lineB".into()),
+        };
+        let json = serde_json::to_string(&join).unwrap();
+        assert!(json.contains("\"op\":\"joinPaths\""), "tag missing: {json}");
+        assert!(json.contains("\"elementId\":"), "{json}");
+        assert!(json.contains("\"otherId\":"), "camelCase rename: {json}");
+        assert!(!json.contains("other_id"), "snake leaked: {json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.discriminant(), "JoinPaths");
+    }
+
+    /// v56 (B-18) — `PasteInto` / `ReleaseFrom` wire shapes. camelCase
+    /// op tags; `containerId` / `childId` ride the same tagged
+    /// `ElementId` shape every structural op uses; no inverse-only
+    /// field (`child_index` / `restore_slot`) leaks onto the wire.
+    #[test]
+    fn v56_paste_into_and_release_from_wire_shapes_round_trip() {
+        use crate::element_selection::ElementId;
+
+        let paste = Mutation::PasteInto {
+            container_id: ElementId::Rectangle("host1".into()),
+            child_id: ElementId::Oval("child1".into()),
+        };
+        let json = serde_json::to_string(&paste).unwrap();
+        assert!(json.contains("\"op\":\"pasteInto\""), "tag missing: {json}");
+        assert!(
+            json.contains("\"containerId\":"),
+            "camelCase rename: {json}"
+        );
+        assert!(json.contains("\"childId\":"), "camelCase rename: {json}");
+        assert!(!json.contains("container_id"), "snake leaked: {json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.discriminant(), "PasteInto");
+        // A hand-authored payload (the editor's shape) deserialises.
+        let hand: Mutation = serde_json::from_str(
+            r#"{"op":"pasteInto","args":{"containerId":{"kind":"rectangle","id":"host1"},"childId":{"kind":"textFrame","id":"tf1"}}}"#,
+        )
+        .expect("hand-authored pasteInto");
+        assert!(matches!(hand, Mutation::PasteInto { .. }));
+
+        let release = Mutation::ReleaseFrom {
+            child_id: ElementId::Oval("child1".into()),
+        };
+        let json = serde_json::to_string(&release).unwrap();
+        assert!(
+            json.contains("\"op\":\"releaseFrom\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"childId\":"), "{json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.discriminant(), "ReleaseFrom");
     }
 
     /// v38 — `RequestFrameChain` serialises with its camelCase tag and

@@ -54,6 +54,7 @@ const SAMPLES: &[&str] = &[
     "markers",
     "masters",
     "corners",
+    "paste-into",
 ];
 
 fn build_sample(name: &str) -> Vec<u8> {
@@ -74,6 +75,7 @@ fn build_sample(name: &str) -> Vec<u8> {
         "markers" => paged_gen::samples::markers::build(),
         "masters" => paged_gen::samples::masters::build(),
         "corners" => paged_gen::samples::corners::build(),
+        "paste-into" => paged_gen::samples::paste_into::build(),
         "footnotes" => paged_gen::samples::footnotes::build(),
         other => panic!("unknown sample {other}"),
     };
@@ -2417,4 +2419,261 @@ fn graphic_line_line_ends_write_back() {
         .expect("inserted gl2 present");
     assert_eq!(gl2.start_arrow, idml_import::ArrowheadType::Barbed);
     assert_eq!(gl2.end_arrow, idml_import::ArrowheadType::None);
+}
+
+// ---------------------------------------------------------------------
+// B-18 — nested content (paste-into): unmutated identity is covered by
+// the SAMPLES loop above (the `paste-into` fixture carries source-
+// nested children); these pin the MUTATED lanes — PasteInto /
+// ReleaseFrom restructure the spread XML and round-trip.
+// ---------------------------------------------------------------------
+
+/// Freshly-inserted container + child, nested via `PasteInto`, save:
+/// the container element is emitted with the child INSIDE it (the
+/// insert lane's nested recursion), and a re-parse reproduces the
+/// nested model with the child's world transform preserved.
+#[test]
+fn paste_into_of_inserted_items_saves_nested_and_reparses() {
+    let original = build_sample("geometry");
+    let doc = idml_import::import_idml_doc(&original).unwrap();
+    let spread_id = first_spread_id(&doc);
+    let host_id = "Rectangle/b18host".to_string();
+    let child_id = "Rectangle/b18child".to_string();
+
+    let mut project = Project::new(doc);
+    for (id, bounds, tx) in [
+        (
+            &host_id,
+            [50.0_f32, 60.0, 250.0, 360.0],
+            Some([1.0, 0.0, 0.0, 1.0, 10.0, 20.0]),
+        ),
+        (
+            &child_id,
+            [0.0, 0.0, 80.0, 120.0],
+            Some([1.0, 0.0, 0.0, 1.0, 100.0, 120.0]),
+        ),
+    ] {
+        let position = project
+            .document()
+            .spreads
+            .iter()
+            .find(|s| s.spread.self_id.as_deref() == Some(spread_id.as_str()))
+            .map(|s| s.spread.rectangles.len())
+            .unwrap();
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread(spread_id.clone()),
+                position,
+                node: NodeSpec::Rectangle {
+                    self_id: id.clone(),
+                    bounds,
+                    fill_color: Some("Color/Black".to_string()),
+                    stroke_color: None,
+                    stroke_weight: None,
+                    item_transform: tx,
+                },
+                z_slot: None,
+            })
+            .expect("insert");
+    }
+    project
+        .apply(Operation::PasteInto {
+            container: NodeId::Rectangle(host_id.clone()),
+            child: NodeId::Rectangle(child_id.clone()),
+            child_index: None,
+        })
+        .expect("paste into");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
+    let spread = re
+        .spreads
+        .iter()
+        .map(|s| &s.spread)
+        .find(|s| s.nested_children.contains_key(&host_id))
+        .expect("nested children reparsed");
+    let children = &spread.nested_children[&host_id];
+    assert_eq!(children.len(), 1);
+    let child = spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(child_id.as_str()))
+        .expect("child reparsed");
+    // World transform preserved: the writer emits the child relative
+    // to the host (90, 100); the parser composes the host back in.
+    let t = child.item_transform.expect("composed transform");
+    assert!((t[4] - 100.0).abs() < 1e-3, "tx = {}", t[4]);
+    assert!((t[5] - 120.0).abs() < 1e-3, "ty = {}", t[5]);
+    // Structurally: the child element must sit INSIDE the host element.
+    let dst = entries(&out);
+    let spread_xml = dst
+        .iter()
+        .find(|(k, v)| k.starts_with("Spreads/") && String::from_utf8_lossy(v).contains("b18host"))
+        .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+        .expect("spread entry");
+    let host_open = spread_xml.find("b18host").unwrap();
+    let host_close = spread_xml[host_open..]
+        .find("</Rectangle>")
+        .map(|i| host_open + i)
+        .expect("host closes");
+    let child_pos = spread_xml.find("b18child").expect("child emitted");
+    assert!(
+        child_pos > host_open && child_pos < host_close,
+        "child element nests inside the host element"
+    );
+}
+
+/// Source items (already in the XML) restructure on `PasteInto`: the
+/// child element leaves its top-level position and re-emits inside the
+/// container; a re-parse reproduces the nested model and the story of
+/// a nested TEXT FRAME child stays attached.
+#[test]
+fn paste_into_of_source_items_saves_nested() {
+    let original = build_sample("geometry");
+    let doc = idml_import::import_idml_doc(&original).unwrap();
+    let spread0 = &doc.spreads[0].spread;
+    let host_id = spread0
+        .rectangles
+        .iter()
+        .find_map(|r| r.self_id.clone())
+        .expect("a source rectangle");
+    let child_id = spread0
+        .text_frames
+        .iter()
+        .find_map(|f| f.self_id.clone())
+        .expect("a source text frame");
+    let child_story = spread0
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(child_id.as_str()))
+        .and_then(|f| f.parent_story.clone());
+    let child_world = spread0
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(child_id.as_str()))
+        .unwrap()
+        .item_transform;
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::PasteInto {
+            container: NodeId::Rectangle(host_id.clone()),
+            child: NodeId::TextFrame(child_id.clone()),
+            child_index: None,
+        })
+        .expect("paste into");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a structural move must change bytes");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
+    let spread = &re.spreads[0].spread;
+    let children = spread
+        .nested_children
+        .get(&host_id)
+        .expect("child nested after reparse");
+    assert_eq!(children.len(), 1);
+    let child = spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(child_id.as_str()))
+        .expect("child text frame survives");
+    assert_eq!(child.parent_story, child_story, "story stays attached");
+    // World transform preserved through decompose → re-compose.
+    match (child_world, child.item_transform) {
+        (None, None) => {}
+        (a, b) => {
+            let a = a.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            let b = b.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            for k in 0..6 {
+                assert!((a[k] - b[k]).abs() < 1e-3, "m[{k}]: {} vs {}", a[k], b[k]);
+            }
+        }
+    }
+}
+
+/// The strongest form of the invariant: PasteInto then undo writes a
+/// byte-identical package.
+#[test]
+fn paste_into_then_undo_round_trips_byte_identical() {
+    let original = build_sample("geometry");
+    let doc = idml_import::import_idml_doc(&original).unwrap();
+    let spread0 = &doc.spreads[0].spread;
+    let host_id = spread0
+        .rectangles
+        .iter()
+        .find_map(|r| r.self_id.clone())
+        .expect("a source rectangle");
+    let child_id = spread0
+        .text_frames
+        .iter()
+        .find_map(|f| f.self_id.clone())
+        .expect("a source text frame");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::PasteInto {
+            container: NodeId::Rectangle(host_id),
+            child: NodeId::TextFrame(child_id),
+            child_index: None,
+        })
+        .expect("paste into");
+    project.undo().unwrap().expect("undo");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_eq!(original, out, "pasteInto→undo should be a no-op write");
+}
+
+/// `ReleaseFrom` on a SOURCE-nested child (the paste-into fixture):
+/// the element leaves the container in the XML and re-emits top-level;
+/// a re-parse shows it in `frames_in_order` and out of
+/// `nested_children`.
+#[test]
+fn release_from_source_nested_child_saves_top_level() {
+    let original = build_sample("paste-into");
+    let doc = idml_import::import_idml_doc(&original).unwrap();
+    let spread0 = &doc.spreads[0].spread;
+    let host_id = spread0
+        .nested_children
+        .keys()
+        .next()
+        .cloned()
+        .expect("fixture has a container");
+    // The nested child rectangle (children[0] per the fixture).
+    let child_id = spread0
+        .rectangles
+        .iter()
+        .skip(1) // index 0 is the host
+        .find_map(|r| r.self_id.clone())
+        .expect("nested child rect");
+
+    let mut project = Project::new(doc);
+    project
+        .apply(Operation::ReleaseFrom {
+            child: NodeId::Rectangle(child_id.clone()),
+            restore_slot: None,
+        })
+        .expect("release");
+
+    let out = write_idml(project.document(), &original).expect("write");
+    assert_ne!(original, out, "a release must change bytes");
+    let re = idml_import::import_idml_doc(&out).expect("reparse");
+    let spread = &re.spreads[0].spread;
+    let still_nested = spread
+        .nested_children
+        .get(&host_id)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    assert_eq!(still_nested, 2, "oval + text frame stay nested; rect left");
+    let child_idx = spread
+        .rectangles
+        .iter()
+        .position(|r| r.self_id.as_deref() == Some(child_id.as_str()))
+        .expect("released child survives");
+    assert!(
+        spread
+            .frames_in_order
+            .contains(&idml_import::FrameRef::Rectangle(child_idx)),
+        "released child is top-level: {:?}",
+        spread.frames_in_order
+    );
 }

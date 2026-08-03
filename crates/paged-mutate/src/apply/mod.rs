@@ -209,6 +209,16 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             others,
             op_kind,
         } => apply_pathfinder(doc, kept, others, *op_kind),
+        Operation::JoinPaths { kept, other } => apply_join_paths(doc, kept, other),
+        Operation::PasteInto {
+            container,
+            child,
+            child_index,
+        } => apply_paste_into(doc, container, child, *child_index),
+        Operation::ReleaseFrom {
+            child,
+            restore_slot,
+        } => apply_release_from(doc, child, *restore_slot),
         Operation::LinkFrames { from, to } => apply_link_frames(doc, from, to),
         Operation::UnlinkFrames { frame, prev_next } => {
             apply_unlink_frames(doc, frame, prev_next.as_deref())
@@ -698,6 +708,7 @@ mod insert_node;
 mod layer;
 mod master;
 mod move_node;
+mod nested;
 mod paragraph;
 mod path_topology;
 mod place_image;
@@ -716,6 +727,7 @@ use insert_node::*;
 use layer::*;
 use master::*;
 use move_node::*;
+use nested::*;
 use paragraph::*;
 use path_topology::*;
 use remove_node::*;

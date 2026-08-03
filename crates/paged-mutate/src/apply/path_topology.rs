@@ -613,6 +613,351 @@ pub(super) fn apply_path_kernel_op(
     })
 }
 
+/// Wave B — endpoints closer than this (pt) count as coincident for
+/// `ClosePath`'s merge-back and `JoinPaths`' weld/ring detection. A
+/// scissors cut (`PathOpenAt`) leaves bit-identical twins, so any
+/// sub-visible epsilon works; a thousandth of a point is far below
+/// the renderer's resolution at any sane zoom.
+const WELD_EPS: f32 = 1e-3;
+
+fn points_coincide(a: (f32, f32), b: (f32, f32)) -> bool {
+    (a.0 - b.0).abs() <= WELD_EPS && (a.1 - b.1).abs() <= WELD_EPS
+}
+
+/// Wave B — close an OPEN subpath (the inverse gesture of
+/// `apply_path_open_at`). Coincident endpoints (the duplicated pair a
+/// scissors cut leaves) merge back into one anchor — the head keeps
+/// its outgoing handle and takes the tail's incoming handle, exactly
+/// reversing the cut; endpoints apart simply flip the contour's
+/// `subpath_open` flag so the renderer draws the implicit straight
+/// closing edge. Inverse = verbatim restore of the snapshot
+/// `(anchors, subpath_starts, subpath_open)` triple, the same
+/// convention as `apply_path_open_at` (so undo reopens at the same
+/// point, bytewise).
+pub(super) fn apply_close_path(
+    doc: &mut paged_scene::Document,
+    node: &NodeId,
+    value: &Value,
+) -> Result<AppliedOperation, OperationError> {
+    let (subpath, prev_anchors, prev_starts, prev_open) = match value {
+        Value::ClosePath {
+            subpath,
+            prev_anchors,
+            prev_subpath_starts,
+            prev_subpath_open,
+        } => (
+            *subpath,
+            prev_anchors.clone(),
+            prev_subpath_starts.clone(),
+            prev_subpath_open.clone(),
+        ),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path: PropertyPath::ClosePath,
+                expected: "ClosePath".to_string(),
+            })
+        }
+    };
+    let (anchors, subpath_starts, subpath_open) = find_path_anchors_mut(doc, node)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+
+    // Snapshot for the inverse (and for the restore branch's own
+    // inverse, keeping redo working).
+    let snap_anchors: Vec<PathAnchorSpec> =
+        anchors.iter().map(PathAnchorSpec::from_parse).collect();
+    let snap_starts = subpath_starts.clone();
+    let snap_open = subpath_open.clone();
+
+    if let (Some(ra), Some(rs), Some(ro)) = (prev_anchors, prev_starts, prev_open) {
+        // Restore branch (undo/redo): verbatim triple.
+        *anchors = ra.iter().map(PathAnchorSpec::to_parse).collect();
+        *subpath_starts = rs;
+        *subpath_open = ro;
+    } else {
+        if anchors.is_empty() {
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path: PropertyPath::ClosePath,
+                reason: "element has no editable path".to_string(),
+            });
+        }
+        // Normalise the parallel tables: a path with no explicit
+        // boundaries is one closed contour starting at 0.
+        if subpath_starts.is_empty() {
+            subpath_starts.push(0);
+        }
+        if subpath_open.len() < subpath_starts.len() {
+            subpath_open.resize(subpath_starts.len(), false);
+        }
+        // Resolve the target subpath: explicit index, or the LAST
+        // open contour (the common single-open-contour default).
+        let s = match subpath {
+            Some(s) => {
+                if s >= subpath_starts.len() {
+                    return Err(OperationError::InvalidValue {
+                        node: node.clone(),
+                        path: PropertyPath::ClosePath,
+                        reason: format!(
+                            "subpath index {s} out of range ({} contours)",
+                            subpath_starts.len()
+                        ),
+                    });
+                }
+                s
+            }
+            None => subpath_open.iter().rposition(|o| *o).ok_or_else(|| {
+                OperationError::InvalidValue {
+                    node: node.clone(),
+                    path: PropertyPath::ClosePath,
+                    reason: "path has no open subpath to close".to_string(),
+                }
+            })?,
+        };
+        if !subpath_open[s] {
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path: PropertyPath::ClosePath,
+                reason: format!("subpath {s} is already closed"),
+            });
+        }
+        let start = subpath_starts[s];
+        let end = subpath_starts.get(s + 1).copied().unwrap_or(anchors.len());
+        let len = end - start;
+        if len < 2 {
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path: PropertyPath::ClosePath,
+                reason: "cannot close a degenerate single-anchor contour".to_string(),
+            });
+        }
+        let head = anchors[start];
+        let tail = anchors[end - 1];
+        if points_coincide(head.anchor, tail.anchor) && len >= 3 {
+            // The duplicated endpoint pair a scissors cut left —
+            // merge back: the head keeps its outgoing handle and
+            // takes the tail's incoming one, then the tail goes.
+            anchors[start].left = tail.left;
+            anchors.remove(end - 1);
+            for boundary in subpath_starts.iter_mut().skip(s + 1) {
+                *boundary -= 1;
+            }
+        }
+        // Endpoints apart (or a 2-anchor there-and-back contour):
+        // the contour just stops being open — the renderer draws
+        // the implicit straight closing edge.
+        subpath_open[s] = false;
+    }
+
+    let inverse = Operation::SetProperty {
+        node: node.clone(),
+        path: PropertyPath::ClosePath,
+        value: Value::ClosePath {
+            subpath,
+            prev_anchors: Some(snap_anchors),
+            prev_subpath_starts: Some(snap_starts),
+            prev_subpath_open: Some(snap_open),
+        },
+    };
+    Ok(AppliedOperation {
+        op: Operation::SetProperty {
+            node: node.clone(),
+            path: PropertyPath::ClosePath,
+            value: value.clone(),
+        },
+        inverse,
+        invalidation: InvalidationHint {
+            frame_geometry: vec![node.clone()],
+            ..Default::default()
+        },
+    })
+}
+
+/// Wave B — read a path element's full `(anchors, subpath_starts,
+/// subpath_open)` triple as a cloned snapshot. `None` when the node
+/// isn't one of the four path-bearing kinds (or doesn't exist).
+fn read_path_triple(
+    doc: &mut paged_scene::Document,
+    node: &NodeId,
+) -> Option<(Vec<paged_model::PathAnchor>, Vec<usize>, Vec<bool>)> {
+    let (anchors, starts, open) = find_path_anchors_mut(doc, node)?;
+    Some((anchors.clone(), starts.clone(), open.clone()))
+}
+
+/// Wave B — reverse a contour in place: anchor order flips and every
+/// anchor's incoming/outgoing handles swap roles.
+fn reverse_contour(anchors: &mut [paged_model::PathAnchor]) {
+    anchors.reverse();
+    for a in anchors.iter_mut() {
+        std::mem::swap(&mut a.left, &mut a.right);
+    }
+}
+
+/// Wave B — `Operation::JoinPaths`: weld two OPEN single-contour path
+/// elements into one. Validates both inputs (path-bearing, non-empty,
+/// exactly one contour, open, ≥ 2 anchors), connects the NEAREST
+/// endpoint pair (reversing either contour as needed so the weld
+/// endpoints meet in sequence), merges coincident weld anchors, closes
+/// the result into a ring when BOTH endpoint pairs coincide, then
+/// mirrors `apply_pathfinder`'s machinery: an internal Batch of
+/// `SetProperty(kept, ClosePath restore-branch → the joined triple)` +
+/// `RemoveNode(other)`. The Batch's inverse restores the kept path's
+/// prior triple verbatim and re-inserts the other element through the
+/// same `NodeSpec` capture RemoveNode always takes, so one Cmd-Z
+/// reverses the whole join.
+pub(super) fn apply_join_paths(
+    doc: &mut paged_scene::Document,
+    kept: &NodeId,
+    other: &NodeId,
+) -> Result<AppliedOperation, OperationError> {
+    let invalid = |reason: String| OperationError::InvalidValue {
+        node: kept.clone(),
+        path: PropertyPath::ClosePath,
+        reason,
+    };
+    if kept == other {
+        return Err(invalid("cannot join a path with itself".to_string()));
+    }
+
+    // 1. Snapshot both inputs' triples (cloned; no mutation yet).
+    let (k_anchors, k_starts, k_open) =
+        read_path_triple(doc, kept).ok_or_else(|| OperationError::NodeNotFound(kept.clone()))?;
+    let (o_anchors, o_starts, o_open) =
+        read_path_triple(doc, other).ok_or_else(|| OperationError::NodeNotFound(other.clone()))?;
+
+    // 2. Validate: each input is ONE open contour with ≥ 2 anchors.
+    //    (A primitive frame — empty anchors — is a closed rect in
+    //    renderer terms; multi-contour inputs would need an endpoint
+    //    picker to be meaningful. Both are honest rejections.)
+    let validate = |node: &NodeId,
+                    anchors: &[paged_model::PathAnchor],
+                    starts: &[usize],
+                    open: &[bool]|
+     -> Result<(), OperationError> {
+        let contours = starts.len().max(1);
+        if anchors.is_empty() {
+            return Err(invalid(format!(
+                "{node:?} has no editable open path (primitive frames are closed)"
+            )));
+        }
+        if contours > 1 {
+            return Err(invalid(format!(
+                "{node:?} has {contours} contours; joinPaths welds single-contour paths"
+            )));
+        }
+        if !open.first().copied().unwrap_or(false) {
+            return Err(invalid(format!("{node:?} is a closed path")));
+        }
+        if anchors.len() < 2 {
+            return Err(invalid(format!(
+                "{node:?} is a degenerate single-anchor path"
+            )));
+        }
+        Ok(())
+    };
+    validate(kept, &k_anchors, &k_starts, &k_open)?;
+    validate(other, &o_anchors, &o_starts, &o_open)?;
+
+    // 3. Pick the nearest endpoint pair among the four combinations
+    //    and orient both contours so the weld endpoints meet in
+    //    sequence: kept's weld end LAST, other's weld end FIRST.
+    let mut k = k_anchors;
+    let mut o = o_anchors;
+    let d2 = |a: (f32, f32), b: (f32, f32)| {
+        let dx = a.0 - b.0;
+        let dy = a.1 - b.1;
+        dx * dx + dy * dy
+    };
+    let ks = k.first().expect("validated non-empty").anchor;
+    let ke = k.last().expect("validated non-empty").anchor;
+    let os = o.first().expect("validated non-empty").anchor;
+    let oe = o.last().expect("validated non-empty").anchor;
+    // (reverse_kept, reverse_other) per combination, evaluated in a
+    // fixed order so ties resolve deterministically toward the
+    // no-reversal weld.
+    let combos = [
+        (d2(ke, os), false, false),
+        (d2(ke, oe), false, true),
+        (d2(ks, os), true, false),
+        (d2(ks, oe), true, true),
+    ];
+    let (_, rev_k, rev_o) = combos
+        .iter()
+        .copied()
+        .min_by(|a, b| a.0.partial_cmp(&b.0).expect("finite coords"))
+        .expect("four combos");
+    if rev_k {
+        reverse_contour(&mut k);
+    }
+    if rev_o {
+        reverse_contour(&mut o);
+    }
+
+    // 4. Weld. Coincident weld endpoints merge into one anchor: the
+    //    kept side keeps its incoming handle, the other side donates
+    //    its outgoing one (the exact inverse of the coincident-twin
+    //    split a scissors cut produces).
+    let weld_coincident = points_coincide(k.last().expect("non-empty").anchor, o[0].anchor);
+    let mut joined = k;
+    if weld_coincident {
+        let donor = o[0];
+        let weld = joined.last_mut().expect("non-empty");
+        weld.right = donor.right;
+        joined.extend(o.into_iter().skip(1));
+    } else {
+        joined.extend(o);
+    }
+    // Ring check: with the SECOND endpoint pair also coincident the
+    // joined contour is a closed ring — merge the free ends and mark
+    // the contour closed. (One coincident pair alone keeps an open
+    // contour, per the join contract.)
+    let ends_coincident = joined.len() >= 3
+        && points_coincide(
+            joined.first().expect("non-empty").anchor,
+            joined.last().expect("non-empty").anchor,
+        );
+    let closed = weld_coincident && ends_coincident;
+    if closed {
+        let tail = joined.pop().expect("non-empty");
+        joined.first_mut().expect("non-empty").left = tail.left;
+    }
+    let joined_specs: Vec<PathAnchorSpec> = joined.iter().map(PathAnchorSpec::from_parse).collect();
+
+    // 5. Mirror `apply_pathfinder`: an internal Batch — the kept
+    //    element takes the joined triple (via ClosePath's verbatim
+    //    restore branch; `FramePath` can't carry `subpath_open`), the
+    //    other element is removed. `apply_batch` rolls back on any
+    //    child failure and hands back the combined inverse.
+    let batch = Operation::Batch {
+        ops: vec![
+            Operation::SetProperty {
+                node: kept.clone(),
+                path: PropertyPath::ClosePath,
+                value: Value::ClosePath {
+                    subpath: None,
+                    prev_anchors: Some(joined_specs),
+                    prev_subpath_starts: Some(vec![0]),
+                    prev_subpath_open: Some(vec![!closed]),
+                },
+            },
+            Operation::RemoveNode {
+                node: other.clone(),
+            },
+        ],
+    };
+    let applied = apply(doc, &batch)?;
+    // The op we record is the original JoinPaths (meaningful in
+    // logs / redo replays it deterministically); the inverse is the
+    // Batch's inverse (restore the kept triple + re-insert other).
+    Ok(AppliedOperation {
+        op: Operation::JoinPaths {
+            kept: kept.clone(),
+            other: other.clone(),
+        },
+        inverse: applied.inverse,
+        invalidation: applied.invalidation,
+    })
+}
+
 pub(super) fn apply_path_point_insert(
     doc: &mut paged_scene::Document,
     node: &NodeId,
@@ -1198,6 +1543,12 @@ pub(super) fn new_polygon(
         nonprinting: false,
         visible: true,
         locked: false,
+        // B-23: a freshly-inserted polygon starts with square
+        // corners; `frameCornerOption*` / `frameCornerRadius*` writes
+        // fill these in afterwards.
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     }
 }
 

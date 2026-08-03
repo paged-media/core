@@ -106,6 +106,19 @@ pub(super) fn register_frame_ref(
     vec_pos: usize,
     z_slot: Option<usize>,
 ) {
+    // B-18: nested-children refs live outside `frames_in_order` but
+    // index the same backing vecs — shift them with everything else
+    // (and regardless of the legacy empty-z-table fallback below).
+    for children in spread.nested_children.values_mut() {
+        for fr in children.iter_mut() {
+            if fr_same_kind(fr, &template) {
+                let i = fr_index(fr);
+                if i >= vec_pos {
+                    *fr = fr_with_index(fr, i + 1);
+                }
+            }
+        }
+    }
     if spread.frames_in_order.is_empty() {
         return; // legacy vec-walk fallback covers this spread
     }
@@ -132,6 +145,19 @@ pub(super) fn unregister_frame_ref(
     template: FrameRef,
     vec_pos: usize,
 ) -> Option<usize> {
+    // B-18: shift nested-children refs of the same kind past the
+    // removed vec slot (the removed item itself can't be nested —
+    // `apply_remove_node` rejects that before capture).
+    for children in spread.nested_children.values_mut() {
+        for fr in children.iter_mut() {
+            if fr_same_kind(fr, &template) {
+                let i = fr_index(fr);
+                if i > vec_pos {
+                    *fr = fr_with_index(fr, i - 1);
+                }
+            }
+        }
+    }
     if spread.frames_in_order.is_empty() {
         return None;
     }

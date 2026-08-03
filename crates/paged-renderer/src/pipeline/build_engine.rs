@@ -29,6 +29,183 @@ use paged_scene::Document;
 use crate::diagnostics::{Diagnostic, DiagnosticCode, RenderDiagnostics};
 use crate::module::geometry::rewrite_tail_for_overprint;
 
+/// B-18 paste-into: the container's outline as a clip path in the
+/// container's INNER coordinate space, plus the container's
+/// (spread-space) item transform. Per page,
+/// [`frame_outer_transform`] maps the path into page coords — so
+/// rotated / sheared containers clip correctly. The geometry mirrors
+/// what the container itself paints: corner effects on rectangles
+/// (and the authored Bezier outline for path-shaped ones), the
+/// inscribed ellipse for ovals, the authored outline for polygons.
+pub(super) fn container_clip_geometry(
+    spread: &paged_model::Spread,
+    host_id: &str,
+) -> Option<(PathData, Option<[f32; 6]>)> {
+    if let Some(rect) = spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(host_id))
+    {
+        let path = if rect.anchors.len() > 4 {
+            // B-23: a lifted (curved) rectangle clips through the same
+            // corner-effected outline it paints.
+            super::text_path::polygon_outline_path(
+                &rect.anchors,
+                &rect.subpath_starts,
+                &rect.subpath_open,
+                super::shapes::uniform_corner(
+                    rect.corner_radius,
+                    rect.corner_option.as_deref(),
+                    &rect.corners,
+                ),
+            )
+        } else {
+            let r = Rect {
+                x: rect.bounds.left,
+                y: rect.bounds.top,
+                w: rect.bounds.width(),
+                h: rect.bounds.height(),
+            };
+            let radii = per_corner_radii(
+                rect.corner_radius,
+                rect.corner_option.as_deref(),
+                &rect.corners,
+            );
+            if radii.iter().any(|r| r.is_some()) {
+                let kinds = per_corner_kinds(rect.corner_option.as_deref(), &rect.corners);
+                corner_rect_path(r, radii, kinds)
+            } else {
+                super::shapes::axis_rect_path(r)
+            }
+        };
+        return Some((path, rect.item_transform));
+    }
+    if let Some(oval) = spread
+        .ovals
+        .iter()
+        .find(|o| o.self_id.as_deref() == Some(host_id))
+    {
+        let r = Rect {
+            x: oval.bounds.left,
+            y: oval.bounds.top,
+            w: oval.bounds.width(),
+            h: oval.bounds.height(),
+        };
+        return Some((super::shapes::ellipse_outline_path(r), oval.item_transform));
+    }
+    if let Some(poly) = spread
+        .polygons
+        .iter()
+        .find(|p| p.self_id.as_deref() == Some(host_id))
+    {
+        let path = if poly.anchors.is_empty() {
+            super::shapes::axis_rect_path(Rect {
+                x: poly.bounds.left,
+                y: poly.bounds.top,
+                w: poly.bounds.width(),
+                h: poly.bounds.height(),
+            })
+        } else {
+            // B-18 × B-23 tie-in: a polygon container clips its nested
+            // children to the outline it PAINTS, corner effect and all
+            // — same helper the polygon emit uses, so a rounded polygon
+            // container masks pasted-in content along the rounded edge
+            // rather than the raw anchor path.
+            super::text_path::polygon_outline_path(
+                &poly.anchors,
+                &poly.subpath_starts,
+                &poly.subpath_open,
+                super::shapes::uniform_corner(
+                    poly.corner_radius,
+                    poly.corner_option.as_deref(),
+                    &poly.corners,
+                ),
+            )
+        };
+        return Some((path, poly.item_transform));
+    }
+    None
+}
+
+/// B-18 paste-into: nested-text-frame glyphs are emitted by the story
+/// passes long after the frame-body brackets, so the container clip
+/// has to be spliced around the glyph ranges separately (mirroring
+/// `apply_polygon_clip`). Map: nested TextFrame `Self` id → ancestor
+/// containers' clip geometry, OUTERMOST FIRST, so a frame nested two
+/// containers deep is masked by both outlines.
+pub(super) type NestedTextClips = HashMap<String, Vec<(PathData, Option<[f32; 6]>)>>;
+
+pub(super) fn collect_nested_text_clips(document: &Document) -> NestedTextClips {
+    let mut out: NestedTextClips = HashMap::new();
+    for parsed in &document.spreads {
+        let spread = &parsed.spread;
+        if spread.nested_children.is_empty() {
+            continue;
+        }
+        // Reverse index: child self id → host self id, for the
+        // ancestor walk (a container can itself be nested).
+        let mut host_of: HashMap<&str, &str> = HashMap::new();
+        for (host, children) in &spread.nested_children {
+            for &c in children {
+                let child_id = match c {
+                    paged_model::FrameRef::TextFrame(i) => {
+                        spread.text_frames.get(i).and_then(|f| f.self_id.as_deref())
+                    }
+                    paged_model::FrameRef::Rectangle(i) => {
+                        spread.rectangles.get(i).and_then(|f| f.self_id.as_deref())
+                    }
+                    paged_model::FrameRef::Oval(i) => {
+                        spread.ovals.get(i).and_then(|f| f.self_id.as_deref())
+                    }
+                    paged_model::FrameRef::Polygon(i) => {
+                        spread.polygons.get(i).and_then(|f| f.self_id.as_deref())
+                    }
+                    paged_model::FrameRef::GraphicLine(i) => spread
+                        .graphic_lines
+                        .get(i)
+                        .and_then(|f| f.self_id.as_deref()),
+                    paged_model::FrameRef::Group(_) => None,
+                };
+                if let Some(id) = child_id {
+                    host_of.insert(id, host.as_str());
+                }
+            }
+        }
+        for (host, children) in &spread.nested_children {
+            for &c in children {
+                let paged_model::FrameRef::TextFrame(i) = c else {
+                    continue;
+                };
+                let Some(child_id) = spread.text_frames.get(i).and_then(|f| f.self_id.clone())
+                else {
+                    continue;
+                };
+                // Ancestor chain, innermost → outermost, then flip.
+                let mut chain: Vec<&str> = vec![host.as_str()];
+                let mut cursor = host.as_str();
+                while let Some(&h) = host_of.get(cursor) {
+                    // Defensive: a malformed cycle must not hang the
+                    // build.
+                    if chain.len() > 64 || chain.contains(&h) {
+                        break;
+                    }
+                    chain.push(h);
+                    cursor = h;
+                }
+                chain.reverse();
+                let clips: Vec<(PathData, Option<[f32; 6]>)> = chain
+                    .iter()
+                    .filter_map(|h| container_clip_geometry(spread, h))
+                    .collect();
+                if !clips.is_empty() {
+                    out.insert(child_id, clips);
+                }
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn build_document_inner(
     document: &Document,
     options: &PipelineOptions,
@@ -886,6 +1063,26 @@ pub(super) fn build_document_inner(
                             options.render_scale,
                         );
                     }
+                    // B-18 paste-into: nested children paint inside
+                    // the container, masked by its outline.
+                    emit_nested_children(
+                        rect.self_id.as_deref(),
+                        &local_indices,
+                        spread,
+                        range,
+                        local_geoms,
+                        pages,
+                        page_image_caches,
+                        decoded_image_cache,
+                        frame_to_page,
+                        frame_spans,
+                        total_stats,
+                        document,
+                        palette,
+                        options,
+                        cmyk_xform,
+                        auto_sized_bounds,
+                    );
                 }
                 paged_model::FrameRef::Oval(idx) => {
                     let Some(oval) = spread.ovals.get(idx) else {
@@ -951,6 +1148,26 @@ pub(super) fn build_document_inner(
                             options.render_scale,
                         );
                     }
+                    // B-18 paste-into: nested children paint inside
+                    // the container, masked by its outline.
+                    emit_nested_children(
+                        oval.self_id.as_deref(),
+                        &local_indices,
+                        spread,
+                        range,
+                        local_geoms,
+                        pages,
+                        page_image_caches,
+                        decoded_image_cache,
+                        frame_to_page,
+                        frame_spans,
+                        total_stats,
+                        document,
+                        palette,
+                        options,
+                        cmyk_xform,
+                        auto_sized_bounds,
+                    );
                 }
                 paged_model::FrameRef::GraphicLine(idx) => {
                     let Some(line) = spread.graphic_lines.get(idx) else {
@@ -1067,6 +1284,26 @@ pub(super) fn build_document_inner(
                             options.render_scale,
                         );
                     }
+                    // B-18 paste-into: nested children paint inside
+                    // the container, masked by its outline.
+                    emit_nested_children(
+                        poly.self_id.as_deref(),
+                        &local_indices,
+                        spread,
+                        range,
+                        local_geoms,
+                        pages,
+                        page_image_caches,
+                        decoded_image_cache,
+                        frame_to_page,
+                        frame_spans,
+                        total_stats,
+                        document,
+                        palette,
+                        options,
+                        cmyk_xform,
+                        auto_sized_bounds,
+                    );
                 }
                 paged_model::FrameRef::Group(gi) => {
                     if let Some(g) = spread.groups.get(gi) {
@@ -1091,6 +1328,85 @@ pub(super) fn build_document_inner(
                         }
                     }
                 }
+            }
+        }
+
+        // B-18 paste-into: emit a container's nested children
+        // bracketed by `PushClip(container outline)` / `PopClip` on
+        // every page the container painted, so the content is masked
+        // to the container's path (incl. corner effects) exactly like
+        // InDesign's paste-into. Children route pages through the
+        // normal `emit_one` arms; a child that painted on a page the
+        // container did NOT paint would land there unclipped, but
+        // that content lies outside the container geometrically, so
+        // real documents never hit it (B-18 residual: no cross-page
+        // clamp). Nested containers recurse — the inner bracket nests
+        // inside this one, intersecting the clips.
+        //
+        // NOTE: a nested TextFrame's GLYPHS are emitted later by the
+        // story pass; `StoryEmitter::apply_container_clip` splices
+        // the same clip over that range.
+        #[allow(clippy::too_many_arguments)]
+        fn emit_nested_children(
+            host_id: Option<&str>,
+            host_local_indices: &[usize],
+            spread: &paged_model::Spread,
+            range: &std::ops::Range<usize>,
+            local_geoms: &[PageGeom],
+            pages: &mut [BuiltPage],
+            page_image_caches: &mut [HashMap<String, paged_compose::ImageId>],
+            decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage>,
+            frame_to_page: &mut HashMap<String, usize>,
+            frame_spans: &mut crate::module::SpreadFrameSpans,
+            total_stats: &mut PipelineStats,
+            document: &Document,
+            palette: &Graphic,
+            options: &PipelineOptions,
+            cmyk_xform: Option<&paged_color::IccTransform>,
+            auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
+        ) {
+            let Some(host_id) = host_id else { return };
+            let Some(children) = spread.nested_children.get(host_id) else {
+                return;
+            };
+            if children.is_empty() {
+                return;
+            }
+            let Some((path, host_transform)) = container_clip_geometry(spread, host_id) else {
+                return;
+            };
+            for &local_idx in host_local_indices {
+                let page_idx = range.start + local_idx;
+                let page = &mut pages[page_idx];
+                let path_id = page.list.paths.push_anon(path.clone());
+                let transform = super::text_frame::frame_outer_transform(page, host_transform);
+                page.list
+                    .push(paged_compose::DisplayCommand::PushClip { path_id, transform });
+            }
+            for &child in children {
+                emit_one(
+                    child,
+                    spread,
+                    range,
+                    local_geoms,
+                    pages,
+                    page_image_caches,
+                    decoded_image_cache,
+                    frame_to_page,
+                    frame_spans,
+                    total_stats,
+                    document,
+                    palette,
+                    options,
+                    cmyk_xform,
+                    auto_sized_bounds,
+                );
+            }
+            for &local_idx in host_local_indices {
+                let page_idx = range.start + local_idx;
+                pages[page_idx]
+                    .list
+                    .push(paged_compose::DisplayCommand::PopClip(Transform::IDENTITY));
             }
         }
 
@@ -1179,6 +1495,12 @@ pub(super) fn build_document_inner(
     // content sits below body content; future work to hard-enforce
     // z-order (rather than rely on display-list append order) should
     // tag these commands as "master layer" if/when we add layering.
+    // B-18 paste-into: nested TextFrame glyph ranges get the
+    // container clip spliced by `apply_container_clip` in the story
+    // passes below — collect each nested text frame's ancestor
+    // outlines once up front.
+    let container_clips = collect_nested_text_clips(document);
+
     for (page_idx, master_frame) in &master_text_emissions {
         let Some(story_id) = master_frame.parent_story.as_deref() else {
             continue;
@@ -1253,6 +1575,7 @@ pub(super) fn build_document_inner(
         }
         emitter.apply_vertical_justification(&mut pages);
         emitter.apply_polygon_clip(&mut pages);
+        emitter.apply_container_clip(&mut pages, &container_clips);
         emitter.apply_blend_groups(&mut pages);
         let anchored_q = emitter.take_anchored_image_queue();
         let new_breaks = emitter.take_breaks();
@@ -1689,6 +2012,7 @@ pub(super) fn build_document_inner(
             }
             emitter.apply_vertical_justification(&mut pages);
             emitter.apply_polygon_clip(&mut pages);
+            emitter.apply_container_clip(&mut pages, &container_clips);
             emitter.apply_blend_groups(&mut pages);
             // Phase 7 — vertical writing post-rotation. When the source
             // story declares `StoryDirection="VerticalWritingDirection"`,
@@ -2540,6 +2864,78 @@ impl<'a> StoryEmitter<'a> {
                 // the clip — clip nests inside the blend group,
                 // matching PDF state-vs-buffer semantics.
                 self.frame_cmd_ranges[frame_idx] = Some((start, end + 2));
+            }
+        }
+    }
+
+    /// B-18 paste-into: splice `PushClip(container outline)` /
+    /// `PopClip` around the glyph range of any chain frame that is
+    /// nested content (a TextFrame pasted into a Rectangle / Oval /
+    /// Polygon). One bracket per ancestor container — outermost
+    /// pushed first — so a frame nested two containers deep is
+    /// masked by both outlines, matching the frame-body brackets
+    /// `emit_nested_children` emits. The clip path is in the
+    /// container's INNER coords and rides `frame_outer_transform`,
+    /// so rotated containers clip correctly (no upright restriction,
+    /// unlike `apply_polygon_clip`'s spread-space path). Run after
+    /// `apply_polygon_clip` and before `apply_blend_groups`; same
+    /// range-update contract (splice high-start-first per page,
+    /// update only the spliced frame's range).
+    pub(super) fn apply_container_clip(
+        &mut self,
+        pages: &mut [BuiltPage],
+        container_clips: &NestedTextClips,
+    ) {
+        if container_clips.is_empty() {
+            return;
+        }
+        type ClipRecord<'c> = (usize, usize, usize, &'c [(PathData, Option<[f32; 6]>)]);
+        let mut per_page: HashMap<usize, Vec<ClipRecord>> = HashMap::new();
+        for (i, frame) in self.chain.iter().enumerate() {
+            let Some((start, end)) = self.frame_cmd_ranges[i] else {
+                continue;
+            };
+            if start == end {
+                continue;
+            }
+            let Some(clips) = frame
+                .self_id
+                .as_deref()
+                .and_then(|id| container_clips.get(id))
+            else {
+                continue;
+            };
+            per_page.entry(self.chain_pages[i]).or_default().push((
+                i,
+                start,
+                end,
+                clips.as_slice(),
+            ));
+        }
+        for (page_idx, mut entries) in per_page {
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            for (frame_idx, start, end, clips) in entries {
+                let page = &mut pages[page_idx];
+                // End-then-start splice order so the start inserts
+                // don't shift `end`. Pops: one per ancestor.
+                for _ in clips {
+                    page.list.commands.insert(
+                        end,
+                        paged_compose::DisplayCommand::PopClip(Transform::IDENTITY),
+                    );
+                }
+                // Pushes at `start`: inserting at a fixed index
+                // reverses order, so walk the ancestors innermost →
+                // outermost to end up with the OUTERMOST push first.
+                for (path, host_transform) in clips.iter().rev() {
+                    let path_id = page.list.paths.push_anon(path.clone());
+                    let transform = super::text_frame::frame_outer_transform(page, *host_transform);
+                    page.list.commands.insert(
+                        start,
+                        paged_compose::DisplayCommand::PushClip { path_id, transform },
+                    );
+                }
+                self.frame_cmd_ranges[frame_idx] = Some((start, end + 2 * clips.len()));
             }
         }
     }

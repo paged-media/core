@@ -359,6 +359,15 @@ pub enum PropertyPath {
     /// B-05 kernel op — re-express the path within a max-deviation
     /// tolerance with fewer anchors (`Value::SimplifyPath`).
     SimplifyPath,
+    /// Wave B — close an OPEN subpath of a path-bearing page item
+    /// (the inverse gesture of `PathOpenAt`'s scissors cut).
+    /// `Value::ClosePath`; any path-bearing kind. When the subpath's
+    /// endpoints are coincident (the shape a scissors cut leaves) the
+    /// duplicated endpoint pair merges back into one anchor; otherwise
+    /// the contour just stops being open (the renderer draws the
+    /// implicit straight closing edge). Snapshot inverse like
+    /// `PathOpenAt`.
+    ClosePath,
     /// Editor-ops — whole gradient-feather replacement on an
     /// effect-bearing page item (`Value::GradientFeather`). One path
     /// for the whole struct — kind + axis + the stop LIST edit
@@ -1276,6 +1285,7 @@ impl PropertyPath {
             PropertyPath::OutlineStrokeVariable => "path.outlineStrokeVariable",
             PropertyPath::OffsetPath => "path.offset",
             PropertyPath::SimplifyPath => "path.simplify",
+            PropertyPath::ClosePath => "path.close",
             PropertyPath::FrameGradientFeather => "frame.gradientFeather",
             PropertyPath::PageBounds => "page.bounds",
             PropertyPath::FrameNonprinting => "frame.nonprinting",
@@ -1976,6 +1986,30 @@ pub enum Value {
     /// Snapshot-inverse like `PathOpenAt`.
     SimplifyPath {
         tolerance: f32,
+        #[serde(default)]
+        prev_anchors: Option<Vec<PathAnchorSpec>>,
+        #[serde(default)]
+        prev_subpath_starts: Option<Vec<usize>>,
+        #[serde(default)]
+        prev_subpath_open: Option<Vec<bool>>,
+    },
+    /// Wave B — close an OPEN subpath (the inverse gesture of
+    /// `PathOpenAt`). `subpath` picks the contour by index into
+    /// `subpath_starts`; `None` targets the LAST open subpath (the
+    /// common single-open-contour case). If the subpath's two
+    /// endpoints are coincident — the duplicated-anchor shape a
+    /// scissors cut leaves behind — the pair merges back into one
+    /// anchor (head takes the tail's incoming handle), reversing the
+    /// cut exactly; otherwise the contour is simply marked closed and
+    /// the renderer draws the implicit straight closing edge.
+    ///
+    /// Same `prev_*` snapshot-inverse convention as `PathOpenAt`: a
+    /// value arriving WITH the triple is the restore branch (undo /
+    /// redo) and sets `(anchors, subpath_starts, subpath_open)`
+    /// verbatim.
+    ClosePath {
+        #[serde(default)]
+        subpath: Option<usize>,
         #[serde(default)]
         prev_anchors: Option<Vec<PathAnchorSpec>>,
         #[serde(default)]
@@ -2792,6 +2826,65 @@ pub enum Operation {
         // the wire to disambiguate.
         #[serde(rename = "opKind")]
         op_kind: PathfinderKind,
+    },
+    /// Wave B — weld two OPEN single-contour path elements into one
+    /// (InDesign's Join). The nearest endpoint pair of `kept` and
+    /// `other` connects; `other`'s anchors are appended onto `kept`'s
+    /// contour in the matching orientation and `other` is deleted.
+    /// Coincident weld endpoints merge into one anchor; if BOTH
+    /// endpoint pairs are coincident the result is a closed ring.
+    ///
+    /// Mirrors `PathfinderBoolean`'s machinery: the apply layer builds
+    /// an internal Batch — `SetProperty(kept, ClosePath restore-branch,
+    /// joined triple)` + `RemoveNode(other)` — and returns the Batch's
+    /// inverse, so one Cmd-Z restores BOTH elements (the kept path's
+    /// prior `(anchors, subpath_starts, subpath_open)` triple verbatim,
+    /// the other element through the same `NodeSpec` capture RemoveNode
+    /// always takes). Non-path, closed, or multi-contour inputs are
+    /// rejected with an honest error and mutate nothing.
+    JoinPaths {
+        kept: NodeId,
+        other: NodeId,
+    },
+    /// B-18 nested content (InDesign **paste-into**) — nest an
+    /// existing TOP-LEVEL page item inside a container Rectangle /
+    /// Oval / Polygon. The child leaves `frames_in_order` (its z slot
+    /// is captured into the inverse) and joins the container's
+    /// `Spread::nested_children` entry; the renderer then paints it
+    /// clipped by the container's outline. **Geometry is preserved in
+    /// document (spread) space**: the child's `item_transform` is not
+    /// touched — the model stores nested transforms composed into
+    /// spread space (the group-member convention), and the writer
+    /// derives IDML's parent-relative form on export. `child_index`
+    /// is the slot within the container's child list — inverse-only
+    /// (redo restores the exact slot); `None` appends on top,
+    /// InDesign's paste order. Validation (apply): container and
+    /// child exist in the SAME spread, the container kind is
+    /// Rectangle/Oval/Polygon, the child is a leaf page item
+    /// (groups stay top-level — B-18 residual), the child is
+    /// currently top-level (not grouped, not already nested), and
+    /// nesting introduces no cycle. Inverse:
+    /// `ReleaseFrom { child, restore_slot }` — one Cmd-Z pops the
+    /// child back to its exact stacking position.
+    PasteInto {
+        container: NodeId,
+        child: NodeId,
+        #[serde(default)]
+        child_index: Option<usize>,
+    },
+    /// B-18 — the inverse gesture: pop a nested child out of its
+    /// container back to top level, world transform preserved (the
+    /// stored transform is already spread-space, so the release is
+    /// pure bookkeeping — the item does not move on canvas).
+    /// `restore_slot` is the `frames_in_order` slot to re-insert at —
+    /// inverse-only (undo-of-pasteInto restores the exact stacking
+    /// position); `None` appends on top. Inverse:
+    /// `PasteInto { container, child, child_index }` with the host
+    /// and slot captured at apply time.
+    ReleaseFrom {
+        child: NodeId,
+        #[serde(default)]
+        restore_slot: Option<usize>,
     },
     /// W0.5 — thread two text frames: rewrite `from`'s
     /// `NextTextFrame` to point at `to` so the story reflows into

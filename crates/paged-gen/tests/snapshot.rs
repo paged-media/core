@@ -1593,6 +1593,77 @@ fn links_ok_all_images_resolve_with_healthy_ppi() {
     );
 }
 
+// ── B-18 — paste-into (nested content) ───────────────────────────────
+
+#[test]
+fn paste_into_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::paste_into::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::paste_into::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+#[test]
+fn paste_into_round_trips_nested_children() {
+    // B-18 — the container's element nests three children; the parser
+    // must lift them into `Spread::nested_children` (keyed by the host
+    // `Self` id), keep them OUT of `frames_in_order`, and compose the
+    // host transform into each child's spread-space `item_transform`.
+    use idml_import::FrameRef;
+    let sample = paged_gen::samples::paste_into::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    assert_eq!(doc.spreads.len(), 1);
+    let spread = &doc.spreads[0].spread;
+    assert_eq!(spread.skipped_nested_frames, 0, "all children lifted");
+    assert_eq!(
+        spread.frames_in_order.len(),
+        1,
+        "only the container is top-level: {:?}",
+        spread.frames_in_order
+    );
+    assert!(matches!(spread.frames_in_order[0], FrameRef::Rectangle(_)));
+
+    let host_id = spread.rectangles[0]
+        .self_id
+        .clone()
+        .expect("host has a Self id");
+    let children = spread
+        .nested_children
+        .get(&host_id)
+        .expect("host has nested children");
+    assert_eq!(children.len(), 3, "rect + oval + text frame");
+    assert!(matches!(children[0], FrameRef::Rectangle(_)));
+    assert!(matches!(children[1], FrameRef::Oval(_)));
+    assert!(matches!(children[2], FrameRef::TextFrame(_)));
+
+    // Child transforms compose the host's translate(140, 200):
+    // child rect authored at translate(-40, -40) ⇒ spread (100, 160).
+    let child_rect_idx = match children[0] {
+        FrameRef::Rectangle(i) => i,
+        _ => unreachable!(),
+    };
+    let t = spread.rectangles[child_rect_idx]
+        .item_transform
+        .expect("composed transform");
+    assert!((t[4] - 100.0).abs() < 1e-3, "tx = {}", t[4]);
+    assert!((t[5] - 160.0).abs() < 1e-3, "ty = {}", t[5]);
+
+    // The nested text frame still resolves its story (flat-vec index
+    // machinery is nesting-agnostic).
+    let text_idx = match children[2] {
+        FrameRef::TextFrame(i) => i,
+        _ => unreachable!(),
+    };
+    let story = spread.text_frames[text_idx]
+        .parent_story
+        .clone()
+        .expect("nested text frame keeps its story");
+    assert!(
+        doc.frame_chain(&story).len() == 1,
+        "story flows through the nested frame"
+    );
+}
+
 // ── W4.14 — duplicate-attribute guard (whole class) ──────────────────
 
 /// Every sample the generator can emit, by name → built package bytes.
@@ -1622,6 +1693,7 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
         ("masters", masters::build),
         ("navigation", navigation::build),
         ("nested_groups", nested_groups::build),
+        ("paste_into", paste_into::build),
         ("numbering", numbering::build),
         ("preflight", preflight::build),
         ("strokes_fills", strokes_fills::build),

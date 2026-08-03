@@ -3615,3 +3615,279 @@ fn no_clipping_path_keeps_single_frame_clip() {
         .iter()
         .any(|d| d.code == DiagnosticCode::ImageClippingPathDeferred));
 }
+
+// ── B-23 — polygon corner effects ────────────────────────────────────
+
+/// Anchor with degenerate handles (an IDML polyline corner).
+fn b23_anchor(x: f32, y: f32) -> paged_model::PathAnchor {
+    paged_model::PathAnchor {
+        anchor: (x, y),
+        left: (x, y),
+        right: (x, y),
+    }
+}
+
+/// The uniform-corner resolver implements the documented addressing
+/// decision: slot 0 (`TopLeft`) wins, the global `CornerOption` /
+/// `CornerRadius` pair is the fallback, and a `None`-valued option means
+/// square corners even when a radius is present.
+#[test]
+fn b23_uniform_corner_resolves_topleft_then_global() {
+    use paged_model::{CornerOption, CornerSpec};
+    let empty = [CornerSpec::default(); 4];
+
+    // Global pair only.
+    assert_eq!(
+        shapes::uniform_corner(Some(12.0), Some("RoundedCorner"), &empty),
+        Some((CornerOption::Rounded, 12.0))
+    );
+    // Explicit `None` option squares the corners despite the radius.
+    assert_eq!(
+        shapes::uniform_corner(Some(12.0), Some("None"), &empty),
+        None
+    );
+    // Radius without an option ⇒ no effect (matches the corpus's
+    // `CornerRadius`-only polygons, which InDesign renders square).
+    assert_eq!(shapes::uniform_corner(Some(12.0), None, &empty), None);
+
+    // Slot 0 wins over the global pair.
+    let mut per = empty;
+    per[0] = CornerSpec {
+        option: Some(CornerOption::Bevel),
+        radius: Some(5.0),
+    };
+    assert_eq!(
+        shapes::uniform_corner(Some(12.0), Some("RoundedCorner"), &per),
+        Some((CornerOption::Bevel, 5.0))
+    );
+
+    // The other three slots are rect-only addressing: a TopRight-only
+    // option does NOT drive polygon geometry. This is the corpus's
+    // five-point arch, whose curvature is already in its PathGeometry.
+    let mut tr_only = empty;
+    tr_only[1].option = Some(CornerOption::Rounded);
+    assert_eq!(shapes::uniform_corner(Some(243.36), None, &tr_only), None);
+}
+
+/// Open contours and sub-three-anchor contours are copied through
+/// verbatim — the corpus's six "rounded" polygons are two-point OPEN
+/// lines that inherited the option from an object style and show no
+/// rounding in InDesign.
+#[test]
+fn b23_open_and_degenerate_contours_keep_their_outline() {
+    use paged_model::CornerOption;
+    let line = [b23_anchor(0.0, 0.0), b23_anchor(100.0, 0.0)];
+    assert!(
+        shapes::corner_polygon_path(&line, &[], &[true], CornerOption::Rounded, 16.0).is_none(),
+        "an open two-point contour has no corner to cut"
+    );
+    let tri = [
+        b23_anchor(0.0, 0.0),
+        b23_anchor(100.0, 0.0),
+        b23_anchor(0.0, 100.0),
+    ];
+    assert!(
+        shapes::corner_polygon_path(&tri, &[], &[true], CornerOption::Rounded, 16.0).is_none(),
+        "a contour flagged open keeps its raw outline"
+    );
+    assert!(
+        shapes::corner_polygon_path(&tri, &[], &[false], CornerOption::None, 16.0).is_none(),
+        "CornerOption::None is not an effect"
+    );
+    assert!(
+        shapes::corner_polygon_path(&tri, &[], &[false], CornerOption::Rounded, 0.0).is_none(),
+        "a zero radius is not an effect"
+    );
+    assert!(
+        shapes::corner_polygon_path(&tri, &[], &[false], CornerOption::Rounded, 16.0).is_some(),
+        "a closed triangle with a positive radius IS effected"
+    );
+}
+
+/// A curved junction (non-degenerate Bezier handles) is left alone: the
+/// corner effect applies where two STRAIGHT edges meet, never to a
+/// smooth spline point that already carries its own curvature.
+#[test]
+fn b23_curved_junctions_are_not_treated_as_corners() {
+    use paged_model::{CornerOption, PathAnchor};
+    // Square whose top-right point carries real handles.
+    let anchors = [
+        b23_anchor(0.0, 0.0),
+        PathAnchor {
+            anchor: (100.0, 0.0),
+            left: (60.0, -20.0),
+            right: (140.0, 20.0),
+        },
+        b23_anchor(100.0, 100.0),
+        b23_anchor(0.0, 100.0),
+    ];
+    let path =
+        shapes::corner_polygon_path(&anchors, &[], &[false], CornerOption::Rounded, 15.0).unwrap();
+    // The curved anchor survives verbatim; the three polyline corners
+    // are cut (3 arcs), and the two curved edges stay cubics.
+    let on_path: Vec<(f32, f32)> = path
+        .segments
+        .iter()
+        .filter_map(|s| match *s {
+            paged_compose::PathSegment::MoveTo { x, y }
+            | paged_compose::PathSegment::LineTo { x, y }
+            | paged_compose::PathSegment::CubicTo { x, y, .. } => Some((x, y)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        on_path
+            .iter()
+            .any(|p| (p.0 - 100.0).abs() < 0.01 && p.1.abs() < 0.01),
+        "the smooth anchor keeps its position: {on_path:?}"
+    );
+}
+
+/// A four-corner axis-aligned polygon and a Rectangle with the same
+/// corner attributes must describe the SAME outline — the generalised
+/// construction has to reduce exactly to the rect math at 90°.
+#[test]
+fn b23_axis_aligned_quad_matches_the_rect_builder() {
+    use paged_model::CornerOption;
+    let quad = [
+        b23_anchor(0.0, 0.0),
+        b23_anchor(80.0, 0.0),
+        b23_anchor(80.0, 60.0),
+        b23_anchor(0.0, 60.0),
+    ];
+    let poly =
+        shapes::corner_polygon_path(&quad, &[], &[false], CornerOption::Rounded, 12.0).unwrap();
+    let rect = corner_rect_path(
+        paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 80.0,
+            h: 60.0,
+        },
+        [Some(12.0); 4],
+        [CornerOption::Rounded; 4],
+    );
+    // Same segment kinds and the same on-path points (the polygon walk
+    // starts at a different corner, so compare the point SETS).
+    assert_eq!(poly.segments.len(), rect.segments.len());
+    let pts = |p: &paged_compose::PathData| {
+        let mut v: Vec<(i32, i32)> = p
+            .segments
+            .iter()
+            .filter_map(|s| match *s {
+                paged_compose::PathSegment::MoveTo { x, y }
+                | paged_compose::PathSegment::LineTo { x, y }
+                | paged_compose::PathSegment::CubicTo { x, y, .. } => {
+                    Some(((x * 100.0) as i32, (y * 100.0) as i32))
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort_unstable();
+        v
+    };
+    assert_eq!(pts(&poly), pts(&rect));
+}
+
+/// A `paged_model::Polygon` with everything off — the B-23 clip test
+/// only cares about `self_id` / `anchors` / the corner fields.
+fn b23_bare_polygon(self_id: &str) -> paged_model::Polygon {
+    paged_model::Polygon {
+        self_id: Some(self_id.to_string()),
+        bounds: paged_model::Bounds {
+            top: 0.0,
+            left: 0.0,
+            bottom: 90.0,
+            right: 120.0,
+        },
+        item_transform: None,
+        fill_color: None,
+        fill_tint: None,
+        stroke_color: None,
+        stroke_weight: None,
+        stroke_type: None,
+        stroke_alignment: None,
+        end_join: None,
+        miter_limit: None,
+        stroke_gap_color: None,
+        stroke_gap_tint: None,
+        stroke_dash: Vec::new(),
+        applied_object_style: None,
+        anchors: Vec::new(),
+        subpath_starts: Vec::new(),
+        subpath_open: Vec::new(),
+        text_wrap: None,
+        item_layer: None,
+        effects: None,
+        gradient_fill_angle: None,
+        gradient_fill_length: None,
+        gradient_stroke_angle: None,
+        gradient_stroke_length: None,
+        opacity: None,
+        blend_mode: None,
+        text_paths: Vec::new(),
+        image_link: None,
+        has_image_element: false,
+        has_inline_pdf: false,
+        image_item_transform: None,
+        image_bytes: None,
+        image_clip: None,
+        overprint_fill: false,
+        overprint_stroke: false,
+        nonprinting: false,
+        visible: true,
+        locked: false,
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
+    }
+}
+
+/// B-18 × B-23 — a polygon container clips its nested children to the
+/// outline it PAINTS, corner effect included.
+#[test]
+fn b23_polygon_container_clip_carries_the_corner_effect() {
+    use paged_model::{CornerOption, CornerSpec};
+    let mut spread = paged_model::Spread::default();
+    let mut poly = b23_bare_polygon("host");
+    poly.anchors = vec![
+        b23_anchor(0.0, 0.0),
+        b23_anchor(120.0, 0.0),
+        b23_anchor(120.0, 90.0),
+        b23_anchor(0.0, 90.0),
+    ];
+    poly.subpath_open = vec![false];
+    spread.polygons.push(poly);
+
+    // No corner effect ⇒ the clip is the raw anchor path (all cubics
+    // from the anchor walk, no straight LineTo edges).
+    let plain = super::build_engine::container_clip_geometry(&spread, "host").unwrap();
+    assert_eq!(
+        plain
+            .0
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::LineTo { .. }))
+            .count(),
+        0,
+        "un-cornered container clips to the raw anchor path"
+    );
+
+    // With a corner effect the clip picks up the arcs.
+    spread.polygons[0].corners[0] = CornerSpec {
+        option: Some(CornerOption::Rounded),
+        radius: Some(18.0),
+    };
+    let rounded = super::build_engine::container_clip_geometry(&spread, "host").unwrap();
+    assert_eq!(
+        rounded
+            .0
+            .segments
+            .iter()
+            .filter(|s| matches!(s, paged_compose::PathSegment::CubicTo { .. }))
+            .count(),
+        4,
+        "one corner arc per vertex in the container clip path"
+    );
+    assert_ne!(format!("{:?}", plain.0), format!("{:?}", rounded.0));
+}

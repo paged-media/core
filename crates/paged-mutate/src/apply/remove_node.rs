@@ -30,6 +30,17 @@ pub(super) fn apply_remove_node(
     doc: &mut Document,
     node: &NodeId,
 ) -> Result<AppliedOperation, OperationError> {
+    // B-18: a nested (pasted-into) child can't be removed directly —
+    // its RemoveNode inverse would restore it TOP-LEVEL, breaking the
+    // mutate-then-undo identity invariant. Release it first.
+    if super::nested::is_nested_child(doc, node) {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path: crate::operation::PropertyPath::FrameTransform,
+            reason: "B-18: the item is pasted into a container — release it before removing"
+                .to_string(),
+        });
+    }
     let (parent, position, captured, z_slot) = remove_and_capture(doc, node)?;
     let inverse = invert_remove_node(parent, position, captured, z_slot);
     Ok(AppliedOperation {

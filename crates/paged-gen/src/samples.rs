@@ -34,6 +34,7 @@ pub mod masters;
 pub mod navigation;
 pub mod nested_groups;
 pub mod numbering;
+pub mod paste_into;
 pub mod preflight;
 pub mod strokes_fills;
 pub mod styles_cascade;

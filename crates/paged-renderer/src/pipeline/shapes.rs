@@ -589,7 +589,16 @@ fn emit_rectangle_polygon_path(
         ..
     } = &resolved.geometry
     {
-        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        // B-23: a Q-11 lifted Rectangle keeps its corner attributes, so
+        // its curved outline gets the same uniform corner effect a
+        // Polygon does (the four names can't address an N-corner path).
+        let corner = uniform_corner(
+            resolved.corner_radius,
+            resolved.corner_option,
+            &resolved.corners,
+        );
+        let path =
+            super::text_path::polygon_outline_path(anchors, subpath_starts, subpath_open, corner);
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
@@ -1555,6 +1564,177 @@ pub(crate) fn per_corner_kinds(
     out
 }
 
+/// One corner's local frame, in whatever coordinate space the caller
+/// builds paths in. Shared by the rect and the polygon corner
+/// builders so a corner *shape* is defined once and only its framing
+/// differs per geometry (B-23).
+///
+/// * `p_in` / `p_out` — where the incoming / outgoing edge meets the
+///   corner effect (the tangent points).
+/// * `c` — the sharp vertex the un-cornered path would pass through.
+/// * `m` — the corner circle's centre: the point at distance `r` from
+///   BOTH edges, on the interior bisector. For a 90° corner this is
+///   `c + r·u_in + r·u_out`, which is exactly what the rect builder
+///   uses.
+/// * `k_convex` / `k_concave` — cubic control-point fractions from an
+///   endpoint toward `c` (convex arc) / toward `m` (concave arc).
+///   `0.5522848` for a quarter-circle; the polygon builder derives
+///   them from the corner's actual sweep so a 30° or 150° corner is
+///   a true circular arc rather than a 90°-shaped approximation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CornerFrame {
+    pub p_in: (f32, f32),
+    pub p_out: (f32, f32),
+    pub c: (f32, f32),
+    pub m: (f32, f32),
+    pub k_convex: f32,
+    pub k_concave: f32,
+}
+
+/// Kappa — the cubic control fraction that approximates a QUARTER
+/// circle. Exact for a rect's 90° corners; the polygon builder scales
+/// it by the corner's real sweep.
+pub(crate) const KAPPA: f32 = 0.552_284_8;
+
+/// Emit one corner's segments, assuming the path's current point is
+/// already at `f.p_in`; the last segment lands on `f.p_out`. Sharp
+/// corners emit nothing (`p_in == p_out == c`).
+///
+/// This is the ONE place a `CornerOption`'s shape is defined —
+/// `corner_rect_path` and `corner_polygon_path` differ only in how
+/// they frame each corner (B-23 generalisation).
+pub(crate) fn push_corner_segments(
+    segs: &mut Vec<paged_compose::PathSegment>,
+    kind: paged_model::CornerOption,
+    r: f32,
+    f: CornerFrame,
+) {
+    use paged_compose::PathSegment::*;
+    use paged_model::CornerOption;
+    let CornerFrame {
+        p_in, p_out, c, m, ..
+    } = f;
+    if r <= 0.0 || matches!(kind, CornerOption::None) {
+        // Sharp: p_in == p_out == vertex; nothing to add.
+        return;
+    }
+    // Control point a fraction `f` of the way from `p` toward
+    // `toward` (the corner vertex `c` for convex, the inner
+    // centre `m` for concave).
+    let ctl = |p: (f32, f32), toward: (f32, f32), f: f32| {
+        (p.0 + (toward.0 - p.0) * f, p.1 + (toward.1 - p.1) * f)
+    };
+    match kind {
+        CornerOption::Rounded => {
+            let c1 = ctl(p_in, c, f.k_convex);
+            let c2 = ctl(p_out, c, f.k_convex);
+            segs.push(CubicTo {
+                cx1: c1.0,
+                cy1: c1.1,
+                cx2: c2.0,
+                cy2: c2.1,
+                x: p_out.0,
+                y: p_out.1,
+            });
+        }
+        CornerOption::Inverse => {
+            // Concave: same endpoints, controls pulled toward
+            // the inner centre so the arc bulges inward.
+            let c1 = ctl(p_in, m, f.k_concave);
+            let c2 = ctl(p_out, m, f.k_concave);
+            segs.push(CubicTo {
+                cx1: c1.0,
+                cy1: c1.1,
+                cx2: c2.0,
+                cy2: c2.1,
+                x: p_out.0,
+                y: p_out.1,
+            });
+        }
+        CornerOption::Bevel => {
+            segs.push(LineTo {
+                x: p_out.0,
+                y: p_out.1,
+            });
+        }
+        CornerOption::Inset => {
+            // InDesign's Inset is the SHARP "fold-in" corner: the
+            // edge steps inward to the inner rounding centre `m`
+            // and back out to the outgoing edge — two straight
+            // segments forming a right-angle notch. Applied to a
+            // square this yields the cross / plus-sign silhouette
+            // Adobe documents ("corners folding in on
+            // themselves"). It is deliberately NOT a quarter-
+            // circle: that is Inverse Rounded (a smooth concave
+            // arc), and a circular Inset would collapse the two
+            // options onto byte-identical geometry. W1.8
+            // calibration verified the two stay visually distinct.
+            segs.push(LineTo { x: m.0, y: m.1 });
+            segs.push(LineTo {
+                x: p_out.0,
+                y: p_out.1,
+            });
+        }
+        CornerOption::Fancy => {
+            // InDesign's Fancy corner is an ornamental scallop:
+            // three small arcs running p_in → q1 → q2 → p_out.
+            // The two outer arcs are convex quarter-bumps (pulled
+            // toward the sharp vertex `c`); the middle arc is a
+            // concave notch (pulled toward the inner centre `m`).
+            // That concave-between-two-convex rhythm is the
+            // decorative three-arc pattern InDesign draws (an
+            // honest approximation of the precise ornament, whose
+            // exact radii Adobe never published — the segment
+            // count, endpoints, and convex/concave rhythm match).
+            //
+            // q1 / q2 split the corner span into thirds along the
+            // straight chord from p_in to p_out; each arc's
+            // control points pull a third of the way toward `c`
+            // (convex) or `m` (concave).
+            let lerp = |a: (f32, f32), b: (f32, f32), f: f32| {
+                (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
+            };
+            let q1 = lerp(p_in, p_out, 1.0 / 3.0);
+            let q2 = lerp(p_in, p_out, 2.0 / 3.0);
+            // Arc 1: p_in → q1, convex bump toward the vertex.
+            let a1 = ctl(p_in, c, 0.5);
+            let a2 = ctl(q1, c, 0.5);
+            segs.push(CubicTo {
+                cx1: a1.0,
+                cy1: a1.1,
+                cx2: a2.0,
+                cy2: a2.1,
+                x: q1.0,
+                y: q1.1,
+            });
+            // Arc 2: q1 → q2, concave notch toward the inner
+            // centre (the ornament's central dip).
+            let b1 = ctl(q1, m, 0.5);
+            let b2 = ctl(q2, m, 0.5);
+            segs.push(CubicTo {
+                cx1: b1.0,
+                cy1: b1.1,
+                cx2: b2.0,
+                cy2: b2.1,
+                x: q2.0,
+                y: q2.1,
+            });
+            // Arc 3: q2 → p_out, convex bump toward the vertex.
+            let d1 = ctl(q2, c, 0.5);
+            let d2 = ctl(p_out, c, 0.5);
+            segs.push(CubicTo {
+                cx1: d1.0,
+                cy1: d1.1,
+                cx2: d2.0,
+                cy2: d2.1,
+                x: p_out.0,
+                y: p_out.1,
+            });
+        }
+        CornerOption::None => {}
+    }
+}
+
 /// Rect path with per-corner radius AND per-corner `CornerOption`
 /// shape. Walks clockwise from the top-left's top-edge point. Each
 /// corner is a sharp 90° when its radius is `None`/`0` or its kind is
@@ -1576,7 +1756,6 @@ pub(crate) fn corner_rect_path(
 ) -> paged_compose::PathData {
     use paged_compose::PathSegment::*;
     use paged_model::CornerOption;
-    const KAPPA: f32 = 0.552_284_8;
     let max_r = rect.w.min(rect.h) * 0.5;
     // Effective radius: 0 when the corner is square (`None` kind) or
     // its radius is absent / non-positive.
@@ -1617,136 +1796,9 @@ pub(crate) fn corner_rect_path(
         ((l + bl, bot), (l, bot - bl), (l, bot), (l + bl, bot - bl)),
     ];
 
-    // Emit one corner's segments (assuming the path's current point is
-    // already at `p_in`), ending at `p_out`.
-    let emit_corner = |segs: &mut Vec<paged_compose::PathSegment>,
-                       kind: CornerOption,
-                       r: f32,
-                       p_in: (f32, f32),
-                       p_out: (f32, f32),
-                       c: (f32, f32),
-                       m: (f32, f32)| {
-        if r <= 0.0 || matches!(kind, CornerOption::None) {
-            // Sharp: p_in == p_out == vertex; nothing to add.
-            return;
-        }
-        // Control point a fraction `f` of the way from `p` toward
-        // `toward` (the corner vertex `c` for convex, the inner
-        // centre `m` for concave).
-        let ctl = |p: (f32, f32), toward: (f32, f32), f: f32| {
-            (p.0 + (toward.0 - p.0) * f, p.1 + (toward.1 - p.1) * f)
-        };
-        match kind {
-            CornerOption::Rounded => {
-                let c1 = ctl(p_in, c, KAPPA);
-                let c2 = ctl(p_out, c, KAPPA);
-                segs.push(CubicTo {
-                    cx1: c1.0,
-                    cy1: c1.1,
-                    cx2: c2.0,
-                    cy2: c2.1,
-                    x: p_out.0,
-                    y: p_out.1,
-                });
-            }
-            CornerOption::Inverse => {
-                // Concave: same endpoints, controls pulled toward
-                // the inner centre so the arc bulges inward.
-                let c1 = ctl(p_in, m, KAPPA);
-                let c2 = ctl(p_out, m, KAPPA);
-                segs.push(CubicTo {
-                    cx1: c1.0,
-                    cy1: c1.1,
-                    cx2: c2.0,
-                    cy2: c2.1,
-                    x: p_out.0,
-                    y: p_out.1,
-                });
-            }
-            CornerOption::Bevel => {
-                segs.push(LineTo {
-                    x: p_out.0,
-                    y: p_out.1,
-                });
-            }
-            CornerOption::Inset => {
-                // InDesign's Inset is the SHARP "fold-in" corner: the
-                // edge steps inward to the inner rounding centre `m`
-                // and back out to the outgoing edge — two straight
-                // segments forming a right-angle notch. Applied to a
-                // square this yields the cross / plus-sign silhouette
-                // Adobe documents ("corners folding in on
-                // themselves"). It is deliberately NOT a quarter-
-                // circle: that is Inverse Rounded (a smooth concave
-                // arc), and a circular Inset would collapse the two
-                // options onto byte-identical geometry. W1.8
-                // calibration verified the two stay visually distinct.
-                segs.push(LineTo { x: m.0, y: m.1 });
-                segs.push(LineTo {
-                    x: p_out.0,
-                    y: p_out.1,
-                });
-            }
-            CornerOption::Fancy => {
-                // InDesign's Fancy corner is an ornamental scallop:
-                // three small arcs running p_in → q1 → q2 → p_out.
-                // The two outer arcs are convex quarter-bumps (pulled
-                // toward the sharp vertex `c`); the middle arc is a
-                // concave notch (pulled toward the inner centre `m`).
-                // That concave-between-two-convex rhythm is the
-                // decorative three-arc pattern InDesign draws (an
-                // honest approximation of the precise ornament, whose
-                // exact radii Adobe never published — the segment
-                // count, endpoints, and convex/concave rhythm match).
-                //
-                // q1 / q2 split the corner span into thirds along the
-                // straight chord from p_in to p_out; each arc's
-                // control points pull a third of the way toward `c`
-                // (convex) or `m` (concave).
-                let lerp = |a: (f32, f32), b: (f32, f32), f: f32| {
-                    (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)
-                };
-                let q1 = lerp(p_in, p_out, 1.0 / 3.0);
-                let q2 = lerp(p_in, p_out, 2.0 / 3.0);
-                // Arc 1: p_in → q1, convex bump toward the vertex.
-                let a1 = ctl(p_in, c, 0.5);
-                let a2 = ctl(q1, c, 0.5);
-                segs.push(CubicTo {
-                    cx1: a1.0,
-                    cy1: a1.1,
-                    cx2: a2.0,
-                    cy2: a2.1,
-                    x: q1.0,
-                    y: q1.1,
-                });
-                // Arc 2: q1 → q2, concave notch toward the inner
-                // centre (the ornament's central dip).
-                let b1 = ctl(q1, m, 0.5);
-                let b2 = ctl(q2, m, 0.5);
-                segs.push(CubicTo {
-                    cx1: b1.0,
-                    cy1: b1.1,
-                    cx2: b2.0,
-                    cy2: b2.1,
-                    x: q2.0,
-                    y: q2.1,
-                });
-                // Arc 3: q2 → p_out, convex bump toward the vertex.
-                let d1 = ctl(q2, c, 0.5);
-                let d2 = ctl(p_out, c, 0.5);
-                segs.push(CubicTo {
-                    cx1: d1.0,
-                    cy1: d1.1,
-                    cx2: d2.0,
-                    cy2: d2.1,
-                    x: p_out.0,
-                    y: p_out.1,
-                });
-            }
-            CornerOption::None => {}
-        }
-    };
-
+    // Corner shapes come from the shared emitter (B-23). A rect's
+    // corners are all 90°, so the quarter-circle KAPPA is exact for
+    // both the convex and the concave arc.
     let radius_of = [tl, tr, br, bl];
     let mut segments = Vec::with_capacity(17);
     // Start at TL's outgoing point on the top edge.
@@ -1763,10 +1815,287 @@ pub(crate) fn corner_rect_path(
             x: p_in.0,
             y: p_in.1,
         });
-        emit_corner(&mut segments, kinds[i], radius_of[i], p_in, p_out, c, m);
+        push_corner_segments(
+            &mut segments,
+            kinds[i],
+            radius_of[i],
+            CornerFrame {
+                p_in,
+                p_out,
+                c,
+                m,
+                k_convex: KAPPA,
+                k_concave: KAPPA,
+            },
+        );
     }
     segments.push(Close);
     paged_compose::PathData { segments }
+}
+
+/// B-23 — resolve the single corner effect a POLYGON applies uniformly
+/// at every one of its straight-line corners.
+///
+/// Why uniform and why `TopLeft`: IDML's four corner names address a
+/// *rectangle's* bounding-box corners in the order a rect's path visits
+/// them. A polygon has N corners, so for N != 4 the names have no
+/// mapping — and the real-export corpus confirms InDesign never depends
+/// on one (of 84 `<Polygon>`s carrying `CornerOption`, 78 are all-`None`,
+/// 6 are open two-point lines that inherited `RoundedCorner` from an
+/// object style, and 4 are a five-point arch whose curvature is already
+/// baked into `<PathGeometry>` — none would render correctly under a
+/// per-quadrant reading). So slot 0 (`TopLeft`), falling back to the
+/// legacy global `CornerOption` / `CornerRadius` pair, is the driver;
+/// the other three round-trip but do not shape geometry.
+///
+/// `None` ⇒ this polygon has no corner effect (square corners).
+pub(crate) fn uniform_corner(
+    corner_radius: Option<f32>,
+    corner_option: Option<&str>,
+    corners: &[paged_model::CornerSpec; 4],
+) -> Option<(paged_model::CornerOption, f32)> {
+    let kind = corners[0]
+        .option
+        .or_else(|| corner_option.and_then(paged_model::CornerOption::from_idml))?;
+    if !kind.rounds() {
+        return None;
+    }
+    let radius = corners[0]
+        .radius
+        .or(corner_radius)
+        .filter(|r| *r > 0.0 && r.is_finite())?;
+    Some((kind, radius))
+}
+
+/// True when the IDML segment from `from` to `to` is a straight line —
+/// both Bezier handles are coincident with their anchors, which is how
+/// InDesign serialises a polyline edge. Corner effects only apply where
+/// two straight edges meet; a smooth Bezier junction already carries its
+/// own curvature and must be left alone.
+fn segment_is_straight(from: &paged_model::PathAnchor, to: &paged_model::PathAnchor) -> bool {
+    let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-4 && (a.1 - b.1).abs() < 1e-4;
+    near(from.right, from.anchor) && near(to.left, to.anchor)
+}
+
+/// One resolved polygon corner: the tangent points, the frame handed to
+/// [`push_corner_segments`], and whether the effect actually applies.
+struct PolyCorner {
+    effected: bool,
+    p_in: (f32, f32),
+    p_out: (f32, f32),
+    frame: CornerFrame,
+    radius: f32,
+}
+
+/// B-23 — build the corner-effected path for one CLOSED contour.
+///
+/// The construction is the true inscribed-circle one: for interior angle
+/// `theta` at the vertex, the tangent points sit `r/tan(theta/2)` back
+/// along each edge and the corner circle's centre sits `r/sin(theta/2)`
+/// out along the interior bisector. At `theta = 90` that reduces to
+/// exactly the rect builder's `p = c +- r` / `m = c + r*u_in + r*u_out`,
+/// so a four-corner axis-aligned polygon and a Rectangle with the same
+/// corner attrs produce identical geometry. The cubic control fractions
+/// are derived from the corner's real sweep (`4/3 * tan(sweep/4)`), so a
+/// 30-degree or 150-degree corner is a true circular arc rather than a
+/// 90-degree-shaped approximation.
+fn resolve_poly_corner(
+    prev: &paged_model::PathAnchor,
+    cur: &paged_model::PathAnchor,
+    next: &paged_model::PathAnchor,
+    radius: f32,
+) -> PolyCorner {
+    let none = PolyCorner {
+        effected: false,
+        p_in: cur.anchor,
+        p_out: cur.anchor,
+        frame: CornerFrame {
+            p_in: cur.anchor,
+            p_out: cur.anchor,
+            c: cur.anchor,
+            m: cur.anchor,
+            k_convex: KAPPA,
+            k_concave: KAPPA,
+        },
+        radius: 0.0,
+    };
+    if !segment_is_straight(prev, cur) || !segment_is_straight(cur, next) {
+        return none;
+    }
+    let c = cur.anchor;
+    let vi = (prev.anchor.0 - c.0, prev.anchor.1 - c.1);
+    let vo = (next.anchor.0 - c.0, next.anchor.1 - c.1);
+    let li = (vi.0 * vi.0 + vi.1 * vi.1).sqrt();
+    let lo = (vo.0 * vo.0 + vo.1 * vo.1).sqrt();
+    if li < 1e-4 || lo < 1e-4 {
+        return none;
+    }
+    let ui = (vi.0 / li, vi.1 / li);
+    let uo = (vo.0 / lo, vo.1 / lo);
+    let cos_t = (ui.0 * uo.0 + ui.1 * uo.1).clamp(-1.0, 1.0);
+    let theta = cos_t.acos();
+    // Collinear (straight-through) or doubled-back vertices have no
+    // corner to cut.
+    if !(1e-3..=(std::f32::consts::PI - 1e-3)).contains(&theta) {
+        return none;
+    }
+    let half = theta * 0.5;
+    // Tangent distance, clamped so two adjacent corners can never eat
+    // past the midpoint of the edge they share.
+    let d = (radius / half.tan()).min(li * 0.5).min(lo * 0.5);
+    if d <= 1e-4 {
+        return none;
+    }
+    // Effective radius after clamping keeps `m` on the real bisector.
+    let r_eff = d * half.tan();
+    let p_in = (c.0 + ui.0 * d, c.1 + ui.1 * d);
+    let p_out = (c.0 + uo.0 * d, c.1 + uo.1 * d);
+    let bis = (ui.0 + uo.0, ui.1 + uo.1);
+    let bl = (bis.0 * bis.0 + bis.1 * bis.1).sqrt();
+    if bl < 1e-6 {
+        return none;
+    }
+    let mdist = r_eff / half.sin();
+    let m = (c.0 + bis.0 / bl * mdist, c.1 + bis.1 / bl * mdist);
+    // Cubic control fractions for a true circular arc: the convex arc
+    // sweeps `PI - theta` about `m` (endpoint -> `c` direction), the
+    // concave arc sweeps `theta` about `c` (endpoint -> `m` direction).
+    const THIRD4: f32 = 4.0 / 3.0;
+    let sweep = std::f32::consts::PI - theta;
+    let k_convex = THIRD4 * (sweep * 0.25).tan() * r_eff / d;
+    let k_concave = THIRD4 * (theta * 0.25).tan() * d / r_eff;
+    PolyCorner {
+        effected: true,
+        p_in,
+        p_out,
+        frame: CornerFrame {
+            p_in,
+            p_out,
+            c,
+            m,
+            k_convex,
+            k_concave,
+        },
+        radius: r_eff,
+    }
+}
+
+/// B-23 — apply a uniform corner effect to every straight-line corner of
+/// every CLOSED contour of a polygon path.
+///
+/// Returns `None` when nothing changed (no effect requested, or no
+/// contour had an effectable corner) so callers fall back to the plain
+/// anchor path and keep their path-cache keys stable.
+///
+/// Open contours (`PathOpen="true"`) and contours with fewer than three
+/// anchors are copied through verbatim: they have no enclosed corner to
+/// cut, matching InDesign — the corpus's six "rounded" polygons are all
+/// two-point OPEN lines that inherited the option from an object style
+/// and show no rounding.
+pub(crate) fn corner_polygon_path(
+    anchors: &[paged_model::PathAnchor],
+    subpath_starts: &[usize],
+    subpath_open: &[bool],
+    kind: paged_model::CornerOption,
+    radius: f32,
+) -> Option<paged_compose::PathData> {
+    use paged_compose::PathSegment::*;
+    if !kind.rounds() || radius <= 0.0 || !radius.is_finite() || anchors.is_empty() {
+        return None;
+    }
+    let ranges = super::text_path::contour_ranges(anchors.len(), subpath_starts);
+    let mut segs: Vec<paged_compose::PathSegment> = Vec::with_capacity(anchors.len() * 4 + 4);
+    let mut any = false;
+    for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
+        let sub = &anchors[lo..hi];
+        if sub.is_empty() {
+            continue;
+        }
+        let is_open = subpath_open.get(range_idx).copied().unwrap_or(false);
+        let n = sub.len();
+        if is_open || n < 3 {
+            push_plain_contour(&mut segs, sub, is_open);
+            continue;
+        }
+        let corners: Vec<PolyCorner> = (0..n)
+            .map(|i| resolve_poly_corner(&sub[(i + n - 1) % n], &sub[i], &sub[(i + 1) % n], radius))
+            .collect();
+        if !corners.iter().any(|c| c.effected) {
+            push_plain_contour(&mut segs, sub, is_open);
+            continue;
+        }
+        any = true;
+        segs.push(MoveTo {
+            x: corners[0].p_out.0,
+            y: corners[0].p_out.1,
+        });
+        // Walk 1..n then back to 0: emit the edge into corner `i`, then
+        // corner `i`'s own segments.
+        for step in 1..=n {
+            let i = step % n;
+            let prev = (i + n - 1) % n;
+            let edge_straight = segment_is_straight(&sub[prev], &sub[i]);
+            if edge_straight || corners[prev].effected || corners[i].effected {
+                segs.push(LineTo {
+                    x: corners[i].p_in.0,
+                    y: corners[i].p_in.1,
+                });
+            } else {
+                segs.push(CubicTo {
+                    cx1: sub[prev].right.0,
+                    cy1: sub[prev].right.1,
+                    cx2: sub[i].left.0,
+                    cy2: sub[i].left.1,
+                    x: corners[i].p_in.0,
+                    y: corners[i].p_in.1,
+                });
+            }
+            if corners[i].effected {
+                push_corner_segments(&mut segs, kind, corners[i].radius, corners[i].frame);
+            }
+        }
+        segs.push(Close);
+    }
+    any.then_some(paged_compose::PathData { segments: segs })
+}
+
+/// Copy one contour through unchanged (mirrors
+/// `polygon_path_from_anchors_with_open`'s per-contour emit) so a
+/// corner-effected polygon's untouched contours keep their exact
+/// geometry.
+fn push_plain_contour(
+    segs: &mut Vec<paged_compose::PathSegment>,
+    sub: &[paged_model::PathAnchor],
+    is_open: bool,
+) {
+    use paged_compose::PathSegment::*;
+    let (mx, my) = sub[0].anchor;
+    segs.push(MoveTo { x: mx, y: my });
+    for w in sub.windows(2) {
+        segs.push(CubicTo {
+            cx1: w[0].right.0,
+            cy1: w[0].right.1,
+            cx2: w[1].left.0,
+            cy2: w[1].left.1,
+            x: w[1].anchor.0,
+            y: w[1].anchor.1,
+        });
+    }
+    if !is_open && sub.len() >= 2 {
+        let last = sub.last().unwrap();
+        let first = &sub[0];
+        segs.push(CubicTo {
+            cx1: last.right.0,
+            cy1: last.right.1,
+            cx2: first.left.0,
+            cy2: first.left.1,
+            x: first.anchor.0,
+            y: first.anchor.1,
+        });
+    }
+    if !is_open {
+        segs.push(Close);
+    }
 }
 
 /// Approximate a unit ellipse with four cubic Bezier curves (the
@@ -2016,10 +2345,18 @@ pub(super) fn emit_polygon_missing_image_placeholder(
         1.0,
     ));
     if !poly.anchors.is_empty() {
-        let path = polygon_path_from_anchors_with_open(
+        // Shares the fill path's cache key — build the same
+        // corner-effected outline (B-23) so the two can't alias to
+        // different geometry depending on emit order.
+        let path = super::text_path::polygon_outline_path(
             &poly.anchors,
             &poly.subpath_starts,
             &poly.subpath_open,
+            uniform_corner(
+                poly.corner_radius,
+                poly.corner_option.as_deref(),
+                &poly.corners,
+            ),
         );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),

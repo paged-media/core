@@ -322,7 +322,11 @@ impl CornerOption {
             "RoundedCorner" | "Rounded" => Some(Self::Rounded),
             "InverseRoundedCorner" | "InverseRounded" => Some(Self::Inverse),
             "InsetCorner" | "Inset" => Some(Self::Inset),
-            "BeveledCorner" | "Beveled" | "Bevel" => Some(Self::Bevel),
+            // B-23: `BevelCorner` is the token InDesign actually
+            // writes (14 occurrences in the real-export corpus);
+            // `BeveledCorner` is the spelling the generator emits.
+            // Both must resolve or a bevelled frame silently squares.
+            "BeveledCorner" | "BevelCorner" | "Beveled" | "Bevel" => Some(Self::Bevel),
             "FancyCorner" | "Fancy" => Some(Self::Fancy),
             _ => None,
         }
@@ -1647,6 +1651,36 @@ pub struct Polygon {
     /// W2.5 — element-level `Locked` (default `false`). See
     /// [`TextFrame::locked`].
     pub locked: bool,
+    /// B-23 — `CornerRadius`; see [`Rectangle::corner_radius`]. IDML
+    /// writes the whole corner vocabulary on `<Polygon>` exactly as it
+    /// does on `<Rectangle>` (measured: 228 `CornerRadius` + 84
+    /// `CornerOption` occurrences across the 61-file real-export
+    /// corpus), so the model carries the same three fields.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// B-23 — `CornerOption`; see [`Rectangle::corner_option`].
+    #[serde(default)]
+    pub corner_option: Option<String>,
+    /// B-23 — per-corner `(option, radius)` overrides, `[top_left,
+    /// top_right, bottom_right, bottom_left]`; see
+    /// [`Rectangle::corners`].
+    ///
+    /// **Addressing caveat (documented decision, not an oversight).**
+    /// The four names are a *rectangle-shaped* vocabulary: they name
+    /// the corners of the item's bounding box in the order a rect's
+    /// path visits them. A polygon has N corners, so there is no
+    /// per-name mapping for N ≠ 4 — and the real-export corpus shows
+    /// InDesign never relies on one (of 84 polygons carrying
+    /// `CornerOption`, 78 are all-`None`, 6 are open two-point lines
+    /// that inherited `RoundedCorner` from an object style, and 4 are a
+    /// five-point arch whose curvature is already baked into
+    /// `<PathGeometry>`). All four slots are therefore parsed, stored,
+    /// mutable and round-tripped byte-preserving, but only slot 0
+    /// (`top_left`) — falling back to `corner_option` /
+    /// `corner_radius` — drives polygon *geometry*, applied uniformly
+    /// at every straight-line corner of every closed contour.
+    #[serde(default)]
+    pub corners: [CornerSpec; 4],
 }
 
 // ---------------------------------------------------------------------------
@@ -4705,9 +4739,14 @@ pub struct Spread {
     /// shapes (donut charts etc.) come with full path rasterisation
     /// later in the roadmap.
     pub polygons: Vec<Polygon>,
-    /// Number of text frames skipped because they were nested inside a
-    /// Group. Exposed so callers can flag lossy parses without reading
-    /// logs.
+    /// Number of nested page items the parser saw but did NOT lift
+    /// into [`Spread::nested_children`] (B-18 residual formats: a
+    /// `<Group>` pasted into a container, or a child whose host
+    /// carries no `Self` id — those still flatten to top level,
+    /// unclipped). Exposed so callers can flag lossy parses without
+    /// reading logs. Historically this counted frames nested inside a
+    /// `<Group>`; groups became first-class long ago and the counter
+    /// now covers the paste-into corners that remain approximate.
     pub skipped_nested_frames: usize,
     /// `<Group>` records, one per group element seen. Each entry
     /// names the page items it wraps (TextFrame / Rectangle / Oval /
@@ -4762,6 +4801,22 @@ pub struct Spread {
     /// per `Key`.
     #[serde(default)]
     pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// B-18 nested content (InDesign **paste-into**). Child page
+    /// items keyed by the HOST container's `Self` id (Rectangle /
+    /// Oval / Polygon). The children live in the spread's backing
+    /// vecs like every other page item but are NOT listed in
+    /// [`Spread::frames_in_order`] (or any group's `members`) — the
+    /// renderer reaches them only through this map and paints them
+    /// clipped by the container's path. Child `item_transform`s are
+    /// stored **composed into spread space** (same convention as
+    /// group members — see [`Group::item_transform`]); IDML itself
+    /// serialises nested `ItemTransform`s relative to the parent
+    /// item, so the writer decomposes on emit. Inner Vec preserves
+    /// XML / paste order (bottom-most first). Side map like
+    /// [`Spread::image_metadata`] so the frame literals stay
+    /// untouched.
+    #[serde(default)]
+    pub nested_children: std::collections::HashMap<String, Vec<FrameRef>>,
 }
 
 // ---------------------------------------------------------------------------

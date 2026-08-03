@@ -2430,6 +2430,50 @@ impl CanvasModel {
                     prev_subpath_open: None,
                 },
             }),
+            // v56 (Wave B) — close an open subpath; the inverse
+            // gesture of PathOpenAt. `subpath: None` = the default
+            // (single/last open contour).
+            Mutation::ClosePath {
+                element_id,
+                subpath,
+            } => Some(Operation::SetProperty {
+                node: path_node_id_for(element_id)?,
+                path: PropertyPath::ClosePath,
+                value: Value::ClosePath {
+                    subpath: subpath.map(|n| n as usize),
+                    prev_anchors: None,
+                    prev_subpath_starts: None,
+                    prev_subpath_open: None,
+                },
+            }),
+            // v56 (Wave B) — weld two open path elements; rides the
+            // PathfinderBoolean-style multi-node Operation (the apply
+            // layer removes `other` and the Batch inverse restores it).
+            Mutation::JoinPaths {
+                element_id,
+                other_id,
+            } => Some(Operation::JoinPaths {
+                kept: path_node_id_for(element_id)?,
+                other: path_node_id_for(other_id)?,
+            }),
+            // v56 (B-18) — paste-into / release. Leaf node ids on both
+            // sides; the apply layer gates the container kind
+            // (Rectangle / Oval / Polygon) and every structural
+            // precondition, so the bridge stays a thin translation.
+            // `child_index` / `restore_slot` are inverse-only and never
+            // ride the wire.
+            Mutation::PasteInto {
+                container_id,
+                child_id,
+            } => Some(Operation::PasteInto {
+                container: element_to_leaf_node_id(container_id)?,
+                child: element_to_leaf_node_id(child_id)?,
+                child_index: None,
+            }),
+            Mutation::ReleaseFrom { child_id } => Some(Operation::ReleaseFrom {
+                child: element_to_leaf_node_id(child_id)?,
+                restore_slot: None,
+            }),
             // W1.20 (groups v2) — members may include existing groups
             // (group-of-groups); `element_to_member_node_id` resolves
             // Group ids too. Fresh top-level create carries no parent /

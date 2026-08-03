@@ -32,6 +32,15 @@ pub enum PageItem {
     Group(Group),
     Polygon(Polygon),
     Oval(Oval),
+    /// B-18 paste-into: a container `Rect` whose element nests child
+    /// page items (InDesign's paste-into serialisation — the children
+    /// are the container element's last children, `ItemTransform`s
+    /// relative to the container). A separate variant so the many
+    /// existing `Rect { .. }` literals stay untouched.
+    PasteInto {
+        container: Box<Rect>,
+        children: Vec<PageItem>,
+    },
 }
 
 impl From<Rect> for PageItem {
@@ -65,6 +74,16 @@ impl PageItem {
             PageItem::Group(g) => g.write(b),
             PageItem::Polygon(p) => p.write(b),
             PageItem::Oval(o) => o.write(b),
+            PageItem::PasteInto {
+                container,
+                children,
+            } => {
+                let kind = container.write_body(b);
+                for c in children {
+                    c.write(b);
+                }
+                b.end(kind);
+            }
         }
     }
 }
@@ -785,6 +804,15 @@ impl Rect {
     /// Emit either `<Rectangle .../>` or `<TextFrame .../>` depending
     /// on whether a parent story was attached.
     pub fn write(&self, b: &mut XmlBuilder) {
+        let kind = self.write_body(b);
+        b.end(kind);
+    }
+
+    /// B-18 paste-into: emit the element WITHOUT its close tag and
+    /// return the element name, so `PageItem::PasteInto` can nest
+    /// child page items inside before closing (InDesign serialises
+    /// pasted-in content as the container element's last children).
+    fn write_body(&self, b: &mut XmlBuilder) -> &'static str {
         let kind = if self.parent_story.is_some() {
             "TextFrame"
         } else {
@@ -1122,7 +1150,7 @@ impl Rect {
             }
             b.empty("AnchoredObjectSetting", &aa);
         }
-        b.end(kind);
+        kind
     }
 }
 

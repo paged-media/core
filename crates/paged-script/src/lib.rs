@@ -3298,6 +3298,7 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         OutlineStrokeVariable => "outlineStrokeVariable",
         OffsetPath => "offsetPath",
         SimplifyPath => "simplifyPath",
+        ClosePath => "closePath",
         PageBounds => "pageBounds",
         FrameGradientFeather => "frameGradientFeather",
         CharacterFontFamily => "characterFontFamily",

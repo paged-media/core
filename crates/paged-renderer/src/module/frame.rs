@@ -413,9 +413,14 @@ impl<'a> ResolvedFrame<'a> {
             stroke_gap_color: poly.stroke_gap_color.as_deref(),
             stroke_gap_tint: poly.stroke_gap_tint,
             stroke_dash: &poly.stroke_dash,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            // B-23: polygons carry the same corner vocabulary as
+            // rectangles. Only slot 0 / the global pair drive geometry
+            // (see `paged_model::Polygon::corners`), but the whole set
+            // is threaded so the object-style cascade and introspection
+            // see the same shape they do for a rect.
+            corner_radius: poly.corner_radius,
+            corner_option: poly.corner_option.as_deref(),
+            corners: poly.corners,
             applied_object_style: poly.applied_object_style.as_deref(),
             overprint_fill: poly.overprint_fill,
             overprint_stroke: poly.overprint_stroke,
@@ -807,6 +812,9 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         };
         let frame = ResolvedFrame::from_polygon(&poly);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dotted"));
