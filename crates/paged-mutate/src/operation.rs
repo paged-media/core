@@ -2665,17 +2665,19 @@ pub enum Operation {
     /// gesture (`SetProperty(ItemLayer)`), not an Arrange. Pinned by
     /// `a_layer_sort_outranks_arrange_within_the_spread`.
     ///
-    /// # Honest limit — `.idml` export does not carry it yet
+    /// # Both save paths carry it
     ///
     /// The new order rides `Spread::frames_in_order`, so it survives a
-    /// `.paged` save (the native model part). The IDML writer, though,
-    /// is a byte-preserving splice: it re-emits existing source
-    /// elements untouched and only places NEW items, deliberately
-    /// leaving a reshuffled z alone (`plan_insert_positions` in
-    /// `idml-export`). An Arrange therefore reverts on an
-    /// `.idml` export/reopen round trip. Closing that is a change to
-    /// the writer, not to this op. Pinned by
-    /// `a_reorder_survives_paged_and_is_lost_on_idml_export`.
+    /// `.paged` save (the native model part). It now survives `.idml`
+    /// too: the writer gained a z-reorder save-back lane
+    /// (`idml-export`'s `reorder.rs`) that splices each page item's
+    /// serialised BYTES into its new slot. Byte-splicing rather than
+    /// re-minting is the load-bearing choice — the `write_new_*`
+    /// emitters rebuild only what the model tracks, so a re-mint would
+    /// silently strip `<Image>`, `<TextWrapPreference>`,
+    /// `<ClippingPathSettings>` and every unparsed attribute the first
+    /// time someone pressed bring-to-front. Pinned by
+    /// `a_reorder_survives_both_paged_and_idml_export`.
     ///
     /// # Inverse
     ///

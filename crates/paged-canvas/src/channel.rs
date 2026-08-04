@@ -3408,14 +3408,20 @@ pub enum Mutation {
     /// InDesign, where crossing layers is a different gesture
     /// (`setElementProperty` on the layer), not an Arrange.
     ///
-    /// **Honest limit 2 — `.idml` export does not carry it yet.** The
-    /// new order shows on canvas and round-trips through `.paged` (it
-    /// rides the native model part), but the IDML writer is a
-    /// byte-preserving splice that re-emits existing source elements
-    /// untouched and only places NEW ones, so an Arrange reverts when
-    /// the document is exported to `.idml` and reopened. Closing that
-    /// is a change to the IDML writer, not to this mutation. Pinned by
-    /// `a_reorder_survives_paged_and_is_lost_on_idml_export`.
+    /// **Both save paths carry it.** `.paged` rides the native model
+    /// part; `.idml` gained a z-reorder save-back lane in the writer
+    /// (`idml-export`'s `reorder.rs`), which SPLICES each page item's
+    /// serialised bytes into its new slot rather than re-minting the
+    /// element — a re-mint would rebuild only what the model tracks and
+    /// would silently drop `<Image>`, `<TextWrapPreference>` and every
+    /// unparsed attribute. It moves only ids the model's sibling list
+    /// names, and returns the input buffer untouched when nothing
+    /// moved, so unmutated documents keep their verbatim ZIP copy.
+    /// Pinned by `a_reorder_survives_both_paged_and_idml_export`.
+    ///
+    /// Note this covers ALL THREE sibling lists a node can live in —
+    /// top level, `Group::members`, and a container's nested children —
+    /// not just the spread's z table.
     ///
     /// Rides `Operation::ReorderNode`.
     ReorderElement {
