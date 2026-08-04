@@ -623,6 +623,22 @@ impl WorkerCore {
                     .and_then(|m| m.nearest_path_point(&id, point));
                 WorkerToMainKind::NearestPathPoint { result }
             }
+            MainToWorkerKind::RequestPlanarRegions { element_ids, point } => {
+                // B-22 (v57) — pure READ. No document ⇒ an honest
+                // `found: false` with a reason, never an empty face list
+                // that reads as "these paths divide into nothing".
+                let result = match self.model.as_ref() {
+                    Some(m) => m.planar_regions(&element_ids, point),
+                    None => paged_canvas::channel::PlanarRegionsResult {
+                        found: false,
+                        faces: Vec::new(),
+                        input_count: 0,
+                        complete: false,
+                        reason: Some("no document loaded".to_string()),
+                    },
+                };
+                WorkerToMainKind::PlanarRegions { result }
+            }
             MainToWorkerKind::RequestLayers => {
                 let items = self.model.as_ref().map(|m| m.layers()).unwrap_or_default();
                 WorkerToMainKind::Layers { items }

@@ -356,7 +356,27 @@ export type WorkerToMain = WorkerToMainKind & {
 // `ReleaseFrom { childId }` pops it back out, world transform preserved.
 // Both ride the same-named `Operation`s; each is one undo step (exact
 // z-slot / child-index restore).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(56);
+//
+// v57 (B-22 — planar regions / the region Pathfinder row): the engine
+// gains the level BELOW element hit-testing — the faces of the planar
+// arrangement overlapping paths divide the plane into (`paged_mutate::
+// planar`). One new read door, `RequestPlanarRegions { elementIds,
+// point? }` → `PlanarRegions { found, faces, inputCount, complete,
+// reason }`: with `point` it answers the single face under it (Shape
+// Builder's hover query), without it, every face. Seven new
+// `Mutation`s ride it: `pathfinderDivide` / `pathfinderTrim` /
+// `pathfinderMerge` / `pathfinderCrop` / `pathfinderOutline` /
+// `pathfinderMinusBack` (Illustrator's Pathfinder row, all over one
+// arrangement, `elementIds` top-to-bottom) plus `pathfinderFaces
+// { elementIds, faces, mode }` (unite the named faces — Shape
+// Builder's click/drag output). Additive — a new editor SENDS
+// messages an older worker can't deserialise, so the minor bumps; the
+// handshake catches a stale pair.
+//
+// NOT in v57 (named residual): Live Paint's PERSISTENT face/edge graph
+// with gap detection. That needs a document-resident object type that
+// survives edits, not a query.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(57);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -722,6 +742,26 @@ pub enum MainToWorkerKind {
     RequestNearestPathPoint {
         id: crate::element_selection::ElementId,
         point: [f32; 2],
+    },
+    /// B-22 (protocol v57) — the REGION read door: resolve the faces
+    /// of the planar arrangement `element_ids` forms (the distinct
+    /// areas overlapping paths divide the plane into, one level below
+    /// element hit-testing). Reply: `PlanarRegions`.
+    ///
+    /// With `point` (element-local / raw path space, the space
+    /// `PathAnchors` reports) it answers ONLY the face under that point
+    /// — Shape Builder's hover query, which costs N point-in-path tests
+    /// plus one region materialisation instead of a full enumeration.
+    /// Without it, every face comes back.
+    ///
+    /// Pure READ. Face ids are stable for the same inputs, so a hovered
+    /// id can be handed straight to the `pathfinderFaces` mutation.
+    /// More than `paged_mutate::planar::MAX_PLANAR_INPUTS` ids is
+    /// refused (`found: false`), never truncated.
+    RequestPlanarRegions {
+        element_ids: Vec<crate::element_selection::ElementId>,
+        #[serde(default)]
+        point: Option<[f32; 2]>,
     },
     /// Track M — list every `<Layer>` from the loaded document's
     /// designmap. Reply: `Layers`. The Layers panel polls this on
@@ -1331,6 +1371,8 @@ pub enum WorkerToMainKind {
     /// element's anchor list is empty (lets the caller distinguish
     /// "no path data" from "didn't resolve").
     PathAnchors { result: Option<PathAnchorsResult> },
+    /// B-22 (protocol v57) — `RequestPlanarRegions` reply.
+    PlanarRegions { result: PlanarRegionsResult },
     /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
     /// doesn't resolve or carries no path data.
     NearestPathPoint {
@@ -2701,6 +2743,59 @@ pub struct NearestPathPointResult {
     pub distance: f32,
 }
 
+/// B-22 (protocol v57) — one face of a planar arrangement: a connected
+/// region of the plane whose containment signature is constant.
+///
+/// Coordinates are in the same RAW path space `PathAnchors` reports
+/// (per-element `ItemTransform`s are not composed in — the arrangement
+/// runs on the anchors as stored, exactly like `pathfinderBoolean`).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanarFaceWire {
+    /// Stable id — `"<signature>#<component>"`, e.g. `"0-1#0"`. Stable
+    /// across calls with the same inputs, which is what lets a hover
+    /// query's id ride straight into `pathfinderFaces`.
+    pub id: String,
+    /// Indices into the REQUEST's `element_ids` whose interior contains
+    /// this face.
+    pub signature: Vec<u32>,
+    /// The face outline (closed). A face with holes carries them as
+    /// extra contours.
+    pub anchors: Vec<PathAnchorTriple>,
+    /// Per-contour boundaries into `anchors`.
+    pub subpath_starts: Vec<u32>,
+    /// Unsigned area, outer contour minus holes.
+    pub area: f32,
+    /// A point strictly inside the face — what a hover highlight or a
+    /// fill drop can key off without re-deriving containment.
+    pub inside: [f32; 2],
+}
+
+/// B-22 (protocol v57) — `RequestPlanarRegions` reply.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanarRegionsResult {
+    /// `false` when the request could not be answered at all — no
+    /// document, an id that doesn't resolve, or more inputs than the
+    /// kernel's cap. `reason` says which. Never a truncated answer.
+    pub found: bool,
+    /// Populated when `found`. With a `point` in the request this holds
+    /// at most one face (empty means the point is outside every input).
+    pub faces: Vec<PlanarFaceWire>,
+    /// How many inputs the arrangement was built from.
+    pub input_count: u32,
+    /// `true` when the resolved faces tile the union of the inputs.
+    /// `false` flags that the enumeration missed a sliver — the faces
+    /// listed are all real, the list just isn't exhaustive. Always
+    /// `true` for a point query (one face is not a tiling claim).
+    pub complete: bool,
+    /// Why `found` is false. `None` on success.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Phase 4 Step 2 — per-rebuild layout cache statistics.
 ///
 /// Sent piggyback on `MutationApplied` / `UndoApplied` / `RedoApplied`
@@ -3299,6 +3394,57 @@ pub enum Mutation {
         kind: paged_mutate::PathfinderKind,
     },
 
+    // ── B-22 (protocol v57) — the REGION Pathfinder row. Where the
+    //    Shape Modes above combine paths into one, these six resolve the
+    //    planar ARRANGEMENT of the inputs (the faces overlapping paths
+    //    divide the plane into) and operate per face. `element_ids` is
+    //    TOP-TO-BOTTOM stacking order — index 0 is the frontmost object,
+    //    the convention `PathfinderBoolean`'s `kept`-is-top already
+    //    sets. Each rides `Operation::PathfinderRegion`; one undo
+    //    restores every input.
+    /// Every face of the arrangement becomes its own object, keeping
+    /// the attributes of the topmost input covering it.
+    PathfinderDivide {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Each input is clipped to the part nothing above it covers, and
+    /// loses its stroke. Inputs entirely hidden are deleted.
+    PathfinderTrim {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Trim, then coalesce: inputs that share a fill colour merge into
+    /// one object.
+    PathfinderMerge {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Keep only what falls inside the TOPMOST input, coloured by the
+    /// objects beneath it; the topmost input is consumed as the cookie
+    /// cutter and disappears.
+    PathfinderCrop {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// Fills become strokes: every arrangement edge (split at each
+    /// crossing) becomes an open `GraphicLine` stroked with the fill of
+    /// the input that contributed it. All inputs are consumed.
+    PathfinderOutline {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// The BACKMOST object minus every object in front of it.
+    PathfinderMinusBack {
+        element_ids: Vec<crate::element_selection::ElementId>,
+    },
+    /// B-22 (protocol v57) — Shape Builder's click/drag output: unite
+    /// the named faces of the arrangement into one result element.
+    /// `faces` carries the stable ids `RequestPlanarRegions` reported;
+    /// `mode` picks whether they are the faces KEPT or the faces
+    /// REMOVED (drag vs alt-drag). An unknown id is refused, not
+    /// ignored.
+    PathfinderFaces {
+        element_ids: Vec<crate::element_selection::ElementId>,
+        faces: Vec<String>,
+        mode: paged_mutate::FaceSelectMode,
+    },
+
     // ── Collection mutations (swatches / gradients / colour groups /
     //    styles) — route 1:1 to the matching `paged_mutate::Operation`.
     //    The Swatches / Styles / Gradients panels emit these on their
@@ -3666,6 +3812,13 @@ impl Mutation {
             Self::LayerRemove { .. } => "LayerRemove",
             Self::SetElementProperty { .. } => "SetElementProperty",
             Self::PathfinderBoolean { .. } => "PathfinderBoolean",
+            Self::PathfinderDivide { .. } => "PathfinderDivide",
+            Self::PathfinderTrim { .. } => "PathfinderTrim",
+            Self::PathfinderMerge { .. } => "PathfinderMerge",
+            Self::PathfinderCrop { .. } => "PathfinderCrop",
+            Self::PathfinderOutline { .. } => "PathfinderOutline",
+            Self::PathfinderMinusBack { .. } => "PathfinderMinusBack",
+            Self::PathfinderFaces { .. } => "PathfinderFaces",
             Self::CreateSwatch { .. } => "CreateSwatch",
             Self::EditSwatch { .. } => "EditSwatch",
             Self::DeleteSwatch { .. } => "DeleteSwatch",
@@ -4145,8 +4298,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v56() {
-        assert_eq!(PROTOCOL_VERSION.0, 56);
+    fn protocol_version_is_v57() {
+        assert_eq!(PROTOCOL_VERSION.0, 57);
     }
 
     /// v56 (Wave B) — `ClosePath` / `JoinPaths` wire shapes. The tag is

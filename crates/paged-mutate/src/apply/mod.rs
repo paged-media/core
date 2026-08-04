@@ -210,6 +210,16 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             op_kind,
         } => apply_pathfinder(doc, kept, others, *op_kind),
         Operation::JoinPaths { kept, other } => apply_join_paths(doc, kept, other),
+        // B-22 — the region-level Pathfinder row + Shape Builder, both
+        // over one planar arrangement (`crate::planar`).
+        Operation::PathfinderRegion { elements, verb } => {
+            planar_ops::apply_pathfinder_region(doc, elements, *verb)
+        }
+        Operation::PathfinderFaces {
+            elements,
+            faces,
+            mode,
+        } => planar_ops::apply_pathfinder_faces(doc, elements, faces, *mode),
         Operation::PasteInto {
             container,
             child,
@@ -712,6 +722,9 @@ mod nested;
 mod paragraph;
 mod path_topology;
 mod place_image;
+mod planar_ops;
+
+pub use planar_ops::element_path;
 mod remove_node;
 mod replace_image_bytes;
 mod sections;

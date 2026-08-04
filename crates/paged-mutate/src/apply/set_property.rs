@@ -404,6 +404,40 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // B-22 — the region Pathfinder verbs rewrite a carrier's whole
+        // path, so its frame box has to follow or the selection chrome
+        // and hit-test rectangle keep describing the pre-Divide shape.
+        // TextFrame / Rectangle already had this arm; Polygon and
+        // GraphicLine complete the four path-bearing kinds. Plain field
+        // writes — nothing rescales the anchors.
+        (NodeId::Polygon(id), PropertyPath::FrameBounds) => {
+            let new_bounds = expect_bounds(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = bounds_to_array(poly.bounds);
+            poly.bounds = bounds_from_array(new_bounds);
+            (
+                Value::Bounds(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::GraphicLine(id), PropertyPath::FrameBounds) => {
+            let new_bounds = expect_bounds(path, value)?;
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = bounds_to_array(line.bounds);
+            line.bounds = bounds_from_array(new_bounds);
+            (
+                Value::Bounds(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         (NodeId::Polygon(id), PropertyPath::FrameStrokeColor) => {
             let new_color = expect_color_ref(path, value)?;
             let poly = find_polygon_mut(doc, id)

@@ -1101,3 +1101,85 @@ fn submit_pixel_layer_with_no_document_replies_not_applied() {
     );
     assert_eq!(effect, CacheEffect::None);
 }
+
+// ---------------------------------------------------------------------
+// B-22 (v57) — the planar-region read door
+// ---------------------------------------------------------------------
+
+#[test]
+fn request_planar_regions_resolves_the_frames_own_face() {
+    // The fixture's single text frame is a primitive (bounds-only)
+    // frame; the arrangement falls back to its bounds rectangle, so one
+    // input resolves to exactly one face covered by input 0.
+    let mut core = loaded_core();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 80,
+            "protocol": protocol(),
+            "kind": "requestPlanarRegions",
+            "payload": { "elementIds": [{ "kind": "textFrame", "id": "tf1" }] }
+        }),
+    );
+    assert_eq!(reply["kind"], "planarRegions", "{reply}");
+    let result = &reply["payload"]["result"];
+    assert!(result["found"].as_bool().unwrap(), "{reply}");
+    assert!(result["complete"].as_bool().unwrap(), "{reply}");
+    assert_eq!(result["inputCount"].as_u64().unwrap(), 1);
+    let faces = result["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 1, "{reply}");
+    assert_eq!(faces[0]["id"].as_str().unwrap(), "0#0");
+    assert_eq!(faces[0]["signature"].as_array().unwrap().len(), 1);
+    assert_eq!(faces[0]["anchors"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn request_planar_regions_point_query_answers_hit_and_miss() {
+    let mut core = loaded_core();
+    let query = |core: &mut WorkerCore, seq: u64, point: [f32; 2]| {
+        roundtrip(
+            core,
+            &serde_json::json!({
+                "seq": seq,
+                "protocol": protocol(),
+                "kind": "requestPlanarRegions",
+                "payload": {
+                    "elementIds": [{ "kind": "textFrame", "id": "tf1" }],
+                    "point": point
+                }
+            }),
+        )
+    };
+    // Inside the frame's box.
+    let hit = query(&mut core, 81, [200.0, 200.0]);
+    let faces = hit["payload"]["result"]["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 1, "{hit}");
+    // Outside it: answered, with no face.
+    let miss = query(&mut core, 82, [10.0, 10.0]);
+    assert!(miss["payload"]["result"]["found"].as_bool().unwrap());
+    assert!(miss["payload"]["result"]["faces"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn request_planar_regions_with_no_document_fails_cleanly() {
+    // An honest `found: false` with a reason — never an empty face list
+    // that would read as "these paths divide into nothing".
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 83,
+            "protocol": protocol(),
+            "kind": "requestPlanarRegions",
+            "payload": { "elementIds": [{ "kind": "textFrame", "id": "tf1" }] }
+        }),
+    );
+    assert_eq!(reply["kind"], "planarRegions", "{reply}");
+    let result = &reply["payload"]["result"];
+    assert!(!result["found"].as_bool().unwrap(), "{reply}");
+    assert!(result["reason"].is_string(), "{reply}");
+    assert!(result["faces"].as_array().unwrap().is_empty());
+}

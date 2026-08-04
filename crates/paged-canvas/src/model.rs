@@ -404,6 +404,18 @@ fn path_node_id_for(id: &crate::element_selection::ElementId) -> Option<paged_mu
     }
 }
 
+/// B-22 (v57) — the shared translation for the six region-Pathfinder
+/// mutations: they differ only in the verb.
+fn region_op(
+    element_ids: &[crate::element_selection::ElementId],
+    verb: paged_mutate::PathfinderRegionVerb,
+) -> Option<paged_mutate::Operation> {
+    Some(paged_mutate::Operation::PathfinderRegion {
+        elements: element_ids.iter().map(element_to_node_id).collect(),
+        verb,
+    })
+}
+
 /// Inspector P1 — map a wire `ElementId` to the apply layer's
 /// `NodeId`. Unlike `path_node_id_for`, this version handles every
 /// element kind including Oval / Group; the apply layer may refuse
@@ -2347,6 +2359,40 @@ impl CanvasModel {
                     op_kind: *kind,
                 })
             }
+            // B-22 (v57) — the region Pathfinder row. Every verb takes
+            // the SAME payload (`elementIds`, top-to-bottom) and differs
+            // only in the verb it hands the apply layer, so the six map
+            // through one helper. Ovals are accepted as inputs (the
+            // arrangement falls back to their bounds rectangle, exactly
+            // as `pathfinderBoolean` does) even though they cannot carry
+            // a result — the apply layer replaces them instead.
+            Mutation::PathfinderDivide { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::Divide)
+            }
+            Mutation::PathfinderTrim { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::Trim)
+            }
+            Mutation::PathfinderMerge { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::Merge)
+            }
+            Mutation::PathfinderCrop { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::Crop)
+            }
+            Mutation::PathfinderOutline { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::Outline)
+            }
+            Mutation::PathfinderMinusBack { element_ids } => {
+                region_op(element_ids, paged_mutate::PathfinderRegionVerb::MinusBack)
+            }
+            Mutation::PathfinderFaces {
+                element_ids,
+                faces,
+                mode,
+            } => Some(Operation::PathfinderFaces {
+                elements: element_ids.iter().map(element_to_node_id).collect(),
+                faces: faces.clone(),
+                mode: *mode,
+            }),
             Mutation::PathPointInsert {
                 element_id,
                 index,
@@ -6975,6 +7021,85 @@ impl CanvasModel {
             point: [hit.point.0, hit.point.1],
             distance: hit.distance,
         })
+    }
+
+    /// B-22 (v57) — `RequestPlanarRegions` accessor: the faces of the
+    /// planar arrangement `ids` forms.
+    ///
+    /// With `point` (raw path space, the `path_anchors` space) this
+    /// answers only the face under it — the Shape Builder hover query,
+    /// which costs N point-in-path tests plus one materialisation
+    /// instead of a full enumeration. Without it, every face comes back.
+    ///
+    /// Geometry comes from `paged_mutate::apply::element_path`, the very
+    /// function the region verbs read, so a face id reported here
+    /// addresses exactly the face `pathfinderFaces` will build.
+    pub fn planar_regions(
+        &self,
+        ids: &[crate::element_selection::ElementId],
+        point: Option<[f32; 2]>,
+    ) -> crate::channel::PlanarRegionsResult {
+        use crate::channel::{PathAnchorTriple, PlanarFaceWire, PlanarRegionsResult};
+
+        let refuse = |reason: String| PlanarRegionsResult {
+            found: false,
+            faces: Vec::new(),
+            input_count: 0,
+            complete: false,
+            reason: Some(reason),
+        };
+        if ids.is_empty() {
+            return refuse("no elements named".to_string());
+        }
+        let mut inputs: Vec<(Vec<paged_model::PathAnchor>, Vec<usize>)> =
+            Vec::with_capacity(ids.len());
+        for id in ids {
+            let node = element_to_node_id(id);
+            match paged_mutate::apply::element_path(self.scene(), &node) {
+                Some(path) => inputs.push(path),
+                None => return refuse(format!("{id:?} carries no path geometry")),
+            }
+        }
+        let to_wire = |face: paged_mutate::planar::PlanarFace| PlanarFaceWire {
+            id: face.id,
+            signature: face.signature.iter().map(|i| *i as u32).collect(),
+            anchors: face
+                .anchors
+                .iter()
+                .map(|a| PathAnchorTriple {
+                    anchor: [a.anchor.0, a.anchor.1],
+                    left: [a.left.0, a.left.1],
+                    right: [a.right.0, a.right.1],
+                })
+                .collect(),
+            subpath_starts: face.subpath_starts.iter().map(|s| *s as u32).collect(),
+            area: face.area as f32,
+            inside: [face.inside.0, face.inside.1],
+        };
+        match point {
+            Some(p) => match paged_mutate::planar::face_at_point(&inputs, (p[0], p[1])) {
+                Ok(hit) => PlanarRegionsResult {
+                    found: true,
+                    faces: hit.into_iter().map(to_wire).collect(),
+                    input_count: ids.len() as u32,
+                    // A point query returns one face; it makes no claim
+                    // about tiling the union.
+                    complete: true,
+                    reason: None,
+                },
+                Err(e) => refuse(e.to_string()),
+            },
+            None => match paged_mutate::planar::build_arrangement(&inputs) {
+                Ok(arrangement) => PlanarRegionsResult {
+                    found: true,
+                    complete: arrangement.complete,
+                    input_count: arrangement.input_count as u32,
+                    faces: arrangement.faces.into_iter().map(to_wire).collect(),
+                    reason: None,
+                },
+                Err(e) => refuse(e.to_string()),
+            },
+        }
     }
 
     pub fn page_indices_for_story(&self, story_id: &str) -> Vec<usize> {

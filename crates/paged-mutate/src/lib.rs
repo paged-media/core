@@ -54,16 +54,17 @@ pub mod notify;
 pub mod operation;
 pub mod path_math;
 pub mod pathfinder;
+pub mod planar;
 
 pub use apply::apply;
 pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
 pub use operation::{
-    AppliedOperation, ColorGroupSpec, FieldKind, GradientSpec, GradientStopSpec, GroupSpec,
-    GuideOrientationSpec, InvalidationHint, NestedParent, NodeId, NodeSpec, NumberingListSpec,
-    Operation, PathPointAddress, PathPointRole, PathfinderKind, PropertyPath, StyleCollection,
-    StyleScope, SwatchSpec, Value,
+    AppliedOperation, ColorGroupSpec, FaceSelectMode, FieldKind, GradientSpec, GradientStopSpec,
+    GroupSpec, GuideOrientationSpec, InvalidationHint, NestedParent, NodeId, NodeSpec,
+    NumberingListSpec, Operation, PathPointAddress, PathPointRole, PathfinderKind,
+    PathfinderRegionVerb, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
 };
 pub use path_math::fit_polyline_to_anchors;
 

@@ -2827,6 +2827,33 @@ pub enum Operation {
         #[serde(rename = "opKind")]
         op_kind: PathfinderKind,
     },
+    /// B-22 — the REGION-level Pathfinder verbs, all six over one
+    /// planar arrangement of `elements` (see [`crate::planar`]).
+    /// `elements` is in TOP-TO-BOTTOM stacking order — index 0 is the
+    /// frontmost object, the same convention `PathfinderBoolean`'s
+    /// `kept`-is-top already uses.
+    ///
+    /// The apply layer resolves the arrangement's faces once, maps them
+    /// to result regions per the verb, then builds an internal Batch —
+    /// `SetProperty(ClosePath restore-branch)` on each input that
+    /// carries a result, `InsertNode(Polygon)` for every extra region,
+    /// `RemoveNode` for inputs left with nothing — and returns that
+    /// Batch's inverse. One Cmd-Z restores every original.
+    PathfinderRegion {
+        elements: Vec<NodeId>,
+        verb: PathfinderRegionVerb,
+    },
+    /// B-22 — Shape Builder's click/drag output: unite the NAMED faces
+    /// of the arrangement of `elements` into one result element.
+    /// `faces` carries the stable ids `requestPlanarRegions` reported.
+    /// `mode` picks whether the named faces are the ones kept or the
+    /// ones removed (a Shape-Builder alt-drag erases what it crosses).
+    /// Rides the same Batch machinery as `PathfinderRegion`.
+    PathfinderFaces {
+        elements: Vec<NodeId>,
+        faces: Vec<String>,
+        mode: FaceSelectMode,
+    },
     /// Wave B — weld two OPEN single-contour path elements into one
     /// (InDesign's Join). The nearest endpoint pair of `kept` and
     /// `other` connects; `other`'s anchors are appended onto `kept`'s
@@ -3415,6 +3442,50 @@ pub enum PathfinderKind {
     Intersect,
     Subtract,
     Exclude,
+}
+
+/// B-22 — the region-level Pathfinder verbs, all resolved over one
+/// planar arrangement (Illustrator's Pathfinder row, as opposed to the
+/// Shape Modes row that [`PathfinderKind`] covers).
+///
+/// Every verb reads the arrangement's faces and decides, per face,
+/// WHICH input owns it. Ownership defaults to the TOPMOST input
+/// covering the face — `min(signature)`, since `elements` arrives
+/// top-to-bottom — which is what makes the results carry the fill you
+/// see on screen at that spot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub enum PathfinderRegionVerb {
+    /// Every face becomes its own object, keeping the attributes of the
+    /// topmost input covering it.
+    Divide,
+    /// Each input is clipped to the part no input above it covers —
+    /// "removes the hidden part of a filled object". One result per
+    /// input (inputs completely hidden are deleted).
+    Trim,
+    /// Trim, then coalesce: inputs sharing a fill colour merge into one
+    /// object.
+    Merge,
+    /// Keep only what falls inside the TOPMOST input, coloured by the
+    /// objects beneath it; the topmost input is consumed as the cookie
+    /// cutter and disappears.
+    Crop,
+    /// Fills become strokes: the arrangement's EDGES (split at every
+    /// crossing) become open line elements.
+    Outline,
+    /// The BACKMOST object minus every object in front of it.
+    MinusBack,
+}
+
+/// B-22 — whether `PathfinderFaces` keeps the named faces or removes
+/// them (Shape Builder's drag vs alt-drag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub enum FaceSelectMode {
+    Keep,
+    Remove,
 }
 
 /// Hint to downstream caches about what the apply touched. Lists
