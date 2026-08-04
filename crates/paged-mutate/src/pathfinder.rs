@@ -23,14 +23,16 @@
 //!
 //! The `accuracy` parameter passed to flo_curves controls how
 //! close two curves must be before they're considered
-//! intersecting at the subdivision level; 0.01 (one-hundredth of
-//! a pt) is well below any visible threshold and keeps subdivision
-//! depth bounded.
+//! intersecting at the subdivision level; 1/64 pt is well below any
+//! visible threshold and keeps subdivision depth bounded. It is
+//! ALSO the grid every input is snapped onto — see the C-21 section
+//! in [`crate::bezier_conv`] for why that is a crash-safety
+//! requirement rather than a tuning choice.
 
 use flo_curves::bezier::path::{path_add, path_intersect, path_sub, SimpleBezierPath};
 use paged_model::PathAnchor;
 
-use crate::bezier_conv::{flo_to_idml_path, idml_path_to_flo};
+use crate::bezier_conv::{flo_to_idml_path, idml_path_to_flo_on_grid, BOOLEAN_GRID};
 
 /// Pathfinder operation kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +48,27 @@ pub enum PathfinderKind {
 }
 
 /// Accuracy used for flo_curves's subdivision-based intersection
-/// math. One-hundredth of a point is comfortably below any
-/// visible threshold and keeps the recursion bounded.
-const PATHFINDER_ACCURACY: f64 = 0.01;
+/// math, AND the grid every input path is snapped onto first.
+///
+/// **C-21 — load-bearing for crash-safety; do not lower it.** It has to
+/// stay strictly above `flo_curves` 0.8.0's hardcoded 0.01 sort epsilon,
+/// because that is what makes the point sort inside `exterior_paths` a
+/// strict weak ordering; below it, Rust's driftsort detects the broken
+/// comparator and PANICS (`panic = abort` in the wasm worker, so it is an
+/// unrecoverable abort, not a bad result). A power of two is what makes
+/// the separation exact in f64 — `1/64` is the finest one above 0.01.
+/// Full derivation, and the residuals this does not cover, in the C-21
+/// section of [`crate::bezier_conv`]. Pinned by
+/// `pathfinder_accuracy_grid_separates_above_the_flo_curves_sort_epsilon`.
+const PATHFINDER_ACCURACY: f64 = BOOLEAN_GRID;
+
+// C-21 — compile-time guard, so a lowered value breaks the BUILD rather
+// than waiting for a test run. The f64-arithmetic half of the invariant
+// is in the test named below.
+const _: () = assert!(
+    PATHFINDER_ACCURACY > crate::bezier_conv::FLO_SORT_EPSILON,
+    "C-21: PATHFINDER_ACCURACY must stay strictly above flo_curves' 0.01 sort epsilon"
+);
 
 /// Run a Pathfinder boolean over N input paths (each a flat anchor
 /// list + subpath_starts). The first input is the "top" path —
@@ -67,9 +87,11 @@ pub fn pathfinder_boolean(
     if inputs.is_empty() {
         return (Vec::new(), Vec::new());
     }
+    // C-21: snapped on the way in — an unsnapped path reaching
+    // `exterior_paths` can abort the process, not just skew a result.
     let flo_inputs: Vec<Vec<SimpleBezierPath>> = inputs
         .iter()
-        .map(|(anchors, starts)| idml_path_to_flo(anchors, starts))
+        .map(|(anchors, starts)| idml_path_to_flo_on_grid(anchors, starts, PATHFINDER_ACCURACY))
         .collect();
     if flo_inputs.iter().all(|p| p.is_empty()) {
         return (Vec::new(), Vec::new());
@@ -136,6 +158,7 @@ pub fn pathfinder_boolean(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bezier_conv::FLO_SORT_EPSILON;
 
     fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Vec<PathAnchor> {
         let p = |x: f32, y: f32| (x, y);
@@ -216,6 +239,70 @@ mod tests {
         assert_eq!(starts.len(), 1, "L-shape is one subpath");
         // An L-shape from this subtraction has 6 corner vertices.
         assert_eq!(anchors.len(), 6, "L-shape has 6 corners");
+    }
+
+    /// C-21 GUARD — do not lower [`PATHFINDER_ACCURACY`].
+    ///
+    /// It is the grid every Pathfinder input is snapped onto, and the
+    /// grid is what keeps `flo_curves`' `exterior_paths` point sort a
+    /// strict weak ordering. A violated ordering is an abort, not a
+    /// wrong pixel. Two properties: the step must exceed the
+    /// comparator's hardcoded epsilon, and it must exceed it in f64
+    /// ARITHMETIC at every reachable magnitude — a nominal 0.01 grid
+    /// (this constant's previous value) fails the second test.
+    #[test]
+    fn pathfinder_accuracy_grid_separates_above_the_flo_curves_sort_epsilon() {
+        // `accuracy > FLO_SORT_EPSILON` is asserted at COMPILE time next
+        // to the constant; the m = 0 step below re-checks it, and the rest
+        // of the loop checks what a const assert cannot — that the
+        // separation survives f64 arithmetic at every reachable magnitude.
+        assert_eq!(
+            PATHFINDER_ACCURACY.log2(),
+            PATHFINDER_ACCURACY.log2().round(),
+            "accuracy must be a power of two so the grid is exact in f64"
+        );
+        for m in -200_000_i64..=200_000 {
+            let lo = (m as f64) * PATHFINDER_ACCURACY;
+            let hi = ((m + 1) as f64) * PATHFINDER_ACCURACY;
+            assert!(
+                hi - lo > FLO_SORT_EPSILON,
+                "grid step collapses under f64 at m={m}: {lo} → {hi}"
+            );
+        }
+    }
+
+    /// C-21 REGRESSION — this geometry ABORTED the process before the
+    /// fix. A staircase of near-aligned anchors (x rising 0.006 pt per
+    /// step while y falls) makes every consecutive triple non-transitive
+    /// under `exterior_paths`' comparator, and driftsort catches it. The
+    /// steps are far finer than the grid, so snapping folds them into
+    /// shared columns and the comparator degenerates to lexicographic.
+    ///
+    /// Raising the `accuracy` ARGUMENT alone does not fix this — verified
+    /// against flo_curves 0.8.0 directly, because `GraphPath::round` is a
+    /// no-op there (see [`crate::bezier_conv`]). Only the snap does.
+    #[test]
+    fn dense_near_aligned_anchors_do_not_abort_the_boolean() {
+        let p = |x: f32, y: f32| PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        };
+        let mut comb = vec![p(0.0, 0.0)];
+        for k in 1..40 {
+            let x = k as f32 * 0.006;
+            let y = -(k as f32);
+            comb.push(p(x, y - 0.5));
+            comb.push(p(x, y));
+        }
+        comb.extend([p(100.0, -40.0), p(100.0, 5.0), p(-5.0, 5.0)]);
+        let bar = rect(-2.0, -2.0, 50.0, 2.0);
+        let (anchors, _) =
+            pathfinder_boolean(&[(comb, vec![]), (bar, vec![])], PathfinderKind::Union);
+        assert!(
+            !anchors.is_empty(),
+            "union of overlapping shapes is non-empty"
+        );
     }
 
     #[test]

@@ -42,10 +42,142 @@
 //! curve-level math — Pathfinder is the first user; future
 //! candidates are Offset Path, Outline Stroke, and curve
 //! simplification.
+//!
+//! # C-21 — why every path is quantized before a boolean
+//!
+//! `flo_curves` 0.8.0 ends every boolean — `path_add`, `path_sub`,
+//! `path_intersect`, `path_remove_interior_points`,
+//! `path_remove_overlapped_points`, and the `GraphPath::exterior_paths`
+//! core all of them share — by sorting the arrangement's points with
+//! this comparator (`bezier/path/graph_path/mod.rs`):
+//!
+//! ```text
+//! if (x_a - x_b).abs() < 0.01 { cmp by y } else { cmp by x }
+//! ```
+//!
+//! That is not a strict weak ordering. Three points whose x values chain
+//! within 0.01 while the outer pair does not are mutually inconsistent
+//! (`x = 0.010, 0.005, 0.000` with ascending y is a cycle). Rust's
+//! driftsort DETECTS the violation and panics — "user-provided comparison
+//! function does not correctly implement a total order" — and the
+//! editor's wasm worker builds `panic = abort`, so it is an
+//! unrecoverable process abort; `catch_unwind` cannot help where it
+//! matters. This is upstream and pre-existing: it is reachable from every
+//! boolean the engine ships, not only from the B-22 arrangement.
+//!
+//! **Upstream's own mitigation does not run.** Each arithmetic entry
+//! point calls `merged_path.round(accuracy)` immediately before
+//! `exterior_paths`, intending to snap every coordinate onto an
+//! `accuracy` grid. But `Coordinate::round` is `fn round(self, f64) ->
+//! Self`, and `GraphPath::round` calls it as a bare statement
+//! (`self.points[i].position.round(accuracy);`), discarding the result —
+//! so it is a **no-op** in 0.8.0 (verified: `round(1.0)` leaves
+//! `0.123456` untouched). Raising the `accuracy` argument therefore
+//! CANNOT make the comparator safe on its own; measured against a
+//! reproduction, `1/64` alone still aborts. 0.8.0 is the newest
+//! published release, so there is no version to bump to.
+//!
+//! So core performs the rounding upstream intended, on its own inputs,
+//! before handing them over — that is [`snap_paths_to_grid`]. On the
+//! [`BOOLEAN_GRID`] every coordinate is an exact multiple of 2⁻⁶, so two
+//! distinct x columns are at least 0.015625 apart — strictly more than
+//! the comparator's 0.01 — and the epsilon branch fires only for
+//! genuinely equal x. The comparator then collapses to plain
+//! lexicographic (x, y), which is transitive by construction rather than
+//! by luck.
+//!
+//! ## Residuals — the hazard is narrowed, not retired
+//!
+//! - Points that `self_collide` INVENTS (curve/curve crossings) are
+//!   interpolated, not grid-aligned. Because 0.015625 < 0.02, one
+//!   off-grid crossing can still sit within 0.01 of two adjacent grid
+//!   columns and bridge them. Input anchors are the dominant source of
+//!   dense x-clusters in real artwork (a boolean carries thousands of
+//!   vertices and a handful of crossings), so quantizing removes the
+//!   reachable case, not the theoretical one.
+//! - `bezier/path/ray.rs`'s `ray_collisions` sorts with the SAME defect
+//!   class: `dx.abs() > SMALL_DISTANCE` (0.001) selects between ordering
+//!   by ray position and ordering by edge priority, so a chain of
+//!   near-coincident collisions is non-transitive too. Quantizing inputs
+//!   does NOT fix it — collision positions are interpolated along curves
+//!   and are never grid points. It is not currently reachable: it sorts
+//!   one ray's collisions (a handful of elements) and Rust's sort only
+//!   validates ordering on slices large enough to leave the
+//!   insertion-sort path, which is exactly why every observed abort came
+//!   from `exterior_paths` instead.
+//!
+//! The complete fix for both is a vendored/patched `flo_curves` wired in
+//! through `[patch.crates-io]` — repair the two comparators, or just make
+//! `GraphPath::round` assign its result. Not taken here: the crate is
+//! 1.6 MB / 106 files under Apache-2.0, and carrying a vendored copy
+//! inside this public MPL-2.0-OR-PMEL repo is a licensing decision for
+//! the maintainer, not something a bug fix should decide.
 
 use flo_curves::bezier::path::SimpleBezierPath;
 use flo_curves::Coord2;
 use paged_model::PathAnchor;
+
+/// The epsilon `flo_curves` 0.8.0 hardcodes in the point sort that
+/// `GraphPath::exterior_paths` runs before it walks the exterior. Two
+/// points whose x differ by LESS than this are treated as one column and
+/// ordered by y; everything else is ordered by x. Recorded here because
+/// [`BOOLEAN_GRID`] only works while it stays strictly above this value.
+pub const FLO_SORT_EPSILON: f64 = 0.01;
+
+/// C-21 — the coordinate grid every path is snapped onto before it is
+/// handed to a `flo_curves` boolean. **Load-bearing for crash-safety, not
+/// a quality knob**; see this module's C-21 section for the full
+/// derivation. Do not lower it below [`FLO_SORT_EPSILON`].
+///
+/// `1/64` is the FINEST power of two above 0.01 (`1/128` = 0.0078 is
+/// below it). A power of two is what makes the grid exact: `m · 2⁻⁶` is
+/// representable in f64 AND in the f32 that [`PathAnchor`] stores, and
+/// `(v / g).round() * g` is scaling by a power of two, so no float slop
+/// creeps in and distinct grid values differ by exactly ≥ 1/64 at every
+/// magnitude. A decimal 0.01 grid — what this code used to pass — does
+/// not have that property: over `m ∈ [-200000, 200000]`, 354 909
+/// consecutive `0.01` grid pairs compute a difference *below* 0.01,
+/// making 0.01 the worst reachable choice.
+///
+/// Cost: a coordinate moves by at most `1/128 pt` = 0.0078 pt ≈ 0.0028 mm
+/// — about a quarter of a device dot at 2400 dpi, and inside the 0.01 pt
+/// accuracy these operations already documented.
+pub const BOOLEAN_GRID: f64 = 1.0 / 64.0;
+
+// C-21 — the compile-time half of the guard. The grid is worthless the
+// moment it drops to or below the epsilon flo_curves hardcodes, and the
+// failure mode is a process abort, so a lowered value must break the
+// BUILD rather than wait for a test run. The f64-ARITHMETIC half (do
+// distinct grid columns really separate by more than the epsilon at
+// every reachable magnitude? a nominal 0.01 grid does not) needs a loop
+// and lives in `boolean_grid_separates_above_the_flo_curves_sort_epsilon`.
+const _: () = assert!(
+    BOOLEAN_GRID > FLO_SORT_EPSILON,
+    "C-21: BOOLEAN_GRID must stay strictly above flo_curves' 0.01 sort epsilon"
+);
+
+/// Snap one coordinate onto a `grid`-sized lattice.
+fn snap_coord(c: Coord2, grid: f64) -> Coord2 {
+    Coord2((c.0 / grid).round() * grid, (c.1 / grid).round() * grid)
+}
+
+/// C-21 — quantize every coordinate (anchors AND control points) of
+/// `paths` onto a `grid`-sized lattice, in place.
+///
+/// Call this on anything about to enter a `flo_curves` path function.
+/// With `grid` = [`BOOLEAN_GRID`] it is what keeps `exterior_paths`'
+/// point sort transitive; see the C-21 section at the top of this module
+/// for why the `accuracy` argument alone cannot do it.
+pub fn snap_paths_to_grid(paths: &mut [SimpleBezierPath], grid: f64) {
+    for (start, segments) in paths.iter_mut() {
+        *start = snap_coord(*start, grid);
+        for (cp1, cp2, end) in segments.iter_mut() {
+            *cp1 = snap_coord(*cp1, grid);
+            *cp2 = snap_coord(*cp2, grid);
+            *end = snap_coord(*end, grid);
+        }
+    }
+}
 
 /// Convert one idml subpath (slice of contiguous PathAnchors that
 /// form a single contour) to a flo_curves `SimpleBezierPath`. The
@@ -99,6 +231,20 @@ pub fn idml_path_to_flo(anchors: &[PathAnchor], subpath_starts: &[usize]) -> Vec
         }
     }
     out
+}
+
+/// [`idml_path_to_flo`] followed by [`snap_paths_to_grid`] — the door
+/// every boolean call site should use. Keeping the two steps married in
+/// one function is deliberate: an unsnapped path reaching
+/// `exterior_paths` is a process abort, not a quality regression (C-21).
+pub fn idml_path_to_flo_on_grid(
+    anchors: &[PathAnchor],
+    subpath_starts: &[usize],
+    grid: f64,
+) -> Vec<SimpleBezierPath> {
+    let mut paths = idml_path_to_flo(anchors, subpath_starts);
+    snap_paths_to_grid(&mut paths, grid);
+    paths
 }
 
 /// Convert a list of flo_curves `SimpleBezierPath`s back to an
@@ -192,6 +338,76 @@ mod tests {
         for (orig, back) in anchors.iter().zip(back_anchors.iter()) {
             assert!((orig.anchor.0 - back.anchor.0).abs() < 1e-3);
             assert!((orig.anchor.1 - back.anchor.1).abs() < 1e-3);
+        }
+    }
+
+    /// C-21 GUARD — do not lower [`BOOLEAN_GRID`].
+    ///
+    /// The grid is what keeps `flo_curves`' `exterior_paths` point sort a
+    /// strict weak ordering, and a violated ordering is a PANIC (an abort
+    /// in the wasm worker), not a wrong pixel. Two properties have to
+    /// hold: the grid step must exceed the comparator's hardcoded
+    /// epsilon, and it must exceed it in f64 ARITHMETIC — a nominal
+    /// 0.01 grid fails the second test at ordinary page coordinates,
+    /// which is what made the previous value the worst possible one.
+    #[test]
+    fn boolean_grid_separates_above_the_flo_curves_sort_epsilon() {
+        // `grid > FLO_SORT_EPSILON` itself is asserted at COMPILE time
+        // next to the constant; the m = 0 step of the loop below re-checks
+        // it, and the rest of the loop checks the part a const assert
+        // cannot: that the separation survives f64 arithmetic.
+
+        // Power of two: exact in f64 and in the f32 PathAnchor stores.
+        assert_eq!(
+            BOOLEAN_GRID.log2(),
+            BOOLEAN_GRID.log2().round(),
+            "grid must be a power of two"
+        );
+        // ±200000 steps of the grid covers ±3125 pt — far beyond any page
+        // coordinate, and the property is scale-free above that.
+        for m in -200_000_i64..=200_000 {
+            let lo = (m as f64) * BOOLEAN_GRID;
+            let hi = ((m + 1) as f64) * BOOLEAN_GRID;
+            assert!(
+                hi - lo > FLO_SORT_EPSILON,
+                "grid step collapses under f64 at m={m}: {lo} → {hi}"
+            );
+            // Snapping an on-grid value must be a fixed point, or the
+            // "distinct columns are ≥ one step apart" argument leaks.
+            assert_eq!(
+                snap_coord(Coord2(lo, lo), BOOLEAN_GRID),
+                Coord2(lo, lo),
+                "snap is not idempotent at m={m}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapping_lands_every_coordinate_on_the_grid() {
+        let anchors = rect_anchors(0.3, -1.7, 10.004, 5.331);
+        let raw = idml_path_to_flo(&anchors, &[]);
+        let snapped = idml_path_to_flo_on_grid(&anchors, &[], BOOLEAN_GRID);
+        let flatten = |paths: &[SimpleBezierPath]| -> Vec<Coord2> {
+            paths
+                .iter()
+                .flat_map(|(start, segments)| {
+                    std::iter::once(*start)
+                        .chain(segments.iter().flat_map(|(a, b, e)| [*a, *b, *e]))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        let (raw, snapped) = (flatten(&raw), flatten(&snapped));
+        assert_eq!(raw.len(), snapped.len());
+        for (before, after) in raw.iter().zip(snapped.iter()) {
+            assert_eq!(
+                snap_coord(*after, BOOLEAN_GRID),
+                *after,
+                "off-grid {after:?}"
+            );
+            // No coordinate moves by more than half a grid step.
+            assert!((after.0 - before.0).abs() <= BOOLEAN_GRID / 2.0);
+            assert!((after.1 - before.1).abs() <= BOOLEAN_GRID / 2.0);
         }
     }
 

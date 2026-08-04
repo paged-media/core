@@ -613,8 +613,17 @@ pub fn offset_closed_path(
             prev.1 + (start.1 - prev.1) * 2.0 / 3.0,
         );
         segs.push((l1, l2, start));
-        let raw: SimpleBezierPath = (start, segs);
-        let resolved: Vec<SimpleBezierPath> = path_remove_interior_points(&vec![raw], 0.01);
+        // C-21: `path_remove_interior_points` ends in `exterior_paths`
+        // like every other flo_curves boolean, so its input has to be on
+        // the boolean grid or the point sort can abort the process. These
+        // coordinates come out of curve OFFSETTING, so they are arbitrary
+        // reals and can cluster arbitrarily tightly in x — exactly the
+        // shape of input that trips it. The 1/64 pt snap sits well inside
+        // this module's own 0.05 pt TOLERANCE.
+        let mut raw: Vec<SimpleBezierPath> = vec![(start, segs)];
+        crate::bezier_conv::snap_paths_to_grid(&mut raw, crate::bezier_conv::BOOLEAN_GRID);
+        let resolved: Vec<SimpleBezierPath> =
+            path_remove_interior_points(&raw, crate::bezier_conv::BOOLEAN_GRID);
         if resolved.is_empty() {
             return None;
         }

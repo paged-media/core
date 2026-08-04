@@ -90,16 +90,21 @@
 //! - **Live Paint** — its PERSISTENT face/edge graph with gap detection
 //!   is out of scope here. That needs a document-resident object type
 //!   that survives edits, not a query (RFI B-22).
-//! - **`flo_curves` 0.8 `exterior_paths` can panic.** Its point sort
-//!   uses an epsilon comparison on x (`(x_a - x_b).abs() < 0.01`) that
-//!   is not transitive, and rustc's driftsort detects the violation and
-//!   panics rather than returning garbage. This is UPSTREAM and
-//!   pre-existing — every shipped `path_add` / `path_sub` /
-//!   `path_intersect` ends in the same call, so `pathfinderBoolean`
-//!   carries the same hazard — but a dense arrangement makes it easier
-//!   to reach. Fixing it means patching or forking `flo_curves`;
-//!   `catch_unwind` would not help where it matters (the wasm worker
-//!   builds panic=abort).
+//! - **`flo_curves` 0.8 `exterior_paths` can panic** (C-21, MITIGATED).
+//!   Its point sort uses an epsilon comparison on x
+//!   (`(x_a - x_b).abs() < 0.01`) that is not transitive, and rustc's
+//!   driftsort detects the violation and panics rather than returning
+//!   garbage. This is UPSTREAM and pre-existing — every shipped
+//!   `path_add` / `path_sub` / `path_intersect` ends in the same call, so
+//!   `pathfinderBoolean` carries the same hazard — but a dense
+//!   arrangement makes it easier to reach. Inputs are now snapped onto
+//!   [`PLANAR_ACCURACY`], a binary-exact grid coarser than that epsilon,
+//!   which collapses the comparator to a transitive lexicographic order
+//!   for every input-derived point; crossings the graph INVENTS are the
+//!   remaining residual, and `ray_collisions` has the same defect class
+//!   untouched. Both are written up in the C-21 section of
+//!   [`crate::bezier_conv`], together with why the fix cannot be the
+//!   `accuracy` argument alone and what a complete fix would take.
 
 use std::collections::BTreeMap;
 
@@ -111,12 +116,34 @@ use flo_curves::bezier::{BezierCurve, BezierCurveFactory, NormalCurve};
 use flo_curves::{Coord2, Coordinate2D};
 use paged_model::PathAnchor;
 
-use crate::bezier_conv::{flo_to_idml_path, idml_path_to_flo};
+use crate::bezier_conv::{
+    flo_to_idml_path, idml_path_to_flo, idml_path_to_flo_on_grid, BOOLEAN_GRID,
+};
 
-/// Subdivision accuracy handed to `flo_curves`. Matches
-/// [`crate::pathfinder`]'s constant — one-hundredth of a point, well
-/// below any visible threshold, and it keeps recursion bounded.
-const PLANAR_ACCURACY: f64 = 0.01;
+/// Subdivision accuracy handed to `flo_curves`, AND the grid every input
+/// path is snapped onto first. Matches [`crate::pathfinder`]'s constant —
+/// 1/64 pt, well below any visible threshold, and it keeps recursion
+/// bounded.
+///
+/// **C-21 — load-bearing for crash-safety; do not lower it.** It has to
+/// stay strictly above `flo_curves` 0.8.0's hardcoded 0.01 sort epsilon,
+/// because that is what makes the point sort inside `exterior_paths` a
+/// strict weak ordering; below it, Rust's driftsort detects the broken
+/// comparator and PANICS (`panic = abort` in the wasm worker, so it is an
+/// unrecoverable abort, not a bad result). A power of two is what makes
+/// the separation exact in f64 — `1/64` is the finest one above 0.01.
+/// Full derivation, and the residuals this does not cover, in the C-21
+/// section of [`crate::bezier_conv`]. Pinned by
+/// `planar_accuracy_grid_separates_above_the_flo_curves_sort_epsilon`.
+const PLANAR_ACCURACY: f64 = BOOLEAN_GRID;
+
+// C-21 — compile-time guard, so a lowered value breaks the BUILD rather
+// than waiting for a test run. The f64-arithmetic half of the invariant
+// is in the test named below.
+const _: () = assert!(
+    PLANAR_ACCURACY > crate::bezier_conv::FLO_SORT_EPSILON,
+    "C-21: PLANAR_ACCURACY must stay strictly above flo_curves' 0.01 sort epsilon"
+);
 
 /// Hard cap on the number of input paths a FULL face enumeration
 /// accepts. Face count grows as 2^N in the worst case (N shapes in
@@ -387,9 +414,14 @@ pub fn face_at_point(
 /// edges — because the merge runs through `path_add`, the same union
 /// `pathfinderBoolean`'s Unite rides.
 pub fn union_faces(faces: &[&PlanarFace]) -> (Vec<PathAnchor>, Vec<usize>) {
+    // C-21: face outlines come back through f32 anchors, so re-snap
+    // before the sweep — `path_remove_overlapped_points` ends in
+    // `exterior_paths` like every other flo_curves boolean.
     let loops: Vec<SimpleBezierPath> = faces
         .iter()
-        .flat_map(|face| idml_path_to_flo(&face.anchors, &face.subpath_starts))
+        .flat_map(|face| {
+            idml_path_to_flo_on_grid(&face.anchors, &face.subpath_starts, PLANAR_ACCURACY)
+        })
         .collect();
     if loops.is_empty() {
         return (Vec::new(), Vec::new());
@@ -458,9 +490,15 @@ pub fn arrangement_edges(
 fn to_flo(
     inputs: &[(Vec<PathAnchor>, Vec<usize>)],
 ) -> Result<Vec<Vec<SimpleBezierPath>>, PlanarError> {
+    // C-21: everything downstream of here — the graph, the boolean
+    // fallback chain, the union — ends in `exterior_paths`, so the
+    // arrangement is built on grid-snapped geometry throughout. Snapping
+    // ONCE here also keeps the graph pass and the boolean fallback
+    // operating on identical inputs, which is what lets their results be
+    // compared for completeness.
     let flo: Vec<Vec<SimpleBezierPath>> = inputs
         .iter()
-        .map(|(anchors, starts)| idml_path_to_flo(anchors, starts))
+        .map(|(anchors, starts)| idml_path_to_flo_on_grid(anchors, starts, PLANAR_ACCURACY))
         .collect();
     if flo.iter().all(|p| p.is_empty()) {
         return Err(PlanarError::NoGeometry);
@@ -481,6 +519,13 @@ fn build_graph(flo: &[Vec<SimpleBezierPath>]) -> GraphPath<Coord2, PathLabel> {
         .collect();
     let mut graph = GraphPath::from_merged_paths(labelled.iter().map(|(p, l)| (*p, *l)));
     graph.self_collide(PLANAR_ACCURACY);
+    // Mirrors what flo_curves' own arithmetic entry points do between
+    // `collide` and `exterior_paths`. C-21: in 0.8.0 this call is a
+    // NO-OP — `Coordinate::round` is `fn round(self, f64) -> Self` and
+    // `GraphPath::round` invokes it as a statement, discarding the
+    // result — which is exactly why core snaps its own inputs in
+    // `to_flo` instead of trusting it. Kept so the graph picks the
+    // rounding up for free if upstream ever assigns.
     graph.round(PLANAR_ACCURACY);
     graph
 }
@@ -933,6 +978,7 @@ fn order_key(face: &PlanarFace) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bezier_conv::FLO_SORT_EPSILON;
 
     /// A closed circle as four cubic arcs (the standard 0.5523 kappa).
     fn circle(cx: f32, cy: f32, r: f32) -> Vec<PathAnchor> {
@@ -1144,9 +1190,14 @@ mod tests {
         );
         for (i, a) in arr.faces.iter().enumerate() {
             for b in arr.faces.iter().skip(i + 1) {
+                // C-21: on the grid here too. Face outlines carry the
+                // crossing points the graph invented, which are NOT
+                // grid-aligned, and this is a real boolean call — the
+                // rule "nothing unsnapped enters flo_curves" has no
+                // exemption for test code.
                 let overlap = flo_curves::bezier::path::path_intersect::<SimpleBezierPath>(
-                    &idml_path_to_flo(&a.anchors, &a.subpath_starts),
-                    &idml_path_to_flo(&b.anchors, &b.subpath_starts),
+                    &idml_path_to_flo_on_grid(&a.anchors, &a.subpath_starts, PLANAR_ACCURACY),
+                    &idml_path_to_flo_on_grid(&b.anchors, &b.subpath_starts, PLANAR_ACCURACY),
                     PLANAR_ACCURACY,
                 );
                 let area = region_area(&overlap);
@@ -1233,6 +1284,60 @@ mod tests {
                 cap: MAX_PLANAR_INPUTS
             }
         );
+    }
+
+    /// C-21 GUARD — do not lower [`PLANAR_ACCURACY`].
+    ///
+    /// It is the grid every arrangement input is snapped onto, and the
+    /// grid is what keeps `flo_curves`' `exterior_paths` point sort a
+    /// strict weak ordering. A violated ordering is an abort, not a
+    /// wrong pixel. Two properties: the step must exceed the
+    /// comparator's hardcoded epsilon, and it must exceed it in f64
+    /// ARITHMETIC at every reachable magnitude — a nominal 0.01 grid
+    /// (this constant's previous value) fails the second test.
+    #[test]
+    fn planar_accuracy_grid_separates_above_the_flo_curves_sort_epsilon() {
+        // `accuracy > FLO_SORT_EPSILON` is asserted at COMPILE time next
+        // to the constant; the m = 0 step below re-checks it, and the rest
+        // of the loop checks what a const assert cannot — that the
+        // separation survives f64 arithmetic at every reachable magnitude.
+        assert_eq!(
+            PLANAR_ACCURACY.log2(),
+            PLANAR_ACCURACY.log2().round(),
+            "accuracy must be a power of two so the grid is exact in f64"
+        );
+        for m in -200_000_i64..=200_000 {
+            let lo = (m as f64) * PLANAR_ACCURACY;
+            let hi = ((m + 1) as f64) * PLANAR_ACCURACY;
+            assert!(
+                hi - lo > FLO_SORT_EPSILON,
+                "grid step collapses under f64 at m={m}: {lo} → {hi}"
+            );
+        }
+    }
+
+    /// C-21 REGRESSION — arranging near-aligned anchors used to ABORT.
+    /// A staircase whose x rises 0.006 pt per step while y falls makes
+    /// every consecutive triple non-transitive under `exterior_paths`'
+    /// comparator; the snap folds those steps into shared grid columns.
+    #[test]
+    fn dense_near_aligned_anchors_do_not_abort_the_arrangement() {
+        let p = |x: f32, y: f32| PathAnchor {
+            anchor: (x, y),
+            left: (x, y),
+            right: (x, y),
+        };
+        let mut comb = vec![p(0.0, 0.0)];
+        for k in 1..40 {
+            let x = k as f32 * 0.006;
+            let y = -(k as f32);
+            comb.push(p(x, y - 0.5));
+            comb.push(p(x, y));
+        }
+        comb.extend([p(100.0, -40.0), p(100.0, 5.0), p(-5.0, 5.0)]);
+        let arr = build_arrangement(&[input(comb), input(rect(-2.0, -2.0, 50.0, 2.0))])
+            .expect("arrangement");
+        assert!(!arr.faces.is_empty(), "overlapping shapes resolve faces");
     }
 
     #[test]
