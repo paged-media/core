@@ -6247,6 +6247,58 @@ mod tests {
         assert!(matches!(err, OperationError::UnsupportedProperty { .. }));
     }
 
+    /// C-20 — the honest half of the tint/blend fan-out. `Polygon` and
+    /// `Oval` gained arms because `paged_model::{Polygon, Oval}` carry
+    /// `fill_tint` + `blend_mode` slots; `paged_model::GraphicLine`
+    /// carries NEITHER (lines have no fill, and the parser never reads a
+    /// `<BlendingSetting>` onto them), so both paths keep rejecting
+    /// rather than writing into a field that does not exist.
+    #[test]
+    fn c20_tint_and_blend_unsupported_on_graphic_line() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        p.apply(Operation::InsertNode {
+            parent: NodeId::Spread("Spread/u_main".to_string()),
+            position: 0,
+            z_slot: None,
+            node: crate::operation::NodeSpec::GraphicLine {
+                item_transform: None,
+                self_id: "GraphicLine/u9".to_string(),
+                bounds: [0.0, 0.0, 100.0, 100.0],
+                anchors: vec![
+                    crate::operation::PathAnchorSpec {
+                        anchor: [0.0, 0.0],
+                        left: [0.0, 0.0],
+                        right: [0.0, 0.0],
+                    },
+                    crate::operation::PathAnchorSpec {
+                        anchor: [100.0, 100.0],
+                        left: [100.0, 100.0],
+                        right: [100.0, 100.0],
+                    },
+                ],
+                subpath_starts: vec![],
+                subpath_open: vec![],
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight: Some(1.0),
+            },
+        })
+        .unwrap();
+        let line = NodeId::GraphicLine("GraphicLine/u9".to_string());
+        for (path, value) in [
+            (PropertyPath::FrameFillTint, Value::Length(Some(50.0))),
+            (
+                PropertyPath::FrameBlendMode,
+                Value::Text("Multiply".to_string()),
+            ),
+        ] {
+            let err = p.apply(set_op(line.clone(), path, value)).unwrap_err();
+            assert!(
+                matches!(err, OperationError::UnsupportedProperty { .. }),
+                "GraphicLine has no storage for {path:?} — reject, don't pretend"
+            );
+        }
+    }
+
     // =======================================================================
     // W0.5 — wire-expansion operations
     // =======================================================================

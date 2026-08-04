@@ -1043,6 +1043,39 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // C-20 — the derived path kinds join the tint lane. paged.draw's
+        // appearance bake stacks N Polygons over one geometry, one paint
+        // each, so a per-layer tint has to land on a Polygon. `Oval`
+        // carries the same field; `GraphicLine` genuinely has no
+        // `fill_tint` slot (lines carry no fill) so it keeps rejecting.
+        (NodeId::Polygon(id), PropertyPath::FrameFillTint) => {
+            let new_val = expect_length(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.fill_tint;
+            poly.fill_tint = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Oval(id), PropertyPath::FrameFillTint) => {
+            let new_val = expect_length(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.fill_tint;
+            oval.fill_tint = new_val;
+            (
+                Value::Length(prev),
+                InvalidationHint {
+                    frame_style: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Editor-ops — Page tool: page resize -----------------
         (NodeId::Page(id), PropertyPath::PageBounds) => {
             let new_bounds = expect_bounds(path, value)?;
@@ -1758,7 +1791,14 @@ pub(super) fn apply_set_property(
         }
 
         // -- Object-level blend mode -------------------------------
-        (NodeId::TextFrame(_) | NodeId::Rectangle(_), PropertyPath::FrameBlendMode) => {
+        // C-20 — Polygon / Oval join here for the same reason as the
+        // tint arms above (per-layer blend on a baked appearance
+        // stack). `GraphicLine` has no `blend_mode` field on the parse
+        // struct, so it stays out and rejects honestly.
+        (
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::Oval(_),
+            PropertyPath::FrameBlendMode,
+        ) => {
             let new_val = expect_text(path, value)?;
             let slot = find_blend_mode_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;

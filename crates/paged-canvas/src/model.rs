@@ -4816,6 +4816,18 @@ impl CanvasModel {
                                     p.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
+                            // C-20 — the object-level blend mode now has
+                            // a Polygon write arm, so surface the read
+                            // half too (tint + opacity were already
+                            // here). The full effects inventory stays
+                            // TextFrame/Rectangle-only: `paged_model::
+                            // Polygon` carries no `effects` bag.
+                            PropertyEntry {
+                                path: PropertyPath::FrameBlendMode,
+                                value: Some(Value::Text(
+                                    p.blend_mode.clone().unwrap_or_default(),
+                                )),
+                            },
                         ]
                     }),
                 ElementId::GraphicLine(_) => spread

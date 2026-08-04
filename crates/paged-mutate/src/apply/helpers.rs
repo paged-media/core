@@ -1017,8 +1017,11 @@ pub(super) fn find_directional_feather_mut<'a>(
 
 // W0.4 — object-level transparency blend mode. Locates the
 // `blend_mode: Option<String>` slot on the kinds that parse it
-// (TextFrame / Rectangle). The `<BlendingSetting Opacity>` half is
-// already wired as `FrameOpacity`.
+// (TextFrame / Rectangle / Polygon / Oval — C-20 added the latter
+// two). The `<BlendingSetting Opacity>` half is already wired as
+// `FrameOpacity`, which covers the same four kinds. `GraphicLine`
+// carries neither field on `paged_model::GraphicLine`, so it is
+// absent here on purpose rather than silently no-op'ing.
 pub(super) fn find_blend_mode_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
@@ -1026,6 +1029,8 @@ pub(super) fn find_blend_mode_mut<'a>(
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.blend_mode),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.blend_mode),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.blend_mode),
         _ => None,
     }
 }

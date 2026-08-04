@@ -325,6 +325,9 @@ pub enum PropertyPath {
     /// `Value::Length(None)` represents "no tint override" — the
     /// renderer uses the swatch at full strength. Tints scale the
     /// resolved colour toward paper white at composition time.
+    /// Carried on every page-item kind with a `fill_tint` field
+    /// (TextFrame / Rectangle / Polygon / Oval — C-20 added the last
+    /// two; `GraphicLine` carries no fill, hence no tint).
     FrameFillTint,
     /// Editor-ops (Gradient Swatch tool) — the gradient axis on a
     /// frame whose fill references a `Gradient/<id>` swatch. Angle in
@@ -1004,7 +1007,9 @@ pub enum PropertyPath {
     /// IDML enum string (`"Normal"`, `"Multiply"`, `"Screen"`,
     /// `"Overlay"`, …); empty clears the override (`blend_mode = None`).
     /// Carried on every page-item kind with a `blend_mode` field
-    /// (TextFrame / Rectangle). The rasterizer doesn't yet honour
+    /// (TextFrame / Rectangle / Polygon / Oval — C-20 added the last
+    /// two so a baked appearance stack can blend per layer;
+    /// `GraphicLine` has no such field). The rasterizer doesn't yet honour
     /// non-Normal modes; the field is wired for authoring + round-trip.
     /// Paint-only (`frame_style`). The companion `FrameOpacity` path
     /// (the `<BlendingSetting Opacity="…">` half) already exists.

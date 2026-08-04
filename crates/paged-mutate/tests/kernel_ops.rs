@@ -321,6 +321,134 @@ fn polygon_fill_and_stroke_set_property_round_trips() {
     .expect("Polygon must accept FrameStrokeWeight (B-22)");
 }
 
+/// C-20 — `FrameFillTint` / `FrameBlendMode` on a Polygon. paged.draw's
+/// appearance bake stacks N page items over one geometry, one paint
+/// each, and the layers a user reaches for first are Polygons (what
+/// `insertPath` mints). `FrameOpacity` already had a Polygon arm, so
+/// per-layer opacity worked while tint + blend rejected — this pins the
+/// pair. Forward writes the field; inverse restores the prior value
+/// bytewise; redo reproduces the forward result.
+#[test]
+fn polygon_fill_tint_and_blend_mode_round_trip() {
+    fn poly_tint(doc: &Document, id: &str) -> Option<f32> {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.polygons.iter())
+            .find(|p| p.self_id.as_deref() == Some(id))
+            .expect("polygon present")
+            .fill_tint
+    }
+    fn poly_blend(doc: &Document, id: &str) -> Option<String> {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.polygons.iter())
+            .find(|p| p.self_id.as_deref() == Some(id))
+            .expect("polygon present")
+            .blend_mode
+            .clone()
+    }
+
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    let id = first_polygon(&doc);
+    let tint_before = poly_tint(&doc, &id);
+    let blend_before = poly_blend(&doc, &id);
+
+    let tinted = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Polygon(id.clone()),
+            path: PropertyPath::FrameFillTint,
+            value: Value::Length(Some(42.0)),
+        },
+    )
+    .expect("Polygon must accept FrameFillTint (C-20), not reject it");
+    assert_eq!(poly_tint(&doc, &id), Some(42.0), "forward tint lands");
+    apply(&mut doc, &tinted.inverse).expect("inverse apply");
+    assert_eq!(
+        poly_tint(&doc, &id),
+        tint_before,
+        "inverse restores the prior tint bytewise"
+    );
+    let redone = apply(&mut doc, &tinted.op).expect("redo apply");
+    assert_eq!(poly_tint(&doc, &id), Some(42.0), "redo reproduces");
+    apply(&mut doc, &redone.inverse).expect("undo the redo");
+
+    let blended = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Polygon(id.clone()),
+            path: PropertyPath::FrameBlendMode,
+            value: Value::Text("Multiply".to_string()),
+        },
+    )
+    .expect("Polygon must accept FrameBlendMode (C-20), not reject it");
+    assert_eq!(
+        poly_blend(&doc, &id).as_deref(),
+        Some("Multiply"),
+        "forward blend lands on the polygon's own slot"
+    );
+    // Paint-only classification, same as the Rectangle arm.
+    assert_eq!(blended.invalidation.frame_style.len(), 1);
+    apply(&mut doc, &blended.inverse).expect("inverse apply");
+    assert_eq!(
+        poly_blend(&doc, &id),
+        blend_before,
+        "inverse restores the prior blend mode"
+    );
+}
+
+/// C-20 sibling — `Oval` carries the same `fill_tint` / `blend_mode`
+/// fields on `paged_model::Oval`, so it joins both lanes.
+#[test]
+fn oval_fill_tint_and_blend_mode_round_trip() {
+    fn first_oval(doc: &Document) -> String {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.ovals.iter())
+            .filter_map(|o| o.self_id.clone())
+            .next()
+            .expect("strokes-fills fixture has an oval")
+    }
+    fn oval_of<'a>(doc: &'a Document, id: &str) -> &'a paged_model::Oval {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.ovals.iter())
+            .find(|o| o.self_id.as_deref() == Some(id))
+            .expect("oval present")
+    }
+
+    let mut doc = idml_import::import_idml_doc(&strokes_fills_bytes()).expect("open");
+    let id = first_oval(&doc);
+    let tint_before = oval_of(&doc, &id).fill_tint;
+    let blend_before = oval_of(&doc, &id).blend_mode.clone();
+
+    let tinted = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Oval(id.clone()),
+            path: PropertyPath::FrameFillTint,
+            value: Value::Length(Some(17.5)),
+        },
+    )
+    .expect("Oval must accept FrameFillTint (C-20)");
+    assert_eq!(oval_of(&doc, &id).fill_tint, Some(17.5));
+    apply(&mut doc, &tinted.inverse).expect("inverse apply");
+    assert_eq!(oval_of(&doc, &id).fill_tint, tint_before);
+
+    let blended = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Oval(id.clone()),
+            path: PropertyPath::FrameBlendMode,
+            value: Value::Text("Screen".to_string()),
+        },
+    )
+    .expect("Oval must accept FrameBlendMode (C-20)");
+    assert_eq!(oval_of(&doc, &id).blend_mode.as_deref(), Some("Screen"));
+    apply(&mut doc, &blended.inverse).expect("inverse apply");
+    assert_eq!(oval_of(&doc, &id).blend_mode, blend_before);
+}
+
 // ---------------------------------------------------------------------------
 // REGRESSION (open finding) — outlineStroke / offsetPath on a PRIMITIVE
 // rectangle. An editor-created rectangle (insertFrame) carries bounds but
