@@ -78,3 +78,20 @@ paged-model = { path = "crates/paged-model" }
 paged-scene = { path = "crates/paged-scene" }
 paged-flow = { path = "crates/paged-flow" }
 paged-composition = { path = "crates/paged-composition" }
+
+# C-21 — flo_curves upstream fix, pinned until it is released.
+#
+# `GraphPath::exterior_paths()` orders the graph's points with a comparator
+# that compares x against a tolerance, which is not transitive — so it is not
+# a valid strict weak ordering and `sort_by` panics on it ("user-provided
+# comparison function does not correctly implement a total order"). Every
+# boolean ends in that call, and `panic = abort` in the wasm worker means we
+# cannot catch it. Upstream PR: Logicalshift/flo_curves#33.
+#
+# Pinned to a REV, not a branch, so a force-push cannot change what we build.
+# REMOVE THIS BLOCK when the fix reaches a crates.io release: drop it, raise
+# the `flo_curves` version pin, and re-lock. `paged-mutate`'s BOOLEAN_GRID
+# snap stays either way — it is defence in depth, and it is what protects a
+# build that does not carry this patch.
+[patch.crates-io]
+flo_curves = { git = "https://github.com/drietsch/flo_curves", rev = "6196f18" }

@@ -25,7 +25,11 @@ wasm-bindgen = { workspace = true }
 # simplification). See path_math::bezier_conv for the
 # PathAnchor ↔ SimpleBezierPath converters.
 kurbo = "0.11.3"
-flo_curves = "=0.8.0"
+# Not pinned with `=`: the workspace patches this to a build carrying the
+# upstream total-order fix (C-21, see the root Cargo.toml), and an exact pin
+# would exclude it. `Cargo.lock` is tracked, so the exact build stays
+# reproducible without the `=`.
+flo_curves = "0.8"
 
 [dev-dependencies]
 idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "d3b84e84327ac626717c079f69ed36a65f2c27bf" }

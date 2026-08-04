@@ -66,7 +66,16 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # plugin-publish hosts the IDML adapter (idml-import/idml-export), extracted
 # out of the engine (N10.2 / ADR-022). The engine git-deps it back at a
 # pinned rev; it is a public paged-media repo with no crates.io release.
+# flo_curves is patched to a build carrying the upstream total-order fix for
+# `exterior_paths()` (C-21 — the comparator it sorts points with is not a
+# strict weak ordering, so `sort_by` panics on it, and `panic = abort` in the
+# wasm worker means we cannot catch it). Upstream PR:
+# Logicalshift/flo_curves#33. Pinned by rev in the root Cargo.toml.
+#
+# TEMPORARY. Remove this entry together with the `[patch.crates-io]` block
+# once the fix reaches a crates.io release.
 allow-git = [
     "https://github.com/linebender/vello.git",
     "https://github.com/paged-media/plugin-publish",
+    "https://github.com/drietsch/flo_curves",
 ]
