@@ -339,6 +339,27 @@ fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_sel
     None
 }
 
+/// C-15 — the STORY a creating operation mints alongside its element,
+/// read off the spec before apply (the translate path knows every id in
+/// advance). `insertTextFrame` mints a `ParentStory`; `insertTable`
+/// lives in the story it was inserted into. This is what lets a
+/// `$h:frame` reference in a `storyId` position address the story of a
+/// text frame the SAME batch created.
+fn created_story_id(op: &paged_mutate::Operation) -> Option<String> {
+    match op {
+        paged_mutate::Operation::Batch { ops } => ops.iter().rev().find_map(created_story_id),
+        paged_mutate::Operation::InsertNode { parent, node, .. } => match node {
+            paged_mutate::NodeSpec::TextFrame { parent_story, .. } => parent_story.clone(),
+            paged_mutate::NodeSpec::Table { .. } => match parent {
+                paged_mutate::NodeId::Story(story_id) => Some(story_id.clone()),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Editor-ops — id-minting scan helper: track the max `u<hex>` suffix.
 fn scan_page_item_id(max: &mut u64, id: Option<&str>) {
     let Some(id) = id else { return };
@@ -621,6 +642,8 @@ fn story_id_of_logged(entry: &LoggedMutation) -> Option<String> {
         LoggedMutation::Text { inverse, .. } => Some(story_id_of_text_op(inverse).to_string()),
         LoggedMutation::Frame(_) => None,
         LoggedMutation::Composite(children) => children.iter().find_map(story_id_of_logged),
+        // App state, not story content.
+        LoggedMutation::Defaults { .. } => None,
     }
 }
 
@@ -1298,6 +1321,19 @@ pub enum LoggedMutation {
     /// them into one record is what makes a batch ONE undo step for the
     /// user, which is the whole reason a plugin batches.
     Composite(Vec<LoggedMutation>),
+    /// C-15 — a `SetDocumentDefaults` that ran as a batch CHILD. The
+    /// defaults are app state with no `Operation` form, so they have
+    /// their own tiny lane: `prev` is the triple the batch replaced and
+    /// `next` the one it wrote. Only the composite reaches this — a
+    /// standalone `setDocumentDefaults` stays what it always was
+    /// (applied, not undoable, no log entry). Inside a batch it MUST be
+    /// reversible, or a failing sibling would leave the defaults changed
+    /// and the batch half-applied, which is exactly what C-14's
+    /// all-or-nothing promise rules out.
+    Defaults {
+        prev: DocumentDefaults,
+        next: DocumentDefaults,
+    },
 }
 
 impl CanvasModel {
@@ -2062,18 +2098,99 @@ impl CanvasModel {
         &mut self,
         ops: &[Mutation],
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        use crate::batch_handles::{BoundHandle, HandleScope};
+
         let log_base = self.applied_log.len();
         let mut created_id = None;
         let mut page_structure_changed = false;
+        // C-15 — handle resolution is OFF unless the batch binds a
+        // name. A batch that binds nothing takes byte-identical
+        // decisions to the pre-C-15 path: no rewrite, no re-encode.
+        let uses_handles = ops
+            .iter()
+            .any(|op| matches!(op, Mutation::BindCreated { .. }));
+        let mut scope = HandleScope::default();
 
         for (i, child) in ops.iter().enumerate() {
+            // C-15 — bind the most recent creation. Contributes no
+            // operation and no log entry: the batch stays one undo step.
+            if let Mutation::BindCreated { handle } = child {
+                match scope.created().cloned() {
+                    Some(bound) => {
+                        scope.bind(handle.clone(), bound);
+                        continue;
+                    }
+                    None => {
+                        return Err(self.roll_back_batch(
+                            log_base,
+                            i,
+                            child,
+                            format!(
+                                "bindCreated {handle:?} has nothing to name — no creating child \
+                                 ran before it in this batch"
+                            ),
+                        ));
+                    }
+                }
+            }
+            // C-15 — resolve `$h:` / `$created` references against what
+            // this batch has minted so far.
+            let resolved;
+            let child: &Mutation = if uses_handles {
+                match crate::batch_handles::substitute(child, &scope) {
+                    Ok(m) => {
+                        resolved = m;
+                        &resolved
+                    }
+                    Err(err) => return Err(self.roll_back_batch(log_base, i, child, err)),
+                }
+            } else {
+                child
+            };
+            // C-15 — document defaults inside a batch. They are app
+            // state with no `Operation` form, so `apply_mutation` would
+            // write them and log NOTHING — a sibling's failure (or the
+            // batch's own undo) would then leave them changed, which is
+            // a half-applied batch. Write them here instead and log a
+            // reversible record the composite collects.
+            if let Mutation::SetDocumentDefaults {
+                fill_color,
+                stroke_color,
+                stroke_weight,
+            } = child
+            {
+                let next = DocumentDefaults {
+                    fill_color: fill_color.clone(),
+                    stroke_color: stroke_color.clone(),
+                    stroke_weight: *stroke_weight,
+                };
+                let prev = std::mem::replace(&mut self.document_defaults, next.clone());
+                let applied_seq = self.bump_applied_seq();
+                self.push_applied(AppliedRecord {
+                    applied_seq,
+                    kind: LoggedMutation::Defaults { prev, next },
+                });
+                continue;
+            }
             match self.apply_mutation(child) {
                 Ok(outcome) => {
                     // The batch reports the LAST id minted by any child,
                     // matching the single-mutation contract (the editor
                     // selects the fresh element).
-                    if outcome.created_id.is_some() {
-                        created_id = outcome.created_id;
+                    if let Some(element) = outcome.created_id {
+                        if uses_handles {
+                            // What the next `bindCreated` names. The
+                            // story comes off the freshly-mutated scene:
+                            // a text frame carries the `ParentStory` its
+                            // insert minted, so `$h:f` in a `storyId`
+                            // position addresses it.
+                            let story_id = self.story_of_element(&element);
+                            scope.set_created(Some(BoundHandle {
+                                element: element.clone(),
+                                story_id,
+                            }));
+                        }
+                        created_id = Some(element);
                     }
                     page_structure_changed |= outcome.page_structure_changed;
                 }
@@ -2081,21 +2198,7 @@ impl CanvasModel {
                     // Reverse what landed, newest first, then report
                     // WHICH child failed — a bare "batch failed" is what
                     // made the original rejection so hard to diagnose.
-                    let applied: Vec<LoggedMutation> = self
-                        .applied_log
-                        .drain(log_base..)
-                        .map(|rec| rec.kind)
-                        .collect();
-                    for entry in applied.into_iter().rev() {
-                        self.revert_logged(&entry);
-                    }
-                    let _ = self.rebuild_after_mutation();
-                    return Err(crate::channel::WorkerError::NotImplemented {
-                        what: format!(
-                            "Mutation::Batch child {i} ({}): {err:?} — batch rolled back",
-                            child.discriminant()
-                        ),
-                    });
+                    return Err(self.roll_back_batch(log_base, i, child, format!("{err:?}")));
                 }
             }
         }
@@ -2133,6 +2236,58 @@ impl CanvasModel {
         })
     }
 
+    /// Reverse everything a batch has applied since `log_base` and
+    /// build the error naming the child that failed. Extracted so every
+    /// way a batch can fail — a child's own error, an unbindable
+    /// `bindCreated`, an unresolvable handle — leaves the SAME
+    /// all-or-nothing state (C-14's promise) instead of each site
+    /// re-deriving it.
+    fn roll_back_batch(
+        &mut self,
+        log_base: usize,
+        index: usize,
+        child: &Mutation,
+        reason: String,
+    ) -> crate::channel::WorkerError {
+        let applied: Vec<LoggedMutation> = self
+            .applied_log
+            .drain(log_base..)
+            .map(|rec| rec.kind)
+            .collect();
+        for entry in applied.into_iter().rev() {
+            self.revert_logged(&entry);
+        }
+        let _ = self.rebuild_after_mutation();
+        crate::channel::WorkerError::NotImplemented {
+            what: format!(
+                "Mutation::Batch child {index} ({}): {reason} — batch rolled back",
+                child.discriminant()
+            ),
+        }
+    }
+
+    /// C-15 — the story an element carries, for handles used in a
+    /// `storyId` position. A text frame's `ParentStory` (the one its
+    /// insert minted); a table / story-range address IS its story.
+    /// `None` for kinds that carry none — the resolver then refuses
+    /// rather than substituting something meaningless.
+    fn story_of_element(&self, id: &crate::element_selection::ElementId) -> Option<String> {
+        use crate::element_selection::ElementId;
+        match id {
+            ElementId::TextFrame(frame_id) => self
+                .scene
+                .spreads
+                .iter()
+                .flat_map(|parsed| parsed.spread.text_frames.iter())
+                .find(|f| f.self_id.as_deref() == Some(frame_id.as_str()))
+                .and_then(|f| f.parent_story.clone()),
+            ElementId::StoryRange { story_id, .. }
+            | ElementId::Table { story_id, .. }
+            | ElementId::TableCell { story_id, .. } => Some(story_id.clone()),
+            _ => None,
+        }
+    }
+
     /// Replay one logged mutation FORWARD against the scene, returning
     /// the record to re-log (its inverse is re-captured, because a text
     /// op's inverse depends on the state it ran against). The redo
@@ -2156,6 +2311,15 @@ impl CanvasModel {
                 }
                 LoggedMutation::Composite(replayed)
             }
+            // C-15 — redo re-writes the triple the batch wrote. Whole-
+            // state, so replay is exact and needs no re-capture.
+            LoggedMutation::Defaults { prev, next } => {
+                self.document_defaults = next.clone();
+                LoggedMutation::Defaults {
+                    prev: prev.clone(),
+                    next: next.clone(),
+                }
+            }
         })
     }
 
@@ -2174,6 +2338,11 @@ impl CanvasModel {
                 for child in children.iter().rev() {
                     self.revert_logged(child);
                 }
+            }
+            // C-15 — restore the triple the batch replaced (undo AND
+            // the mid-batch rollback share this path).
+            LoggedMutation::Defaults { prev, .. } => {
+                self.document_defaults = prev.clone();
             }
         }
     }
@@ -2253,7 +2422,17 @@ impl CanvasModel {
                 // creates the story for an unknown id) — every wire-
                 // inserted text frame is immediately pour-able/hit-able.
                 let story_id = {
-                    let mut n = self.scene.stories.len();
+                    // FINDING #6's sibling (found closing C-15): the
+                    // frame's own `Self` id is offset by the batch's
+                    // mint counter, but the STORY id was not — so two
+                    // `insertTextFrame` children of ONE batch both
+                    // minted `Story/u<stories.len()>` and the second
+                    // frame silently adopted the first frame's story
+                    // (they read as threaded). Offsetting by the same
+                    // counter makes every mint in a batch distinct; the
+                    // scan below still guards against collisions with
+                    // ids already in the document.
+                    let mut n = self.scene.stories.len() + *mint_offset as usize;
                     let mut id = format!("Story/u{n}");
                     while self.scene.stories.iter().any(|s| s.self_id == id) {
                         n += 1;
@@ -2659,7 +2838,36 @@ impl CanvasModel {
                 // create an object and attach metadata/properties in
                 // ONE undo step (apply_batch is atomic + rolls back).
                 let mut last_created: Option<crate::element_selection::ElementId> = None;
+                // C-15 — within-batch handles. Ids are known BEFORE
+                // apply here (each insert's spec carries the id it will
+                // mint), which is what lets a handle-using batch still
+                // collapse to ONE `Operation::Batch` — one apply, one
+                // rebuild, one undo step. Off unless a child binds a
+                // name: a batch without `bindCreated` translates exactly
+                // as it did pre-C-15.
+                let uses_handles = ops
+                    .iter()
+                    .any(|op| matches!(op, Mutation::BindCreated { .. }));
+                let mut scope = crate::batch_handles::HandleScope::default();
                 for child in ops {
+                    if let Mutation::BindCreated { handle } = child {
+                        // Nothing to name ⇒ the whole translation bails
+                        // and `apply_mixed_batch` reports which child
+                        // and why. `bindCreated` itself translates to no
+                        // operation, so the batch stays one undo step.
+                        let bound = scope.created().cloned()?;
+                        scope.bind(handle.clone(), bound);
+                        continue;
+                    }
+                    let handle_resolved;
+                    let child: &Mutation = if uses_handles {
+                        // An unresolvable reference bails the same way —
+                        // never a literal `"$h:a"` id reaching apply.
+                        handle_resolved = crate::batch_handles::substitute(child, &scope).ok()?;
+                        &handle_resolved
+                    } else {
+                        child
+                    };
                     let substituted;
                     let child = match (child, last_created.as_ref()) {
                         (
@@ -2700,6 +2908,12 @@ impl CanvasModel {
                     // child insert in the batch mints a distinct self_id.
                     let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
                     if let Some(id) = created_element_id(&op) {
+                        if uses_handles {
+                            scope.set_created(Some(crate::batch_handles::BoundHandle {
+                                element: id.clone(),
+                                story_id: created_story_id(&op),
+                            }));
+                        }
                         last_created = Some(id);
                     }
                     translated.push(op);
@@ -3536,6 +3750,13 @@ impl CanvasModel {
                 }
                 children.iter().find_map(story_id_of_logged)
             }
+            // C-15 — a top-level `Defaults` record cannot occur (only a
+            // batch child logs one), but undo stays total rather than
+            // silently skipping a record it cannot classify.
+            LoggedMutation::Defaults { .. } => {
+                self.revert_logged(&rec.kind);
+                None
+            }
         };
         // Perf-MasterText + Perf-BodyStory — undo replays an inverse
         // through the same scene paths as the forward commit, so the
@@ -3591,6 +3812,9 @@ impl CanvasModel {
                 let sid = replayed.iter().find_map(story_id_of_logged);
                 (LoggedMutation::Composite(replayed), sid)
             }
+            // C-15 — see `undo`: unreachable as a top-level record, kept
+            // total.
+            LoggedMutation::Defaults { .. } => (self.replay_logged(&rec.kind)?, None),
         };
         // Perf-MasterText + Perf-BodyStory — same invariant as undo():
         // the replayed op mutates content/structure under the caches.

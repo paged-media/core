@@ -376,6 +376,28 @@ export type WorkerToMain = WorkerToMainKind & {
 // NOT in v57 (named residual): Live Paint's PERSISTENT face/edge graph
 // with gap detection. That needs a document-resident object type that
 // survives edits, not a query.
+//
+// v57 also carries C-15 (batch composability) — it RIDES the open number
+// under governance rule 4: v57 has never been tagged or published (the
+// highest tag is v0.51.2 and npm carries `canvas-wasm@0.51.0`), so 57 is
+// still the open, unshipped contract. Two additions, both additive:
+//   - a new `Mutation::BindCreated { handle }`, legal only as a batch
+//     child, plus the `$h:<handle>` REFERENCE convention it enables:
+//     within-batch symbols, generalising the v34 `$created` sentinel from
+//     "the last creation, understood by two mutation kinds" to "any
+//     number of live names, addressable from any mutation kind" (see
+//     `batch_handles`). Every existing payload deserialises byte-
+//     identically and a batch that binds nothing takes the pre-C-15 path
+//     unchanged — nothing an older worker already accepts changes shape.
+//   - `setDocumentDefaults` INSIDE a batch now logs a reversible record
+//     (`LoggedMutation::Defaults`), so the batch's single undo restores
+//     the prior triple and a failing sibling rolls it back. Standalone it
+//     is still app state: applied, not undoable, no log entry. No wire
+//     field changed — same mutation, composable.
+// A stale pair still fails LOUD, which is why riding is safe here: an
+// older worker cannot deserialise `bindCreated` at all, and an engine
+// that ignored handles would fail the referencing child with an unknown
+// id rather than mis-apply it.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(57);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -3336,6 +3358,28 @@ pub enum Mutation {
     Batch {
         ops: Vec<Mutation>,
     },
+    /// C-15 (v57) — name the element the most recent CREATING child of
+    /// this batch minted, so LATER children can address it as
+    /// `$h:<handle>` (anywhere an id is expected: an `elementId` /
+    /// `frameId` / `memberIds` entry, or a `storyId` when the handle
+    /// names a text frame — the frame's minted `ParentStory`). Any
+    /// number of handles may be live at once, which is what the v34
+    /// `$created` sentinel could not do: it named only the LAST
+    /// creation, and only two mutation kinds understood it.
+    ///
+    /// Legal ONLY as a direct child of a `Batch` — standalone it
+    /// addresses nothing and is rejected. It contributes no operation
+    /// and no undo entry of its own; a batch that uses handles is still
+    /// exactly ONE undo step. Binding before any creating child fails
+    /// the batch (nothing to name). Scope is the batch that declares it:
+    /// visible to its own later children INCLUDING nested batches,
+    /// never outward.
+    ///
+    /// See `batch_handles` for the resolution rules — notably that a
+    /// `$h:` in a text payload is content and is never rewritten.
+    BindCreated {
+        handle: String,
+    },
     /// Track M — `<Layer>` visibility toggle. The Layers panel
     /// dispatches this when the user clicks the eye icon.
     LayerSetVisible {
@@ -3803,6 +3847,7 @@ impl Mutation {
             Self::PathPointCurveType { .. } => "PathPointCurveType",
             Self::PathPointSet { .. } => "PathPointSet",
             Self::Batch { .. } => "Batch",
+            Self::BindCreated { .. } => "BindCreated",
             Self::LayerSetVisible { .. } => "LayerSetVisible",
             Self::LayerSetLocked { .. } => "LayerSetLocked",
             Self::LayerSetPrintable { .. } => "LayerSetPrintable",
@@ -4805,6 +4850,32 @@ mod tests {
             }
             other => panic!("expected InsertTable, got {other:?}"),
         }
+    }
+
+    /// C-15 — the handle declaration is an ordinary batch child on the
+    /// wire, and a batch that carries one still decodes as a `Batch`
+    /// (nothing about the envelope changed, which is why this rides v57
+    /// rather than bumping).
+    #[test]
+    fn c15_bind_created_rides_the_batch_envelope() {
+        let json = r#"{"op":"batch","args":{"ops":[
+            {"op":"insertPath","args":{"pageId":"p1","anchors":[],"open":false}},
+            {"op":"bindCreated","args":{"handle":"a"}},
+            {"op":"setElementProperty","args":{"elementId":{"kind":"polygon","id":"$h:a"},
+             "path":"frameFillColor","value":{"type":"colorRef","value":"Color/Black"}}}
+        ]}}"#;
+        let m: Mutation = serde_json::from_str(json).expect("batch with a handle parses");
+        let Mutation::Batch { ops } = m else {
+            panic!("expected Batch");
+        };
+        assert_eq!(ops.len(), 3);
+        match &ops[1] {
+            Mutation::BindCreated { handle } => assert_eq!(handle, "a"),
+            other => panic!("expected BindCreated, got {other:?}"),
+        }
+        // …and re-encodes to the same op tag.
+        let back = serde_json::to_string(&ops[1]).expect("encode");
+        assert_eq!(back, r#"{"op":"bindCreated","args":{"handle":"a"}}"#);
     }
 
     #[test]

@@ -44,6 +44,7 @@
 //! incremental Tier 2 with checkpoints (Phase 3), salsa retrofit
 //! (Phase 3).
 
+pub mod batch_handles;
 pub mod blank;
 pub mod camera;
 pub mod channel;
