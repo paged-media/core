@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! C-23 opacity masks: `Operation::ApplyOpacityMask` /
+//! C-28 opacity masks: `Operation::ApplyOpacityMask` /
 //! `Operation::ReleaseOpacityMask` — move a top-level page item into a
 //! target's [`Spread::opacity_masks`] entry as its mask ARTWORK, and
 //! back out again.
@@ -43,7 +43,7 @@ fn invalid(node: &NodeId, reason: String) -> OperationError {
     }
 }
 
-/// C-23 — the kinds that may take part in a mask, on either side.
+/// C-28 — the kinds that may take part in a mask, on either side.
 ///
 /// Deliberately excludes `TextFrame`. A text frame's GLYPHS are
 /// emitted by a later story pass, not by the frame-body pass the mask
@@ -65,7 +65,7 @@ fn reject_text_frame(node: &NodeId) -> OperationError {
     invalid(
         node,
         format!(
-            "C-23: a {} cannot take part in an opacity mask (Rectangle / Oval / \
+            "C-28: a {} cannot take part in an opacity mask (Rectangle / Oval / \
              GraphicLine / Polygon only — a text frame's glyphs are emitted by the \
              story pass, outside the mask bracket)",
             node.kind()
@@ -108,7 +108,7 @@ fn ref_here(spread: &Spread, node: &NodeId) -> Option<FrameRef> {
     leaf_ref_in_spread(spread, node)
 }
 
-/// C-23 — `Operation::ApplyOpacityMask`. The mask item leaves the
+/// C-28 — `Operation::ApplyOpacityMask`. The mask item leaves the
 /// z-table (its slot is captured into the inverse) and becomes the
 /// target's mask artwork. **Geometry is untouched on both sides**: the
 /// mask covers whatever it geometrically overlaps, exactly like
@@ -133,7 +133,7 @@ pub(super) fn apply_opacity_mask(
         return Err(reject_text_frame(mask));
     }
     if target.self_id() == mask.self_id() {
-        return Err(invalid(mask, "C-23: an item cannot mask itself".into()));
+        return Err(invalid(mask, "C-28: an item cannot mask itself".into()));
     }
     let target_id = target.self_id().to_string();
 
@@ -145,13 +145,13 @@ pub(super) fn apply_opacity_mask(
         if ref_here(spread, target).is_none() {
             return Err(invalid(
                 target,
-                "C-23: the mask and the masked item must live on the same spread".into(),
+                "C-28: the mask and the masked item must live on the same spread".into(),
             ));
         }
         if spread.opacity_masks.contains_key(&target_id) {
             return Err(invalid(
                 target,
-                "C-23: the item already carries an opacity mask (release it first)".into(),
+                "C-28: the item already carries an opacity mask (release it first)".into(),
             ));
         }
         if spread
@@ -161,7 +161,7 @@ pub(super) fn apply_opacity_mask(
         {
             return Err(invalid(
                 mask,
-                "C-23: the item is already serving as a mask (release it first)".into(),
+                "C-28: the item is already serving as a mask (release it first)".into(),
             ));
         }
         if spread
@@ -171,18 +171,18 @@ pub(super) fn apply_opacity_mask(
         {
             return Err(invalid(
                 mask,
-                "C-23: a pasted-in item cannot become a mask (release it first)".into(),
+                "C-28: a pasted-in item cannot become a mask (release it first)".into(),
             ));
         }
         if spread.groups.iter().any(|g| g.members.contains(&mask_ref)) {
             return Err(invalid(
                 mask,
-                "C-23: a grouped item cannot become a mask (ungroup first)".into(),
+                "C-28: a grouped item cannot become a mask (ungroup first)".into(),
             ));
         }
         ensure_frames_in_order(spread);
         let Some(slot) = spread.frames_in_order.iter().position(|r| *r == mask_ref) else {
-            return Err(invalid(mask, "C-23: the mask item is not top-level".into()));
+            return Err(invalid(mask, "C-28: the mask item is not top-level".into()));
         };
         spread.frames_in_order.remove(slot);
         spread.opacity_masks.insert(
@@ -214,7 +214,7 @@ pub(super) fn apply_opacity_mask(
     Err(OperationError::NodeNotFound(mask.clone()))
 }
 
-/// C-23 — `Operation::ReleaseOpacityMask`: drop the relation and pop
+/// C-28 — `Operation::ReleaseOpacityMask`: drop the relation and pop
 /// the mask artwork back to top level. World transform preserved (the
 /// stored transform was never touched), so nothing moves on canvas —
 /// the artwork simply becomes visible again as its own object, which
@@ -296,7 +296,7 @@ pub(super) fn apply_release_opacity_mask(
     }
     Err(invalid(
         target,
-        "C-23: the item carries no opacity mask".into(),
+        "C-28: the item carries no opacity mask".into(),
     ))
 }
 

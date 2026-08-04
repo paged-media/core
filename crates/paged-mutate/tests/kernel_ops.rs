@@ -1516,7 +1516,7 @@ fn polygon_corner_slots_are_independent() {
 }
 
 // ---------------------------------------------------------------------------
-// C-23 (protocol v58) — ApplyOpacityMask + ReleaseOpacityMask through the
+// C-28 (protocol v58) — ApplyOpacityMask + ReleaseOpacityMask through the
 // apply layer: side-map bookkeeping, exact z-slot restore on undo, mode +
 // invert survival across the round-trip, and honest rejection.
 // ---------------------------------------------------------------------------
@@ -1771,7 +1771,7 @@ fn remove_node_refuses_to_delete_a_live_mask_or_its_target() {
 }
 
 // ---------------------------------------------------------------------------
-// C-24 (protocol v58) — AttachTextToPath + DetachTextFromPath through the
+// C-29 (protocol v58) — AttachTextToPath + DetachTextFromPath through the
 // apply layer. The renderer has always CONSUMED `<TextPath>`; until now
 // nothing could create one.
 // ---------------------------------------------------------------------------

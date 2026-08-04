@@ -399,11 +399,11 @@ export type WorkerToMain = WorkerToMainKind & {
 // that ignored handles would fail the referencing child with an unknown
 // id rather than mis-apply it.
 //
-// v58 (C-23 opacity masks + C-24 type-on-a-path): two Illustrator
+// v58 (C-28 opacity masks + C-29 type-on-a-path): two Illustrator
 // "Phase 2" doors, deliberately riding ONE bump because both are new
 // operations landing together.
 //
-// C-23 — `applyOpacityMask { targetId, maskId, maskType?, invert? }` /
+// C-28 — `applyOpacityMask { targetId, maskId, maskType?, invert? }` /
 // `releaseOpacityMask { targetId }`. The engine gains a REAL soft
 // mask: a new `DisplayCommand` bracket (`BeginSoftMask` /
 // `BeginMaskedContent` / `EndSoftMask`) carrying per-pixel coverage,
@@ -415,7 +415,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // skips the artwork and renders the content unmasked (documented gap
 // — it has no coverage-buffer layer API).
 //
-// C-24 — `attachTextToPath { elementId, storyId, pathTypeAlignment?,
+// C-29 — `attachTextToPath { elementId, storyId, pathTypeAlignment?,
 // flipPathEffect?, startBracket?, endBracket? }` /
 // `detachTextFromPath { elementId }`. The renderer has drawn
 // `<TextPath>` for a long time; nothing could CREATE one. These two
@@ -1593,7 +1593,7 @@ pub enum WorkerToMainKind {
     IdmlExported {
         #[tsify(type = "number[]")]
         idml_bytes: ByteBuf,
-        /// v58 (C-23) — paged-NATIVE constructs the IDML writer could
+        /// v58 (C-28) — paged-NATIVE constructs the IDML writer could
         /// not carry, one human-readable line each. Empty for a
         /// document that uses only IDML-expressible features. Today
         /// the only entry kind is opacity masks (IDML has no such
@@ -3324,7 +3324,7 @@ pub enum Mutation {
     ReleaseFrom {
         child_id: crate::element_selection::ElementId,
     },
-    /// v58 (C-23) — Illustrator's **Make Opacity Mask**: the item at
+    /// v58 (C-28) — Illustrator's **Make Opacity Mask**: the item at
     /// `mask_id` stops painting on its own and becomes the alpha mask
     /// of the item at `target_id`. Unlike `PasteInto`'s hard clip the
     /// coverage is CONTINUOUS, so a black→white gradient fades the
@@ -3344,14 +3344,14 @@ pub enum Mutation {
         #[serde(default)]
         invert: Option<bool>,
     },
-    /// v58 (C-23) — **Release Opacity Mask**: drop the relation; the
+    /// v58 (C-28) — **Release Opacity Mask**: drop the relation; the
     /// artwork returns to top level, geometry untouched. Rides
     /// `Operation::ReleaseOpacityMask`; one undo re-applies the mask
     /// with its original mode/invert at the same z slot.
     ReleaseOpacityMask {
         target_id: crate::element_selection::ElementId,
     },
-    /// v58 (C-24) — InDesign's **Type on a Path**: flow an existing
+    /// v58 (C-29) — InDesign's **Type on a Path**: flow an existing
     /// story along an existing path element. `element_id` must be a
     /// Rectangle / GraphicLine / Polygon (the kinds the renderer's
     /// text-path pass walks); the story must exist and must not
@@ -3377,7 +3377,7 @@ pub enum Mutation {
         #[serde(default)]
         end_bracket: Option<f32>,
     },
-    /// v58 (C-24) — the inverse gesture: unlink the text from the
+    /// v58 (C-29) — the inverse gesture: unlink the text from the
     /// path. **The story survives** (unlike InDesign's "Delete Type
     /// from Path", which also deletes the text) — attach only ever
     /// linked an existing story, so unlinking is its exact inverse and
@@ -4455,7 +4455,7 @@ mod tests {
         assert_eq!(PROTOCOL_VERSION.0, 58);
     }
 
-    /// v58 (C-23 / C-24) — the four new wire shapes. Tags are the
+    /// v58 (C-28 / C-29) — the four new wire shapes. Tags are the
     /// camelCase op names; every knob is optional so a caller that
     /// sends only the required ids stays deserialisable, and the
     /// engine applies the Illustrator/IDML defaults.
@@ -5522,7 +5522,7 @@ mod tests {
             protocol: PROTOCOL_VERSION,
             kind: WorkerToMainKind::IdmlExported {
                 idml_bytes: ByteBuf::from(vec![80, 75, 3, 4]), // "PK\x03\x04"
-                // v58 (C-23) — a clean document loses nothing.
+                // v58 (C-28) — a clean document loses nothing.
                 lost: Vec::new(),
             },
         };

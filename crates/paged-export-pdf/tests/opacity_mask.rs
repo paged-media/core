@@ -12,11 +12,11 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! C-23 — opacity masks survive PDF export as NATIVE soft masks.
+//! C-28 — opacity masks survive PDF export as NATIVE soft masks.
 //!
 //! The display-list bracket lowers onto the same
 //! `PendingFormGroup::LuminosityGray` machinery gradient feather has
-//! always used (its only producer before C-23): the mask artwork
+//! always used (its only producer before C-28): the mask artwork
 //! becomes an isolated group Form XObject, an ExtGState's `/SMask`
 //! points at it, and the masked content paints under that gs. These
 //! tests re-parse the emitted bytes and pin exactly that — no raster

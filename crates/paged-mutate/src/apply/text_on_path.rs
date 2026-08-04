@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! C-24 type-on-a-path: `Operation::AttachTextToPath` /
+//! C-29 type-on-a-path: `Operation::AttachTextToPath` /
 //! `Operation::DetachTextFromPath` — create and remove the
 //! [`paged_model::TextPath`] the renderer already consumes.
 //!
@@ -74,7 +74,7 @@ fn host_text_paths<'a>(
     }
 }
 
-/// C-24 — `Operation::AttachTextToPath`: link an EXISTING story to an
+/// C-29 — `Operation::AttachTextToPath`: link an EXISTING story to an
 /// EXISTING path element, producing the `<TextPath>` the renderer
 /// consumes.
 ///
@@ -95,7 +95,7 @@ pub(super) fn apply_attach_text_to_path(
         return Err(invalid(
             host,
             format!(
-                "C-24: a {} cannot host text-on-a-path (Rectangle / GraphicLine / \
+                "C-29: a {} cannot host text-on-a-path (Rectangle / GraphicLine / \
                  Polygon only — those are the kinds the renderer's text-path pass walks)",
                 host.kind()
             ),
@@ -104,7 +104,7 @@ pub(super) fn apply_attach_text_to_path(
     if !doc.stories.iter().any(|s| s.self_id == story_id) {
         return Err(invalid(
             host,
-            format!("C-24: no story `{story_id}` in this document"),
+            format!("C-29: no story `{story_id}` in this document"),
         ));
     }
     // Already flowing into a frame chain?
@@ -118,7 +118,7 @@ pub(super) fn apply_attach_text_to_path(
             return Err(invalid(
                 host,
                 format!(
-                    "C-24: story `{story_id}` already flows into a text frame \
+                    "C-29: story `{story_id}` already flows into a text frame \
                      (a story belongs to exactly one flow)"
                 ),
             ));
@@ -143,7 +143,7 @@ pub(super) fn apply_attach_text_to_path(
         if taken {
             return Err(invalid(
                 host,
-                format!("C-24: story `{story_id}` is already attached to a path"),
+                format!("C-29: story `{story_id}` is already attached to a path"),
             ));
         }
         let Some(paths) = host_text_paths(spread, host) else {
@@ -192,7 +192,7 @@ pub(super) fn apply_attach_text_to_path(
     Err(OperationError::NodeNotFound(host.clone()))
 }
 
-/// C-24 — `Operation::DetachTextFromPath`: remove a `<TextPath>` link
+/// C-29 — `Operation::DetachTextFromPath`: remove a `<TextPath>` link
 /// from its host.
 ///
 /// # Why removing the LINK is the faithful inverse
@@ -220,7 +220,7 @@ pub(super) fn apply_detach_text_from_path(
     if !path_host_kind(host) {
         return Err(invalid(
             host,
-            format!("C-24: a {} never hosts text-on-a-path", host.kind()),
+            format!("C-29: a {} never hosts text-on-a-path", host.kind()),
         ));
     }
     for parsed in doc.spreads.iter_mut() {
@@ -231,14 +231,14 @@ pub(super) fn apply_detach_text_from_path(
         if paths.is_empty() {
             return Err(invalid(
                 host,
-                "C-24: the element hosts no text-on-a-path".into(),
+                "C-29: the element hosts no text-on-a-path".into(),
             ));
         }
         let idx = index.unwrap_or(0);
         if idx >= paths.len() {
             return Err(invalid(
                 host,
-                format!("C-24: text-path index {idx} out of range ({})", paths.len()),
+                format!("C-29: text-path index {idx} out of range ({})", paths.len()),
             ));
         }
         let removed = paths.remove(idx);

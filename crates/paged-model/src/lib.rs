@@ -4951,7 +4951,7 @@ pub struct Spread {
     /// untouched.
     #[serde(default)]
     pub nested_children: std::collections::HashMap<String, Vec<FrameRef>>,
-    /// C-23 opacity masks — keyed by the MASKED page item's `Self` id.
+    /// C-28 opacity masks — keyed by the MASKED page item's `Self` id.
     /// Side map like [`Spread::nested_children`], and structurally its
     /// sibling: the item named by [`OpacityMask::mask_item`] leaves
     /// [`Spread::frames_in_order`] (it is consumed BY the mask, not
@@ -4993,7 +4993,7 @@ pub struct Spread {
     pub opacity_masks: std::collections::HashMap<String, OpacityMask>,
 }
 
-/// C-23 — how a mask item's artwork resolves to coverage. Mirrors
+/// C-28 — how a mask item's artwork resolves to coverage. Mirrors
 /// `paged_compose::SoftMaskType` (and PDF's `/S` subtypes); kept as a
 /// separate model-layer enum so `paged-model` stays free of a
 /// display-list dependency.
@@ -5008,7 +5008,7 @@ pub enum OpacityMaskType {
     Alpha,
 }
 
-/// C-23 — one opacity-mask relation. See [`Spread::opacity_masks`]
+/// C-28 — one opacity-mask relation. See [`Spread::opacity_masks`]
 /// for the keying and the IDML round-trip decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpacityMask {

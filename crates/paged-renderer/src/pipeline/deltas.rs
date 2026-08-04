@@ -178,7 +178,7 @@ pub(super) fn rebase_path_ids(cmd: &mut paged_compose::DisplayCommand, offset: i
         GradientFeather { path_id, .. } => add(path_id),
         FillPathOverprint { path_id, .. } => add(path_id),
         StrokePathOverprint { path_id, .. } => add(path_id),
-        // Variants without a path_id field — no-op. The C-23
+        // Variants without a path_id field — no-op. The C-28
         // soft-mask markers belong here too: the mask ARTWORK lives
         // inline in the same command stream, so its own path-bearing
         // commands are rebased by their own arms above and the

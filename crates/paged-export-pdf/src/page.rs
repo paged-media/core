@@ -183,7 +183,7 @@ pub fn export_page(
                 g.isolated(true);
                 g.color_space().device_gray();
             }
-            // C-23 — an `/S /Alpha` mask reads the group's accumulated
+            // C-28 — an `/S /Alpha` mask reads the group's accumulated
             // alpha, so it must be isolated (no parent backdrop
             // leaking in) but needs no blending colour space.
             PendingFormGroup::AlphaGroup => {
@@ -275,7 +275,7 @@ fn find_group_end(commands: &[DisplayCommand], start: usize) -> usize {
     commands.len()
 }
 
-/// C-23 — locate the `BeginMaskedContent` and `EndSoftMask` matching
+/// C-28 — locate the `BeginMaskedContent` and `EndSoftMask` matching
 /// the `BeginSoftMask` at `start`. Returns `(mid, end)` such that
 /// `start+1..mid` is the mask ARTWORK and `mid+1..end` is the masked
 /// content. Soft-mask brackets nest well-formed, so counting only the
@@ -622,7 +622,7 @@ impl Walker<'_, '_> {
                         );
                     }
                 }
-                // C-23 opacity mask. The display-list bracket lowers
+                // C-28 opacity mask. The display-list bracket lowers
                 // 1:1 onto PDF's native soft-mask machinery, reusing
                 // the SAME `PendingFormGroup::LuminosityGray` path the
                 // gradient feather already drives (its only producer

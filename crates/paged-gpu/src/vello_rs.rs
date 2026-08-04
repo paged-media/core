@@ -63,7 +63,7 @@
 //!    Vello needs a height-field/normal pass it doesn't have, so
 //!    this stays a renderer-gap (CPU is the path of record).
 //!
-//!  - C-23 `BeginSoftMask` / `BeginMaskedContent` / `EndSoftMask`
+//!  - C-28 `BeginSoftMask` / `BeginMaskedContent` / `EndSoftMask`
 //!    (opacity masks) — Vello's `push_layer` takes a *shape*, not a
 //!    coverage buffer, so the version we link against has no way to
 //!    modulate a layer by another layer's luminosity or alpha. Rather
@@ -355,7 +355,7 @@ fn build_scene_with_transform_filtered(
     // properly nested by the emitter.
     let mut layer_stack: Vec<LayerKind> = Vec::new();
 
-    // C-23 — nesting depth of soft-mask ARTWORK we are currently
+    // C-28 — nesting depth of soft-mask ARTWORK we are currently
     // skipping. See the module doc: Vello cannot modulate by a
     // coverage buffer, so the artwork must not be painted (it would
     // land on top of the page as opaque geometry). The masked content

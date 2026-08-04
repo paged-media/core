@@ -911,7 +911,7 @@ pub enum DisplayCommand {
     /// `tiny_skia::Mask` per push, and Vello encodes each push as a
     /// `push_layer` clip layer. (This doc used to claim Vello no-ops
     /// clips; that stopped being true when the Vello clip layers
-    /// landed and the comment was not updated — corrected with C-23,
+    /// landed and the comment was not updated — corrected with C-28,
     /// which had to know the real precedent.)
     PushClip {
         path_id: PathId,
@@ -1084,7 +1084,7 @@ pub enum DisplayCommand {
         stroke: Stroke,
         transform: Transform,
     },
-    /// C-23 opacity mask — open a soft-mask bracket. Unlike
+    /// C-28 opacity mask — open a soft-mask bracket. Unlike
     /// [`PushClip`](DisplayCommand::PushClip) (a hard binary NonZero
     /// clip) this carries **per-pixel coverage**: the mask artwork's
     /// luminosity or alpha modulates the masked content's alpha
@@ -1136,18 +1136,18 @@ pub enum DisplayCommand {
         invert: bool,
         transform: Transform,
     },
-    /// C-23 — close the mask ARTWORK and open the masked content.
+    /// C-28 — close the mask ARTWORK and open the masked content.
     /// See [`DisplayCommand::BeginSoftMask`]. Mismatched markers are
     /// tolerated (a stray one is a no-op), matching the
     /// `PopClip` / `EndBlendGroup` policy. The contained transform is
     /// unused; same rationale as [`DisplayCommand::PopClip`].
     BeginMaskedContent(Transform),
-    /// C-23 — close the masked content, dropping the soft mask. See
+    /// C-28 — close the masked content, dropping the soft mask. See
     /// [`DisplayCommand::BeginSoftMask`].
     EndSoftMask(Transform),
 }
 
-/// C-23 — how a soft mask's artwork resolves to per-pixel coverage.
+/// C-28 — how a soft mask's artwork resolves to per-pixel coverage.
 ///
 /// Named after PDF's `/S` soft-mask subtypes (and matching
 /// `tiny_skia::MaskType`), because both back ends resolve it that

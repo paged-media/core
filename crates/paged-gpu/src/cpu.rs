@@ -100,7 +100,7 @@ struct GroupFrame {
     /// `effect.sigma_pt() * scale`. Cached so the pop site doesn't
     /// have to rescan `effect`.
     effect_sigma_px: f32,
-    /// C-23 — set when this frame is capturing SOFT-MASK ARTWORK
+    /// C-28 — set when this frame is capturing SOFT-MASK ARTWORK
     /// rather than paint destined for the parent. `BeginMaskedContent`
     /// pops it and converts the buffer into a clip-stack mask instead
     /// of compositing it; it never reaches the `EndBlendGroup` /
@@ -1582,7 +1582,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     clip_stack.remove(idx);
                 }
             }
-            // C-23 — open a soft-mask bracket. The artwork that
+            // C-28 — open a soft-mask bracket. The artwork that
             // follows is captured into an offscreen buffer the size of
             // the ACTIVE TARGET (page or enclosing group buffer), not
             // of the artwork's own bbox: a full-size capture makes the
@@ -1615,7 +1615,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     });
                 }
             }
-            // C-23 — the artwork is complete: turn the captured buffer
+            // C-28 — the artwork is complete: turn the captured buffer
             // into a coverage mask and push it onto the clip stack, so
             // every subsequent draw multiplies through it exactly like
             // a clip — except the coverage is continuous, not binary.
@@ -1973,7 +1973,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     backdrop_snapshot,
                     effect,
                     effect_sigma_px,
-                    // C-23: a soft-mask capture frame is always
+                    // C-28: a soft-mask capture frame is always
                     // consumed by `BeginMaskedContent`, so it can only
                     // reach here through a malformed list — composite
                     // it as an ordinary group rather than panicking.
@@ -6269,7 +6269,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // C-23 — opacity masks. These are the correctness gate: every
+    // C-28 — opacity masks. These are the correctness gate: every
     // assertion below FAILS if the soft mask is ignored, because an
     // ignored mask leaves the target fully painted where the mask says
     // it should be gone.

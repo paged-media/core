@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! C-23 opacity masks through the FULL pipeline.
+//! C-28 opacity masks through the FULL pipeline.
 //!
 //! The `layers-z` fixture gives one spread, one page, two overlapping
 //! 220×220 rectangles in spread coords (72 dpi ⇒ 1 pt = 1 px):

@@ -2447,7 +2447,7 @@ pub struct NestedParent {
     pub index: u32,
 }
 
-/// C-23 — wire mirror of [`paged_model::OpacityMaskType`] (the same
+/// C-28 — wire mirror of [`paged_model::OpacityMaskType`] (the same
 /// mirror convention [`PathAnchorSpec`] follows: `paged-model` carries
 /// no `tsify` dependency, so wire-visible enums are declared here and
 /// converted at the boundary).
@@ -2478,7 +2478,7 @@ impl OpacityMaskMode {
     }
 }
 
-/// C-24 — the `<TextPath>` knobs [`Operation::AttachTextToPath`]
+/// C-29 — the `<TextPath>` knobs [`Operation::AttachTextToPath`]
 /// exposes. Grouped into one struct so the op, its inverse and the
 /// wire all name the same thing.
 ///
@@ -3018,7 +3018,7 @@ pub enum Operation {
         #[serde(default)]
         restore_slot: Option<usize>,
     },
-    /// C-23 — make an existing TOP-LEVEL page item the OPACITY MASK of
+    /// C-28 — make an existing TOP-LEVEL page item the OPACITY MASK of
     /// another item on the same spread. The mask item leaves
     /// `frames_in_order` (its z slot is captured into the inverse) and
     /// joins the target's `Spread::opacity_masks` entry; the renderer
@@ -3045,7 +3045,7 @@ pub enum Operation {
         #[serde(default)]
         invert: bool,
     },
-    /// C-23 — the inverse gesture: drop the mask relation and pop the
+    /// C-28 — the inverse gesture: drop the mask relation and pop the
     /// artwork back to top level, world transform preserved (the
     /// stored transform was never touched, so nothing moves on
     /// canvas — the artwork simply becomes its own visible object
@@ -3058,7 +3058,7 @@ pub enum Operation {
         #[serde(default)]
         restore_slot: Option<usize>,
     },
-    /// C-24 — attach an EXISTING story to an EXISTING path element,
+    /// C-29 — attach an EXISTING story to an EXISTING path element,
     /// producing the `<TextPath>` the renderer already consumes
     /// (InDesign's Type on a Path). `host` must be a Rectangle /
     /// GraphicLine / Polygon — the kinds that carry `text_paths` and
@@ -3073,7 +3073,7 @@ pub enum Operation {
         #[serde(default)]
         spec: TextPathSpec,
     },
-    /// C-24 — remove a `<TextPath>` link from its host. **The story
+    /// C-29 — remove a `<TextPath>` link from its host. **The story
     /// survives**: `AttachTextToPath` only ever *linked* an existing
     /// story, so unlinking is its exact inverse (InDesign's "Delete
     /// Type from Path" also deletes the text — the right gesture, but

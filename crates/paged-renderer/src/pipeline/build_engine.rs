@@ -37,7 +37,7 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// what the container itself paints: corner effects on rectangles
 /// (and the authored Bezier outline for path-shaped ones), the
 /// inscribed ellipse for ovals, the authored outline for polygons.
-/// C-23 — the `Self` id behind a `FrameRef` (leaf kinds and groups).
+/// C-28 — the `Self` id behind a `FrameRef` (leaf kinds and groups).
 pub(super) fn frame_ref_self_id(
     spread: &paged_model::Spread,
     fr: paged_model::FrameRef,
@@ -53,7 +53,7 @@ pub(super) fn frame_ref_self_id(
     }
 }
 
-/// C-23 — the reverse: which `FrameRef` carries this `Self` id. Only
+/// C-28 — the reverse: which `FrameRef` carries this `Self` id. Only
 /// the leaf kinds an opacity mask can use.
 pub(super) fn frame_ref_for_self_id(
     spread: &paged_model::Spread,
@@ -89,7 +89,7 @@ pub(super) fn frame_ref_for_self_id(
     })
 }
 
-/// C-23 — the spread-local page indices a `FrameRef` overlaps, using
+/// C-28 — the spread-local page indices a `FrameRef` overlaps, using
 /// the same bounds+transform routing `emit_one` applies per kind.
 /// Never empty: a frame that overlaps nothing still routes to its
 /// nearest page, matching `emit_one`'s `unwrap_or(0)` fallback.
@@ -1504,7 +1504,7 @@ pub(super) fn build_document_inner(
             }
         }
 
-        /// C-23 — emit `fr`, wrapped in a soft-mask bracket when the
+        /// C-28 — emit `fr`, wrapped in a soft-mask bracket when the
         /// spread's `opacity_masks` names it.
         ///
         /// Markers go on the UNION of the pages the target and the
@@ -1623,7 +1623,7 @@ pub(super) fn build_document_inner(
         }
 
         for fr in frames_ordered {
-            // C-23: a masked item's whole frame-body emission is
+            // C-28: a masked item's whole frame-body emission is
             // bracketed by the mask artwork. Defensive skip for a
             // hand-authored / round-tripped model in which the mask
             // artwork was left in the z-table — `ApplyOpacityMask`

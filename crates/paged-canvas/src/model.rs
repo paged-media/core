@@ -2753,7 +2753,7 @@ impl CanvasModel {
                 child: element_to_leaf_node_id(child_id)?,
                 restore_slot: None,
             }),
-            // v58 (C-23) — opacity masks. `maskType` is a free string
+            // v58 (C-28) — opacity masks. `maskType` is a free string
             // on the wire (the editor sends what a dropdown produced);
             // anything that isn't "alpha" is Luminosity, Illustrator's
             // default. `restore_slot` is inverse-only and never rides
@@ -2776,7 +2776,7 @@ impl CanvasModel {
                 target: element_to_leaf_node_id(target_id)?,
                 restore_slot: None,
             }),
-            // v58 (C-24) — type on a path. The apply layer gates the
+            // v58 (C-29) — type on a path. The apply layer gates the
             // host kind and every structural precondition, so the
             // bridge stays a thin translation.
             Mutation::AttachTextToPath {
@@ -3995,7 +3995,7 @@ impl CanvasModel {
         idml_export::write_idml(&self.scene, &self.source_idml)
     }
 
-    /// C-23 — the paged-NATIVE constructs an `.idml` export cannot
+    /// C-28 — the paged-NATIVE constructs an `.idml` export cannot
     /// carry, one human-readable line each. Empty for a document that
     /// uses only IDML-expressible features.
     ///

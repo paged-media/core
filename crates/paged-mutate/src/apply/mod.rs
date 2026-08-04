@@ -229,7 +229,7 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             child,
             restore_slot,
         } => apply_release_from(doc, child, *restore_slot),
-        // C-23 opacity masks — the soft-mask sibling of the B-18 pair
+        // C-28 opacity masks — the soft-mask sibling of the B-18 pair
         // just above.
         Operation::ApplyOpacityMask {
             target,
@@ -241,7 +241,7 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             target,
             restore_slot,
         } => apply_release_opacity_mask(doc, target, *restore_slot),
-        // C-24 type-on-a-path.
+        // C-29 type-on-a-path.
         Operation::AttachTextToPath {
             host,
             story_id,

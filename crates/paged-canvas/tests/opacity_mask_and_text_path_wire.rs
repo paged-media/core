@@ -15,10 +15,10 @@
 //! v58 — the two new doors through the WIRE (the surface a plugin
 //! sends), end to end:
 //!
-//!   * C-23 `applyOpacityMask` / `releaseOpacityMask` — the side map,
+//!   * C-28 `applyOpacityMask` / `releaseOpacityMask` — the side map,
 //!     the undo/redo round-trip, the `.paged` container round-trip
 //!     (the LOSSLESS save path), and the LOUD `.idml` loss report.
-//!   * C-24 `attachTextToPath` / `detachTextFromPath` — creating the
+//!   * C-29 `attachTextToPath` / `detachTextFromPath` — creating the
 //!     `<TextPath>` the renderer already consumes, with every knob it
 //!     honours, and the story surviving the detach.
 
@@ -253,7 +253,7 @@ fn text_paths(model: &CanvasModel, host: &str) -> Vec<paged_model::TextPath> {
         .unwrap_or_default()
 }
 
-/// C-24 through the wire: the link is created with every knob the
+/// C-29 through the wire: the link is created with every knob the
 /// renderer honours, the renderer then draws glyphs along the path,
 /// and detach removes the link while the STORY survives.
 #[test]
@@ -312,7 +312,7 @@ fn attach_and_detach_text_to_path_round_trip_through_the_wire() {
 
 /// The renderer draws the attached story: the same document renders
 /// glyph fills along the path only AFTER the attach. This is what
-/// makes C-24 a door and not just bookkeeping.
+/// makes C-29 a door and not just bookkeeping.
 #[test]
 fn the_attached_story_actually_renders_along_the_path() {
     use paged_compose::DisplayCommand;
