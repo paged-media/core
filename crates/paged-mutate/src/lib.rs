@@ -65,7 +65,7 @@ pub use operation::{
     GroupSpec, GuideOrientationSpec, InvalidationHint, NestedParent, NodeId, NodeSpec,
     NumberingListSpec, OpacityMaskMode, Operation, PathPointAddress, PathPointRole, PathfinderKind,
     PathfinderRegionVerb, PropertyPath, StyleCollection, StyleScope, SwatchSpec, TextPathSpec,
-    Value,
+    Value, ZOrderTarget,
 };
 pub use path_math::fit_polyline_to_anchors;
 

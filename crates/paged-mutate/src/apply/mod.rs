@@ -66,6 +66,10 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             new_parent,
             position,
         } => apply_move_node(doc, node, new_parent, *position),
+        // v59 — Arrange. Unlike `MoveNode` this never changes the
+        // node's parent: it permutes the sibling list the node is
+        // already in (see the operation doc).
+        Operation::ReorderNode { node, target } => apply_reorder_node(doc, node, *target),
         Operation::Batch { ops } => apply_batch(doc, ops),
         Operation::InsertPage {
             after_page_id,
@@ -750,6 +754,7 @@ mod planar_ops;
 
 pub use planar_ops::element_path;
 mod remove_node;
+mod reorder;
 mod replace_image_bytes;
 mod sections;
 mod set_property;
@@ -770,6 +775,7 @@ use opacity_mask::*;
 use paragraph::*;
 use path_topology::*;
 use remove_node::*;
+use reorder::*;
 use sections::*;
 use set_property::*;
 use text_on_path::*;

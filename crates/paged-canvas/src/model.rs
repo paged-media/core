@@ -2753,6 +2753,17 @@ impl CanvasModel {
                 child: element_to_leaf_node_id(child_id)?,
                 restore_slot: None,
             }),
+            // v59 (Arrange) — z-order. `element_to_member_node_id`
+            // because a Group is a first-class z-table entry and must
+            // restack like any leaf. No parent rides the wire: the
+            // apply layer derives the sibling list from where the item
+            // already is, which is what makes "a reorder can't leave
+            // its group / can't sneak into a B-18 container" structural
+            // rather than a rule to keep in sync with PasteInto's.
+            Mutation::ReorderElement { element_id, to } => Some(Operation::ReorderNode {
+                node: element_to_member_node_id(element_id)?,
+                target: *to,
+            }),
             // v58 (C-28) — opacity masks. `maskType` is a free string
             // on the wire (the editor sends what a dropdown produced);
             // anything that isn't "alpha" is Luminosity, Illustrator's

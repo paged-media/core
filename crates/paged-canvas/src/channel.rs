@@ -430,7 +430,38 @@ export type WorkerToMain = WorkerToMainKind & {
 // editor SENDS mutations an older worker cannot deserialise, and the
 // version handshake catches the stale pair LOUD rather than letting a
 // mask silently not apply.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(58);
+//
+// v59 (Arrange — the z-order door): ONE new `Mutation`,
+// `reorderElement { elementId, to }`, riding the new
+// `Operation::ReorderNode`. Nothing on the wire could change an
+// element's stacking position before this — not the editor (no
+// bring-to-front / send-to-back anywhere), not a plugin (five plugin
+// modules document "inserted items land on top of the z-order" as an
+// accepted limit, and paged.draw's Live Paint v0 paints its face fills
+// OVER the strokes bounding them for exactly this reason).
+//
+// `to` is `"front" | "back" | "forward" | "backward" | { index: n }`
+// (`paged_mutate::ZOrderTarget`). The four RELATIVE verbs are the ones
+// a UI and a plugin can actually express — read-modify-write against
+// the order as the engine sees it at apply time, so there is no stale
+// index to race a concurrent edit. `{ index }` is the absolute form:
+// it is what the inverse uses (the apply layer echoes back the slot the
+// item came from, so ONE undo restores the previous order bytewise —
+// the same exact-slot property `RemoveNode`'s `z_slot` was built for),
+// and it is the honest shape for a layers-panel drag. An out-of-range
+// index is REJECTED, never clamped.
+//
+// Deliberately NOT on this door: reparenting. `Operation::MoveNode`'s
+// `new_parent` stays off the wire — reorder derives its sibling list
+// from where the element already is (top-level `frames_in_order`, a
+// `Group::members`, or a B-18 `nested_children` entry), so it cannot
+// move an item out of a group or into a container behind `PasteInto`'s
+// validation. Containment is structural here, not a checked rule.
+//
+// Additive in the minor sense the handshake already covers: a new
+// editor SENDS a mutation an older worker cannot deserialise, and the
+// handshake catches the stale pair LOUD.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(59);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -3324,6 +3355,56 @@ pub enum Mutation {
     ReleaseFrom {
         child_id: crate::element_selection::ElementId,
     },
+    /// v59 — **Arrange**: restack an element within the sibling list
+    /// it already belongs to. The z-order door; nothing on the wire
+    /// could change stacking before this.
+    ///
+    /// `to` is `"front" | "back" | "forward" | "backward" |
+    /// { index: n }`. Prefer the relative verbs: they are evaluated
+    /// against the order the engine holds at apply time, so a
+    /// concurrent insert/delete cannot make them restack the wrong
+    /// slot. `{ index }` is absolute (0 = backmost, painted first) —
+    /// exactly what the inverse carries, so one undo restores the
+    /// previous order bytewise; an out-of-range index is rejected with
+    /// an honest error rather than clamped.
+    ///
+    /// The sibling list is DERIVED from where the element is: a
+    /// top-level item reorders in the spread's z table, a group member
+    /// inside its group, a B-18 pasted-in child inside its container.
+    /// There is no parent argument, so a reorder cannot move anything
+    /// between those scopes — use `pasteInto` / `releaseFrom` /
+    /// `createGroup` / `dissolveGroup` for that. A C-28 opacity-mask
+    /// artwork is painted from no list and is rejected.
+    ///
+    /// **Create-then-arrange in ONE undo step** (the paged.draw Live
+    /// Paint shape — fill a face, then put the fill UNDER the strokes
+    /// bounding it): batch `[insert…, bindCreated { handle },
+    /// reorderElement { elementId: "$h:<handle>", to: "back" }]`. Note
+    /// the `bindCreated`: the bare v34 `$created` sentinel is understood
+    /// by `setPluginMetadata` / `setElementProperty` only, while the
+    /// C-15 handle resolver rewrites any id position of any mutation
+    /// kind — and it is armed by a `bindCreated` child being present.
+    ///
+    /// **Honest limit 1 — Arrange is WITHIN a layer.** The renderer
+    /// sorts the z table by `ItemLayer` first (Q-10), so bring-to-front
+    /// cannot lift an item above one on a higher layer — same as
+    /// InDesign, where crossing layers is a different gesture
+    /// (`setElementProperty` on the layer), not an Arrange.
+    ///
+    /// **Honest limit 2 — `.idml` export does not carry it yet.** The
+    /// new order shows on canvas and round-trips through `.paged` (it
+    /// rides the native model part), but the IDML writer is a
+    /// byte-preserving splice that re-emits existing source elements
+    /// untouched and only places NEW ones, so an Arrange reverts when
+    /// the document is exported to `.idml` and reopened. Closing that
+    /// is a change to the IDML writer, not to this mutation. Pinned by
+    /// `a_reorder_survives_paged_and_is_lost_on_idml_export`.
+    ///
+    /// Rides `Operation::ReorderNode`.
+    ReorderElement {
+        element_id: crate::element_selection::ElementId,
+        to: paged_mutate::ZOrderTarget,
+    },
     /// v58 (C-28) — Illustrator's **Make Opacity Mask**: the item at
     /// `mask_id` stops painting on its own and becomes the alpha mask
     /// of the item at `target_id`. Unlike `PasteInto`'s hard clip the
@@ -3944,6 +4025,7 @@ impl Mutation {
             Self::JoinPaths { .. } => "JoinPaths",
             Self::PasteInto { .. } => "PasteInto",
             Self::ReleaseFrom { .. } => "ReleaseFrom",
+            Self::ReorderElement { .. } => "ReorderElement",
             Self::ApplyOpacityMask { .. } => "ApplyOpacityMask",
             Self::ReleaseOpacityMask { .. } => "ReleaseOpacityMask",
             Self::AttachTextToPath { .. } => "AttachTextToPath",
@@ -4451,8 +4533,55 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v58() {
-        assert_eq!(PROTOCOL_VERSION.0, 58);
+    fn protocol_version_is_v59() {
+        assert_eq!(PROTOCOL_VERSION.0, 59);
+    }
+
+    /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the
+    /// camelCase op name; `to` is the externally-tagged
+    /// `ZOrderTarget`, so the four verbs are bare strings and the
+    /// absolute form is `{"index": n}`. Pinned as a hand-authored
+    /// payload because a plugin writes this JSON by hand.
+    #[test]
+    fn v59_reorder_element_wire_shape_round_trips() {
+        use paged_mutate::ZOrderTarget;
+
+        let m = Mutation::ReorderElement {
+            element_id: crate::element_selection::ElementId::Polygon("Polygon/p1".into()),
+            to: ZOrderTarget::Front,
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(
+            json,
+            r#"{"op":"reorderElement","args":{"elementId":{"kind":"polygon","id":"Polygon/p1"},"to":"front"}}"#
+        );
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.discriminant(), "ReorderElement");
+
+        // The absolute form — the shape the inverse carries.
+        let m = Mutation::ReorderElement {
+            element_id: crate::element_selection::ElementId::Rectangle("Rectangle/r1".into()),
+            to: ZOrderTarget::Index(3),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains(r#""to":{"index":3}"#), "shape: {json}");
+
+        // Hand-authored, as a plugin would send it.
+        for (verb, expect) in [
+            ("\"back\"", ZOrderTarget::Back),
+            ("\"forward\"", ZOrderTarget::Forward),
+            ("\"backward\"", ZOrderTarget::Backward),
+            ("{\"index\":0}", ZOrderTarget::Index(0)),
+        ] {
+            let raw = format!(
+                r#"{{"op":"reorderElement","args":{{"elementId":{{"kind":"group","id":"Group/g1"}},"to":{verb}}}}}"#
+            );
+            let hand: Mutation = serde_json::from_str(&raw).expect("hand-authored reorderElement");
+            match hand {
+                Mutation::ReorderElement { to, .. } => assert_eq!(to, expect),
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
     }
 
     /// v58 (C-28 / C-29) — the four new wire shapes. Tags are the

@@ -2615,6 +2615,80 @@ pub enum Operation {
         new_parent: NodeId,
         position: usize,
     },
+    /// v59 — **Arrange**: restack a page item WITHIN the sibling list it
+    /// already belongs to. The one z-order primitive; nothing else in
+    /// the algebra could express "bring to front".
+    ///
+    /// # Why this is not `MoveNode`
+    ///
+    /// `MoveNode { new_parent, position }` moves a node between spreads
+    /// and positions it in its KIND vec (`Spread::text_frames`,
+    /// `::rectangles`, …). That vec is not paint order: the renderer,
+    /// the hit-tester and the scene tree all walk
+    /// [`paged_model::Spread::frames_in_order`] whenever it is
+    /// non-empty, and `MoveNode`'s forward path re-registers the node
+    /// with `z_slot: None` — i.e. **on top**, whatever `position` said.
+    /// So on any parsed document `MoveNode` cannot express a z change
+    /// at all, and on a synthesised one it can only permute within a
+    /// single kind. `ReorderNode` operates on the z table itself.
+    ///
+    /// # Scope — the containment guarantee
+    ///
+    /// The op takes **no parent**. It locates the node's current
+    /// sibling list and permutes that list in place:
+    ///
+    ///   * top-level page item → the spread's `frames_in_order`
+    ///     (materialised first via the render-neutral
+    ///     `ensure_frames_in_order` when the parse left it empty);
+    ///   * group member → that `Group::members`;
+    ///   * B-18 pasted-in child → that `Spread::nested_children` entry.
+    ///
+    /// Because the destination list is *derived* from where the node
+    /// already is, a reorder can never move an item out of a group,
+    /// into a container behind [`Operation::PasteInto`]'s validation,
+    /// or across spreads. Containment is structural, not checked.
+    /// Reparenting stays with the ops built for it — `PasteInto` /
+    /// `ReleaseFrom`, `CreateGroup` / `DissolveGroup`, `MoveNode`.
+    ///
+    /// An item that is nobody's sibling — a C-28 opacity-mask artwork,
+    /// which is consumed BY the mask and painted from no list — is
+    /// rejected with an honest error rather than silently no-op'd.
+    ///
+    /// # Honest limit — Arrange is WITHIN a layer
+    ///
+    /// The renderer sorts `frames_in_order` by `ItemLayer` before it
+    /// paints (Q-10, `paged_renderer::pipeline::build_engine`), so the
+    /// z table is only the tiebreaker *within* a layer. Bring-to-front
+    /// therefore cannot lift an item above one on a higher layer — the
+    /// op applies and the table changes, but nothing moves on canvas.
+    /// This is InDesign's model, where crossing layers is a different
+    /// gesture (`SetProperty(ItemLayer)`), not an Arrange. Pinned by
+    /// `a_layer_sort_outranks_arrange_within_the_spread`.
+    ///
+    /// # Honest limit — `.idml` export does not carry it yet
+    ///
+    /// The new order rides `Spread::frames_in_order`, so it survives a
+    /// `.paged` save (the native model part). The IDML writer, though,
+    /// is a byte-preserving splice: it re-emits existing source
+    /// elements untouched and only places NEW items, deliberately
+    /// leaving a reshuffled z alone (`plan_insert_positions` in
+    /// `idml-export`). An Arrange therefore reverts on an
+    /// `.idml` export/reopen round trip. Closing that is a change to
+    /// the writer, not to this op. Pinned by
+    /// `a_reorder_survives_paged_and_is_lost_on_idml_export`.
+    ///
+    /// # Inverse
+    ///
+    /// Always `ReorderNode { node, target: Index(slot_it_came_from) }`,
+    /// whichever verb was applied — the same "exact stacking slot"
+    /// property `RemoveNode`'s `z_slot` was built to preserve. One undo
+    /// restores the previous order bytewise. `Index` counts the node's
+    /// FINAL slot in the resulting list (0 = backmost / painted first),
+    /// so remove-at-`to` + insert-at-`from` is an exact reversal.
+    ReorderNode {
+        node: NodeId,
+        target: ZOrderTarget,
+    },
     Batch {
         ops: Vec<Operation>,
     },
@@ -3538,6 +3612,46 @@ pub struct CellAddr {
 pub enum StyleScope {
     Paragraph,
     Character,
+}
+
+/// v59 — where [`Operation::ReorderNode`] puts its target inside the
+/// sibling list it already belongs to.
+///
+/// **Both forms deliberately ship.** The four RELATIVE verbs are what a
+/// UI and a plugin can actually express: they are read-modify-write
+/// against whatever the list happens to be at apply time, so a
+/// concurrent insert or delete between "the caller read the order" and
+/// "the engine applied the op" cannot silently restack the wrong item —
+/// there is no stale index to be wrong. They map 1:1 onto the Arrange
+/// menu every DTP app ships (Illustrator's Object ▸ Arrange, InDesign's
+/// Object ▸ Arrange, PowerPoint's Bring Forward…).
+///
+/// [`ZOrderTarget::Index`] is the absolute form, and it is what makes
+/// the inverse EXACT: the apply layer records the slot the node came
+/// from and hands back `Index(that slot)`. It is also the honest way to
+/// express "restore this exact order" for a drag in a layers panel.
+/// Because an absolute index CAN go stale, an out-of-range `Index` is
+/// rejected loudly (`OperationError::InvalidPosition`) instead of being
+/// clamped — a caller working from a stale model should hear about it.
+///
+/// Serialised externally-tagged (the [`FieldKind`] convention):
+/// `"front"` / `"back"` / `"forward"` / `"backward"` / `{"index": 3}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum ZOrderTarget {
+    /// Bring to front — the last slot, painted over everything else.
+    Front,
+    /// Send to back — slot 0, painted first.
+    Back,
+    /// Bring forward one slot. Already frontmost ⇒ a successful no-op
+    /// (Illustrator's behaviour), whose inverse is still exact.
+    Forward,
+    /// Send backward one slot. Already backmost ⇒ a successful no-op.
+    Backward,
+    /// The node's FINAL slot in the resulting list, 0 = backmost.
+    /// Out of range is an error, never a clamp.
+    Index(usize),
 }
 
 /// W0.5 — the kind of field marker inserted by
