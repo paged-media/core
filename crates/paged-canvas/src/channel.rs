@@ -1826,9 +1826,19 @@ pub struct PathAnchorTriple {
 
 /// Track M — wire-shape mirror of `paged_model::Layer`. Surfaces
 /// everything the Layers panel needs without leaking parse-side
-/// fields the wasm boundary doesn't understand. `z` is the layer's
-/// zero-based index in `designmap.layers` (top-first, matching the
-/// renderer's paint order via `layer_z_index`).
+/// fields the wasm boundary doesn't understand.
+///
+/// `z` is the layer's zero-based index in `designmap.layers`, and
+/// **`z == 0` is the BACKMOST layer** — the first declared, painted
+/// first. The topmost layer has the HIGHEST z.
+///
+/// This comment previously said "top-first … designmap[0] = topmost",
+/// which is the inversion `paged_scene::layer` records as a real bug
+/// (its module doc: "Cycle 2's Q-10 commit had this inverted"), fixed
+/// in the renderer and asserted by its own test. The wire comment kept
+/// the wrong version, so a panel author sorting by `z` would have
+/// stacked the list upside down. See `paged_scene::layer` for the
+/// authority.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]

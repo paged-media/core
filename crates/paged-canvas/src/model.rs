@@ -4191,9 +4191,10 @@ impl CanvasModel {
     /// user can select a whole group as a unit and translate / scale
     /// it via the existing union handles.
     /// Track M — flatten the loaded document's designmap layers into
-    /// the wire-shape `LayerSummary` list. Top-first order matches
-    /// the renderer's `layer_z_index` (designmap[0] = topmost in the
-    /// IDML wire convention).
+    /// the wire-shape `LayerSummary` list, in designmap order:
+    /// `z == 0` is the BACKMOST layer, the highest z is topmost, which
+    /// is what `paged_scene::layer` documents and asserts. (This
+    /// comment previously claimed the opposite.)
     pub fn layers(&self) -> Vec<crate::channel::LayerSummary> {
         use crate::channel::LayerSummary;
         self.scene
