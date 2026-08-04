@@ -2013,6 +2013,7 @@ mod tests {
             image_clip: None,
             has_image_element: false,
             has_inline_pdf: false,
+            has_inline_eps: false,
             image_item_transform: None,
             overprint_fill: false,
             overprint_stroke: false,

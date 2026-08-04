@@ -3829,6 +3829,7 @@ fn b23_bare_polygon(self_id: &str) -> paged_model::Polygon {
         image_link: None,
         has_image_element: false,
         has_inline_pdf: false,
+        has_inline_eps: false,
         image_item_transform: None,
         image_bytes: None,
         image_clip: None,

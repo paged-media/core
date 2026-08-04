@@ -905,6 +905,19 @@ pub struct Rectangle {
     /// frame should fall back to its intrinsic FillColor rather than
     /// the grey-X missing-image placeholder (Q-06).
     pub has_inline_pdf: bool,
+    /// True when the rectangle nests an `<EPS>` element carrying inline
+    /// `<Contents>` CDATA — the PostScript payload of an embedded EPS.
+    ///
+    /// Same posture as [`Self::has_inline_pdf`], for the same reason: we
+    /// have no PostScript interpreter, so the content is present but
+    /// unrasterizable. The grey-X placeholder would be a lie here — it
+    /// says "the link is missing" when the artwork is in fact embedded —
+    /// so the frame falls back to its intrinsic FillColor instead.
+    ///
+    /// Kept separate from `has_inline_pdf` rather than folded into a
+    /// shared "unrasterizable" flag so diagnostics can still name the
+    /// format the document actually used.
+    pub has_inline_eps: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// Maps the image's natural-pixel coordinate space (origin at the
     /// top-left of the source pixmap, with 1px ≈ 1pt at 72 ppi) into
@@ -1320,6 +1333,8 @@ pub struct Oval {
     /// Inline-`<PDF>`-without-link marker (Q-06). Mirrors
     /// [`Rectangle::has_inline_pdf`].
     pub has_inline_pdf: bool,
+    /// [`Rectangle::has_inline_eps`].
+    pub has_inline_eps: bool,
     /// `ItemTransform` from the nested `<Image>`. Mirrors
     /// [`Rectangle::image_item_transform`] (P-16).
     pub image_item_transform: Option<[f32; 6]>,
@@ -1748,6 +1763,8 @@ pub struct Polygon {
     /// Inline-`<PDF>`-without-link marker (Q-06). Mirrors
     /// [`Rectangle::has_inline_pdf`].
     pub has_inline_pdf: bool,
+    /// [`Rectangle::has_inline_eps`].
+    pub has_inline_eps: bool,
     /// `ItemTransform` attribute on the nested `<Image>` element.
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,

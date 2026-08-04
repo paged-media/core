@@ -29,7 +29,7 @@ fn report_image_resolution(
     page: &mut BuiltPage,
     resolution: &ImageResolution,
     has_image_element: bool,
-    has_inline_pdf: bool,
+    has_inline_unrasterizable: bool,
     uri: Option<&str>,
     frame_id: Option<&str>,
 ) {
@@ -38,7 +38,7 @@ fn report_image_resolution(
             DiagnosticCode::ImageDecodeFailed,
             "placed image could not be decoded; frame fill used instead",
         ),
-        ImageResolution::LinkMissing if has_image_element && !has_inline_pdf => (
+        ImageResolution::LinkMissing if has_image_element && !has_inline_unrasterizable => (
             DiagnosticCode::ImageLinkMissing,
             "placed image link could not be resolved; placeholder drawn",
         ),
@@ -107,7 +107,7 @@ pub(super) fn emit_rectangle_image(
         page,
         &resolved,
         rect.has_image_element,
-        rect.has_inline_pdf,
+        rect.has_inline_pdf || rect.has_inline_eps,
         rect.image_link.as_deref(),
         rect.self_id.as_deref(),
     );
@@ -116,11 +116,15 @@ pub(super) fn emit_rectangle_image(
         ImageResolution::Resolved(id, w, h) => (id, w, h),
         ImageResolution::DecodeFailed => return,
         ImageResolution::LinkMissing => {
-            // Q-06: inline `<PDF>` content we can't decode → fall
+            // Q-06: inline `<PDF>` / `<EPS>` content we can't decode
+            // (no PDF decoder, no PostScript interpreter) → fall
             // through to the frame's intrinsic FillColor (already
             // emitted by the earlier shape-fill pass) rather than
             // stamping the grey-X missing-image placeholder over it.
-            if rect.has_image_element && !rect.has_inline_pdf && options.missing_image_placeholder {
+            if rect.has_image_element
+                && !(rect.has_inline_pdf || rect.has_inline_eps)
+                && options.missing_image_placeholder
+            {
                 emit_rectangle_missing_image_placeholder(page, rect, outer);
             }
             return;
@@ -251,7 +255,7 @@ pub(super) fn emit_polygon_image(
         page,
         &resolved,
         poly.has_image_element,
-        poly.has_inline_pdf,
+        poly.has_inline_pdf || poly.has_inline_eps,
         poly.image_link.as_deref(),
         poly.self_id.as_deref(),
     );
@@ -260,7 +264,10 @@ pub(super) fn emit_polygon_image(
         ImageResolution::Resolved(id, w, h) => (id, w, h),
         ImageResolution::DecodeFailed => return,
         ImageResolution::LinkMissing => {
-            if poly.has_image_element && !poly.has_inline_pdf && options.missing_image_placeholder {
+            if poly.has_image_element
+                && !(poly.has_inline_pdf || poly.has_inline_eps)
+                && options.missing_image_placeholder
+            {
                 emit_polygon_missing_image_placeholder(page, poly, outer);
             }
             return;
@@ -426,7 +433,7 @@ pub(super) fn emit_oval_image(
         page,
         &resolved,
         oval.has_image_element,
-        oval.has_inline_pdf,
+        oval.has_inline_pdf || oval.has_inline_eps,
         oval.image_link.as_deref(),
         oval.self_id.as_deref(),
     );
@@ -435,7 +442,10 @@ pub(super) fn emit_oval_image(
         ImageResolution::Resolved(id, w, h) => (id, w, h),
         ImageResolution::DecodeFailed => return,
         ImageResolution::LinkMissing => {
-            if oval.has_image_element && !oval.has_inline_pdf && options.missing_image_placeholder {
+            if oval.has_image_element
+                && !(oval.has_inline_pdf || oval.has_inline_eps)
+                && options.missing_image_placeholder
+            {
                 emit_oval_missing_image_placeholder(page, oval, outer);
             }
             return;
