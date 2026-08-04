@@ -63,17 +63,30 @@
 //!    Vello needs a height-field/normal pass it doesn't have, so
 //!    this stays a renderer-gap (CPU is the path of record).
 //!
+//! Exact (matches the CPU rasterizer, the path of record):
 //!  - C-28 `BeginSoftMask` / `BeginMaskedContent` / `EndSoftMask`
-//!    (opacity masks) — Vello's `push_layer` takes a *shape*, not a
-//!    coverage buffer, so the version we link against has no way to
-//!    modulate a layer by another layer's luminosity or alpha. Rather
-//!    than paint the mask artwork on top of the page (which is what
-//!    ignoring the markers outright would do, and is visibly worse
-//!    than no mask at all), we SKIP the artwork range and render the
-//!    masked content UNMASKED. Explicitly not the `PushClip`
-//!    precedent — clips *are* enforced here — and explicitly not a
-//!    silent divergence: the CPU rasterizer stays the path of record,
-//!    and this is the documented gap.
+//!    (opacity masks) — see `emit_soft_mask`. Vello *does* have a
+//!    coverage-modulating layer: `Scene::push_luminance_mask_layer`
+//!    (v0.9.0, the tag we pin), whose `CMD_END_CLIP` computes
+//!    `dst = backdrop * svg_lum(unpremultiply(fg)) * fg.a` — the same
+//!    demultiply-weight-by-alpha that `tiny_skia::MaskType::Luminance`
+//!    does, to within the Rec.709-vs-SVG luma-coefficient rounding
+//!    (0.2126/0.7152/0.0722 vs 0.2125/0.7154/0.0721). Alpha masks need
+//!    no special layer kind at all: `Compose::DestIn` composites a
+//!    layer as `backdrop * src.a`, and `Compose::DestOut` as
+//!    `backdrop * (1 − src.a)` — i.e. the inverted form for free.
+//!
+//!    Residual: Vello's mask reads the *enclosing layer*, so the
+//!    masked content has to be isolated into a layer of its own,
+//!    while the CPU rasterizer masks each draw in place. The two only
+//!    part company when the masked content carries a non-Normal blend
+//!    — isolated, a Multiply sees an empty backdrop instead of the
+//!    page. `hoistable_blend_group` folds that blend onto the content
+//!    layer for the shape the emitter actually produces (the frame's
+//!    group spanning the whole masked range), which restores exact
+//!    parity. A blend group that only *partly* spans the masked
+//!    content is not folded and stays isolated; no emitter produces
+//!    that today.
 //!
 //! Partial-parity note: the Satin approximation below is a
 //! two-stamp additive blend; the CPU rasterizer's W1.4 `invert`
@@ -355,30 +368,88 @@ fn build_scene_with_transform_filtered(
     // properly nested by the emitter.
     let mut layer_stack: Vec<LayerKind> = Vec::new();
 
-    // C-28 — nesting depth of soft-mask ARTWORK we are currently
-    // skipping. See the module doc: Vello cannot modulate by a
-    // coverage buffer, so the artwork must not be painted (it would
-    // land on top of the page as opaque geometry). The masked content
-    // that follows `BeginMaskedContent` renders unmasked.
-    let mut soft_mask_skip = 0usize;
-
-    for cmd in &list.commands {
-        if soft_mask_skip > 0 {
-            match cmd {
-                DisplayCommand::BeginSoftMask { .. } => soft_mask_skip += 1,
-                DisplayCommand::BeginMaskedContent(_) => soft_mask_skip -= 1,
-                _ => {}
-            }
-            continue;
-        }
+    for (cmd_idx, cmd) in list.commands.iter().enumerate() {
         match cmd {
-            DisplayCommand::BeginSoftMask { .. } => {
-                soft_mask_skip = 1;
+            // C-28 — open a soft-mask bracket. Vello's mask layers
+            // modulate the content already drawn in the enclosing
+            // layer, which is the REVERSE of the display list's
+            // artwork-then-content order, so the artwork is captured
+            // into a sub-scene here and replayed at `EndSoftMask`
+            // once the content is down. Same capture-and-replay
+            // machinery the Gaussian-blur layer uses.
+            DisplayCommand::BeginSoftMask {
+                mask_type, invert, ..
+            } => {
+                scene_stack.push(Scene::new());
+                layer_stack.push(LayerKind::SoftMaskArtwork {
+                    mask_type: *mask_type,
+                    invert: *invert,
+                });
             }
-            // Both remaining markers are pure state changes we cannot
-            // honour — the mask never became a layer, so there is
-            // nothing to pop.
-            DisplayCommand::BeginMaskedContent(_) | DisplayCommand::EndSoftMask(_) => {}
+            // C-28 — artwork done, masked content starts. Close the
+            // capture and open an isolating layer for the content:
+            // Vello's mask applies to *everything already drawn in
+            // the current layer*, so the content needs a layer of its
+            // own or the mask would eat the whole page beneath it.
+            //
+            // That isolation is also the one place this can diverge
+            // from the CPU rasterizer, which masks each draw in place
+            // and so lets a blend inside the masked content see the
+            // page. `hoistable_blend_group` recovers the common case
+            // — see its doc comment.
+            DisplayCommand::BeginMaskedContent(_) => {
+                if !matches!(layer_stack.last(), Some(LayerKind::SoftMaskArtwork { .. })) {
+                    continue; // stray marker — tolerated
+                }
+                let Some(LayerKind::SoftMaskArtwork { mask_type, invert }) = layer_stack.pop()
+                else {
+                    unreachable!("checked by the matches! above")
+                };
+                let artwork = scene_stack
+                    .pop()
+                    .expect("scene_stack underflow on soft-mask artwork");
+                let hoisted = hoistable_blend_group(&list.commands, cmd_idx);
+                let (blend, alpha, rect) = match hoisted {
+                    Some(g) => (
+                        blend_to_peniko(g.blend_mode),
+                        g.opacity.clamp(0.0, 1.0),
+                        kurbo::Rect::new(
+                            g.bounds.x as f64,
+                            g.bounds.y as f64,
+                            (g.bounds.x + g.bounds.w) as f64,
+                            (g.bounds.y + g.bounds.h) as f64,
+                        ),
+                    ),
+                    None => (PenikoBlendMode::default(), 1.0, soft_mask_layer_rect()),
+                };
+                let scene = scene_stack.last_mut().expect("scene_stack underflow");
+                scene.push_layer(Fill::NonZero, blend, alpha, page_to_px, &rect);
+                layer_stack.push(LayerKind::SoftMaskContent {
+                    artwork: Box::new(artwork),
+                    mask_type,
+                    invert,
+                    elide_next_blend_group: hoisted.is_some(),
+                });
+            }
+            // C-28 — content done. Replay the artwork through the
+            // mask layer, then close the content layer.
+            DisplayCommand::EndSoftMask(_) => {
+                if !matches!(layer_stack.last(), Some(LayerKind::SoftMaskContent { .. })) {
+                    continue; // stray marker — tolerated
+                }
+                let Some(LayerKind::SoftMaskContent {
+                    artwork,
+                    mask_type,
+                    invert,
+                    ..
+                }) = layer_stack.pop()
+                else {
+                    unreachable!("checked by the matches! above")
+                };
+                let scene = scene_stack.last_mut().expect("scene_stack underflow");
+                emit_soft_mask(scene, page_to_px, &artwork, mask_type, invert);
+                scene.pop_layer();
+            }
             DisplayCommand::PushClip { path_id, transform } => {
                 let scene = scene_stack.last_mut().expect("scene_stack underflow");
                 let Some(path_data) = list.paths.get(*path_id) else {
@@ -406,6 +477,20 @@ fn build_scene_with_transform_filtered(
                 opacity,
                 ..
             } => {
+                // C-28 — this group's blend was hoisted onto the
+                // enclosing soft-mask content layer at
+                // `BeginMaskedContent`; encoding it again here would
+                // apply the composite twice. Push a do-nothing entry
+                // so the matching `EndBlendGroup` stays balanced.
+                if let Some(LayerKind::SoftMaskContent {
+                    elide_next_blend_group: elide @ true,
+                    ..
+                }) = layer_stack.last_mut()
+                {
+                    *elide = false;
+                    layer_stack.push(LayerKind::Elided);
+                    continue;
+                }
                 let scene = scene_stack.last_mut().expect("scene_stack underflow");
                 let rect = kurbo::Rect::new(
                     bounds.x as f64,
@@ -1035,7 +1120,6 @@ fn build_scene_with_transform_filtered(
 /// matching pop knows whether to call `pop_layer` on the current scene
 /// (Encoded) or unwind a captured sub-scene through the multi-tap
 /// Gaussian replay (Blurred).
-#[derive(Debug, Clone, Copy)]
 enum LayerKind {
     /// A plain `push_layer` call on the current target scene. Clip
     /// layers, blend groups, and `PushLayer { effect: None }` all use
@@ -1051,6 +1135,125 @@ enum LayerKind {
         blend_mode: ComposeBlendMode,
         opacity: f32,
     },
+    /// C-28 — a `BeginSoftMask` opened a sub-scene on `scene_stack`
+    /// that is collecting the mask ARTWORK. Lives on the stack only
+    /// until `BeginMaskedContent`.
+    SoftMaskArtwork {
+        mask_type: paged_compose::SoftMaskType,
+        invert: bool,
+    },
+    /// C-28 — `BeginMaskedContent` closed the artwork capture and
+    /// pushed an isolating layer for the masked content; `artwork`
+    /// waits here for [`emit_soft_mask`] at `EndSoftMask`. Boxed
+    /// because a `Scene` is an order of magnitude larger than the
+    /// other variants and this one is rare.
+    SoftMaskContent {
+        artwork: Box<Scene>,
+        mask_type: paged_compose::SoftMaskType,
+        invert: bool,
+        /// The blend group [`hoistable_blend_group`] found was folded
+        /// into this layer's own blend mode; the next
+        /// `BeginBlendGroup` must therefore encode nothing.
+        elide_next_blend_group: bool,
+    },
+    /// A push that deliberately produced NO Vello layer, so the
+    /// matching pop must do nothing. Only [`LayerKind::SoftMaskContent`]
+    /// hoisting produces these.
+    Elided,
+}
+
+/// The blend group [`hoistable_blend_group`] folded into a soft-mask
+/// content layer. `bounds` rides along so the content layer keeps
+/// clipping to the group's buffer extent, exactly as the un-folded
+/// encoding — and the CPU rasterizer's group pixmap — would.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HoistedGroup {
+    bounds: paged_compose::Rect,
+    blend_mode: ComposeBlendMode,
+    opacity: f32,
+}
+
+/// C-28 — decide whether the blend group opening the masked content
+/// can be folded into the content layer itself.
+///
+/// Vello's mask layers force the masked content into an isolated
+/// layer (see [`emit_soft_mask`]), and a blend group *inside* that
+/// isolation composites against an empty backdrop instead of the
+/// page — so a Multiply frame carrying an opacity mask would come out
+/// unblended. The CPU rasterizer has no such problem: it masks each
+/// draw in place, and `EndBlendGroup` composites the group buffer
+/// onto the page through the clip stack (mask included).
+///
+/// When the masked content is EXACTLY one blend group — which is what
+/// the emitter produces for a frame that has both a blend mode and an
+/// opacity mask, since `emit_one` opens the frame's group first and
+/// closes it last — the two are reconcilable: put the blend on the
+/// content layer, apply the mask inside it, and let the whole thing
+/// composite once at the end. That yields
+/// `page·(1 − m·α) + m·α·blend(page, content)`, which is what the CPU
+/// rasterizer computes.
+///
+/// Returns the group when `mid` (the index of the
+/// `BeginMaskedContent`) is immediately followed by a
+/// `BeginBlendGroup` whose matching `EndBlendGroup` is the last
+/// command before the bracket's `EndSoftMask`. Any other shape
+/// returns `None` and the content layer stays a plain isolator —
+/// folding a group that does not span the whole content would apply
+/// its blend to commands that are not part of it.
+///
+/// The scan is O(bracket length) and runs once per bracket. It is a
+/// no-op for `Normal` blends at opacity 1 (the overwhelmingly common
+/// case): the folded encoding is a `Mix::Normal`/`SrcOver` layer over
+/// the group's bounds either way.
+fn hoistable_blend_group(commands: &[DisplayCommand], mid: usize) -> Option<HoistedGroup> {
+    let hoisted = match commands.get(mid + 1)? {
+        DisplayCommand::BeginBlendGroup {
+            bounds,
+            blend_mode,
+            opacity,
+            ..
+        } => HoistedGroup {
+            bounds: *bounds,
+            blend_mode: *blend_mode,
+            opacity: *opacity,
+        },
+        _ => return None,
+    };
+    // Walk forward tracking layer depth. `BeginMaskedContent` counts
+    // as a push because a nested bracket opens its own content layer;
+    // `BeginSoftMask` does not (it opens a sub-scene, not a layer).
+    let mut depth = 0i32;
+    for (i, cmd) in commands.iter().enumerate().skip(mid + 1) {
+        match cmd {
+            DisplayCommand::PushClip { .. }
+            | DisplayCommand::BeginBlendGroup { .. }
+            | DisplayCommand::PushLayer { .. }
+            | DisplayCommand::BeginMaskedContent(_) => depth += 1,
+            DisplayCommand::PopClip(_)
+            | DisplayCommand::EndBlendGroup(_)
+            | DisplayCommand::PopLayer(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    // The candidate group just closed. Hoist only if
+                    // it closed with the right command AND the
+                    // bracket ends immediately after.
+                    let closes_group = matches!(cmd, DisplayCommand::EndBlendGroup(_));
+                    let bracket_ends_next =
+                        matches!(commands.get(i + 1), Some(DisplayCommand::EndSoftMask(_)));
+                    return (closes_group && bracket_ends_next).then_some(hoisted);
+                }
+            }
+            // Our own bracket closed before the group did: malformed.
+            DisplayCommand::EndSoftMask(_) => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Generic pop: examine the top of `layer_stack` and either pop the
@@ -1068,6 +1271,35 @@ fn pop_layer_or_blur(
         return;
     };
     match kind {
+        // C-28 — a soft-mask bracket is closed by its own
+        // `EndSoftMask` arm, never by a `PopClip` / `PopLayer` /
+        // `EndBlendGroup`. Reaching here means either a stray pop
+        // inside a bracket or the end-of-list drain; both finish the
+        // bracket as best they can rather than desynchronising the
+        // scene stack.
+        LayerKind::SoftMaskArtwork { .. } => {
+            // Artwork capture never reached `BeginMaskedContent` —
+            // drop it. (Painting it would put the mask geometry on
+            // top of the page, the failure mode the old skip-path
+            // was written to avoid.)
+            scene_stack
+                .pop()
+                .expect("scene_stack underflow on soft-mask artwork drain");
+        }
+        LayerKind::SoftMaskContent {
+            artwork,
+            mask_type,
+            invert,
+            ..
+        } => {
+            let scene = scene_stack
+                .last_mut()
+                .expect("scene_stack underflow on soft-mask content drain");
+            emit_soft_mask(scene, page_to_px, &artwork, mask_type, invert);
+            scene.pop_layer();
+        }
+        // A push that encoded nothing — its pop encodes nothing.
+        LayerKind::Elided => {}
         LayerKind::Encoded => {
             let scene = scene_stack
                 .last_mut()
@@ -1091,6 +1323,113 @@ fn pop_layer_or_blur(
             emit_blurred_layer(
                 parent, page_to_px, &sub, sigma_pt, bounds, blend_mode, opacity,
             );
+        }
+    }
+}
+
+/// Half-extent, in page pt, of the rectangle used as the clip shape
+/// for both layers a C-28 soft-mask bracket opens.
+///
+/// A `push_layer` needs a *shape*, and both layers here want "all of
+/// it": the content layer must not clip the content, and the mask
+/// layer must cover every pixel the content can reach — Vello leaves
+/// the backdrop untouched where the mask layer's coverage is zero, so
+/// a mask rect smaller than the content would leave the overhang
+/// unmasked (`fine.wgsl`'s `if area[i] == 0f { rgba[i] = bg; }`).
+///
+/// Oversizing is free where undersizing is wrong, hence a constant
+/// rather than a computed bbox: `tile_alloc.wgsl` clamps every path
+/// bbox to the render target's tile grid, so the cost of this rect is
+/// one target-sized layer — the same order as the CPU rasterizer's
+/// target-sized capture buffer — no matter how large the number is.
+/// It is in PAGE space (not device space) because `build_page_scene` /
+/// `present_multi` build a scene at identity and only then
+/// `Scene::append` it under the camera transform; a device-space rect
+/// would be wrong there.
+const SOFT_MASK_LAYER_EXTENT_PT: f64 = 1.0e5;
+
+fn soft_mask_layer_rect() -> kurbo::Rect {
+    kurbo::Rect::new(
+        -SOFT_MASK_LAYER_EXTENT_PT,
+        -SOFT_MASK_LAYER_EXTENT_PT,
+        SOFT_MASK_LAYER_EXTENT_PT,
+        SOFT_MASK_LAYER_EXTENT_PT,
+    )
+}
+
+/// C-28 — replay a captured mask ARTWORK sub-scene as a coverage mask
+/// over the content layer that is currently on top of `scene`.
+///
+/// Called at `EndSoftMask`, i.e. with the masked content already
+/// encoded into the enclosing layer, because that is the direction
+/// Vello's mask layers work: `CMD_END_CLIP` reads the layer's own
+/// content as the mask and the *backdrop* — everything drawn earlier
+/// in the enclosing layer — as the thing being masked.
+///
+/// Four cases, all exact against the CPU rasterizer:
+///
+/// * **Luminosity** — `push_luminance_mask_layer`, whose end-of-layer
+///   composite is `bg * clamp(svg_lum(unpremultiply(fg)) * fg.a, 0, 1)`.
+///   An unpainted pixel is `fg = 0`, so it resolves to 0 = hidden,
+///   matching PDF's black backdrop and `tiny_skia::MaskType::Luminance`
+///   over an α = 0 capture buffer.
+/// * **Luminosity + invert** — the same layer, but the artwork is
+///   composited over an opaque WHITE fill under `Mix::Difference`.
+///   Difference against white is `1 − c` per channel, and luma is
+///   affine with coefficients summing to 1, so the layer resolves to
+///   `1 − α·lum(c)` — exactly `tiny_skia::Mask::invert` of the
+///   non-inverted mask. (Doing it here rather than post-hoc is the
+///   only option: Vello has no "invert the coverage" knob.)
+/// * **Alpha** — no mask layer needed. `Compose::DestIn` is defined as
+///   `dst · src.a`, which *is* an alpha mask; unpainted artwork gives
+///   `src.a = 0` ⇒ hidden, same default.
+/// * **Alpha + invert** — `Compose::DestOut`, `dst · (1 − src.a)`.
+///
+/// The artwork is replayed under `Scene::append` with no extra
+/// transform: the sub-scene was built in the same shape space, with
+/// `page_to_px` already baked into each draw.
+fn emit_soft_mask(
+    scene: &mut Scene,
+    page_to_px: kurbo::Affine,
+    artwork: &Scene,
+    mask_type: paged_compose::SoftMaskType,
+    invert: bool,
+) {
+    let rect = soft_mask_layer_rect();
+    match mask_type {
+        paged_compose::SoftMaskType::Alpha => {
+            let compose = if invert {
+                Compose::DestOut
+            } else {
+                Compose::DestIn
+            };
+            scene.push_layer(
+                Fill::NonZero,
+                PenikoBlendMode::new(Mix::Normal, compose),
+                1.0,
+                page_to_px,
+                &rect,
+            );
+            scene.append(artwork, None);
+            scene.pop_layer();
+        }
+        paged_compose::SoftMaskType::Luminosity => {
+            scene.push_luminance_mask_layer(Fill::NonZero, 1.0, page_to_px, &rect);
+            if invert {
+                scene.fill(Fill::NonZero, page_to_px, PenikoColor::WHITE, None, &rect);
+                scene.push_layer(
+                    Fill::NonZero,
+                    PenikoBlendMode::new(Mix::Difference, Compose::SrcOver),
+                    1.0,
+                    page_to_px,
+                    &rect,
+                );
+                scene.append(artwork, None);
+                scene.pop_layer();
+            } else {
+                scene.append(artwork, None);
+            }
+            scene.pop_layer();
         }
     }
 }
@@ -3465,5 +3804,619 @@ mod tests {
             nonzero,
             "knockout fallback produced black, got {interior:?}"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // C-28 opacity masks — Vello against the CPU rasterizer.
+    //
+    // The CPU rasterizer is the path of record, so these are parity
+    // tests: one display list, rendered twice, compared. They probe
+    // *continuous* coverage — the whole point of a soft mask over a
+    // clip — not merely "something got hidden".
+    //
+    // Measured on Metal / macOS at the time of writing: the 72 dpi
+    // comparisons are byte-IDENTICAL (worst channel delta 0) across
+    // all four (mask type × invert) combinations, whole image
+    // included. The `<= 2` tolerances below are headroom for
+    // rounding on other adapters, not observed error.
+    // ------------------------------------------------------------------
+
+    /// Page geometry shared by the C-28 parity tests. 100×40 pt at
+    /// 72 dpi (1 pt = 1 px):
+    ///
+    /// * masked CONTENT — black, the whole page.
+    /// * mask ARTWORK — four 25 pt columns spanning y ∈ [5, 35), each
+    ///   a different coverage step (0, ¼, ¾, 1). The y ∈ [0, 5) and
+    ///   y ∈ [35, 40) bands carry NO artwork, which is the
+    ///   "unpainted ⇒ hidden" probe (and, inverted, "unpainted ⇒
+    ///   shown").
+    ///
+    /// Every edge lands on an integer pixel at 72 dpi, so AA plays no
+    /// part in the comparison.
+    #[cfg(feature = "cpu")]
+    fn stepped_mask_list(
+        mask_type: paged_compose::SoftMaskType,
+        invert: bool,
+    ) -> paged_compose::DisplayList {
+        use paged_compose::{Color as DLColor, DisplayCommand, Paint, Transform};
+
+        let mut list = DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // The same four numbers drive both mask types: a step of 0.25
+        // is "grey 0.25 at α 1" for Luminosity and "white at α 0.25"
+        // for Alpha. Values are in the display list's LINEAR RGB
+        // space; both back ends convert to sRGB identically before
+        // resolving coverage, so the parity claim is unaffected.
+        let steps = [0.0_f32, 0.25, 0.75, 1.0];
+
+        list.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type,
+            invert,
+            transform: Transform::IDENTITY,
+        });
+        for (i, level) in steps.iter().enumerate() {
+            let paint = match mask_type {
+                paged_compose::SoftMaskType::Luminosity => {
+                    Paint::Solid(DLColor::rgba(*level, *level, *level, 1.0))
+                }
+                paged_compose::SoftMaskType::Alpha => {
+                    Paint::Solid(DLColor::rgba(1.0, 1.0, 1.0, *level))
+                }
+            };
+            list.commands.push(DisplayCommand::FillPath {
+                path_id: rect_id,
+                paint,
+                transform: Transform([25.0, 0.0, 0.0, 30.0, i as f32 * 25.0, 5.0]),
+            });
+        }
+        list.commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
+            transform: Transform([100.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+        list
+    }
+
+    #[cfg(feature = "cpu")]
+    fn stepped_mask_opts() -> RasterOptions {
+        let mut opts = RasterOptions::new(100.0, 40.0);
+        opts.dpi = 72.0;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        opts
+    }
+
+    /// Worst per-channel delta between two RGBA8 buffers.
+    #[cfg(feature = "cpu")]
+    fn worst_channel_delta(a: &[u8], b: &[u8]) -> u8 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The headline parity test: for every (mask type × invert)
+    /// combination the Vello image equals the CPU image, and both
+    /// carry the four distinct coverage steps.
+    #[test]
+    #[cfg(feature = "cpu")]
+    fn soft_mask_matches_the_cpu_rasterizer_for_every_mode() {
+        use paged_compose::SoftMaskType;
+        for mask_type in [SoftMaskType::Luminosity, SoftMaskType::Alpha] {
+            for invert in [false, true] {
+                let list = stepped_mask_list(mask_type, invert);
+                let opts = stepped_mask_opts();
+                let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+                if !gpu_path_ran(&gpu) {
+                    return; // no adapter — encoding-only tests still ran
+                }
+                let cpu = crate::CpuRasterizer.rasterize(&list, &opts);
+                let worst = worst_channel_delta(&gpu, &cpu);
+                assert!(
+                    worst <= 2,
+                    "{mask_type:?} invert={invert}: worst channel delta {worst} \
+                     between vello and the CPU rasterizer"
+                );
+
+                // Semantics, asserted on the Vello buffer alone so a
+                // shared bug in both back ends can't pass this.
+                let px = |x: usize, y: usize| gpu[(y * 100 + x) * 4];
+                let steps: Vec<u8> = [12usize, 37, 62, 87].iter().map(|x| px(*x, 20)).collect();
+                // Black content under an increasing mask ⇒ strictly
+                // decreasing luminance (or increasing, inverted).
+                let ordered = if invert {
+                    steps.windows(2).all(|w| w[0] < w[1])
+                } else {
+                    steps.windows(2).all(|w| w[0] > w[1])
+                };
+                assert!(
+                    ordered,
+                    "{mask_type:?} invert={invert}: coverage steps not monotone: {steps:?}"
+                );
+                // The unpainted band: hidden (paper) normally, shown
+                // (black content) when inverted.
+                let unpainted = px(50, 2);
+                if invert {
+                    assert!(
+                        unpainted < 40,
+                        "{mask_type:?} inverted: unpainted mask area must SHOW the content, \
+                         got {unpainted}"
+                    );
+                } else {
+                    assert!(
+                        unpainted > 215,
+                        "{mask_type:?}: unpainted mask area must HIDE the content, \
+                         got {unpainted}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The mask artwork is a coverage source, never paint: a red
+    /// artwork must leave no red on the page. Also pins that the
+    /// bracket composes with an enclosing clip and blend group —
+    /// Vello gets that from layer nesting, the CPU rasterizer from
+    /// its clip stack, and the two must still agree.
+    #[test]
+    #[cfg(feature = "cpu")]
+    fn soft_mask_artwork_never_paints_and_nests_in_clips_and_groups() {
+        use paged_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, Paint, Rect, SoftMaskType,
+            Transform,
+        };
+
+        let mut list = DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // 50%-opacity blend group ▸ clip to the left half ▸ soft mask.
+        list.commands.push(DisplayCommand::BeginBlendGroup {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 40.0,
+            },
+            blend_mode: ComposeBlend::Normal,
+            opacity: 0.5,
+            transform: Transform::IDENTITY,
+        });
+        list.commands.push(DisplayCommand::PushClip {
+            path_id: rect_id,
+            transform: Transform([50.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Luminosity,
+            invert: false,
+            transform: Transform::IDENTITY,
+        });
+        // Saturated red artwork spanning y ∈ [10, 30).
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 0.0, 0.0, 1.0)),
+            transform: Transform([80.0, 0.0, 0.0, 20.0, 10.0, 10.0]),
+        });
+        list.commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
+            transform: Transform([100.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::PopClip(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+
+        let opts = stepped_mask_opts();
+        let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+        if !gpu_path_ran(&gpu) {
+            return;
+        }
+        let cpu = crate::CpuRasterizer.rasterize(&list, &opts);
+        let worst = worst_channel_delta(&gpu, &cpu);
+        assert!(
+            worst <= 2,
+            "clip+group nesting: worst channel delta {worst}"
+        );
+
+        let px = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 100 + x) * 4;
+            [gpu[i], gpu[i + 1], gpu[i + 2], gpu[i + 3]]
+        };
+        // Inside the clip, inside the artwork: partial grey. Red's
+        // luminance is ~0.21 in sRGB terms, halved again by the
+        // group's 0.5 opacity — the exact value is pinned by the
+        // parity assertion above; here we only require "neither
+        // paper nor solid".
+        let inside = px(25, 20);
+        assert!(
+            inside[0] > 20 && inside[0] < 245,
+            "masked content should be partially visible, got {inside:?}"
+        );
+        // Outside the clip: untouched paper. The clip must still win.
+        assert_eq!(
+            px(75, 20),
+            [255, 255, 255, 255],
+            "content outside the enclosing clip must not paint"
+        );
+        // Inside the clip but outside the artwork: hidden.
+        assert_eq!(
+            px(25, 2),
+            [255, 255, 255, 255],
+            "content outside the mask artwork must be hidden"
+        );
+        // Nowhere on the page may the red artwork itself show. A
+        // channel-imbalanced pixel is the signature of leaked red.
+        for chunk in gpu.chunks_exact(4) {
+            assert!(
+                chunk[0].abs_diff(chunk[1]) <= 2 && chunk[1].abs_diff(chunk[2]) <= 2,
+                "mask artwork leaked colour onto the page: {chunk:?}"
+            );
+        }
+    }
+
+    /// Parity holds at a non-integer scale too. Step edges land on
+    /// fractional pixels at 300 dpi, where the analytic-coverage GPU
+    /// rasterizer and tiny-skia legitimately disagree by up to ~29/255
+    /// — with or without a mask (a no-mask render of the same artwork
+    /// diverges by ~20/255 in the same bands). Away from those bands
+    /// the two are identical, which is what this pins.
+    #[test]
+    #[cfg(feature = "cpu")]
+    fn soft_mask_parity_holds_at_300_dpi_away_from_edges() {
+        use paged_compose::SoftMaskType;
+        let list = stepped_mask_list(SoftMaskType::Luminosity, false);
+        let mut opts = stepped_mask_opts();
+        opts.dpi = 300.0;
+        let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+        if !gpu_path_ran(&gpu) {
+            return;
+        }
+        let cpu = crate::CpuRasterizer.rasterize(&list, &opts);
+        let (w, h) = opts.pixel_size();
+        let scale = (opts.dpi / 72.0) as f64;
+        let x_edges: Vec<f64> = [0.0_f64, 25.0, 50.0, 75.0, 100.0]
+            .iter()
+            .map(|v| v * scale)
+            .collect();
+        let y_edges: Vec<f64> = [0.0_f64, 5.0, 35.0, 40.0]
+            .iter()
+            .map(|v| v * scale)
+            .collect();
+        let mut worst = 0u8;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let on_edge = x_edges.iter().any(|e| (x as f64 - e).abs() <= 3.0)
+                    || y_edges.iter().any(|e| (y as f64 - e).abs() <= 3.0);
+                if on_edge {
+                    continue;
+                }
+                for c in 0..4 {
+                    let i = (y * w as usize + x) * 4 + c;
+                    worst = worst.max(gpu[i].abs_diff(cpu[i]));
+                }
+            }
+        }
+        assert!(worst <= 2, "300 dpi interior worst channel delta {worst}");
+    }
+
+    /// A blend group *inside* masked content must still composite
+    /// against the page. Vello's mask forces the content into an
+    /// isolated layer, where a Multiply would otherwise see an empty
+    /// backdrop and come out as a plain source-over; the
+    /// `hoistable_blend_group` fold is what recovers it. Without that
+    /// fold this test reads `[0, 255, 0]` (raw green) against the
+    /// CPU rasterizer's `[0, 0, 0]` — the widest divergence the
+    /// C-28 lowering can produce.
+    #[test]
+    #[cfg(feature = "cpu")]
+    fn a_blend_group_inside_masked_content_composites_against_the_page() {
+        use paged_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, Paint, Rect, SoftMaskType,
+            Transform,
+        };
+
+        let mut list = DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // Page content beneath the mask: red across the whole page.
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 0.0, 0.0, 1.0)),
+            transform: Transform([100.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Alpha,
+            invert: false,
+            transform: Transform::IDENTITY,
+        });
+        // Artwork: opaque over x ∈ [0, 25), half-opaque over
+        // x ∈ [25, 70), nothing beyond — so one image covers full,
+        // partial and zero coverage, and the half-opaque band runs
+        // past the blend group's 60 pt bounds to exercise the fold's
+        // clipping too.
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 1.0, 1.0, 1.0)),
+            transform: Transform([25.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 1.0, 1.0, 0.5)),
+            transform: Transform([45.0, 0.0, 0.0, 40.0, 25.0, 0.0]),
+        });
+        list.commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        list.commands.push(DisplayCommand::BeginBlendGroup {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 60.0,
+                h: 40.0,
+            },
+            blend_mode: ComposeBlend::Multiply,
+            opacity: 1.0,
+            transform: Transform::IDENTITY,
+        });
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 1.0, 0.0, 1.0)),
+            transform: Transform([100.0, 0.0, 0.0, 40.0, 0.0, 0.0]),
+        });
+        list.commands
+            .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        list.commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+
+        let opts = stepped_mask_opts();
+        let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+        if !gpu_path_ran(&gpu) {
+            return;
+        }
+        let cpu = crate::CpuRasterizer.rasterize(&list, &opts);
+        // Compare everywhere except the 1 px column at the blend
+        // group's own right edge (x = 60). The two back ends disagree
+        // there for a reason that predates opacity masks and has
+        // nothing to do with them: `cpu.rs` pads a blend group's
+        // buffer by 1 px for AA (`pad_pt = 1.0 / scale`) while this
+        // backend passes `bounds` to `push_layer` verbatim. Rendering
+        // this same scene with the soft-mask bracket removed
+        // reproduces the identical 40-pixel column.
+        let mut worst = 0u8;
+        for y in 0..40usize {
+            for x in 0..100usize {
+                if x.abs_diff(60) <= 1 {
+                    continue;
+                }
+                let i = (y * 100 + x) * 4;
+                for c in 0..4 {
+                    worst = worst.max(gpu[i + c].abs_diff(cpu[i + c]));
+                }
+            }
+        }
+        assert!(
+            worst <= 2,
+            "blend group inside masked content: worst channel delta {worst}"
+        );
+        let px = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 100 + x) * 4;
+            [gpu[i], gpu[i + 1], gpu[i + 2], gpu[i + 3]]
+        };
+        // Full mask coverage: Multiply(red, green) = black.
+        assert_eq!(px(12, 20), [0, 0, 0, 255], "full coverage must multiply");
+        // Zero coverage (no artwork): the page's red, untouched.
+        assert_eq!(px(87, 20), [255, 0, 0, 255], "no coverage must leave red");
+        // Masked, but outside the group's own bounds — the fold has
+        // to keep clipping to them, exactly as the group buffer the
+        // CPU rasterizer allocates does.
+        assert_eq!(
+            px(65, 20),
+            [255, 0, 0, 255],
+            "content outside the folded group's bounds must be clipped"
+        );
+        // Partial coverage: strictly between the two.
+        let mid = px(37, 20);
+        assert!(
+            mid[0] > 0 && mid[0] < 255 && mid[1] < 40,
+            "partial coverage must interpolate towards the multiply, got {mid:?}"
+        );
+    }
+
+    /// The fold is only sound when the group spans the masked content
+    /// exactly; anything else must leave the content layer a plain
+    /// isolator rather than smear the group's blend over commands
+    /// that were never inside it.
+    #[test]
+    fn the_blend_group_fold_only_fires_on_an_exact_span() {
+        use paged_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, Paint, PathId, Rect,
+            SoftMaskType, Transform,
+        };
+
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let group = || DisplayCommand::BeginBlendGroup {
+            bounds,
+            blend_mode: ComposeBlend::Multiply,
+            opacity: 0.5,
+            transform: Transform::IDENTITY,
+        };
+        let folded = Some(HoistedGroup {
+            bounds,
+            blend_mode: ComposeBlend::Multiply,
+            opacity: 0.5,
+        });
+        let fill = || DisplayCommand::FillPath {
+            path_id: PathId(0),
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
+            transform: Transform::IDENTITY,
+        };
+        let mid = || DisplayCommand::BeginMaskedContent(Transform::IDENTITY);
+        let end = || DisplayCommand::EndSoftMask(Transform::IDENTITY);
+        let begin = || DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Alpha,
+            invert: false,
+            transform: Transform::IDENTITY,
+        };
+        let end_group = || DisplayCommand::EndBlendGroup(Transform::IDENTITY);
+
+        // Exact span ⇒ fold.
+        let exact = vec![mid(), group(), fill(), end_group(), end()];
+        assert_eq!(hoistable_blend_group(&exact, 0), folded);
+        // Nested layers inside the group don't disturb the match.
+        let nested = vec![
+            mid(),
+            group(),
+            DisplayCommand::PushClip {
+                path_id: PathId(0),
+                transform: Transform::IDENTITY,
+            },
+            fill(),
+            DisplayCommand::PopClip(Transform::IDENTITY),
+            end_group(),
+            end(),
+        ];
+        assert_eq!(hoistable_blend_group(&nested, 0), folded);
+        // A nested soft-mask bracket inside the group: still exact.
+        let inner_bracket = vec![
+            mid(),
+            group(),
+            begin(),
+            fill(),
+            mid(),
+            fill(),
+            end(),
+            end_group(),
+            end(),
+        ];
+        assert_eq!(hoistable_blend_group(&inner_bracket, 0), folded);
+        // Trailing content after the group ⇒ no fold.
+        let trailing = vec![mid(), group(), fill(), end_group(), fill(), end()];
+        assert_eq!(hoistable_blend_group(&trailing, 0), None);
+        // Leading content before the group ⇒ no fold.
+        let leading = vec![mid(), fill(), group(), fill(), end_group(), end()];
+        assert_eq!(hoistable_blend_group(&leading, 0), None);
+        // A clip rather than a group ⇒ no fold.
+        let clipped = vec![
+            mid(),
+            DisplayCommand::PushClip {
+                path_id: PathId(0),
+                transform: Transform::IDENTITY,
+            },
+            fill(),
+            DisplayCommand::PopClip(Transform::IDENTITY),
+            end(),
+        ];
+        assert_eq!(hoistable_blend_group(&clipped, 0), None);
+        // Truncated list ⇒ no fold, no panic.
+        let truncated = vec![mid(), group(), fill()];
+        assert_eq!(hoistable_blend_group(&truncated, 0), None);
+    }
+
+    /// Malformed marker sequences must not desynchronise the scene /
+    /// layer stacks — same tolerance policy `PopClip` and
+    /// `EndBlendGroup` carry. No GPU needed: the assertion is that
+    /// scene building terminates with a well-formed encoding.
+    #[test]
+    fn build_scene_tolerates_unbalanced_soft_mask_markers() {
+        use paged_compose::{Color as DLColor, DisplayCommand, Paint, SoftMaskType, Transform};
+
+        // Stray closers with no opener.
+        let mut stray = DisplayList::new();
+        stray
+            .commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        stray
+            .commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+        let _ = build_scene_with_transform(&stray, kurbo::Affine::scale(1.0));
+
+        // Opener with no closers: the artwork capture is dropped at
+        // the end-of-list drain rather than painted onto the page.
+        let mut dangling = DisplayList::new();
+        let rect_id = unit_rect_path(&mut dangling);
+        dangling.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Alpha,
+            invert: false,
+            transform: Transform::IDENTITY,
+        });
+        dangling.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 0.0, 0.0, 1.0)),
+            transform: Transform([10.0, 0.0, 0.0, 10.0, 0.0, 0.0]),
+        });
+        let _ = build_scene_with_transform(&dangling, kurbo::Affine::scale(1.0));
+
+        // Artwork opened and closed, content never ended.
+        let mut half = DisplayList::new();
+        let rect_id = unit_rect_path(&mut half);
+        half.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Luminosity,
+            invert: true,
+            transform: Transform::IDENTITY,
+        });
+        half.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 1.0, 1.0, 1.0)),
+            transform: Transform([10.0, 0.0, 0.0, 10.0, 0.0, 0.0]),
+        });
+        half.commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        half.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
+            transform: Transform([20.0, 0.0, 0.0, 20.0, 0.0, 0.0]),
+        });
+        let _ = build_scene_with_transform(&half, kurbo::Affine::scale(1.0));
+
+        // Nested brackets: a soft mask whose ARTWORK is itself masked.
+        let mut nested = DisplayList::new();
+        let rect_id = unit_rect_path(&mut nested);
+        let fill = |t: [f32; 6], v: f32| DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(v, v, v, 1.0)),
+            transform: Transform(t),
+        };
+        nested.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Luminosity,
+            invert: false,
+            transform: Transform::IDENTITY,
+        });
+        nested.commands.push(DisplayCommand::BeginSoftMask {
+            mask_type: SoftMaskType::Alpha,
+            invert: false,
+            transform: Transform::IDENTITY,
+        });
+        nested
+            .commands
+            .push(fill([20.0, 0.0, 0.0, 20.0, 0.0, 0.0], 1.0));
+        nested
+            .commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        nested
+            .commands
+            .push(fill([30.0, 0.0, 0.0, 30.0, 0.0, 0.0], 0.5));
+        nested
+            .commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+        nested
+            .commands
+            .push(DisplayCommand::BeginMaskedContent(Transform::IDENTITY));
+        nested
+            .commands
+            .push(fill([40.0, 0.0, 0.0, 40.0, 0.0, 0.0], 0.0));
+        nested
+            .commands
+            .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
+        let _ = build_scene_with_transform(&nested, kurbo::Affine::scale(1.0));
     }
 }
