@@ -1449,6 +1449,13 @@ pub(crate) fn new_text_frame(
         nonprinting: false,
         visible: true,
         locked: false,
+        // C-18: a freshly-inserted text frame starts with square
+        // corners; `frameCornerOption*` / `frameCornerRadius*` writes
+        // fill these in afterwards (and they render, unlike on an
+        // oval / line / group).
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     }
 }
 
@@ -1489,6 +1496,12 @@ pub(super) fn new_graphic_line(
         end_arrow: paged_model::ArrowheadType::None,
         start_arrow_scale: 100.0,
         end_arrow_scale: 100.0,
+        // C-18: parsed + round-tripped, never rendered on an open
+        // stroke-only contour — see `paged_model::GraphicLine::
+        // corner_radius`.
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     }
 }
 
@@ -1589,6 +1602,11 @@ pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<Strin
         nonprinting: false,
         visible: true,
         locked: false,
+        // C-18: parsed + round-tripped, never rendered — an ellipse
+        // has no corner. See `paged_model::Oval::corner_radius`.
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     }
 }
 

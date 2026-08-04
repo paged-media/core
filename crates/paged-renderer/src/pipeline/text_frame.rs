@@ -860,6 +860,16 @@ pub(super) fn emit_text_frame_into(
     // `emit_polygon_into`. Plain rectangular text panels keep the
     // unit-rect path (`fill_path = None`) and the rect emitter. Text
     // *layout* clipping is handled separately off `frame.anchors`.
+    //
+    // C-18: a text frame carries the corner vocabulary too, and unlike
+    // an oval / line / group its body is a REAL outline, so the effect
+    // renders. The rectangular panel goes through the same
+    // `corner_path_module` a `<Rectangle>` uses (all four names address
+    // the box's corners); the pathed one folds the uniform corner into
+    // the anchor path exactly as `emit_polygon_into` does. Both leave
+    // `fill_path = None` when no corner effect resolves, so an ordinary
+    // text frame keeps the cheap rect primitive it always used.
+    let corner = crate::module::corner_path_module(&resolved, page);
     let fill_path = if let Geometry::Polygon {
         anchors,
         subpath_starts,
@@ -867,7 +877,16 @@ pub(super) fn emit_text_frame_into(
         ..
     } = &resolved.geometry
     {
-        let path = polygon_path_from_anchors_with_open(anchors, subpath_starts, subpath_open);
+        let path = super::text_path::polygon_outline_path(
+            anchors,
+            subpath_starts,
+            subpath_open,
+            super::shapes::uniform_corner(
+                resolved.corner_radius,
+                resolved.corner_option,
+                &resolved.corners,
+            ),
+        );
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
@@ -875,7 +894,7 @@ pub(super) fn emit_text_frame_into(
         let (id, _) = page.list.paths.intern(cache_key, path);
         Some(id)
     } else {
-        None
+        corner.fill
     };
     // Q-04: extended GradientFeather (and the rest of FrameEffects) to
     // TextFrame. For the rectangular panel we route through the unit-
@@ -886,9 +905,15 @@ pub(super) fn emit_text_frame_into(
     // interned polygon path is already in inner-anchor coords under
     // `outer`, so effects ride it directly with no unit normalisation
     // (mirrors `emit_polygon_into`).
+    // C-18: a CORNER-effected rectangular panel takes the same third
+    // route `emit_rectangle_into` does — the corner path is already in
+    // inner coords, so effects ride it under plain `outer` with no unit
+    // normalisation. Without it the halo/feather would trace the square
+    // box while the fill traced the rounded one.
     let (effects_path, effects_xform, effects_unit_normalize) = if frame.effects.is_some() {
         match (&resolved.geometry, fill_path) {
-            (Geometry::TextFrameRect { rect: r }, _) => {
+            (Geometry::TextFrameRect { .. }, Some(pid)) => (Some(pid), outer, None),
+            (Geometry::TextFrameRect { rect: r }, None) => {
                 let (id, _) = page.list.paths.intern(
                     paged_compose::UNIT_RECT_KEY,
                     paged_compose::PathData {
@@ -939,7 +964,14 @@ pub(super) fn emit_text_frame_into(
         palette,
         cmyk_xform,
         outer,
-        fill_path,
+        // C-18: the corner module returns a SEPARATE stroke path with
+        // `StrokeAlignment` baked in. A text frame never carries an
+        // alignment (`from_text_frame` leaves it `None` ⇒ zero offset),
+        // so today the two paths are congruent — but taking the stroke
+        // one keeps this emitter on the same contract as
+        // `emit_rectangle_into` for the day it does. `.or(fill_path)`
+        // covers the pathed case, where the corner module stood down.
+        corner.stroke.or(fill_path),
         stroke_for(
             resolved.stroke_type,
             resolved.effective_stroke_weight(),

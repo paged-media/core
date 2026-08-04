@@ -904,6 +904,12 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         nonprinting: false,
         visible: true,
         locked: false,
+        // C-18: the synthetic frame exists only to run the composer
+        // over the anchored object's story; it paints no body, so it
+        // carries no corner geometry.
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     };
     // Sub-emitter borrows from the parent's `'a` so the document /
     // palette / font_table refs share lifetimes with the body pass.

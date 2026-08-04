@@ -294,13 +294,23 @@ pub(super) fn find_miter_limit_mut<'a>(
     }
 }
 
-/// B-23 — locate the `corners: [CornerSpec; 4]` array. Carried by the
-/// two kinds whose model parses the IDML corner vocabulary: Rectangle
-/// (four bounding-box corners, the four names address them exactly)
-/// and Polygon (N path corners — the names are stored + round-tripped,
-/// but only slot 0 drives geometry; see `paged_model::Polygon::corners`).
-/// Oval / TextFrame / GraphicLine carry the attributes on disk too but
-/// have no model fields yet, so they stay `UnsupportedProperty`.
+/// B-23 / C-18 — locate the `corners: [CornerSpec; 4]` array. Carried by
+/// EVERY page-item kind, because IDML writes the corner vocabulary on
+/// every one of them and the corpus proves the values are real rather
+/// than defaulted (`CornerRadius` occurrences: Rectangle 301, Polygon
+/// 228, Group 28, GraphicLine 21, Oval 16, TextFrame 16).
+///
+/// What differs is whether the values shape GEOMETRY, which is a
+/// renderer question, not a kernel one — the write is honest on all six
+/// either way, and each model struct documents its own answer:
+///
+/// * Rectangle — all four names address the bounding-box corners exactly.
+/// * TextFrame — same outline as a rectangle, so the same addressing.
+/// * Polygon — N corners, so slot 0 drives a uniform effect (see
+///   `paged_model::Polygon::corners`).
+/// * Oval / GraphicLine / Group — stored and round-tripped, never
+///   rendered: an ellipse has no corner, an open stroke-only line has no
+///   enclosed corner, and a group has no outline of its own.
 pub(super) fn find_corners_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
@@ -308,6 +318,10 @@ pub(super) fn find_corners_mut<'a>(
     match node {
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.corners),
         NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.corners),
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.corners),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.corners),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.corners),
+        NodeId::Group(id) => find_group_mut(doc, id).map(|g| &mut g.corners),
         _ => None,
     }
 }

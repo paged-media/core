@@ -68,6 +68,9 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         nonprinting: false,
         visible: true,
         locked: false,
+        corner_radius: None,
+        corner_option: None,
+        corners: Default::default(),
     }
 }
 

@@ -2384,55 +2384,68 @@ pub(super) fn apply_set_property(
             )
         }
 
-        // ====== W0.3 — per-corner option + radius (Rectangle+Polygon) =
-        // B-23 (RFI plugin-platform) — CLOSED for Polygon 2026-08-03.
-        // The full lockstep sequence shipped: plugin-publish's
-        // `idml-import` reads the corner vocabulary off `<Polygon>`
-        // (same attribute names as `<Rectangle>`) and its `idml-export`
-        // patches them back byte-preservingly;
-        // `paged_model::Polygon` grew `corner_radius` /
-        // `corner_option` / `corners` (serde-defaulted); these arms
-        // write both kinds through `find_corners_mut`; and the
-        // corner-effect geometry was generalised out of the
-        // rect-specific `corner_rect_path` into
-        // `pipeline::shapes::push_corner_segments`, which
-        // `corner_polygon_path` applies at every straight-line corner
-        // of every closed polygon contour (true tangent-circle
-        // construction — it reduces to the identical rect math at 90°).
+        // ====== W0.3 — per-corner option + radius (every kind) ========
+        // B-23 closed Rectangle + Polygon; C-18 closed the rest
+        // (2026-08-04). The full lockstep sequence shipped for all six:
+        // plugin-publish's `idml-import` reads the corner vocabulary off
+        // every page-item element (one shared `read_corner_attrs`) and
+        // its `idml-export` patches it back byte-preservingly (a
+        // corner-ONLY patch lane for `<Group>`, which is not a
+        // `VectorItem`); the model structs grew `corner_radius` /
+        // `corner_option` / `corners` (serde-defaulted); and these arms
+        // write every kind through `find_corners_mut`.
         //
-        // NAMED RESIDUALS (deliberate, evidence-backed — see the
-        // addressing note on `paged_model::Polygon::corners`):
+        // Evidence, not symmetry: across the 61-file real-export corpus
+        // every kind carries genuinely NON-default values —
+        // `CornerRadius` on 392 rectangles / 228 polygons / 37 groups /
+        // 21 lines / 17 text frames / 16 ovals, and a corner write that
+        // answered `UnsupportedProperty` was silently unsaveable.
+        //
+        // Where the values shape GEOMETRY is a renderer question and
+        // differs per kind; each model struct documents its own answer.
+        // Rectangle and TextFrame address all four names exactly (their
+        // bodies are the same outline). Polygon takes a uniform effect
+        // from slot 0. Oval / GraphicLine / Group store and round-trip
+        // without rendering — an ellipse has no corner, an open
+        // stroke-only line has no enclosed corner, and a group has no
+        // outline of its own.
+        //
+        // NAMED RESIDUALS (deliberate, evidence-backed):
         //   * Only the TopLeft slot (falling back to the global
         //     `CornerOption`/`CornerRadius` pair) drives polygon
         //     GEOMETRY; the other three are stored, mutable and
         //     round-tripped but rect-only as *addressing*. IDML has no
         //     per-name mapping for a polygon with N ≠ 4 corners and the
         //     real-export corpus never relies on one.
-        //   * Oval / TextFrame / GraphicLine / Group carry the same
-        //     attributes on disk (the corpus has 16 / 16 / 21 / 28
-        //     `CornerRadius` occurrences) but have no model fields, so
-        //     a corner write on those kinds is still an honest
-        //     `UnsupportedProperty`. Ovals have no corners to round;
-        //     TextFrame/GraphicLine would be the next lockstep pass.
         //   * Corner effects apply to CLOSED contours with ≥ 3 anchors;
         //     an open contour (IDML `PathOpen="true"`) keeps its raw
         //     outline — matching InDesign, where a two-point open path
         //     inheriting `RoundedCorner` from an object style shows
-        //     nothing.
+        //     nothing. That is also why a `GraphicLine` never renders
+        //     one.
         //   * A SMOOTH spline junction (non-degenerate Bezier handles)
         //     is never treated as a corner; the effect only cuts where
-        //     two straight edges meet.
+        //     two straight edges meet. That is also why an `Oval` never
+        //     renders one — all four of an ellipse's anchors are smooth.
         //   * All five options (Rounded / Inverse / Bevel / Inset /
         //     Fancy) render on polygons because the shared emitter is
         //     kind-agnostic — but `Inset` and `Fancy` carry the same
         //     "approximation pending reference-PDF calibration" caveat
         //     they already carry for rectangles.
-        //   * The polygon corner attributes are NOT surfaced through
-        //     `paged-canvas`'s property descriptor yet (it still
-        //     enumerates the corner slots for rectangles only) — an
-        //     editor-panel wiring task, not a kernel gap.
+        //   * The object-style corner CASCADE
+        //     (`module::object_style_cascade`) still fires on
+        //     `Geometry::Rect` only, so a polygon / text frame takes its
+        //     corners from its own attributes. No corpus document
+        //     depends on the cascade: every `<ObjectStyle>` and the
+        //     `<PageItemDefault>` in all 61 files spells every corner
+        //     option `None`.
         (
-            NodeId::Rectangle(_) | NodeId::Polygon(_),
+            NodeId::Rectangle(_)
+            | NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Oval(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Group(_),
             PropertyPath::FrameCornerOptionTopLeft
             | PropertyPath::FrameCornerOptionTopRight
             | PropertyPath::FrameCornerOptionBottomLeft
@@ -2460,7 +2473,12 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::Rectangle(_) | NodeId::Polygon(_),
+            NodeId::Rectangle(_)
+            | NodeId::Polygon(_)
+            | NodeId::TextFrame(_)
+            | NodeId::Oval(_)
+            | NodeId::GraphicLine(_)
+            | NodeId::Group(_),
             PropertyPath::FrameCornerRadiusTopLeft
             | PropertyPath::FrameCornerRadiusTopRight
             | PropertyPath::FrameCornerRadiusBottomLeft

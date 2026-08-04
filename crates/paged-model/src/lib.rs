@@ -458,6 +458,33 @@ pub struct Group {
     /// that need the un-composed group transform on its own can
     /// recover it without re-walking the spread.
     pub item_transform: Option<[f32; 6]>,
+    /// C-18 — `CornerRadius`; see [`Rectangle::corner_radius`].
+    ///
+    /// **Stored and round-tripped, never rendered** (documented
+    /// decision, not an oversight). `<Group>` inherits IDML's page-item
+    /// attribute set, so it carries the corner vocabulary too, and the
+    /// corpus proves the values are real rather than defaulted: 37 of
+    /// 1 062 groups carry it, 28 with a radius (`12` ×22,
+    /// `42.51968503937008` ×3, `70.86614173228347` ×2, `0.167` ×1) and 11
+    /// with `RoundedCorner`. Dropping them on save-back would be a loss.
+    ///
+    /// But a group is a CONTAINER — it has no outline of its own. It
+    /// paints nothing; the renderer walks `members` and each member
+    /// paints its own geometry with its own corner attributes. There is
+    /// no path for a group-level corner effect to cut, and InDesign's own
+    /// Corner Options on a group selection rewrite the MEMBERS' attributes
+    /// rather than the group's.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// C-18 — `CornerOption`; see [`Group::corner_radius`] for why this
+    /// round-trips without shaping geometry.
+    #[serde(default)]
+    pub corner_option: Option<String>,
+    /// C-18 — per-corner `(option, radius)` overrides, `[top_left,
+    /// top_right, bottom_right, bottom_left]`; see
+    /// [`Rectangle::corners`] and [`Group::corner_radius`].
+    #[serde(default)]
+    pub corners: [CornerSpec; 4],
 }
 
 /// Reference to one of a `Spread`'s page-item vecs. Carries the
@@ -735,6 +762,32 @@ pub struct TextFrame {
     /// paints locked items; the canvas hit-tester blocks their
     /// selection. See `CommonAttrs::locked`.
     pub locked: bool,
+    /// C-18 — `CornerRadius`; see [`Rectangle::corner_radius`].
+    ///
+    /// Unlike [`Oval`] / [`GraphicLine`] / [`Group`], a text frame's
+    /// corners are REAL and render: its body is the same rectangular (or
+    /// authored-path) outline a `<Rectangle>` paints, so the corner
+    /// effect cuts it exactly the way it cuts a rectangle. The corpus
+    /// backs that up — 17 of 9 600 text frames carry the vocabulary, 16
+    /// with a non-zero radius, and the option is never `None`: 28
+    /// `RoundedCorner` + 10 `BevelCorner` occurrences. One of them
+    /// (`indesign-magazine` `Self="u8a9"`) is genuinely per-corner —
+    /// `TopLeftCornerRadius="14.740157480314963"` with the other three at
+    /// `0` and all four options `BevelCorner` — so the four slots are
+    /// addressed individually here, exactly as on a rectangle.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// C-18 — `CornerOption`; see [`Rectangle::corner_option`].
+    #[serde(default)]
+    pub corner_option: Option<String>,
+    /// C-18 — per-corner `(option, radius)` overrides, `[top_left,
+    /// top_right, bottom_right, bottom_left]`; see [`Rectangle::corners`].
+    /// A rectangular text panel addresses all four by name; a text frame
+    /// whose `<PathGeometry>` is non-rectangular takes the uniform
+    /// treatment [`Polygon::corners`] documents (slot 0 drives, applied
+    /// at every straight-line corner).
+    #[serde(default)]
+    pub corners: [CornerSpec; 4],
 }
 
 /// Parsed `<ClippingPathSettings>` for a placed image. Carries the
@@ -1287,6 +1340,32 @@ pub struct Oval {
     /// W2.5 — element-level `Locked` (default `false`). See
     /// [`TextFrame::locked`].
     pub locked: bool,
+    /// C-18 — `CornerRadius`; see [`Rectangle::corner_radius`].
+    ///
+    /// **Stored and round-tripped, never rendered** (documented
+    /// decision, not an oversight). IDML writes the corner vocabulary on
+    /// `<Oval>` — 16 of the 11 248 ovals in the 61-file real-export
+    /// corpus carry it, and every one of those 16 has a NON-zero radius
+    /// (8 of them also an explicit `RoundedCorner`), so the attributes
+    /// are real data, not defaults, and dropping them on a save-back
+    /// would be a loss. But an ellipse has no corner: it is rendered
+    /// from `bounds` as the inscribed ellipse ([`Oval`] carries no
+    /// `anchors` at all), and the corner effect B-23 defined only cuts
+    /// where two STRAIGHT edges meet — an ellipse's four IDML anchors are
+    /// all smooth spline junctions, which `segment_is_straight` rejects
+    /// by construction. InDesign agrees: Corner Options on an ellipse
+    /// draw nothing.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// C-18 — `CornerOption`; see [`Oval::corner_radius`] for why this
+    /// round-trips without shaping geometry.
+    #[serde(default)]
+    pub corner_option: Option<String>,
+    /// C-18 — per-corner `(option, radius)` overrides, `[top_left,
+    /// top_right, bottom_right, bottom_left]`; see
+    /// [`Rectangle::corners`] and [`Oval::corner_radius`].
+    #[serde(default)]
+    pub corners: [CornerSpec; 4],
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -1359,6 +1438,37 @@ pub struct GraphicLine {
     /// the stroke weight.
     pub start_arrow_scale: f32,
     pub end_arrow_scale: f32,
+    /// C-18 — `CornerRadius`; see [`Rectangle::corner_radius`].
+    ///
+    /// **Stored and round-tripped, never rendered** (documented
+    /// decision, not an oversight). 21 of the 1 467 `<GraphicLine>`s in
+    /// the 61-file real-export corpus carry the radius attributes, all
+    /// with genuinely non-zero values (`99.21259842519686` ×20,
+    /// `16.06299212598418` ×1) — so they must survive a save-back. What
+    /// the corpus does NOT contain is a single `*CornerOption` attribute
+    /// on any `<GraphicLine>`: 0 occurrences of all five names, so the
+    /// effective option is the inherited default, and every `ObjectStyle`
+    /// and the `PageItemDefault` in that corpus spell it `None`. The
+    /// radii are inert inheritance carriers.
+    ///
+    /// That matches the geometry: a line is an OPEN stroke-only contour,
+    /// and B-23 established (from InDesign's own behaviour) that a corner
+    /// effect never applies to an open contour — the corpus's six
+    /// "rounded" polygons are exactly such two-point open lines and show
+    /// no rounding. A multi-segment line's interior joins are shaped by
+    /// `end_join` / `miter_limit`, not by the corner vocabulary.
+    #[serde(default)]
+    pub corner_radius: Option<f32>,
+    /// C-18 — `CornerOption`; see [`GraphicLine::corner_radius`] for why
+    /// this round-trips without shaping geometry. Never present in the
+    /// real-export corpus.
+    #[serde(default)]
+    pub corner_option: Option<String>,
+    /// C-18 — per-corner `(option, radius)` overrides, `[top_left,
+    /// top_right, bottom_right, bottom_left]`; see
+    /// [`Rectangle::corners`] and [`GraphicLine::corner_radius`].
+    #[serde(default)]
+    pub corners: [CornerSpec; 4],
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the

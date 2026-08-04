@@ -674,6 +674,60 @@ fn corner_option_idml(v: paged_model::CornerOption) -> &'static str {
     }
 }
 
+/// E-1 — the eight per-corner read rows, in IDML `corners[4]` order
+/// `[top_left, top_right, bottom_right, bottom_left]`.
+///
+/// One builder shared by every page-item arm so a kind can never expose a
+/// partial or differently-ordered corner set. Read and write stay PAIRED
+/// by construction: `paged_mutate`'s `find_corners_mut` accepts exactly
+/// the six kinds that call this, so every row here has a write arm behind
+/// it (the C-17 lesson — a property that reads but rejects the write is
+/// worse than one that does neither).
+///
+/// An option reads as `""` when the slot carries no override, which is
+/// the same spelling the mutation takes to CLEAR it — so a panel can
+/// round-trip a cleared corner without a special case.
+fn corner_entries(corners: &[paged_model::CornerSpec; 4]) -> Vec<crate::channel::PropertyEntry> {
+    use crate::channel::PropertyEntry;
+    use paged_mutate::{PropertyPath, Value};
+    const SLOTS: [(PropertyPath, PropertyPath); 4] = [
+        (
+            PropertyPath::FrameCornerOptionTopLeft,
+            PropertyPath::FrameCornerRadiusTopLeft,
+        ),
+        (
+            PropertyPath::FrameCornerOptionTopRight,
+            PropertyPath::FrameCornerRadiusTopRight,
+        ),
+        (
+            PropertyPath::FrameCornerOptionBottomRight,
+            PropertyPath::FrameCornerRadiusBottomRight,
+        ),
+        (
+            PropertyPath::FrameCornerOptionBottomLeft,
+            PropertyPath::FrameCornerRadiusBottomLeft,
+        ),
+    ];
+    let mut out = Vec::with_capacity(8);
+    for (i, (opt_path, rad_path)) in SLOTS.iter().enumerate() {
+        out.push(PropertyEntry {
+            path: *opt_path,
+            value: Some(Value::Text(
+                corners[i]
+                    .option
+                    .map(corner_option_idml)
+                    .unwrap_or_default()
+                    .to_string(),
+            )),
+        });
+        out.push(PropertyEntry {
+            path: *rad_path,
+            value: Some(Value::Length(corners[i].radius)),
+        });
+    }
+    out
+}
+
 fn decompose_angle(m: Option<[f32; 6]>) -> f32 {
     paged_mutate::operation::decompose_transform(m).angle_deg
 }
@@ -4314,6 +4368,11 @@ impl CanvasModel {
                             f.effects.as_ref(),
                             f.blend_mode.as_deref(),
                         ));
+                        // C-18 / E-1 — per-corner option + radius. A text
+                        // frame's corners RENDER (its body is the same
+                        // outline a rectangle paints), so these bind to a
+                        // live effect, not just a stored value.
+                        entries.extend(corner_entries(&f.corners));
                         entries
                     }),
                 ElementId::Rectangle(_) => spread
@@ -4574,65 +4633,6 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(f.stroke_dash.clone())),
                             },
-                            // W0.3 — per-corner option + radius. Order
-                            // matches IDML `corners[4]`:
-                            // [top_left, top_right, bottom_right, bottom_left].
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerOptionTopLeft,
-                                value: Some(Value::Text(
-                                    f.corners[0]
-                                        .option
-                                        .map(corner_option_idml)
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                )),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerRadiusTopLeft,
-                                value: Some(Value::Length(f.corners[0].radius)),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerOptionTopRight,
-                                value: Some(Value::Text(
-                                    f.corners[1]
-                                        .option
-                                        .map(corner_option_idml)
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                )),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerRadiusTopRight,
-                                value: Some(Value::Length(f.corners[1].radius)),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerOptionBottomRight,
-                                value: Some(Value::Text(
-                                    f.corners[2]
-                                        .option
-                                        .map(corner_option_idml)
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                )),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerRadiusBottomRight,
-                                value: Some(Value::Length(f.corners[2].radius)),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerOptionBottomLeft,
-                                value: Some(Value::Text(
-                                    f.corners[3]
-                                        .option
-                                        .map(corner_option_idml)
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                )),
-                            },
-                            PropertyEntry {
-                                path: PropertyPath::FrameCornerRadiusBottomLeft,
-                                value: Some(Value::Length(f.corners[3].radius)),
-                            },
                             // W0.3 — overprint + transform-decompose.
                             PropertyEntry {
                                 path: PropertyPath::FrameOverprintFill,
@@ -4696,6 +4696,8 @@ impl CanvasModel {
                             f.effects.as_ref(),
                             f.blend_mode.as_deref(),
                         ));
+                        // W0.3 — per-corner option + radius.
+                        entries.extend(corner_entries(&f.corners));
                         entries
                     }),
                 // W1.20 (groups v2) — a Group surfaces its own
@@ -4716,7 +4718,7 @@ impl CanvasModel {
                             bottom: 0.0,
                             right: 0.0,
                         });
-                        vec![
+                        let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
                                 value: Some(Value::Bounds([
@@ -4730,19 +4732,27 @@ impl CanvasModel {
                                 path: PropertyPath::FrameTransform,
                                 value: Some(Value::Transform(g.item_transform)),
                             },
-                        ]
+                        ];
+                        // C-18 / E-1 — a `<Group>` carries the corner
+                        // vocabulary on disk (37 corpus groups do, 11
+                        // with `RoundedCorner`) and now has write arms,
+                        // so the read half is here to pair with them.
+                        // The value is STORED, not rendered: a group has
+                        // no outline of its own. See
+                        // `paged_model::Group::corner_radius`.
+                        entries.extend(corner_entries(&g.corners));
+                        entries
                     }),
                 // Punch-list (rides v35) — Polygon / GraphicLine surface
                 // the stroke property set so the closed-path
                 // join/miter/alignment mutations (now apply-wired for all
-                // path kinds) read back. Oval stays on the geometry-only
-                // default below until its apply arms cover the set too.
+                // path kinds) read back.
                 ElementId::Polygon(_) => spread
                     .polygons
                     .iter()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                     .map(|p| {
-                        vec![
+                        let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
                                 value: Some(Value::Bounds([
@@ -4828,14 +4838,23 @@ impl CanvasModel {
                                     p.blend_mode.clone().unwrap_or_default(),
                                 )),
                             },
-                        ]
+                        ];
+                        // B-23 / E-1 — the polygon corner slots the
+                        // kernel has applied since B-23 finally have a
+                        // read half, so an editor panel has something to
+                        // bind to. All four are stored and mutable; only
+                        // slot 0 drives geometry (uniformly, at every
+                        // straight-line corner) — see
+                        // `paged_model::Polygon::corners`.
+                        entries.extend(corner_entries(&p.corners));
+                        entries
                     }),
                 ElementId::GraphicLine(_) => spread
                     .graphic_lines
                     .iter()
                     .find(|l| l.self_id.as_deref() == Some(raw))
                     .map(|l| {
-                        vec![
+                        let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameBounds,
                                 value: Some(Value::Bounds([
@@ -4909,10 +4928,46 @@ impl CanvasModel {
                                     l.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
-                        ]
+                        ];
+                        // C-18 / E-1 — stored + mutable, never rendered
+                        // on an open stroke-only contour. See
+                        // `paged_model::GraphicLine::corner_radius`.
+                        entries.extend(corner_entries(&l.corners));
+                        entries
                     }),
-                // Oval: geometry-only default until its apply arms cover
-                // the stroke set.
+                // C-18 / E-1 — an `<Oval>` had NO descriptor arm at all
+                // before this (it fell through to `_ => None`, so an oval
+                // answered zero properties despite carrying apply arms
+                // for most of the paint set — see the read/write audit
+                // note below). It gets one now, carrying the geometry
+                // pair plus the corner slots the C-18 write arms accept.
+                //
+                // Deliberately NOT extended to the rest of the oval's
+                // paint set in this pass: that asymmetry is REPORTED, not
+                // silently fixed, so the decision stays visible.
+                ElementId::Oval(_) => spread
+                    .ovals
+                    .iter()
+                    .find(|o| o.self_id.as_deref() == Some(raw))
+                    .map(|o| {
+                        // NOTE: `FrameBounds` is deliberately ABSENT.
+                        // `set_property` has a `FrameBounds` arm for
+                        // TextFrame / Rectangle / Polygon / GraphicLine
+                        // but NOT for Oval, so reading it here would be
+                        // exactly the C-17 mistake — a row a panel can
+                        // show and not write. The missing apply arm is a
+                        // reported gap, not something to paper over from
+                        // the read side.
+                        let mut entries = vec![PropertyEntry {
+                            path: PropertyPath::FrameTransform,
+                            value: Some(Value::Transform(o.item_transform)),
+                        }];
+                        // Stored + mutable, never rendered — an ellipse
+                        // has no corner. See
+                        // `paged_model::Oval::corner_radius`.
+                        entries.extend(corner_entries(&o.corners));
+                        entries
+                    }),
                 _ => None,
             };
             if let Some(mut entries) = entries {

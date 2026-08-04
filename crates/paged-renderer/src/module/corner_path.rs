@@ -12,14 +12,22 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Corner-path module — Rectangle-only.
+//! Corner-path module — the rect-shaped kinds.
 //!
-//! Builds the rounded-corner path for a Rectangle whose
+//! Builds the rounded-corner path for a box-shaped frame whose
 //! `CornerOption` selects one of the rounding variants and returns
 //! the interned `(fill_path, stroke_path)` pair so the fill / stroke
 //! modules emit `FillPath{Blend}` / `StrokePath` instead of axis-
-//! aligned rect primitives. Returns `(None, None)` for non-Rectangle
-//! geometries or rectangles without a positive corner radius.
+//! aligned rect primitives. Returns `(None, None)` for other
+//! geometries, or for a box without a positive corner radius.
+//!
+//! C-18: `Geometry::TextFrameRect` is accepted alongside
+//! `Geometry::Rect`. A rectangular text panel paints exactly the
+//! outline a `<Rectangle>` does — the two variants exist to let the
+//! adapter tell them apart, not because their corner geometry differs —
+//! and the corpus carries `RoundedCorner` / `BevelCorner` on real text
+//! frames. The curved (`Geometry::Polygon`) text frame takes the
+//! polygon lane instead, in `emit_text_frame_into`.
 
 use paged_compose::PathId;
 
@@ -44,7 +52,7 @@ impl CornerPaths {
 }
 
 pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage) -> CornerPaths {
-    let Geometry::Rect { rect } = frame.geometry else {
+    let (Geometry::Rect { rect } | Geometry::TextFrameRect { rect }) = frame.geometry else {
         return CornerPaths::none();
     };
     // Q-16: resolve 4 per-corner radii (falls back to the symmetric

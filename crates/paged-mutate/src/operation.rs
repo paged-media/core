@@ -795,21 +795,30 @@ pub enum PropertyPath {
     /// (`frame_style`); a dash change repaints but does not reflow.
     FrameStrokeDashArray,
 
-    // ---- W0.3 — corners (Rectangle) -----------------------------
+    // ---- W0.3 — corners (every page-item kind) ------------------
     /// W0.3 — per-corner `CornerOption` enum (`"None"`,
     /// `"RoundedCorner"`, `"InverseRoundedCorner"`, `"InsetCorner"`,
     /// `"BeveledCorner"`, `"FancyCorner"`). `Value::Text`; empty
-    /// clears that corner's override. Rectangle-only; addresses one of
-    /// the four entries in `corners[4]` (IDML order
+    /// clears that corner's override. Addresses one of the four entries
+    /// in `corners[4]` (IDML order
     /// `[top_left, top_right, bottom_right, bottom_left]`). Paint-only
-    /// (the renderer re-derives the rounded-rect path on rebuild).
+    /// (the renderer re-derives the corner path on rebuild).
+    ///
+    /// Accepted on EVERY page-item kind since C-18 (was Rectangle-only
+    /// through W0.3, then Rectangle + Polygon through B-23) — IDML
+    /// writes the vocabulary on all six and the real-export corpus
+    /// carries non-default values on all six. Whether the value shapes
+    /// geometry differs per kind; see `find_corners_mut` and the model
+    /// structs (`Oval` / `GraphicLine` / `Group` store + round-trip
+    /// without rendering).
     FrameCornerOptionTopLeft,
     FrameCornerOptionTopRight,
     FrameCornerOptionBottomLeft,
     FrameCornerOptionBottomRight,
     /// W0.3 — per-corner `CornerRadius` in pt. `Value::Length`;
-    /// `None` clears that corner's radius. Rectangle-only; pairs with
-    /// the matching `FrameCornerOption*`. Paint-only.
+    /// `None` clears that corner's radius. Same kind coverage as
+    /// [`PropertyPath::FrameCornerOptionTopLeft`]; pairs with the
+    /// matching `FrameCornerOption*`. Paint-only.
     FrameCornerRadiusTopLeft,
     FrameCornerRadiusTopRight,
     FrameCornerRadiusBottomLeft,

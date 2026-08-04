@@ -283,9 +283,14 @@ impl<'a> ResolvedFrame<'a> {
             stroke_gap_color: frame.stroke_gap_color.as_deref(),
             stroke_gap_tint: frame.stroke_gap_tint,
             stroke_dash: &frame.stroke_dash,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            // C-18: a text frame's body is the same outline a rectangle
+            // paints, so its corner attributes shape geometry the same
+            // way — all four names address the box's corners for the
+            // `TextFrameRect` case, and a pathed text frame takes the
+            // polygon's uniform treatment.
+            corner_radius: frame.corner_radius,
+            corner_option: frame.corner_option.as_deref(),
+            corners: frame.corners,
             applied_object_style: frame.applied_object_style.as_deref(),
             overprint_fill: frame.overprint_fill,
             overprint_stroke: frame.overprint_stroke,
@@ -365,6 +370,12 @@ impl<'a> ResolvedFrame<'a> {
             stroke_gap_color: oval.stroke_gap_color.as_deref(),
             stroke_gap_tint: oval.stroke_gap_tint,
             stroke_dash: &oval.stroke_dash,
+            // C-18: `paged_model::Oval` DOES carry the corner fields (16
+            // corpus ovals have real values), but they are deliberately
+            // NOT threaded here — an ellipse has no corner to cut, so
+            // handing them to the paint modules could only produce
+            // geometry InDesign does not draw. Stored, mutable and
+            // round-tripped; never rendered.
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -461,6 +472,11 @@ impl<'a> ResolvedFrame<'a> {
             stroke_gap_color: line.stroke_gap_color.as_deref(),
             stroke_gap_tint: line.stroke_gap_tint,
             stroke_dash: &line.stroke_dash,
+            // C-18: same as the oval — `paged_model::GraphicLine` carries
+            // the fields (21 corpus lines have real radii, and never a
+            // `CornerOption`) but an OPEN stroke-only contour has no
+            // enclosed corner, so they are not threaded. Its interior
+            // joins are shaped by `end_join` / `miter_limit` instead.
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
@@ -599,6 +615,9 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         }
     }
 
@@ -759,6 +778,9 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         };
         let frame = ResolvedFrame::from_oval(&oval);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dashed"));
@@ -856,6 +878,9 @@ mod tests {
             end_arrow: paged_model::ArrowheadType::None,
             start_arrow_scale: 100.0,
             end_arrow_scale: 100.0,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         };
         let frame = ResolvedFrame::from_graphic_line(&line);
         assert_eq!(frame.stroke_type, Some("CustomDashStyle"));

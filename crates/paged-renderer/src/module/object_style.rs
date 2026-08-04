@@ -45,10 +45,21 @@ pub(crate) fn resolve_applied_style(
 }
 
 /// Fold cascaded values from `style` into `frame` for any field the
-/// frame itself didn't carry. `corner_radius` / `corner_option`
-/// cascade only on rectangle-shaped geometry — they have no
-/// semantic meaning on Ovals, Polygons, GraphicLines, or
-/// TextFrames.
+/// frame itself didn't carry.
+///
+/// `corner_radius` / `corner_option` cascade on `Geometry::Rect` only —
+/// deliberately NARROWER than the kinds that now carry the fields
+/// (B-23 added Polygon, C-18 added TextFrame; `Oval` / `GraphicLine` /
+/// `Group` carry them without rendering at all). A polygon or text frame
+/// therefore takes its corners from its own attributes.
+///
+/// Evidence for leaving it there rather than widening on symmetry: no
+/// document in the 61-file real-export corpus depends on the cascade —
+/// every `<ObjectStyle>` and the `<PageItemDefault>` in all 61 files
+/// spells all five corner options `None`, and IDML gates the whole
+/// block behind an `EnableStrokeAndCornerOptions` flag this model does
+/// not carry. Widening would be inventing inheritance nothing measured
+/// asks for. Named residual, not an oversight.
 pub(crate) fn object_style_cascade<'a>(frame: &mut ResolvedFrame<'a>, style: &'a ResolvedObject) {
     if frame.fill_color.is_none() {
         frame.fill_color = style.fill_color.as_deref();

@@ -224,6 +224,9 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         }
     }
 
@@ -1888,6 +1891,9 @@ mod tests {
             ],
             transparency: paged_model::GroupTransparency::default(),
             item_transform: group_xform,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         });
         Document {
             designmap: DesignMap::default(),
@@ -2233,6 +2239,9 @@ mod tests {
             end_arrow: paged_model::ArrowheadType::None,
             start_arrow_scale: 100.0,
             end_arrow_scale: 100.0,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
         });
         let doc = Document {
             designmap: DesignMap::default(),
@@ -5795,13 +5804,43 @@ mod tests {
         );
     }
 
+    /// C-18 — the corner vocabulary is no longer Rectangle-only (nor
+    /// Rectangle+Polygon, B-23's state): IDML writes it on every
+    /// page-item element and the real-export corpus carries non-default
+    /// values on every one, so a corner write on a TextFrame now
+    /// SUCCEEDS where it used to answer `UnsupportedProperty`.
+    ///
+    /// This test used to pin the opposite. It is flipped rather than
+    /// deleted so the closure is visible in the diff.
+    #[test]
+    fn c18_corner_path_accepted_on_a_text_frame() {
+        let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
+        assert_round_trips(
+            &mut p,
+            set_op(
+                NodeId::TextFrame("TextFrame/u1".to_string()),
+                PropertyPath::FrameCornerRadiusTopLeft,
+                Value::Length(Some(5.0)),
+            ),
+            |d| {
+                assert_eq!(
+                    d.spreads[0].spread.text_frames[0].corners[0].radius,
+                    Some(5.0)
+                )
+            },
+        );
+    }
+
+    /// …but a NON page-item node still rejects it. The corner vocabulary
+    /// is a page-item attribute set; a `Page` has no corners, so
+    /// `find_corners_mut` answers `None` and the write is an honest
+    /// `UnsupportedProperty` rather than a silent no-op.
     #[test]
     fn w03_unsupported_kind_for_corner_path_errors() {
-        // Corners are Rectangle-only; a TextFrame must reject them.
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         let err = p
             .apply(set_op(
-                NodeId::TextFrame("TextFrame/u1".to_string()),
+                NodeId::Page("Page/u2".to_string()),
                 PropertyPath::FrameCornerRadiusTopLeft,
                 Value::Length(Some(5.0)),
             ))
