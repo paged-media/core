@@ -461,7 +461,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // Additive in the minor sense the handshake already covers: a new
 // editor SENDS a mutation an older worker cannot deserialise, and the
 // handshake catches the stale pair LOUD.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(59);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -1839,6 +1839,23 @@ pub struct LayerSummary {
     pub locked: bool,
     pub printable: bool,
     pub z: u32,
+    /// v60 — `Self` of the enclosing `<Layer>` when this layer is nested
+    /// inside a layer GROUP (folder) in InDesign's Layers panel; `None`
+    /// for a top-level layer, which is the overwhelmingly common case.
+    ///
+    /// Mirrors [`paged_model::Layer::parent_id`], which the model has
+    /// carried all along — the summary simply dropped it, so every
+    /// consumer of this wire type saw a FLAT layer list and a Layers
+    /// panel could not render a tree. Added when ADR 023's shared-panel
+    /// work hit exactly that wall.
+    ///
+    /// Note the renderer already resolves visibility and lock THROUGH
+    /// ancestors (a visible child inside a hidden parent group is
+    /// hidden), so `visible`/`locked` here are the layer's OWN flags,
+    /// not the resolved ones. A panel showing effective state must walk
+    /// the chain itself.
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 /// v38 (Wave 2, C-2 / S-05) — one link in a story's `NextTextFrame`
@@ -4533,8 +4550,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v59() {
-        assert_eq!(PROTOCOL_VERSION.0, 59);
+    fn protocol_version_is_v60() {
+        assert_eq!(PROTOCOL_VERSION.0, 60);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

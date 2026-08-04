@@ -213,20 +213,19 @@ fn an_out_of_range_index_is_rejected_through_the_wire() {
 ///
 ///   * `.paged` (native) round-trips the new order verbatim — the z
 ///     table rides the N2 model part, which `export_paged` refreshes.
-///   * `.idml` (interchange) does **not**. The IDML writer is a
-///     byte-preserving splice: it re-emits the source XML untouched and
-///     only places NEW items (`plan_insert_positions` in
-///     `idml-export`'s `rewrite.rs`, which says so in as many words —
-///     "a document whose z was RESHUFFLED is deliberately left alone …
-///     z-reorder save-back is a different lane"). So an Arrange shows
-///     on canvas, survives a native save, and reverts when the document
-///     is exported to IDML and reopened.
+///   * `.idml` (interchange) round-trips it too, as of the writer's
+///     z-reorder save-back lane. It did NOT when `reorderElement`
+///     landed: the writer was a byte-preserving splice that re-emitted
+///     source XML untouched and only placed NEW items, so an Arrange
+///     showed on canvas, survived a native save, and silently reverted
+///     through IDML — which would have been worse than not shipping
+///     Arrange, since the app confirms an edit it then discards.
 ///
-/// This test pins BOTH halves so the limit is on record rather than
-/// discovered by a user. Closing it is a change to the IDML writer
-/// (`paged-media/plugin-publish`), not to this op.
+/// This test pins BOTH halves. It was originally written to pin the
+/// LOSS; it now pins the fix, and its failure when the writer landed is
+/// exactly the signal a known-limit test exists to give.
 #[test]
-fn a_reorder_survives_paged_and_is_lost_on_idml_export() {
+fn a_reorder_survives_both_paged_and_idml_export() {
     let mut model = load();
     model
         .apply_mutation(&Mutation::ReorderElement {
@@ -250,15 +249,17 @@ fn a_reorder_survives_paged_and_is_lost_on_idml_export() {
         ".paged must round-trip the new stacking order"
     );
 
-    // --- LOSSY: .idml re-emits the source order (see the doc above).
+    // --- .idml carries it too, since the writer gained z-reorder
+    // save-back. Asserted against `expected` rather than a literal so
+    // this cannot drift from the .paged half above.
     let idml = model.export_idml().expect("export idml");
     let reopened = CanvasModel::load("doc-v59-idml", &idml, CanvasOptions::default())
         .expect("reopen exported idml");
     assert_eq!(
         painted(&reopened),
-        vec![10, 20, 30, 15, 40, 50],
-        "KNOWN LIMIT: the IDML writer does not yet re-order existing \
-         source elements, so an Arrange does not survive an .idml export"
+        expected,
+        ".idml must round-trip the new stacking order — an Arrange that \
+         reverts on save is worse than no Arrange at all"
     );
 }
 

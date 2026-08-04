@@ -4208,6 +4208,7 @@ impl CanvasModel {
                 locked: l.locked,
                 printable: l.printable,
                 z: z as u32,
+                parent_id: l.parent_id.clone(),
             })
             .collect()
     }
