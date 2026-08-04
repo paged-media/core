@@ -42,7 +42,7 @@ fn ref_self_id(spread: &Spread, r: FrameRef) -> Option<&str> {
 /// Resolve a leaf page-item `NodeId` to its `FrameRef` within one
 /// spread. `None` when the id isn't in this spread (or the NodeId is
 /// not a leaf page-item kind).
-fn leaf_ref_in_spread(spread: &Spread, node: &NodeId) -> Option<FrameRef> {
+pub(super) fn leaf_ref_in_spread(spread: &Spread, node: &NodeId) -> Option<FrameRef> {
     match node {
         NodeId::TextFrame(id) => spread
             .text_frames

@@ -2081,13 +2081,21 @@ pub enum NodeSpec {
         /// RemoveNode → undo so the frame re-inserts in place.
         #[serde(default)]
         item_transform: Option<[f32; 6]>,
-        /// `ParentStory` id. `None` on a FRESH insert ⇒ the apply layer
-        /// MINTS an empty story (`Story/u<n>`) and attaches it — every
-        /// text frame carries a story, InDesign's model (a fresh frame
-        /// used to carry none, so `hitTest` answered `storyId: null`
-        /// and no caller could ever pour text into it — found live by
-        /// the sheets K-1 e2e). `Some` on the RemoveNode-built spec ⇒
-        /// undo of a delete REATTACHES the original story.
+        /// `ParentStory` id. `Some(id)` naming a story the document does
+        /// NOT yet have ⇒ the apply layer MINTS an empty story under
+        /// that id and attaches it — every text frame carries a story,
+        /// InDesign's model (a fresh frame used to carry none, so
+        /// `hitTest` answered `storyId: null` and no caller could ever
+        /// pour text into it — found live by the sheets K-1 e2e). The
+        /// canvas layer supplies the fresh id on `insertTextFrame`.
+        /// `Some(id)` naming an EXISTING story ⇒ attach to it, which is
+        /// how the RemoveNode-built spec makes undo of a delete
+        /// REATTACH the original. `None` ⇒ no story at all; that is the
+        /// shape the internal helpers use for synthetic frames, not a
+        /// mint request.
+        ///
+        /// (This doc used to say `None` triggered the mint. It never
+        /// did — `apply_insert_node` only mints under `Some`.)
         #[serde(default)]
         parent_story: Option<String>,
     },
@@ -2437,6 +2445,89 @@ pub struct GroupSpec {
 pub struct NestedParent {
     pub group_id: String,
     pub index: u32,
+}
+
+/// C-23 — wire mirror of [`paged_model::OpacityMaskType`] (the same
+/// mirror convention [`PathAnchorSpec`] follows: `paged-model` carries
+/// no `tsify` dependency, so wire-visible enums are declared here and
+/// converted at the boundary).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum OpacityMaskMode {
+    /// The mask artwork's LUMINOSITY drives coverage — white shows,
+    /// black hides, unpainted hides. Illustrator's default.
+    #[default]
+    Luminosity,
+    /// The mask artwork's ALPHA drives coverage; colour ignored.
+    Alpha,
+}
+
+impl OpacityMaskMode {
+    pub fn to_model(self) -> paged_model::OpacityMaskType {
+        match self {
+            Self::Luminosity => paged_model::OpacityMaskType::Luminosity,
+            Self::Alpha => paged_model::OpacityMaskType::Alpha,
+        }
+    }
+    pub fn from_model(m: paged_model::OpacityMaskType) -> Self {
+        match m {
+            paged_model::OpacityMaskType::Luminosity => Self::Luminosity,
+            paged_model::OpacityMaskType::Alpha => Self::Alpha,
+        }
+    }
+}
+
+/// C-24 — the `<TextPath>` knobs [`Operation::AttachTextToPath`]
+/// exposes. Grouped into one struct so the op, its inverse and the
+/// wire all name the same thing.
+///
+/// Every field maps to an attribute the RENDERER ALREADY HONOURS
+/// (verified against `paged_renderer::pipeline::text_path`):
+///
+///   * `path_type_alignment` → `PathTypeAlignment`: the glyph's
+///     vertical seat — `BaselinePathType` (default) / `CenterPathType`
+///     / `AscenderPathType` / `DescenderPathType`.
+///   * `flip_path_effect` → `FlipPathEffect`: `Flipped` reverses the
+///     path direction so the text reads the other way round.
+///   * `start_bracket` / `end_bracket` → `StartBracket` /
+///     `EndBracket`: the arc-length window the text flows within. The
+///     renderer clamps both to the tessellated path length, centres
+///     the run in the window when it fits, and drops glyphs past
+///     `EndBracket` while reporting `OversetTextDropped`.
+///
+/// **Deliberately NOT exposed: `PathEffect`.** Only
+/// `RainbowPathEffect` actually renders; `SkewPathEffect`,
+/// `Path3DRibbonEffect`, `StairStepPathEffect` and
+/// `GravityPathEffect` parse but draw as Rainbow. A knob whose value
+/// is silently ignored is worse than no knob, so the op does not take
+/// one and the created `TextPath` leaves the attribute absent — which
+/// IS Rainbow, the IDML default.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPathSpec {
+    #[serde(default)]
+    pub path_type_alignment: Option<String>,
+    #[serde(default)]
+    pub flip_path_effect: Option<String>,
+    #[serde(default)]
+    pub start_bracket: Option<f32>,
+    #[serde(default)]
+    pub end_bracket: Option<f32>,
+}
+
+impl TextPathSpec {
+    /// Capture the knobs off an existing model entry (used to build
+    /// the detach inverse so redo re-creates it identically).
+    pub fn from_model(tp: &paged_model::TextPath) -> Self {
+        Self {
+            path_type_alignment: tp.path_type_alignment.clone(),
+            flip_path_effect: tp.flip_path_effect.clone(),
+            start_bracket: tp.start_bracket,
+            end_bracket: tp.end_bracket,
+        }
+    }
 }
 
 /// Wire description of a gradient swatch, mirroring `GradientEntry`.
@@ -2926,6 +3017,80 @@ pub enum Operation {
         child: NodeId,
         #[serde(default)]
         restore_slot: Option<usize>,
+    },
+    /// C-23 — make an existing TOP-LEVEL page item the OPACITY MASK of
+    /// another item on the same spread. The mask item leaves
+    /// `frames_in_order` (its z slot is captured into the inverse) and
+    /// joins the target's `Spread::opacity_masks` entry; the renderer
+    /// then paints the target under a soft mask whose coverage comes
+    /// from the mask item's artwork. Unlike `PasteInto` — a hard
+    /// binary clip — this is CONTINUOUS coverage, so a black→white
+    /// gradient fades the target out.
+    ///
+    /// **Geometry is untouched on both sides** (same convention as
+    /// `PasteInto`): the mask covers what it geometrically overlaps.
+    /// Validation (apply): both items exist on the SAME spread; both
+    /// are Rectangle / Oval / GraphicLine / Polygon (a TextFrame's
+    /// glyphs are emitted outside the mask bracket, so it is rejected
+    /// with an error saying so); they are not the same item; the mask
+    /// item is currently top-level (not grouped, not pasted-in, not
+    /// already a mask); and the target carries no mask yet. Inverse:
+    /// `ReleaseOpacityMask { target, restore_slot }` — one Cmd-Z pops
+    /// the artwork back to its exact stacking position.
+    ApplyOpacityMask {
+        target: NodeId,
+        mask: NodeId,
+        #[serde(default)]
+        mask_type: OpacityMaskMode,
+        #[serde(default)]
+        invert: bool,
+    },
+    /// C-23 — the inverse gesture: drop the mask relation and pop the
+    /// artwork back to top level, world transform preserved (the
+    /// stored transform was never touched, so nothing moves on
+    /// canvas — the artwork simply becomes its own visible object
+    /// again, exactly like Illustrator's Release Opacity Mask).
+    /// `restore_slot` is **inverse-only**; `None` stacks on top.
+    /// Inverse: `ApplyOpacityMask` with the mask id, mode and invert
+    /// flag captured at apply time.
+    ReleaseOpacityMask {
+        target: NodeId,
+        #[serde(default)]
+        restore_slot: Option<usize>,
+    },
+    /// C-24 — attach an EXISTING story to an EXISTING path element,
+    /// producing the `<TextPath>` the renderer already consumes
+    /// (InDesign's Type on a Path). `host` must be a Rectangle /
+    /// GraphicLine / Polygon — the kinds that carry `text_paths` and
+    /// that the renderer's text-path pass walks. Validation (apply):
+    /// the host exists and is one of those kinds; the story exists;
+    /// the story is not already flowing into a text frame or onto
+    /// another path (one story, one flow). Inverse:
+    /// `DetachTextFromPath { host, index, restore }`.
+    AttachTextToPath {
+        host: NodeId,
+        story_id: String,
+        #[serde(default)]
+        spec: TextPathSpec,
+    },
+    /// C-24 — remove a `<TextPath>` link from its host. **The story
+    /// survives**: `AttachTextToPath` only ever *linked* an existing
+    /// story, so unlinking is its exact inverse (InDesign's "Delete
+    /// Type from Path" also deletes the text — the right gesture, but
+    /// the wrong inverse, since it would destroy content the apply
+    /// never created). `index` and `restore` are **inverse-only**:
+    /// `index` names the slot on hosts carrying more than one
+    /// `<TextPath>`, `restore` carries the removed entry's knobs so
+    /// redo re-creates it identically. A user-initiated detach passes
+    /// `None` for both and takes slot 0. Inverse:
+    /// `AttachTextToPath` with the story id + knobs captured at apply
+    /// time.
+    DetachTextFromPath {
+        host: NodeId,
+        #[serde(default)]
+        index: Option<usize>,
+        #[serde(default)]
+        restore: Option<TextPathSpec>,
     },
     /// W0.5 — thread two text frames: rewrite `from`'s
     /// `NextTextFrame` to point at `to` so the story reflows into

@@ -1651,8 +1651,15 @@ pub struct TextPath {
     /// other side. `NotFlipped` is the IDML default.
     pub flip_path_effect: Option<String>,
     /// `StartBracket` / `EndBracket` — IDML's per-path range over
-    /// which the text flows, in path-local arc-length units. Captured
-    /// for future fidelity; the current renderer flows from t=0.
+    /// which the text flows, in path-local arc-length units.
+    ///
+    /// **Honoured by the renderer.** `emit_text_path_into` clamps both
+    /// to the tessellated length, centres the run inside the window
+    /// when it fits, and drops (plus reports as `OversetTextDropped`)
+    /// glyphs whose origin lands past `EndBracket`. This doc used to
+    /// say "captured for future fidelity; the current renderer flows
+    /// from t=0" — that stopped being true when the bracket window
+    /// landed and the comment was not updated.
     pub start_bracket: Option<f32>,
     pub end_bracket: Option<f32>,
 }
@@ -4927,6 +4934,74 @@ pub struct Spread {
     /// untouched.
     #[serde(default)]
     pub nested_children: std::collections::HashMap<String, Vec<FrameRef>>,
+    /// C-23 opacity masks — keyed by the MASKED page item's `Self` id.
+    /// Side map like [`Spread::nested_children`], and structurally its
+    /// sibling: the item named by [`OpacityMask::mask_item`] leaves
+    /// [`Spread::frames_in_order`] (it is consumed BY the mask, not
+    /// painted on its own) while staying in the spread's backing vec,
+    /// exactly as a pasted-in child does. The renderer reaches it only
+    /// through this map.
+    ///
+    /// # IDML round-trip — a deliberate, LOUD loss
+    ///
+    /// IDML has **no opacity-mask element**. InDesign's transparency
+    /// model offers per-object opacity, blend modes and feathering,
+    /// but nothing that modulates one object's alpha by another
+    /// object's artwork; there is no `<OpacityMask>` and no
+    /// `TransparencySetting` attribute that carries one. Inventing an
+    /// element would produce a package InDesign rejects, so we don't.
+    ///
+    /// The decision therefore is: **an opacity mask is a paged-native
+    /// construct.**
+    ///
+    ///   * `.paged` (the native container) round-trips it verbatim —
+    ///     this map is `Serialize`/`Deserialize` and rides the N2
+    ///     native model part (`paged/core/model/document.pgm`), which
+    ///     `export_paged` refreshes on every save. Nothing is lost.
+    ///   * `.idml` (interchange export) **cannot** carry it. The
+    ///     relation is dropped and the mask artwork re-appears as an
+    ///     ordinary top-level item. That loss is reported, never
+    ///     silent: `CanvasModel::idml_export_losses` names every
+    ///     masked item and the `IdmlExported` reply carries the list
+    ///     to the host as `lost`.
+    ///
+    /// The alternative — smuggling the relation through
+    /// `Properties/Label` `KeyValuePair`s ([`Spread::labels`], which
+    /// InDesign does preserve verbatim) — was rejected: it would
+    /// survive a paged→InDesign→paged trip on paper, but InDesign
+    /// itself would meanwhile render the mask artwork as an opaque
+    /// object sitting on top of the design. A wrong-looking document
+    /// that silently "round-trips" is worse than an honest loss.
+    #[serde(default)]
+    pub opacity_masks: std::collections::HashMap<String, OpacityMask>,
+}
+
+/// C-23 — how a mask item's artwork resolves to coverage. Mirrors
+/// `paged_compose::SoftMaskType` (and PDF's `/S` subtypes); kept as a
+/// separate model-layer enum so `paged-model` stays free of a
+/// display-list dependency.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpacityMaskType {
+    /// The artwork's LUMINOSITY drives coverage: white shows, black
+    /// hides, and unpainted area hides. Illustrator's default, and
+    /// what a black→white gradient swatch means to a designer.
+    #[default]
+    Luminosity,
+    /// The artwork's ALPHA drives coverage; its colour is ignored.
+    Alpha,
+}
+
+/// C-23 — one opacity-mask relation. See [`Spread::opacity_masks`]
+/// for the keying and the IDML round-trip decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpacityMask {
+    /// `Self` id of the page item supplying the mask ARTWORK.
+    pub mask_item: String,
+    #[serde(default)]
+    pub mask_type: OpacityMaskType,
+    /// Invert the resolved coverage — Illustrator's "Invert Mask".
+    #[serde(default)]
+    pub invert: bool,
 }
 
 // ---------------------------------------------------------------------------

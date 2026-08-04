@@ -36,10 +36,10 @@ use paged_compose::{
 };
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
-    LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask, Paint as TsPaint,
-    PathBuilder, Pixmap, PixmapPaint, PixmapRef, Point as TsPoint, PremultipliedColorU8,
-    RadialGradient as TsRadialGradient, Shader, SpreadMode, Stroke as TsStroke,
-    SweepGradient as TsSweepGradient, Transform as TsTransform,
+    LineJoin as TsLineJoin, LinearGradient as TsLinearGradient, Mask as TsMask,
+    MaskType as TsMaskType, Paint as TsPaint, PathBuilder, Pixmap, PixmapPaint, PixmapRef,
+    Point as TsPoint, PremultipliedColorU8, RadialGradient as TsRadialGradient, Shader, SpreadMode,
+    Stroke as TsStroke, SweepGradient as TsSweepGradient, Transform as TsTransform,
 };
 
 use crate::{PathRasterizer, RasterOptions};
@@ -100,6 +100,12 @@ struct GroupFrame {
     /// `effect.sigma_pt() * scale`. Cached so the pop site doesn't
     /// have to rescan `effect`.
     effect_sigma_px: f32,
+    /// C-23 — set when this frame is capturing SOFT-MASK ARTWORK
+    /// rather than paint destined for the parent. `BeginMaskedContent`
+    /// pops it and converts the buffer into a clip-stack mask instead
+    /// of compositing it; it never reaches the `EndBlendGroup` /
+    /// `PopLayer` composite path.
+    soft_mask: Option<(paged_compose::SoftMaskType, bool)>,
 }
 
 /// Parallel CMYK accumulator state for the CPU rasterizer (Stage B of
@@ -1559,7 +1565,12 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     clip_stack.push(ClipEntry { mask: fresh, scope });
                 }
             }
-            DisplayCommand::PopClip(_) => {
+            // `EndSoftMask` shares this arm: the mask that
+            // `BeginMaskedContent` pushed IS a clip-stack entry at the
+            // active scope, so dropping the topmost entry is exactly
+            // the right pop — and it inherits the same mismatched-pair
+            // tolerance.
+            DisplayCommand::PopClip(_) | DisplayCommand::EndSoftMask(_) => {
                 let scope = if group_stack.is_empty() {
                     ClipScope::Page
                 } else {
@@ -1570,6 +1581,85 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 if let Some(idx) = clip_stack.iter().rposition(|e| e.scope == scope) {
                     clip_stack.remove(idx);
                 }
+            }
+            // C-23 — open a soft-mask bracket. The artwork that
+            // follows is captured into an offscreen buffer the size of
+            // the ACTIVE TARGET (page or enclosing group buffer), not
+            // of the artwork's own bbox: a full-size capture makes the
+            // resulting `tiny_skia::Mask` pixel-aligned with the
+            // target, so `BeginMaskedContent` needs no offset maths
+            // and the mask composes with the existing clip stack for
+            // free. (A bbox-sized buffer would save memory but the
+            // clip stack already allocates target-sized masks, so this
+            // costs the same order.)
+            DisplayCommand::BeginSoftMask {
+                mask_type, invert, ..
+            } => {
+                let (w, h, offset) = match group_stack.last() {
+                    Some(top) => (top.pixmap.width(), top.pixmap.height(), top.offset),
+                    None => (px_w, px_h, (0, 0)),
+                };
+                // A failed allocation still pushes a 1×1 placeholder so
+                // the matching markers stay balanced.
+                let buf = Pixmap::new(w, h).or_else(|| Pixmap::new(1, 1));
+                if let Some(buf) = buf {
+                    group_stack.push(GroupFrame {
+                        pixmap: buf,
+                        offset,
+                        blend_mode: TsBlendMode::SourceOver,
+                        opacity: 1.0,
+                        backdrop_snapshot: None,
+                        effect: None,
+                        effect_sigma_px: 0.0,
+                        soft_mask: Some((*mask_type, *invert)),
+                    });
+                }
+            }
+            // C-23 — the artwork is complete: turn the captured buffer
+            // into a coverage mask and push it onto the clip stack, so
+            // every subsequent draw multiplies through it exactly like
+            // a clip — except the coverage is continuous, not binary.
+            DisplayCommand::BeginMaskedContent(_) => {
+                let Some(top) = group_stack.last() else {
+                    continue; // stray marker — tolerated
+                };
+                let Some((mask_type, invert)) = top.soft_mask else {
+                    continue; // topmost group is a blend group, not a mask
+                };
+                let frame = group_stack.pop().expect("checked above");
+                let ts_kind = match mask_type {
+                    paged_compose::SoftMaskType::Luminosity => TsMaskType::Luminance,
+                    paged_compose::SoftMaskType::Alpha => TsMaskType::Alpha,
+                };
+                // tiny-skia's Luminance demultiplies before weighting,
+                // so an UNPAINTED pixel (α = 0) resolves to 0 — the same
+                // "black backdrop ⇒ hidden" default PDF gives a
+                // luminosity mask. Alpha resolves unpainted to 0 too.
+                let mut mask = TsMask::from_pixmap(frame.pixmap.as_ref(), ts_kind);
+                if invert {
+                    mask.invert();
+                }
+                // Scope is resolved AFTER the pop — the mask applies to
+                // whatever target now sits on top.
+                let scope = if group_stack.is_empty() {
+                    ClipScope::Page
+                } else {
+                    ClipScope::Group(group_stack.len())
+                };
+                // Compose with the enclosing clip/mask (the stack holds
+                // cumulative coverage, so each entry must already
+                // include its parent). `intersect_path` can't help here
+                // — two masks multiply per byte.
+                if let Some(parent) = clip_stack.iter().rev().find(|e| e.scope == scope) {
+                    if parent.mask.width() == mask.width() && parent.mask.height() == mask.height()
+                    {
+                        let parent_data = parent.mask.data().to_vec();
+                        for (m, p) in mask.data_mut().iter_mut().zip(parent_data) {
+                            *m = ((*m as u16 * p as u16 + 127) / 255) as u8;
+                        }
+                    }
+                }
+                clip_stack.push(ClipEntry { mask, scope });
             }
             DisplayCommand::BeginBlendGroup {
                 bounds,
@@ -1648,6 +1738,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             backdrop_snapshot,
                             effect: None,
                             effect_sigma_px: 0.0,
+                            soft_mask: None,
                         });
                     }
                     None => {
@@ -1664,6 +1755,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                                 backdrop_snapshot: None,
                                 effect: None,
                                 effect_sigma_px: 0.0,
+                                soft_mask: None,
                             });
                         }
                     }
@@ -1713,6 +1805,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             backdrop_snapshot: None,
                             effect: Some(*effect),
                             effect_sigma_px,
+                            soft_mask: None,
                         });
                     }
                     None => {
@@ -1725,6 +1818,7 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                                 backdrop_snapshot: None,
                                 effect: None,
                                 effect_sigma_px: 0.0,
+                                soft_mask: None,
                             });
                         }
                     }
@@ -1879,6 +1973,11 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                     backdrop_snapshot,
                     effect,
                     effect_sigma_px,
+                    // C-23: a soft-mask capture frame is always
+                    // consumed by `BeginMaskedContent`, so it can only
+                    // reach here through a malformed list — composite
+                    // it as an ordinary group rather than panicking.
+                    soft_mask: _,
                 } = top;
                 // Apply the layer effect (Gaussian blur) before
                 // compositing. The buffer was padded by `3σ + 1px` at
@@ -6167,5 +6266,352 @@ mod tests {
         // Far from everything: untouched paper.
         let far = at(&img, 70, 5);
         assert!(far[0] > 240, "far corner should be paper; got {far:?}");
+    }
+
+    // ---------------------------------------------------------------
+    // C-23 — opacity masks. These are the correctness gate: every
+    // assertion below FAILS if the soft mask is ignored, because an
+    // ignored mask leaves the target fully painted where the mask says
+    // it should be gone.
+    // ---------------------------------------------------------------
+
+    /// Emit a full-coverage soft mask over `region`, painted with
+    /// `mask_paint`, then a black rect over `target`.
+    fn soft_masked_black_rect(
+        list: &mut DisplayList,
+        mask_type: paged_compose::SoftMaskType,
+        invert: bool,
+        region: Rect,
+        mask_paint: Paint,
+        target: Rect,
+    ) {
+        list.commands
+            .push(paged_compose::DisplayCommand::BeginSoftMask {
+                mask_type,
+                invert,
+                transform: paged_compose::Transform::IDENTITY,
+            });
+        emit_rect(region, mask_paint, list);
+        list.commands
+            .push(paged_compose::DisplayCommand::BeginMaskedContent(
+                paged_compose::Transform::IDENTITY,
+            ));
+        emit_rect(target, Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0)), list);
+        list.commands
+            .push(paged_compose::DisplayCommand::EndSoftMask(
+                paged_compose::Transform::IDENTITY,
+            ));
+    }
+
+    /// A WHITE luminosity mask shows the content; the area the mask
+    /// never painted hides it. Ignoring the mask would paint the whole
+    /// 40×40 target black and the "outside" sample would be black too.
+    #[test]
+    fn luminosity_soft_mask_shows_under_white_and_hides_outside() {
+        let mut list = DisplayList::new();
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Luminosity,
+            false,
+            // Mask artwork: a WHITE square covering only the left half.
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 20.0,
+                h: 40.0,
+            },
+            Paint::Solid(Color::rgba(1.0, 1.0, 1.0, 1.0)),
+            // Target: black over the WHOLE page.
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+
+        let shown = at(&img, 10, 20);
+        assert!(
+            shown[0] < 15 && shown[1] < 15 && shown[2] < 15,
+            "under a white luminosity mask the black target must paint; got {shown:?}"
+        );
+        let hidden = at(&img, 30, 20);
+        assert!(
+            hidden[0] > 240 && hidden[1] > 240 && hidden[2] > 240,
+            "outside the mask artwork the target must be fully hidden (paper); got {hidden:?}"
+        );
+    }
+
+    /// A BLACK luminosity mask hides the content even though it is
+    /// fully opaque — this is the assertion that distinguishes a real
+    /// luminosity mask from a hard clip. A `PushClip` over the same
+    /// geometry would show the target; the mask must not.
+    #[test]
+    fn black_luminosity_mask_hides_what_a_clip_would_show() {
+        let mut list = DisplayList::new();
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Luminosity,
+            false,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+            // Opaque BLACK artwork: full alpha, zero luminance.
+            Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let p = at(&img, 20, 20);
+        assert!(
+            p[0] > 240 && p[1] > 240 && p[2] > 240,
+            "opaque BLACK artwork must hide the target under a luminosity mask \
+             (a clip over the same geometry would show it); got {p:?}"
+        );
+    }
+
+    /// The same opaque-black artwork under an ALPHA mask SHOWS the
+    /// content — alpha reads opacity and ignores colour. Run back to
+    /// back with the test above, this pins that the two mask types are
+    /// genuinely wired to different resolutions rather than both
+    /// falling through to one default.
+    #[test]
+    fn alpha_soft_mask_reads_opacity_not_colour() {
+        let mut list = DisplayList::new();
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Alpha,
+            false,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 20.0,
+                h: 40.0,
+            },
+            Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let shown = at(&img, 10, 20);
+        assert!(
+            shown[0] < 15,
+            "opaque artwork must SHOW under an alpha mask; got {shown:?}"
+        );
+        let hidden = at(&img, 30, 20);
+        assert!(
+            hidden[0] > 240,
+            "unpainted area must hide under an alpha mask; got {hidden:?}"
+        );
+    }
+
+    /// `invert` flips the coverage: the white half now hides and the
+    /// unpainted half shows.
+    #[test]
+    fn inverted_soft_mask_flips_coverage() {
+        let mut list = DisplayList::new();
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Luminosity,
+            true,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 20.0,
+                h: 40.0,
+            },
+            Paint::Solid(Color::rgba(1.0, 1.0, 1.0, 1.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let under_white = at(&img, 10, 20);
+        assert!(
+            under_white[0] > 240,
+            "inverted: the white half must now HIDE; got {under_white:?}"
+        );
+        let outside = at(&img, 30, 20);
+        assert!(
+            outside[0] < 15,
+            "inverted: the unpainted half must now SHOW; got {outside:?}"
+        );
+    }
+
+    /// The headline case: a black→white gradient produces CONTINUOUS
+    /// coverage. Sampling across the ramp must give a monotonically
+    /// darkening series — a binary clip could not.
+    #[test]
+    fn gradient_soft_mask_produces_a_continuous_ramp() {
+        let mut list = DisplayList::new();
+        let grad = list.push_linear_gradient(paged_compose::LinearGradient {
+            start: (0.0, 0.0),
+            end: (1.0, 0.0),
+            stops: vec![
+                paged_compose::GradientStop {
+                    offset: 0.0,
+                    color: Color::rgba(0.0, 0.0, 0.0, 1.0),
+                },
+                paged_compose::GradientStop {
+                    offset: 1.0,
+                    color: Color::rgba(1.0, 1.0, 1.0, 1.0),
+                },
+            ],
+        });
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Luminosity,
+            false,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+            Paint::LinearGradient(grad),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        let samples: Vec<u8> = [3u32, 12, 20, 28, 37]
+            .iter()
+            .map(|&x| at(&img, x, 20)[0])
+            .collect();
+        for w in samples.windows(2) {
+            assert!(
+                w[1] < w[0],
+                "coverage must ramp continuously (each sample darker than the last); \
+                 got {samples:?}"
+            );
+        }
+        assert!(
+            samples[0] > 230,
+            "the black end of the ramp must be near-paper; got {samples:?}"
+        );
+        assert!(
+            samples[4] < 40,
+            "the white end of the ramp must be near-black; got {samples:?}"
+        );
+    }
+
+    /// A soft mask composes with an enclosing clip: the clip-stack
+    /// entry the mask pushes must MULTIPLY the parent's coverage, not
+    /// replace it. Without the composition step the region outside the
+    /// clip but inside the mask would paint.
+    #[test]
+    fn soft_mask_multiplies_with_an_enclosing_clip() {
+        let mut list = DisplayList::new();
+        let mut clip_path = paged_compose::PathData::default();
+        for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            if clip_path.segments.is_empty() {
+                clip_path
+                    .segments
+                    .push(paged_compose::PathSegment::MoveTo { x, y });
+            } else {
+                clip_path
+                    .segments
+                    .push(paged_compose::PathSegment::LineTo { x, y });
+            }
+        }
+        clip_path.segments.push(paged_compose::PathSegment::Close);
+        let clip_id = list.paths.push_anon(clip_path);
+        // unit square → the TOP half of the page (y 0..20).
+        list.commands.push(paged_compose::DisplayCommand::PushClip {
+            path_id: clip_id,
+            transform: paged_compose::Transform([40.0, 0.0, 0.0, 20.0, 0.0, 0.0]),
+        });
+        // Mask shows the LEFT half.
+        soft_masked_black_rect(
+            &mut list,
+            paged_compose::SoftMaskType::Luminosity,
+            false,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 20.0,
+                h: 40.0,
+            },
+            Paint::Solid(Color::rgba(1.0, 1.0, 1.0, 1.0)),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 40.0,
+                h: 40.0,
+            },
+        );
+        list.commands.push(paged_compose::DisplayCommand::PopClip(
+            paged_compose::Transform::IDENTITY,
+        ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        // Top-left: inside clip AND inside mask ⇒ painted.
+        assert!(at(&img, 10, 10)[0] < 15, "clip ∩ mask must paint");
+        // Top-right: inside clip, outside mask ⇒ hidden.
+        assert!(at(&img, 30, 10)[0] > 240, "clip minus mask must be hidden");
+        // Bottom-left: outside clip, inside mask ⇒ hidden.
+        assert!(at(&img, 10, 30)[0] > 240, "mask minus clip must be hidden");
+    }
+
+    /// Structural tolerance, mirroring the `PopClip` / `EndBlendGroup`
+    /// policy: stray markers must not panic and must not corrupt the
+    /// page.
+    #[test]
+    fn stray_soft_mask_markers_are_tolerated() {
+        let mut list = DisplayList::new();
+        list.commands
+            .push(paged_compose::DisplayCommand::BeginMaskedContent(
+                paged_compose::Transform::IDENTITY,
+            ));
+        list.commands
+            .push(paged_compose::DisplayCommand::EndSoftMask(
+                paged_compose::Transform::IDENTITY,
+            ));
+        emit_rect(
+            Rect {
+                x: 5.0,
+                y: 5.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0)),
+            &mut list,
+        );
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+        assert!(
+            at(&img, 10, 10)[0] < 15,
+            "stray markers must leave the page drawable"
+        );
     }
 }

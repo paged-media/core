@@ -398,7 +398,39 @@ export type WorkerToMain = WorkerToMainKind & {
 // older worker cannot deserialise `bindCreated` at all, and an engine
 // that ignored handles would fail the referencing child with an unknown
 // id rather than mis-apply it.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(57);
+//
+// v58 (C-23 opacity masks + C-24 type-on-a-path): two Illustrator
+// "Phase 2" doors, deliberately riding ONE bump because both are new
+// operations landing together.
+//
+// C-23 — `applyOpacityMask { targetId, maskId, maskType?, invert? }` /
+// `releaseOpacityMask { targetId }`. The engine gains a REAL soft
+// mask: a new `DisplayCommand` bracket (`BeginSoftMask` /
+// `BeginMaskedContent` / `EndSoftMask`) carrying per-pixel coverage,
+// not the hard binary `PushClip`. The CPU rasterizer resolves the
+// artwork to a `tiny_skia::Mask` (luminance or alpha, optionally
+// inverted) and multiplies it into the clip stack; the PDF exporter
+// lowers it onto the existing `PendingFormGroup::LuminosityGray`
+// soft-mask path (plus a new `AlphaGroup` for `/S /Alpha`); Vello
+// skips the artwork and renders the content unmasked (documented gap
+// — it has no coverage-buffer layer API).
+//
+// C-24 — `attachTextToPath { elementId, storyId, pathTypeAlignment?,
+// flipPathEffect?, startBracket?, endBracket? }` /
+// `detachTextFromPath { elementId }`. The renderer has drawn
+// `<TextPath>` for a long time; nothing could CREATE one. These two
+// ops close exactly that gap — no renderer change at all.
+//
+// Also additive on the reply side: `IdmlExported` grows a `lost:
+// string[]` naming every paged-native construct the IDML writer could
+// not carry (today: opacity masks — IDML has no such element). It is
+// `#[serde(default)]`, so an older payload still deserialises.
+//
+// Additive in the minor sense the handshake already covers: a new
+// editor SENDS mutations an older worker cannot deserialise, and the
+// version handshake catches the stale pair LOUD rather than letting a
+// mask silently not apply.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(58);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -1561,6 +1593,16 @@ pub enum WorkerToMainKind {
     IdmlExported {
         #[tsify(type = "number[]")]
         idml_bytes: ByteBuf,
+        /// v58 (C-23) — paged-NATIVE constructs the IDML writer could
+        /// not carry, one human-readable line each. Empty for a
+        /// document that uses only IDML-expressible features. Today
+        /// the only entry kind is opacity masks (IDML has no such
+        /// element). The host is expected to SURFACE this — the whole
+        /// point is that a lossy save is never silent; `.paged` is
+        /// the lossless target. `#[serde(default)]` so a pre-v58
+        /// payload still deserialises.
+        #[serde(default)]
+        lost: Vec<String>,
     },
     /// W3.B2 (rides v29 — added before first editor sync) — `ExportIdml`
     /// failed (no document loaded, or the carry-through writer errored).
@@ -3282,6 +3324,68 @@ pub enum Mutation {
     ReleaseFrom {
         child_id: crate::element_selection::ElementId,
     },
+    /// v58 (C-23) — Illustrator's **Make Opacity Mask**: the item at
+    /// `mask_id` stops painting on its own and becomes the alpha mask
+    /// of the item at `target_id`. Unlike `PasteInto`'s hard clip the
+    /// coverage is CONTINUOUS, so a black→white gradient fades the
+    /// target out. Both must be Rectangle / Oval / GraphicLine /
+    /// Polygon on the SAME spread; a TextFrame on either side is
+    /// rejected with an honest error (its glyphs are emitted outside
+    /// the mask bracket). `mask_type` defaults to `"luminosity"`
+    /// (Illustrator's default — the artwork's colour drives coverage);
+    /// `"alpha"` reads its opacity instead. `invert` is Illustrator's
+    /// Invert Mask. Rides `Operation::ApplyOpacityMask`; one undo pops
+    /// the artwork back to its exact stacking slot.
+    ApplyOpacityMask {
+        target_id: crate::element_selection::ElementId,
+        mask_id: crate::element_selection::ElementId,
+        #[serde(default)]
+        mask_type: Option<String>,
+        #[serde(default)]
+        invert: Option<bool>,
+    },
+    /// v58 (C-23) — **Release Opacity Mask**: drop the relation; the
+    /// artwork returns to top level, geometry untouched. Rides
+    /// `Operation::ReleaseOpacityMask`; one undo re-applies the mask
+    /// with its original mode/invert at the same z slot.
+    ReleaseOpacityMask {
+        target_id: crate::element_selection::ElementId,
+    },
+    /// v58 (C-24) — InDesign's **Type on a Path**: flow an existing
+    /// story along an existing path element. `element_id` must be a
+    /// Rectangle / GraphicLine / Polygon (the kinds the renderer's
+    /// text-path pass walks); the story must exist and must not
+    /// already flow into a text frame or onto another path. The
+    /// optional knobs are the ones the renderer HONOURS:
+    /// `path_type_alignment` (`BaselinePathType` default /
+    /// `CenterPathType` / `AscenderPathType` / `DescenderPathType`),
+    /// `flip_path_effect` (`Flipped` / `NotFlipped`), and the
+    /// `start_bracket` / `end_bracket` arc-length window (text is
+    /// centred in the window when it fits; glyphs past the end are
+    /// dropped and reported as overset). `PathEffect` is deliberately
+    /// absent — only `RainbowPathEffect` renders, so there is no knob
+    /// to set. Rides `Operation::AttachTextToPath`.
+    AttachTextToPath {
+        element_id: crate::element_selection::ElementId,
+        story_id: String,
+        #[serde(default)]
+        path_type_alignment: Option<String>,
+        #[serde(default)]
+        flip_path_effect: Option<String>,
+        #[serde(default)]
+        start_bracket: Option<f32>,
+        #[serde(default)]
+        end_bracket: Option<f32>,
+    },
+    /// v58 (C-24) — the inverse gesture: unlink the text from the
+    /// path. **The story survives** (unlike InDesign's "Delete Type
+    /// from Path", which also deletes the text) — attach only ever
+    /// linked an existing story, so unlinking is its exact inverse and
+    /// one undo re-attaches with the same knobs. Takes the host's
+    /// first `<TextPath>`. Rides `Operation::DetachTextFromPath`.
+    DetachTextFromPath {
+        element_id: crate::element_selection::ElementId,
+    },
     /// B-04 (protocol v32) — group page items on one spread.
     /// Reference-based and z-order-neutral (the group takes the
     /// earliest member's paint slot). Reply carries the minted group
@@ -3840,6 +3944,10 @@ impl Mutation {
             Self::JoinPaths { .. } => "JoinPaths",
             Self::PasteInto { .. } => "PasteInto",
             Self::ReleaseFrom { .. } => "ReleaseFrom",
+            Self::ApplyOpacityMask { .. } => "ApplyOpacityMask",
+            Self::ReleaseOpacityMask { .. } => "ReleaseOpacityMask",
+            Self::AttachTextToPath { .. } => "AttachTextToPath",
+            Self::DetachTextFromPath { .. } => "DetachTextFromPath",
             Self::CreateGroup { .. } => "CreateGroup",
             Self::DissolveGroup { .. } => "DissolveGroup",
             Self::SetGroupTransform { .. } => "SetGroupTransform",
@@ -4343,8 +4451,129 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v57() {
-        assert_eq!(PROTOCOL_VERSION.0, 57);
+    fn protocol_version_is_v58() {
+        assert_eq!(PROTOCOL_VERSION.0, 58);
+    }
+
+    /// v58 (C-23 / C-24) — the four new wire shapes. Tags are the
+    /// camelCase op names; every knob is optional so a caller that
+    /// sends only the required ids stays deserialisable, and the
+    /// engine applies the Illustrator/IDML defaults.
+    #[test]
+    fn v58_opacity_mask_and_text_path_wire_shapes_round_trip() {
+        use crate::element_selection::ElementId;
+
+        let apply_mask = Mutation::ApplyOpacityMask {
+            target_id: ElementId::Rectangle("r1".into()),
+            mask_id: ElementId::Polygon("p1".into()),
+            mask_type: Some("alpha".into()),
+            invert: Some(true),
+        };
+        let json = serde_json::to_string(&apply_mask).unwrap();
+        assert!(
+            json.contains("\"op\":\"applyOpacityMask\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"targetId\":"), "{json}");
+        assert!(json.contains("\"maskId\":"), "{json}");
+        assert!(json.contains("\"maskType\":\"alpha\""), "{json}");
+        assert!(!json.contains("mask_type"), "snake leaked: {json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.discriminant(), "ApplyOpacityMask");
+
+        // Ids only — the optional knobs default.
+        let minimal: Mutation = serde_json::from_str(
+            r#"{"op":"applyOpacityMask","args":{"targetId":{"kind":"rectangle","id":"r1"},
+                "maskId":{"kind":"rectangle","id":"r2"}}}"#,
+        )
+        .expect("ids-only payload deserialises");
+        match minimal {
+            Mutation::ApplyOpacityMask {
+                mask_type, invert, ..
+            } => {
+                assert!(mask_type.is_none());
+                assert!(invert.is_none());
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        let release = Mutation::ReleaseOpacityMask {
+            target_id: ElementId::Rectangle("r1".into()),
+        };
+        let json = serde_json::to_string(&release).unwrap();
+        assert!(
+            json.contains("\"op\":\"releaseOpacityMask\""),
+            "tag missing: {json}"
+        );
+        let _: Mutation = serde_json::from_str(&json).unwrap();
+
+        let attach = Mutation::AttachTextToPath {
+            element_id: ElementId::Polygon("curve".into()),
+            story_id: "st1".into(),
+            path_type_alignment: Some("CenterPathType".into()),
+            flip_path_effect: Some("Flipped".into()),
+            start_bracket: Some(10.0),
+            end_bracket: Some(90.0),
+        };
+        let json = serde_json::to_string(&attach).unwrap();
+        assert!(
+            json.contains("\"op\":\"attachTextToPath\""),
+            "tag missing: {json}"
+        );
+        assert!(json.contains("\"storyId\":\"st1\""), "{json}");
+        assert!(json.contains("\"pathTypeAlignment\":"), "{json}");
+        assert!(json.contains("\"startBracket\":"), "{json}");
+        assert!(!json.contains("start_bracket"), "snake leaked: {json}");
+        let _: Mutation = serde_json::from_str(&json).unwrap();
+
+        // Required fields only.
+        let minimal: Mutation = serde_json::from_str(
+            r#"{"op":"attachTextToPath","args":{"elementId":{"kind":"polygon","id":"c"},
+                "storyId":"st1"}}"#,
+        )
+        .expect("required-only payload deserialises");
+        assert_eq!(minimal.discriminant(), "AttachTextToPath");
+
+        let detach = Mutation::DetachTextFromPath {
+            element_id: ElementId::Polygon("curve".into()),
+        };
+        let json = serde_json::to_string(&detach).unwrap();
+        assert!(
+            json.contains("\"op\":\"detachTextFromPath\""),
+            "tag missing: {json}"
+        );
+        let _: Mutation = serde_json::from_str(&json).unwrap();
+    }
+
+    /// v58 — `IdmlExported.lost` is additive: a pre-v58 payload without
+    /// the field still deserialises (to an empty list), so an older
+    /// worker's reply does not break a newer main thread.
+    #[test]
+    fn v58_idml_exported_lost_field_is_backward_compatible() {
+        let legacy =
+            r#"{"seq":1,"protocol":58,"kind":"idmlExported","payload":{"idmlBytes":[80,75]}}"#;
+        let msg: WorkerToMain = serde_json::from_str(legacy).expect("legacy payload");
+        match msg.kind {
+            WorkerToMainKind::IdmlExported { lost, idml_bytes } => {
+                assert!(lost.is_empty(), "missing `lost` defaults to empty");
+                assert_eq!(idml_bytes.as_slice(), &[80, 75]);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        // And a populated list rides as camelCase-free plain strings.
+        let msg = WorkerToMain {
+            seq: Some(1),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::IdmlExported {
+                idml_bytes: ByteBuf::from(vec![80, 75]),
+                lost: vec!["opacity mask on `r1`".into()],
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(
+            json.contains("\"lost\":[\"opacity mask on `r1`\"]"),
+            "{json}"
+        );
     }
 
     /// v56 (Wave B) — `ClosePath` / `JoinPaths` wire shapes. The tag is
@@ -5293,6 +5522,8 @@ mod tests {
             protocol: PROTOCOL_VERSION,
             kind: WorkerToMainKind::IdmlExported {
                 idml_bytes: ByteBuf::from(vec![80, 75, 3, 4]), // "PK\x03\x04"
+                // v58 (C-23) — a clean document loses nothing.
+                lost: Vec::new(),
             },
         };
         let json = serde_json::to_string(&ok).unwrap();
@@ -5307,8 +5538,9 @@ mod tests {
         assert!(!json.contains("idml_bytes"), "snake leaked: {json}");
         let back: WorkerToMain = serde_json::from_str(&json).unwrap();
         match back.kind {
-            WorkerToMainKind::IdmlExported { idml_bytes } => {
+            WorkerToMainKind::IdmlExported { idml_bytes, lost } => {
                 assert_eq!(idml_bytes.as_slice(), &[80, 75, 3, 4]);
+                assert!(lost.is_empty());
             }
             other => panic!("wrong variant: {other:?}"),
         }

@@ -37,6 +37,100 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// what the container itself paints: corner effects on rectangles
 /// (and the authored Bezier outline for path-shaped ones), the
 /// inscribed ellipse for ovals, the authored outline for polygons.
+/// C-23 — the `Self` id behind a `FrameRef` (leaf kinds and groups).
+pub(super) fn frame_ref_self_id(
+    spread: &paged_model::Spread,
+    fr: paged_model::FrameRef,
+) -> Option<&str> {
+    use paged_model::FrameRef as F;
+    match fr {
+        F::TextFrame(i) => spread.text_frames.get(i)?.self_id.as_deref(),
+        F::Rectangle(i) => spread.rectangles.get(i)?.self_id.as_deref(),
+        F::Oval(i) => spread.ovals.get(i)?.self_id.as_deref(),
+        F::GraphicLine(i) => spread.graphic_lines.get(i)?.self_id.as_deref(),
+        F::Polygon(i) => spread.polygons.get(i)?.self_id.as_deref(),
+        F::Group(i) => spread.groups.get(i)?.self_id.as_deref(),
+    }
+}
+
+/// C-23 — the reverse: which `FrameRef` carries this `Self` id. Only
+/// the leaf kinds an opacity mask can use.
+pub(super) fn frame_ref_for_self_id(
+    spread: &paged_model::Spread,
+    id: &str,
+) -> Option<paged_model::FrameRef> {
+    use paged_model::FrameRef as F;
+    let hit = |v: Option<usize>| v;
+    hit(spread
+        .rectangles
+        .iter()
+        .position(|r| r.self_id.as_deref() == Some(id)))
+    .map(F::Rectangle)
+    .or_else(|| {
+        spread
+            .ovals
+            .iter()
+            .position(|o| o.self_id.as_deref() == Some(id))
+            .map(F::Oval)
+    })
+    .or_else(|| {
+        spread
+            .graphic_lines
+            .iter()
+            .position(|l| l.self_id.as_deref() == Some(id))
+            .map(F::GraphicLine)
+    })
+    .or_else(|| {
+        spread
+            .polygons
+            .iter()
+            .position(|p| p.self_id.as_deref() == Some(id))
+            .map(F::Polygon)
+    })
+}
+
+/// C-23 — the spread-local page indices a `FrameRef` overlaps, using
+/// the same bounds+transform routing `emit_one` applies per kind.
+/// Never empty: a frame that overlaps nothing still routes to its
+/// nearest page, matching `emit_one`'s `unwrap_or(0)` fallback.
+pub(super) fn frame_ref_local_pages(
+    spread: &paged_model::Spread,
+    fr: paged_model::FrameRef,
+    local_geoms: &[PageGeom],
+) -> Vec<usize> {
+    use paged_model::FrameRef as F;
+    let b = match fr {
+        F::TextFrame(i) => spread
+            .text_frames
+            .get(i)
+            .map(|f| transform_bounds(f.bounds, f.item_transform)),
+        F::Rectangle(i) => spread
+            .rectangles
+            .get(i)
+            .map(|f| transform_bounds(f.bounds, f.item_transform)),
+        F::Oval(i) => spread
+            .ovals
+            .get(i)
+            .map(|f| transform_bounds(f.bounds, f.item_transform)),
+        F::GraphicLine(i) => spread
+            .graphic_lines
+            .get(i)
+            .map(|f| transform_bounds(f.bounds, f.item_transform)),
+        F::Polygon(i) => spread
+            .polygons
+            .get(i)
+            .map(|f| transform_bounds(f.bounds, f.item_transform)),
+        F::Group(_) => None,
+    };
+    let Some(b) = b else { return vec![0] };
+    let overlaps = pages_overlapping_frame(&b, local_geoms);
+    if overlaps.is_empty() {
+        vec![page_for_frame(&b, local_geoms).unwrap_or(0)]
+    } else {
+        overlaps
+    }
+}
+
 pub(super) fn container_clip_geometry(
     spread: &paged_model::Spread,
     host_id: &str,
@@ -1410,8 +1504,138 @@ pub(super) fn build_document_inner(
             }
         }
 
-        for fr in frames_ordered {
+        /// C-23 — emit `fr`, wrapped in a soft-mask bracket when the
+        /// spread's `opacity_masks` names it.
+        ///
+        /// Markers go on the UNION of the pages the target and the
+        /// mask artwork overlap. That keeps every page's stream
+        /// balanced without inspecting what `emit_one` decided
+        /// internally: `emit_one` only ever writes to pages the item
+        /// overlaps, which is a subset of the union, so a union page
+        /// sees `Begin…, [maybe artwork], BeginMasked…, [maybe
+        /// target], End…` and a non-union page sees nothing at all.
+        /// (Single-page spreads — nearly every real document — reduce
+        /// to the obvious one-page case.)
+        #[allow(clippy::too_many_arguments)]
+        fn emit_masked(
+            fr: paged_model::FrameRef,
+            spread: &paged_model::Spread,
+            range: &std::ops::Range<usize>,
+            local_geoms: &[PageGeom],
+            pages: &mut [BuiltPage],
+            page_image_caches: &mut [HashMap<String, paged_compose::ImageId>],
+            decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage>,
+            frame_to_page: &mut HashMap<String, usize>,
+            frame_spans: &mut crate::module::SpreadFrameSpans,
+            total_stats: &mut PipelineStats,
+            document: &Document,
+            palette: &Graphic,
+            options: &PipelineOptions,
+            cmyk_xform: Option<&paged_color::IccTransform>,
+            auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
+        ) {
+            let mask_entry = frame_ref_self_id(spread, fr)
+                .and_then(|id| spread.opacity_masks.get(id))
+                .and_then(|m| frame_ref_for_self_id(spread, &m.mask_item).map(|art| (m, art)));
+            let Some((mask, artwork_ref)) = mask_entry else {
+                emit_one(
+                    fr,
+                    spread,
+                    range,
+                    local_geoms,
+                    pages,
+                    page_image_caches,
+                    decoded_image_cache,
+                    frame_to_page,
+                    frame_spans,
+                    total_stats,
+                    document,
+                    palette,
+                    options,
+                    cmyk_xform,
+                    auto_sized_bounds,
+                );
+                return;
+            };
+            let mut union: Vec<usize> = frame_ref_local_pages(spread, fr, local_geoms);
+            for p in frame_ref_local_pages(spread, artwork_ref, local_geoms) {
+                if !union.contains(&p) {
+                    union.push(p);
+                }
+            }
+            let mask_type = match mask.mask_type {
+                paged_model::OpacityMaskType::Luminosity => paged_compose::SoftMaskType::Luminosity,
+                paged_model::OpacityMaskType::Alpha => paged_compose::SoftMaskType::Alpha,
+            };
+            for &local_idx in &union {
+                pages[range.start + local_idx].list.push(
+                    paged_compose::DisplayCommand::BeginSoftMask {
+                        mask_type,
+                        invert: mask.invert,
+                        transform: Transform::IDENTITY,
+                    },
+                );
+            }
             emit_one(
+                artwork_ref,
+                spread,
+                range,
+                local_geoms,
+                pages,
+                page_image_caches,
+                decoded_image_cache,
+                frame_to_page,
+                frame_spans,
+                total_stats,
+                document,
+                palette,
+                options,
+                cmyk_xform,
+                auto_sized_bounds,
+            );
+            for &local_idx in &union {
+                pages[range.start + local_idx].list.push(
+                    paged_compose::DisplayCommand::BeginMaskedContent(Transform::IDENTITY),
+                );
+            }
+            emit_one(
+                fr,
+                spread,
+                range,
+                local_geoms,
+                pages,
+                page_image_caches,
+                decoded_image_cache,
+                frame_to_page,
+                frame_spans,
+                total_stats,
+                document,
+                palette,
+                options,
+                cmyk_xform,
+                auto_sized_bounds,
+            );
+            for &local_idx in &union {
+                pages[range.start + local_idx].list.push(
+                    paged_compose::DisplayCommand::EndSoftMask(Transform::IDENTITY),
+                );
+            }
+        }
+
+        for fr in frames_ordered {
+            // C-23: a masked item's whole frame-body emission is
+            // bracketed by the mask artwork. Defensive skip for a
+            // hand-authored / round-tripped model in which the mask
+            // artwork was left in the z-table — `ApplyOpacityMask`
+            // removes it, but a model that never went through the op
+            // would otherwise paint it twice (once as artwork, once
+            // as a visible object).
+            if frame_ref_self_id(spread, fr)
+                .is_some_and(|id| spread.opacity_masks.values().any(|m| m.mask_item == id))
+            {
+                continue;
+            }
+            emit_masked(
                 fr,
                 spread,
                 &range,

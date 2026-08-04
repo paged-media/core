@@ -1022,6 +1022,10 @@ impl WorkerCore {
                 Some(m) => match m.export_idml() {
                     Ok(bytes) => WorkerToMainKind::IdmlExported {
                         idml_bytes: bytes.into(),
+                        // v58 (C-23) — a lossy IDML save is never
+                        // silent: paged-native constructs the writer
+                        // could not carry ride back with the bytes.
+                        lost: m.idml_export_losses(),
                     },
                     Err(e) => WorkerToMainKind::ExportIdmlFailed {
                         error: e.to_string(),

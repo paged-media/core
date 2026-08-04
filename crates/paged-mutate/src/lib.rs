@@ -63,8 +63,9 @@ pub use notify::Notifier;
 pub use operation::{
     AppliedOperation, ColorGroupSpec, FaceSelectMode, FieldKind, GradientSpec, GradientStopSpec,
     GroupSpec, GuideOrientationSpec, InvalidationHint, NestedParent, NodeId, NodeSpec,
-    NumberingListSpec, Operation, PathPointAddress, PathPointRole, PathfinderKind,
-    PathfinderRegionVerb, PropertyPath, StyleCollection, StyleScope, SwatchSpec, Value,
+    NumberingListSpec, OpacityMaskMode, Operation, PathPointAddress, PathPointRole, PathfinderKind,
+    PathfinderRegionVerb, PropertyPath, StyleCollection, StyleScope, SwatchSpec, TextPathSpec,
+    Value,
 };
 pub use path_math::fit_polyline_to_anchors;
 

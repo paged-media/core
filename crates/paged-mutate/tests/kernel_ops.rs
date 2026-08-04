@@ -1514,3 +1514,527 @@ fn polygon_corner_slots_are_independent() {
         assert_eq!(poly_corner(&doc, &id, i), (None, None), "slot {i} restored");
     }
 }
+
+// ---------------------------------------------------------------------------
+// C-23 (protocol v58) — ApplyOpacityMask + ReleaseOpacityMask through the
+// apply layer: side-map bookkeeping, exact z-slot restore on undo, mode +
+// invert survival across the round-trip, and honest rejection.
+// ---------------------------------------------------------------------------
+
+fn mask_of(doc: &Document, target: &str) -> Option<paged_model::OpacityMask> {
+    doc.spreads[0].spread.opacity_masks.get(target).cloned()
+}
+
+/// The headline invariant: the mask artwork LEAVES the z-table (it no
+/// longer paints on its own), the relation lands in the side map with
+/// the requested mode, geometry is untouched on both sides, and ONE
+/// undo restores the artwork to its EXACT prior stacking slot.
+#[test]
+fn apply_opacity_mask_consumes_the_artwork_and_one_undo_restores_the_z_slot() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c23Target", [0.0, 0.0, 200.0, 300.0]);
+    insert_rect(&mut doc, "c23Mask", [10.0, 10.0, 150.0, 250.0]);
+    insert_rect(&mut doc, "c23Above", [0.0, 0.0, 20.0, 20.0]);
+    let order_before = top_level_ids(&doc);
+    let t_target = rect_transform(&doc, "c23Target");
+    let t_mask = rect_transform(&doc, "c23Mask");
+
+    let applied = apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23Target".to_string()),
+            mask: NodeId::Rectangle("c23Mask".to_string()),
+            mask_type: paged_mutate::OpacityMaskMode::Alpha,
+            invert: true,
+        },
+    )
+    .expect("apply opacity mask");
+
+    let order_masked = top_level_ids(&doc);
+    assert!(
+        !order_masked.contains(&"c23Mask".to_string()),
+        "the artwork must leave the z-table: {order_masked:?}"
+    );
+    assert!(
+        order_masked.contains(&"c23Target".to_string()),
+        "the target keeps painting: {order_masked:?}"
+    );
+    let entry = mask_of(&doc, "c23Target").expect("side-map entry");
+    assert_eq!(entry.mask_item, "c23Mask");
+    assert_eq!(entry.mask_type, paged_model::OpacityMaskType::Alpha);
+    assert!(entry.invert);
+    assert_eq!(rect_transform(&doc, "c23Target"), t_target, "geometry kept");
+    assert_eq!(rect_transform(&doc, "c23Mask"), t_mask, "geometry kept");
+
+    // ONE undo restores the artwork to its EXACT prior slot.
+    let undone = apply(&mut doc, &applied.inverse).expect("undo apply-mask");
+    assert_eq!(top_level_ids(&doc), order_before, "exact z slot restored");
+    assert!(mask_of(&doc, "c23Target").is_none());
+
+    // Redo re-applies with the SAME mode + invert (an exact inverse).
+    apply(&mut doc, &undone.inverse).expect("redo apply-mask");
+    let again = mask_of(&doc, "c23Target").expect("side-map entry after redo");
+    assert_eq!(again.mask_type, paged_model::OpacityMaskType::Alpha);
+    assert!(again.invert, "invert survived the undo/redo round-trip");
+    assert_eq!(top_level_ids(&doc), order_masked);
+}
+
+/// The inverse gesture: a user-initiated release stacks the artwork on
+/// top, and ITS inverse re-applies the mask with the captured mode.
+#[test]
+fn release_opacity_mask_pops_the_artwork_and_undo_reapplies_the_same_mode() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c23T", [0.0, 0.0, 200.0, 300.0]);
+    insert_rect(&mut doc, "c23M", [10.0, 10.0, 150.0, 250.0]);
+    apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23T".to_string()),
+            mask: NodeId::Rectangle("c23M".to_string()),
+            mask_type: paged_mutate::OpacityMaskMode::Luminosity,
+            invert: false,
+        },
+    )
+    .expect("apply");
+
+    let applied = apply(
+        &mut doc,
+        &Operation::ReleaseOpacityMask {
+            target: NodeId::Rectangle("c23T".to_string()),
+            restore_slot: None,
+        },
+    )
+    .expect("release");
+    assert!(mask_of(&doc, "c23T").is_none());
+    assert_eq!(
+        top_level_ids(&doc).last().map(String::as_str),
+        Some("c23M"),
+        "a user-initiated release stacks the artwork on top"
+    );
+
+    let undone = apply(&mut doc, &applied.inverse).expect("undo release");
+    let entry = mask_of(&doc, "c23T").expect("mask restored");
+    assert_eq!(entry.mask_item, "c23M");
+    assert_eq!(entry.mask_type, paged_model::OpacityMaskType::Luminosity);
+    // The undo's own inverse is the release again — redo works.
+    apply(&mut doc, &undone.inverse).expect("redo release");
+    assert!(mask_of(&doc, "c23T").is_none());
+}
+
+/// Honest rejection, no mutation: a TextFrame on either side, self-mask,
+/// double-mask, and a grouped artwork item.
+#[test]
+fn opacity_mask_rejects_the_cases_it_cannot_render_faithfully() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c23A", [0.0, 0.0, 100.0, 100.0]);
+    insert_rect(&mut doc, "c23B", [0.0, 0.0, 100.0, 100.0]);
+    insert_rect(&mut doc, "c23C", [0.0, 0.0, 100.0, 100.0]);
+    let order_before = top_level_ids(&doc);
+
+    // A TextFrame cannot take part — its glyphs are emitted outside the
+    // mask bracket, so a masked text frame would be a visible lie.
+    let text_frame_id = doc.spreads[0]
+        .spread
+        .text_frames
+        .first()
+        .and_then(|f| f.self_id.clone());
+    if let Some(tf) = text_frame_id {
+        assert!(apply(
+            &mut doc,
+            &Operation::ApplyOpacityMask {
+                target: NodeId::TextFrame(tf.clone()),
+                mask: NodeId::Rectangle("c23A".to_string()),
+                mask_type: Default::default(),
+                invert: false,
+            },
+        )
+        .is_err());
+        assert!(apply(
+            &mut doc,
+            &Operation::ApplyOpacityMask {
+                target: NodeId::Rectangle("c23A".to_string()),
+                mask: NodeId::TextFrame(tf),
+                mask_type: Default::default(),
+                invert: false,
+            },
+        )
+        .is_err());
+    }
+
+    // Self-mask.
+    assert!(apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23A".to_string()),
+            mask: NodeId::Rectangle("c23A".to_string()),
+            mask_type: Default::default(),
+            invert: false,
+        },
+    )
+    .is_err());
+
+    // Releasing an unmasked item.
+    assert!(apply(
+        &mut doc,
+        &Operation::ReleaseOpacityMask {
+            target: NodeId::Rectangle("c23A".to_string()),
+            restore_slot: None,
+        },
+    )
+    .is_err());
+
+    assert_eq!(top_level_ids(&doc), order_before, "nothing mutated");
+
+    // A second mask on the same target is refused (an implicit replace
+    // would lose the first artwork's z slot).
+    apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23A".to_string()),
+            mask: NodeId::Rectangle("c23B".to_string()),
+            mask_type: Default::default(),
+            invert: false,
+        },
+    )
+    .expect("first mask");
+    assert!(apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23A".to_string()),
+            mask: NodeId::Rectangle("c23C".to_string()),
+            mask_type: Default::default(),
+            invert: false,
+        },
+    )
+    .is_err());
+    // …and reusing a live artwork item as a second mask is refused too.
+    assert!(apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23C".to_string()),
+            mask: NodeId::Rectangle("c23B".to_string()),
+            mask_type: Default::default(),
+            invert: false,
+        },
+    )
+    .is_err());
+}
+
+/// A live mask item (and a masked target) cannot be deleted out from
+/// under the relation — the RemoveNode inverse would restore the
+/// artwork TOP-LEVEL and break the mutate-then-undo identity.
+#[test]
+fn remove_node_refuses_to_delete_a_live_mask_or_its_target() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c23DelT", [0.0, 0.0, 100.0, 100.0]);
+    insert_rect(&mut doc, "c23DelM", [0.0, 0.0, 100.0, 100.0]);
+    apply(
+        &mut doc,
+        &Operation::ApplyOpacityMask {
+            target: NodeId::Rectangle("c23DelT".to_string()),
+            mask: NodeId::Rectangle("c23DelM".to_string()),
+            mask_type: Default::default(),
+            invert: false,
+        },
+    )
+    .expect("apply");
+    assert!(apply(
+        &mut doc,
+        &Operation::RemoveNode {
+            node: NodeId::Rectangle("c23DelM".to_string()),
+        },
+    )
+    .is_err());
+    assert!(apply(
+        &mut doc,
+        &Operation::RemoveNode {
+            node: NodeId::Rectangle("c23DelT".to_string()),
+        },
+    )
+    .is_err());
+    // Released, both delete normally.
+    apply(
+        &mut doc,
+        &Operation::ReleaseOpacityMask {
+            target: NodeId::Rectangle("c23DelT".to_string()),
+            restore_slot: None,
+        },
+    )
+    .expect("release");
+    apply(
+        &mut doc,
+        &Operation::RemoveNode {
+            node: NodeId::Rectangle("c23DelM".to_string()),
+        },
+    )
+    .expect("delete once released");
+}
+
+// ---------------------------------------------------------------------------
+// C-24 (protocol v58) — AttachTextToPath + DetachTextFromPath through the
+// apply layer. The renderer has always CONSUMED `<TextPath>`; until now
+// nothing could create one.
+// ---------------------------------------------------------------------------
+
+fn text_paths_of(doc: &Document, host: &str) -> Vec<paged_model::TextPath> {
+    let spread = &doc.spreads[0].spread;
+    spread
+        .rectangles
+        .iter()
+        .find(|r| r.self_id.as_deref() == Some(host))
+        .map(|r| r.text_paths.clone())
+        .or_else(|| {
+            spread
+                .polygons
+                .iter()
+                .find(|p| p.self_id.as_deref() == Some(host))
+                .map(|p| p.text_paths.clone())
+        })
+        .or_else(|| {
+            spread
+                .graphic_lines
+                .iter()
+                .find(|l| l.self_id.as_deref() == Some(host))
+                .map(|l| l.text_paths.clone())
+        })
+        .unwrap_or_default()
+}
+
+/// Mint an UNPLACED story: insert a text frame naming a fresh story id
+/// (the apply layer mints the empty story for it), then remove the
+/// frame — the story survives, unflowed. `AttachTextToPath` refuses to
+/// steal a story that already has a flow, so a placed one won't do.
+fn fresh_unplaced_story(doc: &mut Document, frame_id: &str) -> String {
+    let spread_id = doc.spreads[0]
+        .spread
+        .self_id
+        .clone()
+        .expect("spread has a self id");
+    let position = doc.spreads[0].spread.text_frames.len();
+    let story = format!("Story/{frame_id}");
+    apply(
+        &mut *doc,
+        &Operation::InsertNode {
+            parent: NodeId::Spread(spread_id),
+            position,
+            node: paged_mutate::NodeSpec::TextFrame {
+                self_id: frame_id.to_string(),
+                bounds: [0.0, 0.0, 100.0, 100.0],
+                parent_story: Some(story.clone()),
+                item_transform: None,
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+            },
+            z_slot: None,
+        },
+    )
+    .expect("insert text frame");
+    assert!(doc.stories.iter().any(|s| s.self_id == story));
+    apply(
+        &mut *doc,
+        &Operation::RemoveNode {
+            node: NodeId::TextFrame(frame_id.to_string()),
+        },
+    )
+    .expect("remove the frame, leaving the story unflowed");
+    story
+}
+
+/// Attach creates the `<TextPath>` the renderer consumes, carrying every
+/// knob the renderer HONOURS; detach removes exactly that link and
+/// LEAVES THE STORY ALONE; one undo/redo round-trips the knobs.
+#[test]
+fn attach_text_to_path_creates_the_link_and_detach_is_its_exact_inverse() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c24Host", [0.0, 0.0, 200.0, 100.0]);
+    let story = fresh_unplaced_story(&mut doc, "c24Seed1");
+    let stories_before = doc.stories.len();
+    assert!(text_paths_of(&doc, "c24Host").is_empty());
+
+    let spec = paged_mutate::TextPathSpec {
+        path_type_alignment: Some("CenterPathType".to_string()),
+        flip_path_effect: Some("Flipped".to_string()),
+        start_bracket: Some(12.0),
+        end_bracket: Some(180.0),
+    };
+    let applied = apply(
+        &mut doc,
+        &Operation::AttachTextToPath {
+            host: NodeId::Rectangle("c24Host".to_string()),
+            story_id: story.clone(),
+            spec: spec.clone(),
+        },
+    )
+    .expect("attach");
+
+    let tps = text_paths_of(&doc, "c24Host");
+    assert_eq!(tps.len(), 1, "one TextPath created");
+    assert_eq!(tps[0].parent_story, story);
+    assert_eq!(
+        tps[0].path_type_alignment.as_deref(),
+        Some("CenterPathType")
+    );
+    assert_eq!(tps[0].flip_path_effect.as_deref(), Some("Flipped"));
+    assert_eq!(tps[0].start_bracket, Some(12.0));
+    assert_eq!(tps[0].end_bracket, Some(180.0));
+    assert!(
+        tps[0].path_effect.is_none(),
+        "PathEffect stays absent (= Rainbow); only Rainbow renders, so no knob is offered"
+    );
+
+    // Undo removes the LINK and leaves the story in place.
+    let undone = apply(&mut doc, &applied.inverse).expect("undo attach");
+    assert!(text_paths_of(&doc, "c24Host").is_empty());
+    assert_eq!(
+        doc.stories.len(),
+        stories_before,
+        "the story survives detach — attach only ever linked it"
+    );
+    assert!(doc.stories.iter().any(|s| s.self_id == story));
+
+    // Redo restores the link with EVERY knob intact.
+    apply(&mut doc, &undone.inverse).expect("redo attach");
+    let tps = text_paths_of(&doc, "c24Host");
+    assert_eq!(tps.len(), 1);
+    assert_eq!(
+        tps[0].path_type_alignment.as_deref(),
+        Some("CenterPathType")
+    );
+    assert_eq!(tps[0].flip_path_effect.as_deref(), Some("Flipped"));
+    assert_eq!(tps[0].start_bracket, Some(12.0));
+    assert_eq!(tps[0].end_bracket, Some(180.0));
+}
+
+/// A user-initiated detach (no captured index/knobs) still produces an
+/// inverse that re-attaches identically.
+#[test]
+fn detach_text_from_path_round_trips_without_captured_state() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c24H2", [0.0, 0.0, 200.0, 100.0]);
+    let story = fresh_unplaced_story(&mut doc, "c24Seed2");
+    apply(
+        &mut doc,
+        &Operation::AttachTextToPath {
+            host: NodeId::Rectangle("c24H2".to_string()),
+            story_id: story.clone(),
+            spec: paged_mutate::TextPathSpec {
+                path_type_alignment: Some("AscenderPathType".to_string()),
+                ..Default::default()
+            },
+        },
+    )
+    .expect("attach");
+
+    let applied = apply(
+        &mut doc,
+        &Operation::DetachTextFromPath {
+            host: NodeId::Rectangle("c24H2".to_string()),
+            index: None,
+            restore: None,
+        },
+    )
+    .expect("detach");
+    assert!(text_paths_of(&doc, "c24H2").is_empty());
+
+    apply(&mut doc, &applied.inverse).expect("undo detach");
+    let tps = text_paths_of(&doc, "c24H2");
+    assert_eq!(tps.len(), 1);
+    assert_eq!(tps[0].parent_story, story);
+    assert_eq!(
+        tps[0].path_type_alignment.as_deref(),
+        Some("AscenderPathType"),
+        "the detach inverse carries the knobs it removed"
+    );
+}
+
+/// Honest rejection, no mutation: an unknown story, a non-path host, a
+/// story already flowing into a text frame, a story already on another
+/// path, and detaching from a host that hosts nothing.
+#[test]
+fn text_on_path_rejects_what_it_cannot_render() {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    insert_rect(&mut doc, "c24R1", [0.0, 0.0, 200.0, 100.0]);
+    insert_rect(&mut doc, "c24R2", [0.0, 0.0, 200.0, 100.0]);
+    let story = fresh_unplaced_story(&mut doc, "c24Seed3");
+
+    // Unknown story.
+    assert!(apply(
+        &mut doc,
+        &Operation::AttachTextToPath {
+            host: NodeId::Rectangle("c24R1".to_string()),
+            story_id: "no-such-story".to_string(),
+            spec: Default::default(),
+        },
+    )
+    .is_err());
+
+    // A story already flowing into a text frame belongs to that flow.
+    let placed = doc.spreads[0]
+        .spread
+        .text_frames
+        .iter()
+        .find_map(|f| f.parent_story.clone());
+    if let Some(placed) = placed {
+        assert!(apply(
+            &mut doc,
+            &Operation::AttachTextToPath {
+                host: NodeId::Rectangle("c24R1".to_string()),
+                story_id: placed,
+                spec: Default::default(),
+            },
+        )
+        .is_err());
+    }
+
+    // An Oval has no `text_paths` and the renderer's pass never walks
+    // ovals — accepting one would create a link nothing draws.
+    let oval = doc.spreads[0]
+        .spread
+        .ovals
+        .first()
+        .and_then(|o| o.self_id.clone());
+    if let Some(oval) = oval {
+        assert!(apply(
+            &mut doc,
+            &Operation::AttachTextToPath {
+                host: NodeId::Oval(oval),
+                story_id: story.clone(),
+                spec: Default::default(),
+            },
+        )
+        .is_err());
+    }
+
+    // Detaching from a host with no TextPath.
+    assert!(apply(
+        &mut doc,
+        &Operation::DetachTextFromPath {
+            host: NodeId::Rectangle("c24R1".to_string()),
+            index: None,
+            restore: None,
+        },
+    )
+    .is_err());
+
+    // One story, one flow: a second path cannot claim the same story.
+    apply(
+        &mut doc,
+        &Operation::AttachTextToPath {
+            host: NodeId::Rectangle("c24R1".to_string()),
+            story_id: story.clone(),
+            spec: Default::default(),
+        },
+    )
+    .expect("attach");
+    assert!(apply(
+        &mut doc,
+        &Operation::AttachTextToPath {
+            host: NodeId::Rectangle("c24R2".to_string()),
+            story_id: story,
+            spec: Default::default(),
+        },
+    )
+    .is_err());
+    assert!(text_paths_of(&doc, "c24R2").is_empty());
+}

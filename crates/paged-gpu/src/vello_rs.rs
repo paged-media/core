@@ -63,6 +63,18 @@
 //!    Vello needs a height-field/normal pass it doesn't have, so
 //!    this stays a renderer-gap (CPU is the path of record).
 //!
+//!  - C-23 `BeginSoftMask` / `BeginMaskedContent` / `EndSoftMask`
+//!    (opacity masks) — Vello's `push_layer` takes a *shape*, not a
+//!    coverage buffer, so the version we link against has no way to
+//!    modulate a layer by another layer's luminosity or alpha. Rather
+//!    than paint the mask artwork on top of the page (which is what
+//!    ignoring the markers outright would do, and is visibly worse
+//!    than no mask at all), we SKIP the artwork range and render the
+//!    masked content UNMASKED. Explicitly not the `PushClip`
+//!    precedent — clips *are* enforced here — and explicitly not a
+//!    silent divergence: the CPU rasterizer stays the path of record,
+//!    and this is the documented gap.
+//!
 //! Partial-parity note: the Satin approximation below is a
 //! two-stamp additive blend; the CPU rasterizer's W1.4 `invert`
 //! flips a *difference* mask it doesn't compute, so the Vello
@@ -343,8 +355,30 @@ fn build_scene_with_transform_filtered(
     // properly nested by the emitter.
     let mut layer_stack: Vec<LayerKind> = Vec::new();
 
+    // C-23 — nesting depth of soft-mask ARTWORK we are currently
+    // skipping. See the module doc: Vello cannot modulate by a
+    // coverage buffer, so the artwork must not be painted (it would
+    // land on top of the page as opaque geometry). The masked content
+    // that follows `BeginMaskedContent` renders unmasked.
+    let mut soft_mask_skip = 0usize;
+
     for cmd in &list.commands {
+        if soft_mask_skip > 0 {
+            match cmd {
+                DisplayCommand::BeginSoftMask { .. } => soft_mask_skip += 1,
+                DisplayCommand::BeginMaskedContent(_) => soft_mask_skip -= 1,
+                _ => {}
+            }
+            continue;
+        }
         match cmd {
+            DisplayCommand::BeginSoftMask { .. } => {
+                soft_mask_skip = 1;
+            }
+            // Both remaining markers are pure state changes we cannot
+            // honour — the mask never became a layer, so there is
+            // nothing to pop.
+            DisplayCommand::BeginMaskedContent(_) | DisplayCommand::EndSoftMask(_) => {}
             DisplayCommand::PushClip { path_id, transform } => {
                 let scene = scene_stack.last_mut().expect("scene_stack underflow");
                 let Some(path_data) = list.paths.get(*path_id) else {

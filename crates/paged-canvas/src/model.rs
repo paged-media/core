@@ -2753,6 +2753,54 @@ impl CanvasModel {
                 child: element_to_leaf_node_id(child_id)?,
                 restore_slot: None,
             }),
+            // v58 (C-23) — opacity masks. `maskType` is a free string
+            // on the wire (the editor sends what a dropdown produced);
+            // anything that isn't "alpha" is Luminosity, Illustrator's
+            // default. `restore_slot` is inverse-only and never rides
+            // the wire, exactly like `ReleaseFrom`'s.
+            Mutation::ApplyOpacityMask {
+                target_id,
+                mask_id,
+                mask_type,
+                invert,
+            } => Some(Operation::ApplyOpacityMask {
+                target: element_to_leaf_node_id(target_id)?,
+                mask: element_to_leaf_node_id(mask_id)?,
+                mask_type: match mask_type.as_deref() {
+                    Some("alpha") | Some("Alpha") => paged_mutate::OpacityMaskMode::Alpha,
+                    _ => paged_mutate::OpacityMaskMode::Luminosity,
+                },
+                invert: invert.unwrap_or(false),
+            }),
+            Mutation::ReleaseOpacityMask { target_id } => Some(Operation::ReleaseOpacityMask {
+                target: element_to_leaf_node_id(target_id)?,
+                restore_slot: None,
+            }),
+            // v58 (C-24) — type on a path. The apply layer gates the
+            // host kind and every structural precondition, so the
+            // bridge stays a thin translation.
+            Mutation::AttachTextToPath {
+                element_id,
+                story_id,
+                path_type_alignment,
+                flip_path_effect,
+                start_bracket,
+                end_bracket,
+            } => Some(Operation::AttachTextToPath {
+                host: element_to_leaf_node_id(element_id)?,
+                story_id: story_id.clone(),
+                spec: paged_mutate::TextPathSpec {
+                    path_type_alignment: path_type_alignment.clone(),
+                    flip_path_effect: flip_path_effect.clone(),
+                    start_bracket: *start_bracket,
+                    end_bracket: *end_bracket,
+                },
+            }),
+            Mutation::DetachTextFromPath { element_id } => Some(Operation::DetachTextFromPath {
+                host: element_to_leaf_node_id(element_id)?,
+                index: None,
+                restore: None,
+            }),
             // W1.20 (groups v2) — members may include existing groups
             // (group-of-groups); `element_to_member_node_id` resolves
             // Group ids too. Fresh top-level create carries no parent /
@@ -3945,6 +3993,43 @@ impl CanvasModel {
     /// which is exactly the `&Document` the writer takes.
     pub fn export_idml(&self) -> Result<Vec<u8>, idml_export::WriteError> {
         idml_export::write_idml(&self.scene, &self.source_idml)
+    }
+
+    /// C-23 — the paged-NATIVE constructs an `.idml` export cannot
+    /// carry, one human-readable line each. Empty for a document that
+    /// uses only IDML-expressible features.
+    ///
+    /// This exists because IDML has **no opacity-mask element** —
+    /// InDesign's transparency model has per-object opacity, blend
+    /// modes and feathering, but nothing that modulates one object's
+    /// alpha by another object's artwork. Rather than invent an
+    /// element InDesign would reject, or smuggle the relation through
+    /// `Properties/Label` (which round-trips on paper but leaves the
+    /// mask artwork rendering as an opaque object *inside InDesign*),
+    /// an opacity mask is accepted as native-only — and the loss is
+    /// made LOUD here instead of silently happening on save.
+    ///
+    /// The lossless path is `.paged`: [`Self::export_paged`] embeds a
+    /// fresh native model part, and `Spread::opacity_masks` is part of
+    /// that serialisation, so a `.paged` round-trip keeps every mask.
+    pub fn idml_export_losses(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for parsed in &self.scene.spreads {
+            let mut ids: Vec<(&String, &paged_model::OpacityMask)> =
+                parsed.spread.opacity_masks.iter().collect();
+            // HashMap iteration order is not stable; sort so the
+            // reported list is deterministic across runs.
+            ids.sort_by(|a, b| a.0.cmp(b.0));
+            for (target, mask) in ids {
+                out.push(format!(
+                    "opacity mask on `{target}` (artwork `{}`) is a paged-native construct — \
+                     IDML has no opacity-mask element, so the mask is dropped and its artwork \
+                     exports as an ordinary item. Save as `.paged` to keep it.",
+                    mask.mask_item
+                ));
+            }
+        }
+        out
     }
 
     // ---- `.paged` container parts (the `host.parts` SDK door, engine side) ----

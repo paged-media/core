@@ -183,6 +183,12 @@ pub fn export_page(
                 g.isolated(true);
                 g.color_space().device_gray();
             }
+            // C-23 — an `/S /Alpha` mask reads the group's accumulated
+            // alpha, so it must be isolated (no parent backdrop
+            // leaking in) but needs no blending colour space.
+            PendingFormGroup::AlphaGroup => {
+                g.isolated(true);
+            }
         }
         g.finish();
         x.finish();
@@ -267,6 +273,40 @@ fn find_group_end(commands: &[DisplayCommand], start: usize) -> usize {
     }
     // Unbalanced list — treat everything to the end as the group.
     commands.len()
+}
+
+/// C-23 — locate the `BeginMaskedContent` and `EndSoftMask` matching
+/// the `BeginSoftMask` at `start`. Returns `(mid, end)` such that
+/// `start+1..mid` is the mask ARTWORK and `mid+1..end` is the masked
+/// content. Soft-mask brackets nest well-formed, so counting only the
+/// soft-mask markers is sufficient — the artwork itself may contain a
+/// whole nested bracket.
+///
+/// An unbalanced list degrades safely: a missing `BeginMaskedContent`
+/// makes the whole tail artwork (nothing paints, which is the honest
+/// reading of "the mask never closed"); a missing `EndSoftMask` runs
+/// the masked content to the end of the list.
+fn find_soft_mask_parts(commands: &[DisplayCommand], start: usize) -> (usize, usize) {
+    let mut depth = 0usize;
+    let mut mid = commands.len();
+    for (idx, cmd) in commands.iter().enumerate().skip(start) {
+        match cmd {
+            DisplayCommand::BeginSoftMask { .. } => depth += 1,
+            DisplayCommand::BeginMaskedContent(_) => {
+                if depth == 1 && mid == commands.len() {
+                    mid = idx;
+                }
+            }
+            DisplayCommand::EndSoftMask(_) => {
+                depth -= 1;
+                if depth == 0 {
+                    return (mid.min(idx), idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    (mid, commands.len())
 }
 
 /// Per-page walk state. `walk` recurses for captured transparency
@@ -582,6 +622,92 @@ impl Walker<'_, '_> {
                         );
                     }
                 }
+                // C-23 opacity mask. The display-list bracket lowers
+                // 1:1 onto PDF's native soft-mask machinery, reusing
+                // the SAME `PendingFormGroup::LuminosityGray` path the
+                // gradient feather already drives (its only producer
+                // until now): the ARTWORK range becomes an isolated
+                // group Form XObject, the ExtGState's `/SMask` points
+                // at it, and the masked range paints under that gs.
+                //   BeginSoftMask      → capture artwork → form
+                //   BeginMaskedContent → q + gs(/SMask)
+                //   EndSoftMask        → Q
+                DisplayCommand::BeginSoftMask {
+                    mask_type, invert, ..
+                } => {
+                    let (mid, end) = find_soft_mask_parts(commands, i);
+                    // The artwork stream shares the page /Resources by
+                    // ref, exactly like the blend-group forms.
+                    let mut artwork = Content::new();
+                    let mut artwork_stack = StateStack::new();
+                    self.walk(&mut artwork, &mut artwork_stack, i + 1..mid.min(range.end));
+                    artwork_stack.flush(&mut artwork);
+                    let form_ref = self.state.refs.alloc();
+                    self.pending_forms.push(PendingForm {
+                        form_ref,
+                        data: artwork.finish().to_vec(),
+                        bbox: self.content_bbox,
+                        group: match mask_type {
+                            paged_compose::SoftMaskType::Luminosity => {
+                                PendingFormGroup::LuminosityGray
+                            }
+                            paged_compose::SoftMaskType::Alpha => PendingFormGroup::AlphaGroup,
+                        },
+                    });
+                    // `invert` rides PDF's `/TR` transfer function. An
+                    // inversion is exactly a Type-2 exponential with
+                    // C0 = [1], C1 = [0], N = 1 — i.e. `1 − x` — so no
+                    // PostScript calculator function is needed.
+                    let tr_ref = if *invert {
+                        let r = self.state.refs.alloc();
+                        let mut f = self.state.pdf.exponential_function(r);
+                        f.domain([0.0, 1.0]);
+                        f.range([0.0, 1.0]);
+                        f.c0([1.0]);
+                        f.c1([0.0]);
+                        f.n(1.0);
+                        f.finish();
+                        Some(r)
+                    } else {
+                        None
+                    };
+                    let gs_ref = self.state.refs.alloc();
+                    {
+                        let mut gs = self.state.pdf.ext_graphics(gs_ref);
+                        let mut sm = gs.soft_mask();
+                        sm.subtype(match mask_type {
+                            paged_compose::SoftMaskType::Luminosity => {
+                                pdf_writer::types::MaskType::Luminosity
+                            }
+                            paged_compose::SoftMaskType::Alpha => {
+                                pdf_writer::types::MaskType::Alpha
+                            }
+                        });
+                        sm.group(form_ref);
+                        // Outside the form's BBox the mask evaluates to
+                        // the backdrop: black ⇒ alpha 0 ⇒ hidden, the
+                        // same "unpainted means hidden" default the CPU
+                        // rasterizer gets from an α = 0 capture buffer.
+                        sm.backdrop([0.0]);
+                        if let Some(r) = tr_ref {
+                            sm.transfer_function(r);
+                        }
+                        sm.finish();
+                        gs.finish();
+                    }
+                    let gs_name = format!("GsSm{}", self.resources.ext_g_states.len());
+                    self.resources.ext_g_states.insert(gs_name.clone(), gs_ref);
+                    content.save_state();
+                    content.set_parameters(Name(gs_name.as_bytes()));
+                    self.walk(content, stack, mid + 1..end.min(range.end));
+                    content.restore_state();
+                    i = end; // loop tail advances past EndSoftMask
+                }
+                // Reached only through a malformed list (a marker
+                // without its opening `BeginSoftMask`); tolerated as a
+                // no-op, matching the `PopClip` / `EndBlendGroup`
+                // policy.
+                DisplayCommand::BeginMaskedContent(_) | DisplayCommand::EndSoftMask(_) => {}
                 // v1: the remaining blur-based effects are documented
                 // gaps (the canvas-side raster look is the reference;
                 // shadows — the headline effect — export above).

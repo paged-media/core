@@ -229,6 +229,29 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             child,
             restore_slot,
         } => apply_release_from(doc, child, *restore_slot),
+        // C-23 opacity masks — the soft-mask sibling of the B-18 pair
+        // just above.
+        Operation::ApplyOpacityMask {
+            target,
+            mask,
+            mask_type,
+            invert,
+        } => apply_opacity_mask(doc, target, mask, mask_type.to_model(), *invert),
+        Operation::ReleaseOpacityMask {
+            target,
+            restore_slot,
+        } => apply_release_opacity_mask(doc, target, *restore_slot),
+        // C-24 type-on-a-path.
+        Operation::AttachTextToPath {
+            host,
+            story_id,
+            spec,
+        } => apply_attach_text_to_path(doc, host, story_id, spec),
+        Operation::DetachTextFromPath {
+            host,
+            index,
+            restore,
+        } => apply_detach_text_from_path(doc, host, *index, restore.as_ref()),
         Operation::LinkFrames { from, to } => apply_link_frames(doc, from, to),
         Operation::UnlinkFrames { frame, prev_next } => {
             apply_unlink_frames(doc, frame, prev_next.as_deref())
@@ -719,6 +742,7 @@ mod layer;
 mod master;
 mod move_node;
 mod nested;
+mod opacity_mask;
 mod paragraph;
 mod path_topology;
 mod place_image;
@@ -729,6 +753,7 @@ mod remove_node;
 mod replace_image_bytes;
 mod sections;
 mod set_property;
+mod text_on_path;
 
 use batch_page::*;
 use character::*;
@@ -741,10 +766,12 @@ use layer::*;
 use master::*;
 use move_node::*;
 use nested::*;
+use opacity_mask::*;
 use paragraph::*;
 use path_topology::*;
 use remove_node::*;
 use sections::*;
 use set_property::*;
+use text_on_path::*;
 
 pub(crate) use path_topology::{new_oval, new_rectangle, new_text_frame};

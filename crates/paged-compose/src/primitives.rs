@@ -384,6 +384,9 @@ mod tests {
             DisplayCommand::PopLayer(transform) => *transform,
             DisplayCommand::FillPathOverprint { transform, .. } => *transform,
             DisplayCommand::StrokePathOverprint { transform, .. } => *transform,
+            DisplayCommand::BeginSoftMask { transform, .. } => *transform,
+            DisplayCommand::BeginMaskedContent(transform) => *transform,
+            DisplayCommand::EndSoftMask(transform) => *transform,
         };
         // Unit rect corners: (0,0), (1,0), (1,1), (0,1).
         assert_eq!(t.apply(0.0, 0.0), (100.0, 200.0));

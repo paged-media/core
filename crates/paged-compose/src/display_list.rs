@@ -907,10 +907,12 @@ pub enum DisplayCommand {
     /// coordinates, exactly like `FillPath::transform`. The
     /// rasterizer multiplies in its page-to-pixel scale on top.
     ///
-    /// Today only the CPU rasterizer enforces clips; the Vello
-    /// backend currently no-ops them (matching its existing
-    /// "unsupported feature ⇒ skip" behaviour for `Image` and
-    /// `DropShadow`).
+    /// Both back ends enforce clips: the CPU rasterizer intersects a
+    /// `tiny_skia::Mask` per push, and Vello encodes each push as a
+    /// `push_layer` clip layer. (This doc used to claim Vello no-ops
+    /// clips; that stopped being true when the Vello clip layers
+    /// landed and the comment was not updated — corrected with C-23,
+    /// which had to know the real precedent.)
     PushClip {
         path_id: PathId,
         transform: Transform,
@@ -1082,6 +1084,82 @@ pub enum DisplayCommand {
         stroke: Stroke,
         transform: Transform,
     },
+    /// C-23 opacity mask — open a soft-mask bracket. Unlike
+    /// [`PushClip`](DisplayCommand::PushClip) (a hard binary NonZero
+    /// clip) this carries **per-pixel coverage**: the mask artwork's
+    /// luminosity or alpha modulates the masked content's alpha
+    /// continuously, so a black→white gradient fades the content
+    /// out.
+    ///
+    /// # Why three markers and not a `SoftMaskId` pool
+    ///
+    /// The bracket is a THREE-marker sequence, in emission order:
+    ///
+    /// ```text
+    /// BeginSoftMask { .. }     ← mask ARTWORK commands start here
+    ///   …artwork…
+    /// BeginMaskedContent(..)   ← artwork ends, MASKED content starts
+    ///   …masked content…
+    /// EndSoftMask(..)          ← masked content ends
+    /// ```
+    ///
+    /// The obvious alternative — a `soft_masks: Vec<SoftMaskDef>`
+    /// pool holding the artwork as a nested command vec, referenced
+    /// by a 2-marker `PushSoftMask { mask_id }` / `PopSoftMask` pair
+    /// — was rejected because the artwork's paths/gradients/images
+    /// would then live in a *second* set of pools. Every pass that
+    /// walks this list by **flat command range** (vertical
+    /// justification, `frame_cmd_ranges`, the master-text delta cache
+    /// and its `rebase_path_ids`, the PDF exporter's `walk(range)`,
+    /// the scene-layer splicer) would need a parallel recursive form.
+    /// Keeping the artwork inline in the same stream means all of
+    /// that machinery keeps working untouched — the only cost is one
+    /// extra marker variant.
+    ///
+    /// It also maps 1:1 onto PDF: the artwork becomes a luminosity /
+    /// alpha group Form XObject, `BeginMaskedContent` becomes
+    /// `q` + `gs` with that `/SMask`, and `EndSoftMask` becomes `Q`.
+    ///
+    /// Unpainted mask area means **hidden** for both mask types
+    /// (luminosity: unpainted = black = 0; alpha: unpainted = α 0),
+    /// matching PDF's default black backdrop. `invert` flips that.
+    ///
+    /// `transform` is a stub (matches `BeginBlendGroup`'s scheme) so
+    /// [`DisplayCommand::transform_mut`] keeps returning a non-None
+    /// reference; emitters initialise it to identity and no
+    /// rasterizer consumes it — the artwork commands already carry
+    /// their own page-space transforms.
+    BeginSoftMask {
+        mask_type: SoftMaskType,
+        /// Invert the resolved coverage (`1 − c`). Illustrator's
+        /// "Invert Mask" checkbox.
+        invert: bool,
+        transform: Transform,
+    },
+    /// C-23 — close the mask ARTWORK and open the masked content.
+    /// See [`DisplayCommand::BeginSoftMask`]. Mismatched markers are
+    /// tolerated (a stray one is a no-op), matching the
+    /// `PopClip` / `EndBlendGroup` policy. The contained transform is
+    /// unused; same rationale as [`DisplayCommand::PopClip`].
+    BeginMaskedContent(Transform),
+    /// C-23 — close the masked content, dropping the soft mask. See
+    /// [`DisplayCommand::BeginSoftMask`].
+    EndSoftMask(Transform),
+}
+
+/// C-23 — how a soft mask's artwork resolves to per-pixel coverage.
+///
+/// Named after PDF's `/S` soft-mask subtypes (and matching
+/// `tiny_skia::MaskType`), because both back ends resolve it that
+/// way: `Luminosity` reads the artwork's *colour* (a white shape
+/// shows the content, black hides it — Illustrator's default, and
+/// what a black→white gradient swatch means to a designer),
+/// `Alpha` reads the artwork's *opacity* and ignores its colour.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SoftMaskType {
+    #[default]
+    Luminosity,
+    Alpha,
 }
 
 impl DisplayCommand {
@@ -1112,7 +1190,10 @@ impl DisplayCommand {
             | DisplayCommand::PushLayer { transform, .. }
             | DisplayCommand::PopLayer(transform)
             | DisplayCommand::FillPathOverprint { transform, .. }
-            | DisplayCommand::StrokePathOverprint { transform, .. } => transform,
+            | DisplayCommand::StrokePathOverprint { transform, .. }
+            | DisplayCommand::BeginSoftMask { transform, .. }
+            | DisplayCommand::BeginMaskedContent(transform)
+            | DisplayCommand::EndSoftMask(transform) => transform,
         }
     }
 }

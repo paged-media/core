@@ -41,6 +41,28 @@ pub(super) fn apply_remove_node(
                 .to_string(),
         });
     }
+    // C-23: same argument for a mask item — its RemoveNode inverse
+    // would restore it TOP-LEVEL and leave the target pointing at an
+    // id that is now an ordinary visible object.
+    if super::opacity_mask::is_mask_item(doc, node) {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path: crate::operation::PropertyPath::FrameTransform,
+            reason: "C-23: the item is serving as an opacity mask — release it before removing"
+                .to_string(),
+        });
+    }
+    // C-23: deleting a MASKED item would strand its mask artwork
+    // outside `frames_in_order` — invisible and unreachable. Release
+    // the mask first so the artwork returns to the z-table.
+    if super::opacity_mask::is_masked_target(doc, node) {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path: crate::operation::PropertyPath::FrameTransform,
+            reason: "C-23: the item carries an opacity mask — release it before removing"
+                .to_string(),
+        });
+    }
     let (parent, position, captured, z_slot) = remove_and_capture(doc, node)?;
     let inverse = invert_remove_node(parent, position, captured, z_slot);
     Ok(AppliedOperation {

@@ -34,7 +34,7 @@ pub use display_list::{
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
-    Satin, SpotInk, SpotInkId, Stroke, SweepGradient, Transform,
+    Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, SweepGradient, Transform,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use pixel_layer::{PixelLayer, PixelTile};

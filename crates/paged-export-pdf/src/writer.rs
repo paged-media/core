@@ -101,6 +101,12 @@ pub enum PendingFormGroup {
     TransparencyInherit,
     /// Isolated DeviceGray group (luminosity soft masks).
     LuminosityGray,
+    /// C-23 — isolated transparency group whose ALPHA channel drives
+    /// an `/S /Alpha` soft mask. No `/CS` is written: for an alpha
+    /// mask the group's colour is irrelevant by definition, and PDF
+    /// 32000-1 §11.6.5.2 only requires the blending colour space for
+    /// luminosity masks.
+    AlphaGroup,
 }
 
 /// Per-page resource dictionaries (name → object ref). Names are
