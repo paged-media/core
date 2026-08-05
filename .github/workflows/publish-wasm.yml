@@ -14,8 +14,9 @@ name: publish-wasm
 #      `@paged-media/canvas-wasm` (and devtools at `@paged-media/introspect-wasm`)
 #      instead of the in-repo `build-wasm.sh` output.
 #
-# Until those exist, this runs the build steps but the publish step is a
-# no-op without NPM_TOKEN.
+# All four have been true since v0.42.0, so the workflow no longer treats a
+# missing token as a valid state to be green about: the preflight below
+# rejects an absent OR non-authenticating NPM_TOKEN before the build starts.
 
 on:
   push:
@@ -27,6 +28,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Fail on a bad token in seconds, not after the build.
+      #
+      # v0.51.0, v0.51.1 and v0.51.2 were each tagged, built for ~11
+      # minutes, and then died on `npm error 404 ... PUT
+      # .../@paged-media%2fcanvas-wasm`. E404-on-PUT is npm's answer for an
+      # unauthenticated publish — it will not admit a package exists to a
+      # caller who cannot see it — so all three were an expired NPM_TOKEN
+      # wearing a "not found" costume, and three releases sat tagged and
+      # unpublished while npm kept serving 0.51.0.
+      #
+      # `npm whoami` asks the registry the same auth question the publish
+      # will ask, before anything expensive runs. An ABSENT token fails here
+      # too: the old `if: env.NPM_TOKEN != ''` guard dates from before the
+      # packages existed, and today it can only turn "published nothing"
+      # into a green check.
+      - name: preflight — the npm token must actually authenticate
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not set — a tag push would build for ~11 minutes and publish nothing."
+            exit 1
+          fi
+          RC="$(mktemp)"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "$RC"
+          if ! WHO=$(NPM_CONFIG_USERCONFIG="$RC" npm whoami --registry https://registry.npmjs.org/ 2>&1); then
+            rm -f "$RC"
+            echo "::error::NPM_TOKEN does not authenticate against the npm registry: ${WHO}"
+            echo "::error::Rotate the secret (npm automation token, publish scope on @paged-media) and re-run."
+            exit 1
+          fi
+          rm -f "$RC"
+          echo "npm authenticated as: ${WHO}"
 
       # Pin the toolchain from rust-toolchain.toml (audit B21) — the
       # published wasm must be built with the same compiler the rest of
@@ -175,7 +211,6 @@ jobs:
           npm pkg set version="${{ steps.ver.outputs.version }}"
 
       - name: Publish
-        if: ${{ env.NPM_TOKEN != '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
