@@ -926,12 +926,30 @@ pub enum DisplayCommand {
     /// that never include clip pairs.
     PopClip(Transform),
     /// Begin a transparency group. Subsequent drawing commands emit
-    /// into an offscreen buffer sized to `bounds` (in page coords)
-    /// instead of the page; a matching `EndBlendGroup` composites the
-    /// buffer back onto the page (or the next-outer group) using
-    /// `blend_mode` and `opacity`. This is the structurally correct
-    /// PDF transparency-group semantic — non-Normal blend / partial
-    /// opacity gets applied at the group composite, not per fill.
+    /// into an offscreen buffer instead of onto the page; a matching
+    /// `EndBlendGroup` composites the buffer back onto the page (or the
+    /// next-outer group) using `blend_mode` and `opacity`. This is the
+    /// structurally correct PDF transparency-group semantic —
+    /// non-Normal blend / partial opacity gets applied at the group
+    /// composite, not per fill.
+    ///
+    /// **`bounds` (page coords) is a CLIP, not an allocation hint.**
+    /// Both back ends cut the group's contents at that rect — the CPU
+    /// through `group_bounds_mask`, Vello by handing it to
+    /// `push_layer` — so anything the group paints outside `bounds` is
+    /// simply gone, with a hard edge where the rect ends. (The CPU's
+    /// buffer is deliberately a little larger than `bounds`, for
+    /// outward pixel snapping and antialiasing slack; that is
+    /// allocation, and it is NOT the group's extent. Letting the buffer
+    /// edge be the clip made one document enclose different content at
+    /// 72 dpi than at 300 — see 7751cda.)
+    ///
+    /// Emitters size `bounds` from the geometry they have to hand, which
+    /// is routinely smaller than what lands inside: a drop shadow, a
+    /// wide stroke, an outer glow and the feather family all reach
+    /// further. [`crate::extent::fit_transparency_group_bounds`] is the
+    /// pass that reconciles the two, and it runs on the finished list —
+    /// a `BeginBlendGroup` spliced in after it will be clipped short.
     ///
     /// `transform` is a stub (mirrors `PopClip`'s scheme) so
     /// [`DisplayCommand::transform_mut`] keeps returning a non-None

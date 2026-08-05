@@ -47,6 +47,15 @@ pub(crate) fn frame_group_opacity(frame: &ResolvedFrame<'_>) -> f32 {
 /// buffer). Returns the bounds the matching `EndBlendGroup` will use,
 /// for callers that want to bracket multiple ranges of commands with
 /// the same group buffer.
+///
+/// The geometry rect is a STARTING POINT, not the final extent. It is
+/// what this emitter knows; what actually lands in the group also
+/// includes the drop shadow emitted immediately below (offset + 3σ),
+/// the stroke's outer half-weight, and any outer glow / feather. Since
+/// `bounds` is a clip in both back ends, all of that would be cut here.
+/// `paged_compose::fit_transparency_group_bounds`, run once on the
+/// finished page list at the end of `build_document_inner`, grows the
+/// rect to cover it.
 pub(crate) fn push_blend_group(
     page: &mut BuiltPage,
     bounds_in_inner: paged_compose::Rect,
@@ -56,7 +65,9 @@ pub(crate) fn push_blend_group(
 ) -> paged_compose::Rect {
     let bounds = rect_bounds_in_page(bounds_in_inner, outer);
     // Pad by 0.5pt so glyph anti-aliasing at the edges of the
-    // text-frame bbox still falls inside the buffer.
+    // text-frame bbox still falls inside the buffer. The fit pass keeps
+    // the same headroom (`paged_compose::GROUP_AA_PAD_PT`), so a group
+    // whose contents match its geometry ends up with exactly this rect.
     let padded = paged_compose::Rect {
         x: bounds.x - 0.5,
         y: bounds.y - 0.5,

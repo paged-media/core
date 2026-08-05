@@ -2398,6 +2398,48 @@ pub(super) fn build_document_inner(
         cmyk_xform.as_ref(),
     );
 
+    // Size every transparency group to what it actually PAINTS.
+    //
+    // `BeginBlendGroup { bounds }` is a clip in both back ends
+    // (7751cda made the CPU stop leaking past it), and every site that
+    // opens one sizes it from the GEOMETRY it has to hand — a frame's
+    // rect, a glyph range's frame bbox, a page — padded by 0.5 pt for
+    // glyph antialiasing. A drop shadow lands at `geometry + offset +
+    // 3σ`; a centred stroke reaches half its weight past the outline;
+    // an outer glow reaches `3σ + spread`. All of that used to be cut
+    // with a hard edge, while `paged-export-pdf` gave the same group's
+    // form the media box and kept it — the raster and the PDF
+    // disagreed about one document. Growing `bounds` here makes the
+    // clip harmless instead of lossy, which is what keeps 7751cda's
+    // cross-backend parity intact.
+    //
+    // Runs LAST, once, per page: four different passes splice these
+    // brackets in (frame groups, glyph-range brackets, the
+    // glyph-shadow wrapper, `<Group>` transparency) and the footnote /
+    // anchored-image post-passes above still add commands, so only
+    // here is the list final.
+    for page in &mut pages {
+        paged_compose::fit_transparency_group_bounds(&mut page.list);
+    }
+    // Debug-only: the invariant the pass above establishes, verified by
+    // an independent walk of the FINAL list. It is a second O(commands)
+    // traversal, so it does not earn its place in a release build — but
+    // in debug it turns "a shadow looks subtly clipped" into a loud
+    // failure here, at the emitter, instead of a pixel diff nobody
+    // reads. It fires when a bracket is emitted or moved after the fit.
+    #[cfg(debug_assertions)]
+    for (page_idx, page) in pages.iter().enumerate() {
+        if let Some(fit) = paged_compose::transparency_group_overflow(&page.list) {
+            panic!(
+                "page {page_idx}: the transparency group opened at command {} paints outside \
+                 its own bounds (declared {:?}, needs {:?}). Both rasterizers CLIP a group to \
+                 `bounds`, so that paint is cut with a hard edge. Something opened or moved a \
+                 blend-group bracket after `fit_transparency_group_bounds` ran.",
+                fit.index, fit.declared, fit.required
+            );
+        }
+    }
+
     // Aggregate diagnostics: the per-story emit channel (overset,
     // section fallback) already carries page indices; the per-page
     // collectors (missing image, footnote overflow) get their flat
@@ -3224,6 +3266,14 @@ impl<'a> StoryEmitter<'a> {
             };
             let frame_bounds_in_page = rect_bounds_in_page(inner_rect, outer);
             let blend_group = if needs_group {
+                // The frame's rect + 0.5 pt of AA headroom, matching
+                // `push_blend_group`. It is a starting point: glyph ink
+                // can overshoot the frame box (descenders past the
+                // bottom inset, an italic's overhang), and `bounds` is
+                // a CLIP in both back ends.
+                // `fit_transparency_group_bounds`, run at the end of
+                // `build_document_inner`, grows it to the glyphs'
+                // actual extent.
                 let padded = paged_compose::Rect {
                     x: frame_bounds_in_page.x - 0.5,
                     y: frame_bounds_in_page.y - 0.5,

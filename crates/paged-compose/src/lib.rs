@@ -21,6 +21,7 @@
 //! tooling.
 
 pub mod display_list;
+pub mod extent;
 pub mod glyph;
 pub mod pixel_layer;
 pub mod primitives;
@@ -35,6 +36,9 @@ pub use display_list::{
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
     Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, SweepGradient, Transform,
+};
+pub use extent::{
+    fit_transparency_group_bounds, transparency_group_overflow, GroupFit, GROUP_AA_PAD_PT,
 };
 pub use glyph::{GlyphOutliner, TtfOutliner, UnitSquareOutliner};
 pub use pixel_layer::{PixelLayer, PixelTile};
