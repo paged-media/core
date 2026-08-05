@@ -1297,6 +1297,26 @@ pub fn render_built_page(page: &BuiltPage, dpi: f32, background: Color) -> image
     paged_gpu::rasterize(&page.list, &raster_opts)
 }
 
+/// Separate an already-built page into its ink plates at `dpi`.
+///
+/// The raster is thrown away — only the plate state is wanted. Cost is
+/// one full CPU rasterisation of the page, so callers should treat this
+/// as an on-demand analysis, not something to run per keystroke.
+///
+/// `dpi` sets the sampling resolution of an *area* measurement: a solid
+/// tint reads correctly at any dpi, but an anti-aliased edge dilutes
+/// its ink with the paper it partially covers, so sub-pixel hairlines
+/// under-report at low dpi. 72 (1 px per pt) is the sane default for a
+/// coverage reading; raise it when hairline rules matter. Ink limits on
+/// *swatches* are better checked against the palette directly — that is
+/// exact and resolution-free.
+#[cfg(feature = "cpu")]
+pub fn separate_built_page(page: &BuiltPage, dpi: f32) -> paged_gpu::separations::Separation {
+    let mut raster_opts = paged_gpu::RasterOptions::new(page.width_pt, page.height_pt);
+    raster_opts.dpi = dpi;
+    paged_gpu::rasterize_with_separation(&page.list, &raster_opts).1
+}
+
 /// Build + rasterise every page. Returns one `RgbaImage` per page in
 /// document order. `dpi` and `background` apply uniformly.
 #[cfg(feature = "cpu")]

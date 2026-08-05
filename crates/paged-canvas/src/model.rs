@@ -33,6 +33,25 @@ use tsify_next::Tsify;
 
 use crate::channel::{LoadError, Mutation};
 
+/// §21 advanced prepress — sampling resolution of the `inkCoverage`
+/// analysis render, in dpi. 1 px per pt: coverage is an *area*
+/// measurement, so a solid tint reads identically at any resolution
+/// and the whole-document pass stays cheap enough to run inside a
+/// collection fetch. The cost is that an anti-aliased edge dilutes its
+/// ink with the paper it partly covers, so sub-pixel hairlines
+/// under-report — check those against
+/// `SwatchSummary::total_area_coverage_pct`, which is exact.
+pub const INK_COVERAGE_DPI: f32 = 72.0;
+
+/// §21 advanced prepress — the total-area-coverage limit the
+/// `inkCoverage` collection counts violations against, in percent.
+/// 300% is the common SWOP sheet-fed figure; web-offset and uncoated
+/// stocks run 240–280%. The row carries a full TAC histogram so a
+/// panel can re-threshold to the actual press without a re-render,
+/// which is why this being a constant rather than a wire argument
+/// costs nothing.
+pub const INK_COVERAGE_LIMIT_PCT: f32 = 300.0;
+
 /// Options that flow through to `paged-renderer::PipelineOptions`.
 /// Mirrors the subset of the renderer's options the worker needs
 /// to surface to the main thread on `LoadDocument`.
@@ -626,6 +645,44 @@ fn collapse_uniform<T: Clone + PartialEq>(values: &[T]) -> Option<T> {
     }
 }
 
+/// §21 advanced prepress — a swatch's total area coverage in percent:
+/// how much ink every press plate lays down for it, summed.
+///
+/// A process CMYK swatch sums its four channels after the swatch-level
+/// tint (60/40/40/100 rich black → 240%). A **spot swatch is one
+/// plate**, so it contributes its tint and nothing else — 100% PANTONE
+/// 286 C is 100% TAC, NOT the 175% its CMYK alternate happens to sum
+/// to. Getting that backwards would flag every duotone as over-limit.
+///
+/// `None` — never `Some(0.0)` — when the swatch has no ink
+/// decomposition: RGB and Lab process colours separate at the RIP
+/// against the output intent, and mixed-ink swatches need the spectral
+/// model this engine does not ship (see `deep-defer-records.md`
+/// §mixed-ink). Reporting 0% for those would read as "adds no ink".
+///
+/// Exact and resolution-free — no render involved — so it catches an
+/// over-limit colour wherever it is used, including in the hairlines
+/// that the rendered per-page reading under-samples. It can therefore
+/// disagree with the page reading for a spot with a non-CMYK
+/// alternate: press truth says one plate at its tint, but the raster
+/// lane cannot separate that swatch at all and leaves those pixels
+/// unmeasured. The swatch figure is the one to trust.
+fn swatch_total_area_coverage(color: &paged_model::ColorEntry) -> Option<f32> {
+    use paged_model::{ColorModel, ColorSpace};
+    let tint_pct = color.tint.map(|v| v.clamp(0.0, 100.0)).unwrap_or(100.0);
+    match color.model {
+        ColorModel::Spot => Some(tint_pct),
+        ColorModel::Process => {
+            if color.space != ColorSpace::Cmyk || color.value.len() != 4 {
+                return None;
+            }
+            let sum: f32 = color.value.iter().map(|v| v.clamp(0.0, 100.0)).sum();
+            Some(sum * tint_pct / 100.0)
+        }
+        ColorModel::MixedInk | ColorModel::Unknown => None,
+    }
+}
+
 fn story_id_of_text_op(op: &crate::mutate::TextOp) -> &str {
     match op {
         crate::mutate::TextOp::InsertText { story_id, .. } => story_id,
@@ -1124,6 +1181,13 @@ pub struct CanvasModel {
     /// (transform creation is expensive; the SwatchPicker previews
     /// every swatch per refresh). Cleared by `SetColorSettings`.
     cmm_cache: std::cell::RefCell<Option<std::rc::Rc<paged_color::IccCmm>>>,
+    /// §21 advanced prepress — memoised `inkCoverage` collection,
+    /// keyed on `rebuild_stats.rebuilds`. Producing it rasterises
+    /// every page, so unlike every other collection it must not be
+    /// recomputed on each re-fetch. Keying on the monotone rebuild
+    /// counter means there is no invalidation site to remember: any
+    /// path that reaches `rebuild_after_mutation` invalidates it.
+    ink_coverage_cache: std::cell::RefCell<Option<(u64, Vec<crate::channel::InkCoverageSummary>)>>,
     /// Phase 3 Item 6 — content hash of the scene at load time.
     /// Drives determinism tests: replaying the recorded mutation log
     /// against the same `initial_state_hash` must produce a matching
@@ -1522,6 +1586,7 @@ impl CanvasModel {
             ink_settings: Default::default(),
             use_standard_lab_for_spots: false,
             cmm_cache: std::cell::RefCell::new(None),
+            ink_coverage_cache: std::cell::RefCell::new(None),
             initial_state_hash,
             last_applied_seq: 0,
             current_selection: None,
@@ -5883,6 +5948,7 @@ impl CanvasModel {
                 self_id: self_id.clone(),
                 name,
                 kind: kind.to_string(),
+                total_area_coverage_pct: swatch_total_area_coverage(color),
             });
         }
         out
@@ -6837,7 +6903,123 @@ impl CanvasModel {
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
             NumberingLists => serde_json::to_value(self.numbering_lists()).unwrap_or_default(),
+            InkCoverage => serde_json::to_value(self.ink_coverage()).unwrap_or_default(),
         }
+    }
+
+    /// §21 advanced prepress — per-page ink coverage, read off the CPU
+    /// rasterizer's per-ink plane state. Backs
+    /// `documentCollection:inkCoverage`.
+    ///
+    /// Analysed at [`INK_COVERAGE_DPI`] against
+    /// [`INK_COVERAGE_LIMIT_PCT`]; the returned histogram lets a panel
+    /// re-threshold the limit without another render. Memoised on the
+    /// rebuild counter — the first call after a mutation rasterises
+    /// every page, later calls are free.
+    ///
+    /// **Read `separated_pct` before quoting anything else.** Images,
+    /// RGB/Lab swatches, gradients and blend-group content carry no
+    /// ink decomposition in the raster lane; those pixels are excluded
+    /// as *unknown*, not counted as blank. See
+    /// [`crate::channel::InkCoverageSummary`].
+    #[cfg(feature = "cpu")]
+    pub fn ink_coverage(&self) -> Vec<crate::channel::InkCoverageSummary> {
+        let generation = self.rebuild_stats.rebuilds;
+        if let Some((cached_at, rows)) = self.ink_coverage_cache.borrow().as_ref() {
+            if *cached_at == generation {
+                return rows.clone();
+            }
+        }
+        let rows = self.compute_ink_coverage();
+        *self.ink_coverage_cache.borrow_mut() = Some((generation, rows.clone()));
+        rows
+    }
+
+    /// Stub for builds without the CPU rasterizer (the WebGPU-only
+    /// SDK lane). Returning an empty collection rather than erroring
+    /// follows the worker's "no data ⇒ empty, never throw" rule — and
+    /// an empty list cannot be mistaken for "this document needs no
+    /// ink", because there are no rows to read at all.
+    #[cfg(not(feature = "cpu"))]
+    pub fn ink_coverage(&self) -> Vec<crate::channel::InkCoverageSummary> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "cpu")]
+    fn compute_ink_coverage(&self) -> Vec<crate::channel::InkCoverageSummary> {
+        // The ink lane exists only when the build had a CMYK transform
+        // to resolve swatches through: `color_id_to_paint` needs BOTH
+        // an ICC transform and a CMYK-valued swatch to emit a
+        // `Paint::Cmyk`, and without the transform every CMYK and spot
+        // swatch collapses to `Paint::Solid` — display RGB with no ink
+        // decomposition. Mirror of the `cmyk_icc_profile` selection in
+        // `rebuild_pipeline_options`; keep the two in step.
+        let separation_available = self.proof_state.is_some() || self.icc_bytes.is_some();
+        let mut rows = Vec::with_capacity(self.built.pages.len());
+        for (index, page) in self.built.pages.iter().enumerate() {
+            let separation = paged_renderer::separate_built_page(page, INK_COVERAGE_DPI);
+            let report = separation.ink_coverage(INK_COVERAGE_LIMIT_PCT);
+            let plates = report
+                .plates
+                .iter()
+                .zip(separation.plates.iter())
+                .map(|(coverage, plate)| {
+                    let (ink_id, name) = match plate.channel {
+                        paged_renderer::InkChannel::Cyan => ("cyan", "Cyan".to_string()),
+                        paged_renderer::InkChannel::Magenta => ("magenta", "Magenta".to_string()),
+                        paged_renderer::InkChannel::Yellow => ("yellow", "Yellow".to_string()),
+                        paged_renderer::InkChannel::Black => ("black", "Black".to_string()),
+                        paged_renderer::InkChannel::Spot(_) => {
+                            // The display list names a spot by its IDML
+                            // `<Color Self="…">` id; the palette turns
+                            // that into the swatch name the Ink Manager
+                            // shows, so both surfaces name one ink the
+                            // same way.
+                            let display = self
+                                .scene
+                                .palette
+                                .colors
+                                .get(&plate.name)
+                                .and_then(|c| c.name.clone())
+                                .unwrap_or_else(|| plate.name.clone());
+                            return crate::channel::PlateCoverageSummary {
+                                ink_id: plate.name.clone(),
+                                name: display,
+                                is_spot: true,
+                                area_pct: coverage.area_pct,
+                                max_tint_pct: coverage.max_tint_pct,
+                                mean_tint_pct: coverage.mean_tint_pct,
+                            };
+                        }
+                    };
+                    crate::channel::PlateCoverageSummary {
+                        ink_id: ink_id.to_string(),
+                        name,
+                        is_spot: false,
+                        area_pct: coverage.area_pct,
+                        max_tint_pct: coverage.max_tint_pct,
+                        mean_tint_pct: coverage.mean_tint_pct,
+                    }
+                })
+                .collect();
+            rows.push(crate::channel::InkCoverageSummary {
+                page_id: page.id.clone(),
+                page_index: index as u32,
+                separation_available,
+                analysis_dpi: INK_COVERAGE_DPI,
+                limit_pct: report.limit_pct,
+                total_pixels: report.total_pixels as u32,
+                separated_pixels: report.separated_pixels as u32,
+                separated_pct: report.separated_pct(),
+                max_tac_pct: report.max_tac_pct,
+                mean_tac_pct: report.mean_tac_pct,
+                over_limit_pixels: report.over_limit_pixels as u32,
+                over_limit_pct: report.over_limit_pct_of_separated(),
+                plates,
+                histogram: report.histogram.clone(),
+            });
+        }
+        rows
     }
 
     /// SDK Phase 5 (D1) — singleton document-state snapshot per

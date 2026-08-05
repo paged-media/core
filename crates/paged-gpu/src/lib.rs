@@ -76,6 +76,12 @@ pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
 pub mod cmyk_compute;
 #[cfg(feature = "cpu")]
 pub mod cpu;
+/// Ink separations + total-area-coverage readings off the CPU
+/// rasterizer's plane state. CPU-only: the Vello backend keeps plane
+/// state per overprint batch, not per page, so it has no separation to
+/// hand out (see the module docs).
+#[cfg(feature = "cpu")]
+pub mod separations;
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub mod surface;
 #[cfg(feature = "vello-backend")]
@@ -84,7 +90,13 @@ pub mod vello_rs;
 #[cfg(feature = "cpu")]
 pub use cpu::rasterize;
 #[cfg(feature = "cpu")]
+pub use cpu::rasterize_with_separation;
+#[cfg(feature = "cpu")]
 pub use cpu::CpuRasterizer;
+#[cfg(feature = "cpu")]
+pub use separations::{
+    InkChannel, InkCoverageReport, InkPlate, PlateCoverage, Separation, TAC_BUCKETS, TAC_BUCKET_PCT,
+};
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
 pub use surface::{SurfaceError, SurfacePresenter, Viewport};
 // Re-export vello::Scene so consumers (paged-canvas-wasm) don't need

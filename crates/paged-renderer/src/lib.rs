@@ -42,7 +42,16 @@ pub use resource_provider::{
 };
 
 #[cfg(feature = "cpu")]
-pub use pipeline::{render, render_built_page, render_document};
+pub use pipeline::{render, render_built_page, render_document, separate_built_page};
+
+// Prepress: the CPU rasterizer's ink separation. Re-exported so the
+// canvas layer reads coverage without depending on `paged-gpu`
+// directly (it has no other reason to). CPU-only — the Vello backend
+// keeps no page-level plane state; see `paged_gpu::separations`.
+#[cfg(feature = "cpu")]
+pub use paged_gpu::separations::{
+    InkChannel, InkCoverageReport, InkPlate, PlateCoverage, Separation, TAC_BUCKETS, TAC_BUCKET_PCT,
+};
 
 // Re-export Document so consumers only need one `use` for the common
 // path: `use paged_renderer::{Document, pipeline, PipelineOptions};`.

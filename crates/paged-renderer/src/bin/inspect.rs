@@ -115,6 +115,26 @@ struct Args {
     /// DPI for --render output (72 = 1 px per pt; 300 = print).
     #[arg(long, default_value_t = 144.0)]
     dpi: f32,
+    /// §21 advanced prepress — separate every page into its ink plates
+    /// and write one PNG per plate into this directory, plus an
+    /// ink-limit overlay. Implies --display-list.
+    ///
+    /// Plate isolation reads the CPU rasterizer's per-ink plane state,
+    /// which only exists for CMYK and spot swatches resolved through an
+    /// ACTIVE CMYK working profile — pass `--cmyk-profile`, or the
+    /// separation is empty. Pixels the raster lane cannot decompose
+    /// (placed images, RGB/Lab swatches, gradients, blend-group
+    /// content) come out TRANSPARENT, not white: they are unknown on
+    /// this plate, not absent from it. Every plate PNG is accompanied
+    /// by a printed `separated` percentage saying how much of the page
+    /// was actually measured.
+    #[arg(long, value_name = "DIR")]
+    separations: Option<PathBuf>,
+    /// Total-area-coverage limit for the `--separations` ink-limit
+    /// overlay, in percent. 300 is the common SWOP sheet-fed figure;
+    /// uncoated / newsprint run 240-280.
+    #[arg(long, default_value_t = 300.0)]
+    ink_limit: f32,
     /// Emit the report as machine-readable JSON instead of the
     /// human-readable plain text. Suppresses the per-spread/story
     /// log lines.
@@ -293,7 +313,8 @@ fn main() -> Result<()> {
     }
 
     // Everything below is driven by the library.
-    let want_display_list = args.display_list || args.render.is_some();
+    let want_display_list =
+        args.display_list || args.render.is_some() || args.separations.is_some();
     let font_bytes = args
         .font
         .as_deref()
@@ -493,6 +514,70 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(dir) = args.separations.as_deref() {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        for (i, page) in built.pages.iter().enumerate() {
+            let sep = pipeline::separate_built_page(page, args.dpi);
+            let report = sep.ink_coverage(args.ink_limit);
+            let page_no = i + 1;
+            // Lead with the denominator. A plate PNG is only as
+            // meaningful as the share of the page that could be
+            // separated at all, and an operator reading a plate has to
+            // see that number before the plate.
+            println!(
+                "page {page_no}: separated {sep_pct:.1}% of the page \
+                 ({sepx}/{total} px)  maxTAC {max:.0}%  meanTAC {mean:.0}%  \
+                 over {limit:.0}% on {over} px",
+                sep_pct = report.separated_pct(),
+                sepx = report.separated_pixels,
+                total = report.total_pixels,
+                max = report.max_tac_pct,
+                mean = report.mean_tac_pct,
+                limit = report.limit_pct,
+                over = report.over_limit_pixels,
+            );
+            if report.separated_pixels == 0 {
+                println!(
+                    "  nothing on this page carries ink the raster lane can \
+                     decompose. If the artwork IS CMYK, pass --cmyk-profile: \
+                     without an active CMYK working profile every swatch \
+                     resolves straight to display RGB and no plate exists."
+                );
+            }
+            for (idx, plate) in sep.plates.iter().enumerate() {
+                let coverage = &report.plates[idx];
+                println!(
+                    "  {name:<24} area {area:>6.2}%  max {max:>5.1}%  mean {mean:>5.1}%{blank}",
+                    name = plate.name,
+                    area = coverage.area_pct,
+                    max = coverage.max_tint_pct,
+                    mean = coverage.mean_tint_pct,
+                    blank = if coverage.inked_pixels == 0 {
+                        "  (blank plate)"
+                    } else {
+                        ""
+                    },
+                );
+                let file = dir.join(format!(
+                    "page-{page_no:03}-plate-{idx:02}-{}.png",
+                    sanitize_plate_name(&plate.name)
+                ));
+                sep.plate_preview(&[idx])
+                    .save(&file)
+                    .with_context(|| format!("write {}", file.display()))?;
+            }
+            let all: Vec<usize> = (0..sep.plates.len()).collect();
+            let composite = dir.join(format!("page-{page_no:03}-all-plates.png"));
+            sep.plate_preview(&all)
+                .save(&composite)
+                .with_context(|| format!("write {}", composite.display()))?;
+            let overlay = dir.join(format!("page-{page_no:03}-ink-limit.png"));
+            sep.ink_limit_overlay(args.ink_limit, [255, 0, 0, 255])
+                .save(&overlay)
+                .with_context(|| format!("write {}", overlay.display()))?;
+        }
+    }
+
     if args.json {
         let payload = build_json_report(
             &args,
@@ -596,6 +681,14 @@ impl ModelStats {
             run_text,
         }
     }
+}
+
+/// Filesystem-safe plate name for `--separations` output. Spot plates
+/// are named by their IDML `<Color Self="…">` id, which carries a `/`.
+fn sanitize_plate_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Decompress every non-directory entry of an IDML package into a

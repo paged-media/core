@@ -746,9 +746,28 @@ pub struct TextFrame {
     /// `OverprintFill="true"` on the IDML element. When true, the
     /// frame's fill physically mixes with whatever ink already sits
     /// behind it instead of knocking out the underlying separations
-    /// (Adobe's print-preview overprint behaviour). The renderer
-    /// approximates this on RGB with a per-pixel darken composite;
-    /// per-channel CMYK overprint is deferred (see Phase 3 plan).
+    /// (Adobe's print-preview overprint behaviour).
+    ///
+    /// **Per-channel CMYK overprint is implemented, not deferred** —
+    /// the note that used to sit here pointing at a "Phase 3 plan" was
+    /// stale. When the paint is a `Paint::Cmyk` (i.e. a CMYK or spot
+    /// swatch resolved through an active CMYK working profile) the CPU
+    /// rasterizer composites the real per-channel maximum against
+    /// page-level ink planes, with named inks kept on their own plate
+    /// (`paged_gpu::cpu`, `compose_cmyk_overprint_via_planes` /
+    /// `compose_spot_overprint_via_plane`); the Vello backend mirrors
+    /// the same arithmetic in a compute pass
+    /// (`paged_gpu::cmyk_compute`).
+    ///
+    /// What genuinely remains an RGB darken approximation:
+    /// `Paint::Solid` and gradient paints (no ink decomposition to
+    /// compose), and any overprint inside a blend-group buffer (the
+    /// plane state is page-level). Two further gaps, both real: text
+    /// runs never reach the overprint commands — only frame fill and
+    /// stroke do, so character-level `OverprintFill` does not render —
+    /// and Adobe's "100% K auto-overprints" default is not applied, so
+    /// overprint happens exactly where the IDML attribute says and
+    /// nowhere else.
     pub overprint_fill: bool,
     /// `OverprintStroke="true"` analogue for the frame stroke.
     pub overprint_stroke: bool,

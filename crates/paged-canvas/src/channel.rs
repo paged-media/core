@@ -461,7 +461,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // Additive in the minor sense the handshake already covers: a new
 // editor SENDS a mutation an older worker cannot deserialise, and the
 // handshake catches the stale pair LOUD.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(60);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(61);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -2009,6 +2009,19 @@ pub enum CollectionName {
     /// Backs `documentCollection:numberingLists` — the editor's
     /// list-definitions surface. Additive read-only collection.
     NumberingLists,
+    /// §21 advanced prepress — one row per page, carrying the ink
+    /// separation read off the CPU rasterizer's plane state: which
+    /// plates the page needs, how heavily each is inked, and the
+    /// total-area-coverage distribution. Backs the Separations /
+    /// ink-limit surface.
+    ///
+    /// **This one renders.** Every other collection is a cheap walk
+    /// over parsed state; this rasterises every page once (72 dpi) to
+    /// get per-pixel ink. The model memoises it against the rebuild
+    /// counter so a re-fetch after an unrelated mutation is free, but
+    /// a caller should still treat it as an on-demand analysis rather
+    /// than something to poll.
+    InkCoverage,
 }
 
 impl CollectionName {
@@ -2042,6 +2055,7 @@ impl CollectionName {
             Self::Sections => "sections",
             Self::Stories => "stories",
             Self::NumberingLists => "numberingLists",
+            Self::InkCoverage => "inkCoverage",
         }
     }
 
@@ -2075,6 +2089,7 @@ impl CollectionName {
             "sections" => Self::Sections,
             "stories" => Self::Stories,
             "numberingLists" => Self::NumberingLists,
+            "inkCoverage" => Self::InkCoverage,
             _ => return None,
         })
     }
@@ -2191,6 +2206,120 @@ pub struct SwatchSummary {
     pub self_id: String,
     pub name: String,
     pub kind: String,
+    /// §21 advanced prepress — the swatch's total area coverage in
+    /// percent: how much ink every press plate lays down for it,
+    /// summed. A process CMYK swatch sums its four channels (a 60/40/
+    /// 40/100 rich black is 240%); a spot swatch is ONE plate, so it
+    /// contributes its own tint (100% PANTONE 286 C is 100%, not the
+    /// 175% its CMYK alternate would sum to).
+    ///
+    /// `None` — not `0.0` — when the swatch has no ink decomposition:
+    /// RGB, Lab, mixed-ink and unknown swatches separate at the RIP,
+    /// not here. The distinction is load-bearing; a UI must show a
+    /// blank, never a zero.
+    ///
+    /// This is the EXACT reading, computed from the palette with no
+    /// render involved, so it is resolution-free and catches an
+    /// over-limit colour wherever it is used — including in hairlines
+    /// that the rendered per-page coverage under-samples. Additive
+    /// read-only field; no protocol bump on its own.
+    #[serde(default)]
+    pub total_area_coverage_pct: Option<f32>,
+}
+
+/// §21 advanced prepress — one ink plate's coverage on one page.
+///
+/// `area_pct` is the share of the WHOLE page this plate puts any ink
+/// on — the "does this plate earn its pass on press" number.
+/// `max_tint_pct` / `mean_tint_pct` describe how heavily, over the
+/// inked pixels only.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PlateCoverageSummary {
+    /// `"cyan"` / `"magenta"` / `"yellow"` / `"black"` for the process
+    /// inks; the spot swatch's `Color/<id>` for a named ink — the same
+    /// id `InkSummary::spot_id` uses, so the Ink Manager and this
+    /// surface address the same ink.
+    pub ink_id: String,
+    /// Display name: `"Cyan"` … `"Black"`, or the spot swatch's
+    /// palette name (falling back to its id).
+    pub name: String,
+    pub is_spot: bool,
+    pub area_pct: f32,
+    pub max_tint_pct: f32,
+    pub mean_tint_pct: f32,
+}
+
+/// §21 advanced prepress — one page's ink-coverage reading, produced
+/// by rasterising the page and reading the CPU rasterizer's per-ink
+/// plane state.
+///
+/// # Read `separated_pct` before quoting any other number
+///
+/// The raster lane only decomposes a pixel into inks when the draw
+/// that made it carried a CMYK or spot swatch. Placed images, RGB and
+/// Lab swatches, gradients, and anything inside a blend group carry no
+/// ink decomposition — those pixels are **unknown**, not blank, and
+/// every statistic below excludes them. `separatedPct` is how much of
+/// the page was actually measured. A `maxTacPct` of 340 over a
+/// `separatedPct` of 4 is a statement about 4% of the page.
+///
+/// Nothing here estimates the unknown pixels. The renderer's RGB→CMYK
+/// map is 100%-GCR (a rich black inverts to K-only / 100% TAC where a
+/// real coated profile gives ~300%), so folding it in would make the
+/// headline figure confidently wrong exactly where operators check it.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct InkCoverageSummary {
+    pub page_id: PageId,
+    pub page_index: u32,
+    /// **Check this first.** `false` means the document has no active
+    /// CMYK working profile (none supplied at load, none named by the
+    /// designmap that the host had registered, no soft proof), and
+    /// therefore the renderer resolved every CMYK and spot swatch
+    /// straight to display RGB — there is no ink lane at all and every
+    /// figure below is structurally zero.
+    ///
+    /// That is a completely different condition from "this page is all
+    /// RGB artwork", and a surface MUST NOT render them the same way:
+    /// one says *activate a profile*, the other says *this content
+    /// separates at the RIP*. Both produce `separatedPct == 0`.
+    ///
+    /// `SwatchSummary::totalAreaCoveragePct` is unaffected — it is
+    /// palette arithmetic and needs no profile — so the swatch-level
+    /// ink-limit audit still works when this is `false`.
+    pub separation_available: bool,
+    /// Sampling resolution of the analysis render, in dpi. An area
+    /// measurement is dpi-independent for solid tints; anti-aliased
+    /// edges dilute their ink with the paper they partly cover, so
+    /// sub-pixel hairlines under-report. Check hairline rich blacks
+    /// against `SwatchSummary::totalAreaCoveragePct`, which is exact.
+    pub analysis_dpi: f32,
+    /// The total-area-coverage limit `overLimitPixels` was counted
+    /// against, in percent.
+    pub limit_pct: f32,
+    pub total_pixels: u32,
+    pub separated_pixels: u32,
+    /// `separatedPixels / totalPixels`, 0..=100. The honesty
+    /// denominator — see the type docs.
+    pub separated_pct: f32,
+    pub max_tac_pct: f32,
+    pub mean_tac_pct: f32,
+    pub over_limit_pixels: u32,
+    /// Share of the SEPARATED pixels over the limit, 0..=100.
+    pub over_limit_pct: f32,
+    /// Four process plates always, then one per spot ink used on the
+    /// page. A blank process plate still appears — "Cyan: 0%" is
+    /// itself a reading.
+    pub plates: Vec<PlateCoverageSummary>,
+    /// 81 counts over the separated pixels, bucket `i` covering
+    /// `[i·10%, (i+1)·10%)` of total area coverage (so 0–800%, which
+    /// leaves room for spot plates above the 400% process ceiling).
+    /// Lets a panel re-threshold the ink limit with a slider and no
+    /// re-render.
+    pub histogram: Vec<u32>,
 }
 
 /// SDK Phase 3 — one paragraph style's identity + display name +
@@ -4566,8 +4695,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_v60() {
-        assert_eq!(PROTOCOL_VERSION.0, 60);
+    fn protocol_version_is_v61() {
+        assert_eq!(PROTOCOL_VERSION.0, 61);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

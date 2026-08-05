@@ -153,7 +153,7 @@ struct GroupFrame {
 /// names are already interned on the `DisplayList` as `SpotInkId(u32)`,
 /// so the array index *is* the id. Lookup stays O(1), no hashing per
 /// pixel.
-struct CmykPlanes {
+pub(crate) struct CmykPlanes {
     planes: [Vec<u8>; 4],
     coverage: Vec<u8>,
     /// One plane per spot ink id. `spots[id]` records the per-pixel
@@ -181,6 +181,28 @@ impl CmykPlanes {
             w,
             h,
         }
+    }
+
+    /// Read side for [`crate::separations`]: one process plane by
+    /// channel index (0 = C, 1 = M, 2 = Y, 3 = K).
+    pub(crate) fn process_plane(&self, channel: usize) -> &[u8] {
+        &self.planes[channel]
+    }
+
+    /// The process-ink coverage mask. Note this is NOT the full
+    /// "we know this pixel's ink" mask — a non-overprint spot draw
+    /// writes its spot plane and deliberately leaves `coverage`
+    /// untouched, so the separation folds the spot planes in itself.
+    pub(crate) fn coverage_mask(&self) -> &[u8] {
+        &self.coverage
+    }
+
+    pub(crate) fn spot_planes(&self) -> &[Vec<u8>] {
+        &self.spots
+    }
+
+    pub(crate) fn spot_alternate(&self, idx: usize) -> [u8; 4] {
+        self.spot_alts.get(idx).copied().unwrap_or([0; 4])
     }
 }
 
@@ -890,6 +912,33 @@ fn decode_image_for_render(bytes: &[u8], expected_w: u32, expected_h: u32) -> Op
 /// Free-function form retained for callers that already use it (the
 /// `paged-renderer::pipeline::render_document` path).
 pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
+    rasterize_inner(list, options).0
+}
+
+/// Rasterise AND hand back the ink separation the render produced.
+///
+/// The plane state is not extra work — the rasterizer builds it on
+/// every `Paint::Cmyk` draw regardless, because per-channel overprint
+/// needs it (Stage 4A/4B/4C). This entry point simply stops throwing it
+/// away. The image is bit-identical to [`rasterize`]'s for the same
+/// input: both run the same body, and the separation is read out after
+/// the last draw, never written back.
+///
+/// See [`crate::separations`] for what the separation does and does not
+/// know — in particular that images, gradients and RGB/Lab swatches
+/// carry no ink decomposition here and come back as *unknown* rather
+/// than *blank*.
+pub fn rasterize_with_separation(
+    list: &DisplayList,
+    options: &RasterOptions,
+) -> (RgbaImage, crate::separations::Separation) {
+    let (px_w, px_h) = options.pixel_size();
+    let (image, planes) = rasterize_inner(list, options);
+    let separation = crate::separations::Separation::from_planes(planes.as_ref(), list, px_w, px_h);
+    (image, separation)
+}
+
+fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, Option<CmykPlanes>) {
     let (px_w, px_h) = options.pixel_size();
     let scale = options.dpi / 72.0;
 
@@ -2137,11 +2186,17 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
     // because no ICC transform exists for the *per-channel-max
     // result* of two overprint composites — the naive forward map
     // is the renderer's CMYK→RGB definition in that case.
-    let _ = cmyk_planes;
+    //
+    // The planes ARE the page's ink separation, so they are handed
+    // back to the caller rather than dropped ­— `rasterize` discards
+    // them (unchanged behaviour), `rasterize_with_separation` reads
+    // them out. Nothing below this point writes to the framebuffer, so
+    // the two entry points are bit-identical by construction.
 
     let data = pixmap.take();
-    RgbaImage::from_raw(px_w, px_h, data)
-        .unwrap_or_else(|| RgbaImage::from_pixel(px_w, px_h, Rgba([0, 0, 0, 0])))
+    let image = RgbaImage::from_raw(px_w, px_h, data)
+        .unwrap_or_else(|| RgbaImage::from_pixel(px_w, px_h, Rgba([0, 0, 0, 0])));
+    (image, cmyk_planes)
 }
 
 /// Apply a tiny-skia `Transform` (sx, ky, kx, sy, tx, ty form) to a
