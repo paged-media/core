@@ -713,3 +713,139 @@ fn defaults_and_handles_compose_in_one_batch() {
     assert_eq!(format!("{:?}", model.scene().spreads), before);
     assert_eq!(model.document_meta().default_fill_color, None);
 }
+
+/// RFI #72 — a `bindCreated` placed after a `createGroup` must name the
+/// GROUP, and must do so whether or not an earlier handle is live.
+///
+/// Measured first from paged.draw's Repeats work, which routes around
+/// this rather than depending on it: with an earlier bind in the batch,
+/// `dissolveGroup { groupId: "$h:g" }` refused with
+/// "node not found: Group(<the EARLIER insert's id>)" — the handle had
+/// resolved to the previous creation, not the group.
+///
+/// The cause was NOT the resolver. `Mutation::CreateGroup` translates
+/// with `spec.self_id: None` (the wire never names a group; the engine
+/// mints it), and `created_element_id` read the id off the REQUESTED
+/// spec. The applier fills `resolved.self_id` with what it minted, so
+/// reading the APPLIED op is what makes the group nameable.
+#[test]
+fn bind_after_create_group_names_the_group_not_the_previous_insert() {
+    let mut model = load();
+
+    // Two inserts, each bound — the second bind is what used to be
+    // shadowed by the group's missing id.
+    let outcome = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                insert_path(0.0),
+                bind("a"),
+                insert_path(50.0),
+                bind("b"),
+                Mutation::CreateGroup {
+                    member_ids: vec![handle_ref("a"), handle_ref("b")],
+                },
+                bind("g"),
+                // If `$h:g` resolved to insert "b" (the old behaviour)
+                // this refuses with "node not found: Group(<b's id>)".
+                Mutation::DissolveGroup {
+                    group_id: "$h:g".into(),
+                },
+            ],
+        })
+        .expect("the group must be nameable by the bind that follows it");
+
+    // Dissolving restored both members to the spread, so the two
+    // polygons are still there and ungrouped.
+    assert_eq!(
+        polygon_ids(&model).len(),
+        2,
+        "both members survive the group/dissolve round trip"
+    );
+    assert!(
+        model.scene().spreads[0].spread.groups.is_empty(),
+        "the group this batch created was dissolved by its own handle"
+    );
+    assert_eq!(model.applied_log_len(), 1, "still ONE undo step");
+    let _ = outcome;
+}
+
+/// The same shape with NO earlier bind — the case that already worked
+/// (the group was the batch's FIRST creation, so the stale `created`
+/// slot happened to be empty). Pinned so the fix cannot regress it.
+#[test]
+fn bind_after_create_group_works_with_no_earlier_handle() {
+    let mut model = load();
+
+    // Two inserts, NEITHER bound; group them by handle-free means by
+    // binding only after the group exists.
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![insert_path(0.0), insert_path(50.0)],
+        })
+        .expect("two plain inserts");
+    let ids = polygon_ids(&model);
+    assert_eq!(ids.len(), 2);
+
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::CreateGroup {
+                    member_ids: vec![
+                        ElementId::Polygon(ids[0].clone()),
+                        ElementId::Polygon(ids[1].clone()),
+                    ],
+                },
+                bind("g"),
+                Mutation::DissolveGroup {
+                    group_id: "$h:g".into(),
+                },
+            ],
+        })
+        .expect("the group is nameable as the batch's first creation too");
+
+    assert!(
+        model.scene().spreads[0].spread.groups.is_empty(),
+        "created and dissolved in one batch"
+    );
+}
+
+/// The id a `createGroup` mints is now chosen at TRANSLATION time. It
+/// must still be the one the applier would have chosen — otherwise the
+/// fix above would move every group id in the document by one.
+#[test]
+fn a_group_id_minted_at_translation_matches_the_applier() {
+    let mut model = load();
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![insert_path(0.0), insert_path(50.0)],
+        })
+        .expect("two inserts");
+    let ids = polygon_ids(&model);
+
+    model
+        .apply_mutation(&Mutation::CreateGroup {
+            member_ids: vec![
+                ElementId::Polygon(ids[0].clone()),
+                ElementId::Polygon(ids[1].clone()),
+            ],
+        })
+        .expect("group");
+
+    let group_id = model.scene().spreads[0].spread.groups[0]
+        .self_id
+        .clone()
+        .expect("the group carries its id");
+    // Two polygons at u1/u2 (plus the fixture's own items) ⇒ the group
+    // takes the NEXT id in the shared page-item space, exactly as
+    // `mint_group_id` would have.
+    let max_before: u64 = ids
+        .iter()
+        .filter_map(|i| u64::from_str_radix(i.strip_prefix('u')?, 16).ok())
+        .max()
+        .expect("polygon ids are u<hex>");
+    assert_eq!(
+        group_id,
+        format!("u{:x}", max_before + 1),
+        "the group takes the next id in the shared space, not a private one"
+    );
+}

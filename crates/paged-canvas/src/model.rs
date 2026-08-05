@@ -2881,9 +2881,28 @@ impl CanvasModel {
             // (group-of-groups); `element_to_member_node_id` resolves
             // Group ids too. Fresh top-level create carries no parent /
             // own-transform (those are inverse-only).
+            // C-15 / RFI #72 — MINT THE GROUP'S ID HERE, not in the
+            // applier. This used to send `self_id: None` and let
+            // `apply_create_group` mint, which reads correctly for a
+            // lone mutation and is WRONG inside a handle-using batch:
+            // that path translates every child BEFORE applying any of
+            // them, so it can only learn a created id from the
+            // translated op. A `None` there meant `created_element_id`
+            // answered nothing, `scope.set_created` was never called,
+            // and the next `bindCreated` silently re-bound the PREVIOUS
+            // creation — `dissolveGroup { groupId: "$h:g" }` then failed
+            // with "node not found: Group(<the earlier insert's id>)".
+            //
+            // The minted value is IDENTICAL either way: this helper and
+            // `mint_group_id` scan the same `u<hex>` id space over the
+            // same six kind vectors, and threading `mint_offset` gives
+            // the same answer the applier would reach after the batch's
+            // earlier inserts had landed. The applier still validates it
+            // (a duplicate is `DuplicateNodeId`), so nothing is trusted
+            // blindly — the id is merely known one step sooner.
             Mutation::CreateGroup { member_ids } => Some(Operation::CreateGroup {
                 spec: paged_mutate::GroupSpec {
-                    self_id: None,
+                    self_id: Some(self.mint_page_item_id_with_offset(mint_offset)),
                     members: member_ids
                         .iter()
                         .map(element_to_member_node_id)
