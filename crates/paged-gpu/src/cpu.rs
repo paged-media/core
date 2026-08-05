@@ -1673,6 +1673,12 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                 // pixel in page-pixel coords is `(off_x_px, off_y_px)`
                 // — subsequent fills/strokes/draws targeting this
                 // group adjust their transform by that offset.
+                //
+                // The slack is ALLOCATION only. The group's extent is
+                // `bounds`, and `group_bounds_mask` below clips every
+                // draw to it; letting the padded buffer edge be the
+                // clip instead would paint 1–2 px the Vello backend
+                // clips away, at a boundary that moves with the dpi.
                 let scale_factor = scale;
                 let pad_pt = 1.0 / scale_factor.max(1e-6);
                 let min_x_pt = bounds.x - pad_pt;
@@ -1740,6 +1746,17 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             effect_sigma_px: 0.0,
                             soft_mask: None,
                         });
+                        if let Some(mask) = group_bounds_mask(
+                            *bounds,
+                            (off_x_px, off_y_px),
+                            (w_px, h_px),
+                            page_to_px,
+                        ) {
+                            clip_stack.push(ClipEntry {
+                                mask,
+                                scope: ClipScope::Group(group_stack.len()),
+                            });
+                        }
                     }
                     None => {
                         // Allocation failure (zero or pathological
@@ -1807,6 +1824,30 @@ pub fn rasterize(list: &DisplayList, options: &RasterOptions) -> RgbaImage {
                             effect_sigma_px,
                             soft_mask: None,
                         });
+                        // Clip to `bounds` for the same reason
+                        // `BeginBlendGroup` does — but only on the
+                        // branch Vello encodes as a plain layer. The
+                        // condition is Vello's own (`sigma_pt > 0.5`,
+                        // in pt): above it the layer takes Vello's
+                        // capture-and-replay blur path, which clips its
+                        // contents nowhere, so clipping here would
+                        // widen the divergence instead of closing it.
+                        // What a BLURRED layer's extent should be is a
+                        // separate question — the blur legitimately
+                        // paints outside `bounds`.
+                        if sigma_pt <= 0.5 {
+                            if let Some(mask) = group_bounds_mask(
+                                *bounds,
+                                (off_x_px, off_y_px),
+                                (w_px, h_px),
+                                page_to_px,
+                            ) {
+                                clip_stack.push(ClipEntry {
+                                    mask,
+                                    scope: ClipScope::Group(group_stack.len()),
+                                });
+                            }
+                        }
                     }
                     None => {
                         if let Some(buf) = Pixmap::new(1, 1) {
@@ -2400,6 +2441,43 @@ pub(crate) fn naive_cmyk_to_rgb_8bit(c: u8, m: u8, y: u8, k: u8) -> (u8, u8, u8)
         ((prod + 127) / 255).min(255) as u8
     };
     (chan(c), chan(m), chan(y))
+}
+
+/// Antialiased coverage mask for a transparency group's `bounds`
+/// rect, in the group buffer's own pixel grid.
+///
+/// `bounds` is a PAGE-space rect, and it is the extent both back ends
+/// clip the group to. The buffer allocated for the group is
+/// deliberately a little larger — outward pixel snapping plus a device
+/// pixel of AA slack — so the buffer's own edge is NOT the group's
+/// edge, and drawing straight into the buffer would paint content the
+/// Vello backend clips away. Masking every draw with this rect makes
+/// the clip the rect itself: identical at every dpi and every zoom,
+/// which a device-pixel-derived edge can never be (Vello encodes a
+/// page scene once, at identity, and re-uses it across zoom levels —
+/// it never sees the device scale).
+///
+/// `offset` is the buffer's top-left in page-pixel coords and
+/// `page_to_px` the page-space pt→px scale; together they map the rect
+/// into the buffer's local grid, exactly as `PushClip` does.
+fn group_bounds_mask(
+    bounds: paged_compose::Rect,
+    offset: (i32, i32),
+    size: (u32, u32),
+    page_to_px: TsTransform,
+) -> Option<TsMask> {
+    let mut pb = PathBuilder::new();
+    pb.move_to(bounds.x, bounds.y);
+    pb.line_to(bounds.x + bounds.w, bounds.y);
+    pb.line_to(bounds.x + bounds.w, bounds.y + bounds.h);
+    pb.line_to(bounds.x, bounds.y + bounds.h);
+    pb.close();
+    let path = pb.finish()?;
+    let to_pixel =
+        TsTransform::from_translate(-offset.0 as f32, -offset.1 as f32).pre_concat(page_to_px);
+    let mut mask = TsMask::new(size.0, size.1)?;
+    mask.fill_path(&path, FillRule::Winding, true, to_pixel);
+    Some(mask)
 }
 
 /// Snapshot a `w_px × h_px` region of `parent`'s pixels into a fresh
@@ -4590,6 +4668,92 @@ mod tests {
             p[0] > 100 && p[0] < 180,
             "expected mid-gray (50% black on white), got {p:?}"
         );
+    }
+
+    /// A blend group cuts at its `bounds` rect — not at the buffer
+    /// allocated for it, which is deliberately larger (outward pixel
+    /// snapping plus a device pixel of AA slack).
+    ///
+    /// Sampled at two dpi because the slack is a DEVICE pixel: letting
+    /// the buffer edge be the clip made the amount of overflowing
+    /// paint that survived a function of the output resolution, and
+    /// made it unreproducible in the Vello backend, which encodes a
+    /// page scene once at identity and re-uses it at every zoom. The
+    /// cross-backend half of this lives in
+    /// `vello_rs::tests::a_blend_group_cuts_at_its_bounds_in_both_back_ends`
+    /// (feature `vello-backend`, off by default).
+    #[test]
+    fn blend_group_paint_is_cut_at_bounds_not_at_the_padded_buffer() {
+        for dpi in [72.0f32, 288.0] {
+            let scale = dpi / 72.0;
+            let mut list = DisplayList::new();
+            // Page-wide red, then a Multiply group over x/y 20..60 /
+            // 10..40 whose content covers the WHOLE page. Multiply of
+            // green over red is black, so every pixel reads either
+            // black (inside the group) or red (cut).
+            emit_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 60.0,
+                },
+                Paint::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0)),
+                &mut list,
+            );
+            list.commands
+                .push(paged_compose::DisplayCommand::BeginBlendGroup {
+                    bounds: Rect {
+                        x: 20.0,
+                        y: 10.0,
+                        w: 40.0,
+                        h: 30.0,
+                    },
+                    blend_mode: paged_compose::BlendMode::Multiply,
+                    opacity: 1.0,
+                    transform: paged_compose::Transform::IDENTITY,
+                });
+            emit_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 60.0,
+                },
+                Paint::Solid(Color::rgba(0.0, 1.0, 0.0, 1.0)),
+                &mut list,
+            );
+            list.commands
+                .push(paged_compose::DisplayCommand::EndBlendGroup(
+                    paged_compose::Transform::IDENTITY,
+                ));
+
+            let mut opts = RasterOptions::new(100.0, 60.0);
+            opts.dpi = dpi;
+            opts.background = Color::rgba(1.0, 1.0, 1.0, 1.0);
+            let img = rasterize(&list, &opts);
+            let px = |x_pt: f32, y_pt: f32| at(&img, (x_pt * scale) as u32, (y_pt * scale) as u32);
+
+            assert_eq!(
+                px(40.0, 25.0),
+                [0, 0, 0, 255],
+                "inside the group the Multiply must land ({dpi} dpi)"
+            );
+            // The first pixel column/row past each edge. These are the
+            // pixels the padded buffer used to paint.
+            for (x, y, edge) in [
+                (60.0, 25.0, "right"),
+                (19.0, 25.0, "left"),
+                (40.0, 40.0, "bottom"),
+                (40.0, 9.0, "top"),
+            ] {
+                assert_eq!(
+                    px(x, y),
+                    [255, 0, 0, 255],
+                    "paint past the group's {edge} edge must be cut ({dpi} dpi)"
+                );
+            }
+        }
     }
 
     #[test]

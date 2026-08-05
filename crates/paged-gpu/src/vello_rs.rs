@@ -4179,20 +4179,16 @@ mod tests {
             return;
         }
         let cpu = crate::CpuRasterizer.rasterize(&list, &opts);
-        // Compare everywhere except the 1 px column at the blend
-        // group's own right edge (x = 60). The two back ends disagree
-        // there for a reason that predates opacity masks and has
-        // nothing to do with them: `cpu.rs` pads a blend group's
-        // buffer by 1 px for AA (`pad_pt = 1.0 / scale`) while this
-        // backend passes `bounds` to `push_layer` verbatim. Rendering
-        // this same scene with the soft-mask bracket removed
-        // reproduces the identical 40-pixel column.
+        // Whole image, no exclusions. This used to skip the 1 px
+        // column at the blend group's own right edge (x = 60), where
+        // the CPU buffer's AA pad let paint survive one device pixel
+        // past `bounds` that this backend clipped away — a divergence
+        // that predated opacity masks and had nothing to do with them.
+        // `group_bounds_mask` closed it; see
+        // `a_blend_group_cuts_at_its_bounds_in_both_back_ends`.
         let mut worst = 0u8;
         for y in 0..40usize {
             for x in 0..100usize {
-                if x.abs_diff(60) <= 1 {
-                    continue;
-                }
                 let i = (y * 100 + x) * 4;
                 for c in 0..4 {
                     worst = worst.max(gpu[i + c].abs_diff(cpu[i + c]));
@@ -4418,5 +4414,195 @@ mod tests {
             .commands
             .push(DisplayCommand::EndSoftMask(Transform::IDENTITY));
         let _ = build_scene_with_transform(&nested, kurbo::Affine::scale(1.0));
+    }
+
+    /// Build a page whose only subject is a Multiply blend group with
+    /// `bounds`, containing paint that runs past those bounds on all
+    /// four sides. `grouped = false` drops the bracket and leaves the
+    /// same paint — the CONTROL, whose CPU-vs-Vello delta is the two
+    /// back ends' intrinsic antialiasing disagreement on a fractional
+    /// edge, nothing to do with groups.
+    #[cfg(feature = "cpu")]
+    fn overflowing_blend_group(bounds: paged_compose::Rect, grouped: bool) -> DisplayList {
+        use paged_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, Paint, Transform,
+        };
+
+        let mut list = DisplayList::new();
+        let rect_id = unit_rect_path(&mut list);
+        // Page-wide red underneath, so a Multiply that lands reads
+        // black and one that is clipped away reads red — a 255-wide
+        // signal on every pixel the two back ends disagree about.
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(DLColor::rgba(1.0, 0.0, 0.0, 1.0)),
+            transform: Transform([100.0, 0.0, 0.0, 60.0, 0.0, 0.0]),
+        });
+        if grouped {
+            list.commands.push(DisplayCommand::BeginBlendGroup {
+                bounds,
+                blend_mode: ComposeBlend::Multiply,
+                opacity: 1.0,
+                transform: Transform::IDENTITY,
+            });
+        }
+        // Multiply(red, green) is opaque black, so the control's plain
+        // opaque black over the same rect is the SAME image — the two
+        // renders differ only in how the rect's edge came to be, which
+        // is the whole point of the comparison.
+        let (paint, transform) = if grouped {
+            (
+                DLColor::rgba(0.0, 1.0, 0.0, 1.0),
+                // Overflows `bounds` on all four sides.
+                Transform([100.0, 0.0, 0.0, 60.0, 0.0, 0.0]),
+            )
+        } else {
+            (
+                DLColor::rgba(0.0, 0.0, 0.0, 1.0),
+                Transform([bounds.w, 0.0, 0.0, bounds.h, bounds.x, bounds.y]),
+            )
+        };
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect_id,
+            paint: Paint::Solid(paint),
+            transform,
+        });
+        if grouped {
+            list.commands
+                .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        }
+        list
+    }
+
+    #[cfg(feature = "cpu")]
+    fn overflow_opts(dpi: f32) -> RasterOptions {
+        let mut opts = RasterOptions::new(100.0, 60.0);
+        opts.dpi = dpi;
+        opts.background = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
+        opts
+    }
+
+    /// Worst per-channel delta and the number of pixels past a
+    /// 2/255 noise floor, for a CPU-vs-Vello pair.
+    #[cfg(feature = "cpu")]
+    fn cpu_gpu_delta(list: &DisplayList, opts: &RasterOptions) -> Option<(u8, usize)> {
+        let gpu = VelloRasterizer::new().rasterize(list, opts);
+        if !gpu_path_ran(&gpu) {
+            return None;
+        }
+        let cpu = crate::CpuRasterizer.rasterize(list, opts);
+        let mut worst = 0u8;
+        let mut ndiff = 0usize;
+        for (g, c) in gpu.chunks_exact(4).zip(cpu.chunks_exact(4)) {
+            let d = (0..4).map(|i| g[i].abs_diff(c[i])).max().unwrap_or(0);
+            worst = worst.max(d);
+            if d > 2 {
+                ndiff += 1;
+            }
+        }
+        Some((worst, ndiff))
+    }
+
+    /// A blend group's extent is its `bounds` rect, in PAGE space, and
+    /// both back ends must cut there.
+    ///
+    /// This is the divergence the C-28 mask test excluded a column for.
+    /// `cpu.rs` allocates the group buffer with a device pixel of AA
+    /// slack (`pad_pt = 1.0 / scale`) on top of outward pixel snapping,
+    /// and used to let that buffer edge BE the clip; the Vello backend
+    /// passes `bounds` to `push_layer` verbatim. Content that reaches
+    /// the group's edge therefore survived one device pixel further on
+    /// the CPU than on the GPU — a 255/255 band, on all four sides
+    /// (measured: 1 px for pixel-aligned bounds, 2 px for fractional
+    /// ones, at every dpi, because the pad is a device pixel by
+    /// construction).
+    ///
+    /// The CPU was the side to move. `bounds` is a page-space rect and
+    /// `page_to_px` is not knowable when a Vello scene is encoded —
+    /// `SurfacePresenter::build_page_scene` encodes once at identity
+    /// and `present_scenes` re-uses that encoding at every zoom level
+    /// — so a device-pixel-derived edge is not a contract Vello can
+    /// implement, and it would mean the same document enclosing
+    /// different content at 72 and at 300 dpi.
+    #[test]
+    #[cfg(feature = "cpu")]
+    fn a_blend_group_cuts_at_its_bounds_in_both_back_ends() {
+        use paged_compose::Rect;
+
+        // Pixel-aligned bounds: exact parity, whole image, no
+        // exclusions. (Before the fix: worst 255 over a 1 px ring.)
+        let bounds = Rect {
+            x: 20.0,
+            y: 10.0,
+            w: 40.0,
+            h: 30.0,
+        };
+        let opts = overflow_opts(72.0);
+        let Some((worst, ndiff)) = cpu_gpu_delta(&overflowing_blend_group(bounds, true), &opts)
+        else {
+            return; // no GPU adapter — skip cleanly
+        };
+        assert!(
+            worst <= 2 && ndiff == 0,
+            "pixel-aligned group bounds must be byte-identical: worst {worst}, {ndiff} px differ"
+        );
+
+        // The group really does cut — "both back ends paint
+        // everything" would satisfy the assertion above too.
+        let cpu = crate::CpuRasterizer.rasterize(&overflowing_blend_group(bounds, true), &opts);
+        let px = |x: usize, y: usize| -> [u8; 4] {
+            let i = (y * 100 + x) * 4;
+            [cpu[i], cpu[i + 1], cpu[i + 2], cpu[i + 3]]
+        };
+        assert_eq!(
+            px(40, 25),
+            [0, 0, 0, 255],
+            "inside the group: Multiply lands"
+        );
+        assert_eq!(
+            px(60, 25),
+            [255, 0, 0, 255],
+            "one px past the group's right edge: page red, unmultiplied"
+        );
+        assert_eq!(
+            px(19, 25),
+            [255, 0, 0, 255],
+            "one px before the group's left edge: page red, unmultiplied"
+        );
+        assert_eq!(
+            px(40, 40),
+            [255, 0, 0, 255],
+            "one px past the group's bottom edge: page red, unmultiplied"
+        );
+
+        // Fractional bounds, at two very different scales. Here the
+        // two back ends still differ on the boundary pixel, because
+        // they disagree about partial coverage in general — Vello is
+        // analytic, tiny-skia quantises. The bar is that the GROUP
+        // contributes nothing on top of that: the same scene with the
+        // bracket removed must diverge by the same amount over the
+        // same number of pixels.
+        let fractional = Rect {
+            x: 20.3,
+            y: 10.7,
+            w: 40.4,
+            h: 30.2,
+        };
+        for dpi in [72.0, 300.0] {
+            let opts = overflow_opts(dpi);
+            let Some(grouped) = cpu_gpu_delta(&overflowing_blend_group(fractional, true), &opts)
+            else {
+                return;
+            };
+            let Some(control) = cpu_gpu_delta(&overflowing_blend_group(fractional, false), &opts)
+            else {
+                return;
+            };
+            assert_eq!(
+                grouped, control,
+                "at {dpi} dpi a fractional group edge must diverge exactly as much as the same \
+                 edge with no group at all: grouped {grouped:?}, control {control:?}"
+            );
+        }
     }
 }
