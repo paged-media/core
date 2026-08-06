@@ -5,22 +5,28 @@ name: publish-wasm
 # package boundary — "decision B" of the migration plan: the editor never
 # takes a Rust path dependency on the engine; it depends on these packages.
 #
-# AUTHENTICATION: npm trusted publishing (OIDC) — there is no NPM_TOKEN.
+# AUTHENTICATION: the `NPM_TOKEN` secret, with trusted publishing (OIDC)
+# staged behind it.
 #
-# Each of the four packages carries a Trusted Publisher on npmjs.com naming
-# this org, this repo, and THIS FILENAME (`publish-wasm.yml`). At publish
-# time npm asks GitHub for a short-lived OIDC token and exchanges it for
-# publish rights, so nothing long-lived is stored and nothing expires.
+# npm's Trusted Publisher config is PER PACKAGE, and the four packages here
+# do not have entries yet — the token-exchange endpoint answers "package not
+# found" for every one of them, while the OIDC claims this workflow presents
+# (repository paged-media/core, workflow publish-wasm.yml, no environment)
+# are exactly right. So the token authorizes the publish and the advisory
+# step below watches for the day it stops being needed.
 #
-# Renaming this file, or publishing these packages from another workflow,
-# breaks authentication — the npm-side config is keyed on the filename.
+# Token failures are the reason four releases went missing. v0.51.0, v0.51.1
+# and v0.51.2 were each tagged, built for ~11 minutes, then died on `npm
+# error 404 ... PUT .../@paged-media%2fcanvas-wasm` — E404-on-PUT is what npm
+# answers an unauthenticated publish, since it will not admit a package
+# exists to a caller who cannot see it. All three were one expired token
+# wearing a "not found" costume, while npm kept serving 0.51.0 to the editor.
+# v0.61.0 then died the SAME way for the opposite reason: no token at all,
+# and an OIDC exchange that failed silently. Hence the hard preflight.
 #
-# The secret it replaced had lapsed and taken v0.51.0, v0.51.1 and v0.51.2
-# with it: each was tagged, built for ~11 minutes, then died on `npm error
-# 404 ... PUT .../@paged-media%2fcanvas-wasm`. E404-on-PUT is what npm
-# answers an unauthenticated publish — it will not admit a package exists to
-# a caller who cannot see it — so all three were one expired token wearing a
-# "not found" costume, while npm kept serving 0.51.0 to the editor.
+# When trusted publishing does land, the npm-side config is keyed on this
+# FILENAME — renaming this file, or publishing these packages from another
+# workflow, would break it.
 #
 # Still required, and not automatic:
 #   1. Tag a release, e.g. `git tag v0.1.0 && git push --tags`. The package
@@ -46,82 +52,66 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Fail on a broken publishing setup in seconds, not after the build.
+      # THE HARD GATE. `npm whoami` asks the registry the same auth question
+      # `npm publish` will ask, before anything expensive runs — a bad token
+      # costs two seconds and names itself (E401) instead of arriving as
+      # npm's misleading E404-on-PUT eleven minutes in.
       #
-      # OIDC has no `npm whoami` equivalent — the exchange happens inside
-      # `npm publish` — but the token ENDPOINT only exists when
-      # `permissions: id-token: write` is in effect, so its absence proves
-      # every publish below would fail after the full ~11-minute build.
-      #
-      # This is the first of three preflights: the endpoint's existence,
-      # then npm's version (after setup-node, which decides which npm
-      # runs), then the actual per-package OIDC exchange.
-      - name: preflight — OIDC must be in effect
+      # A throwaway userconfig keeps the real ~/.npmrc untouched.
+      - name: preflight — the npm token must authenticate
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo '::error::No OIDC token endpoint — permissions.id-token: write is not in effect.'
-            echo '::error::Every npm publish below would fail after the full build.'
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not set — a tag push would build for ~11 minutes and publish nothing."
             exit 1
           fi
-          echo "OIDC token endpoint present"
+          RC="$(mktemp)"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "$RC"
+          if ! WHO=$(NPM_CONFIG_USERCONFIG="$RC" npm whoami --registry https://registry.npmjs.org/ 2>&1); then
+            rm -f "$RC"
+            echo "::error::NPM_TOKEN does not authenticate against the npm registry: ${WHO}"
+            echo "::error::Mint a granular token with read+write on the @paged-media scope and re-set the secret."
+            exit 1
+          fi
+          rm -f "$RC"
+          echo "npm authenticated as: ${WHO}"
 
-      # Node 24, not 20: trusted publishing needs npm >= 11.5.1, and Node 24
-      # bundles npm 11.x (Node 20/22 carry npm 10.x). The runs were also
-      # warning that Node 20 is deprecated on GitHub runners.
-      #
-      # `registry-url` is kept — it writes the .npmrc registry config the
-      # publish needs — but no NODE_AUTH_TOKEN is passed to it, which is
-      # exactly the trusted-publishing shape.
-      #
-      # Hoisted above the Rust steps together with its check, so BOTH
-      # preflights run before anything expensive. It used to sit after a
-      # multi-minute `cargo install wasm-bindgen-cli`, which is precisely
-      # the cost this lane keeps paying to learn it cannot publish.
+      # Node 24, not 20: Node 20/22 bundle npm 10.x, and Node 20 is deprecated
+      # on GitHub runners. npm 11.x is also what trusted publishing needs, so
+      # the switch below costs no further change.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # The other half of the preflight, here because setup-node decides
-      # which npm runs. An older npm DOES NOT ERROR on trusted publishing —
-      # it has never heard of it, silently falls back to token auth, and
-      # with no token fails as the same misleading E404-on-PUT this lane
-      # spent three releases misreading. Assert rather than assume.
-      - name: preflight — npm must know about trusted publishing
-        run: |
-          set -euo pipefail
-          NPM_V="$(npm --version)"
-          echo "npm ${NPM_V}"
-          if [ "$(printf '11.5.1\n%s\n' "$NPM_V" | sort -V | head -1)" != "11.5.1" ]; then
-            echo "::error::npm ${NPM_V} predates trusted publishing (needs >= 11.5.1)."
-            echo "::error::It would not error — it would fall back to token auth and fail as a 404."
-            exit 1
-          fi
-
-      # Do the OIDC exchange npm will do, per package, and demand an answer.
+      # ADVISORY, never fatal: is trusted publishing ready to replace the
+      # token yet? The four Trusted Publisher entries are not in place, so
+      # this reports rather than gates — the token above is what authorizes
+      # the publish today.
       #
-      # This exists because npm's OIDC helper is SILENT on every failure
-      # path: `lib/utils/oidc.js` logs at verbose/silly and returns
+      # It survives as a step because npm's OIDC helper is SILENT on every
+      # failure path: `lib/utils/oidc.js` logs at verbose/silly and returns
       # undefined, after which publish falls back to whatever token is
-      # configured. setup-node's `registry-url` writes a placeholder
-      # NODE_AUTH_TOKEN, so the fallback is a garbage credential and the
-      # only thing the log shows is npm's E404-on-PUT — which reads as
-      # "package missing" and is really "trusted publishing never happened".
-      # v0.61.0 died exactly that way with a correct workflow.
+      # configured. That is why v0.61.0's first attempt read as npm's
+      # E404-on-PUT — "package missing" — when it meant "trusted publishing
+      # never happened". Asking the exchange directly is the only way to see
+      # it, and the claims it prints are exactly the values the npmjs.com
+      # form must match.
       #
-      # So we ask the registry the same question, per package, and print
-      # what it says. The response carries a real npm token on success; it
-      # is never echoed, only its presence is asserted.
-      - name: preflight — the trusted publisher must answer for every package
+      # When this reports OK for all four: delete the token preflight, drop
+      # `env: NODE_AUTH_TOKEN` from Publish, and remove the NPM_TOKEN secret.
+      - name: advisory — trusted-publishing readiness
+        continue-on-error: true
         run: |
           set -euo pipefail
           AUD="npm:registry.npmjs.org"
           ID_TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" | jq -r '.value // empty')"
           if [ -z "$ID_TOKEN" ]; then
-            echo "::error::GitHub would not issue an OIDC id-token for audience ${AUD}."
-            exit 1
+            echo "::notice::No OIDC id-token for ${AUD} — trusted publishing not available in this run."
+            exit 0
           fi
           echo "id-token issued for ${AUD}"
 
@@ -148,15 +138,16 @@ jobs:
               echo "  OK    @paged-media/${PKG}"
             else
               MSG="$(jq -r '.message // .error // empty' /tmp/exch.json 2>/dev/null || true)"
-              echo "::error::@paged-media/${PKG}: OIDC exchange returned HTTP ${CODE} — ${MSG:-no message}"
+              echo "  NOT READY  @paged-media/${PKG}: HTTP ${CODE} — ${MSG:-no message}"
               FAILED=1
             fi
             rm -f /tmp/exch.json
           done
           if [ "$FAILED" = "1" ]; then
-            echo "::error::Trusted Publisher config must name org 'paged-media', repo 'core',"
-            echo "::error::and workflow filename 'publish-wasm.yml' EXACTLY, on each package above."
-            exit 1
+            echo "::notice::Still on token auth. Each package needs its OWN Trusted Publisher entry"
+            echo "::notice::(org 'paged-media', repo 'core', workflow 'publish-wasm.yml', no environment)."
+          else
+            echo "::notice::All four packages authenticate via OIDC — the NPM_TOKEN can be retired."
           fi
 
       # The version is the tag, so a run on anything else must not reach the
@@ -315,10 +306,14 @@ jobs:
           cp ../../dist/sdk/paged_sdk.js ../../dist/sdk/paged_sdk_bg.wasm ../../dist/sdk/paged_sdk.d.ts wasm/
           npm pkg set version="${{ steps.ver.outputs.version }}"
 
-      # No `env:` — trusted publishing authenticates from the job's OIDC
-      # token. Setting NODE_AUTH_TOKEN here would put a credential back in
-      # front of the thing that replaced it.
+      # NODE_AUTH_TOKEN is what authorizes this today. npm still ATTEMPTS the
+      # OIDC exchange first and silently falls back here when it fails — so
+      # the day the Trusted Publisher entries land, publishes start going
+      # through OIDC on their own and this env becomes dead weight rather
+      # than a switch anyone has to throw.
       - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           # Leading ./ is load-bearing: a bare `dist/canvas-wasm` is
