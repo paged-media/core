@@ -53,12 +53,9 @@ jobs:
       # `permissions: id-token: write` is in effect, so its absence proves
       # every publish below would fail after the full ~11-minute build.
       #
-      # NOT checked here: whether each package's Trusted Publisher on
-      # npmjs.com names this org/repo/filename. That lives in npm's account
-      # settings with no public read, so a mismatch can only surface at
-      # publish time — per package, which is why a partial publish is
-      # possible. (The npm-version half is checked after setup-node, which
-      # is what decides which npm actually runs.)
+      # This is the first of three preflights: the endpoint's existence,
+      # then npm's version (after setup-node, which decides which npm
+      # runs), then the actual per-package OIDC exchange.
       - name: preflight — OIDC must be in effect
         run: |
           set -euo pipefail
@@ -102,6 +99,89 @@ jobs:
             exit 1
           fi
 
+      # Do the OIDC exchange npm will do, per package, and demand an answer.
+      #
+      # This exists because npm's OIDC helper is SILENT on every failure
+      # path: `lib/utils/oidc.js` logs at verbose/silly and returns
+      # undefined, after which publish falls back to whatever token is
+      # configured. setup-node's `registry-url` writes a placeholder
+      # NODE_AUTH_TOKEN, so the fallback is a garbage credential and the
+      # only thing the log shows is npm's E404-on-PUT — which reads as
+      # "package missing" and is really "trusted publishing never happened".
+      # v0.61.0 died exactly that way with a correct workflow.
+      #
+      # So we ask the registry the same question, per package, and print
+      # what it says. The response carries a real npm token on success; it
+      # is never echoed, only its presence is asserted.
+      - name: preflight — the trusted publisher must answer for every package
+        run: |
+          set -euo pipefail
+          AUD="npm:registry.npmjs.org"
+          ID_TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" | jq -r '.value // empty')"
+          if [ -z "$ID_TOKEN" ]; then
+            echo "::error::GitHub would not issue an OIDC id-token for audience ${AUD}."
+            exit 1
+          fi
+          echo "id-token issued for ${AUD}"
+
+          FAILED=0
+          for PKG in canvas-wasm introspect-wasm sdk idml-viewer; do
+            CODE="$(curl -sS -o /tmp/exch.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer ${ID_TOKEN}" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@paged-media%2f${PKG}")"
+            if [ "$CODE" = "200" ] && [ -n "$(jq -r '.token // empty' /tmp/exch.json)" ]; then
+              echo "  OK    @paged-media/${PKG}"
+            else
+              MSG="$(jq -r '.message // .error // empty' /tmp/exch.json 2>/dev/null || true)"
+              echo "::error::@paged-media/${PKG}: OIDC exchange returned HTTP ${CODE} — ${MSG:-no message}"
+              FAILED=1
+            fi
+            rm -f /tmp/exch.json
+          done
+          if [ "$FAILED" = "1" ]; then
+            echo "::error::Trusted Publisher config must name org 'paged-media', repo 'core',"
+            echo "::error::and workflow filename 'publish-wasm.yml' EXACTLY, on each package above."
+            exit 1
+          fi
+
+      # The version is the tag, so a run on anything else must not reach the
+      # publish. `workflow_dispatch` accepts any ref: dispatched from main
+      # this used to resolve `version=main`, build for eleven minutes, and
+      # offer npm a package versioned "main". Dispatch against a TAG ref
+      # (`gh workflow run publish-wasm.yml --ref v0.61.0`) still works.
+      - name: Resolve version from tag
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::ref ${GITHUB_REF_NAME} is a ${GITHUB_REF_TYPE}, not a tag — nothing to version a release from."
+            exit 1
+          fi
+          if ! printf '%s' "${GITHUB_REF_NAME}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not vMAJOR.MINOR.PATCH[-prerelease]."
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # W0.9 dist-tag rider (protocol-governance §4): prerelease tags
+      # (`v0.N.0-rc.x` — anything with a `-suffix`) publish under the
+      # `next` dist-tag, never `latest`. A clean `0.N.P` publishes under
+      # npm's default (`latest`). This sets a `dist-tag` output the
+      # publish step appends as `--tag` only for prereleases.
+      - name: Derive npm dist-tag from version
+        id: disttag
+        run: |
+          set -euo pipefail
+          V="${{ steps.ver.outputs.version }}"
+          if [[ "$V" == *-* ]]; then
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+            echo "prerelease version '$V' → npm dist-tag 'next' (not latest)"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "release version '$V' → npm dist-tag 'latest' (default)"
+          fi
+
       # Pin the toolchain from rust-toolchain.toml (audit B21) — the
       # published wasm must be built with the same compiler the rest of
       # CI uses, not a drifting `@stable`.
@@ -128,28 +208,6 @@ jobs:
           tar -xzf /tmp/binaryen.tgz -C /tmp
           echo "/tmp/binaryen-version_${BINARYEN}/bin" >> "$GITHUB_PATH"
           "/tmp/binaryen-version_${BINARYEN}/bin/wasm-opt" --version
-
-      - name: Resolve version from tag
-        id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      # W0.9 dist-tag rider (protocol-governance §4): prerelease tags
-      # (`v0.N.0-rc.x` — anything with a `-suffix`) publish under the
-      # `next` dist-tag, never `latest`. A clean `0.N.P` publishes under
-      # npm's default (`latest`). This sets a `dist-tag` output the
-      # publish step appends as `--tag` only for prereleases.
-      - name: Derive npm dist-tag from version
-        id: disttag
-        run: |
-          set -euo pipefail
-          V="${{ steps.ver.outputs.version }}"
-          if [[ "$V" == *-* ]]; then
-            echo "tag=next" >> "$GITHUB_OUTPUT"
-            echo "prerelease version '$V' → npm dist-tag 'next' (not latest)"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-            echo "release version '$V' → npm dist-tag 'latest' (default)"
-          fi
 
       - name: Build @paged-media/canvas-wasm
         run: |
@@ -263,9 +321,13 @@ jobs:
           # package configured wrongly on npmjs.com stops the run with the
           # earlier ones already published. That is a partial release, and
           # the fix is to configure it and re-run the tag, not to re-tag.
+          # --loglevel verbose is not noise-for-its-own-sake: npm's OIDC
+          # helper reports EVERY failure at verbose/silly and then silently
+          # falls back to token auth. At the default level a broken trusted
+          # publisher is indistinguishable from a missing package.
           TAG="${{ steps.disttag.outputs.tag }}"
           echo "publishing under npm dist-tag: $TAG"
-          npm publish --access public --tag "$TAG" ./dist/canvas-wasm
-          npm publish --access public --tag "$TAG" ./dist/introspect-wasm
-          npm publish --access public --tag "$TAG" ./dist/sdk
-          npm publish --access public --tag "$TAG" ./web/idml-viewer
+          npm publish --loglevel verbose --access public --tag "$TAG" ./dist/canvas-wasm
+          npm publish --loglevel verbose --access public --tag "$TAG" ./dist/introspect-wasm
+          npm publish --loglevel verbose --access public --tag "$TAG" ./dist/sdk
+          npm publish --loglevel verbose --access public --tag "$TAG" ./web/idml-viewer
