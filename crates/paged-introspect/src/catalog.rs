@@ -337,10 +337,18 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("pathPointInsert", P::PathPointInsert),
     ("pathPointRemove", P::PathPointRemove),
     ("pathPointCurveType", P::PathPointCurveType),
-    ("layerVisible", P::LayerVisible),
-    ("layerLocked", P::LayerLocked),
-    ("layerPrintable", P::LayerPrintable),
-    ("layerName", P::LayerName),
+    // NO layer* PATHS HERE, deliberately (C-33, 2026-08-07). They were
+    // listed and projected into `settable_paths`, and NOTHING COULD USE
+    // THEM: `ElementId` has no Layer variant, `id_grammar()` publishes
+    // no layer address form, and `parse_element_id` cannot produce one —
+    // so `paged.set("layer:ua", "layerVisible", false)` never parsed. A
+    // layer's flags ARE mutable, through the seven dedicated `Layer*`
+    // mutations, which is a different lane and is where they belong.
+    //
+    // This mattered beyond tidiness: docs.paged.media and the plugin SDK
+    // both GENERATE from this catalog, so the false claim propagated to
+    // every consumer that trusted it. `every_settable_path_is_addressable`
+    // below now fails if this comes back.
     ("characterFontSize", P::CharacterFontSize),
     ("characterLeading", P::CharacterLeading),
     ("characterTracking", P::CharacterTracking),
@@ -650,10 +658,14 @@ fn elements() -> Vec<ElementType> {
             chapter: "layers",
             summary: "A document layer; controls visibility, lock, and print state for the items assigned to it.",
             attributes: vec![
-                attr("Name", "string", Some("layerName"), "Layer name."),
-                attr("Visible", "boolean", Some("layerVisible"), "Whether the layer's items render."),
-                attr("Locked", "boolean", Some("layerLocked"), "Whether the layer's items are editable."),
-                attr("Printable", "boolean", Some("layerPrintable"), "Whether the layer prints/exports."),
+                // `None` — NOT settable through the property-path lane.
+                // A layer has no addressable `ElementId`, so these move
+                // only through the dedicated `Layer*` mutations. See the
+                // note in PROPERTY_PATHS.
+                attr("Name", "string", None, "Layer name. Changed by the `layerSetName` mutation, not `paged.set` — a layer has no element address."),
+                attr("Visible", "boolean", None, "Whether the layer's items render. Changed by `layerSetVisible`."),
+                attr("Locked", "boolean", None, "Whether the layer's items are editable. Changed by `layerSetLocked`. NOTE: enforced at hit-test only — a dispatched mutation is not blocked by it."),
+                attr("Printable", "boolean", None, "Whether the layer prints/exports. Changed by `layerSetPrintable`."),
             ],
         },
         ElementType {
@@ -715,7 +727,11 @@ mod tests {
     #[test]
     fn catalog_resolves_and_is_complete() {
         let cat = api_catalog();
-        assert_eq!(cat.settable_paths.len(), 179, "settable path count drifted");
+        // 179 -> 175: the four unreachable `layer*` paths were removed
+        // (C-33). A DROP in this count is the unusual direction and is
+        // the whole point of the change — the catalog stopped claiming
+        // four mutations no caller could perform.
+        assert_eq!(cat.settable_paths.len(), 175, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings
@@ -738,6 +754,92 @@ mod tests {
                         a.name
                     );
                 }
+            }
+        }
+    }
+
+    /// C-33 — EVERY SETTABLE PATH MUST BE REACHABLE BY SOME ADDRESS.
+    ///
+    /// `element_settable_paths_resolve` above checks one link of the
+    /// chain: that a cited path exists in `PROPERTY_PATHS`. It never
+    /// checked the other, and the gap shipped: four `layer*` paths were
+    /// listed as settable while `ElementId` has no Layer variant,
+    /// `id_grammar()` publishes no layer form and `parse_element_id`
+    /// cannot produce one. So the catalog advertised a mutation nobody
+    /// could perform — and because docs.paged.media and the plugin SDK
+    /// GENERATE from this catalog, the false claim propagated to every
+    /// consumer that trusted it.
+    ///
+    /// The mapping below is EXPLICIT rather than inferred from the
+    /// name, because IDML element names and address forms deliberately
+    /// differ: a `ParagraphStyleRange` is written through
+    /// `storyRange:<id>@<a>..<b>`. A first cut of this test matched on
+    /// the name and reported that as a second bug; it is not one, and
+    /// the false positive is why the table is spelled out. The cost of
+    /// the table is the point — a NEW element type carrying settable
+    /// paths cannot compile past this without someone classifying it.
+    #[test]
+    fn every_settable_path_is_addressable() {
+        /// `Some(form)` — the published id form that reaches this
+        /// element. `None` — NOT addressable, which is legal only if the
+        /// element declares no settable path at all.
+        fn address_form(element: &str) -> Option<&'static str> {
+            match element {
+                "TextFrame" => Some("textFrame:"),
+                "Rectangle" => Some("rectangle:"),
+                "Oval" => Some("oval:"),
+                "Polygon" => Some("polygon:"),
+                "GraphicLine" => Some("graphicLine:"),
+                "Group" => Some("group:"),
+                // Both style ranges are addressed as a character range
+                // within a story — the paragraph paths apply to the
+                // paragraphs that range touches.
+                "CharacterStyleRange" | "ParagraphStyleRange" => Some("storyRange:"),
+                // Structural: no ElementId variant, hence no way to name
+                // one as a write target. Each must therefore declare
+                // every attribute read-only.
+                "Layer" | "Page" | "Spread" | "Story" => None,
+                // Unknown element type — fail loudly rather than pass by
+                // default, so adding one forces this decision.
+                _ => Some("<<unclassified>>"),
+            }
+        }
+
+        let published: Vec<&str> = id_grammar()
+            .iter()
+            .map(|f| f.form.split('<').next().unwrap_or_default())
+            .collect();
+
+        for el in elements() {
+            let settable: Vec<&str> = el
+                .attributes
+                .iter()
+                .filter_map(|a| a.settable_path)
+                .collect();
+            let form = address_form(el.name);
+            match form {
+                None => assert!(
+                    settable.is_empty(),
+                    "element type '{}' is NOT addressable (no ElementId variant, no id \
+                     form) but declares settable paths {:?}. Nothing can name a target \
+                     to write them. Set those attributes to `None` and document the \
+                     mutation that really changes them.",
+                    el.name,
+                    settable
+                ),
+                Some(f) => assert!(
+                    published.iter().any(|p| p.eq_ignore_ascii_case(f))
+                        || published
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case("textFrame:")
+                                && matches!(
+                                    el.name,
+                                    "Rectangle" | "Oval" | "Polygon" | "GraphicLine"
+                                )),
+                    "element type '{}' maps to address form '{f}', which id_grammar() \
+                     does not publish. Either publish it or reclassify the element.",
+                    el.name
+                ),
             }
         }
     }

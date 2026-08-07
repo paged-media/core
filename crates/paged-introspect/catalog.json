@@ -793,10 +793,6 @@
     "pathPointInsert",
     "pathPointRemove",
     "pathPointCurveType",
-    "layerVisible",
-    "layerLocked",
-    "layerPrintable",
-    "layerName",
     "characterFontSize",
     "characterLeading",
     "characterTracking",
@@ -1190,26 +1186,26 @@
         {
           "name": "Name",
           "typeHint": "string",
-          "settablePath": "layerName",
-          "summary": "Layer name."
+          "settablePath": null,
+          "summary": "Layer name. Changed by the `layerSetName` mutation, not `paged.set` — a layer has no element address."
         },
         {
           "name": "Visible",
           "typeHint": "boolean",
-          "settablePath": "layerVisible",
-          "summary": "Whether the layer's items render."
+          "settablePath": null,
+          "summary": "Whether the layer's items render. Changed by `layerSetVisible`."
         },
         {
           "name": "Locked",
           "typeHint": "boolean",
-          "settablePath": "layerLocked",
-          "summary": "Whether the layer's items are editable."
+          "settablePath": null,
+          "summary": "Whether the layer's items are editable. Changed by `layerSetLocked`. NOTE: enforced at hit-test only — a dispatched mutation is not blocked by it."
         },
         {
           "name": "Printable",
           "typeHint": "boolean",
-          "settablePath": "layerPrintable",
-          "summary": "Whether the layer prints/exports."
+          "settablePath": null,
+          "summary": "Whether the layer prints/exports. Changed by `layerSetPrintable`."
         }
       ]
     },
