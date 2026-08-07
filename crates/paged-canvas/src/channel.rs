@@ -923,6 +923,13 @@ pub enum MainToWorkerKind {
     SubmitSceneLayer {
         element_id: String,
         layer: paged_compose::SceneLayer,
+        /// C-34 — the plugin submitting. When present the engine
+        /// records the frame's owner and refuses a foreign replace: a
+        /// frame's in-frame render belongs to ONE content type, and this
+        /// door used to be an unconditional insert. Optional, `None`
+        /// bypasses — see `WritePagedPart::caller`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
     /// v39 (C-1) — drop the scene layer previously submitted for
     /// `element_id` (no-op if none). Reply: `SceneLayerApplied`.
@@ -1071,6 +1078,19 @@ pub enum MainToWorkerKind {
         path: String,
         #[tsify(type = "number[]")]
         bytes: ByteBuf,
+        /// C-34 — the plugin making the request. When present the
+        /// engine confines the write to `paged/<caller>/`, closing the
+        /// hole where any holder of the canvas handle could clobber
+        /// another plugin's content part — which is where a plugin
+        /// content type's own model, including its own layers, lives.
+        ///
+        /// OPTIONAL, and `None` bypasses, exactly as
+        /// `SetPluginMetadata.caller` does: the host's own writes and
+        /// every sender that omits it keep the prior behaviour. It lets a
+        /// correct caller PROVE it is correct; it is not a boundary
+        /// against a hostile one, which needs the isolate/RPC host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
     /// v51 — read a `.paged` part's bytes (the live overlay, else the loaded
     /// container). Reply: `PagedPartRead` (or `PagedPartFailed`).
@@ -5614,15 +5634,40 @@ mod tests {
             kind: MainToWorkerKind::WritePagedPart {
                 path: "paged/media.paged.sheet/o1/spec.json".into(),
                 bytes: ByteBuf::from(vec![1u8, 2, 3]),
+                caller: None,
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"kind\":\"writePagedPart\""), "{json}");
+        // C-34 — AN ABSENT CALLER IS ABSENT ON THE WIRE, not a
+        // serialized null. That is what makes the field additive under
+        // GOVERNANCE RULE 1 (a back-compatible `#[serde(default)]` add
+        // on an existing message kind is NOT a protocol bump): the
+        // bytes a sender that omits it produces are unchanged, so an
+        // older worker sees exactly the message it always saw.
+        assert!(
+            !json.contains("caller"),
+            "an omitted caller must not appear: {json}"
+        );
         match serde_json::from_str::<MainToWorker>(&json).unwrap().kind {
-            MainToWorkerKind::WritePagedPart { path, bytes } => {
+            MainToWorkerKind::WritePagedPart {
+                path,
+                bytes,
+                caller,
+            } => {
                 assert_eq!(path, "paged/media.paged.sheet/o1/spec.json");
                 assert_eq!(bytes.into_vec(), vec![1, 2, 3]);
+                assert!(caller.is_none());
             }
+            other => panic!("wrong request variant: {other:?}"),
+        }
+
+        // …and a message written BEFORE the field existed still
+        // deserializes — the other half of "additive", and the half a
+        // round-trip of our own struct cannot show.
+        let legacy = r#"{"seq":51,"protocol":61,"kind":"writePagedPart","payload":{"path":"paged/x/a","bytes":[1]}}"#;
+        match serde_json::from_str::<MainToWorker>(legacy).unwrap().kind {
+            MainToWorkerKind::WritePagedPart { caller, .. } => assert!(caller.is_none()),
             other => panic!("wrong request variant: {other:?}"),
         }
 

@@ -751,7 +751,11 @@ impl WorkerCore {
                     descender,
                 }
             }
-            MainToWorkerKind::SubmitSceneLayer { element_id, layer } => {
+            MainToWorkerKind::SubmitSceneLayer {
+                element_id,
+                layer,
+                caller,
+            } => {
                 // v39 (C-1) — store the plugin scene layer + rebuild so the
                 // next snapshot lowers it inside the frame. Invalidate ALL
                 // page caches: the layer's frame may sit on any page and we
@@ -761,7 +765,11 @@ impl WorkerCore {
                         // A rebuild failure must not poison the worker; the
                         // layer is stored and the next successful rebuild
                         // picks it up. Treat a build error as "not applied".
-                        m.set_scene_layer(element_id.clone(), layer).is_ok()
+                        // C-34 — the caller-gated door. A foreign replace
+                        // of another plugin's in-frame render is refused;
+                        // `None` keeps the prior behaviour exactly.
+                        m.set_scene_layer_as(caller.as_deref(), element_id.clone(), layer)
+                            .is_ok()
                     }
                     None => false,
                 };
@@ -1036,8 +1044,15 @@ impl WorkerCore {
                 },
             },
             // v51 — the `.paged` container parts door (host.parts engine side).
-            MainToWorkerKind::WritePagedPart { path, bytes } => match self.model.as_mut() {
-                Some(m) => match m.set_paged_part(path, bytes.into_vec()) {
+            MainToWorkerKind::WritePagedPart {
+                path,
+                bytes,
+                caller,
+            } => match self.model.as_mut() {
+                // C-34 — routed through the CALLER-GATED door. `None`
+                // keeps the prior behaviour exactly, so this is additive
+                // for every existing sender.
+                Some(m) => match m.set_paged_part_as(caller.as_deref(), path, bytes.into_vec()) {
                     Ok(()) => WorkerToMainKind::PagedPartWritten {},
                     Err(e) => WorkerToMainKind::PagedPartFailed { error: e },
                 },

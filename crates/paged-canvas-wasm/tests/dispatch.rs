@@ -1183,3 +1183,119 @@ fn request_planar_regions_with_no_document_fails_cleanly() {
     assert!(result["reason"].is_string(), "{reply}");
     assert!(result["faces"].as_array().unwrap().is_empty());
 }
+
+// ── C-34 (v62) — the caller gate, asserted AT THE WIRE ───────────────
+//
+// The engine methods have their own unit tests; these exist because the
+// wire is the contract the editor and every plugin actually speak, and
+// because the gate shipped one commit EARLIER as engine-only — reachable
+// by nothing, while the commit message read as though the hole were
+// closed. A door that cannot be opened proves nothing, so the proof
+// belongs here.
+
+#[test]
+fn c34_write_paged_part_confines_a_named_caller_to_its_own_subtree() {
+    let mut core = WorkerCore::new();
+    roundtrip(&mut core, &load_msg(1));
+
+    // Its OWN subtree — accepted.
+    let ok = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 2, "protocol": protocol(), "kind": "writePagedPart",
+            "payload": {
+                "path": "paged/media.paged.sheet/o1/spec.json",
+                "bytes": [123, 125],
+                "caller": "media.paged.sheet",
+            },
+        }),
+    );
+    assert_eq!(ok["kind"], "pagedPartWritten");
+
+    // ANOTHER plugin's subtree — refused, and the refusal names what it
+    // protected rather than failing anonymously.
+    let refused = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 3, "protocol": protocol(), "kind": "writePagedPart",
+            "payload": {
+                "path": "paged/media.paged.image/o1/pixels.bin",
+                "bytes": [1],
+                "caller": "media.paged.sheet",
+            },
+        }),
+    );
+    assert_eq!(refused["kind"], "pagedPartFailed");
+    assert!(
+        refused["payload"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("media.paged.image"),
+        "the refusal names the subtree it protected, got {:?}",
+        refused["payload"]["error"]
+    );
+
+    // OMITTED caller — the prior behaviour, exactly. This is what makes
+    // the v62 bump additive: every pre-v62 sender keeps working, and a
+    // test that only proved the refusal would not have shown it.
+    let legacy = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 4, "protocol": protocol(), "kind": "writePagedPart",
+            "payload": {
+                "path": "paged/media.paged.image/o1/pixels.bin",
+                "bytes": [1],
+            },
+        }),
+    );
+    assert_eq!(legacy["kind"], "pagedPartWritten");
+}
+
+#[test]
+fn c34_submit_scene_layer_gives_a_frame_one_owner() {
+    let mut core = WorkerCore::new();
+    roundtrip(&mut core, &load_msg(1));
+    let layer = serde_json::json!({ "items": [] });
+
+    let claim = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 2, "protocol": protocol(), "kind": "submitSceneLayer",
+            "payload": { "elementId": "u1", "layer": layer, "caller": "media.paged.sheet" },
+        }),
+    );
+    assert_eq!(claim["kind"], "sceneLayerApplied");
+    assert_eq!(claim["payload"]["applied"], true);
+
+    // A FOREIGN plugin may not replace it: a frame's in-frame render
+    // belongs to one content type.
+    let foreign = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 3, "protocol": protocol(), "kind": "submitSceneLayer",
+            "payload": { "elementId": "u1", "layer": layer, "caller": "media.paged.image" },
+        }),
+    );
+    assert_eq!(
+        foreign["payload"]["applied"], false,
+        "a foreign submitter must not replace the owner's render"
+    );
+
+    // Clearing releases the claim, so the frame is not locked forever to
+    // whoever happened to draw on it first.
+    roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 4, "protocol": protocol(), "kind": "clearSceneLayer",
+            "payload": { "elementId": "u1" },
+        }),
+    );
+    let after = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 5, "protocol": protocol(), "kind": "submitSceneLayer",
+            "payload": { "elementId": "u1", "layer": layer, "caller": "media.paged.image" },
+        }),
+    );
+    assert_eq!(after["payload"]["applied"], true);
+}
