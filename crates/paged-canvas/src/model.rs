@@ -4166,6 +4166,14 @@ impl CanvasModel {
     /// `caller: None` bypasses it. It is an HONESTY AID that lets a
     /// correct caller prove it is correct — not a security boundary
     /// against a hostile one, which would need the isolate/RPC host.
+    ///
+    /// **NOT YET REACHABLE FROM THE WIRE.** The parts request carries no
+    /// caller and `paged-canvas-wasm`'s dispatch calls
+    /// [`Self::set_paged_part`], so this gate cannot fire in production
+    /// today. Landing the engine half first is deliberate: the wire
+    /// field is then a one-line addition with the semantics already
+    /// pinned by tests, and it rides a protocol bump on its own merits
+    /// rather than being smuggled into a fix (RFI C-34).
     pub fn set_paged_part_as(
         &mut self,
         caller: Option<&str>,
@@ -7942,6 +7950,10 @@ impl CanvasModel {
     /// nothing, so the host's own submissions and every pre-C-34 caller
     /// behave exactly as before. It lets a correct caller prove it is
     /// correct; it is not a boundary against a hostile one.
+    ///
+    /// **NOT YET REACHABLE FROM THE WIRE** — `SubmitSceneLayer` carries
+    /// no caller and dispatch calls [`Self::set_scene_layer`]. Same
+    /// reasoning as the parts door above (RFI C-34).
     pub fn set_scene_layer_as(
         &mut self,
         caller: Option<&str>,
