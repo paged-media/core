@@ -1816,7 +1816,29 @@ impl From<crate::gesture::GestureError> for GestureFailure {
 #[serde(rename_all = "camelCase")]
 pub struct ElementGeometryItem {
     pub id: crate::element_selection::ElementId,
-    pub page_id: PageId,
+    /// C-23 — the page this element sits on, or `None` when it sits on
+    /// the PASTEBOARD and belongs to no page.
+    ///
+    /// This used to be a plain `PageId`, and the door did not report a
+    /// pageless element as pageless — it dropped it from the reply
+    /// entirely, so a plugin that generated art off-page (paged.draw's
+    /// pattern bake, stepping a tile past the page edge) created and
+    /// grouped something it then could not read back.
+    ///
+    /// **The convention `None` carries:** `bounds` + `item_transform`
+    /// compose against the SPREAD origin rather than a page origin.
+    /// `spread_id` names which spread, because without it the answer is
+    /// unusable the moment a document has two.
+    ///
+    /// Runtime-safe to widen: every element of every existing document
+    /// is on a page, so no existing reply changes shape. The `None`
+    /// only appears for items this door used to omit.
+    #[serde(default)]
+    pub page_id: Option<PageId>,
+    /// C-23 — the owning spread. Always populated; the page-owned case
+    /// carries it too, so a consumer never has to ask a second door.
+    #[serde(default)]
+    pub spread_id: Option<String>,
     /// `[top, left, bottom, right]`.
     pub bounds: [f32; 4],
     /// `[a, b, c, d, tx, ty]`.
@@ -2998,7 +3020,13 @@ pub struct SceneTreeNode {
 #[serde(rename_all = "camelCase")]
 pub struct PathAnchorsResult {
     pub id: crate::element_selection::ElementId,
-    pub page_id: PageId,
+    /// C-23 — see [`ElementGeometryItem::page_id`]; same convention,
+    /// same reason. Anchors are in the element's own space either way.
+    #[serde(default)]
+    pub page_id: Option<PageId>,
+    /// C-23 — the owning spread; see [`ElementGeometryItem::spread_id`].
+    #[serde(default)]
+    pub spread_id: Option<String>,
     pub anchors: Vec<PathAnchorTriple>,
     /// Per-contour boundaries. Empty for the common single-contour
     /// case so callers can iterate a single subpath without special-

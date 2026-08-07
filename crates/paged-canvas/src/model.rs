@@ -7405,7 +7405,24 @@ impl CanvasModel {
                         let [x, y, w, h] = cr.rect;
                         out.push(crate::channel::ElementGeometryItem {
                             id: id.clone(),
-                            page_id: bp.id.clone(),
+                            // C-23 — a table cell is resolved from a
+                            // BUILT PAGE's retained rect, so it is
+                            // page-owned by construction: a cell cannot
+                            // be on the pasteboard without its table
+                            // being there, and a pasteboard table has
+                            // no laid-out cell rects to find.
+                            page_id: Some(bp.id.clone()),
+                            spread_id: self
+                                .scene()
+                                .spreads
+                                .iter()
+                                .find(|p| {
+                                    p.spread
+                                        .pages
+                                        .iter()
+                                        .any(|pg| pg.self_id.as_deref() == Some(bp.id.as_str()))
+                                })
+                                .and_then(|p| p.spread.self_id.clone()),
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
                             has_image: false,
@@ -7512,15 +7529,18 @@ impl CanvasModel {
                 let built_page = host_page
                     .and_then(|p| p.self_id.as_deref())
                     .and_then(|sid| self.built().pages.iter().find(|bp| bp.id.as_str() == sid));
-                if let Some(bp) = built_page {
-                    out.push(crate::channel::ElementGeometryItem {
-                        id: id.clone(),
-                        page_id: bp.id.clone(),
-                        bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
-                        item_transform,
-                        has_image,
-                    });
-                }
+                // C-23 — an element whose centroid lands on no page is
+                // ON THE PASTEBOARD, not absent. This used to `if let`
+                // the push away, so the door answered nothing for an
+                // element that exists, is grouped and renders.
+                out.push(crate::channel::ElementGeometryItem {
+                    id: id.clone(),
+                    page_id: built_page.map(|bp| bp.id.clone()),
+                    spread_id: parsed.spread.self_id.clone(),
+                    bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
+                    item_transform,
+                    has_image,
+                });
                 break;
             }
         }
@@ -7629,15 +7649,23 @@ impl CanvasModel {
             let aabb = crate::hit::transform_bbox(bounds, item_transform);
             let cx = (aabb.left + aabb.right) * 0.5;
             let cy = (aabb.top + aabb.bottom) * 0.5;
-            let host_page = parsed.spread.pages.iter().find(|p| {
-                let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
-                cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
-            })?;
-            let page = self
-                .built()
+            // C-23 — pageless is an ANSWER, not a miss. Both lookups
+            // used to `?` out of the whole function, so a path on the
+            // pasteboard had no readable anchors at all.
+            let page = parsed
+                .spread
                 .pages
                 .iter()
-                .find(|bp| Some(bp.id.as_str()) == host_page.self_id.as_deref())?;
+                .find(|p| {
+                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
+                })
+                .and_then(|hp| {
+                    self.built()
+                        .pages
+                        .iter()
+                        .find(|bp| Some(bp.id.as_str()) == hp.self_id.as_deref())
+                });
             let anchors_out: Vec<PathAnchorTriple> = anchors
                 .iter()
                 .map(|a| PathAnchorTriple {
@@ -7648,7 +7676,8 @@ impl CanvasModel {
                 .collect();
             return Some(PathAnchorsResult {
                 id: id.clone(),
-                page_id: page.id.clone(),
+                page_id: page.map(|p| p.id.clone()),
+                spread_id: parsed.spread.self_id.clone(),
                 anchors: anchors_out,
                 subpath_starts: subpath_starts.iter().map(|&n| n as u32).collect(),
                 subpath_open: subpath_open.to_vec(),
@@ -9161,6 +9190,110 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
             r2.image_transform,
             Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0]),
             "the inner <Image ItemTransform>, not the frame's"
+        );
+    }
+
+    /// An IDML with two rectangles: `on` sits on the page, `off` is
+    /// translated well clear of it onto the PASTEBOARD. Both are real
+    /// page items — same spread, same vec — differing only in where
+    /// their transform puts them.
+    fn pasteboard_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<Rectangle Self="on" GeometricBounds="0 0 100 100" ItemTransform="1 0 0 1 50 50"/>
+<Rectangle Self="off" GeometricBounds="0 0 100 100" ItemTransform="1 0 0 1 5000 5000"/>
+</Spread></idPkg:Spread>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// C-23 — an element on the PASTEBOARD is reported as pageless, not
+    /// omitted.
+    ///
+    /// The old behaviour was not "returns no page" but "returns
+    /// nothing": the push sat inside `if let Some(built_page)`, so a
+    /// plugin generating art off-page — paged.draw's pattern bake,
+    /// stepping a tile past the page edge — created and grouped
+    /// something it could then not read back at all. An absent entry
+    /// and a pageless entry are very different answers to give a
+    /// caller.
+    #[test]
+    fn c23_a_pasteboard_element_is_reported_as_pageless_not_omitted() {
+        use crate::element_selection::ElementId;
+        let bytes = pasteboard_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+
+        let ids = vec![
+            ElementId::Rectangle("on".into()),
+            ElementId::Rectangle("off".into()),
+        ];
+        let geom = model.element_geometry(&ids);
+        assert_eq!(
+            geom.len(),
+            2,
+            "BOTH elements answer, not just the on-page one"
+        );
+
+        let on = geom
+            .iter()
+            .find(|g| g.id.raw_id() == "on")
+            .expect("the on-page rect");
+        assert_eq!(
+            on.page_id.as_ref().map(|p| p.0.as_str()),
+            Some("p1"),
+            "the page-owned case is unchanged"
+        );
+
+        let off = geom
+            .iter()
+            .find(|g| g.id.raw_id() == "off")
+            .expect("the pasteboard rect — this is the whole gap");
+        assert!(
+            off.page_id.is_none(),
+            "on no page, and says so: {:?}",
+            off.page_id
+        );
+        // Pageless without a spread is unusable the moment a document
+        // has two spreads, so the spread is what makes the answer
+        // actionable rather than merely honest.
+        assert_eq!(off.spread_id.as_deref(), Some("s1"));
+        assert_eq!(on.spread_id.as_deref(), Some("s1"));
+        // The geometry itself is real, not a placeholder.
+        assert_eq!(off.bounds, [0.0, 0.0, 100.0, 100.0]);
+        assert_eq!(
+            off.item_transform,
+            Some([1.0, 0.0, 0.0, 1.0, 5000.0, 5000.0])
         );
     }
 

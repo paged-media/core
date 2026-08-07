@@ -304,7 +304,16 @@ fn cell_geometry_returns_the_hit_test_rect() {
     let items = model.element_geometry(std::slice::from_ref(&id));
     assert_eq!(items.len(), 1, "cell geometry resolves to one item");
     let item = &items[0];
-    assert_eq!(item.page_id.as_str(), "p1");
+    // C-23 widened `page_id` to an Option for the pasteboard case. A
+    // table cell is resolved from a BUILT PAGE's retained rect, so it
+    // is page-owned by construction — asserting `Some` here is what
+    // keeps that reasoning honest rather than assumed.
+    assert_eq!(item.page_id.as_ref().map(|p| p.as_str()), Some("p1"));
+    assert_eq!(
+        item.spread_id.as_deref(),
+        Some("sp1"),
+        "C-23 — the spread is populated for the page-owned case too"
+    );
     assert!(item.item_transform.is_none(), "cell rect is page-local");
     let [top, left, bottom, right] = item.bounds;
     assert!((top - 40.0).abs() < 0.5, "top {top}");
