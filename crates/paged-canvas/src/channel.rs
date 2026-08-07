@@ -2820,6 +2820,24 @@ pub struct LinkSummary {
     /// 300-ppi floor. `None` when the IDML omits it.
     #[serde(default)]
     pub effective_ppi: Option<f32>,
+    /// C-27 — the placed image's OWN `<Image ItemTransform>`: how the
+    /// pixels sit inside the frame. `elementGeometry` reports the frame
+    /// and nothing reported this, so a plugin deriving geometry from the
+    /// pixels (Image Trace today; any measure or annotate tool later)
+    /// had to assume the image fills the frame — and quietly mis-placed
+    /// its output on every cropped or fitted placement.
+    ///
+    /// Row-major `[a, b, c, d, tx, ty]`, mapping the image's natural
+    /// pixel rect `(0, 0, width, height)` into the frame's INNER
+    /// coordinate space — the same matrix the renderer composes with
+    /// the frame's own transform. Compose it the same way and generated
+    /// geometry lands where the pixels do.
+    ///
+    /// `None` for synthetic IDMLs that omit the inner transform, which
+    /// is the case the renderer handles by stretching the image to the
+    /// frame bounds; a consumer seeing `None` may assume that fill.
+    #[serde(default)]
+    pub image_transform: Option<[f32; 6]>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one object style's summary. Backs

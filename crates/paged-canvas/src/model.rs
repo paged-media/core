@@ -6592,7 +6592,8 @@ impl CanvasModel {
         let summary = |self_id: String,
                        host_kind: &str,
                        uri: String,
-                       meta: Option<&paged_model::ImageMetadata>| {
+                       meta: Option<&paged_model::ImageMetadata>,
+                       image_transform: Option<[f32; 6]>| {
             LinkSummary {
                 status: if missing.contains(&self_id) {
                     "missing"
@@ -6605,6 +6606,7 @@ impl CanvasModel {
                 host_self_id: self_id,
                 host_kind: host_kind.to_string(),
                 uri,
+                image_transform,
             }
         };
         let mut out = Vec::new();
@@ -6613,19 +6615,31 @@ impl CanvasModel {
             for r in &parsed.spread.rectangles {
                 if let (Some(self_id), Some(uri)) = (r.self_id.clone(), r.image_link.clone()) {
                     let meta = meta_map.get(&self_id);
-                    out.push(summary(self_id, "Rectangle", uri, meta));
+                    out.push(summary(
+                        self_id,
+                        "Rectangle",
+                        uri,
+                        meta,
+                        r.image_item_transform,
+                    ));
                 }
             }
             for o in &parsed.spread.ovals {
                 if let (Some(self_id), Some(uri)) = (o.self_id.clone(), o.image_link.clone()) {
                     let meta = meta_map.get(&self_id);
-                    out.push(summary(self_id, "Oval", uri, meta));
+                    out.push(summary(self_id, "Oval", uri, meta, o.image_item_transform));
                 }
             }
             for p in &parsed.spread.polygons {
                 if let (Some(self_id), Some(uri)) = (p.self_id.clone(), p.image_link.clone()) {
                     let meta = meta_map.get(&self_id);
-                    out.push(summary(self_id, "Polygon", uri, meta));
+                    out.push(summary(
+                        self_id,
+                        "Polygon",
+                        uri,
+                        meta,
+                        p.image_item_transform,
+                    ));
                 }
             }
         }
@@ -6642,27 +6656,51 @@ impl CanvasModel {
     /// resolve, or it hasn't rendered yet (no cache entry). The bytes are
     /// the ENCODED file so a plugin (paged.image) can parse it with its
     /// own codecs — e.g. read PSD layers, which the flattened RGBA loses.
+    ///
+    /// C-26 — an INLINE-EMBEDDED `<Image><Contents>` payload is served
+    /// too, and takes precedence over `LinkResourceURI` exactly as the
+    /// renderer's own routing does (Q-03). Its bytes come straight from
+    /// the parsed element rather than the decode cache, because the
+    /// parser already holds them; the cache is consulted only for the
+    /// natural pixel size, which is why an inline image — like a linked
+    /// one — answers `None` until it has rendered once.
+    ///
+    /// The returned name is the element's `LinkResourceURI` when it has
+    /// one (IDML commonly embeds a payload AND records the original
+    /// filename, and a filename is the useful hint for a plugin picking
+    /// a codec), falling back to the synthetic `inline:<element_id>`.
     pub fn placed_asset_bytes(&self, element_id: &str) -> Option<(String, u32, u32, Vec<u8>)> {
         let mut uri: Option<String> = None;
+        let mut inline: Option<Vec<u8>> = None;
         for parsed in &self.scene.spreads {
             for r in &parsed.spread.rectangles {
                 if r.self_id.as_deref() == Some(element_id) {
                     uri = r.image_link.clone();
+                    inline = r.image_bytes.clone();
                 }
             }
             for o in &parsed.spread.ovals {
                 if o.self_id.as_deref() == Some(element_id) {
                     uri = o.image_link.clone();
+                    inline = o.image_bytes.clone();
                 }
             }
             for p in &parsed.spread.polygons {
                 if p.self_id.as_deref() == Some(element_id) {
                     uri = p.image_link.clone();
+                    inline = p.image_bytes.clone();
                 }
             }
         }
-        let uri = uri?;
         let cache = self.image_decode_cache.borrow();
+        if let Some(bytes) = inline {
+            // Shared key builder, not a second copy of the format
+            // string — see the re-export's note in `pipeline/mod.rs`.
+            let key = paged_renderer::pipeline::inline_image_cache_key(Some(element_id), &bytes);
+            let img = cache.get(&key)?;
+            return Some((uri.unwrap_or(key), img.width, img.height, bytes));
+        }
+        let uri = uri?;
         let img = cache.get(&uri)?;
         if img.encoded.is_empty() {
             // Decoded-only image (e.g. a synthetic buffer) — no original
@@ -9013,6 +9051,117 @@ mod tests {
         assert_eq!(got, file);
         // An unknown / non-image element resolves to None, never panics.
         assert!(model.placed_asset_bytes("not-a-frame").is_none());
+    }
+
+    /// A minimal IDML whose only page item is a Rectangle hosting an
+    /// INLINE-embedded PNG (base64 `<Contents>`) — no `LinkResourceURI`,
+    /// no asset resolver, nothing on disk. The 4×2 red PNG is real and
+    /// decodable, so the build resolves and caches it on its own.
+    fn inline_image_idml_bytes() -> Vec<u8> {
+        use std::io::Write;
+        const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEklEQVR4\
+nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
+        let mut buf = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("mimetype", opts).unwrap();
+            zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+                .unwrap();
+            zip.start_file("META-INF/container.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="designmap.xml" media-type="text/xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            zip.start_file("designmap.xml", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+            )
+            .unwrap();
+            zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+            zip.write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<Rectangle Self="r1" GeometricBounds="0 0 100 100" ItemTransform="1 0 0 1 50 50">
+<Image Self="img1" Space="$ID/RGB"><Contents><![CDATA[{PNG_B64}]]></Contents></Image>
+</Rectangle>
+<Rectangle Self="r2" GeometricBounds="0 0 100 100" ItemTransform="1 0 0 1 200 50">
+<Image Self="img2" Space="$ID/RGB" ItemTransform="0.5 0 0 0.5 10 20" LinkResourceURI="file:///photo.png"><Contents><![CDATA[{PNG_B64}]]></Contents></Image>
+</Rectangle>
+</Spread></idPkg:Spread>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// C-26 — an inline-embedded image is reachable through the door.
+    ///
+    /// This goes through a REAL build rather than seeding the cache by
+    /// hand, because the bug was never in either side alone: the
+    /// renderer cached the payload under the bytes' allocation address
+    /// while the door looked it up by link URI, so each half was
+    /// self-consistent and the pair was broken. Only a test that lets
+    /// the renderer write the entry and the door read it can see that.
+    #[test]
+    fn c26_an_inline_embedded_image_is_reachable_through_the_door() {
+        let bytes = inline_image_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let (name, w, h, got) = model
+            .placed_asset_bytes("r1")
+            .expect("an inline-embedded payload the engine renders must be readable");
+        // The natural size of the embedded PNG, proving these came from
+        // the decode the renderer actually performed.
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(&got[..8], b"\x89PNG\r\n\x1a\n", "the ORIGINAL encoded file");
+        // No LinkResourceURI on this frame, so the synthetic name stands
+        // in — and it is the same key the renderer cached under.
+        assert_eq!(name, "inline:r1");
+        assert!(model.placed_asset_bytes("not-a-frame").is_none());
+
+        // r2 is the real-world Envato shape: an embedded payload AND a
+        // LinkResourceURI. The bytes still come from the embedding (the
+        // file on disk does not exist), but the name is the filename,
+        // because that is the useful hint for choosing a codec.
+        let (name2, w2, h2, got2) = model.placed_asset_bytes("r2").expect("embedded + linked");
+        assert_eq!(name2, "file:///photo.png");
+        assert_eq!((w2, h2), (4, 2));
+        assert_eq!(got2, got, "same embedded payload, reached the same way");
+    }
+
+    /// C-27 — a placed image's own fit/crop transform is readable.
+    ///
+    /// Without it a plugin generating geometry FROM the pixels can only
+    /// assume the image fills its frame, so every cropped or fitted
+    /// placement silently mis-registers its output. The frame's own
+    /// transform was always readable; this is the inner one.
+    #[test]
+    fn c27_a_placed_images_own_fit_transform_is_readable() {
+        let bytes = inline_image_idml_bytes();
+        let model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default()).unwrap();
+        let links = model.links();
+        // Only r2 carries a LinkResourceURI, so only it is a "link".
+        let r2 = links
+            .iter()
+            .find(|l| l.host_self_id == "r2")
+            .expect("the linked placement");
+        assert_eq!(
+            r2.image_transform,
+            Some([0.5, 0.0, 0.0, 0.5, 10.0, 20.0]),
+            "the inner <Image ItemTransform>, not the frame's"
+        );
     }
 
     /// SDK Phase 5 (D1) — the generic `collection(name)` dispatcher

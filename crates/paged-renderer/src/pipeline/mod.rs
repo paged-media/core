@@ -52,6 +52,11 @@ mod geom;
 mod image_convert;
 mod image_decode;
 mod images;
+/// C-26 — the inline-image cache key is shared with `paged-canvas`'s
+/// `placed_asset_bytes` door on purpose. Two copies of this format
+/// string that drift apart is exactly the bug C-26 was: the renderer
+/// caching an embedded payload under a name no reader could produce.
+pub use images::inline_image_cache_key;
 mod links;
 mod metrics;
 mod nested_styles;

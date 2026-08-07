@@ -90,7 +90,13 @@ pub(super) fn emit_rectangle_image(
     // we decode straight from those bytes regardless of whether an
     // asset resolver is wired up.
     let resolved = if let Some(bytes) = rect.image_bytes.as_deref() {
-        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+        resolve_inline_image_bytes(
+            rect.self_id.as_deref(),
+            bytes,
+            &mut page.list,
+            page_image_cache,
+            decoded_cache,
+        )
     } else {
         match rect.image_link.as_deref() {
             Some(uri) => resolve_image_id(
@@ -238,7 +244,13 @@ pub(super) fn emit_polygon_image(
     decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
 ) {
     let resolved = if let Some(bytes) = poly.image_bytes.as_deref() {
-        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+        resolve_inline_image_bytes(
+            poly.self_id.as_deref(),
+            bytes,
+            &mut page.list,
+            page_image_cache,
+            decoded_cache,
+        )
     } else {
         match poly.image_link.as_deref() {
             Some(uri) => resolve_image_id(
@@ -416,7 +428,13 @@ pub(super) fn emit_oval_image(
     decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
 ) {
     let resolved = if let Some(bytes) = oval.image_bytes.as_deref() {
-        resolve_inline_image_bytes(bytes, &mut page.list, page_image_cache, decoded_cache)
+        resolve_inline_image_bytes(
+            oval.self_id.as_deref(),
+            bytes,
+            &mut page.list,
+            page_image_cache,
+            decoded_cache,
+        )
     } else {
         match oval.image_link.as_deref() {
             Some(uri) => resolve_image_id(
@@ -670,17 +688,38 @@ fn resolve_image_id(
 
 /// Q-03: route inline base64 image bytes (the `<Contents>` payload
 /// captured by the parser) through the same per-page + decoded
-/// caches `resolve_image_id` uses. Cache key is the bytes' allocation
-/// address — stable across reuses inside a single render pass, and
-/// distinct per frame so two Rectangles with the same inline image
-/// share the decoded result.
+/// caches `resolve_image_id` uses.
+///
+/// C-26 — the key is the OWNING ELEMENT's id, not (as it was) the
+/// bytes' allocation address. Both are stable within a render pass,
+/// but only one is something a caller outside the renderer can name:
+/// `CanvasModel::placed_asset_bytes` looks an element's cached image
+/// up by key, so under pointer-keying an `<Image><Contents>` payload
+/// was unreachable through that door — the engine decoded it, drew it
+/// on canvas and wrote it into exported PDFs, yet every plugin asking
+/// for its bytes got `None`. An address is also a worse cache key on
+/// its own terms: two frames holding equal payloads in separate
+/// allocations missed each other, which is the sharing the old comment
+/// here claimed to get and did not.
+///
+/// `element_id` is `None` only for synthetic frames the parser never
+/// gave a `Self` attribute; those keep the address form, since an
+/// unnamed element is not addressable through the door anyway.
+pub fn inline_image_cache_key(element_id: Option<&str>, bytes: &[u8]) -> String {
+    match element_id {
+        Some(id) => format!("inline:{id}"),
+        None => format!("inline:{:p}:{}", bytes.as_ptr(), bytes.len()),
+    }
+}
+
 fn resolve_inline_image_bytes(
+    element_id: Option<&str>,
     bytes: &[u8],
     list: &mut paged_compose::DisplayList,
     page_image_cache: &mut HashMap<String, paged_compose::ImageId>,
     decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
 ) -> ImageResolution {
-    let key = format!("inline:{:p}:{}", bytes.as_ptr(), bytes.len());
+    let key = inline_image_cache_key(element_id, bytes);
     let id = match page_image_cache.get(&key).copied() {
         Some(id) => id,
         None => {
