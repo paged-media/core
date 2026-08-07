@@ -2396,9 +2396,29 @@ pub struct Layer {
     /// `Visible="true|false"` — when false the layer is hidden in
     /// InDesign's view and PDF export skips it.
     pub visible: bool,
-    /// `Locked="true|false"` — purely an editor concern; the renderer
-    /// ignores it but we surface the field so future tooling can
-    /// honour it.
+    /// `Locked="true|false"` — a POINTER-LEVEL guard, and nothing more.
+    ///
+    /// Enforced at HIT-TEST (`paged-canvas/src/hit.rs` drops items on
+    /// locked layers), so a user cannot click, drag or marquee-select
+    /// them. It is NOT enforced in `paged-mutate/src/apply/` — a
+    /// dispatched mutation naming a locked layer's item applies
+    /// normally, and `RemoveLayer` on a locked layer succeeds (pinned
+    /// by `remove_layer_inverts_via_batch_restoring_flags` and by
+    /// `a_locked_layer_still_takes_dispatched_mutations`).
+    ///
+    /// STATED RATHER THAN FIXED, deliberately (C-35). "Refuse every
+    /// mutation touching a locked layer" is not obviously the right
+    /// rule — `layerSetLocked` must work on a locked layer or nothing
+    /// could ever be unlocked, and InDesign itself lets you delete a
+    /// locked layer from the Layers panel. Which ops a lock should
+    /// block is a product question, so the semantics are pinned as they
+    /// are instead of being changed by inference.
+    ///
+    /// The practical consequence, which is the reason this note exists:
+    /// **lock is not a scope or safety mechanism.** Anything relying on
+    /// it to keep a mutation out — an edit-context write scope, a
+    /// permission model — is relying on a guard that only covers the
+    /// pointer.
     pub locked: bool,
     /// `Printable="true|false"` — InDesign's "Print Layer" checkbox.
     /// Non-printable layers are skipped during rendering.

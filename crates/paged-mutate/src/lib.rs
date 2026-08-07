@@ -2793,6 +2793,50 @@ mod tests {
         assert_eq!(layer.name.as_deref(), Some("Body"));
     }
 
+    /// C-35 — LOCK IS A POINTER GUARD, NOT A MUTATION GUARD.
+    ///
+    /// Pinned deliberately, because the behaviour is easy to mistake for
+    /// a bug and easy to "fix" into a real one. `locked` is enforced at
+    /// HIT-TEST (`paged-canvas/src/hit.rs`), so a user cannot click or
+    /// drag a locked layer's items — and it is enforced NOWHERE in
+    /// `apply/`, so a dispatched mutation lands normally.
+    ///
+    /// Refusing every mutation on a locked layer is NOT obviously right:
+    /// `SetLayerLocked` must work on a locked layer or nothing could be
+    /// unlocked, and InDesign lets you delete a locked layer from its
+    /// own panel. Which ops a lock should block is a product question.
+    ///
+    /// What this test buys is that the answer stops being accidental:
+    /// anyone tightening it has to change this test on purpose, and
+    /// anyone relying on lock as a SCOPE or SAFETY mechanism can read
+    /// here that it is not one.
+    #[test]
+    fn a_locked_layer_still_takes_dispatched_mutations() {
+        let mut project = Project::new(document_with_one_layer("ua"));
+        project.document_mut().designmap.layers[0].locked = true;
+
+        // Renaming a LOCKED layer applies — the lock never reaches here.
+        project
+            .apply(Operation::SetProperty {
+                node: NodeId::Layer("ua".to_string()),
+                path: PropertyPath::LayerName,
+                value: Value::Text("Renamed while locked".to_string()),
+            })
+            .expect("a locked layer still accepts a name write");
+        assert_eq!(
+            layer_of(&project).name.as_deref(),
+            Some("Renamed while locked"),
+        );
+
+        // And UNLOCKING works, which is why a blanket refusal would be
+        // wrong rather than merely strict — it would make the lock
+        // permanent.
+        project
+            .apply(layer_op("ua", PropertyPath::LayerLocked, false))
+            .expect("a locked layer must accept a lock write");
+        assert!(!layer_of(&project).locked);
+    }
+
     // ---- Track J fan-out — path topology on non-Polygon kinds ----------
 
     /// Seed a TextFrame's anchors. `document_with_one_textframe`

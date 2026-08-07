@@ -2662,8 +2662,19 @@ pub enum Operation {
     /// therefore cannot lift an item above one on a higher layer — the
     /// op applies and the table changes, but nothing moves on canvas.
     /// This is InDesign's model, where crossing layers is a different
-    /// gesture (`SetProperty(ItemLayer)`), not an Arrange. Pinned by
+    /// gesture, not an Arrange. Pinned by
     /// `a_layer_sort_outranks_arrange_within_the_spread`.
+    ///
+    /// **THAT GESTURE DOES NOT EXIST HERE (C-35).** This comment used
+    /// to name `SetProperty(ItemLayer)` as if it were a door you could
+    /// reach for. There is no `PropertyPath::ItemLayer`;
+    /// `Layer::item_layer` is read by the hit-tester and the renderer
+    /// and written by no operation, and `apply_move_node` accepts only
+    /// `NodeId::Spread` as a parent. So moving an item to another layer
+    /// is currently INEXPRESSIBLE, and a Layers panel has to be
+    /// designed around that. Adding it is a wire change (a new
+    /// `PropertyPath` variant + a protocol bump) and is tracked as its
+    /// own decision rather than implied by a doc comment.
     ///
     /// # Both save paths carry it
     ///

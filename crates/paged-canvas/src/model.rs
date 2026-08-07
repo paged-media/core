@@ -1138,6 +1138,12 @@ pub struct CanvasModel {
     /// next rebuild lowers it inside the matching frame. Survives gestures /
     /// undo (it's outside the mutation channel) but not a document reload.
     scene_layers: HashMap<String, paged_compose::SceneLayer>,
+    /// C-34 — which plugin submitted the scene layer on each frame, for
+    /// the callers that name themselves. Populated only by
+    /// `set_scene_layer_as`; a `None` caller records no ownership, so
+    /// the gate degrades to today's behaviour rather than locking a
+    /// frame nobody claimed.
+    scene_layer_owner: HashMap<String, String>,
     /// C-6 (I-06) — image-resource claims + budgeted LRU tile cache.
     /// Ephemeral render-time content like `scene_layers`: a plugin claims
     /// a frame's image (`ClaimImageResource`), submits pyramid tiles
@@ -1574,6 +1580,7 @@ impl CanvasModel {
             built,
             page_index,
             scene_layers: HashMap::new(),
+            scene_layer_owner: HashMap::new(),
             resource_tiles: crate::resource_tiles::ResourceTileStore::default(),
             resource_render_scale: 1.0,
             font_bytes,
@@ -4133,16 +4140,51 @@ impl CanvasModel {
     /// `paged/` namespace — the IDML parts, `mimetype`, and `manifest.json`
     /// are off-limits, so a plugin can never clobber the IDML or the
     /// container metadata. `export_paged` emits the overlay alongside the
-    /// IDML parts. (Namespace OWNERSHIP — a plugin writing only its own
-    /// `paged/<plugin-id>/…` subtree — is gated at the SDK door, where the
-    /// caller identity is known; this engine method enforces only the
-    /// `paged/` boundary.)
+    /// IDML parts.
+    ///
+    /// This entry point enforces only the `paged/` boundary and does NOT
+    /// know who is calling. Use [`Self::set_paged_part_as`] when the
+    /// caller is known — it additionally confines the write to that
+    /// plugin's own subtree.
     pub fn set_paged_part(&mut self, path: String, bytes: Vec<u8>) -> Result<(), String> {
+        self.set_paged_part_as(None, path, bytes)
+    }
+
+    /// Set a `.paged` part ON BEHALF OF a named plugin (C-34).
+    ///
+    /// THE GAP THIS CLOSES. Namespace ownership — a plugin writing only
+    /// its own `paged/<plugin-id>/…` subtree — was documented as "gated
+    /// at the SDK door, where the caller identity is known", and the
+    /// engine enforced only the `paged/` prefix. But a plugin content
+    /// type's own model, INCLUDING ITS OWN LAYERS, lives in that
+    /// subtree, so any holder of the canvas handle could read, list or
+    /// clobber another plugin's document content. A gate that exists
+    /// only in the layer above is not a boundary; it is a convention.
+    ///
+    /// Mirrors the `SetPluginMetadata` caller gate exactly, including
+    /// its posture, which is worth stating rather than discovering:
+    /// `caller: None` bypasses it. It is an HONESTY AID that lets a
+    /// correct caller prove it is correct — not a security boundary
+    /// against a hostile one, which would need the isolate/RPC host.
+    pub fn set_paged_part_as(
+        &mut self,
+        caller: Option<&str>,
+        path: String,
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
         if !path.starts_with(idml_export::PAGED_PREFIX) {
             return Err(format!(
                 "paged part path must start with `{}` (got {path:?})",
                 idml_export::PAGED_PREFIX
             ));
+        }
+        if let Some(caller) = caller {
+            let own = format!("{}{caller}/", idml_export::PAGED_PREFIX);
+            if !path.starts_with(&own) {
+                return Err(format!(
+                    "caller {caller:?} may only write its own subtree {own:?}, not {path:?}"
+                ));
+            }
         }
         self.paged_parts.insert(path, bytes);
         Ok(())
@@ -7885,6 +7927,39 @@ impl CanvasModel {
         element_id: String,
         layer: paged_compose::SceneLayer,
     ) -> Result<(), crate::channel::LoadError> {
+        self.set_scene_layer_as(None, element_id, layer)
+    }
+
+    /// C-1 — submit a scene layer ON BEHALF OF a named plugin (C-34).
+    ///
+    /// A frame's in-frame render belongs to ONE content type, and this
+    /// door used to be an unconditional `insert`: plugin A could clear
+    /// or overwrite plugin B's render on B's own frame. When both sides
+    /// name themselves, a foreign overwrite is now refused.
+    ///
+    /// Same posture as the other caller gates, stated rather than
+    /// implied: `caller: None` records no ownership and enforces
+    /// nothing, so the host's own submissions and every pre-C-34 caller
+    /// behave exactly as before. It lets a correct caller prove it is
+    /// correct; it is not a boundary against a hostile one.
+    pub fn set_scene_layer_as(
+        &mut self,
+        caller: Option<&str>,
+        element_id: String,
+        layer: paged_compose::SceneLayer,
+    ) -> Result<(), crate::channel::LoadError> {
+        if let (Some(caller), Some(owner)) = (caller, self.scene_layer_owner.get(&element_id)) {
+            if owner != caller {
+                return Err(crate::channel::LoadError::Scene(format!(
+                    "frame {element_id:?} carries a scene layer owned by {owner:?}; \
+                     {caller:?} may not replace it"
+                )));
+            }
+        }
+        if let Some(caller) = caller {
+            self.scene_layer_owner
+                .insert(element_id.clone(), caller.to_string());
+        }
         self.scene_layers.insert(element_id, layer);
         self.rebuild_after_mutation()
     }
@@ -7893,6 +7968,9 @@ impl CanvasModel {
     /// rebuild so the frame returns to its native content.
     pub fn clear_scene_layer(&mut self, element_id: &str) -> Result<(), crate::channel::LoadError> {
         if self.scene_layers.remove(element_id).is_some() {
+            // The claim goes with the layer — a frame with no render has
+            // no owner, so the next submitter starts clean.
+            self.scene_layer_owner.remove(element_id);
             self.rebuild_after_mutation()?;
         }
         Ok(())
@@ -8502,6 +8580,94 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    #[test]
+    fn c34_a_named_caller_may_write_only_its_own_paged_subtree() {
+        // C-34 — namespace ownership was documented as "gated at the SDK
+        // door, where the caller identity is known", and the engine
+        // enforced only the `paged/` prefix. A plugin content type's own
+        // model — including its own layers — lives in that subtree, so
+        // any holder of the handle could clobber another plugin's
+        // document content. A gate that exists only one layer up is a
+        // convention, not a boundary.
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default())
+            .expect("minimal IDML parses + builds");
+
+        model
+            .set_paged_part_as(
+                Some("media.paged.sheet"),
+                "paged/media.paged.sheet/o1/spec.json".into(),
+                b"{}".to_vec(),
+            )
+            .expect("a plugin writes its OWN subtree");
+
+        let foreign = model.set_paged_part_as(
+            Some("media.paged.sheet"),
+            "paged/media.paged.image/o1/pixels.bin".into(),
+            b"stolen".to_vec(),
+        );
+        assert!(
+            foreign.is_err(),
+            "one plugin must not write another plugin's subtree"
+        );
+        assert!(
+            foreign.unwrap_err().contains("media.paged.image"),
+            "the refusal names the subtree it protected"
+        );
+
+        // `None` bypasses — stated rather than discovered. The host and
+        // every pre-C-34 caller behave exactly as before, which is what
+        // makes this additive; it is an honesty aid for a correct
+        // caller, not a boundary against a hostile one.
+        model
+            .set_paged_part(
+                "paged/media.paged.image/o1/pixels.bin".into(),
+                b"host".to_vec(),
+            )
+            .expect("an unnamed caller keeps the prior behaviour");
+
+        // The `paged/` boundary still holds for everyone.
+        assert!(
+            model
+                .set_paged_part_as(Some("media.paged.sheet"), "designmap.xml".into(), vec![])
+                .is_err(),
+            "the IDML parts stay off-limits"
+        );
+    }
+
+    #[test]
+    fn c34_a_frames_scene_layer_belongs_to_one_plugin() {
+        // The door was an unconditional insert keyed on element id, so
+        // plugin A could clear or overwrite plugin B's in-frame render
+        // on B's own frame.
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-1", &bytes, CanvasOptions::default())
+            .expect("minimal IDML parses + builds");
+        let empty = || paged_compose::SceneLayer { items: Vec::new() };
+
+        model
+            .set_scene_layer_as(Some("media.paged.sheet"), "u1".into(), empty())
+            .expect("the first submitter claims the frame");
+        model
+            .set_scene_layer_as(Some("media.paged.sheet"), "u1".into(), empty())
+            .expect("and may replace its own render");
+
+        assert!(
+            model
+                .set_scene_layer_as(Some("media.paged.image"), "u1".into(), empty())
+                .is_err(),
+            "a foreign plugin must not replace it"
+        );
+
+        // Clearing releases the claim — a frame with no render has no
+        // owner, so the next submitter starts clean rather than
+        // inheriting a lock nobody can lift.
+        model.clear_scene_layer("u1").expect("clear");
+        model
+            .set_scene_layer_as(Some("media.paged.image"), "u1".into(), empty())
+            .expect("after a clear the frame is unclaimed");
     }
 
     #[test]

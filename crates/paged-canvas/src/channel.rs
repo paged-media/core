@@ -3544,8 +3544,13 @@ pub enum Mutation {
     /// **Honest limit 1 — Arrange is WITHIN a layer.** The renderer
     /// sorts the z table by `ItemLayer` first (Q-10), so bring-to-front
     /// cannot lift an item above one on a higher layer — same as
-    /// InDesign, where crossing layers is a different gesture
-    /// (`setElementProperty` on the layer), not an Arrange.
+    /// InDesign, where crossing layers is a different gesture, not an
+    /// Arrange.
+    ///
+    /// **THAT GESTURE IS NOT IMPLEMENTED (C-35).** This used to say
+    /// `setElementProperty` on the layer, which does not work: there is
+    /// no layer `PropertyPath` and no `ElementId` that addresses a
+    /// layer. Moving an item across layers is inexpressible today.
     ///
     /// **Both save paths carry it.** `.paged` rides the native model
     /// part; `.idml` gained a z-reorder save-back lane in the writer
