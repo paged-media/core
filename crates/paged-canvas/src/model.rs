@@ -5292,6 +5292,17 @@ impl CanvasModel {
                                     p.blend_mode.clone().unwrap_or_default(),
                                 )),
                             },
+                            // C-25 — both overprints were writable and
+                            // unread. Same one-sided debt as the Oval
+                            // paint set above, two rows wide.
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintFill,
+                                value: Some(Value::Bool(p.overprint_fill)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintStroke,
+                                value: Some(Value::Bool(p.overprint_stroke)),
+                            },
                         ];
                         // B-23 / E-1 — the polygon corner slots the
                         // kernel has applied since B-23 finally have a
@@ -5382,6 +5393,15 @@ impl CanvasModel {
                                     l.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
+                            // C-25 — writable and unread. Only the
+                            // STROKE overprint: a line has no fill, so
+                            // `overprint_fill` is absent from the model
+                            // and its absence here is correct, not a
+                            // second gap.
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintStroke,
+                                value: Some(Value::Bool(l.overprint_stroke)),
+                            },
                         ];
                         // C-18 / E-1 — stored + mutable, never rendered
                         // on an open stroke-only contour. See
@@ -5412,10 +5432,88 @@ impl CanvasModel {
                         // show and not write. The missing apply arm is a
                         // reported gap, not something to paper over from
                         // the read side.
-                        let mut entries = vec![PropertyEntry {
-                            path: PropertyPath::FrameTransform,
-                            value: Some(Value::Transform(o.item_transform)),
-                        }];
+                        // C-25 — the paint set. Every row below has an
+                        // `NodeId::Oval` write arm in `set_property`
+                        // (verified arm by arm, including the
+                        // multi-kind `|` patterns), so adding the read
+                        // half PAIRS them rather than creating the
+                        // opposite asymmetry. The debt was one-sided:
+                        // the kernel accepted all thirteen and the
+                        // descriptor surfaced none, so the editor's
+                        // Attributes and Stroke panels — which already
+                        // bind these exact paths — had nothing to show
+                        // for an ellipse.
+                        //
+                        // `FrameStrokeAlignment` is NOT here on purpose:
+                        // only `NodeId::Rectangle` has that write arm,
+                        // so on an Oval it is neither readable nor
+                        // writable — symmetric, if empty. Reading it
+                        // would be the C-17 mistake the `FrameBounds`
+                        // note above is already about.
+                        let mut entries = vec![
+                            PropertyEntry {
+                                path: PropertyPath::FrameTransform,
+                                value: Some(Value::Transform(o.item_transform)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillColor,
+                                value: Some(Value::ColorRef(o.fill_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameFillTint,
+                                value: Some(Value::Length(o.fill_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeColor,
+                                value: Some(Value::ColorRef(o.stroke_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeWeight,
+                                value: Some(Value::Length(o.stroke_weight)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeType,
+                                value: Some(Value::Text(
+                                    o.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapColor,
+                                value: Some(Value::ColorRef(o.stroke_gap_color.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeGapTint,
+                                value: Some(Value::Length(o.stroke_gap_tint)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeDashArray,
+                                value: Some(Value::Lengths(o.stroke_dash.clone())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Some(Value::Length(o.opacity)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameBlendMode,
+                                value: Some(Value::Text(
+                                    o.blend_mode.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintFill,
+                                value: Some(Value::Bool(o.overprint_fill)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameOverprintStroke,
+                                value: Some(Value::Bool(o.overprint_stroke)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::AppliedObjectStyle,
+                                value: Some(Value::Text(
+                                    o.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                        ];
                         // Stored + mutable, never rendered — an ellipse
                         // has no corner. See
                         // `paged_model::Oval::corner_radius`.

@@ -370,32 +370,22 @@ fn e1_read_write_pairing_audit_across_kinds() {
 /// arms already accepted — fill, stroke, tint, opacity, dash, gap, type,
 /// alignment — was unreadable. C-18 gave it bounds + transform + the
 /// eight corner rows; the paint set stays on this list.
-const KNOWN_WRITE_ONLY: &[(&str, PropertyPath)] = &[
-    // Oval — the paint set its apply arms accept but the descriptor
-    // still does not surface (see the note above).
-    ("Oval", PropertyPath::FrameFillColor),
-    ("Oval", PropertyPath::FrameFillTint),
-    ("Oval", PropertyPath::FrameStrokeColor),
-    ("Oval", PropertyPath::FrameStrokeWeight),
-    ("Oval", PropertyPath::FrameStrokeType),
-    // (`FrameStrokeAlignment` is NOT here: only `NodeId::Rectangle` has
-    // that write arm, so on an Oval it is neither readable nor writable —
-    // symmetric, if empty.)
-    ("Oval", PropertyPath::FrameStrokeGapColor),
-    ("Oval", PropertyPath::FrameStrokeGapTint),
-    ("Oval", PropertyPath::FrameStrokeDashArray),
-    ("Oval", PropertyPath::FrameOpacity),
-    ("Oval", PropertyPath::FrameBlendMode),
-    ("Oval", PropertyPath::FrameOverprintFill),
-    ("Oval", PropertyPath::FrameOverprintStroke),
-    ("Oval", PropertyPath::AppliedObjectStyle),
-    // GraphicLine — no fill (a line has none), but these paint/flag rows
-    // are writable and unread.
-    ("GraphicLine", PropertyPath::FrameOverprintStroke),
-    // Polygon — same shape.
-    ("Polygon", PropertyPath::FrameOverprintFill),
-    ("Polygon", PropertyPath::FrameOverprintStroke),
-];
+/// C-25 — CLOSED 2026-08-08. This list held thirteen Oval paint rows,
+/// both Polygon overprints and GraphicLine's stroke overprint: paths
+/// the kernel accepted and the descriptor would not surface. They are
+/// now read, so the list is EMPTY — and it stays here, empty, because
+/// the audit asserts on staleness as well as growth. An empty list with
+/// a live audit is a stronger statement than a deleted one: it says
+/// "nothing is write-only, and we check".
+///
+/// What made this cheap, and is the reusable part: the editor's
+/// Attributes and Stroke panels already bind these exact PropertyPaths.
+/// The row was filed as a panel-design decision; it was a read-side gap,
+/// and closing it lit the panels up with no editor change at all.
+///
+/// The bar for adding an entry here: a path is write-only ON PURPOSE
+/// only when the read half would be a lie. Otherwise pair it.
+const KNOWN_WRITE_ONLY: &[(&str, PropertyPath)] = &[];
 
 #[test]
 fn e1_write_without_read_audit_across_kinds() {
