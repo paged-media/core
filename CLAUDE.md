@@ -6,7 +6,7 @@ engine** (`paged-media/core`).
 
 ## What this is
 
-Pixel-faithful Adobe IDML renderer in Rust. 16-crate workspace, parses
+Pixel-faithful Adobe IDML renderer in Rust. 22-crate workspace, parses
 IDML packages, lays out text with InDesign-calibrated Knuth-Plass, emits a
 versioned display list, rasterises through tiny-skia (CPU, default) or
 Vello (wgpu/GPU). Public APIs target both native and WASM.

@@ -133,10 +133,12 @@ pub(super) fn compose_footnote_paragraphs(
             .iter()
             .map(|r| document.resolved_run_attrs(para, r))
             .collect();
-        let bytes_pool = match font_table.resolve_paragraph_bytes(&resolved_runs) {
+        let resolved_fonts = match font_table.resolve_paragraph_bytes(&resolved_runs) {
             Some(b) => b,
             None => continue,
         };
+        let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
+            resolved_fonts.into_iter().unzip();
         let wghts: Vec<f32> = resolved_runs
             .iter()
             .map(|r| wght_for_font_style(r.font_style.as_deref()))
@@ -148,15 +150,15 @@ pub(super) fn compose_footnote_paragraphs(
         // negligible and keeps this path independent of the cache's
         // harvest pass (which never sees footnote stories).
         let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-        let mut owned_faces: Vec<Option<rustybuzz::Face>> = Vec::with_capacity(bytes_pool.len());
+        let mut owned_faces: Vec<Option<paged_text::Face>> = Vec::with_capacity(bytes_pool.len());
         for (i, b) in bytes_pool.iter().enumerate() {
-            let face = rustybuzz::Face::from_slice(b.as_ref(), 0).map(|mut rf| {
+            let face = paged_text::Face::from_slice(b.as_ref(), 0).map(|mut rf| {
                 let has_wght = ttf_parser::Face::parse(b.as_ref(), 0)
                     .ok()
                     .map(|of| of.variation_axes().into_iter().any(|a| a.tag == wght_tag))
                     .unwrap_or(false);
                 if has_wght {
-                    rf.set_variations(&[rustybuzz::Variation {
+                    rf.set_variations(&[paged_text::Variation {
                         tag: wght_tag,
                         value: wghts[i],
                     }]);
@@ -219,6 +221,7 @@ pub(super) fn compose_footnote_paragraphs(
                     font_id: font_ids[i],
                     underline: resolved_runs[i].underline.unwrap_or(false),
                     strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+                    substituted: substituted_flags[i],
                     baseline_shift_pt,
                     horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
                     vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),

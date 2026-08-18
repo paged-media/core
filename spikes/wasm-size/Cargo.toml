@@ -17,8 +17,8 @@ crate-type = ["cdylib", "rlib"]
 # passes without a full WASM toolchain. The real target is wasm32; see
 # measure.sh in this directory.
 [dependencies]
-rustybuzz = "0.18"
-ttf-parser = "0.24"
+harfrust = "0.13"
+ttf-parser = "0.25"
 # Pulls in the full render stack so the measured artefact reflects
 # what a real browser deployment would ship.
 paged-sdk = { path = "../../crates/paged-sdk" }

@@ -1661,7 +1661,7 @@ pub(super) fn build_document_inner(
     // The font table pre-resolves every distinct (family, style)
     // referenced anywhere in the document so each paragraph picks up
     // the right TTF without re-querying the resolver. Per paragraph
-    // we still build `Face`s on demand — `rustybuzz::Face::from_slice`
+    // we still build `Face`s on demand — `paged_text::Face::from_slice`
     // is cheap (parses font tables, no allocation churn).
     // Group transparency pass: bracket every group's emitted frame
     // range with `BeginBlendGroup` / `EndBlendGroup` whenever the
@@ -1689,6 +1689,21 @@ pub(super) fn build_document_inner(
     let font_table: &FontTable = options
         .pre_built_font_table
         .unwrap_or_else(|| owned_font_table.as_ref().expect("set on None branch"));
+    // A4 — one FontSubstituted diagnostic per (family, style) the
+    // resolver served with its catch-all substitute (traced at the A1
+    // resolver seam; BTreeSet order keeps the report deterministic).
+    // Fired regardless of `degraded_asset_markers`: the substitution
+    // happened either way — the option only gates the visual marker.
+    for (family, style) in font_table.substituted_keys() {
+        let label = match style.as_deref() {
+            Some(s) => format!("{family} {s}"),
+            None => family.clone(),
+        };
+        emit_diagnostics.push(Diagnostic::new(
+            DiagnosticCode::FontSubstituted,
+            format!("font \"{label}\" is not available; a substitute face was used"),
+        ));
+    }
     // One hyphenator per render. We currently only build English-US;
     // the document's `AppliedLanguage` is honoured via the cascade,
     // but unrecognised values fall back to this dictionary so we
@@ -3699,9 +3714,14 @@ pub(super) fn emit_paragraph_into_chain(
     // default font) — without this, an IDML referencing one missing
     // font (e.g. an obscure decorative face) would silently drop the
     // entire paragraph and lose every neighbouring run with it.
-    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+    let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
         return;
     };
+    // A1/A2 — split the per-run (bytes, substituted) pairs; the flags
+    // ride each StyledRun into layout so substituted glyphs can be
+    // highlighted (degraded_asset_markers).
+    let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
+        resolved_fonts.into_iter().unzip();
 
     // Per-run wght axis values. Variable fonts ship one TTF that
     // covers the whole weight axis; a run flagged `FontStyle="Bold"`
@@ -3738,9 +3758,9 @@ pub(super) fn emit_paragraph_into_chain(
     // the harvest pass didn't see). `owned_shaping_faces` holds the
     // fallbacks; `shaping_faces` is the parallel array of borrowed
     // references that StyledRun consumes downstream.
-    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
+    let mut owned_shaping_faces: Vec<Option<paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
-    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+    let mut shaping_faces: Vec<Option<&paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
     let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
@@ -3781,11 +3801,11 @@ pub(super) fn emit_paragraph_into_chain(
             .face(bytes_font_ids[i], wghts[i].to_bits())
             .is_none()
         {
-            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            let Some(mut rf) = paged_text::Face::from_slice(bytes_ref, 0) else {
                 return;
             };
             if has_wght_axis {
-                rf.set_variations(&[rustybuzz::Variation {
+                rf.set_variations(&[paged_text::Variation {
                     tag: wght_tag,
                     value: wghts[i],
                 }]);
@@ -4001,7 +4021,7 @@ pub(super) fn emit_paragraph_into_chain(
     // face. Same-face siblings collapse via raw-pointer comparison
     // so the fallback list is bounded by the number of distinct
     // fonts in the paragraph (typically 1-3).
-    let mut fallback_faces_pool: Vec<&rustybuzz::Face> = Vec::new();
+    let mut fallback_faces_pool: Vec<&paged_text::Face> = Vec::new();
     for (i, f) in shaping_faces.iter().enumerate() {
         if unique_idx[i] != i {
             continue;
@@ -4059,6 +4079,7 @@ pub(super) fn emit_paragraph_into_chain(
                 font_id: font_ids[i],
                 underline: resolved_runs[i].underline.unwrap_or(false),
                 strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+                substituted: substituted_flags[i],
                 baseline_shift_pt,
                 horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
                 vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
@@ -4364,6 +4385,7 @@ pub(super) fn emit_paragraph_into_chain(
                     font_id: r.font_id,
                     underline: r.underline,
                     strikethru: r.strikethru,
+                    substituted: r.substituted,
                     baseline_shift_pt: r.baseline_shift_pt,
                     horizontal_scale_pct: r.horizontal_scale_pct,
                     vertical_scale_pct: r.vertical_scale_pct,
@@ -5127,6 +5149,26 @@ pub(super) fn emit_paragraph_into_chain(
             }
         }
 
+        // A3 — pink substituted-font highlight, BEFORE the line's glyph
+        // fills so it paints behind the text (same `text_origin_pt`
+        // origin as `emit_glyph_slice`). Glyph font_ids mix the wght
+        // bits in (`fnv ^ wght`); map back to the plain byte-hash key
+        // `FontTable::metrics_for` uses.
+        if em.options.degraded_asset_markers {
+            emit_substituted_highlight_for_line(
+                &line,
+                &|fid| {
+                    font_ids
+                        .iter()
+                        .position(|f| *f == fid)
+                        .and_then(|i| em.font_table.metrics_for(bytes_font_ids[i]))
+                        .copied()
+                },
+                text_origin_pt,
+                &mut pages[target_page].list,
+            );
+        }
+
         let mut start = 0;
         while start < line.glyphs.len() {
             let fid = line.glyphs[start].font_id;
@@ -5434,6 +5476,7 @@ pub(super) fn emit_paragraph_into_chain(
                 point_size: cap_point_size,
                 underline: false,
                 strikethru: false,
+                substituted: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
                 // Drop caps inherit run 0's skew (the cap is the head of

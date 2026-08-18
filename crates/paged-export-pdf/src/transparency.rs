@@ -590,3 +590,113 @@ pub fn emit_gradient_feather(
     content.fill_nonzero();
     content.restore_state();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paged_compose::PathSegment;
+
+    #[test]
+    fn blend_names_match_pdf_blend_modes_one_to_one() {
+        // The interned gs KEY uses `blend_name` while the written dict
+        // uses `pdf_blend` — if the two mappings ever disagree, two
+        // different blend modes could share one pooled ExtGState.
+        let modes = [
+            BlendMode::Normal,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ];
+        let mut names: Vec<&str> = modes.iter().map(|m| blend_name(*m)).collect();
+        // PDF's /BM names are exactly these strings (32000-1 Table 136).
+        assert_eq!(blend_name(BlendMode::Multiply), "Multiply");
+        assert_eq!(blend_name(BlendMode::ColorDodge), "ColorDodge");
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), modes.len(), "blend names must be distinct");
+        for m in modes {
+            // The pdf_writer enum's Debug names mirror the PDF names.
+            assert_eq!(format!("{:?}", pdf_blend(m)), blend_name(m));
+        }
+    }
+
+    #[test]
+    fn short_hash_is_deterministic_and_separates_gs_keys() {
+        // Resource NAMES derive from this hash; a collision between
+        // two live keys would silently alias two graphics states.
+        assert_eq!(
+            short_hash("BMultiplyA0.500O0"),
+            short_hash("BMultiplyA0.500O0")
+        );
+        assert_ne!(
+            short_hash("BMultiplyA0.500O0"),
+            short_hash("BMultiplyA0.500O1")
+        );
+        assert_ne!(short_hash("B-A0.500O0"), short_hash("BMultiplyA-O0"));
+    }
+
+    fn rect_path(w: f32, h: f32) -> PathData {
+        PathData {
+            segments: vec![
+                PathSegment::MoveTo { x: 0.0, y: 0.0 },
+                PathSegment::LineTo { x: w, y: 0.0 },
+                PathSegment::LineTo { x: w, y: h },
+                PathSegment::LineTo { x: 0.0, y: h },
+                PathSegment::Close,
+            ],
+        }
+    }
+
+    #[test]
+    fn blurred_alpha_stamp_pads_by_three_sigma_and_blurs_the_edge() {
+        let path = rect_path(100.0, 100.0);
+        let ident = Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        // blur_radius 4 → σ = 2 pt → pad = 6 pt; at 72 dpi 1 pt = 1 px.
+        let stamp = blurred_alpha_stamp(&path, &ident, 4.0, 72.0).expect("stamp");
+        assert_eq!(stamp.origin_pt, (-6.0, -6.0));
+        assert_eq!(stamp.size_pt, (112.0, 112.0));
+        assert_eq!((stamp.width_px, stamp.height_px), (112, 112));
+        let at = |x: u32, y: u32| stamp.alpha[(y * stamp.width_px + x) as usize];
+        // Deep interior: fully opaque.
+        assert!(at(56, 56) >= 250, "interior alpha {}", at(56, 56));
+        // Stamp corner (3σ out from the shape): fully faded.
+        assert!(at(0, 0) <= 5, "corner alpha {}", at(0, 0));
+        // On the shape edge: a genuine gradient, neither 0 nor 255 —
+        // this is the blur actually happening.
+        let edge = at(6, 56);
+        assert!(
+            (20..=235).contains(&edge),
+            "edge alpha {edge} should be mid-ramp"
+        );
+    }
+
+    #[test]
+    fn blurred_alpha_stamp_applies_the_transform() {
+        // The same rect under a (30, 40) translation must move the
+        // stamp origin with it — stamps are in PAGE space.
+        let path = rect_path(10.0, 10.0);
+        let t = Transform([1.0, 0.0, 0.0, 1.0, 30.0, 40.0]);
+        let stamp = blurred_alpha_stamp(&path, &t, 4.0, 72.0).expect("stamp");
+        assert_eq!(stamp.origin_pt, (24.0, 34.0));
+        assert_eq!(stamp.size_pt, (22.0, 22.0));
+    }
+
+    #[test]
+    fn blurred_alpha_stamp_rejects_empty_paths() {
+        let empty = PathData { segments: vec![] };
+        let ident = Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert!(blurred_alpha_stamp(&empty, &ident, 4.0, 72.0).is_none());
+    }
+}

@@ -977,3 +977,274 @@ fn paint_key(p: &Paint) -> u64 {
         Paint::SweepGradient(id) => 5 << 60 | id.0 as u64,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paged_compose::{BlendMode, PathData, PathSegment, Rect};
+
+    fn ident() -> Transform {
+        Transform([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+    }
+
+    /// Structurally inert filler — neither bracket walker counts it.
+    fn filler() -> DisplayCommand {
+        DisplayCommand::PopClip(ident())
+    }
+
+    fn blend_group() -> DisplayCommand {
+        DisplayCommand::BeginBlendGroup {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            blend_mode: BlendMode::Multiply,
+            opacity: 0.5,
+            transform: ident(),
+        }
+    }
+
+    fn layer() -> DisplayCommand {
+        DisplayCommand::PushLayer {
+            bounds: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            effect: paged_compose::LayerEffect::None,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            transform: ident(),
+        }
+    }
+
+    #[test]
+    fn find_group_end_matches_nested_same_kind_brackets() {
+        // [BBG, BBG, EBG, filler, EBG] — the outer group closes at 4.
+        let cmds = vec![
+            blend_group(),
+            blend_group(),
+            DisplayCommand::EndBlendGroup(ident()),
+            filler(),
+            DisplayCommand::EndBlendGroup(ident()),
+        ];
+        assert_eq!(find_group_end(&cmds, 0), 4);
+        assert_eq!(find_group_end(&cmds, 1), 2);
+    }
+
+    #[test]
+    fn find_group_end_counts_layer_and_blend_brackets_independently() {
+        // A PushLayer/PopLayer pair inside a blend group must not
+        // close the blend group early (and vice versa).
+        let cmds = vec![
+            blend_group(),
+            layer(),
+            DisplayCommand::PopLayer(ident()),
+            DisplayCommand::EndBlendGroup(ident()),
+        ];
+        assert_eq!(find_group_end(&cmds, 0), 3);
+        assert_eq!(find_group_end(&cmds, 1), 2);
+    }
+
+    #[test]
+    fn find_group_end_unbalanced_runs_to_list_end() {
+        let cmds = vec![blend_group(), filler()];
+        assert_eq!(find_group_end(&cmds, 0), 2);
+    }
+
+    #[test]
+    fn find_soft_mask_parts_splits_artwork_and_masked_content() {
+        // [BSM, art, BMC, masked, ESM] → artwork 1..2, masked 3..4.
+        let cmds = vec![
+            DisplayCommand::BeginSoftMask {
+                mask_type: paged_compose::SoftMaskType::Luminosity,
+                invert: false,
+                transform: ident(),
+            },
+            filler(),
+            DisplayCommand::BeginMaskedContent(ident()),
+            filler(),
+            DisplayCommand::EndSoftMask(ident()),
+        ];
+        assert_eq!(find_soft_mask_parts(&cmds, 0), (2, 4));
+    }
+
+    #[test]
+    fn find_soft_mask_parts_skips_nested_bracket_inside_artwork() {
+        // The outer bracket's artwork contains a WHOLE nested
+        // soft-mask bracket; the outer mid must be the outer
+        // BeginMaskedContent (4), not the nested one (2).
+        let bsm = || DisplayCommand::BeginSoftMask {
+            mask_type: paged_compose::SoftMaskType::Alpha,
+            invert: false,
+            transform: ident(),
+        };
+        let cmds = vec![
+            bsm(),
+            bsm(),
+            DisplayCommand::BeginMaskedContent(ident()),
+            DisplayCommand::EndSoftMask(ident()),
+            DisplayCommand::BeginMaskedContent(ident()),
+            DisplayCommand::EndSoftMask(ident()),
+        ];
+        assert_eq!(find_soft_mask_parts(&cmds, 0), (4, 5));
+    }
+
+    #[test]
+    fn find_soft_mask_parts_degrades_safely_when_unbalanced() {
+        let bsm = || DisplayCommand::BeginSoftMask {
+            mask_type: paged_compose::SoftMaskType::Luminosity,
+            invert: false,
+            transform: ident(),
+        };
+        // Missing BeginMaskedContent: masked range collapses empty
+        // (nothing paints — the mask never closed).
+        let cmds = vec![bsm(), filler(), DisplayCommand::EndSoftMask(ident())];
+        assert_eq!(find_soft_mask_parts(&cmds, 0), (2, 2));
+        // Missing EndSoftMask: masked content runs to the list end.
+        let cmds = vec![
+            bsm(),
+            filler(),
+            DisplayCommand::BeginMaskedContent(ident()),
+            filler(),
+        ];
+        assert_eq!(find_soft_mask_parts(&cmds, 0), (2, 4));
+    }
+
+    #[test]
+    fn transform_path_maps_every_segment_kind_pointwise() {
+        let path = PathData {
+            segments: vec![
+                PathSegment::MoveTo { x: 1.0, y: 1.0 },
+                PathSegment::LineTo { x: 2.0, y: 0.0 },
+                PathSegment::QuadTo {
+                    cx: 3.0,
+                    cy: 4.0,
+                    x: 5.0,
+                    y: 6.0,
+                },
+                PathSegment::CubicTo {
+                    cx1: 1.0,
+                    cy1: 2.0,
+                    cx2: 3.0,
+                    cy2: 4.0,
+                    x: 5.0,
+                    y: 6.0,
+                },
+                PathSegment::Close,
+            ],
+        };
+        // Scale 2 + translate (10, 20).
+        let t = Transform([2.0, 0.0, 0.0, 2.0, 10.0, 20.0]);
+        let out = transform_path(&path, &t);
+        assert_eq!(out.segments.len(), 5);
+        assert_eq!(out.segments[0], PathSegment::MoveTo { x: 12.0, y: 22.0 });
+        assert_eq!(out.segments[1], PathSegment::LineTo { x: 14.0, y: 20.0 });
+        assert_eq!(
+            out.segments[2],
+            PathSegment::QuadTo {
+                cx: 16.0,
+                cy: 28.0,
+                x: 20.0,
+                y: 32.0,
+            }
+        );
+        assert_eq!(
+            out.segments[3],
+            PathSegment::CubicTo {
+                cx1: 12.0,
+                cy1: 24.0,
+                cx2: 16.0,
+                cy2: 28.0,
+                x: 20.0,
+                y: 32.0,
+            }
+        );
+        assert_eq!(out.segments[4], PathSegment::Close);
+    }
+
+    #[test]
+    fn path_bbox_covers_control_points_and_handles_degenerates() {
+        // Control points count toward the (conservative) bbox — a
+        // shading painted over it must cover the whole clip region.
+        let path = PathData {
+            segments: vec![
+                PathSegment::MoveTo { x: 10.0, y: 10.0 },
+                PathSegment::LineTo { x: 30.0, y: 10.0 },
+                PathSegment::QuadTo {
+                    cx: 50.0,
+                    cy: 40.0,
+                    x: 30.0,
+                    y: 20.0,
+                },
+            ],
+        };
+        let b = path_bbox(&path);
+        assert_eq!((b.x, b.y), (10.0, 10.0));
+        assert_eq!((b.w, b.h), (40.0, 30.0));
+
+        // Empty path → the documented 1×1 fallback at the origin.
+        let empty = path_bbox(&PathData { segments: vec![] });
+        assert_eq!((empty.x, empty.y, empty.w, empty.h), (0.0, 0.0, 1.0, 1.0));
+
+        // A single point degenerates to the minimum non-zero extent
+        // (zero-area rects break shading BBoxes downstream).
+        let point = path_bbox(&PathData {
+            segments: vec![PathSegment::MoveTo { x: 5.0, y: 5.0 }],
+        });
+        assert!(point.w > 0.0 && point.h > 0.0);
+    }
+
+    #[test]
+    fn paint_key_groups_equal_paints_and_separates_unequal_ones() {
+        use paged_compose::{Color, GradientId, SpotInkId};
+        let red = Paint::Solid(Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        });
+        let red2 = Paint::Solid(Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        });
+        let blue = Paint::Solid(Color {
+            r: 0.0,
+            g: 0.0,
+            b: 1.0,
+            a: 1.0,
+        });
+        assert_eq!(paint_key(&red), paint_key(&red2));
+        assert_ne!(paint_key(&red), paint_key(&blue));
+
+        let cmyk = |spot: Option<SpotInkId>| Paint::Cmyk {
+            c: 0.1,
+            m: 0.2,
+            y: 0.3,
+            k: 0.4,
+            rgb: Color {
+                r: 0.5,
+                g: 0.5,
+                b: 0.5,
+                a: 1.0,
+            },
+            spot,
+        };
+        // A spot ink must not group with its process-alternate twin —
+        // they hit different colour spaces in the output.
+        assert_ne!(paint_key(&cmyk(None)), paint_key(&cmyk(Some(SpotInkId(0)))));
+        assert_eq!(paint_key(&cmyk(None)), paint_key(&cmyk(None)));
+
+        // Variants never collide with each other.
+        let lin = Paint::LinearGradient(GradientId(1));
+        let rad = Paint::RadialGradient(GradientId(1));
+        assert_ne!(paint_key(&lin), paint_key(&rad));
+        assert_ne!(paint_key(&lin), paint_key(&red));
+        assert_ne!(paint_key(&cmyk(None)), paint_key(&red));
+    }
+}

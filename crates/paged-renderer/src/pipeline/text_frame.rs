@@ -1232,7 +1232,7 @@ pub(super) fn emit_frame_scene_layer(
     // renders every text run in this default face (the run's `family`/
     // `style` hints are reserved for per-run selection).
     let text_faces = font_bytes.and_then(|b| {
-        let rb = rustybuzz::Face::from_slice(b, 0)?;
+        let rb = paged_text::Face::from_slice(b, 0)?;
         let ttf = ttf_parser::Face::parse(b, 0).ok()?;
         Some((rb, ttf))
     });
@@ -1271,6 +1271,7 @@ pub(super) fn emit_frame_scene_layer(
                     point_size: t.size,
                     underline: false,
                     strikethru: false,
+                    substituted: false,
                     x_scale: 1.0,
                     y_scale: 1.0,
                     skew_deg: 0.0,

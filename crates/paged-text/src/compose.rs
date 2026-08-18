@@ -19,7 +19,7 @@
 //! `shape_run`) so results are stable and reproducible. A
 //! `AdvanceMeasurer` trait abstracts width measurement so:
 //!
-//! * Production code plugs in `RustybuzzMeasurer` (real shaping).
+//! * Production code plugs in `HarfrustMeasurer` (real shaping).
 //! * Tests and tooling can use `MonospaceMeasurer` (every char N units,
 //!   every space M units) — fast, deterministic, no font required.
 //!
@@ -30,11 +30,9 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use paragraph_breaker::{Breakpoint, Item};
-use rustybuzz::Face;
-
 use crate::hyphenate::Hyphenator;
-use crate::shape::{shape_run, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
+use crate::shape::{shape_run, Face, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
+use paragraph_breaker::{Breakpoint, Item};
 
 /// Hard Kinsoku ("forbidden break") character classification.
 ///
@@ -1000,20 +998,20 @@ fn segment(text: &str) -> Vec<WordSpan> {
     out
 }
 
-/// Production measurer: shapes each word via `rustybuzz` at the given
+/// Production measurer: shapes each word via `harfrust` at the given
 /// point size and reads back advance widths.
-pub struct RustybuzzMeasurer<'a> {
+pub struct HarfrustMeasurer<'a> {
     pub face: &'a Face<'a>,
     pub point_size: f32,
 }
 
-impl<'a> RustybuzzMeasurer<'a> {
+impl<'a> HarfrustMeasurer<'a> {
     pub fn new(face: &'a Face<'a>, point_size: f32) -> Self {
         Self { face, point_size }
     }
 }
 
-impl AdvanceMeasurer for RustybuzzMeasurer<'_> {
+impl AdvanceMeasurer for HarfrustMeasurer<'_> {
     fn measure_word(&self, text: &str) -> i32 {
         shape_run(self.face, text, self.point_size).total_advance
     }
@@ -1023,7 +1021,7 @@ impl AdvanceMeasurer for RustybuzzMeasurer<'_> {
     }
 }
 
-impl TextShaper for RustybuzzMeasurer<'_> {
+impl TextShaper for HarfrustMeasurer<'_> {
     fn shape(&self, text: &str) -> ShapedRun {
         shape_run(self.face, text, self.point_size)
     }

@@ -267,6 +267,8 @@ impl PreflightFinding {
             C::ImageClippingPathDeferred => "image_clipping_path_deferred",
             C::FootnoteOverflow => "footnote_overflow",
             C::SectionNumberingFallback => "section_numbering_fallback",
+            C::FontSubstituted => "font_substituted",
+            C::ImageContentUnrenderable => "image_content_unrenderable",
         };
         // `FindingSeverity` has no `Info` rung; build infos ride as
         // warnings (the preflight list groups by warning/error only).

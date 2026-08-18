@@ -30,9 +30,9 @@
 //!   paged.get(idStr, pathStr) -> value | null
 //!   paged.insertText(storyId, offset, text) -> bool       (Stage 1 authoring)
 //!   paged.deleteRange(storyId, start, end) -> bool
-//!   paged.insertTextFrame(pageId, [t,l,b,r]) -> bool
-//!   paged.insertFrame(pageId, [t,l,b,r]) -> bool           (Stage 2 authoring)
-//!   paged.insertPage(afterPageId?) -> bool
+//!   paged.insertTextFrame(pageId, [t,l,b,r]) -> "textFrame:<id>" | null
+//!   paged.insertFrame(pageId, [t,l,b,r]) -> address | null  (Stage 2 authoring)
+//!   paged.insertPage(afterPageId?) -> pageId | null
 //!   paged.placeImage(frameId, uri, fit?) -> bool
 //!   paged.applyStyle(storyId, start, end, styleRef) -> bool
 //!   paged.createGroup([id, ...]) -> bool

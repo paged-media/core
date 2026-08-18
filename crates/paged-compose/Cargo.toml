@@ -14,7 +14,7 @@ workspace = true
 paged-scene = { path = "../paged-scene" }
 paged-text = { path = "../paged-text" }
 paged-color = { path = "../paged-color" }
-ttf-parser = "0.24"
+ttf-parser = "0.25"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }

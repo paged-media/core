@@ -257,15 +257,22 @@ fn describe_emits_the_capability_catalog() {
             "missing host fn {needle} in catalog"
         );
     }
-    // The full settable-path vocabulary (179) is present.
+    // The full settable-path vocabulary is present — set-equality against
+    // the catalog source, not a count pin: a pinned 179 went stale when
+    // C-33 (fcf2529) deliberately removed the four unaddressable layer*
+    // paths, and a count can't tell removal from substitution anyway.
     let paths = cat["settablePaths"]
         .as_array()
         .expect("settablePaths array");
+    let emitted: std::collections::BTreeSet<&str> =
+        paths.iter().map(|p| p.as_str().unwrap()).collect();
+    let expected: std::collections::BTreeSet<&str> = paged_script::api_catalog()
+        .settable_paths
+        .into_iter()
+        .collect();
     assert_eq!(
-        paths.len(),
-        179,
-        "settable path count drifted: {}",
-        paths.len()
+        emitted, expected,
+        "describe's settablePaths drifted from paged_script::api_catalog()"
     );
     assert!(paths.iter().any(|p| p == "characterFontSize"));
     // Id grammar + constraints are non-empty.

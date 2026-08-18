@@ -141,7 +141,7 @@ pub(super) fn emit_ruby_for_line(
         return;
     }
     // Construct a shaping + outlining face for the ruby text.
-    let Some(rb_face) = rustybuzz::Face::from_slice(font_bytes, 0) else {
+    let Some(rb_face) = paged_text::Face::from_slice(font_bytes, 0) else {
         return;
     };
     let Ok(ttf_face) = ttf_parser::Face::parse(font_bytes, 0) else {
@@ -228,6 +228,7 @@ pub(super) fn emit_ruby_for_line(
                 point_size: ruby_pt,
                 underline: false,
                 strikethru: false,
+                substituted: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
                 skew_deg: 0.0,
@@ -307,5 +308,66 @@ pub(super) fn emit_line_decorations(
             );
             start = end;
         }
+    }
+}
+
+/// A3 — pink "this text renders in a substituted font" highlight.
+/// Same contiguous-segment walk as [`emit_line_decorations`], keyed on
+/// [`paged_text::PositionedGlyph::substituted`]: per substituted
+/// segment, one `FillPath` rect spanning the segment horizontally and
+/// ascent→descent vertically. `metrics_for_glyph` maps a glyph's
+/// `font_id` to the face's parsed metrics (the caller resolves the
+/// wght-mixed glyph id back to the `FontTable::metrics_for` key); a
+/// miss falls back to the pipeline's usual 0.8 / 0.2 em split.
+///
+/// Emitted BEFORE the line's glyph fills so the pink composites behind
+/// the text, and gated on `PipelineOptions::degraded_asset_markers` at
+/// the call site (default off — exports stay byte-identical).
+pub(super) fn emit_substituted_highlight_for_line(
+    line: &paged_text::layout::LaidOutLine,
+    metrics_for_glyph: &dyn Fn(u32) -> Option<FontMetrics>,
+    frame_origin_pt: (f32, f32),
+    list: &mut DisplayList,
+) {
+    use paged_text::shape::ADVANCE_PRECISION;
+    if line.glyphs.is_empty() || !line.glyphs.iter().any(|g| g.substituted) {
+        return;
+    }
+    let pink = Paint::Solid(Color {
+        r: SUBSTITUTED_HIGHLIGHT_R,
+        g: SUBSTITUTED_HIGHLIGHT_G,
+        b: SUBSTITUTED_HIGHLIGHT_B,
+        a: 1.0,
+    });
+    let mut start = 0;
+    while start < line.glyphs.len() {
+        if !line.glyphs[start].substituted {
+            start += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < line.glyphs.len() && line.glyphs[end].substituted {
+            end += 1;
+        }
+        let g0 = &line.glyphs[start];
+        let g_last = &line.glyphs[end - 1];
+        let x_start_pt = frame_origin_pt.0 + (g0.x as f32) / ADVANCE_PRECISION;
+        let x_end_pt =
+            frame_origin_pt.0 + ((g_last.x + g_last.x_advance) as f32) / ADVANCE_PRECISION;
+        let baseline_pt = frame_origin_pt.1 + (line.baseline_y as f32) / ADVANCE_PRECISION;
+        let (ascender, descender) = metrics_for_glyph(g0.font_id)
+            .map(|m| (m.ascender, m.descender))
+            .unwrap_or((0.8, 0.2));
+        let point_size = g0.point_size.max(1.0);
+        let rect = Rect {
+            x: x_start_pt,
+            y: baseline_pt - ascender * point_size,
+            w: x_end_pt - x_start_pt,
+            h: (ascender + descender) * point_size,
+        };
+        if rect.w > 0.0 && rect.h > 0.0 {
+            paged_compose::emit_rect_transformed(rect, Transform::IDENTITY, pink, list);
+        }
+        start = end;
     }
 }

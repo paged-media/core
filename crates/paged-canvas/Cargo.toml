@@ -53,11 +53,11 @@ image = { workspace = true }
 # (double-click word selection). Already in the lockfile via
 # paged-text; wasm-clean (pure-Rust tables, no native deps).
 unicode-segmentation = "1"
-# S-13 — the `measure_text` font-metrics query constructs a
-# `rustybuzz::Face` directly to read ascender / descender + shape the
-# run via `paged_text::shape_run`. Already in the lockfile via
+# S-13 / W-06 — `measure_text` reads ascender / descender and
+# `font_postscript_name` reads the `name` table directly (the shaping
+# side goes through `paged_text::Face`). Already in the lockfile via
 # paged-text; wasm-clean.
-rustybuzz = "0.18"
+ttf-parser = "0.25"
 # File ▸ New — synthesise a blank IDML package (see `blank.rs`). Same
 # zip writer idml-import reads + idml-export emits; wasm-clean (both
 # already ship it into the wasm worker), so this adds no new wasm dep.

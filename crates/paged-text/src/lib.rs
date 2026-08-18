@@ -15,7 +15,7 @@
 //! Text engine.
 //!
 //! Highest-risk subsystem; roughly 40% of project effort. Responsibilities:
-//! - shaping each homogeneous run via rustybuzz
+//! - shaping each homogeneous run via harfrust
 //! - Knuth-Plass line breaking with InDesign-calibrated penalty weights
 //! - hyphenation (TeX patterns by default; Proximity if licensed)
 //! - composition into frame-bound layouts with justification
@@ -35,8 +35,7 @@ pub use cache::{CacheStats, LayoutCache, LayoutKeyHasher};
 pub use compose::{
     compose_paragraph, compose_paragraph_with_drop_cap, drop_cap_column_widths,
     drop_cap_column_widths_with_min, drop_cap_point_size, AdvanceMeasurer, ComposeOptions,
-    ComposedLine, DropCapComposition, DropCapSpec, MonospaceMeasurer, RustybuzzMeasurer,
-    TextShaper,
+    ComposedLine, DropCapComposition, DropCapSpec, HarfrustMeasurer, MonospaceMeasurer, TextShaper,
 };
 pub use frame_shape::{cubic_steps_for_tolerance, flatten_cubic, Contour, FrameShape};
 pub use hyphenate::{Hyphenator, Language};
@@ -46,6 +45,6 @@ pub use layout::{
 };
 pub use shape::{
     apply_optical_margin, apply_tracking, optical_margin_offset, shape_run,
-    shape_run_with_features, FigureStyle, KerningMethod, MarginSide, ShapedGlyph, ShapedRun,
-    ShapingFeatures,
+    shape_run_with_features, Face, FigureStyle, KerningMethod, MarginSide, ShapedGlyph, ShapedRun,
+    ShapingFeatures, Variation,
 };

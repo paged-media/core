@@ -86,10 +86,12 @@ pub(crate) use shapes::{
 use shapes::{
     emit_line_into, emit_oval_into, emit_oval_missing_image_placeholder,
     emit_polygon_missing_image_placeholder, emit_rectangle_into,
-    emit_rectangle_missing_image_placeholder, unit_ellipse_path,
+    emit_rectangle_missing_image_placeholder, emit_unrenderable_content_ghost_cross,
+    unit_ellipse_path,
 };
 #[cfg(test)]
 use shapes::{PLACEHOLDER_FILL_RGB, PLACEHOLDER_X_RGB, PLACEHOLDER_X_STROKE_PT};
+use shapes::{SUBSTITUTED_HIGHLIGHT_B, SUBSTITUTED_HIGHLIGHT_G, SUBSTITUTED_HIGHLIGHT_R};
 
 pub(crate) use blend_shadow::{
     frame_group_opacity, frame_needs_blend_group, pop_blend_group, push_blend_group,
@@ -280,6 +282,14 @@ pub struct PipelineOptions<'a> {
     /// IDML's reference PDF instead of falling back to the frame's raw
     /// fill.
     pub missing_image_placeholder: bool,
+    /// A3/A4 — degraded-asset markers for *interactive* builds: a pink
+    /// highlight painted behind text whose font was substituted at the
+    /// resolver seam, and a stroke-only ghost-cross over inline-EPS/PDF
+    /// frames whose link is missing (visually distinct from the grey-X
+    /// missing-image placeholder — the artwork exists, we just can't
+    /// rasterise it). Default `false` so exports and the fidelity gate
+    /// stay pixel-identical; the canvas enables it for live builds only.
+    pub degraded_asset_markers: bool,
     /// Track 2: when true, the renderer records one [`BreakRecord`] per
     /// laid-out line into [`BuiltDocument::breaks`]. Cheap (Vec push
     /// per line) and gated so production renders pay zero cost.
@@ -473,6 +483,7 @@ impl Default for PipelineOptions<'_> {
             frame_drop_shadow: None,
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
+            degraded_asset_markers: false,
             collect_breaks: false,
             break_story_filter: None,
             break_page_range: None,
@@ -1210,7 +1221,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
 
     let shaping_face = options
         .font
-        .and_then(|bytes| rustybuzz::Face::from_slice(bytes, 0));
+        .and_then(|bytes| paged_text::Face::from_slice(bytes, 0));
     let outline_face = options
         .font
         .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok());
@@ -1246,7 +1257,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             let (Some(face), Some(col_pt)) = (shaping_face.as_ref(), column_width_pt) else {
                 continue;
             };
-            let measurer = paged_text::RustybuzzMeasurer::new(face, paragraph_size);
+            let measurer = paged_text::HarfrustMeasurer::new(face, paragraph_size);
             let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
             lopts.alignment = map_justification(paragraph.justification);
             let laid_out = paged_text::layout_paragraph(&paragraph_text, &measurer, &lopts);

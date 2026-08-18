@@ -29,13 +29,13 @@ use paged_scene::Document;
 ///
 /// Field declaration order matters: `faces` is declared FIRST so on
 /// drop it is dropped FIRST — before `face_bytes`. The cached
-/// `rustybuzz::Face<'static>` values borrow from the `Bytes` stored
+/// `paged_text::Face<'static>` values borrow from the `Bytes` stored
 /// in `face_bytes`; if we dropped `face_bytes` first the Faces would
 /// briefly hold dangling references. Rust drops struct fields in
 /// declaration order (first declared = first dropped), so keeping
 /// `faces` above `face_bytes` is load-bearing for soundness.
 /// Per-render shaping resource: the resolved bytes + configured
-/// rustybuzz Faces for every (family, style, wght) referenced by the
+/// shaping Faces for every (family, style, wght) referenced by the
 /// document. Built once per `build_document` call by default; the
 /// caller can pre-build it (via `FontTable::build`) and pass it
 /// through `PipelineOptions::pre_built_font_table` to amortise the
@@ -44,7 +44,7 @@ use paged_scene::Document;
 /// — the struct can be moved + held by a long-lived caller (e.g.
 /// `CanvasModel`) without invalidating the Face references.
 pub struct FontTable {
-    /// Pre-configured rustybuzz `Face` cache keyed by
+    /// Pre-configured shaping `Face` cache keyed by
     /// `(font_id, wght_bits)`. The `Face<'static>` lifetime is a
     /// LIE narrowed back to `&self` at the public accessor.
     ///
@@ -59,14 +59,14 @@ pub struct FontTable {
     ///      the buffer a cached Face borrows from outlives that Face.
     ///   3. `faces` is declared before `face_bytes`, so on `Drop` the
     ///      Faces are dropped first — they never see a freed `Bytes`.
-    ///   4. The accessor [`Self::face`] returns `&rustybuzz::Face<'_>`
+    ///   4. The accessor [`Self::face`] returns `&paged_text::Face<'_>`
     ///      with the lifetime narrowed to `&self`. No caller ever
     ///      observes the `'static` lifetime, so the lie can't escape.
     ///   5. Variations are baked in at insert time. The cached Face
     ///      is never mutated post-insert (no `&mut Face` is ever
     ///      exposed). Two runs with the same bytes but different
     ///      `wght` use distinct cache keys → distinct cached Faces.
-    pub(super) faces: HashMap<(u32, u32), rustybuzz::Face<'static>>,
+    pub(super) faces: HashMap<(u32, u32), paged_text::Face<'static>>,
     /// Bytes kept alive for `faces` to point into. One entry per
     /// distinct `font_id` (the wght variant is irrelevant — same
     /// buffer, just different variation state on the Face).
@@ -80,6 +80,13 @@ pub struct FontTable {
     #[allow(dead_code)]
     pub(super) face_bytes: HashMap<u32, Bytes>,
     pub(super) cache: HashMap<(String, Option<String>), Bytes>,
+    /// A1 — cache keys whose bytes the resolver reported as a
+    /// *substitute* (its catch-all default font stood in for the
+    /// requested face — see `AssetResolver::resolve_font_traced`).
+    /// `bytes_for` re-reads this to flag runs for the degraded-asset
+    /// pink highlight. `BTreeSet` so the once-per-(family, style)
+    /// `FontSubstituted` diagnostics emit in a deterministic order.
+    pub(super) substituted: std::collections::BTreeSet<(String, Option<String>)>,
     pub(super) fallback: Option<Bytes>,
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
     /// the pipeline uses for glyph-cache routing).
@@ -124,6 +131,8 @@ impl FontTable {
     pub fn build(document: &Document, options: &PipelineOptions) -> Self {
         let fallback = options.font.map(Bytes::copy_from_slice);
         let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
+        let mut substituted: std::collections::BTreeSet<(String, Option<String>)> =
+            std::collections::BTreeSet::new();
         if let Some(resolver) = options.assets {
             // Walk every run in every story and collect distinct
             // keys before calling the resolver — `resolve_font`
@@ -165,8 +174,11 @@ impl FontTable {
             }
             cache.reserve(keys.len());
             for key in keys {
-                if let Some(bytes) = resolver.resolve_font(&key.0, key.1.as_deref()) {
-                    cache.insert(key, bytes);
+                if let Some(rf) = resolver.resolve_font_traced(&key.0, key.1.as_deref()) {
+                    if rf.substituted {
+                        substituted.insert(key.clone());
+                    }
+                    cache.insert(key, rf.bytes);
                 }
             }
         }
@@ -178,7 +190,7 @@ impl FontTable {
         // Storing the configured Face here (vs. per-paragraph) lets
         // the shaping sites in `emit_paragraph_into_chain`,
         // `emit_cell_paragraph`, and `measure_cell_paragraph` share
-        // one rustybuzz::Face across the entire render — Adobe-typical
+        // one paged_text::Face across the entire render — Adobe-typical
         // docs reuse the same (font, weight) thousands of times.
         let mut face_keys: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         let mut id_to_bytes: HashMap<u32, Bytes> = HashMap::new();
@@ -246,7 +258,7 @@ impl FontTable {
         // pointer is stable across clones, so the buffer is alive
         // for as long as the `face_bytes` map holds an entry.
         let face_bytes: HashMap<u32, Bytes> = id_to_bytes;
-        let mut faces: HashMap<(u32, u32), rustybuzz::Face<'static>> =
+        let mut faces: HashMap<(u32, u32), paged_text::Face<'static>> =
             HashMap::with_capacity(face_keys.len());
         let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
         for (font_id, wght_bits) in face_keys {
@@ -267,7 +279,7 @@ impl FontTable {
             //     in `FontTable`, and Rust drops struct fields in
             //     declaration order (first declared = first dropped).
             //  4. The public accessor [`Self::face`] returns
-            //     `&rustybuzz::Face<'_>` with the lifetime re-anchored
+            //     `&paged_text::Face<'_>` with the lifetime re-anchored
             //     to `&self`, so the 'static lie never escapes the
             //     module.
             //  5. The Face is never mutated post-insert: no `&mut`
@@ -277,7 +289,7 @@ impl FontTable {
             //     bytes ends up in distinct cache slots.
             let bytes_static: &'static [u8] =
                 unsafe { std::mem::transmute::<&[u8], &'static [u8]>(buf.as_ref()) };
-            let Some(mut face) = rustybuzz::Face::from_slice(bytes_static, 0) else {
+            let Some(mut face) = paged_text::Face::from_slice(bytes_static, 0) else {
                 continue;
             };
             // Only bake a wght variation when the face actually exposes
@@ -289,7 +301,7 @@ impl FontTable {
                 .any(|axis| axis.tag == wght_tag);
             let wght = f32::from_bits(wght_bits);
             if has_wght_axis {
-                face.set_variations(&[rustybuzz::Variation {
+                face.set_variations(&[paged_text::Variation {
                     tag: wght_tag,
                     value: wght,
                 }]);
@@ -360,6 +372,7 @@ impl FontTable {
             faces,
             face_bytes,
             cache,
+            substituted,
             fallback,
             metrics,
             family_metrics,
@@ -374,29 +387,46 @@ impl FontTable {
     /// Callers must NOT call `set_variations` on the returned Face —
     /// variations are baked in at cache-insert time. The signature
     /// (`&Face`, not `&mut Face`) enforces that at compile time.
-    pub(super) fn face(&self, font_id: u32, wght_bits: u32) -> Option<&rustybuzz::Face<'_>> {
+    pub(super) fn face(&self, font_id: u32, wght_bits: u32) -> Option<&paged_text::Face<'_>> {
         self.faces.get(&(font_id, wght_bits))
     }
 
-    /// Look up the bytes a paragraph should shape with.
-    /// Resolver hit > options.font fallback. `None` means no font
-    /// is available — caller skips the paragraph.
-    pub(super) fn bytes_for(&self, family: Option<&str>, style: Option<&str>) -> Option<Bytes> {
+    /// Look up the bytes a paragraph should shape with, plus whether
+    /// they substitute for the requested face (A1). Resolver hit >
+    /// options.font fallback. `None` means no font is available —
+    /// caller skips the paragraph.
+    pub(super) fn bytes_for(
+        &self,
+        family: Option<&str>,
+        style: Option<&str>,
+    ) -> Option<(Bytes, bool)> {
         if let Some(family) = family {
             // Direct (family, style) hit, then bare-family hit, so
             // a doc that only registers "Body Font" still picks up
-            // its bold runs.
-            if let Some(b) = self
-                .cache
-                .get(&(family.to_string(), style.map(str::to_string)))
-            {
-                return Some(b.clone());
+            // its bold runs. Either hit inherits the resolver's own
+            // substitution flag for that cache key.
+            let styled_key = (family.to_string(), style.map(str::to_string));
+            if let Some(b) = self.cache.get(&styled_key) {
+                return Some((b.clone(), self.substituted.contains(&styled_key)));
             }
-            if let Some(b) = self.cache.get(&(family.to_string(), None)) {
-                return Some(b.clone());
+            let bare_key = (family.to_string(), None);
+            if let Some(b) = self.cache.get(&bare_key) {
+                return Some((b.clone(), self.substituted.contains(&bare_key)));
             }
+            // The renderer-wide default font standing in for a named
+            // family that resolved nowhere is a substitution.
+            return self.fallback.clone().map(|b| (b, true));
         }
-        self.fallback.clone()
+        // No family requested at all: the configured default IS the
+        // asked-for font, not a stand-in.
+        self.fallback.clone().map(|b| (b, false))
+    }
+
+    /// A4 — the resolver-substituted `(family, style)` keys, in
+    /// deterministic order. `build_document` fires one
+    /// `FontSubstituted` diagnostic per entry.
+    pub(super) fn substituted_keys(&self) -> impl Iterator<Item = &(String, Option<String>)> + '_ {
+        self.substituted.iter()
     }
 
     /// Resolve a paragraph's per-run font bytes, filling any
@@ -408,29 +438,35 @@ impl FontTable {
     /// (the renderer-wide default font), then `None` — signalling
     /// no font is available anywhere and the caller should skip.
     ///
+    /// Each slot also carries the A1 substitution flag: a run served
+    /// by `bytes_for` keeps that lookup's flag; a run filled from the
+    /// paragraph-level fallback is by definition rendered in a face it
+    /// didn't ask for, so sibling-style fills always count as
+    /// substituted.
+    ///
     /// Returns `None` when no run resolves AND no document-wide
     /// fallback is configured. In that case the paragraph still has
     /// to be dropped because there's nothing to shape with.
     pub(super) fn resolve_paragraph_bytes(
         &self,
         runs: &[paged_scene::ResolvedRunAttrs],
-    ) -> Option<Vec<Bytes>> {
+    ) -> Option<Vec<(Bytes, bool)>> {
         if runs.is_empty() {
             return None;
         }
-        let per_run: Vec<Option<Bytes>> = runs
+        let per_run: Vec<Option<(Bytes, bool)>> = runs
             .iter()
             .map(|r| self.bytes_for(r.font.as_deref(), r.font_style.as_deref()))
             .collect();
         let paragraph_fallback: Option<Bytes> = per_run
             .iter()
-            .find_map(|b| b.clone())
+            .find_map(|b| b.as_ref().map(|(bytes, _)| bytes.clone()))
             .or_else(|| self.fallback.clone());
         let paragraph_fallback = paragraph_fallback?;
         Some(
             per_run
                 .into_iter()
-                .map(|b| b.unwrap_or_else(|| paragraph_fallback.clone()))
+                .map(|b| b.unwrap_or_else(|| (paragraph_fallback.clone(), true)))
                 .collect(),
         )
     }

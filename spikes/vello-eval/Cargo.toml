@@ -20,4 +20,4 @@ image = { workspace = true }
 pollster = "0.4"
 wgpu = "22"
 vello = "0.3"
-ttf-parser = "0.24"
+ttf-parser = "0.25"

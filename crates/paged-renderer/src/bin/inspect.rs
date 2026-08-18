@@ -149,6 +149,14 @@ struct Args {
     /// placeholder visible can opt out via this flag.
     #[arg(long)]
     no_missing_image_placeholder: bool,
+    /// A3/A4 — draw editor-style degraded-asset markers: a pink
+    /// highlight behind text whose font was substituted (resolver
+    /// catch-all / default-font stand-in) and a stroke-only
+    /// ghost-cross over inline-EPS/PDF frames whose link is missing.
+    /// Off by default so renders match export output and the fidelity
+    /// gate; pass it for manual verification of degraded documents.
+    #[arg(long)]
+    degraded_asset_markers: bool,
     /// Install a tracing subscriber that prints debug-level events
     /// from the `paged_renderer::icc` target to stderr. Used to confirm
     /// the JPEG-embedded-ICC branch fires on a corpus pack — the
@@ -464,6 +472,7 @@ fn main() -> Result<()> {
         fallback_column_width_pt: args.column_width_pt,
         font_metrics_overrides: &metric_overrides,
         missing_image_placeholder: !args.no_missing_image_placeholder,
+        degraded_asset_markers: args.degraded_asset_markers,
         collect_breaks: args.emit_breaks.is_some(),
         break_story_filter: args.break_story_id.clone(),
         break_page_range,

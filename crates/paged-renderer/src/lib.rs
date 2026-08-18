@@ -25,7 +25,7 @@ pub mod resource_provider;
 
 mod module;
 
-pub use asset::{AssetResolver, BytesResolver};
+pub use asset::{AssetResolver, BytesResolver, ResolvedFont};
 pub use diagnostics::{
     Diagnostic, DiagnosticCode, OversetContinuation, RenderDiagnostics, Severity,
 };

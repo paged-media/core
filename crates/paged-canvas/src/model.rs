@@ -1536,6 +1536,11 @@ impl CanvasModel {
                 pre_built_font_table: Some(&font_table),
                 master_text_emit_cache: Some(&master_text_emit_cache),
                 body_story_emit_cache: Some(&body_story_emit_cache),
+                // A5 — interactive canvas builds surface degraded-asset
+                // markers (pink substituted-font highlight, inline-
+                // EPS/PDF ghost-cross); export builds keep the default
+                // `false` so output stays pixel-faithful.
+                degraded_asset_markers: true,
                 ..PipelineOptions::default()
             };
             // Phase 4 Step 1 — install an empty cache for the initial
@@ -8049,6 +8054,10 @@ impl CanvasModel {
             // land on `BuiltDocument::resource_tiles_needed`.
             resource_providers: Some(&resource_providers),
             render_scale: self.resource_render_scale,
+            // A5 — live rebuilds keep the degraded-asset markers on
+            // (mirrors the initial load); `build_for_export` stays at
+            // the default `false`.
+            degraded_asset_markers: true,
             ..PipelineOptions::default()
         };
         let mut cache = std::mem::take(&mut self.layout_cache);
@@ -8378,7 +8387,7 @@ impl CanvasModel {
         use paged_renderer::AssetResolver;
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref())?;
         let bytes = resolver.resolve_font(family, style)?;
-        let face = rustybuzz::Face::from_slice(&bytes, 0)?;
+        let face = paged_text::Face::from_slice(&bytes, 0)?;
 
         let upem = face.units_per_em() as f32;
         if upem <= 0.0 {
@@ -8680,7 +8689,6 @@ pub fn sniff_font_format(bytes: &[u8]) -> &'static str {
 /// when the payload doesn't parse as sfnt (woff/woff2 containers) or
 /// carries no Unicode-decodable entry.
 pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
-    use rustybuzz::ttf_parser;
     let face = ttf_parser::Face::parse(bytes, 0).ok()?;
     face.names()
         .into_iter()

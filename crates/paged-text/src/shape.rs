@@ -12,13 +12,97 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Shaping helper: wraps `rustybuzz::shape` and scales to point units.
+//! Shaping helper: wraps `harfrust` shaping and scales to point units.
 //!
 //! Every homogeneous character run (single font, size, feature set) goes
 //! through this function. Output is a `ShapedRun` whose advances are in
 //! 1/64 pt so downstream layout can stay in integer arithmetic.
 
-use rustybuzz::{Face, UnicodeBuffer};
+use harfrust::UnicodeBuffer;
+
+/// A font ready for both shaping and metric/table reads.
+///
+/// harfrust splits the rustybuzz `Face` role in two: a zero-copy
+/// `FontRef` view plus a `ShaperData` cache holding the accelerated
+/// GSUB/GPOS/cmap lookups. Building `ShaperData` is the expensive part
+/// (rustybuzz paid the same cost inside `Face::from_slice`), so this
+/// wrapper owns one per face and every `shape_run` call derives a cheap
+/// per-call `Shaper` from it — cached faces (FontTable, the per-
+/// paragraph pools) therefore amortise the shaping tables exactly like
+/// they amortised the rustybuzz `Face`.
+///
+/// Metric reads (`units_per_em`, `ascender`, `variation_axes`,
+/// `outline_glyph`, …) go through a parallel `ttf_parser::Face` over
+/// the same bytes, exposed via `Deref` — the same surface the rustybuzz
+/// `Face` deref used to provide, so metric call sites are unchanged.
+pub struct Face<'a> {
+    font: harfrust::FontRef<'a>,
+    shaper_data: harfrust::ShaperData,
+    /// Variable-font position for the shaping side. `None` = default
+    /// (non-variable or all axes at default).
+    instance: Option<harfrust::ShaperInstance>,
+    metrics: ttf_parser::Face<'a>,
+}
+
+/// A variation-axis setting, mirroring `rustybuzz::Variation`. The tag
+/// is a `ttf_parser::Tag` because call sites already build tags via
+/// `ttf_parser::Tag::from_bytes` for the metric side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Variation {
+    pub tag: ttf_parser::Tag,
+    pub value: f32,
+}
+
+impl<'a> Face<'a> {
+    /// Parse a face from raw font bytes. Returns `None` when either the
+    /// shaping view or the metrics view rejects the bytes (matching the
+    /// old `rustybuzz::Face::from_slice` contract of Option-on-parse-
+    /// failure).
+    pub fn from_slice(data: &'a [u8], index: u32) -> Option<Self> {
+        let font = harfrust::FontRef::from_index(data, index).ok()?;
+        let metrics = ttf_parser::Face::parse(data, index).ok()?;
+        let shaper_data = harfrust::ShaperData::new(&font);
+        Some(Self {
+            font,
+            shaper_data,
+            instance: None,
+            metrics,
+        })
+    }
+
+    /// Set variation-axis values on both the shaping and the metric
+    /// side (rustybuzz's `set_variations` updated both through its
+    /// single inner face; here the two views are updated in lockstep).
+    pub fn set_variations(&mut self, variations: &[Variation]) {
+        self.instance = Some(harfrust::ShaperInstance::from_variations(
+            &self.font,
+            variations.iter().map(|v| harfrust::Variation {
+                tag: harfrust::Tag::new(&v.tag.to_bytes()),
+                value: v.value,
+            }),
+        ));
+        for v in variations {
+            self.metrics.set_variation(v.tag, v.value);
+        }
+    }
+
+    /// Derive a shaper for this face. Cheap — the heavy lookup caches
+    /// live in the wrapped `ShaperData`.
+    pub fn shaper(&self) -> harfrust::Shaper<'_> {
+        self.shaper_data
+            .shaper(&self.font)
+            .instance(self.instance.as_ref())
+            .build()
+    }
+}
+
+impl<'a> std::ops::Deref for Face<'a> {
+    type Target = ttf_parser::Face<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.metrics
+    }
+}
 
 /// Advance precision: 1/64 pt, matching the composer spike.
 pub const ADVANCE_PRECISION: f32 = 64.0;
@@ -50,7 +134,7 @@ pub struct ShapedRun {
 /// paragraphs into such runs.
 ///
 /// Equivalent to [`shape_run_with_features`] with `features` =
-/// [`ShapingFeatures::default()`] (rustybuzz's defaults: kerning + standard
+/// [`ShapingFeatures::default()`] (the shaper's defaults: kerning + standard
 /// ligatures on, discretionary ligatures off — the same set the OpenType
 /// spec says fonts opt into by default). Kept as a no-features wrapper
 /// because the calibration spike, the optical-margin pass, and several
@@ -59,12 +143,12 @@ pub fn shape_run(face: &Face, text: &str, point_size: f32) -> ShapedRun {
     shape_run_with_features(face, text, point_size, ShapingFeatures::default())
 }
 
-/// Phase 4 typography — OpenType feature toggles fed to rustybuzz.
+/// Phase 4 typography — OpenType feature toggles fed to the shaper.
 ///
 /// Beyond standard ligatures (`liga`/`clig`) and kerning (`kern`), this
 /// carries the discrete OpenType features InDesign exposes per character
 /// style and serialises as individual `OTF*` IDML attributes. Each maps
-/// to one (or, for the figure styles, two) rustybuzz feature tag(s):
+/// to one (or, for the figure styles, two) OpenType feature tag(s):
 ///
 /// | field                     | IDML attribute             | tag(s)              |
 /// |---------------------------|----------------------------|---------------------|
@@ -94,7 +178,7 @@ pub struct ShapingFeatures {
     pub discretionary_ligatures: bool,
     /// `KerningMethod`. When `Off`, the `kern` OpenType feature is
     /// disabled and shape advances reflect the font's bare metrics.
-    /// `Metrics` (default) lets rustybuzz apply OpenType kerning;
+    /// `Metrics` (default) lets the shaper apply OpenType kerning;
     /// `Optical` falls through to Metrics for now — InDesign's
     /// optical kerning would need a separate pass over glyph
     /// outlines and is queued.
@@ -206,21 +290,13 @@ impl Default for ShapingFeatures {
 }
 
 impl ShapingFeatures {
-    fn to_rustybuzz(self) -> Vec<rustybuzz::Feature> {
-        let mut out: Vec<rustybuzz::Feature> = Vec::new();
-        let on = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
-            out.push(rustybuzz::Feature::new(
-                ttf_parser::Tag::from_bytes(tag),
-                1,
-                ..,
-            ));
+    fn to_harfrust(self) -> Vec<harfrust::Feature> {
+        let mut out: Vec<harfrust::Feature> = Vec::new();
+        let on = |out: &mut Vec<harfrust::Feature>, tag: &[u8; 4]| {
+            out.push(harfrust::Feature::new(harfrust::Tag::new(tag), 1, ..));
         };
-        let off = |out: &mut Vec<rustybuzz::Feature>, tag: &[u8; 4]| {
-            out.push(rustybuzz::Feature::new(
-                ttf_parser::Tag::from_bytes(tag),
-                0,
-                ..,
-            ));
+        let off = |out: &mut Vec<harfrust::Feature>, tag: &[u8; 4]| {
+            out.push(harfrust::Feature::new(harfrust::Tag::new(tag), 0, ..));
         };
         if !self.ligatures_on {
             // Standard + contextual ligatures off.
@@ -259,7 +335,7 @@ impl ShapingFeatures {
         if let Some(t) = width_tag {
             on(&mut out, t);
         }
-        // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. rustybuzz needs a
+        // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. The shaper needs a
         // 4-byte tag per set, so format `ss01`..`ss20` (the OpenType
         // spec defines exactly 20 stylistic-set features).
         for i in 0..20u32 {
@@ -287,8 +363,16 @@ pub fn shape_run_with_features(
 ) -> ShapedRun {
     let mut buf = UnicodeBuffer::new();
     buf.push_str(text);
-    let rb_features = features.to_rustybuzz();
-    let shaped = rustybuzz::shape(face, &rb_features, buf);
+    // rustybuzz's `shape()` guessed script/direction/language from the
+    // buffer content implicitly; harfrust builds the plan from whatever
+    // the buffer carries. Call the same guess explicitly so segment
+    // handling (script from content, direction from script, LTR
+    // fallback) stays byte-identical to the rustybuzz behaviour.
+    buf.guess_segment_properties();
+    let hr_features = features.to_harfrust();
+    let shaped = face
+        .shaper()
+        .shape(buf, harfrust::ShapeOptions::new().features(&hr_features));
 
     let units_per_em = face.units_per_em() as f32;
     let scale = point_size * ADVANCE_PRECISION / units_per_em;
@@ -300,7 +384,7 @@ pub fn shape_run_with_features(
 
     // Drop control-char glyphs (.notdef "tofu" boxes from ASCII LF /
     // CR / ZWSP / line / paragraph separators). IDML's <Br/> lands
-    // as `\n` in run text; rustybuzz emits a notdef rectangle for
+    // as `\n` in run text; the shaper emits a notdef rectangle for
     // it. Cluster byte offsets stay valid because we only filter
     // by the *source* byte, not by reordering.
     let bytes = text.as_bytes();
@@ -642,7 +726,7 @@ mod tests {
     #[test]
     fn shaping_features_default_passes_empty_feature_list() {
         let f = ShapingFeatures::default();
-        assert_eq!(f.to_rustybuzz().len(), 0);
+        assert_eq!(f.to_harfrust().len(), 0);
     }
 
     #[test]
@@ -651,7 +735,7 @@ mod tests {
             ligatures_on: false,
             ..Default::default()
         };
-        let fs = f.to_rustybuzz();
+        let fs = f.to_harfrust();
         assert_eq!(fs.len(), 2, "expect liga + clig off entries");
         // Both should have value 0.
         for feat in &fs {
@@ -665,7 +749,7 @@ mod tests {
             kerning: KerningMethod::Off,
             ..Default::default()
         };
-        let fs = f.to_rustybuzz();
+        let fs = f.to_harfrust();
         assert_eq!(fs.len(), 1);
         assert_eq!(fs[0].value, 0);
     }
@@ -676,22 +760,20 @@ mod tests {
             kerning: KerningMethod::Metrics,
             ..Default::default()
         };
-        assert!(f.to_rustybuzz().is_empty());
+        assert!(f.to_harfrust().is_empty());
     }
 
     /// Collect `(tag-string, value)` pairs from a feature list so tests
     /// can assert on the human-readable OpenType tags.
-    fn tag_pairs(features: &[rustybuzz::Feature]) -> Vec<(String, u32)> {
+    fn tag_pairs(features: &[harfrust::Feature]) -> Vec<(String, u32)> {
         features
             .iter()
             .map(|f| (f.tag.to_string(), f.value))
             .collect()
     }
 
-    fn has_tag_on(features: &[rustybuzz::Feature], tag: &str) -> bool {
-        features
-            .iter()
-            .any(|f| f.tag.to_string() == tag && f.value == 1)
+    fn has_tag_on(features: &[harfrust::Feature], tag: &str) -> bool {
+        features.iter().any(|f| f.tag == tag && f.value == 1)
     }
 
     #[test]
@@ -710,7 +792,7 @@ mod tests {
         for (set, tag) in cases {
             let mut f = ShapingFeatures::default();
             set(&mut f);
-            let rb = f.to_rustybuzz();
+            let rb = f.to_harfrust();
             assert_eq!(
                 rb.len(),
                 1,
@@ -726,12 +808,12 @@ mod tests {
     fn shaping_features_contextual_alternates_off_emits_calt_off() {
         // `calt` is font-default-on, so it only appears as an explicit
         // disable (value 0); the default (true) emits nothing.
-        assert!(ShapingFeatures::default().to_rustybuzz().is_empty());
+        assert!(ShapingFeatures::default().to_harfrust().is_empty());
         let off = ShapingFeatures {
             contextual_alternates: false,
             ..Default::default()
         };
-        let rb = off.to_rustybuzz();
+        let rb = off.to_harfrust();
         assert_eq!(tag_pairs(&rb), vec![("calt".to_string(), 0)]);
     }
 
@@ -742,21 +824,18 @@ mod tests {
             figure_style: FigureStyle::Lining,
             ..Default::default()
         };
-        assert_eq!(tag_pairs(&lining.to_rustybuzz()), vec![("lnum".into(), 1)]);
+        assert_eq!(tag_pairs(&lining.to_harfrust()), vec![("lnum".into(), 1)]);
         let oldstyle = ShapingFeatures {
             figure_style: FigureStyle::OldStyle,
             ..Default::default()
         };
-        assert_eq!(
-            tag_pairs(&oldstyle.to_rustybuzz()),
-            vec![("onum".into(), 1)]
-        );
+        assert_eq!(tag_pairs(&oldstyle.to_harfrust()), vec![("onum".into(), 1)]);
         // Combined styles force both the figure and width axes.
         let prop_old = ShapingFeatures {
             figure_style: FigureStyle::ProportionalOldstyle,
             ..Default::default()
         };
-        let rb = prop_old.to_rustybuzz();
+        let rb = prop_old.to_harfrust();
         assert!(
             has_tag_on(&rb, "onum"),
             "expected onum: {:?}",
@@ -772,11 +851,11 @@ mod tests {
             figure_style: FigureStyle::TabularLining,
             ..Default::default()
         };
-        let rb = tab_lin.to_rustybuzz();
+        let rb = tab_lin.to_harfrust();
         assert!(has_tag_on(&rb, "lnum"));
         assert!(has_tag_on(&rb, "tnum"));
         // `Default` figure style forces neither axis.
-        assert!(ShapingFeatures::default().to_rustybuzz().is_empty());
+        assert!(ShapingFeatures::default().to_harfrust().is_empty());
     }
 
     #[test]
@@ -810,7 +889,7 @@ mod tests {
             stylistic_sets: (1 << 0) | (1 << 1) | (1 << 11) | (1 << 19),
             ..Default::default()
         };
-        let rb = f.to_rustybuzz();
+        let rb = f.to_harfrust();
         let tags: Vec<String> = rb.iter().map(|x| x.tag.to_string()).collect();
         assert!(tags.contains(&"ss01".to_string()), "{tags:?}");
         assert!(tags.contains(&"ss02".to_string()), "{tags:?}");
@@ -825,7 +904,7 @@ mod tests {
             stylistic_sets: 1 << 25,
             ..Default::default()
         };
-        assert!(high.to_rustybuzz().is_empty());
+        assert!(high.to_harfrust().is_empty());
     }
 
     #[test]
@@ -839,7 +918,7 @@ mod tests {
             figure_style: FigureStyle::OldStyle,
             ..Default::default()
         };
-        let rb = f.to_rustybuzz();
+        let rb = f.to_harfrust();
         let pairs = tag_pairs(&rb);
         assert!(pairs.contains(&("liga".into(), 0)), "{pairs:?}");
         assert!(pairs.contains(&("clig".into(), 0)), "{pairs:?}");
@@ -857,7 +936,7 @@ mod tests {
                 .join("../../corpus/fonts/Inter.ttf"),
         )
         .expect("Inter.ttf fixture");
-        let face = rustybuzz::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let face = Face::from_slice(&bytes, 0).expect("parse Inter");
         let r = shape_run_with_features(
             &face,
             "",

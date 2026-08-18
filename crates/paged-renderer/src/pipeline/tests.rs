@@ -931,6 +931,7 @@ fn font_table_with(cache: &[(&str, Option<&str>, &[u8])], fallback: Option<&[u8]
         faces: HashMap::new(),
         face_bytes: HashMap::new(),
         cache: hm,
+        substituted: Default::default(),
         fallback: fallback.map(Bytes::copy_from_slice),
         metrics: HashMap::new(),
         family_metrics: HashMap::new(),
@@ -962,9 +963,14 @@ fn resolve_paragraph_bytes_falls_back_per_run_to_sibling_font() {
         .resolve_paragraph_bytes(&runs)
         .expect("paragraph kept");
     assert_eq!(pool.len(), 3);
-    assert_eq!(&pool[0][..], b"INTER");
-    assert_eq!(&pool[1][..], b"INTER", "missing run inherits sibling");
-    assert_eq!(&pool[2][..], b"INTER");
+    assert_eq!(&pool[0].0[..], b"INTER");
+    assert_eq!(&pool[1].0[..], b"INTER", "missing run inherits sibling");
+    assert_eq!(&pool[2].0[..], b"INTER");
+    // A1 — resolved runs are unflagged; the sibling-style fill counts
+    // as a substitution (the run asked for Limon Script, got Inter).
+    assert!(!pool[0].1);
+    assert!(pool[1].1, "sibling-filled run must flag substituted");
+    assert!(!pool[2].1);
 }
 
 #[test]
@@ -980,8 +986,11 @@ fn resolve_paragraph_bytes_prefers_table_fallback_when_no_run_resolves() {
         .resolve_paragraph_bytes(&runs)
         .expect("paragraph kept");
     assert_eq!(pool.len(), 2);
-    assert_eq!(&pool[0][..], b"DEFAULT");
-    assert_eq!(&pool[1][..], b"DEFAULT");
+    assert_eq!(&pool[0].0[..], b"DEFAULT");
+    assert_eq!(&pool[1].0[..], b"DEFAULT");
+    // A1 — the renderer-wide default standing in for named families
+    // that resolved nowhere is a substitution on every slot.
+    assert!(pool[0].1 && pool[1].1);
 }
 
 #[test]
@@ -992,6 +1001,34 @@ fn resolve_paragraph_bytes_returns_none_when_nothing_resolves() {
     let table = font_table_with(&[], None);
     let runs = vec![run_attrs(Some("Unknown"), None)];
     assert!(table.resolve_paragraph_bytes(&runs).is_none());
+}
+
+#[test]
+fn resolve_paragraph_bytes_carries_resolver_substitution_flag() {
+    // A1 — a cache key the RESOLVER itself served via its catch-all
+    // default font (traced by `resolve_font_traced`) keeps its
+    // substituted flag through the per-run resolution.
+    let mut table = font_table_with(&[("Ghost", None, b"STANDIN")], None);
+    table.substituted.insert(("Ghost".to_string(), None));
+    let runs = vec![run_attrs(Some("Ghost"), None)];
+    let pool = table
+        .resolve_paragraph_bytes(&runs)
+        .expect("paragraph kept");
+    assert_eq!(&pool[0].0[..], b"STANDIN");
+    assert!(pool[0].1, "resolver-substituted key must stay flagged");
+}
+
+#[test]
+fn resolve_paragraph_bytes_unnamed_family_on_fallback_is_not_substituted() {
+    // A run with no requested family shaping through the configured
+    // default font is NOT a substitution — the default IS its font.
+    let table = font_table_with(&[], Some(b"DEFAULT"));
+    let runs = vec![run_attrs(None, None)];
+    let pool = table
+        .resolve_paragraph_bytes(&runs)
+        .expect("paragraph kept");
+    assert_eq!(&pool[0].0[..], b"DEFAULT");
+    assert!(!pool[0].1);
 }
 
 // P-22: lock the stroke-alignment inset math. `tiny_skia` strokes
@@ -1109,6 +1146,213 @@ fn q22_missing_image_placeholder_calibration_pinned() {
         PLACEHOLDER_X_RGB < 0.05,
         "placeholder X should read as near-black against the grey fill",
     );
+}
+
+#[test]
+// A3 — pins the substituted-font highlight calibration (linear-RGB
+// InDesign pink) the same way q22 pins the placeholder greys.
+#[allow(clippy::assertions_on_constants)]
+fn a3_substituted_highlight_calibration_pinned() {
+    assert!(
+        (SUBSTITUTED_HIGHLIGHT_R - 1.0).abs() < 1e-6,
+        "highlight red channel should be full",
+    );
+    assert!(
+        (SUBSTITUTED_HIGHLIGHT_G - 0.522).abs() < 1e-6,
+        "highlight green channel drifted from the calibrated pink",
+    );
+    assert!(
+        (SUBSTITUTED_HIGHLIGHT_B - 0.604).abs() < 1e-6,
+        "highlight blue channel drifted from the calibrated pink",
+    );
+    // It must read as pink: red dominant, blue above green.
+    assert!(SUBSTITUTED_HIGHLIGHT_R > SUBSTITUTED_HIGHLIGHT_B);
+    assert!(SUBSTITUTED_HIGHLIGHT_B > SUBSTITUTED_HIGHLIGHT_G);
+}
+
+/// A3/A4 — fixture: one TextFrame whose story asks for an
+/// unresolvable "Ghost Family" (served by the resolver's default-font
+/// catch-all → substituted) plus one Rectangle carrying an inline
+/// `<PDF/>` with no link (the deliberate render-the-fill fall-through).
+fn degraded_asset_fixture_idml() -> Vec<u8> {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="20 20 120 380"/>
+    <Rectangle Self="r1" GeometricBounds="150 20 250 120">
+      <PDF/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+    zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Ghost Family" PointSize="12">
+        <Content>Missing font text</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    )
+    .unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+fn is_substituted_highlight_fill(cmd: &paged_compose::DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        paged_compose::DisplayCommand::FillPath {
+            paint: Paint::Solid(c),
+            ..
+        } if (c.r - SUBSTITUTED_HIGHLIGHT_R).abs() < 1e-6
+            && (c.g - SUBSTITUTED_HIGHLIGHT_G).abs() < 1e-6
+            && (c.b - SUBSTITUTED_HIGHLIGHT_B).abs() < 1e-6
+    )
+}
+
+fn is_ghost_cross_stroke(cmd: &paged_compose::DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        paged_compose::DisplayCommand::StrokePath { stroke, .. }
+            if (stroke.width - PLACEHOLDER_X_STROKE_PT).abs() < 1e-6
+    )
+}
+
+#[test]
+fn degraded_asset_markers_off_emits_no_marker_commands() {
+    // Mirrors q22's calibration intent for A3/A4: with the option at
+    // its default `false`, a degraded document (substituted font +
+    // unrenderable inline PDF) must emit NO pink highlight and NO
+    // ghost-cross — export output stays byte-identical to pre-A3.
+    let bytes = degraded_asset_fixture_idml();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let inter = inter_font_bytes();
+    let resolver = crate::BytesResolver::new().with_default_font(inter.clone());
+    let options = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let cmds: Vec<_> = built
+        .pages
+        .iter()
+        .flat_map(|p| p.list.commands.iter())
+        .collect();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, paged_compose::DisplayCommand::FillPath { .. })),
+        "sanity: the substituted text still renders glyph fills"
+    );
+    assert!(
+        !cmds.iter().any(|c| is_substituted_highlight_fill(c)),
+        "no pink highlight when degraded_asset_markers is off"
+    );
+    assert!(
+        !cmds.iter().any(|c| is_ghost_cross_stroke(c)),
+        "no ghost-cross strokes when degraded_asset_markers is off"
+    );
+    // The substitution FACT is still reported (diagnostics are not
+    // gated by the visual-marker option), once per (family, style).
+    let subst: Vec<_> = built
+        .diagnostics
+        .items
+        .iter()
+        .filter(|d| d.code == crate::diagnostics::DiagnosticCode::FontSubstituted)
+        .collect();
+    assert_eq!(subst.len(), 1, "one FontSubstituted per (family, style)");
+    assert!(subst[0].message.contains("Ghost Family"));
+}
+
+#[test]
+fn degraded_asset_markers_on_emits_pink_rect_and_ghost_cross() {
+    let bytes = degraded_asset_fixture_idml();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let inter = inter_font_bytes();
+    let resolver = crate::BytesResolver::new().with_default_font(inter.clone());
+    let options = PipelineOptions {
+        assets: Some(&resolver),
+        degraded_asset_markers: true,
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let cmds: Vec<_> = built
+        .pages
+        .iter()
+        .flat_map(|p| p.list.commands.iter())
+        .collect();
+    assert!(
+        cmds.iter().any(|c| is_substituted_highlight_fill(c)),
+        "substituted-font text must paint the pink highlight rect"
+    );
+    let crosses = cmds.iter().filter(|c| is_ghost_cross_stroke(c)).count();
+    assert_eq!(
+        crosses, 2,
+        "inline-PDF missing-link frame must paint exactly the two \
+         ghost-cross diagonals (stroke-only, no grey fill)"
+    );
+    // Stroke-only: the ghost-cross must NOT bring the placeholder's
+    // 50% grey fill with it (that is the real missing-image visual).
+    let grey_fills = cmds
+        .iter()
+        .filter(|c| {
+            matches!(
+                c,
+                paged_compose::DisplayCommand::FillPath {
+                    paint: Paint::Solid(col),
+                    ..
+                } if (col.r - PLACEHOLDER_FILL_RGB).abs() < 1e-6
+                    && (col.g - PLACEHOLDER_FILL_RGB).abs() < 1e-6
+                    && (col.b - PLACEHOLDER_FILL_RGB).abs() < 1e-6
+            )
+        })
+        .count();
+    assert_eq!(grey_fills, 0, "ghost-cross must not add a grey fill");
+    // The pink paints BEFORE (behind) the first glyph fill of the
+    // substituted text on its page.
+    let page0 = &built.pages[0].list.commands;
+    let pink_idx = page0
+        .iter()
+        .position(is_substituted_highlight_fill)
+        .expect("pink highlight on page 0");
+    let later_fill = page0[pink_idx + 1..].iter().any(|c| {
+        matches!(c, paged_compose::DisplayCommand::FillPath { paint: Paint::Solid(col), .. }
+            if (col.r - SUBSTITUTED_HIGHLIGHT_R).abs() > 1e-6)
+    });
+    assert!(later_fill, "glyph fills must follow (paint over) the pink");
+    let unrenderable: Vec<_> = built
+        .diagnostics
+        .items
+        .iter()
+        .filter(|d| d.code == crate::diagnostics::DiagnosticCode::ImageContentUnrenderable)
+        .collect();
+    assert_eq!(unrenderable.len(), 1);
+    assert_eq!(unrenderable[0].frame_id.as_deref(), Some("r1"));
 }
 
 /// Q-08 (hypothesis check, rect / oval path): for a rotated

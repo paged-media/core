@@ -438,6 +438,26 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // Ovals carried every sibling style arm but not FrameBounds, so
+        // the unrotated translate gesture (canonical commit op:
+        // SetProperty { FrameBounds }) failed on any oval — found by the
+        // 2026-08-17 corpus sweep once the editor surfaced the
+        // GestureFailure::Other message. Plain field write like its
+        // siblings — the elliptical outline derives from the box.
+        (NodeId::Oval(id), PropertyPath::FrameBounds) => {
+            let new_bounds = expect_bounds(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = bounds_to_array(oval.bounds);
+            oval.bounds = bounds_from_array(new_bounds);
+            (
+                Value::Bounds(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         (NodeId::Polygon(id), PropertyPath::FrameStrokeColor) => {
             let new_color = expect_color_ref(path, value)?;
             let poly = find_polygon_mut(doc, id)

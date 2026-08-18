@@ -435,7 +435,7 @@ fn path_type_baseline_offset_units(alignment: Option<&str>, ascender: i16, desce
 /// tessellated curve. Approximates IDML's text-on-path:
 ///
 ///   - Concatenates every paragraph's runs into a single styled
-///     string and shapes them with rustybuzz, exactly like the body
+///     string and shapes them with harfrust, exactly like the body
 ///     text path. Per-paragraph styles (alignment, leading, tabs)
 ///     are intentionally ignored — text-on-path is a single
 ///     baseline, not a multi-line column.
@@ -550,8 +550,11 @@ pub(super) fn emit_text_path_into(
             // `default_font` directly. Without this the text-on-path
             // would silently emit zero glyphs whenever the host
             // story's runs lack a directly-set `AppliedFont`.
+            // Text-on-path doesn't render the substituted highlight
+            // (it has no line pass), so the A1 flag is dropped here.
             let face_bytes_b = font_table
                 .bytes_for(resolved.font.as_deref(), resolved.font_style.as_deref())
+                .map(|(bytes, _substituted)| bytes)
                 .or_else(|| {
                     options.assets.and_then(|r| {
                         r.resolve_font(
@@ -577,9 +580,10 @@ pub(super) fn emit_text_path_into(
             // fallback path that `harvest_face_keys` didn't see).
             let font_id = fnv_1a_u32(face_bytes_b.as_ref());
             let wght_bits = wght_for_font_style(resolved.font_style.as_deref()).to_bits();
-            let owned_face: Option<rustybuzz::Face> =
+            let owned_face: Option<paged_text::Face> =
                 if font_table.face(font_id, wght_bits).is_none() {
-                    let Some(mut rf) = rustybuzz::Face::from_slice(face_bytes_b.as_ref(), 0) else {
+                    let Some(mut rf) = paged_text::Face::from_slice(face_bytes_b.as_ref(), 0)
+                    else {
                         continue;
                     };
                     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
@@ -588,7 +592,7 @@ pub(super) fn emit_text_path_into(
                         .into_iter()
                         .any(|axis| axis.tag == wght_tag);
                     if has_wght_axis {
-                        rf.set_variations(&[rustybuzz::Variation {
+                        rf.set_variations(&[paged_text::Variation {
                             tag: wght_tag,
                             value: f32::from_bits(wght_bits),
                         }]);
@@ -597,7 +601,7 @@ pub(super) fn emit_text_path_into(
                 } else {
                     None
                 };
-            let rb_face: &rustybuzz::Face = match font_table.face(font_id, wght_bits) {
+            let rb_face: &paged_text::Face = match font_table.face(font_id, wght_bits) {
                 Some(f) => f,
                 None => owned_face.as_ref().unwrap(),
             };

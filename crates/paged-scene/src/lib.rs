@@ -1348,7 +1348,7 @@ pub struct ResolvedRunAttrs {
     /// `OTFFigureStyle`, `OTFStylisticSets`, …). Resolves through the
     /// direct > character-style chain; IDML records these at the
     /// character level only, so there is no paragraph-style fallback.
-    /// The renderer maps the resolved bag to rustybuzz feature tags via
+    /// The renderer maps the resolved bag to OpenType feature tags via
     /// `paged_text::ShapingFeatures`.
     pub otf: paged_model::OtfFeatures,
 }

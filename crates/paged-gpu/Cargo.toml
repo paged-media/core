@@ -23,19 +23,22 @@ cpu = ["dep:tiny-skia", "dep:image"]
 
 [dependencies]
 paged-compose = { path = "../paged-compose" }
-# vello 0.8 / tiny-skia 0.12 / wgpu 29 — current Chrome ships the
+# vello 0.10 / tiny-skia 0.12 / wgpu 29 — current Chrome ships the
 # post-2024 WebGPU spec and rejects wgpu < 24's
 # `maxInterStageShaderComponents` limit. wgpu is direct-deps so its
 # version is explicit; we still use vello for the path rasterizer.
+# wgpu 30 is BLOCKED on vello: 0.10.0 (the newest release) requires
+# wgpu ^29 — forcing 30 splits the wgpu types and cargo refuses
+# (verified 2026-08-18). Revisit with vello's next release.
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-vello = { git = "https://github.com/linebender/vello.git", tag = "v0.9.0", optional = true, default-features = false, features = ["wgpu"] }
+vello = { version = "0.10.0", optional = true, default-features = false, features = ["wgpu"] }
 tiny-skia = { version = "0.12", optional = true }
 image = { workspace = true, optional = true }
-wgpu = { version = "29.0.1", optional = true }
+wgpu = { version = "29.0.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas"] }
@@ -43,7 +46,7 @@ web-sys = { version = "0.3", features = ["HtmlCanvasElement", "OffscreenCanvas"]
 # On wasm32 we always want it on so the worker can talk to
 # `navigator.gpu`. Native targets continue using Vulkan / Metal /
 # DX12 (wgpu's default features).
-wgpu = { version = "29.0.1", optional = true, features = ["webgpu"] }
+wgpu = { version = "29.0.3", optional = true, features = ["webgpu"] }
 # Sub-phase D — PNG-readback for offscreen Vello renders (used by the
 # fidelity test driver to compare Vello's GPU output against the
 # reference PDF). image + futures-channel are wasm-only because

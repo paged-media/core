@@ -2699,7 +2699,7 @@ pub struct TabStop {
 /// cascade `None` means the feature is off (its OpenType default).
 /// `merge_below` fills each unset field from the level below.
 ///
-/// The renderer maps these to rustybuzz feature tags in
+/// The renderer maps these to OpenType feature tags in
 /// `paged_text::ShapingFeatures` — see that type for the tag table.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OtfFeatures {

@@ -14,10 +14,10 @@
 
 //! End-to-end test exercising the full text path with real OpenType
 //! fonts. Every other test in this crate either uses placeholder
-//! font bytes (rustybuzz never shapes) or skips text by registering
+//! font bytes (the shaper never shapes) or skips text by registering
 //! no resolver. This one drives:
 //!
-//!     parse → scene → shape (rustybuzz) → compose (Knuth-Plass)
+//!     parse → scene → shape (harfrust) → compose (Knuth-Plass)
 //!         → outline (ttf-parser) → CPU raster → pixel sample
 //!
 //! Fonts are vendored under `corpus/fonts/` (Google Fonts:

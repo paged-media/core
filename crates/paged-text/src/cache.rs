@@ -309,6 +309,10 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_optional_f32(r.tracking);
         h.add_bool(r.underline);
         h.add_bool(r.strikethru);
+        // Substitution reaches every laid-out glyph (the degraded-asset
+        // highlight reads it), so two runs identical except for the
+        // flag must not alias in the cache.
+        h.add_bool(r.substituted);
         h.add_f32(r.baseline_shift_pt);
         h.add_f32(r.horizontal_scale_pct);
         h.add_f32(r.vertical_scale_pct);
@@ -531,7 +535,7 @@ mod tests {
                 .join("../../corpus/fonts/Inter.ttf"),
         )
         .expect("Inter.ttf fixture");
-        let face = rustybuzz::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let face = crate::shape::Face::from_slice(&bytes, 0).expect("parse Inter");
         let opts = LayoutOptions::new(400.0, 12.0);
 
         let base = StyledRun {
@@ -542,6 +546,7 @@ mod tests {
             font_id: 1,
             underline: false,
             strikethru: false,
+            substituted: false,
             baseline_shift_pt: 0.0,
             horizontal_scale_pct: 100.0,
             vertical_scale_pct: 100.0,
@@ -579,6 +584,13 @@ mod tests {
                 "baseline_shift_pt",
                 StyledRun {
                     baseline_shift_pt: 4.0,
+                    ..base
+                },
+            ),
+            (
+                "substituted",
+                StyledRun {
+                    substituted: true,
                     ..base
                 },
             ),

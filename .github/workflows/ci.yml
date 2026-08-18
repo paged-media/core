@@ -209,3 +209,197 @@ jobs:
           else
             echo "::warning title=Unpublished protocol::PROTOCOL_VERSION is $P but no v0.${P}.* tag exists. Tag \`v0.${P}.<patch>\` to publish the engine packages the editor pins (protocol-governance §4)."
           fi
+
+  # Audit G1 — the HARD gate the warn-only nudge above should have been:
+  # during the 2026 npm-token outage NINE protocol bumps (52–60) merged
+  # to main untagged and the nudge's warnings scrolled by unread
+  # (recovered at v0.61.0). Governance (protocol-governance, "Release
+  # coupling"): a protocol bump on main without its `v0.<P>.*` tag is an
+  # unpublished engine the editor cannot pin. So: when a push to main
+  # CHANGES PROTOCOL_VERSION, the matching tag must exist or this job
+  # FAILS. Pushes that leave the constant alone pass untouched — the
+  # standing-state warning stays with tag-on-bump.
+  protocol-tag-guard:
+    name: protocol-tag-guard
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for the push-range diff + tags
+      - name: fail if this push bumps PROTOCOL_VERSION without its tag
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          CHANNEL=crates/paged-canvas/src/channel.rs
+          proto_at() {  # PROTOCOL_VERSION at a git rev; "" when unparseable/absent
+            git show "$1:$CHANNEL" 2>/dev/null \
+              | grep -E 'pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion\(' \
+              | head -n1 | sed -E 's/.*ProtocolVersion\(([0-9]+)\).*/\1/' || true
+          }
+          NEW=$(proto_at HEAD)
+          if [ -z "$NEW" ]; then
+            echo "::warning::could not parse PROTOCOL_VERSION at HEAD — skipping protocol-tag-guard"
+            exit 0
+          fi
+          # Push-range base: github.event.before — unless this is a first
+          # push (all-zero SHA) or a force-push whose old tip is gone from
+          # the repo; then fall back to HEAD~1 (best available base; a
+          # root commit has none, so OLD stays empty and counts as a
+          # change, which is the safe direction).
+          if [ -z "${BEFORE:-}" ] \
+             || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            BEFORE=$(git rev-parse --verify -q HEAD~1 || true)
+          fi
+          OLD=""
+          if [ -n "$BEFORE" ]; then
+            OLD=$(proto_at "$BEFORE")
+          fi
+          echo "PROTOCOL_VERSION: '${OLD:-<none>}' → '${NEW}' (push base: ${BEFORE:-<none>})"
+          if [ "$OLD" = "$NEW" ]; then
+            echo "protocol-tag-guard ok — this push does not change PROTOCOL_VERSION."
+            exit 0
+          fi
+          git fetch --tags --quiet || true
+          if [ -n "$(git tag -l "v0.${NEW}.*")" ]; then
+            echo "protocol-tag-guard ok — bump to protocol ${NEW} and a v0.${NEW}.* tag exists."
+          else
+            echo "::error title=Untagged protocol bump::This push changes PROTOCOL_VERSION (${OLD:-<none>} → ${NEW}) but no v0.${NEW}.* tag exists. Governance rule (protocol-governance, Release coupling): a protocol bump on main must ship with its release tag — tag v0.${NEW}.<patch> so publish-wasm ships the packages the editor pins. Nine bumps (protocols 52–60) went untagged exactly this way during the 2026 npm-token outage."
+            exit 1
+          fi
+
+  # Audit 17082026 finding A4 / backlog 2.9 — the PDF-export golden lane
+  # (corpus/generated/export-diff.sh, in-tree since 2026-06-04), finally
+  # wired to a REAL gate. The lane exports each generated fixture to PDF,
+  # rasterises it with poppler, renders the same scene with the CPU
+  # renderer, and pixel-diffs the two (self-consistency: exporter vs
+  # renderer — NOT the InDesign fidelity gate in fidelity.yml).
+  #
+  # Runtime, measured 2026-08-18: 227 pages across 33 fixtures, ~90 s for
+  # the diff loop + the release builds of paged-export/paged-inspect/
+  # paged-diff (cache-friendly; ~2.5 min wall warm locally). Comparable to
+  # the corpus job in fidelity.yml, so it runs on every PR — no label
+  # gating needed.
+  #
+  # CMYK profile: the script uses ONE profile on BOTH sides (exporter tags
+  # ICCBased(N4), renderer converts through the same), so parity holds for
+  # any reasonable CMYK profile. CI fetches Ghostscript's freely-licensed
+  # SWOP profile from the PINNED ghostpdl release tag (verified: the full
+  # lane under this profile reproduces the local FOGRA39 results). Without
+  # ANY profile, poppler's naive DeviceCMYK diverges from the renderer's
+  # profile conversion by design (measured: swatches ΔE 5.5) — so if the
+  # fetch ever fails, the lane DEGRADES TO ADVISORY with a loud warning
+  # instead of hard-failing on a colour-management artifact (the same
+  # honest degradation the third-party-sample lane in fidelity.yml uses
+  # for absent assets).
+  #
+  # KNOWN PRE-EXISTING DRIFT (audit A4; measured 2026-08-18, both with
+  # FOGRA39 and with the GS SWOP profile — profile-independent):
+  #   effects   p16 ΔE 2.19 / p17 ΔE 2.09 / p22 ΔE 3.23  (v1 exporter gap:
+  #             inner-shadow/glow/bevel/satin/feather commands are
+  #             documented not-yet-exported — see page.rs walk())
+  #   footnotes p1 SSIM 0.921 (< 0.93)
+  #   swatches  p1/p3 ΔE 1.53 (hovers at the 1.5 ceiling; profile-
+  #             sensitive spot-ink pages — 1.53 GS vs 1.85 FOGRA on p2)
+  # These three fixtures run in a separate ADVISORY step below so the
+  # drift stays loudly visible without blocking unrelated work; every
+  # other fixture is a HARD gate. Thresholds are NOT loosened (repo rule:
+  # never loosen a fidelity threshold to hide a regression) — draining
+  # the advisory list back into the hard set is the tracked follow-up.
+  export-diff:
+    name: pdf export-diff gate
+    needs: toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install poppler-utils (pdftoppm)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+
+      - name: fetch CMYK profile (Ghostscript SWOP, pinned release tag)
+        id: profile
+        run: |
+          set -uo pipefail
+          if curl -fsSL --retry 3 -o /tmp/default_cmyk.icc \
+              "https://raw.githubusercontent.com/ArtifexSoftware/ghostpdl/ghostpdl-10.05.1/iccprofiles/default_cmyk.icc"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "CMYK profile fetched ($(stat -c '%s' /tmp/default_cmyk.icc) bytes)."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=export-diff degraded to advisory::CMYK profile fetch failed — without a shared profile poppler's naive DeviceCMYK diverges from the renderer by design, so this run gates nothing (advisory). Fix the fetch to restore the hard gate."
+          fi
+
+      # The lane diffs against the gitignored corpus/generated/*.idml
+      # fixtures — regenerate them exactly like the test jobs do.
+      - name: regenerate fixtures
+        run: bash scripts/regen-fixtures.sh
+
+      - name: export-diff gate (hard; all fixtures minus known drift)
+        env:
+          PROFILE_FOUND: ${{ steps.profile.outputs.found }}
+        run: |
+          set -euo pipefail
+          # Known-drift fixtures run ADVISORY in the next step — keep
+          # this list in sync with the job header comment.
+          KNOWN_DRIFT="effects footnotes swatches"
+          gate=()
+          for f in corpus/generated/*.idml; do
+            n=$(basename "$f" .idml)
+            case " $KNOWN_DRIFT " in
+              *" $n "*) ;;
+              *) gate+=("$n") ;;
+            esac
+          done
+          echo "hard-gating ${#gate[@]} fixtures (advisory: $KNOWN_DRIFT)"
+          if [ "$PROFILE_FOUND" = "true" ]; then
+            export PAGED_CMYK_PROFILE=/tmp/default_cmyk.icc
+          else
+            # No shared profile → colour parity is unmeasurable; run
+            # advisory rather than fail on a CM artifact (see header).
+            export IDML_EXPORT_DIFF_GATE=advisory
+          fi
+          ./corpus/generated/export-diff.sh "${gate[@]}"
+
+      - name: export-diff known-drift fixtures (advisory)
+        if: ${{ !cancelled() }}
+        env:
+          PROFILE_FOUND: ${{ steps.profile.outputs.found }}
+        run: |
+          set -euo pipefail
+          KNOWN_DRIFT="effects footnotes swatches"
+          if [ "$PROFILE_FOUND" = "true" ]; then
+            export PAGED_CMYK_PROFILE=/tmp/default_cmyk.icc
+          fi
+          export IDML_EXPORT_DIFF_GATE=advisory
+          # shellcheck disable=SC2086
+          ./corpus/generated/export-diff.sh $KNOWN_DRIFT | tee /tmp/export-diff-advisory.txt
+          {
+            echo "## PDF export-diff — known-drift fixtures (ADVISORY)"
+            echo ""
+            echo '```'
+            cat /tmp/export-diff-advisory.txt
+            echo '```'
+            echo ""
+            echo "Pre-existing drift recorded by audit 17082026 (A4); these fixtures do not"
+            echo "block merges until the drift is fixed and they rejoin the hard gate above."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q FAIL /tmp/export-diff-advisory.txt; then
+            echo "::warning title=export-diff known drift::effects/footnotes/swatches still exceed the export-diff thresholds (audit 17082026 A4). Advisory only — fix the drift, then move them back into the hard gate."
+          fi
+
+      - name: upload diff output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-diff-output
+          # Per-fixture exported PDF + poppler + native rasters — enough
+          # to triage any exporter/renderer divergence.
+          path: /tmp/paged-export-diff
+          if-no-files-found: warn
+          retention-days: 14

@@ -358,3 +358,23 @@ impl DocState {
         Ok(self.pdf.finish())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ref_allocator_hands_out_dense_ids_from_one() {
+        // The whole xref discipline rests on this: ids strictly
+        // sequential from 1 in call order, so the same input yields
+        // the same object numbering (and a dense xref table).
+        let mut a = RefAllocator::new();
+        assert_eq!(a.alloc(), Ref::new(1));
+        assert_eq!(a.alloc(), Ref::new(2));
+        assert_eq!(a.alloc(), Ref::new(3));
+
+        // Default is the same as new() — no alternate starting point.
+        let mut d = RefAllocator::default();
+        assert_eq!(d.alloc(), Ref::new(1));
+    }
+}

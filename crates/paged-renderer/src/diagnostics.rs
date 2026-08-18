@@ -63,6 +63,19 @@ pub enum DiagnosticCode {
     /// the document's `<Section>` numbering rules (or a 1-based fallback
     /// when no section applies).
     SectionNumberingFallback,
+    /// A1/A3 — a font `(family, style)` referenced by the document was
+    /// served by the resolver's catch-all substitute instead of the
+    /// requested face; affected text shaped and rendered with the
+    /// stand-in (and is highlighted pink when
+    /// `PipelineOptions::degraded_asset_markers` is on). Fired once per
+    /// distinct `(family, style)`. Appended at the enum END (the
+    /// append-only contract above).
+    FontSubstituted,
+    /// A4 — a frame's inline `<EPS>` / `<PDF>` content has no
+    /// resolvable link and no interpreter to rasterise it; only the
+    /// frame's intrinsic fill rendered (plus the stroke-only
+    /// ghost-cross when `degraded_asset_markers` is on).
+    ImageContentUnrenderable,
 }
 
 impl DiagnosticCode {
@@ -75,6 +88,8 @@ impl DiagnosticCode {
             DiagnosticCode::ImageClippingPathDeferred => Severity::Info,
             DiagnosticCode::FootnoteOverflow => Severity::Warning,
             DiagnosticCode::SectionNumberingFallback => Severity::Info,
+            DiagnosticCode::FontSubstituted => Severity::Warning,
+            DiagnosticCode::ImageContentUnrenderable => Severity::Warning,
         }
     }
 }

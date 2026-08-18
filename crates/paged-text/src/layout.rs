@@ -26,11 +26,10 @@
 use std::ops::Range;
 
 use paragraph_breaker::{Breakpoint, Item};
-use rustybuzz::Face;
 
 use crate::compose::{compose_paragraph, ComposeOptions, TextShaper};
 use crate::shape::{
-    apply_tracking, shape_run, shape_run_with_features, ShapedRun, ADVANCE_PRECISION,
+    apply_tracking, shape_run, shape_run_with_features, Face, ShapedRun, ADVANCE_PRECISION,
 };
 
 /// A glyph positioned in frame space, ready for rasterization.
@@ -62,6 +61,12 @@ pub struct PositionedGlyph {
     /// them false.
     pub underline: bool,
     pub strikethru: bool,
+    /// The glyph was shaped with a *substituted* font — the resolver
+    /// couldn't serve the run's requested (family, style) and a
+    /// stand-in face was used. Flows from `StyledRun::substituted`
+    /// the same way `underline` does; leaders / synthetic glyphs stay
+    /// `false`. Drives the renderer's degraded-asset pink highlight.
+    pub substituted: bool,
     /// IDML `HorizontalScale` as a multiplier (1.0 = identity). Drives
     /// the glyph-emit affine x-scale so painted glyphs are stretched
     /// to match the breaker's advance (P-08).
@@ -255,6 +260,7 @@ pub fn position_line(
             point_size: 0.0,
             underline: false,
             strikethru: false,
+            substituted: false,
             x_scale: 1.0,
             y_scale: 1.0,
             skew_deg: 0.0,
@@ -351,6 +357,11 @@ pub struct StyledRun<'a> {
     pub font_id: u32,
     pub underline: bool,
     pub strikethru: bool,
+    /// The run's font is a substitute for its requested (family,
+    /// style) — traced from the asset-resolver seam. Copied onto every
+    /// output glyph (`PositionedGlyph::substituted`), mirroring how
+    /// `underline` flows.
+    pub substituted: bool,
     /// IDML `BaselineShift` in pt. Positive lifts glyphs above the
     /// baseline; negative drops them. Applied per-glyph after layout
     /// so the line height (computed from font metrics + leading)
@@ -378,7 +389,7 @@ pub struct StyledRun<'a> {
     /// no per-cluster fallback (the legacy behaviour).
     pub fallback_faces: &'a [&'a Face<'a>],
     /// Phase 4 typography — OpenType feature toggles. Default
-    /// (`ShapingFeatures::default()`) means rustybuzz's standard
+    /// (`ShapingFeatures::default()`) means the shaper's standard
     /// behaviour (kern + liga on). When the IDML carries
     /// `LigaturesOn="false"` or `KerningMethod="None"`, callers set
     /// the relevant fields so `shape_run` opts out of those features.
@@ -880,6 +891,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 point_size: run.point_size,
                 underline: run.underline,
                 strikethru: run.strikethru,
+                substituted: run.substituted,
                 x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                 y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
                 skew_deg: run.skew_deg,
@@ -912,6 +924,9 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         point_size: r.point_size,
                         underline: r.underline,
                         strikethru: r.strikethru,
+                        // The synthetic hyphen shapes with the owning
+                        // run's face, so it shares that run's flag.
+                        substituted: r.substituted,
                         x_scale: (r.horizontal_scale_pct / 100.0).max(0.0),
                         y_scale: (r.vertical_scale_pct / 100.0).max(0.0),
                         skew_deg: r.skew_deg,
@@ -1302,11 +1317,13 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     ch: leader_str.chars().next(),
                     font_id: run.font_id,
                     point_size: run.point_size,
-                    // Leaders don't carry underline / strikethrough —
-                    // those decorations belong to the visible content
-                    // runs, not the synthesised tab fill.
+                    // Leaders don't carry underline / strikethrough /
+                    // the substituted flag — those belong to the
+                    // visible content runs, not the synthesised tab
+                    // fill.
                     underline: false,
                     strikethru: false,
+                    substituted: false,
                     x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                     y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
                     skew_deg: run.skew_deg,
@@ -1751,6 +1768,7 @@ mod tests {
             point_size,
             underline: false,
             strikethru: false,
+            substituted: false,
             x_scale: 1.0,
             y_scale: 1.0,
             skew_deg: 0.0,
@@ -1788,6 +1806,7 @@ mod tests {
                 point_size: 12.0,
                 underline: false,
                 strikethru: false,
+                substituted: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
                 skew_deg: 0.0,
@@ -1999,6 +2018,7 @@ mod tests {
                 point_size: 12.0,
                 underline: false,
                 strikethru: false,
+                substituted: false,
                 x_scale: 1.0,
                 y_scale: 1.0,
                 skew_deg: 0.0,

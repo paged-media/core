@@ -1891,9 +1891,11 @@ fn measure_cell_paragraph(
     // Per-run bytes with per-paragraph fallback for any run whose
     // (family, style) doesn't resolve — keeps height-measurement
     // honest even when one cell run references an absent font.
-    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+    let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
         return 0.0;
     };
+    let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
+        resolved_fonts.into_iter().unzip();
     let wghts: Vec<f32> = resolved_runs
         .iter()
         .map(|r| wght_for_font_style(r.font_style.as_deref()))
@@ -1910,9 +1912,9 @@ fn measure_cell_paragraph(
     // Shaping faces: prefer the per-render FontTable cache (built
     // from a full harvest of every run, table cells included); fall
     // back to building on demand for runs the cache didn't see.
-    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
+    let mut owned_shaping_faces: Vec<Option<paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
-    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+    let mut shaping_faces: Vec<Option<&paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
     let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
@@ -1926,7 +1928,7 @@ fn measure_cell_paragraph(
             .is_none()
         {
             let bytes_ref = bytes_pool[i].as_ref();
-            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            let Some(mut rf) = paged_text::Face::from_slice(bytes_ref, 0) else {
                 return 0.0;
             };
             let has_wght_axis = rf
@@ -1934,7 +1936,7 @@ fn measure_cell_paragraph(
                 .into_iter()
                 .any(|axis| axis.tag == wght_tag);
             if has_wght_axis {
-                rf.set_variations(&[rustybuzz::Variation {
+                rf.set_variations(&[paged_text::Variation {
                     tag: wght_tag,
                     value: wghts[i],
                 }]);
@@ -1977,6 +1979,7 @@ fn measure_cell_paragraph(
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+            substituted: substituted_flags[i],
             baseline_shift_pt: {
                 // Add the `Position` (super/subscript) baseline offset
                 // on top of any explicit `BaselineShift`.
@@ -2054,9 +2057,11 @@ pub(super) fn emit_cell_paragraph(
     // Per-run bytes with per-paragraph fallback (matches the main
     // emit path). A single unresolvable run no longer takes the
     // whole cell paragraph down with it.
-    let Some(bytes_pool) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+    let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
         return 0.0;
     };
+    let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
+        resolved_fonts.into_iter().unzip();
     // Per-run wght axis values, derived from the resolved FontStyle.
     // Identical wiring to the main `emit_paragraph_into_chain` path —
     // table-cell text needs Bold / Light pinning too. Without this,
@@ -2069,7 +2074,7 @@ pub(super) fn emit_cell_paragraph(
         .collect();
     // Reuse a shaped face only when both bytes AND weight match; a
     // bold + regular pair sharing the same Inter.ttf bytes still
-    // needs two distinct rustybuzz::Face objects so set_variations
+    // needs two distinct paged_text::Face objects so set_variations
     // doesn't fight itself.
     let mut unique_idx: Vec<usize> = Vec::with_capacity(bytes_pool.len());
     for (i, b) in bytes_pool.iter().enumerate() {
@@ -2086,9 +2091,9 @@ pub(super) fn emit_cell_paragraph(
     // fallback for any (font_id, wght_bits) the cache didn't see.
     let mut outline_faces: Vec<Option<ttf_parser::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
-    let mut owned_shaping_faces: Vec<Option<rustybuzz::Face>> =
+    let mut owned_shaping_faces: Vec<Option<paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
-    let mut shaping_faces: Vec<Option<&rustybuzz::Face>> =
+    let mut shaping_faces: Vec<Option<&paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
     let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
@@ -2128,11 +2133,11 @@ pub(super) fn emit_cell_paragraph(
             .face(bytes_font_ids[i], wghts[i].to_bits())
             .is_none()
         {
-            let Some(mut rf) = rustybuzz::Face::from_slice(bytes_ref, 0) else {
+            let Some(mut rf) = paged_text::Face::from_slice(bytes_ref, 0) else {
                 return 0.0;
             };
             if has_wght_axis {
-                rf.set_variations(&[rustybuzz::Variation {
+                rf.set_variations(&[paged_text::Variation {
                     tag: wght_tag,
                     value: wghts[i],
                 }]);
@@ -2179,6 +2184,7 @@ pub(super) fn emit_cell_paragraph(
             font_id: font_ids[i],
             underline: resolved_runs[i].underline.unwrap_or(false),
             strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+            substituted: substituted_flags[i],
             baseline_shift_pt: {
                 // Add the `Position` (super/subscript) baseline offset
                 // on top of any explicit `BaselineShift`.

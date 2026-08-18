@@ -1105,6 +1105,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "font-types"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75382bc7392ef10aad10935f92fc3db36d2d4dad0e5d96d8d65e04f89a07ec39"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "fontdb"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1113,7 +1122,7 @@ dependencies = [
  "log",
  "slotmap",
  "tinyvec",
- "ttf-parser 0.25.1",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -1407,6 +1416,18 @@ dependencies = [
  "crunchy",
  "num-traits",
  "zerocopy",
+]
+
+[[package]]
+name = "harfrust"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ddc6e68be24399b1a9d489f71fd43f6954558294882234c90a322b857e10c63"
+dependencies = [
+ "bitflags 2.11.1",
+ "bytemuck",
+ "read-fonts 0.43.0",
+ "smallvec",
 ]
 
 [[package]]
@@ -2004,7 +2025,7 @@ dependencies = [
  "stringprep",
  "thiserror 2.0.18",
  "time",
- "ttf-parser 0.25.1",
+ "ttf-parser",
  "weezl",
 ]
 
@@ -2389,12 +2410,12 @@ dependencies = [
  "paged-scene",
  "paged-store",
  "paged-text",
- "rustybuzz 0.18.0",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "tsify-next",
+ "ttf-parser",
  "unicode-segmentation",
  "wasm-bindgen",
  "web-sys",
@@ -2445,7 +2466,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tsify-next",
- "ttf-parser 0.24.1",
+ "ttf-parser",
  "wasm-bindgen",
 ]
 
@@ -2491,7 +2512,7 @@ dependencies = [
  "subsetter",
  "thiserror 2.0.18",
  "tracing",
- "ttf-parser 0.25.1",
+ "ttf-parser",
  "xmp-writer",
 ]
 
@@ -2545,7 +2566,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny-skia 0.12.0",
  "tracing",
- "vello 0.9.0",
+ "vello 0.10.0",
  "web-sys",
  "wgpu 29.0.3",
 ]
@@ -2633,7 +2654,6 @@ dependencies = [
  "paged-scene",
  "paged-text",
  "resvg",
- "rustybuzz 0.18.0",
  "serde",
  "serde_json",
  "tempfile",
@@ -2641,7 +2661,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tsify-next",
- "ttf-parser 0.24.1",
+ "ttf-parser",
  "wasm-bindgen",
  "zip",
 ]
@@ -2721,13 +2741,13 @@ name = "paged-text"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "harfrust",
  "hypher",
  "paged-scene",
  "paragraph-breaker",
- "rustybuzz 0.18.0",
  "thiserror 2.0.18",
  "tracing",
- "ttf-parser 0.24.1",
+ "ttf-parser",
  "unicode-bidi",
  "unicode-segmentation",
 ]
@@ -3186,6 +3206,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "read-fonts"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
+dependencies = [
+ "bytemuck",
+ "font-types 0.12.3",
+ "once_cell",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6b5cae85882cfb0167038e7726a426f47ebd808e67af78c2d6bcbb02acbf3ce"
+dependencies = [
+ "bytemuck",
+ "font-types 0.12.3",
+ "once_cell",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3307,24 +3349,6 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustybuzz"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c85d1ccd519e61834798eb52c4e886e8c2d7d698dd3d6ce0b1b47eb8557f1181"
-dependencies = [
- "bitflags 2.11.1",
- "bytemuck",
- "core_maths",
- "log",
- "smallvec",
- "ttf-parser 0.24.1",
- "unicode-bidi-mirroring 0.3.0",
- "unicode-ccc 0.3.0",
- "unicode-properties",
- "unicode-script",
-]
-
-[[package]]
-name = "rustybuzz"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3c7c96f8a08ee34eff8857b11b49b07d71d1c3f4e88f8a88d4c9e9f90b1702"
@@ -3334,9 +3358,9 @@ dependencies = [
  "core_maths",
  "log",
  "smallvec",
- "ttf-parser 0.25.1",
- "unicode-bidi-mirroring 0.4.0",
- "unicode-ccc 0.4.0",
+ "ttf-parser",
+ "unicode-bidi-mirroring",
+ "unicode-ccc",
  "unicode-properties",
  "unicode-script",
 ]
@@ -3507,6 +3531,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "skrifa"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68"
+dependencies = [
+ "bytemuck",
+ "read-fonts 0.41.0",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3543,7 +3577,6 @@ dependencies = [
  "anyhow",
  "clap",
  "paged-text",
- "rustybuzz 0.18.0",
  "serde",
  "serde_json",
 ]
@@ -3555,7 +3588,7 @@ dependencies = [
  "anyhow",
  "image",
  "pollster",
- "ttf-parser 0.24.1",
+ "ttf-parser",
  "vello 0.3.0",
  "wgpu 22.1.0",
 ]
@@ -3564,9 +3597,9 @@ dependencies = [
 name = "spike-wasm-size"
 version = "0.0.0"
 dependencies = [
+ "harfrust",
  "paged-sdk",
- "rustybuzz 0.18.0",
- "ttf-parser 0.24.1",
+ "ttf-parser",
  "wasm-bindgen",
  "wgpu 22.1.0",
 ]
@@ -4029,15 +4062,6 @@ dependencies = [
 
 [[package]]
 name = "ttf-parser"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be21190ff5d38e8b4a2d3b6a3ae57f612cc39c96e83cedeaf7abc338a8bac4a"
-dependencies = [
- "core_maths",
-]
-
-[[package]]
-name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
@@ -4059,21 +4083,9 @@ checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
 
 [[package]]
 name = "unicode-bidi-mirroring"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64af057ad7466495ca113126be61838d8af947f41d93a949980b2389a118082f"
-
-[[package]]
-name = "unicode-bidi-mirroring"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dfa6e8c60bb66d49db113e0125ee8711b7647b5579dc7f5f19c42357ed039fe"
-
-[[package]]
-name = "unicode-ccc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "260bc6647b3893a9a90668360803a15f96b85a5257b1c3a0c3daf6ae2496de42"
 
 [[package]]
 name = "unicode-ccc"
@@ -4153,7 +4165,7 @@ dependencies = [
  "log",
  "pico-args",
  "roxmltree",
- "rustybuzz 0.20.1",
+ "rustybuzz",
  "simplecss",
  "siphasher",
  "strict-num",
@@ -4205,19 +4217,20 @@ dependencies = [
 
 [[package]]
 name = "vello"
-version = "0.9.0"
-source = "git+https://github.com/linebender/vello.git?tag=v0.9.0#875f324f21da93019cae9e8e61d4abfd69893206"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af76ceb17b2869be23598baef40a9c8db4de86b87c60510c3bc245559275a617"
 dependencies = [
  "bytemuck",
  "futures-intrusive",
  "log",
  "peniko 0.6.1",
  "png 0.18.1",
- "skrifa 0.42.1",
+ "skrifa 0.44.0",
  "static_assertions",
  "thiserror 2.0.18",
- "vello_encoding 0.9.0",
- "vello_shaders 0.9.0",
+ "vello_encoding 0.10.0",
+ "vello_shaders 0.10.0",
  "wgpu 29.0.3",
 ]
 
@@ -4236,13 +4249,14 @@ dependencies = [
 
 [[package]]
 name = "vello_encoding"
-version = "0.9.0"
-source = "git+https://github.com/linebender/vello.git?tag=v0.9.0#875f324f21da93019cae9e8e61d4abfd69893206"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e31cd622201690d8dfe9fd8fea8d1ae59db1bfeea414856a617d1d03438418c"
 dependencies = [
  "bytemuck",
  "guillotiere 0.7.0",
  "peniko 0.6.1",
- "skrifa 0.42.1",
+ "skrifa 0.44.0",
  "smallvec",
 ]
 
@@ -4260,14 +4274,15 @@ dependencies = [
 
 [[package]]
 name = "vello_shaders"
-version = "0.9.0"
-source = "git+https://github.com/linebender/vello.git?tag=v0.9.0#875f324f21da93019cae9e8e61d4abfd69893206"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abf943bd2920bfd22928a9c1bad39866f7ffcc1109b6ed924ab52773e3868a83"
 dependencies = [
  "bytemuck",
  "log",
  "naga 29.0.3",
  "thiserror 2.0.18",
- "vello_encoding 0.9.0",
+ "vello_encoding 0.10.0",
 ]
 
 [[package]]
@@ -4575,18 +4590,18 @@ dependencies = [
 
 [[package]]
 name = "wgpu-core-deps-apple"
-version = "29.0.3"
+version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62e51b5447e144b3dbba4feb01f80f4fa21696fa0cd99afb2c3df1affd6fdb28"
+checksum = "f5e39e26c4c0e07589e67d18546cf79ff45383659fc72fca4dd293358a0347f3"
 dependencies = [
  "wgpu-hal 29.0.3",
 ]
 
 [[package]]
 name = "wgpu-core-deps-emscripten"
-version = "29.0.3"
+version = "29.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3487cd6293a963bc5c0c0396f6a2192043c50003c07f4efdccbad3d90ec9d819"
+checksum = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"
 dependencies = [
  "wgpu-hal 29.0.3",
 ]

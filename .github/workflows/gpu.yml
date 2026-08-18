@@ -10,11 +10,16 @@ name: gpu
 # tests skip silently — so this lane only adds coverage, never flakes the
 # default pipeline.
 #
-# ADVISORY: the whole job is `continue-on-error: true` and writes a loud
-# step-summary banner. Software-rasterizer parity isn't a merge gate yet
-# (lavapipe ≠ a real GPU, and Vello on llvmpipe can diverge at the pixel
-# level); promotion to a hard gate is a later, deliberate flip once the
-# lane has proven stable.
+# PROMOTION STEP 1 (fidelity-governance second half; audit 17082026
+# §1.10): `continue-on-error` is REMOVED, so a failure now shows as a
+# red check on the PR/commit instead of a green check with a buried
+# banner. The lane is deliberately NOT added to branch protection's
+# required checks yet — one week of visible-red observation first
+# (llvmpipe ≠ a real GPU; Vello on lavapipe can diverge at the pixel
+# level, and a flaky required gate would be neutered within days).
+# After the observation week, the deliberate second flip is marking
+# this check required in branch protection — that flip happens in the
+# repo settings, not in this file.
 
 on:
   push:
@@ -41,11 +46,12 @@ jobs:
         run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
 
   vello-lavapipe:
-    name: vello on lavapipe (advisory)
+    name: vello on lavapipe
     needs: toolchain
     runs-on: ubuntu-latest
-    # ADVISORY — a red result here never blocks a merge (see header).
-    continue-on-error: true
+    # No `continue-on-error` — failures are a VISIBLE red check. Not
+    # branch-protection-required yet; see the header (audit 17082026
+    # §1.10).
     env:
       # Force wgpu/Vulkan onto Mesa's lavapipe software ICD. Both env
       # names are honoured by the loader across versions; set both.
@@ -92,24 +98,25 @@ jobs:
           cargo test -p paged-gpu --features vello-backend -- --nocapture
           echo "rc=$?" >> "$GITHUB_OUTPUT"
 
-      - name: loud advisory summary
+      - name: lane summary
         if: ${{ !cancelled() }}
         run: |
           {
-            echo "## GPU lane (Vello on lavapipe) — ADVISORY"
+            echo "## GPU lane (Vello on lavapipe)"
             echo ""
             if [ "${{ steps.gpu_tests.outcome }}" = "success" ]; then
               echo "✅ \`cargo test -p paged-gpu --features vello-backend\` PASSED on Mesa lavapipe."
             else
-              echo "⚠️ \`cargo test -p paged-gpu --features vello-backend\` did NOT pass on Mesa lavapipe."
+              echo "❌ \`cargo test -p paged-gpu --features vello-backend\` did NOT pass on Mesa lavapipe."
               echo ""
-              echo "This lane is **advisory** (\`continue-on-error: true\`) — it does **not** block the merge."
+              echo "This check is now VISIBLY red on failure (promotion step 1, audit 17082026 §1.10) but is"
+              echo "deliberately **not** branch-protection-required during the one-week observation window."
               echo "Software-rasterizer (llvmpipe) parity can diverge from a real GPU; triage the log, don't auto-trust red."
             fi
             echo ""
-            echo "Promotion to a hard gate is a later, deliberate flip once the lane is proven stable (W0.7)."
+            echo "Promotion step 2 — marking this check required — is a repo-settings flip after the observation week (W0.7)."
           } >> "$GITHUB_STEP_SUMMARY"
           # Also emit a workflow annotation so it shows on the checks tab.
           if [ "${{ steps.gpu_tests.outcome }}" != "success" ]; then
-            echo "::warning title=GPU lane advisory::Vello-on-lavapipe tests did not pass; advisory only (does not block merge)."
+            echo "::warning title=GPU lane red::Vello-on-lavapipe tests did not pass; red check is visible but not yet branch-protection-required (observation week, audit 17082026 §1.10)."
           fi

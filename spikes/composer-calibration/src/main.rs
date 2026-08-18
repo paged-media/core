@@ -27,8 +27,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use paged_text::{compose_paragraph, ComposeOptions, RustybuzzMeasurer};
-use rustybuzz::Face;
+use paged_text::{compose_paragraph, ComposeOptions, Face, HarfrustMeasurer};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
@@ -93,7 +92,7 @@ fn main() -> Result<()> {
         std::fs::read(&spec.font).with_context(|| format!("read font {}", spec.font.display()))?;
     let face = Face::from_slice(&font_bytes, 0).context("not a valid TTF/OTF")?;
 
-    let measurer = RustybuzzMeasurer::new(&face, spec.point_size);
+    let measurer = HarfrustMeasurer::new(&face, spec.point_size);
     let mut opts = ComposeOptions::new(spec.column_width_pt);
     if let Some(t) = spec.penalties.tolerance {
         opts.tolerance = t;

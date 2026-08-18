@@ -54,6 +54,21 @@ fn report_image_resolution(
     page.diagnostics.push(d);
 }
 
+/// A4 — record the inline-EPS/PDF fall-through as
+/// `ImageContentUnrenderable`. Only called from the
+/// `degraded_asset_markers` branch (alongside the ghost-cross emit) so
+/// the default path's diagnostics stay byte-identical to before.
+fn report_unrenderable_content(page: &mut BuiltPage, frame_id: Option<&str>) {
+    let mut d = Diagnostic::new(
+        DiagnosticCode::ImageContentUnrenderable,
+        "inline EPS/PDF content cannot be rasterised; frame fill rendered with a ghost-cross marker",
+    );
+    if let Some(f) = frame_id {
+        d = d.with_frame(f);
+    }
+    page.diagnostics.push(d);
+}
+
 /// Resolve, decode, and emit a placed image for a rectangle. Skips
 /// silently if `assets` is unset, the resolver returns `None`, or
 /// decoding fails — IDMLs without their linked assets should still
@@ -132,6 +147,15 @@ pub(super) fn emit_rectangle_image(
                 && options.missing_image_placeholder
             {
                 emit_rectangle_missing_image_placeholder(page, rect, outer);
+            } else if rect.has_image_element
+                && (rect.has_inline_pdf || rect.has_inline_eps)
+                && options.degraded_asset_markers
+            {
+                // A4 — interactive builds mark the deliberate fall-
+                // through with a stroke-only ghost-cross (no grey
+                // fill: content exists, we just can't rasterise it).
+                emit_unrenderable_content_ghost_cross(page, rect.bounds, outer);
+                report_unrenderable_content(page, rect.self_id.as_deref());
             }
             return;
         }
@@ -281,6 +305,12 @@ pub(super) fn emit_polygon_image(
                 && options.missing_image_placeholder
             {
                 emit_polygon_missing_image_placeholder(page, poly, outer);
+            } else if poly.has_image_element
+                && (poly.has_inline_pdf || poly.has_inline_eps)
+                && options.degraded_asset_markers
+            {
+                emit_unrenderable_content_ghost_cross(page, poly.bounds, outer);
+                report_unrenderable_content(page, poly.self_id.as_deref());
             }
             return;
         }
@@ -465,6 +495,12 @@ pub(super) fn emit_oval_image(
                 && options.missing_image_placeholder
             {
                 emit_oval_missing_image_placeholder(page, oval, outer);
+            } else if oval.has_image_element
+                && (oval.has_inline_pdf || oval.has_inline_eps)
+                && options.degraded_asset_markers
+            {
+                emit_unrenderable_content_ghost_cross(page, oval.bounds, outer);
+                report_unrenderable_content(page, oval.self_id.as_deref());
             }
             return;
         }

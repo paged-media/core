@@ -2038,7 +2038,7 @@ fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
 
     // Page 4 hosts the TOC frame. Recover the rendered text by
     // grouping glyph emissions by baseline (one entry per line)
-    // and converting glyph_id → character via the font (rustybuzz
+    // and converting glyph_id → character via the font (the shaper
     // shapes ASCII Inter at PointSize without ligatures so every
     // letter corresponds to one glyph).
     let toc_cmds = &built.pages[3].list.commands;

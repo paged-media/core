@@ -28,6 +28,14 @@ pub(super) const PLACEHOLDER_FILL_RGB: f32 = 0.5;
 pub(super) const PLACEHOLDER_X_STROKE_PT: f32 = 1.5;
 pub(super) const PLACEHOLDER_X_RGB: f32 = 0.0;
 
+/// A3 — InDesign's substituted-font highlight pink, as LINEAR RGB
+/// (display-list colors are linear; gamma is the rasterizer's job).
+/// Derived from InDesign's salmon highlight (~#FFBFCC sRGB):
+/// `linear = ((srgb + 0.055) / 1.055)^2.4` per channel.
+pub(super) const SUBSTITUTED_HIGHLIGHT_R: f32 = 1.0;
+pub(super) const SUBSTITUTED_HIGHLIGHT_G: f32 = 0.522;
+pub(super) const SUBSTITUTED_HIGHLIGHT_B: f32 = 0.604;
+
 pub(super) fn emit_oval_into(
     page: &mut BuiltPage,
     oval: &Oval,
@@ -2435,6 +2443,50 @@ fn emit_diagonal_under_transform(
         stroke,
         transform: outer,
     });
+}
+
+/// A4 — ghost-cross for a frame whose inline `<EPS>` / `<PDF>` content
+/// cannot be rasterised (no PostScript / PDF interpreter) and whose
+/// link is missing: two stroke-only diagonals across the frame bounds,
+/// deliberately WITHOUT the 50% grey fill so it stays visually distinct
+/// from the real missing-image placeholder — the artwork exists, we
+/// just can't render it. Gated on
+/// `PipelineOptions::degraded_asset_markers` at the call sites.
+pub(super) fn emit_unrenderable_content_ghost_cross(
+    page: &mut BuiltPage,
+    bounds: paged_model::Bounds,
+    outer: Transform,
+) {
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return;
+    }
+    let stroke = paged_compose::Stroke::new(PLACEHOLDER_X_STROKE_PT);
+    let dark = Paint::Solid(Color::rgba(
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        PLACEHOLDER_X_RGB,
+        1.0,
+    ));
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
+    emit_diagonal_under_transform(
+        &mut page.list,
+        bounds.right,
+        bounds.top,
+        bounds.left,
+        bounds.bottom,
+        outer,
+        stroke,
+        dark,
+    );
 }
 
 #[cfg(test)]
