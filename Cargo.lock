@@ -2577,6 +2577,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "idml-import",
  "image",
  "paged-compose",
  "paged-model",

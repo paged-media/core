@@ -54,8 +54,13 @@ jobs:
       - name: regenerate fixtures
         run: bash scripts/regen-fixtures.sh
 
+      # --no-fail-fast: a fail-fast abort silently SKIPS every binary after
+      # the first failure and reads as "the rest were green" in a truncated
+      # log — that combination hid a second, unrelated failure twice on
+      # 2026-08-18 (coverage campaign, suite-integrity rule). The step's own
+      # exit code is the gate; never pipe this through tail/grep.
       - name: test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # W0.6 evidence (audit V26): run the workspace suite under cargo-nextest
   # with JUnit output and publish normalized results to paged-media/state
