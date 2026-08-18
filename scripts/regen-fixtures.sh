@@ -20,7 +20,7 @@ SAMPLES=(
   effects footnotes gradients tables images image-clipping anchored
   transparency markers masters corners links-broken links-ok preflight
   numbering variables conditions swatches navigation styles-cascade layout
-  nested-groups paste-into
+  nested-groups paste-into layers-z
 )
 
 cargo build --release --bin paged-gen

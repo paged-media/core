@@ -53,11 +53,13 @@ pub fn cmyk_unit_to_linear_rgb(c: f32, m: f32, y: f32, k: f32) -> Color {
 }
 
 /// Naive 8-bit RGB→CMYK (Adobe-style: K = 255 - max(R,G,B), then the
-/// chromatic channels relative to the remaining range). Lives at the
-/// crate root — not in `cpu` — because both the CPU rasterizer and the
-/// Vello/`vello-backend` overprint-compute path need it, and the latter
-/// must build without the `cpu` feature (WebGPU-only SDK builds). Pure
-/// integer math, no rasterizer dependency.
+/// chromatic channels relative to the remaining range). Only the CPU
+/// rasterizer calls the Rust form — the Vello/`vello-backend`
+/// overprint-compute path mirrors the exact math in WGSL
+/// (`cmyk_compute/shaders/splat_or_overprint.wgsl`), so a cpu-less
+/// build (e.g. paged-export-pdf's cli graph) has no caller and the
+/// workspace's denied dead_code fails it without the gate.
+#[cfg(feature = "cpu")]
 pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
     let max_rgb = r.max(g).max(b);
     let k = 255u8.saturating_sub(max_rgb);

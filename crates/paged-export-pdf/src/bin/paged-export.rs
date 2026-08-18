@@ -27,7 +27,6 @@ use paged_export_pdf::{
     MarkOptions, PdfStandard,
 };
 use paged_renderer::pipeline::{self, FontTable, PipelineOptions};
-use paged_scene::Document;
 
 #[derive(Parser, Debug)]
 #[command(
