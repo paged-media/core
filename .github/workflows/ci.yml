@@ -184,9 +184,27 @@ jobs:
       # wasm-bindgen's reference-types output: "error validating input").
       # Same pin publish-wasm.yml uses. brotli from apt is fine.
       - name: install binaryen (pinned) + brotli
+        # BOUNDED, and apt only when actually needed. `apt-get update`
+        # here was unbounded, and on 2026-08-19 it hung this job for 70+
+        # minutes against a normal runtime of under three — the same
+        # failure that had the editor's Playwright lane stuck in apt for
+        # a month (its `playwright install --with-deps` ran the job's
+        # full 50-minute timeout on every attempt). GitHub's Ubuntu
+        # runners were intermittently unable to reach the archive that
+        # day; azure.archive.ubuntu.com answers with `Ign:` and apt then
+        # sits there.
+        #
+        # So: skip apt entirely when brotli is already on the image, and
+        # bound the step so a hang reports AS a hang instead of eating
+        # the job.
+        timeout-minutes: 8
         run: |
           set -euo pipefail
-          sudo apt-get update && sudo apt-get install -y brotli
+          if command -v brotli >/dev/null 2>&1; then
+            echo "brotli already present ($(command -v brotli)) — skipping apt"
+          else
+            sudo apt-get update && sudo apt-get install -y brotli
+          fi
           BINARYEN=126
           curl -fsSL -o /tmp/binaryen.tgz \
             "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz"
