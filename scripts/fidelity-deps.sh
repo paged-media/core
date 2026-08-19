@@ -5,7 +5,7 @@
 # specific set of external tools + generated assets are present. On a
 # fresh clone (and in lean/package-boundary CI) some are absent: the
 # generated IDML/PDF pairs are gitignored or live in the private corpus
-# repo, `corpus/samples/diff.sh` is the per-fixture render delegate, and
+# repo, `corpus/generated/render-diff.sh` is the per-fixture render engine, and
 # `pdftoppm` (poppler) rasterises the reference PDFs.
 #
 # This script probes each dependency and reports it. It is purely a
@@ -51,11 +51,13 @@ else
   MISSING=1
 fi
 
-# diff.sh delegates per-fixture rendering to corpus/samples/diff.sh.
-if [ -x corpus/samples/diff.sh ]; then
-  note "OK" "corpus/samples/diff.sh present + executable (per-fixture render delegate)"
+# diff.sh delegates per-fixture rendering to corpus/generated/render-diff.sh,
+# which is COMMITTED here (it used to live in the private corpus, which is
+# why this gate silently no-opped in public CI for so long).
+if [ -x corpus/generated/render-diff.sh ]; then
+  note "OK" "corpus/generated/render-diff.sh present + executable (the fidelity engine)"
 else
-  note "MISS" "corpus/samples/diff.sh absent — diff.sh delegates per-fixture rendering to it (exits 2 without it)"
+  note "MISS" "corpus/generated/render-diff.sh absent — it is committed, so this means a partial checkout (diff.sh exits 2)"
   MISSING=1
 fi
 

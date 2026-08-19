@@ -23,9 +23,9 @@ cargo run -p paged-gen -- emit --sample geometry --out corpus/generated
 #    iterates corpus/generated/*.idml, and writes corpus/generated/*.pdf.
 bash tools/indesign-export/run-export.sh
 
-# 3. Run the diff harness. corpus/samples/diff.sh now resolves either
+# 3. Run the diff harness. corpus/generated/render-diff.sh resolves either
 #    corpus/samples/<name>.{idml,pdf} or corpus/generated/<name>.{idml,pdf}.
-bash corpus/samples/diff.sh geometry
+bash corpus/generated/render-diff.sh geometry
 ```
 
 ## Outputs

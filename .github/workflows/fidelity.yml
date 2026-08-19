@@ -82,7 +82,7 @@ jobs:
           retention-days: 14
 
       - name: third-party sample diff (advisory)
-        # Runs ./corpus/samples/diff.sh against any third-party
+        # Runs ./corpus/generated/render-diff.sh against any third-party
         # IDML pair (idml + matching pdf) under corpus/samples/.
         # Those files are gitignored and only present when a dev
         # has staged one locally; CI no-ops when none exist.
@@ -96,5 +96,5 @@ jobs:
             pdf="corpus/samples/$name.pdf"
             [ -f "$pdf" ] || continue
             echo "==> diff for $name"
-            ./corpus/samples/diff.sh "$name" || true
+            ./corpus/generated/render-diff.sh "$name" || true
           done

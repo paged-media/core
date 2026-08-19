@@ -7,7 +7,7 @@
 #   1. Regenerate the IDML via `cargo run -p paged-gen -- emit --sample <name>`.
 #      Generated IDMLs are gitignored and reproducible.
 #   2. Render every page through the CPU backend → cand-NNN.png
-#      (delegates to corpus/samples/diff.sh, which already wires up
+#      (delegates to corpus/generated/render-diff.sh, which wires up
 #      paged-inspect + per-fixture font flags).
 #   3. Rasterise each PDF page via pdftoppm → ref-NNN.png.
 #   4. Run paged-diff per page → JSON report (mean ΔE / p99 ΔE / SSIM).
@@ -19,7 +19,7 @@
 #   cand-NNN.png      candidate (renderer)
 #   ref-NNN.png       reference (rasterised PDF)
 #   heat-NNN.png      heatmap, only on threshold violations
-#   report.json       per-page metrics from corpus/samples/diff.sh
+#   report.json       per-page metrics from corpus/generated/render-diff.sh
 #   gate.json         { fixture, pages_checked, passed, failures: [...] }
 #
 # Usage:
@@ -36,22 +36,25 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GENERATED_DIR="$ROOT/corpus/generated"
 THRESHOLDS="$GENERATED_DIR/fidelity-thresholds.json"
-SAMPLES_DIFF="$ROOT/corpus/samples/diff.sh"
+ENGINE="$ROOT/corpus/generated/render-diff.sh"
 GATE_OUT="${IDML_GENERATED_OUT:-/tmp/idml-generated-diff}"
 GATE_MODE="${IDML_DIFF_GATE:-strict}"   # strict | advisory
 
 [ -f "$THRESHOLDS" ] || { echo "missing $THRESHOLDS"; exit 2; }
-# The render+rasterise+diff engine ($SAMPLES_DIFF) lives in the PRIVATE
-# `paged-media/corpus` repo (it wires up paged-inspect + per-fixture font
-# flags + the envato sample harness), so it is absent from a clean public
-# `core` checkout. When it is missing, SKIP the gate gracefully (no-op,
-# exit 0) instead of hard-failing: the real fidelity gate runs in the
-# corpus repo's own CI, and local dev with the corpus checked out (or the
-# private CI) still runs it normally.
-if [ ! -x "$SAMPLES_DIFF" ]; then
-    echo "==> fidelity engine $SAMPLES_DIFF not present (private paged-media/corpus)"
-    echo "==> skipping the generated-fidelity gate in this environment (no-op)."
-    exit 0
+# The render+rasterise+diff engine used to live in the PRIVATE
+# paged-media/corpus repo, and this gate skipped itself whenever it was
+# absent — which is every clean public checkout, including core's own
+# CI. The step is named "(hard)" and it had never gated anything here:
+# both runners printed "skipping ... (no-op)" and the job went green.
+#
+# The engine is core's now (corpus/generated/render-diff.sh) and the
+# fixtures it runs against are core's license-clear generated set, so
+# there is nothing left to skip FOR. A missing engine is a broken
+# checkout, not an environment to tiptoe around.
+if [ ! -x "$ENGINE" ]; then
+    echo "error: fidelity engine $ENGINE is missing or not executable." >&2
+    echo "It is committed at corpus/generated/render-diff.sh — a partial checkout?" >&2
+    exit 2
 fi
 command -v pdftoppm >/dev/null || { echo "install poppler-utils (pdftoppm)"; exit 2; }
 command -v python3 >/dev/null || { echo "install python3"; exit 2; }
@@ -98,13 +101,13 @@ for fixture in "${FIXTURES[@]}"; do
     fixture_out="$GATE_OUT/$fixture"
     mkdir -p "$fixture_out"
     echo "==> [$fixture] render + rasterise + per-page diff -> $fixture_out"
-    # corpus/samples/diff.sh already handles the heavy lifting:
+    # render-diff.sh already handles the heavy lifting:
     # picks up the IDML from corpus/generated/ when present (line 26),
     # writes report.json to $IDML_DIFF_OUT, applies per-fixture font flags.
     # NOTE: samples/diff.sh `rm -rf $OUT` before writing, so we capture
     # the log in $GATE_OUT (sibling of $fixture_out) where it survives.
     log="$GATE_OUT/$fixture.log"
-    IDML_DIFF_OUT="$fixture_out" "$SAMPLES_DIFF" "$fixture" \
+    IDML_DIFF_OUT="$fixture_out" "$ENGINE" "$fixture" \
         > "$log" 2>&1 || true
     if [ ! -f "$fixture_out/report.json" ]; then
         echo "==> [$fixture] diff.sh did not produce report.json:"
