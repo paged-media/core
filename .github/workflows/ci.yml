@@ -203,6 +203,16 @@ jobs:
           if command -v brotli >/dev/null 2>&1; then
             echo "brotli already present ($(command -v brotli)) — skipping apt"
           else
+            # The Azure mirror is the actual fault. On 2026-08-19 it
+            # answered `Ign:` to every index request while
+            # archive.ubuntu.com responded normally, and apt then sat
+            # there — hanging the editor's Playwright lane for a MONTH
+            # and two core jobs for 70 and 32 minutes. Point sources at
+            # archive.ubuntu.com before updating, so a sick regional
+            # mirror cannot stall the build.
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+                /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list.d/*.sources 2>/dev/null || true
             sudo apt-get update && sudo apt-get install -y brotli
           fi
           BINARYEN=126
@@ -378,6 +388,16 @@ jobs:
           if command -v pdftoppm >/dev/null 2>&1; then
             echo "pdftoppm already present ($(command -v pdftoppm)) — skipping apt"
           else
+            # The Azure mirror is the actual fault. On 2026-08-19 it
+            # answered `Ign:` to every index request while
+            # archive.ubuntu.com responded normally, and apt then sat
+            # there — hanging the editor's Playwright lane for a MONTH
+            # and two core jobs for 70 and 32 minutes. Point sources at
+            # archive.ubuntu.com before updating, so a sick regional
+            # mirror cannot stall the build.
+            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+                /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list.d/*.sources 2>/dev/null || true
             sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
           fi
 

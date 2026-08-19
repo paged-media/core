@@ -74,6 +74,11 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
+          # Bypass the Azure mirror — see the note in ci.yml; on
+          # 2026-08-19 it Ign'd every index request and stalled apt.
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' \
+              /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list.d/*.sources 2>/dev/null || true
           sudo apt-get update
           # mesa-vulkan-drivers ships lavapipe (lvp); vulkan-tools gives
           # vulkaninfo for the sanity check below; libvulkan1 + the loader
