@@ -67,6 +67,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: install Mesa lavapipe (software Vulkan) + vulkan tools
+        # Bounded: unlike the poppler/brotli cases this genuinely needs
+        # apt (lavapipe is not on the image), so it cannot be skipped —
+        # but it must not hang unbounded either. See 2026-08-19, when
+        # three unbounded apt calls stalled across this workspace.
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           sudo apt-get update

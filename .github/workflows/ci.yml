@@ -363,7 +363,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: install poppler-utils (pdftoppm)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+        # Bounded, and apt only when the tool is actually absent.
+        # 2026-08-19: GitHub's Ubuntu runners were intermittently unable
+        # to reach the archive — azure.archive.ubuntu.com answers `Ign:`
+        # and apt then waits indefinitely. Three unbounded calls hung
+        # that day (editor's playwright --with-deps for its job's full
+        # 50-minute timeout on EVERY run for a month; core's wasm-size
+        # gate for 70 minutes against a <3-minute norm; this one for 32
+        # against 5-7). In two of the three the package was already on
+        # the image, so the call was pure risk for no benefit.
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          if command -v pdftoppm >/dev/null 2>&1; then
+            echo "pdftoppm already present ($(command -v pdftoppm)) — skipping apt"
+          else
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+          fi
 
       - name: fetch CMYK profile (Ghostscript SWOP, pinned release tag)
         id: profile
