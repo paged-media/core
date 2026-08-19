@@ -50,3 +50,125 @@ pub mod text_overset;
 pub mod text_wrap;
 pub mod transparency;
 pub mod variables;
+
+/// Every built-in sample, by CLI name.
+///
+/// This is the ONE list. It used to be four: the `match` arms in
+/// `bin/paged-gen.rs`, the `known:` string in that match's error, the
+/// `SAMPLES` array in `scripts/regen-fixtures.sh`, and a hand-copied loop
+/// in the EDITOR's `tests.yml`. The copies drifted in the direction no
+/// guard could see — the build fails loudly on a name that does not
+/// exist, but nothing noticed a name that exists and was left OUT. Both
+/// `layers-z` and `paste-into` went missing from the editor's copy that
+/// way, and four `layers-panel` specs failed there with `Could not find
+/// EOCD` because they fetched a fixture CI had never emitted.
+pub const SAMPLES: &[&str] = &[
+    "geometry",
+    "geometry-groups",
+    "strokes-fills",
+    "text",
+    "text-advanced",
+    "text-autosize",
+    "text-letterspacing",
+    "text-on-path",
+    "text-overset",
+    "text-in-shape",
+    "text-wrap",
+    "effects",
+    "footnotes",
+    "gradients",
+    "tables",
+    "images",
+    "image-clipping",
+    "anchored",
+    "transparency",
+    "markers",
+    "masters",
+    "corners",
+    "links-broken",
+    "links-ok",
+    "preflight",
+    "numbering",
+    "variables",
+    "conditions",
+    "swatches",
+    "navigation",
+    "styles-cascade",
+    "layout",
+    "nested-groups",
+    "paste-into",
+    "layers-z",
+];
+
+/// Build a sample by its CLI name, or `None` if the name is unknown.
+pub fn build(name: &str) -> Option<crate::Sample> {
+    Some(match name {
+        "geometry" => geometry::build(),
+        "geometry-groups" => geometry_groups::build(),
+        "strokes-fills" => strokes_fills::build(),
+        "text" => text::build(),
+        "text-advanced" => text_advanced::build(),
+        "text-autosize" => text_autosize::build(),
+        "text-letterspacing" => text_letterspacing::build(),
+        "text-on-path" => text_on_path::build(),
+        "text-overset" => text_overset::build(),
+        "text-in-shape" => text_in_shape::build(),
+        "text-wrap" => text_wrap::build(),
+        "effects" => effects::build(),
+        "footnotes" => footnotes::build(),
+        "gradients" => gradients::build(),
+        "tables" => tables::build(),
+        "images" => images::build(),
+        "image-clipping" => image_clipping::build(),
+        "anchored" => anchored::build(),
+        "transparency" => transparency::build(),
+        "markers" => markers::build(),
+        "masters" => masters::build(),
+        "corners" => corners::build(),
+        "links-broken" => links_broken::build(),
+        "links-ok" => links_ok::build(),
+        "preflight" => preflight::build(),
+        "numbering" => numbering::build(),
+        "variables" => variables::build(),
+        "conditions" => conditions::build(),
+        "swatches" => swatches::build(),
+        "navigation" => navigation::build(),
+        "styles-cascade" => styles_cascade::build(),
+        "layout" => layout::build(),
+        "nested-groups" => nested_groups::build(),
+        "paste-into" => paste_into::build(),
+        "layers-z" => layers_z::build(),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The direction the old four-way duplication could never check: a
+    /// name listed in `SAMPLES` that no arm builds.
+    #[test]
+    fn every_listed_sample_builds() {
+        for name in SAMPLES {
+            assert!(
+                build(name).is_some(),
+                "SAMPLES lists {name:?} but samples::build has no arm for it"
+            );
+        }
+    }
+
+    /// …and the other direction, so adding an arm without listing it is
+    /// caught too. Counted rather than reflected over (Rust cannot
+    /// enumerate match arms), so this is a deliberate shrink-only pin:
+    /// bump it in the same commit that adds the sample TO `SAMPLES`.
+    #[test]
+    fn the_list_is_not_missing_a_sample() {
+        assert_eq!(
+            SAMPLES.len(),
+            35,
+            "sample count changed — add the new name to SAMPLES (and only then \
+             update this number), or the editor's CI silently stops emitting it"
+        );
+    }
+}

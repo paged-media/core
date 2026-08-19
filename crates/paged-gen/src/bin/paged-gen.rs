@@ -37,58 +37,44 @@ enum Cmd {
         #[arg(long, default_value = "corpus/generated")]
         out: PathBuf,
     },
+    /// Emit EVERY built-in sample into `--out`.
+    ///
+    /// Consumers should prefer this over a hand-copied name list. Four
+    /// copies of that list existed and drifted; `layers-z` and
+    /// `paste-into` fell out of the editor's, and its layers specs then
+    /// failed on a fixture CI had never emitted.
+    EmitAll {
+        /// Output directory.
+        #[arg(long, default_value = "corpus/generated")]
+        out: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
         Cmd::Emit { sample, out } => emit_sample(&sample, &out),
+        Cmd::EmitAll { out } => {
+            for name in paged_gen::samples::SAMPLES {
+                emit_sample(name, &out)?;
+            }
+            eprintln!(
+                "emitted {} samples into {}",
+                paged_gen::samples::SAMPLES.len(),
+                out.display()
+            );
+            Ok(())
+        }
     }
 }
 
 fn emit_sample(name: &str, out_dir: &std::path::Path) -> Result<()> {
-    let sample = match name {
-        "geometry" => paged_gen::samples::geometry::build(),
-        "geometry-groups" => paged_gen::samples::geometry_groups::build(),
-        "strokes-fills" => paged_gen::samples::strokes_fills::build(),
-        "text" => paged_gen::samples::text::build(),
-        "text-advanced" => paged_gen::samples::text_advanced::build(),
-        "text-autosize" => paged_gen::samples::text_autosize::build(),
-        "text-letterspacing" => paged_gen::samples::text_letterspacing::build(),
-        "text-on-path" => paged_gen::samples::text_on_path::build(),
-        "text-overset" => paged_gen::samples::text_overset::build(),
-        "text-in-shape" => paged_gen::samples::text_in_shape::build(),
-        "text-wrap" => paged_gen::samples::text_wrap::build(),
-        "effects" => paged_gen::samples::effects::build(),
-        "footnotes" => paged_gen::samples::footnotes::build(),
-        "gradients" => paged_gen::samples::gradients::build(),
-        "tables" => paged_gen::samples::tables::build(),
-        "images" => paged_gen::samples::images::build(),
-        "image-clipping" => paged_gen::samples::image_clipping::build(),
-        "anchored" => paged_gen::samples::anchored::build(),
-        "transparency" => paged_gen::samples::transparency::build(),
-        "markers" => paged_gen::samples::markers::build(),
-        "masters" => paged_gen::samples::masters::build(),
-        "corners" => paged_gen::samples::corners::build(),
-        "links-broken" => paged_gen::samples::links_broken::build(),
-        "links-ok" => paged_gen::samples::links_ok::build(),
-        "preflight" => paged_gen::samples::preflight::build(),
-        "numbering" => paged_gen::samples::numbering::build(),
-        "variables" => paged_gen::samples::variables::build(),
-        "conditions" => paged_gen::samples::conditions::build(),
-        "swatches" => paged_gen::samples::swatches::build(),
-        "navigation" => paged_gen::samples::navigation::build(),
-        "styles-cascade" => paged_gen::samples::styles_cascade::build(),
-        "layout" => paged_gen::samples::layout::build(),
-        "nested-groups" => paged_gen::samples::nested_groups::build(),
-        "paste-into" => paged_gen::samples::paste_into::build(),
-        "layers-z" => paged_gen::samples::layers_z::build(),
-        other => {
-            anyhow::bail!(
-                "unknown sample {other:?}; known: geometry, geometry-groups, strokes-fills, text, text-advanced, text-autosize, text-letterspacing, text-on-path, text-overset, text-in-shape, text-wrap, effects, footnotes, gradients, tables, images, image-clipping, anchored, transparency, markers, masters, corners, links-broken, links-ok, preflight, numbering, variables, conditions, swatches, navigation, styles-cascade, layout, nested-groups, layers-z, paste-into"
-            )
-        }
-    };
+    let sample = paged_gen::samples::build(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown sample {name:?}; known: {}",
+            paged_gen::samples::SAMPLES.join(", ")
+        )
+    })?;
     let bytes = paged_gen::write_idml(&sample).context("write idml")?;
     std::fs::create_dir_all(out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
     let path = out_dir.join(format!("{name}.idml"));
