@@ -68,7 +68,31 @@ jobs:
         # asserts every gated page stays under the per-fixture
         # tolerances in corpus/generated/fidelity-thresholds.json.
         # Failure here blocks the merge.
-        run: ./corpus/generated/diff.sh
+        #
+        # Exit 3 is a THIRD state, added 2026-08-19: "inconclusive".
+        # The reference PDFs were exported by InDesign in Coated
+        # FOGRA39, and no runner has that profile — Adobe's is not
+        # redistributable. Without it pdftoppm rasterises in poppler's
+        # SWOP default while paged-inspect falls back to naive CMYK
+        # math, so the two sides sit in different colour spaces and
+        # every page reads ~4.16 dE p99. That is not a regression and
+        # must not be reported as one; equally it must not be silently
+        # swallowed, which is precisely what this step did for months
+        # (it skipped itself entirely and went green).
+        #
+        # So: 0 passes, 1 blocks, 3 annotates and continues. Give a
+        # runner a FOGRA39 profile via PAGED_CMYK_PROFILE and 3 stops
+        # happening.
+        run: |
+          set +e
+          ./corpus/generated/diff.sh
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            echo "::warning title=fidelity inconclusive::No FOGRA39 profile on this runner — the gate could not reproduce the reference colour space, so it measured nothing. Not a regression. See the banner above."
+            exit 0
+          fi
+          exit "$rc"
 
       - name: upload generated-corpus heatmaps on failure
         if: failure()

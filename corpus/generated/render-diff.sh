@@ -156,11 +156,21 @@ if [ "$HAVE_PDF" -eq 1 ]; then
         esac
     else
         echo "==> WARNING: no CoatedFOGRA39.icc — pdftoppm falls back to poppler's SWOP default" >&2
-        echo "==> while the renderer uses FOGRA39. Expect a uniform ~4 dE p99 on every page." >&2
+        echo "==> while the renderer falls back to naive CMYK math. Two different colour" >&2
+        echo "==> spaces: expect a uniform ~4 dE p99 on every page of every fixture." >&2
         echo "==> Set PAGED_CMYK_PROFILE to a FOGRA39 profile to compare like with like." >&2
+        # Leave a marker so the GATE can tell "regressed" from "could not
+        # reproduce the reference colour space". Those are different
+        # answers and must not share an exit code.
+        : > "$OUT/.no-cmyk-profile"
     fi
     echo "==> rasterise $PDF via pdftoppm at $DPI dpi"
-    pdftoppm "${PDFTOPPM_CMYK_FLAGS[@]}" -r "$DPI" -png "$PDF" "$OUT/ref" >/dev/null
+    # `${arr[@]}` on an EMPTY array trips `set -u` on bash 3.2, which is
+    # what macOS ships — so the no-profile path died with "unbound
+    # variable" on macOS while working on ubuntu's bash 5. The `+` form
+    # expands to nothing when unset instead of erroring.
+    pdftoppm ${PDFTOPPM_CMYK_FLAGS[@]+"${PDFTOPPM_CMYK_FLAGS[@]}"} \
+        -r "$DPI" -png "$PDF" "$OUT/ref" >/dev/null
     # pdftoppm uses the smallest sufficient zero-padding (2 digits for
     # 48 pages). paged-inspect always pads to 3. Normalise both to 3 so
     # the per-page loop below can pair them by integer page number.

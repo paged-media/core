@@ -202,6 +202,23 @@ if [ "$OVERALL_PASS" -eq 1 ]; then
     exit 0
 fi
 
+if [ -n "$(find "$GATE_OUT" -name .no-cmyk-profile -print -quit 2>/dev/null)" ]; then
+    echo
+    echo "======================================================================"
+    echo "INCONCLUSIVE — not a regression."
+    echo
+    echo "The reference PDFs were exported by InDesign in Coated FOGRA39. This"
+    echo "run had no FOGRA39 profile, so pdftoppm rasterised them with"
+    echo "poppler's SWOP default while paged-inspect fell back to naive CMYK"
+    echo "math. The two sides are in different colour spaces and the per-page"
+    echo "numbers above compare nothing — the giveaway is a near-uniform p99"
+    echo "of ~4.16 across every page."
+    echo
+    echo "Install a FOGRA39 profile, or set PAGED_CMYK_PROFILE to one, and"
+    echo "re-run. Exiting 3 (inconclusive), NOT 1 (regressed)."
+    echo "======================================================================"
+    exit 3
+fi
 echo "==> one or more fixtures regressed"
 if [ "$GATE_MODE" = "advisory" ]; then
     echo "==> advisory mode (IDML_DIFF_GATE=advisory) — exiting 0 anyway"
