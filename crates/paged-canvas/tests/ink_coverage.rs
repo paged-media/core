@@ -95,27 +95,11 @@ fn prepress_idml(rect_fill: &str) -> Vec<u8> {
 /// matters most (no profile ⇒ no ink lane) is pinned unconditionally
 /// by `ink_coverage_without_a_cmyk_profile_says_so_instead_of_reporting_zero`.
 fn cmyk_profile() -> Option<Vec<u8>> {
-    if let Ok(p) = std::env::var("PAGED_CMYK_PROFILE") {
-        if let Ok(bytes) = std::fs::read(&p) {
-            return Some(bytes);
-        }
-    }
-    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/profiles");
-    if let Ok(entries) = std::fs::read_dir(&corpus) {
-        for e in entries.flatten() {
-            let path = e.path();
-            if path
-                .extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
-            {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    return Some(bytes);
-                }
-            }
-        }
-    }
-    std::fs::read("/Library/Application Support/Adobe/Color/Profiles/Recommended/CoatedFOGRA39.icc")
-        .ok()
+    // ONE resolver for the whole workspace (env → corpus/profiles →
+    // local Adobe install). Three hand-rolled copies used to disagree,
+    // and ~8 colour tests skipped silently as a result — see
+    // `paged_color::test_profiles`.
+    paged_color::test_profiles::read_cmyk_profile(env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]
@@ -187,7 +171,7 @@ fn ink_coverage_without_a_cmyk_profile_says_so_instead_of_reporting_zero() {
 #[test]
 fn ink_coverage_measures_a_rich_black_when_a_profile_is_active() {
     let Some(profile) = cmyk_profile() else {
-        eprintln!("skipping: no CMYK profile in corpus/calibration");
+        eprintln!("skipping: {}", paged_color::test_profiles::NO_PROFILE_HINT);
         return;
     };
     let model = CanvasModel::load(
@@ -249,7 +233,7 @@ fn ink_coverage_measures_a_rich_black_when_a_profile_is_active() {
 #[test]
 fn rgb_artwork_separates_nothing_even_with_a_profile_active() {
     let Some(profile) = cmyk_profile() else {
-        eprintln!("skipping: no CMYK profile in corpus/calibration");
+        eprintln!("skipping: {}", paged_color::test_profiles::NO_PROFILE_HINT);
         return;
     };
     let model = CanvasModel::load(

@@ -76,28 +76,11 @@ fn small_idml() -> Vec<u8> {
 }
 
 fn find_profile() -> Option<Vec<u8>> {
-    if let Ok(p) = std::env::var("PAGED_CMYK_PROFILE") {
-        if let Ok(bytes) = std::fs::read(&p) {
-            return Some(bytes);
-        }
-    }
-    let manifest = env!("CARGO_MANIFEST_DIR");
-    let corpus = std::path::Path::new(manifest).join("../../corpus/profiles");
-    if let Ok(entries) = std::fs::read_dir(&corpus) {
-        for e in entries.flatten() {
-            let path = e.path();
-            if path
-                .extension()
-                .is_some_and(|x| x.eq_ignore_ascii_case("icc"))
-            {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    return Some(bytes);
-                }
-            }
-        }
-    }
-    let adobe = "/Library/Application Support/Adobe/Color/Profiles/Recommended/CoatedFOGRA39.icc";
-    std::fs::read(adobe).ok()
+    // ONE resolver for the whole workspace (env → corpus/profiles →
+    // local Adobe install). Three hand-rolled copies used to disagree,
+    // and ~8 colour tests skipped silently as a result — see
+    // `paged_color::test_profiles`.
+    paged_color::test_profiles::read_cmyk_profile(env!("CARGO_MANIFEST_DIR"))
 }
 
 #[test]

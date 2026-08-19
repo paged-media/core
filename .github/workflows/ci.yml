@@ -54,6 +54,16 @@ jobs:
       - name: regenerate fixtures
         run: bash scripts/regen-fixtures.sh
 
+      # Colour tests need a CMYK profile or they skip. Before 2026-08-19 no
+      # .icc existed anywhere in the workspace and ~8 tests across the qcms
+      # engine, CMYK export, PDF/X-4, ink coverage and soft-proofing printed
+      # "skipping" and passed. Fetching one here is what makes them assert on
+      # a runner (a designer's Mac finds Adobe's profiles instead). Not a hard
+      # failure: if the fetch dies the tests degrade to the loud skip they had
+      # before, rather than turning an upstream outage into a red build.
+      - name: fetch CMYK profile for the colour tests
+        run: bash scripts/fetch-profiles.sh || echo "::warning title=colour tests degraded::profile fetch failed — colour tests will skip this run"
+
       # --no-fail-fast: a fail-fast abort silently SKIPS every binary after
       # the first failure and reads as "the rest were green" in a truncated
       # log — that combination hid a second, unrelated failure twice on
