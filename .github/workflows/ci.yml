@@ -47,6 +47,16 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # core is PUBLIC and must build standalone, so it keeps its own
+      # copies of the shared OFL faces rather than depending on the
+      # private corpus. That duplication drifted the first day it
+      # existed. This verifies core's bytes against the corpus's
+      # published manifest — no private access, and a mismatch fails
+      # here instead of surfacing later as a silently substituted font
+      # in a fidelity diff.
+      - name: font corpus has not drifted
+        run: bash scripts/check-font-hashes.sh
+
       # Several tests read the gitignored corpus/generated/*.idml fixtures
       # (inspector_wire, round-trip, conformance) and panic with "read
       # fixture: NotFound" if they're absent — CI must regenerate them, the

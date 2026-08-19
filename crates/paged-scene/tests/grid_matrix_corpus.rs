@@ -51,10 +51,10 @@ fn matrix_files() -> Option<Vec<PathBuf>> {
     } else {
         PathBuf::from(switch)
     };
-    let dir = root.join("envato/packs/gridtastic-grid-kit/assets/idml");
+    let dir = root.join("vendor/envato/packs/gridtastic-grid-kit/assets/idml");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!(
-            "SKIP grid matrix: {} not readable — run corpus/envato/unpack.sh",
+            "SKIP grid matrix: {} not readable — run corpus/harness/unpack.sh",
             dir.display()
         );
         return None;
@@ -79,7 +79,7 @@ fn matrix_files() -> Option<Vec<PathBuf>> {
 ///
 /// The bare names are the pack's first page-size directory, which the
 /// extractor leaves undecorated because there was nothing to disambiguate
-/// yet — see the collision rule in `corpus/envato/unpack.sh`.
+/// yet — see the collision rule in `corpus/harness/unpack.sh`.
 fn axes(path: &std::path::Path) -> (String, String) {
     let stem = path
         .file_stem()

@@ -1,0 +1,23 @@
+# Canonical hashes for the shared font corpus.
+#
+# core keeps its own copy of these faces because it is PUBLIC and must
+# build standalone — it cannot depend on this private repo. That
+# duplication drifted once already: NotoSansArabic-VF.ttf existed only
+# in core for a day. core commits this same list and verifies its copies
+# against it (scripts/check-font-hashes.sh), so divergence fails loudly
+# instead of silently substituting a font at render time.
+#
+# Regenerate: python3 harness/gen-font-hashes.py
+
+b20b7d9626dd956b2c5e558692ad328b1f19e3275e2782db4fa07670d83f35e0  CormorantGaramond.ttf
+29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031  Inter.ttf
+822a6621ccbe8d97d20ac88c1c41f5615c9c2c202eaa75f272cd452aac6475a7  Lora.ttf
+63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e  NotoSansArabic-VF.ttf
+fe269381e992f32e135801740998544d6235061e37c93ec067ad2be3edd5b17b  OpenSans-Italic.ttf
+36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878  OpenSans.ttf
+61f89f8db49261c2f6106e8dccc35df7b2f7ed909020db40a3fc905e95f99334  Roboto-Bold.ttf
+40083ed54338397cf49d2c49f59eddcd963a30fdb301813d4bd3abbb37a13d12  Roboto-BoldItalic.ttf
+fa0b17bb4aaac4a1b2ee149dd4ca3b55e97d3077aa6ba9bb02541b316e7c46ce  Roboto-Italic.ttf
+56a45233d29f11b4dfb86d248e921939d115778f87325e7ae8cc108383d6664d  Roboto-Regular.ttf
+786ae192477447d33c6672c3055fba7cbfe45184c9a79e77a14f15716ca05b16  RobotoSlab.ttf
+97b2d4da6e3cb494b5a1e66ae176914d852ccabef49e0c02c0df25f3e39aca0b  SourceSerif4.ttf
