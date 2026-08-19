@@ -7248,7 +7248,13 @@ impl CanvasModel {
             units: String::new(),
             color_mode: String::new(),
             document_name: String::new(),
-            dirty: false,
+            // Edits-since-load, from the undo log: undoing every applied
+            // mutation empties the log and the document reads clean again
+            // (a pending redo does not differ from the loaded state). Was
+            // hardcoded `false` — every consumer (status chip, Info panel,
+            // title dirty dot) permanently claimed a clean document; found
+            // by the Info panel's first behaviour spec, 2026-08-18.
+            dirty: !self.applied_log.is_empty(),
             default_fill_color: self.document_defaults.fill_color.clone(),
             default_stroke_color: self.document_defaults.stroke_color.clone(),
             default_stroke_weight: self.document_defaults.stroke_weight,
@@ -9469,6 +9475,30 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
         assert!(meta.color_mode.is_empty());
         assert!(meta.document_name.is_empty());
         assert!(!meta.dirty);
+    }
+
+    /// `dirty` follows the undo log: an applied mutation sets it, undoing
+    /// everything clears it (the document no longer differs from the load).
+    /// It was hardcoded `false` until 2026-08-18 — every consumer chip/panel
+    /// permanently claimed a clean document.
+    #[test]
+    fn document_meta_dirty_follows_the_undo_log() {
+        let bytes = one_rect_idml_bytes();
+        let mut model = CanvasModel::load("doc-rect", &bytes, CanvasOptions::default()).unwrap();
+        assert!(!model.document_meta().dirty, "fresh load is clean");
+
+        let resize = Mutation::ResizeFrame {
+            frame_id: "r1".into(),
+            bounds: (100.0, 100.0, 500.0, 400.0),
+        };
+        model.apply_mutation(&resize).expect("resize applies");
+        assert!(model.document_meta().dirty, "an applied mutation dirties");
+
+        model.undo().expect("undo pops the log");
+        assert!(
+            !model.document_meta().dirty,
+            "undoing every mutation reads clean again"
+        );
     }
 
     #[test]
