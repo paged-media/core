@@ -430,10 +430,28 @@ fn main() -> Result<()> {
     // Resolve the CMYK ICC profile bytes — explicit CLI override wins;
     // otherwise probe the document's declared name against the
     // host's Adobe ColorSync install. Naive fallback is fine.
-    let cmyk_profile_bytes: Option<Vec<u8>> = if let Some(path) = args.cmyk_profile.as_deref() {
-        Some(std::fs::read(path).with_context(|| format!("read {}", path.display()))?)
-    } else if let Some(name) = document.designmap.color_settings.cmyk_profile.as_deref() {
-        match resolve_cmyk_profile_by_name(name) {
+    let cmyk_profile_bytes: Option<Vec<u8>> = match choose_cmyk_profile(
+        args.cmyk_profile.as_deref(),
+        std::env::var("PAGED_CMYK_PROFILE").ok().as_deref(),
+        document.designmap.color_settings.cmyk_profile.as_deref(),
+    ) {
+        CmykProfileChoice::Explicit(path) => {
+            Some(std::fs::read(&path).with_context(|| format!("read {}", path.display()))?)
+        }
+        CmykProfileChoice::Env { path, overrode } => {
+            match overrode {
+                Some(declared) => eprintln!(
+                    "color: PAGED_CMYK_PROFILE={} overrides the document's declared {declared:?}",
+                    path.display()
+                ),
+                None => eprintln!("color: using PAGED_CMYK_PROFILE {}", path.display()),
+            }
+            Some(
+                std::fs::read(&path)
+                    .with_context(|| format!("read PAGED_CMYK_PROFILE {}", path.display()))?,
+            )
+        }
+        CmykProfileChoice::Declared(name) => match resolve_cmyk_profile_by_name(&name) {
             Some(bytes) => {
                 eprintln!("color: using CMYK profile match for {name:?}");
                 Some(bytes)
@@ -442,9 +460,8 @@ fn main() -> Result<()> {
                 eprintln!("color: no CMYK profile match for {name:?}; falling back to naive math");
                 None
             }
-        }
-    } else {
-        None
+        },
+        CmykProfileChoice::Naive => None,
     };
 
     let break_page_range = match args.break_page_range.as_deref() {
@@ -1349,6 +1366,72 @@ fn build_json_report(
     })
 }
 
+/// Which CMYK profile this render should use, decided before anything
+/// is read from disk so the precedence can be tested on its own.
+#[derive(Debug, PartialEq, Eq)]
+enum CmykProfileChoice {
+    /// `--cmyk-profile` — an explicit instruction outranks everything.
+    Explicit(std::path::PathBuf),
+    /// `PAGED_CMYK_PROFILE`, carrying the declared name it displaced so
+    /// the log can say so rather than silently changing colour.
+    Env {
+        path: std::path::PathBuf,
+        overrode: Option<String>,
+    },
+    /// The document's own `CMYKProfile` name, resolved against a local
+    /// Adobe install.
+    Declared(String),
+    /// Nothing to convert with — naive CMYK→sRGB math.
+    Naive,
+}
+
+/// `PAGED_CMYK_PROFILE` sits ABOVE the document's declared profile, and
+/// that ordering is the whole point of it.
+///
+/// The fidelity harness measures our render against a `pdftoppm`
+/// rasterisation of InDesign's PDF, and
+/// `corpus/generated/render-diff.sh` forces poppler to
+/// `$PAGED_CMYK_PROFILE` when it is set. If the renderer honoured only
+/// the document's declared name, the two halves of that comparison
+/// would run in different colour spaces on any machine without the
+/// declared profile installed — which is exactly the uniform ~4 dE p99
+/// that harness's own comment tells you not to chase in the renderer.
+/// Both halves now read the same variable, so both move together.
+///
+/// It is deliberately not a *fallback*: honouring it only when the
+/// declared name misses would leave the mismatch in place precisely
+/// where the profile IS installed but differs from the one poppler was
+/// pointed at.
+fn choose_cmyk_profile(
+    cli: Option<&std::path::Path>,
+    env: Option<&str>,
+    declared: Option<&str>,
+) -> CmykProfileChoice {
+    if let Some(path) = cli {
+        return CmykProfileChoice::Explicit(path.to_path_buf());
+    }
+    // An empty value is how a shell spells "unset" when the variable is
+    // exported but never assigned; treat it as absent rather than as a
+    // path to "".
+    if let Some(env) = env.map(str::trim).filter(|e| !e.is_empty()) {
+        // "$ID/" is InDesign's "application default" sentinel, not a
+        // profile the document chose, so overriding it displaces
+        // nothing worth reporting.
+        let overrode = declared
+            .map(str::trim)
+            .filter(|d| !d.is_empty() && *d != "$ID/")
+            .map(str::to_owned);
+        return CmykProfileChoice::Env {
+            path: std::path::PathBuf::from(env),
+            overrode,
+        };
+    }
+    match declared {
+        Some(name) => CmykProfileChoice::Declared(name.to_owned()),
+        None => CmykProfileChoice::Naive,
+    }
+}
+
 /// Resolve an IDML-declared `CMYKProfile` name (e.g. `"Coated FOGRA39
 /// (ISO 12647-2:2004)"`) to ICC bytes by mapping common Adobe profile
 /// names to Adobe's standard Recommended/ filenames, then probing the
@@ -1480,7 +1563,77 @@ fn first_line(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::lookup_cmyk_profile_filename;
+    use super::{choose_cmyk_profile, lookup_cmyk_profile_filename, CmykProfileChoice};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn cli_profile_outranks_everything() {
+        assert_eq!(
+            choose_cmyk_profile(
+                Some(Path::new("/cli.icc")),
+                Some("/env.icc"),
+                Some("Coated FOGRA39")
+            ),
+            CmykProfileChoice::Explicit(PathBuf::from("/cli.icc"))
+        );
+    }
+
+    #[test]
+    fn env_profile_outranks_the_documents_declared_name() {
+        // The half of the fidelity comparison that rasterises the
+        // reference PDF is forced to $PAGED_CMYK_PROFILE by
+        // corpus/generated/render-diff.sh. If the renderer preferred
+        // the declared name here, the two halves would be measured in
+        // different colour spaces wherever the declared profile is
+        // installed but is not the one poppler was pointed at.
+        assert_eq!(
+            choose_cmyk_profile(None, Some("/env.icc"), Some("Japan Color 2001 Coated")),
+            CmykProfileChoice::Env {
+                path: PathBuf::from("/env.icc"),
+                overrode: Some("Japan Color 2001 Coated".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn overriding_indesigns_default_sentinel_displaces_nothing() {
+        // "$ID/" means the document declared no profile at all, so the
+        // override has nothing to report having replaced.
+        assert_eq!(
+            choose_cmyk_profile(None, Some("/env.icc"), Some("$ID/")),
+            CmykProfileChoice::Env {
+                path: PathBuf::from("/env.icc"),
+                overrode: None,
+            }
+        );
+    }
+
+    #[test]
+    fn an_exported_but_empty_env_var_is_not_a_path() {
+        // `export PAGED_CMYK_PROFILE=` reaches the process as Some(""),
+        // which would otherwise be read as a profile at the path "" and
+        // abort the render.
+        assert_eq!(
+            choose_cmyk_profile(None, Some(""), Some("Coated FOGRA39")),
+            CmykProfileChoice::Declared("Coated FOGRA39".to_owned())
+        );
+        assert_eq!(
+            choose_cmyk_profile(None, Some("   "), None),
+            CmykProfileChoice::Naive
+        );
+    }
+
+    #[test]
+    fn without_either_lever_the_declared_name_still_decides() {
+        assert_eq!(
+            choose_cmyk_profile(None, None, Some("Coated FOGRA39")),
+            CmykProfileChoice::Declared("Coated FOGRA39".to_owned())
+        );
+        assert_eq!(
+            choose_cmyk_profile(None, None, None),
+            CmykProfileChoice::Naive
+        );
+    }
 
     #[test]
     fn resolves_mid_name_parenthetical() {
