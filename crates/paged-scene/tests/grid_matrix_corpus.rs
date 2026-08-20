@@ -51,7 +51,7 @@ fn matrix_files() -> Option<Vec<PathBuf>> {
     } else {
         PathBuf::from(switch)
     };
-    let dir = root.join("vendor/envato/packs/gridtastic-grid-kit/assets/idml");
+    let dir = root.join("idml/packs/gridtastic-grid-kit/assets/idml");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!(
             "SKIP grid matrix: {} not readable — run corpus/harness/unpack.sh",
