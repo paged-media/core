@@ -257,9 +257,11 @@ pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, Ope
             restore,
         } => apply_detach_text_from_path(doc, host, *index, restore.as_ref()),
         Operation::LinkFrames { from, to } => apply_link_frames(doc, from, to),
-        Operation::UnlinkFrames { frame, prev_next } => {
-            apply_unlink_frames(doc, frame, prev_next.as_deref())
-        }
+        Operation::UnlinkFrames {
+            frame,
+            prev_next,
+            restore_target,
+        } => apply_unlink_frames(doc, frame, prev_next.as_deref(), restore_target.as_ref()),
         Operation::ApplyStyle {
             story_id,
             start,

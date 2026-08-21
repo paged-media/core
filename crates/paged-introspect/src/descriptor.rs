@@ -267,6 +267,8 @@ pub enum PropertyPathJson {
     // W2.5 — element-level visibility / lock.
     ElementVisible,
     ElementLocked,
+    // C-35 (v62) — which layer a page item is on.
+    ItemLayer,
 }
 
 impl From<PropertyPath> for PropertyPathJson {
@@ -297,6 +299,7 @@ impl From<PropertyPath> for PropertyPathJson {
             PropertyPath::AppliedParagraphStyle => PropertyPathJson::AppliedParagraphStyle,
             PropertyPath::AppliedCharacterStyle => PropertyPathJson::AppliedCharacterStyle,
             PropertyPath::AppliedObjectStyle => PropertyPathJson::AppliedObjectStyle,
+            PropertyPath::ItemLayer => PropertyPathJson::ItemLayer,
             PropertyPath::AppliedCellStyle => PropertyPathJson::AppliedCellStyle,
             PropertyPath::AppliedTableStyle => PropertyPathJson::AppliedTableStyle,
             PropertyPath::FramePath => PropertyPathJson::FramePath,
@@ -570,6 +573,7 @@ impl From<PropertyPathJson> for PropertyPath {
             PropertyPathJson::AppliedParagraphStyle => PropertyPath::AppliedParagraphStyle,
             PropertyPathJson::AppliedCharacterStyle => PropertyPath::AppliedCharacterStyle,
             PropertyPathJson::AppliedObjectStyle => PropertyPath::AppliedObjectStyle,
+            PropertyPathJson::ItemLayer => PropertyPath::ItemLayer,
             PropertyPathJson::AppliedCellStyle => PropertyPath::AppliedCellStyle,
             PropertyPathJson::AppliedTableStyle => PropertyPath::AppliedTableStyle,
             PropertyPathJson::FramePath => PropertyPath::FramePath,

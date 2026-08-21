@@ -1696,6 +1696,7 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
         ("paste_into", paste_into::build),
         ("numbering", numbering::build),
         ("preflight", preflight::build),
+        ("showcase_base", showcase_base::build),
         ("strokes_fills", strokes_fills::build),
         ("styles_cascade", styles_cascade::build),
         ("styles_cascade_otf_off", styles_cascade::build_otf_off),

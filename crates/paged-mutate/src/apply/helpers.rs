@@ -801,6 +801,78 @@ pub(super) fn find_applied_object_style_mut<'a>(
     None
 }
 
+/// C-35 — the `ItemLayer` reference on a leaf page item.
+///
+/// Mirrors `find_applied_object_style_mut` exactly, and for the same
+/// reason: layer membership is a per-item reference to a `<Layer>`
+/// self_id in designmap.xml, carried by every leaf kind and by no
+/// structural container. A `<Group>` has no `ItemLayer` in IDML — its
+/// members each carry their own — so `NodeId::Group` falls through to
+/// `None` and the caller reports an unsupported path rather than
+/// silently doing nothing.
+pub(super) fn find_item_layer_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    let raw = node.self_id();
+    for parsed in &mut doc.spreads {
+        match node {
+            NodeId::TextFrame(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .text_frames
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.item_layer);
+                }
+            }
+            NodeId::Rectangle(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .rectangles
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.item_layer);
+                }
+            }
+            NodeId::Oval(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.item_layer);
+                }
+            }
+            NodeId::Polygon(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .polygons
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.item_layer);
+                }
+            }
+            NodeId::GraphicLine(_) => {
+                if let Some(p) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|p| p.self_id.as_deref() == Some(raw))
+                {
+                    return Some(&mut p.item_layer);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 pub(super) fn find_spread<'a>(
     doc: &'a Document,
     self_id: &str,

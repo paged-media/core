@@ -3443,6 +3443,10 @@ impl CanvasModel {
             Mutation::UnlinkFrames { frame } => Some(Operation::UnlinkFrames {
                 frame: frame.clone(),
                 prev_next: None,
+                // A user-initiated unlink has nothing to restore; the
+                // field carries the target's pre-link story only when
+                // the op is serving as `LinkFrames`'s inverse.
+                restore_target: None,
             }),
             Mutation::ApplyStyle {
                 story_id,
@@ -4547,6 +4551,12 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::ItemLayer,
+                                value: Some(Value::Text(
+                                    f.item_layer.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameTextWrapMode,
                                 value: Some(Value::Text(
                                     f.text_wrap
@@ -4873,6 +4883,12 @@ impl CanvasModel {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
                                     f.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::ItemLayer,
+                                value: Some(Value::Text(
+                                    f.item_layer.clone().unwrap_or_default(),
                                 )),
                             },
                             PropertyEntry {
@@ -5285,6 +5301,12 @@ impl CanvasModel {
                                     p.applied_object_style.clone().unwrap_or_default(),
                                 )),
                             },
+                            PropertyEntry {
+                                path: PropertyPath::ItemLayer,
+                                value: Some(Value::Text(
+                                    p.item_layer.clone().unwrap_or_default(),
+                                )),
+                            },
                             // C-20 — the object-level blend mode now has
                             // a Polygon write arm, so surface the read
                             // half too (tint + opacity were already
@@ -5396,6 +5418,12 @@ impl CanvasModel {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
                                     l.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::ItemLayer,
+                                value: Some(Value::Text(
+                                    l.item_layer.clone().unwrap_or_default(),
                                 )),
                             },
                             // C-25 — writable and unread. Only the
@@ -5516,6 +5544,12 @@ impl CanvasModel {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
                                     o.applied_object_style.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::ItemLayer,
+                                value: Some(Value::Text(
+                                    o.item_layer.clone().unwrap_or_default(),
                                 )),
                             },
                         ];

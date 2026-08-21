@@ -2039,6 +2039,44 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // C-35 (v62) — move a page item to another LAYER. Same wire
+        // shape as the object-style ref above (Value::Text carrying a
+        // `<Layer>` self_id, empty string clears to the default
+        // layer), and the same leaf-only addressing: a `<Group>` has
+        // no `ItemLayer` in IDML, its members each carry their own.
+        //
+        // The invalidation is `structural`, not `frame_style`, and
+        // that is the whole subtlety of this path. The renderer sorts
+        // `frames_in_order` by `ItemLayer` BEFORE it paints (Q-10), so
+        // changing one item's layer reorders the whole spread's paint
+        // sequence and can change what occludes what several frames
+        // away. Hinting `frame_style` here would repaint the item and
+        // leave every other frame drawn in the old order.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::ItemLayer,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let field = find_item_layer_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = field.clone().unwrap_or_default();
+            *field = if new_val.is_empty() {
+                None
+            } else {
+                Some(new_val.clone())
+            };
+            (
+                Value::Text(prev),
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
         (
             NodeId::StoryRange {
                 story_id,

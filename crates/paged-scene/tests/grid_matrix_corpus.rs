@@ -51,14 +51,29 @@ fn matrix_files() -> Option<Vec<PathBuf>> {
     } else {
         PathBuf::from(switch)
     };
-    let dir = root.join("idml/packs/gridtastic-grid-kit/assets/idml");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    // A corpus that is not mounted is the only honest reason to skip. The
+    // switch was set, so the caller asked for this lane.
+    if !root.is_dir() {
         eprintln!(
-            "SKIP grid matrix: {} not readable — run corpus/harness/unpack.sh",
-            dir.display()
+            "SKIP grid matrix: no corpus at {} (private checkout)",
+            root.display()
         );
         return None;
-    };
+    }
+    // `assets/doc`, not `assets/idml`. The corpus files companions by
+    // ROLE — "doc" is every layout/authoring document, IDML and DOCX and
+    // Affinity alike — and the 2026-08 extraction rework renamed the old
+    // `assets/idml` accordingly. This lane kept the old name and had been
+    // skipping all 179 layouts ever since, while reporting ok.
+    let dir = root.join("idml/packs/gridtastic-grid-kit/assets/doc");
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| {
+        panic!(
+            "grid matrix addresses {}, which this corpus does not have ({e}). \
+             The path is stale or the pack moved — fix the lane; a corpus \
+             that IS mounted must not be answered with a skip.",
+            dir.display()
+        )
+    });
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -68,10 +83,12 @@ fn matrix_files() -> Option<Vec<PathBuf>> {
         })
         .collect();
     out.sort();
-    if out.is_empty() {
-        eprintln!("SKIP grid matrix: no IDMLs under {}", dir.display());
-        return None;
-    }
+    assert!(
+        !out.is_empty(),
+        "grid matrix found no IDML under {} — the pack is present but its \
+         layouts are not where this lane looks",
+        dir.display()
+    );
     Some(out)
 }
 

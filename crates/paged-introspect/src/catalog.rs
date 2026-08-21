@@ -359,6 +359,14 @@ pub const PROPERTY_PATHS: &[(&str, P)] = &[
     ("appliedParagraphStyle", P::AppliedParagraphStyle),
     ("appliedCharacterStyle", P::AppliedCharacterStyle),
     ("appliedObjectStyle", P::AppliedObjectStyle),
+    // C-35 (v62) — WHICH LAYER an item is on. Note the contrast with
+    // the `layer*` paths refused just above: those addressed a LAYER,
+    // which has no `ElementId` form, so nothing could name the target.
+    // This one addresses the PAGE ITEM (`rectangle:u12`, `textFrame:u7`
+    // — forms `id_grammar()` already publishes) and merely carries a
+    // layer self_id as its value, so it is addressable and passes
+    // `every_settable_path_is_addressable`.
+    ("itemLayer", P::ItemLayer),
     ("appliedCellStyle", P::AppliedCellStyle),
     ("appliedTableStyle", P::AppliedTableStyle),
     ("appliedConditions", P::AppliedConditions),
@@ -731,7 +739,15 @@ mod tests {
         // (C-33). A DROP in this count is the unusual direction and is
         // the whole point of the change — the catalog stopped claiming
         // four mutations no caller could perform.
-        assert_eq!(cat.settable_paths.len(), 175, "settable path count drifted");
+        //
+        // 175 -> 176: `itemLayer` (C-35, protocol 62). Note this is the
+        // OPPOSITE of the C-33 removal above and is not a reversal of
+        // it: those four addressed a LAYER, which has no `ElementId`
+        // form, so no caller could name the target. This one addresses
+        // the PAGE ITEM and carries a layer id as its value, so it is
+        // reachable — `every_settable_path_is_addressable` is what
+        // tells the two cases apart, and it passes.
+        assert_eq!(cat.settable_paths.len(), 176, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

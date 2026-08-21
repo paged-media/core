@@ -3461,6 +3461,12 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
         // W2.5 — element-level visibility / lock.
         ElementVisible => "elementVisible",
         ElementLocked => "elementLocked",
+        // C-35 (v62) — which layer a page item is on. Spelled the same
+        // as its `PROPERTY_PATHS` catalog entry, because the catalog is
+        // what `paged.set` parses and this is what it prints back; a
+        // disagreement between the two is a path a script can write and
+        // never read.
+        ItemLayer => "itemLayer",
     }
 }
 

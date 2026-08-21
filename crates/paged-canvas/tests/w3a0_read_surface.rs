@@ -338,3 +338,56 @@ fn stories_collection_returns_summaries_with_overset_flags() {
         Some(CollectionName::Stories)
     );
 }
+
+/// Threading is TWO facts, and the op used to write one.
+///
+/// `LinkFrames` set the source's `NextTextFrame` and stopped. But the
+/// composer reaches a frame by walking the STORY's chain, so a target
+/// still sitting on its own story — and `InsertTextFrame` mints every
+/// frame with one — was never reached, however correct the pointer
+/// was. The op applied, the model changed, and nothing rendered: a
+/// 0-pixel diff across link, resize and hide. This pins the half that
+/// was missing, and its undo.
+#[test]
+fn linking_frames_puts_the_target_on_the_source_story() {
+    let mut m = model();
+
+    let story_of = |m: &CanvasModel, frame: &str| -> Option<String> {
+        m.scene()
+            .spreads
+            .iter()
+            .flat_map(|p| p.spread.text_frames.iter())
+            .find(|f| f.self_id.as_deref() == Some(frame))
+            .and_then(|f| f.parent_story.clone())
+    };
+
+    let a_story = story_of(&m, "tfA").expect("tfA has a story");
+    let b_story_before = story_of(&m, "tfB");
+    assert_ne!(
+        Some(a_story.clone()),
+        b_story_before,
+        "the fixture's frames start on different stories — otherwise \
+         this test proves nothing"
+    );
+
+    m.apply_mutation(&Mutation::LinkFrames {
+        from: "tfA".into(),
+        to: "tfB".into(),
+    })
+    .expect("link frames applies");
+
+    assert_eq!(
+        story_of(&m, "tfB"),
+        Some(a_story),
+        "the target must join the source's story, or the text it is \
+         threaded to can never reach it"
+    );
+
+    assert!(m.undo().is_some(), "undo produced no outcome");
+    assert_eq!(
+        story_of(&m, "tfB"),
+        b_story_before,
+        "undo must put the target back on its own story, or the frame \
+         keeps rendering content it is no longer threaded to"
+    );
+}

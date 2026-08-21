@@ -298,6 +298,25 @@ pub enum PropertyPath {
     /// rewritten; the renderer's style-cascade re-resolves on next
     /// rebuild. Inverse restores the previous reference.
     AppliedObjectStyle,
+    /// C-35 (protocol v62) — the layer a page item belongs to. Value is
+    /// `Value::Text(String)` carrying a `<Layer>` self_id from
+    /// designmap.xml; the empty string clears the reference, putting
+    /// the item on the document's default layer. Addressed against a
+    /// LEAF page item (TextFrame / Rectangle / Oval / Polygon /
+    /// GraphicLine) — a `<Group>` carries no `ItemLayer` in IDML, its
+    /// members each carry their own, so `NodeId::Group` is refused
+    /// rather than silently ignored.
+    ///
+    /// This is the missing half of the layer model. `LayerInsert` /
+    /// `LayerSetVisible` / `LayerSetLocked` / `LayerMove` have always
+    /// managed the layer LIST; nothing could change which layer an item
+    /// was on, so items could only be born onto one by a fixture. The
+    /// renderer already sorts `frames_in_order` by `ItemLayer` before
+    /// painting and the hit-tester already gates on layer lock, so both
+    /// honour a change here with no further work — which is precisely
+    /// why the invalidation is `structural`: this rewrites PAINT ORDER
+    /// across the whole spread, not one frame's appearance.
+    ItemLayer,
     /// SDK Phase 5 (D3 completion) — applied cell style ref. Wire-
     /// shape only for v1: the apply layer errors with
     /// `UnsupportedProperty` until the Table NodeId surface
@@ -1273,6 +1292,7 @@ impl PropertyPath {
             PropertyPath::AppliedParagraphStyle => "paragraph.appliedStyle",
             PropertyPath::AppliedCharacterStyle => "character.appliedStyle",
             PropertyPath::AppliedObjectStyle => "object.appliedStyle",
+            PropertyPath::ItemLayer => "object.itemLayer",
             PropertyPath::AppliedCellStyle => "cell.appliedStyle",
             PropertyPath::AppliedTableStyle => "table.appliedStyle",
             PropertyPath::AppliedConditions => "story.appliedConditions",
@@ -2665,16 +2685,18 @@ pub enum Operation {
     /// gesture, not an Arrange. Pinned by
     /// `a_layer_sort_outranks_arrange_within_the_spread`.
     ///
-    /// **THAT GESTURE DOES NOT EXIST HERE (C-35).** This comment used
-    /// to name `SetProperty(ItemLayer)` as if it were a door you could
-    /// reach for. There is no `PropertyPath::ItemLayer`;
-    /// `Layer::item_layer` is read by the hit-tester and the renderer
-    /// and written by no operation, and `apply_move_node` accepts only
-    /// `NodeId::Spread` as a parent. So moving an item to another layer
-    /// is currently INEXPRESSIBLE, and a Layers panel has to be
-    /// designed around that. Adding it is a wire change (a new
-    /// `PropertyPath` variant + a protocol bump) and is tracked as its
-    /// own decision rather than implied by a doc comment.
+    /// **THAT GESTURE IS A DIFFERENT OP (C-35, closed at v62).** Moving
+    /// an item ACROSS layers is `SetProperty(ItemLayer)`, not a
+    /// reorder: `apply_move_node` still accepts only `NodeId::Spread`
+    /// as a parent, because a layer is not a container in IDML — it is
+    /// a reference each leaf item carries. Reorder positions an item
+    /// within its layer; `ItemLayer` chooses the layer. Both are
+    /// needed, and a Layers panel drives both.
+    ///
+    /// This comment used to say the gesture was INEXPRESSIBLE and that
+    /// adding it was "a wire change tracked as its own decision". That
+    /// decision was taken; the path exists and the note below is what
+    /// replaced it.
     ///
     /// # Both save paths carry it
     ///
@@ -3201,6 +3223,18 @@ pub enum Operation {
         frame: String,
         #[serde(default)]
         prev_next: Option<String>,
+        /// Inverse-only, and the other half of undoing a link.
+        ///
+        /// Threading is two facts, not one: the source points forward
+        /// AND the target joins the source's story. Undo therefore has
+        /// to put the target back on its own story, or the frame keeps
+        /// rendering content it is no longer threaded to.
+        ///
+        /// `(target, parent_story, reserved)` — the story the target
+        /// carried BEFORE the link. Absent on a user-initiated unlink,
+        /// which has nothing to restore.
+        #[serde(default)]
+        restore_target: Option<(String, Option<String>, Option<String>)>,
     },
     /// W0.5 — apply a named paragraph or character style to a story
     /// range. Delegates to the same run/paragraph splitter as

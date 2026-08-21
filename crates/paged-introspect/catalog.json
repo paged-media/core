@@ -803,6 +803,7 @@
     "appliedParagraphStyle",
     "appliedCharacterStyle",
     "appliedObjectStyle",
+    "itemLayer",
     "appliedCellStyle",
     "appliedTableStyle",
     "appliedConditions",

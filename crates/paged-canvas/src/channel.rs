@@ -461,7 +461,34 @@ export type WorkerToMain = WorkerToMainKind & {
 // Additive in the minor sense the handshake already covers: a new
 // editor SENDS a mutation an older worker cannot deserialise, and the
 // handshake catches the stale pair LOUD.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(61);
+//
+// ── v62 (C-35 — layer assignment) ────────────────────────────────────
+//
+// `PropertyPath::ItemLayer`, reachable through the `SetElementProperty`
+// door that already existed. No new message: the vocabulary grew, not
+// the wire shape, which is why this is a bump and not a redesign.
+//
+// It closes the half of the layer model that was missing. The seven
+// `Layer*` mutations have always managed the layer LIST — insert,
+// remove, reorder, rename, visible, locked, printable — while WHICH
+// LAYER AN ITEM IS ON was written by no operation at all. Items could
+// only be born onto a layer by a generated fixture, so a Layers panel
+// could show the tree and toggle it but could never let you drag an
+// item between rows, and `layers-z.idml` was the only document in the
+// project with items on more than one layer.
+//
+// Addressed against a LEAF page item, never a `<Group>` — IDML puts no
+// `ItemLayer` on a group, its members each carry their own. The value
+// is a `<Layer>` self_id as `Value::Text`; the empty string clears the
+// reference to the default layer. The inverse restores the previous
+// reference, so one undo moves the item back.
+//
+// Note this is NOT `ReorderElement` with a different parent, and the
+// two do not collapse into each other: reorder positions an item
+// within the layer it is on, `ItemLayer` chooses the layer, and the
+// renderer sorts by layer BEFORE it consults the z table (Q-10). A
+// layers panel drives both.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(62);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -4765,9 +4792,14 @@ mod tests {
         );
     }
 
+    /// The tag-on-bump guard. This constant and the published
+    /// `@paged-media/canvas-wasm` minor are the same number by
+    /// convention (`0.<protocol>.<patch>`), so a bump here is a
+    /// release commitment, not a detail — the protocol-governance
+    /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v61() {
-        assert_eq!(PROTOCOL_VERSION.0, 61);
+    fn protocol_version_is_v62() {
+        assert_eq!(PROTOCOL_VERSION.0, 62);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

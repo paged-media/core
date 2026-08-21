@@ -36,6 +36,7 @@ pub mod nested_groups;
 pub mod numbering;
 pub mod paste_into;
 pub mod preflight;
+pub mod showcase_base;
 pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
@@ -98,6 +99,7 @@ pub const SAMPLES: &[&str] = &[
     "nested-groups",
     "paste-into",
     "layers-z",
+    "showcase-base",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -138,6 +140,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "nested-groups" => nested_groups::build(),
         "paste-into" => paste_into::build(),
         "layers-z" => layers_z::build(),
+        "showcase-base" => showcase_base::build(),
         _ => return None,
     })
 }
@@ -166,7 +169,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            35,
+            36,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

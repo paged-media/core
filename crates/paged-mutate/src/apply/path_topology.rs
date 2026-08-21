@@ -2902,6 +2902,39 @@ pub(super) fn apply_link_frames(
     let story_id = doc.spreads[from_si].spread.text_frames[from_fi]
         .parent_story
         .clone();
+
+    // ── the half of a thread that was missing ───────────────────────
+    //
+    // A forward `NextTextFrame` on its own does NOTHING. What makes
+    // text appear in the next frame is that both frames name the SAME
+    // `ParentStory` — the chain walk starts from the story and follows
+    // `next_text_frame`, so a target on a DIFFERENT story is never
+    // reached however correct the pointer is. And `insertTextFrame`
+    // mints every frame with a story of its own, so the target always
+    // arrived carrying one.
+    //
+    // The result was an op that applied cleanly, changed the model,
+    // and moved no pixels: measured as a 0-pixel render diff across
+    // link, resize and hide — which is exactly how a thread that
+    // threads nothing presents itself. `paged-gen`'s `text_overset`
+    // fixture has had the right shape all along (two frames, one
+    // `parent_story`), so the composer never needed changing. Only
+    // this did.
+    //
+    // Note there is no back-pointer to write: `paged_model::TextFrame`
+    // carries `next_text_frame` and no `previous_text_frame`. IDML has
+    // the attribute and the parser drops it, because a singly-linked
+    // chain plus the story is all the composer reads.
+    let (to_si, to_fi) = find_text_frame_pos(doc, to)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::TextFrame(to.to_string())))?;
+    let restore_target = Some((
+        to.to_string(),
+        doc.spreads[to_si].spread.text_frames[to_fi]
+            .parent_story
+            .clone(),
+        None,
+    ));
+    doc.spreads[to_si].spread.text_frames[to_fi].parent_story = story_id.clone();
     let invalidation = match story_id {
         Some(sid) => reflow_hint_for_story(doc, &sid),
         None => InvalidationHint {
@@ -2916,10 +2949,13 @@ pub(super) fn apply_link_frames(
             to: to.to_string(),
         },
         // Undo restores `from`'s prior next-target (None clears it; a
-        // prior link re-points it).
+        // prior link re-points it) AND puts the target back on its own
+        // story — both halves, or the frame keeps rendering content it
+        // is no longer threaded to.
         inverse: Operation::UnlinkFrames {
             frame: from.to_string(),
             prev_next,
+            restore_target,
         },
         invalidation,
     })
@@ -2929,6 +2965,7 @@ pub(super) fn apply_unlink_frames(
     doc: &mut Document,
     frame: &str,
     prev_next: Option<&str>,
+    restore_target: Option<&(String, Option<String>, Option<String>)>,
 ) -> Result<AppliedOperation, OperationError> {
     let (si, fi) = find_text_frame_pos(doc, frame)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::TextFrame(frame.to_string())))?;
@@ -2937,6 +2974,20 @@ pub(super) fn apply_unlink_frames(
         .clone();
     // Forward unlink clears; the inverse-only `prev_next` restores.
     doc.spreads[si].spread.text_frames[fi].next_text_frame = prev_next.map(str::to_string);
+
+    // Undoing a link: put the target back on the story it had before,
+    // and drop its back-pointer. Without this the frame stays joined to
+    // the story it was threaded into and keeps rendering that text, so
+    // Cmd-Z would leave the page looking linked while the model said
+    // otherwise.
+    if let Some((target, parent_story, _)) = restore_target {
+        if let Some((tsi, tfi)) = find_text_frame_pos(doc, target) {
+            doc.spreads[tsi].spread.text_frames[tfi].parent_story = parent_story.clone();
+        }
+    }
+    // A user-initiated unlink leaves the target's story alone: the
+    // chain walk simply stops reaching it, which is what "unthreaded"
+    // means, and re-linking is the way back.
 
     let story_id = doc.spreads[si].spread.text_frames[fi].parent_story.clone();
     let invalidation = match story_id {
@@ -2958,6 +3009,7 @@ pub(super) fn apply_unlink_frames(
         None => Operation::UnlinkFrames {
             frame: frame.to_string(),
             prev_next: None,
+            restore_target: None,
         },
     };
 
@@ -2965,6 +3017,7 @@ pub(super) fn apply_unlink_frames(
         op: Operation::UnlinkFrames {
             frame: frame.to_string(),
             prev_next: prev_next.map(str::to_string),
+            restore_target: restore_target.cloned(),
         },
         inverse,
         invalidation,

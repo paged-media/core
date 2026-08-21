@@ -1555,6 +1555,7 @@ mod tests {
             Operation::UnlinkFrames {
                 frame: "TextFrame/u1".to_string(),
                 prev_next: Some("TextFrame/u9".to_string()),
+                restore_target: None,
             },
             Operation::ApplyStyle {
                 story_id: "Story/u1".to_string(),
@@ -6494,12 +6495,21 @@ mod tests {
                     .as_deref(),
                 Some("TextFrame/to")
             );
-            // Inverse clears the link.
+            // Inverse clears the link AND puts the target back on its
+            // own story. `restore_target` carries the second half:
+            // linking moves the target onto the source's `ParentStory`
+            // (without that, the composer never reaches it and the op
+            // renders nothing), so undo has to move it back or the
+            // frame keeps rendering content it is no longer threaded
+            // to. Both frames here start with `parent_story: None`, so
+            // the captured value is `None` — what matters is that the
+            // inverse NAMES the target at all.
             assert_eq!(
                 applied.inverse,
                 Operation::UnlinkFrames {
                     frame: "TextFrame/from".to_string(),
                     prev_next: None,
+                    restore_target: Some(("TextFrame/to".to_string(), None, None)),
                 }
             );
             p.undo().expect("undo");
