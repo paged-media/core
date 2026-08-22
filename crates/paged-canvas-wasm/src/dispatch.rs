@@ -30,6 +30,7 @@
 //! out as a [`Clock`] closure and a returned [`CacheEffect`], neither
 //! of which changes a single serialised field.
 
+use paged_canvas::journal::JournalEntry;
 use paged_canvas::{
     channel::LayoutCacheStats, CanvasModel, CanvasOptions, ColorProfileEntry, FontEntry,
     MainToWorker, MainToWorkerKind, PageId, WorkerError, WorkerToMain, WorkerToMainKind,
@@ -175,6 +176,7 @@ impl WorkerCore {
                 let err = WorkerToMain {
                     seq,
                     protocol: PROTOCOL_VERSION,
+                    journal: Vec::new(),
                     kind: match seq {
                         Some(_) => WorkerToMainKind::MutationFailed {
                             error: WorkerError::NotImplemented {
@@ -206,6 +208,19 @@ impl WorkerCore {
     ) -> (WorkerToMain, CacheEffect) {
         let seq = Some(msg.seq);
         let mut effect = CacheEffect::None;
+        // ADR 025 — instrument the WHOLE match once.
+        //
+        // Every command in the system passes through the `match msg.kind`
+        // below, and a `Clock` is ALREADY dependency-injected into every arm
+        // (it was extracted for the `rebuild_ms` readings, which only four
+        // arms ever took). Bracketing the match here therefore instruments
+        // 100% of the command surface for the price of two clock reads, and
+        // stays natively testable through `tests/dispatch.rs`'s stub clock.
+        //
+        // The wire message kind is a code-authored constant, so it crosses as
+        // a lowercased machine identifier; nothing about the PAYLOAD does.
+        let kind_ident = wire_kind_ident(&msg.kind);
+        let t_dispatch = clock();
         // Helper to wrap an early-return reply with no cache effect.
         macro_rules! reply {
             ($kind:expr) => {
@@ -213,6 +228,7 @@ impl WorkerCore {
                     WorkerToMain {
                         seq,
                         protocol: PROTOCOL_VERSION,
+                        journal: Vec::new(),
                         kind: $kind,
                     },
                     CacheEffect::None,
@@ -1303,13 +1319,94 @@ impl WorkerCore {
                 }
             }
         };
+        let journal = vec![JournalEntry::new("engine.dispatch")
+            .dur_ms(clock() - t_dispatch)
+            .corr(msg.seq)
+            .machine("kind", kind_ident)];
         (
             WorkerToMain {
                 seq,
                 protocol: PROTOCOL_VERSION,
+                journal,
                 kind,
             },
             effect,
         )
+    }
+}
+
+/// The wire message kind as a stable machine identifier, for the journal.
+///
+/// An EXHAUSTIVE match with no catch-all, deliberately: adding a
+/// `MainToWorkerKind` variant without naming it here becomes a COMPILE
+/// error rather than a silently unattributed journal entry. That is the same
+/// discipline the wire recipe's completeness check applies to operations, and
+/// it is the reason this is not derived from serde — serialising the payload
+/// on every dispatch just to read its tag would cost more than the work being
+/// measured.
+fn wire_kind_ident(kind: &MainToWorkerKind) -> &'static str {
+    match kind {
+        MainToWorkerKind::BeginGesture { .. } => "begin-gesture",
+        MainToWorkerKind::CancelGesture { .. } => "cancel-gesture",
+        MainToWorkerKind::ClaimImageResource { .. } => "claim-image-resource",
+        MainToWorkerKind::ClearFontRegistry => "clear-font-registry",
+        MainToWorkerKind::ClearPixelLayer { .. } => "clear-pixel-layer",
+        MainToWorkerKind::ClearSceneLayer { .. } => "clear-scene-layer",
+        MainToWorkerKind::CommitGesture { .. } => "commit-gesture",
+        MainToWorkerKind::ExecuteScript { .. } => "execute-script",
+        MainToWorkerKind::ExportIdml { .. } => "export-idml",
+        MainToWorkerKind::ExportPaged { .. } => "export-paged",
+        MainToWorkerKind::ExportPdfBegin { .. } => "export-pdf-begin",
+        MainToWorkerKind::ExportPdfCancel { .. } => "export-pdf-cancel",
+        MainToWorkerKind::ExportPdfFinish { .. } => "export-pdf-finish",
+        MainToWorkerKind::ExportPdfPage { .. } => "export-pdf-page",
+        MainToWorkerKind::ExportSwatchLibrary { .. } => "export-swatch-library",
+        MainToWorkerKind::Hello => "hello",
+        MainToWorkerKind::HitTest { .. } => "hit-test",
+        MainToWorkerKind::ListPagedParts { .. } => "list-paged-parts",
+        MainToWorkerKind::LoadDocument { .. } => "load-document",
+        MainToWorkerKind::Mutate { .. } => "mutate",
+        MainToWorkerKind::NewBlankDocument { .. } => "new-blank-document",
+        MainToWorkerKind::ReadPagedPart { .. } => "read-paged-part",
+        MainToWorkerKind::Redo => "redo",
+        MainToWorkerKind::RegisterColorProfile { .. } => "register-color-profile",
+        MainToWorkerKind::RegisterFont { .. } => "register-font",
+        MainToWorkerKind::ReleaseImageResource { .. } => "release-image-resource",
+        MainToWorkerKind::RequestCaretGeometry { .. } => "request-caret-geometry",
+        MainToWorkerKind::RequestCaretNav { .. } => "request-caret-nav",
+        MainToWorkerKind::RequestCollection { .. } => "request-collection",
+        MainToWorkerKind::RequestColorCompute { .. } => "request-color-compute",
+        MainToWorkerKind::RequestColorPreview { .. } => "request-color-preview",
+        MainToWorkerKind::RequestDocumentMeta => "request-document-meta",
+        MainToWorkerKind::RequestDocumentPlaceholders => "request-document-placeholders",
+        MainToWorkerKind::RequestElementGeometry { .. } => "request-element-geometry",
+        MainToWorkerKind::RequestElementProperties { .. } => "request-element-properties",
+        MainToWorkerKind::RequestFontFaceBytes { .. } => "request-font-face-bytes",
+        MainToWorkerKind::RequestFrameChain { .. } => "request-frame-chain",
+        MainToWorkerKind::RequestGradientDetail { .. } => "request-gradient-detail",
+        MainToWorkerKind::RequestGroupLeaves { .. } => "request-group-leaves",
+        MainToWorkerKind::RequestLayers => "request-layers",
+        MainToWorkerKind::RequestLineBounds { .. } => "request-line-bounds",
+        MainToWorkerKind::RequestMarqueeHits { .. } => "request-marquee-hits",
+        MainToWorkerKind::RequestMeasureText { .. } => "request-measure-text",
+        MainToWorkerKind::RequestNearestPathPoint { .. } => "request-nearest-path-point",
+        MainToWorkerKind::RequestPage { .. } => "request-page",
+        MainToWorkerKind::RequestParagraphBounds { .. } => "request-paragraph-bounds",
+        MainToWorkerKind::RequestPathAnchors { .. } => "request-path-anchors",
+        MainToWorkerKind::RequestPlacedAssetBytes { .. } => "request-placed-asset-bytes",
+        MainToWorkerKind::RequestPlanarRegions { .. } => "request-planar-regions",
+        MainToWorkerKind::RequestSceneTree => "request-scene-tree",
+        MainToWorkerKind::RequestSelectionGeometry { .. } => "request-selection-geometry",
+        MainToWorkerKind::RequestSnapshot { .. } => "request-snapshot",
+        MainToWorkerKind::RequestStoryContent { .. } => "request-story-content",
+        MainToWorkerKind::RequestWordBounds { .. } => "request-word-bounds",
+        MainToWorkerKind::SetElementSelection { .. } => "set-element-selection",
+        MainToWorkerKind::SetSelection { .. } => "set-selection",
+        MainToWorkerKind::SubmitPixelLayer { .. } => "submit-pixel-layer",
+        MainToWorkerKind::SubmitResourceTiles { .. } => "submit-resource-tiles",
+        MainToWorkerKind::SubmitSceneLayer { .. } => "submit-scene-layer",
+        MainToWorkerKind::Undo => "undo",
+        MainToWorkerKind::UpdateGesture { .. } => "update-gesture",
+        MainToWorkerKind::WritePagedPart { .. } => "write-paged-part",
     }
 }

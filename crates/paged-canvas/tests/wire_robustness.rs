@@ -35,6 +35,7 @@ fn link_frames_to_rectangle_errors_and_reply_serializes() {
     let reply = WorkerToMain {
         seq: Some(1),
         protocol: PROTOCOL_VERSION,
+        journal: Vec::new(),
         kind: WorkerToMainKind::MutationFailed {
             error: out.unwrap_err(),
         },

@@ -131,6 +131,44 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # ── The gate's numbers, kept ────────────────────────────────────
+      # Everything above this line uploads only `if: failure()`, which
+      # means every PASSING run's ΔE2000 and SSIM — the most valuable
+      # measurement this project makes — was computed and thrown away.
+      # Nobody could answer "is fidelity drifting?" without re-running
+      # history by hand.
+      #
+      # `gate.json` also carries a real per-fixture ASSERTION (`passed`)
+      # that no results artifact ever published, so a full fidelity gate
+      # contributed ZERO rows to the state dashboard. That is a missing
+      # EVIDENCE lane, not just a missing metric.
+      #
+      # `if: always()` and JSON only — the heavy PNGs stay on the
+      # failure path above, so this costs kilobytes.
+      - name: derive fidelity evidence + measurements
+        if: always()
+        run: |
+          node scripts/measurements-from-fidelity.mjs \
+            --in /tmp/idml-generated-diff \
+            --out-dir "$RUNNER_TEMP" \
+            --commit "$GITHUB_SHA" \
+            --branch "$GITHUB_REF_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --os "${{ matrix.os }}"
+
+      - name: upload fidelity evidence + measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paged-fidelity-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/paged-results-fidelity.json
+            ${{ runner.temp }}/paged-measurements-fidelity.json
+          if-no-files-found: warn
+          # Longer than the heatmaps': these are the trend inputs, and a
+          # 14-day window cannot show drift.
+          retention-days: 90
+
       - name: third-party sample diff (advisory)
         # Runs ./corpus/generated/render-diff.sh against any third-party
         # IDML pair (idml + matching pdf) under corpus/samples/.

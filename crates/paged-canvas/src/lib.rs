@@ -53,6 +53,7 @@ pub mod export;
 pub mod geometry;
 pub mod gesture;
 pub mod hit;
+pub mod journal;
 pub mod model;
 pub mod mutate;
 pub mod resolve;

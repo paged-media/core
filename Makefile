@@ -54,6 +54,7 @@ verify: _board_init
 	-$(MAKE) --no-print-directory _verify_check_wasm
 	-$(MAKE) --no-print-directory _verify_test_wasm
 	-$(MAKE) --no-print-directory _verify_fidelity
+	-$(MAKE) --no-print-directory _verify_measurements
 	@$(MAKE) --no-print-directory _board_report
 
 # A per-run scoreboard temp file, shared by every lane via the env var.
@@ -98,6 +99,20 @@ _verify_fidelity:
 	else \
 	  bash scripts/verify-lane.sh fidelity --skip \
 	    "fidelity-gate deps absent (run \`make fidelity-deps\` for the checklist)"; \
+	fi
+
+# The fidelity gate's numbers used to be computed and discarded on every
+# passing run. `measurements-from-fidelity.mjs` turns its per-fixture output
+# into an evidence artifact (contract v1) plus a measurement artifact; this
+# lane guards the reader itself. SKIPs when node is absent rather than
+# failing — same honesty rule as the fidelity lane above.
+_verify_measurements:
+	@if command -v node >/dev/null 2>&1; then \
+	  bash scripts/verify-lane.sh measurements -- \
+	    node scripts/measurements-from-fidelity.test.mjs; \
+	else \
+	  bash scripts/verify-lane.sh measurements --skip \
+	    "node not on PATH (the fidelity measurement reader is a node script)"; \
 	fi
 
 # --- direct lanes (also usable standalone) -------------------------------

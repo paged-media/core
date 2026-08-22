@@ -56,6 +56,22 @@ export type MainToWorker = MainToWorkerKind & {
 export type WorkerToMain = WorkerToMainKind & {
   seq: number | null;
   protocol: ProtocolVersion;
+  /** ADR 025 — journal entries minted while producing this reply.
+   *  Optional: absent on nearly every reply, and absent entirely from a
+   *  pre-journal engine. */
+  journal?: JournalEntry[];
+};
+
+/** ADR 025 — one engine-side journal entry. There is deliberately no
+ *  free-text field: `data` values are numbers, booleans, or identifiers
+ *  matching /^[a-z0-9][a-z0-9._:-]{0,63}$/, so document text, file paths
+ *  and URIs are UNREPRESENTABLE rather than filtered. */
+export type JournalEntry = {
+  code: string;
+  severity: "debug" | "info" | "warn" | "error";
+  durMs?: number;
+  corr?: number;
+  data?: Record<string, number | boolean | string>;
 };
 "#;
 
@@ -1301,6 +1317,23 @@ pub struct WorkerToMain {
     #[serde(default)]
     pub seq: Option<u64>,
     pub protocol: ProtocolVersion,
+    // ---- ADR 025 — journal entries minted while producing this reply. ----
+    // Additive, `#[serde(default)]`, skipped when empty: governance rule 1,
+    // so this ships with NO PROTOCOL_VERSION bump. Same precedent as the
+    // W1.24 `RebuildStats` breakdown further down this file, which rode v35
+    // for exactly the same reason.
+    //
+    // A pre-journal main thread ignores the unknown field; a journal-aware
+    // main thread against a pre-journal engine deserialises an empty vec.
+    // The TS shape is hand-authored in TS_ENVELOPES above (Tsify is
+    // deliberately OFF both envelope structs), so the field is genuinely
+    // OPTIONAL there and no `postBack({...})` construction site changes.
+    //
+    // Empty on the overwhelming majority of replies — the aggregate-heavy
+    // rate policy lives on the editor side, so the engine only pushes what
+    // it actually measured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub journal: Vec<crate::journal::JournalEntry>,
     #[serde(flatten)]
     pub kind: WorkerToMainKind,
 }
@@ -4802,6 +4835,57 @@ mod tests {
         assert_eq!(PROTOCOL_VERSION.0, 62);
     }
 
+    /// ADR 025 — the journal field is ADDITIVE, and this is the test that
+    /// says so out loud.
+    ///
+    /// The ADR's central claim is that shipping an engine-side journal costs
+    /// NO protocol bump, because governance rule 1 makes a
+    /// `#[serde(default)]` field a back-compatible add (the W1.24
+    /// `RebuildStats` breakdown rode v35 for exactly this reason). Three
+    /// things have to hold for that claim to be true, so all three are
+    /// asserted here rather than left to a reviewer's memory.
+    #[test]
+    fn journal_rides_the_envelope_without_a_protocol_bump() {
+        use crate::journal::JournalEntry;
+
+        // 1. A PRE-journal payload — no `journal` key at all, exactly what an
+        //    older engine emits — still deserialises.
+        let old_wire = r#"{"seq":1,"protocol":62,"kind":"pagesDirty","payload":{"pageIds":[]}}"#;
+        let parsed: WorkerToMain = serde_json::from_str(old_wire).unwrap();
+        assert!(parsed.journal.is_empty());
+        assert_eq!(parsed.protocol.0, 62);
+
+        // 2. An EMPTY journal is skipped on the way out, so the overwhelming
+        //    majority of replies pay nothing for the field existing.
+        let out = serde_json::to_string(&parsed).unwrap();
+        assert!(
+            !out.contains("journal"),
+            "an empty journal must not appear on the wire: {out}"
+        );
+
+        // 3. A populated journal round-trips, and the protocol is untouched.
+        let with = WorkerToMain {
+            seq: Some(2),
+            protocol: PROTOCOL_VERSION,
+            journal: vec![JournalEntry::new("engine.dispatch")
+                .dur_ms(0.5)
+                .machine("kind", "LoadDocument")],
+            kind: WorkerToMainKind::PagesDirty { page_ids: vec![] },
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("engine.dispatch"));
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.journal.len(), 1);
+        assert_eq!(
+            back.journal[0].data["kind"],
+            crate::journal::JournalValue::Ident("loaddocument".into())
+        );
+        assert_eq!(
+            back.protocol.0, 62,
+            "the journal must not move the protocol"
+        );
+    }
+
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the
     /// camelCase op name; `to` is the externally-tagged
     /// `ZOrderTarget`, so the four verbs are bare strings and the
@@ -4958,6 +5042,7 @@ mod tests {
         let msg = WorkerToMain {
             seq: Some(1),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::IdmlExported {
                 idml_bytes: ByteBuf::from(vec![80, 75]),
                 lost: vec!["opacity mask on `r1`".into()],
@@ -5095,6 +5180,7 @@ mod tests {
         let reply = WorkerToMain {
             seq: Some(3),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::FrameChainResult {
                 links: vec![
                     FrameChainLink {
@@ -5158,6 +5244,7 @@ mod tests {
         let reply = WorkerToMain {
             seq: Some(4),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::MeasureTextResult {
                 advance: 14.5,
                 ascender: 9.6,
@@ -5191,6 +5278,7 @@ mod tests {
         let reply = WorkerToMain {
             seq: None,
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::FrameReflow {
                 frame_id: "tf1".into(),
                 content_box: [100.0, 100.0, 500.0, 400.0],
@@ -5257,6 +5345,7 @@ mod tests {
         let env = WorkerToMain {
             seq: Some(9),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ParagraphBoundsResult {
                 bounds: Some(crate::geometry::ParagraphBounds { start: 6, end: 10 }),
             },
@@ -5278,6 +5367,7 @@ mod tests {
         let none = WorkerToMain {
             seq: Some(9),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ParagraphBoundsResult { bounds: None },
         };
         let json = serde_json::to_string(&none).unwrap();
@@ -5536,6 +5626,7 @@ mod tests {
         let msg = WorkerToMain {
             seq: None,
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::PagesDirty {
                 page_ids: vec![PageId("p1".into()), PageId("p2".into())],
             },
@@ -5633,6 +5724,7 @@ mod tests {
         let ack = WorkerToMain {
             seq: Some(11),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ResourceClaimApplied {
                 image_id: "x-paged-image:f1".into(),
                 applied: true,
@@ -5661,6 +5753,7 @@ mod tests {
         let unsolicited = WorkerToMain {
             seq: None,
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ResourceTilesNeeded(ResourceTilesNeededWire {
                 image_id: "x-paged-image:f1".into(),
                 level: 2,
@@ -5753,6 +5846,7 @@ mod tests {
         let reply = WorkerToMain {
             seq: Some(51),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::PagedExported {
                 bytes: ByteBuf::from(vec![9u8, 8, 7]),
             },
@@ -5770,6 +5864,7 @@ mod tests {
         let list = WorkerToMain {
             seq: Some(1),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::PagedPartList {
                 paths: vec!["paged/x/1/spec.json".into()],
             },
@@ -5817,6 +5912,7 @@ mod tests {
         let r = WorkerToMain {
             seq: Some(1),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::CaretNavResult { offset: Some(12) },
         };
         let json = serde_json::to_string(&r).unwrap();
@@ -5829,6 +5925,7 @@ mod tests {
         let r = WorkerToMain {
             seq: Some(1),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::LineBoundsResult {
                 bounds: Some(crate::geometry::LineBounds {
                     line_start: 3,
@@ -5883,6 +5980,7 @@ mod tests {
         let r = WorkerToMain {
             seq: Some(13),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::WordBoundsResult {
                 bounds: Some(crate::geometry::WordBounds { start: 4, end: 9 }),
             },
@@ -5902,6 +6000,7 @@ mod tests {
         let none = WorkerToMain {
             seq: Some(13),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::WordBoundsResult { bounds: None },
         };
         let back: WorkerToMain =
@@ -5939,6 +6038,7 @@ mod tests {
         let ok = WorkerToMain {
             seq: Some(11),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::IdmlExported {
                 idml_bytes: ByteBuf::from(vec![80, 75, 3, 4]), // "PK\x03\x04"
                 // v58 (C-28) — a clean document loses nothing.
@@ -5968,6 +6068,7 @@ mod tests {
         let err = WorkerToMain {
             seq: Some(11),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ExportIdmlFailed {
                 error: "no document loaded".into(),
             },
@@ -5995,6 +6096,7 @@ mod tests {
         let env = WorkerToMain {
             seq: Some(7),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ScriptResult {
                 output: vec!["[log] hi".into()],
                 error: Some("runtime budget exceeded: …".into()),
@@ -6032,6 +6134,7 @@ mod tests {
         let env = WorkerToMain {
             seq: Some(7),
             protocol: PROTOCOL_VERSION,
+            journal: Vec::new(),
             kind: WorkerToMainKind::ScriptResult {
                 output: vec![],
                 error: None,
