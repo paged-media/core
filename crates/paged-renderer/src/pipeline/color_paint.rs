@@ -18,24 +18,60 @@
 
 use super::*;
 
+/// How this build resolves a swatch into paint: the document's CMYK
+/// display transform plus the Ink Manager policy that decides what a
+/// spot ink's colour even *is*.
+///
+/// Built once per render in `build_document_inner` from the colour
+/// fields of [`PipelineOptions`] (profile, intent, black-point
+/// compensation, standard-Lab-for-spots) and threaded to every paint
+/// resolver, so the whole page agrees on one answer. Copy, so passing
+/// it costs the same as the `Option<&IccTransform>` it replaced.
+#[derive(Clone, Copy, Default)]
+pub struct ColorCtx<'a> {
+    /// CMYK → linear-RGB display transform, built from the document's
+    /// working profile. `None` on hosts with no profile loaded (and on
+    /// wasm32 without lcms2), where CMYK collapses to the naive RGB
+    /// `graphic::to_linear_rgb` produces.
+    pub icc: Option<&'a paged_color::IccTransform>,
+    /// Ink Manager — "Use Standard Lab Values for Spots". A spot swatch
+    /// whose PRIMARY space is Lab carries measured, device-independent
+    /// values; its CMYK alternate is only the printing approximation
+    /// InDesign falls back to. With this on, such a swatch is DISPLAYED
+    /// from its Lab primary. See [`spot_lab_display_rgb`].
+    pub standard_lab_for_spots: bool,
+}
+
+impl<'a> ColorCtx<'a> {
+    /// The transform-only context — the shape every caller that has no
+    /// ink-manager state (tests, the `&Graphic`-only public resolvers)
+    /// wants.
+    pub fn icc(icc: Option<&'a paged_color::IccTransform>) -> Self {
+        Self {
+            icc,
+            standard_lab_for_spots: false,
+        }
+    }
+}
+
 /// Pick the paint for a frame from its FillColor attribute.
 pub fn resolve_fill(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
-    color_id_to_paint(frame.fill_color.as_deref()?, palette, None)
+    color_id_to_paint(frame.fill_color.as_deref()?, palette, ColorCtx::default())
 }
 
 /// Same, for StrokeColor.
 pub fn resolve_stroke(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
-    color_id_to_paint(frame.stroke_color.as_deref()?, palette, None)
+    color_id_to_paint(frame.stroke_color.as_deref()?, palette, ColorCtx::default())
 }
 
 /// Rectangle flavour of `resolve_fill` (no ParentStory to consider).
 pub fn resolve_rect_fill(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
-    color_id_to_paint(rect.fill_color.as_deref()?, palette, None)
+    color_id_to_paint(rect.fill_color.as_deref()?, palette, ColorCtx::default())
 }
 
 /// Rectangle flavour of `resolve_stroke`.
 pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint> {
-    color_id_to_paint(rect.stroke_color.as_deref()?, palette, None)
+    color_id_to_paint(rect.stroke_color.as_deref()?, palette, ColorCtx::default())
 }
 
 /// Solid-paint resolver. Used by per-cluster glyph paint pickers
@@ -49,7 +85,7 @@ pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint>
 /// at draw time for ordinary paints; only the overprint path consumes
 /// the channels separately.
 ///
-/// When `cmyk_xform` is `None` (wasm32 fallback, hosts without an
+/// When `color_ctx.icc` is `None` (wasm32 fallback, hosts without an
 /// ICC profile loaded) CMYK swatches collapse to the naive RGB the
 /// `graphic::to_linear_rgb` helper produces, matching the prior
 /// behaviour — the CMYK path is gated on having a usable ICC transform
@@ -63,7 +99,7 @@ pub fn resolve_rect_stroke(rect: &Rectangle, palette: &Graphic) -> Option<Paint>
 pub fn gradient_midpoint_paint(
     id: &str,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) -> Option<Paint> {
     let grad = palette.gradients.get(id)?;
     // Walk the stops in declaration order; interpolate the colour at
@@ -74,7 +110,7 @@ pub fn gradient_midpoint_paint(
         .stops
         .iter()
         .filter_map(|s| {
-            let p = color_id_to_paint(&s.stop_color, palette, cmyk_xform)?;
+            let p = color_id_to_paint(&s.stop_color, palette, color_ctx)?;
             let c = match p {
                 Paint::Solid(c) => c,
                 Paint::Cmyk { rgb, .. } => rgb,
@@ -108,18 +144,21 @@ pub fn gradient_midpoint_paint(
     Some(Paint::Solid(color))
 }
 
-pub fn color_id_to_paint(
-    id: &str,
-    palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
-) -> Option<Paint> {
+pub fn color_id_to_paint(id: &str, palette: &Graphic, color_ctx: ColorCtx<'_>) -> Option<Paint> {
     let entry = palette.resolve(id)?;
+    // Ink Manager — "Use Standard Lab Values for Spots". Off (the
+    // default, and InDesign's) this is `None` and every line below is
+    // the historical path.
+    let lab_display = color_ctx
+        .standard_lab_for_spots
+        .then(|| spot_lab_display_rgb(entry))
+        .flatten();
     // Prefer the swatch's *effective* CMYK — it folds Spot →
     // alternate-CMYK resolution and any swatch-level `TintValue`
     // (e.g. "PANTONE 286 C at 50%") into the channels before ICC.
     // Tint scales each channel toward paper white (0,0,0,0) linearly
     // in CMYK space, which is what InDesign does in preview.
-    if let (Some(xform), Some([c, m, y, k])) = (cmyk_xform, entry.effective_cmyk()) {
+    if let (Some(xform), Some([c, m, y, k])) = (color_ctx.icc, entry.effective_cmyk()) {
         {
             // ICC-resolve once at compose time and bake the result into
             // the paint. The rasterizer uses `rgb` for ordinary draws
@@ -127,14 +166,22 @@ pub fn color_id_to_paint(
             // C/M/Y/K channels for overprint composition.
             // Backend: lcms2 on native, qcms on wasm32 (both behind
             // the `paged_color::IccTransform` shim).
-            let cmyk = paged_color::Cmyk { c, m, y, k };
-            let paged_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
+            let rgb = lab_display.unwrap_or_else(|| {
+                let cmyk = paged_color::Cmyk { c, m, y, k };
+                let paged_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(cmyk);
+                Color::rgba(r, g, b, 1.0)
+            });
             return Some(Paint::Cmyk {
+                // The CHANNELS keep the CMYK alternate even under
+                // standard-Lab: they are what the spot plane composites
+                // and what separates on output, and the Ink Manager
+                // toggle governs how the ink is *shown*, not which
+                // plate it lands on.
                 c: (c / 100.0).clamp(0.0, 1.0),
                 m: (m / 100.0).clamp(0.0, 1.0),
                 y: (y / 100.0).clamp(0.0, 1.0),
                 k: (k / 100.0).clamp(0.0, 1.0),
-                rgb: Color::rgba(r, g, b, 1.0),
+                rgb,
                 // The list-aware wrappers (e.g. `color_id_to_paint_with_list_dir`)
                 // re-tag this paint with a `SpotInkId` for `Model="Spot"`
                 // swatches; this function lacks a `&mut DisplayList`,
@@ -145,6 +192,12 @@ pub fn color_id_to_paint(
             });
         }
     }
+    // No ICC transform: the CMYK alternate would collapse to naive RGB
+    // below, so a Lab-primary spot under standard-Lab is better served
+    // by its own measured values, which need no profile at all.
+    if let Some(rgb) = lab_display {
+        return Some(Paint::Solid(rgb));
+    }
     if let Some([r, g, b]) = to_linear_rgb(entry) {
         return Some(Paint::Solid(Color::rgba(r, g, b, 1.0)));
     }
@@ -154,6 +207,29 @@ pub fn color_id_to_paint(
     // linear sRGB, no profile needed for display). Previously these
     // swatches dropped out entirely and rendered as missing paint.
     lab_entry_to_paint(entry)
+}
+
+/// The display colour of a spot ink under the Ink Manager's "Use
+/// Standard Lab Values for Spots", or `None` when the setting has
+/// nothing to say about this swatch.
+///
+/// IDML gives a spot swatch two descriptions: its PRIMARY value (what
+/// the ink measures — a Lab reading, for every modern library swatch)
+/// and an `AlternateColorValue` (how to fake it in process ink). The
+/// renderer previews spots through the alternate because that is what
+/// InDesign does by default. Standard-Lab is the opposite instruction:
+/// trust the measurement. Lab is device-independent, so this needs no
+/// profile — D50 → Bradford → linear sRGB and we are done.
+///
+/// Only Lab-primary spots are affected. A spot described in CMYK or RGB
+/// has no measurement to prefer, and a process swatch is not an ink.
+fn spot_lab_display_rgb(entry: &paged_model::ColorEntry) -> Option<Color> {
+    if entry.model != paged_model::ColorModel::Spot {
+        return None;
+    }
+    let [l, a, b] = entry.effective_lab()?;
+    let paged_color::LinearRgb([r, g, bl]) = paged_color::lab::lab_d50_to_linear_srgb(l, a, b);
+    Some(Color::rgba(r, g, bl, 1.0))
 }
 
 /// Lab(D50) swatch → solid paint, or None when the entry isn't a
@@ -212,10 +288,10 @@ pub(super) fn linear_gradient_endpoints(
 pub fn color_id_to_paint_with_list(
     id: &str,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut DisplayList,
 ) -> Option<Paint> {
-    color_id_to_paint_with_list_dir(id, palette, cmyk_xform, list, None, None, None)
+    color_id_to_paint_with_list_dir(id, palette, color_ctx, list, None, None, None)
 }
 
 /// Like [`color_id_to_paint_with_list`] but takes an explicit
@@ -270,7 +346,7 @@ pub(super) fn color_lerp(
 pub fn color_id_to_paint_with_list_dir(
     id: &str,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut DisplayList,
     gradient_angle_deg: Option<f32>,
     gradient_length_pt: Option<f32>,
@@ -298,8 +374,8 @@ pub fn color_id_to_paint_with_list_dir(
             .stops
             .iter()
             .filter_map(|s| {
-                let color = color_id_to_paint(&s.stop_color, palette, cmyk_xform)
-                    .and_then(|p| paint_as_solid_with_icc(p, cmyk_xform))?;
+                let color = color_id_to_paint(&s.stop_color, palette, color_ctx)
+                    .and_then(|p| paint_as_solid_with_icc(p, color_ctx))?;
                 let entry = palette.resolve(&s.stop_color);
                 let cmyk = entry.and_then(|e| e.effective_cmyk());
                 Some(StopRef {
@@ -317,8 +393,9 @@ pub fn color_id_to_paint_with_list_dir(
         if raw_stops.len() < 2 {
             return None;
         }
-        let cmyk_tessellate_xform =
-            cmyk_xform.filter(|_| raw_stops.iter().any(|s| s.cmyk.is_some()));
+        let cmyk_tessellate_xform = color_ctx
+            .icc
+            .filter(|_| raw_stops.iter().any(|s| s.cmyk.is_some()));
         let stops: Vec<paged_compose::GradientStop> = if let Some(xform) = cmyk_tessellate_xform {
             // At least one stop carries CMYK (process or spot-with-
             // CMYK-alternate). Tessellate the gradient in CMYK space
@@ -470,7 +547,7 @@ pub fn color_id_to_paint_with_list_dir(
         let id = list.push_linear_gradient(paged_compose::LinearGradient { start, end, stops });
         return Some(Paint::LinearGradient(id));
     }
-    let paint = color_id_to_paint(id, palette, cmyk_xform)?;
+    let paint = color_id_to_paint(id, palette, color_ctx)?;
     // Stage C: when the swatch is a named-ink spot colour, intern the
     // ink name on the display list and tag the paint with the resulting
     // id. Spot-on-same-spot overprint then composites per-pixel in the
@@ -572,7 +649,7 @@ pub fn build_run_paint_picker(
     palette: &Graphic,
     default: Paint,
 ) -> RunPaintPicker {
-    build_run_paint_picker_with_cmyk(paragraph, palette, None, default)
+    build_run_paint_picker_with_cmyk(paragraph, palette, ColorCtx::default(), default)
 }
 
 /// Variant of [`build_run_paint_picker`] that routes CMYK swatches
@@ -583,7 +660,7 @@ pub fn build_run_paint_picker(
 pub fn build_run_paint_picker_with_cmyk(
     paragraph: &paged_model::Paragraph,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     default: Paint,
 ) -> RunPaintPicker {
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(paragraph.runs.len());
@@ -598,8 +675,8 @@ pub fn build_run_paint_picker_with_cmyk(
             .fill_color
             .as_deref()
             .and_then(|id| {
-                color_id_to_paint(id, palette, cmyk_xform)
-                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+                color_id_to_paint(id, palette, color_ctx)
+                    .or_else(|| gradient_midpoint_paint(id, palette, color_ctx))
             })
             .unwrap_or(default);
         bands.push((cursor, paint));
@@ -632,7 +709,7 @@ pub(super) fn build_run_stroke_picker(
     paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     bullet_byte_offset: u32,
 ) -> RunStrokePicker {
     let mut bands: Vec<(u32, Option<(Paint, Stroke)>)> =
@@ -649,7 +726,7 @@ pub(super) fn build_run_stroke_picker(
         let entry = resolved_runs[i]
             .stroke_color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+            .and_then(|id| color_id_to_paint(id, palette, color_ctx))
             .map(|paint| {
                 let width = resolved_runs[i].stroke_weight.unwrap_or(1.0);
                 (paint, Stroke::new(width))
@@ -664,7 +741,7 @@ pub(super) fn build_run_paint_picker_resolved(
     paragraph: &paged_model::Paragraph,
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     default: Paint,
     bullet_paint_override: Option<(u32, Paint)>,
 ) -> RunPaintPicker {
@@ -691,8 +768,8 @@ pub(super) fn build_run_paint_picker_resolved(
             .fill_color
             .as_deref()
             .and_then(|id| {
-                color_id_to_paint(id, palette, cmyk_xform)
-                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+                color_id_to_paint(id, palette, color_ctx)
+                    .or_else(|| gradient_midpoint_paint(id, palette, color_ctx))
             })
             .unwrap_or(default);
         let paint = apply_fill_tint(base, resolved_runs[i].fill_tint);
@@ -713,7 +790,7 @@ pub(super) fn build_footnote_paint_picker(
     resolved_runs: &[paged_scene::ResolvedRunAttrs],
     run_text_lens: &[usize],
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     default: Paint,
 ) -> RunPaintPicker {
     let mut bands: Vec<(u32, Paint)> = Vec::with_capacity(resolved_runs.len() + 1);
@@ -723,8 +800,8 @@ pub(super) fn build_footnote_paint_picker(
             .fill_color
             .as_deref()
             .and_then(|id| {
-                color_id_to_paint(id, palette, cmyk_xform)
-                    .or_else(|| gradient_midpoint_paint(id, palette, cmyk_xform))
+                color_id_to_paint(id, palette, color_ctx)
+                    .or_else(|| gradient_midpoint_paint(id, palette, color_ctx))
             })
             .unwrap_or(default);
         let paint = apply_fill_tint(base, attrs.fill_tint);

@@ -29,7 +29,7 @@ use paged_model::Graphic;
 
 use super::geometry::{emit_stroked, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
-use crate::pipeline::{color_id_to_paint_with_list_dir, BuiltPage};
+use crate::pipeline::{color_id_to_paint_with_list_dir, BuiltPage, ColorCtx};
 
 /// Resolve and emit the frame stroke. `stroke_path`, when `Some`,
 /// routes through `StrokePath` against the pre-interned offset path
@@ -44,7 +44,7 @@ pub(crate) fn stroke_paint_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     outer: Transform,
     stroke_path: Option<PathId>,
     stroke: Stroke,
@@ -66,7 +66,7 @@ pub(crate) fn stroke_paint_module(
         color_id_to_paint_with_list_dir(
             id,
             palette,
-            cmyk_xform,
+            color_ctx,
             &mut page.list,
             frame.gradient_stroke_angle,
             frame.gradient_stroke_length,

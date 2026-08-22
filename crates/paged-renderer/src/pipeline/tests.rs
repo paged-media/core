@@ -1970,7 +1970,7 @@ fn section_walk_computes_roman_then_arabic_labels() {
         .map(|id| w.next_label(Some(id), None))
         .collect();
     assert_eq!(labels, vec!["i", "ii", "1", "2"]);
-    assert!(w.used_fallback);
+    assert!(w.used_fallback());
 }
 
 #[test]
@@ -3410,7 +3410,7 @@ fn footnote_pool_reserves_space_below_body_text() {
         &doc,
         &font_table,
         &doc.palette,
-        None,
+        ColorCtx::default(),
     );
     let pool_h: f32 = pools.values().copied().fold(0.0, f32::max);
     assert!(pool_h > 0.0, "expected a measurable footnote pool height");

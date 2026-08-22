@@ -782,7 +782,7 @@ pub(super) fn emit_text_frame_into(
     document: &Document,
     palette: &Graphic,
     fallback: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     drop_shadow: Option<DropShadow>,
     auto_sized_bounds: Option<paged_model::Bounds>,
 ) {
@@ -847,7 +847,7 @@ pub(super) fn emit_text_frame_into(
         &resolved,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         drop_shadow,
         outer,
         frame.stroke_drop_shadow.as_ref(),
@@ -941,11 +941,11 @@ pub(super) fn emit_text_frame_into(
             path_id,
             effects_xform,
             palette,
-            cmyk_xform,
+            color_ctx,
         );
     }
     crate::module::fill_paint_module(
-        &resolved, page, palette, cmyk_xform, fallback, outer, fill_path,
+        &resolved, page, palette, color_ctx, fallback, outer, fill_path,
     );
     if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
         crate::module::emit_effects_post_fill(
@@ -954,7 +954,7 @@ pub(super) fn emit_text_frame_into(
             path_id,
             effects_xform,
             palette,
-            cmyk_xform,
+            color_ctx,
             effects_unit_normalize,
         );
     }
@@ -962,7 +962,7 @@ pub(super) fn emit_text_frame_into(
         &resolved,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         outer,
         // C-18: the corner module returns a SEPARATE stroke path with
         // `StrokeAlignment` baked in. A text frame never carries an
@@ -1397,20 +1397,17 @@ pub(super) fn rect_bounds_in_page(
 /// drop-shadow / gradient-stop / decoration paths that have only ever
 /// understood RGB keep producing identical pixels to the pre-Stage A
 /// world.
-pub(super) fn paint_as_solid_with_icc(
-    p: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
-) -> Option<Color> {
+pub(super) fn paint_as_solid_with_icc(p: Paint, color_ctx: ColorCtx<'_>) -> Option<Color> {
     match p {
         Paint::Solid(c) => Some(c),
         // The CMYK paint carries the ICC-resolved display RGB cached
         // on it — drop-shadow / gradient-stop paths use that directly
         // so the colour matches what a direct `Paint::Solid` resolved
-        // to before Stage A landed. `cmyk_xform` is unused here but
+        // to before Stage A landed. `color_ctx` is unused here but
         // kept in the signature for callers that don't know if the
         // paint is a CMYK paint and want a stable API.
         Paint::Cmyk { rgb, .. } => {
-            let _ = cmyk_xform;
+            let _ = color_ctx;
             Some(rgb)
         }
         _ => None,

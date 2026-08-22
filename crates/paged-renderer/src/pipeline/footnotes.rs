@@ -383,7 +383,7 @@ pub(super) fn resolve_footnote_metrics(
     document: &Document,
     column_width_pt: f32,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     default_size: f32,
 ) -> FootnoteMetrics {
     let fo = &document.designmap.footnote_options;
@@ -413,7 +413,7 @@ pub(super) fn resolve_footnote_metrics(
         let base_paint = fo
             .rule_color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+            .and_then(|id| color_id_to_paint(id, palette, color_ctx))
             .unwrap_or(Paint::Solid(Color {
                 r: 0.0,
                 g: 0.0,
@@ -452,7 +452,7 @@ pub(super) fn measure_footnote_pools(
     document: &Document,
     font_table: &FontTable,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) -> std::collections::HashMap<(usize, i32, i32, i32, i32), f32> {
     let mut out = std::collections::HashMap::new();
     if options.font.is_none() && font_table.fallback.is_none() {
@@ -476,7 +476,7 @@ pub(super) fn measure_footnote_pools(
                 document,
                 column_width_pt,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 FOOTNOTE_POINT_SIZE,
             );
             let h =
@@ -618,7 +618,7 @@ pub(super) fn emit_footnote_pools(
     options: &PipelineOptions,
     document: &Document,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     // The footnote pool needs at least one resolvable face. The
     // styled-run composer resolves per-run bytes through the FontTable
@@ -662,7 +662,7 @@ pub(super) fn emit_footnote_pools(
                 document,
                 column_width_pt,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 FOOTNOTE_POINT_SIZE,
             );
             // Compose each footnote through the styled-run path (per-run
@@ -755,7 +755,7 @@ pub(super) fn emit_footnote_pools(
                         &c.resolved_runs_per_para[p_idx],
                         &c.run_text_lens_per_para[p_idx],
                         palette,
-                        cmyk_xform,
+                        color_ctx,
                         default_paint,
                     );
                     let para_top = cursor_y_pt;

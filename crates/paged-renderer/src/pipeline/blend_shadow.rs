@@ -102,10 +102,10 @@ pub(crate) fn resolve_frame_shadow(
     frame_shadow: Option<&paged_model::DropShadowSetting>,
     fallback: Option<DropShadow>,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) -> Option<DropShadow> {
     frame_shadow
-        .and_then(|s| convert_setting_to_shadow(s, palette, cmyk_xform))
+        .and_then(|s| convert_setting_to_shadow(s, palette, color_ctx))
         .or(fallback)
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn resolve_frame_shadow(
 pub(super) fn convert_setting_to_shadow(
     setting: &paged_model::DropShadowSetting,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) -> Option<DropShadow> {
     let opacity = (setting.opacity_pct / 100.0).clamp(0.0, 1.0);
     if opacity == 0.0 {
@@ -124,8 +124,8 @@ pub(super) fn convert_setting_to_shadow(
     let color = setting
         .effect_color
         .as_deref()
-        .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
-        .and_then(|p| paint_as_solid_with_icc(p, cmyk_xform))
+        .and_then(|id| color_id_to_paint(id, palette, color_ctx))
+        .and_then(|p| paint_as_solid_with_icc(p, color_ctx))
         .unwrap_or(Color::BLACK);
     Some(DropShadow {
         offset_x: setting.x_offset,

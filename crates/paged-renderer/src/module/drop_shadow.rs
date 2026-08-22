@@ -49,7 +49,7 @@ use paged_model::{DropShadowSetting, Graphic};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
     fnv_1a_u64, frame_fill_is_transparent, frame_stroke_is_visible, path_signature,
-    polygon_path_from_anchors_with_open, resolve_frame_shadow, BuiltPage,
+    polygon_path_from_anchors_with_open, resolve_frame_shadow, BuiltPage, ColorCtx,
 };
 
 /// Emit the drop-shadow stamp(s) for a frame. The fill-shadow stamps
@@ -62,7 +62,7 @@ pub(crate) fn drop_shadow_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     fallback: Option<DropShadow>,
     outer: Transform,
     stroke_drop_shadow: Option<&DropShadowSetting>,
@@ -100,7 +100,7 @@ pub(crate) fn drop_shadow_module(
     // Fill shadow — gated on a visible fill so the stamp doesn't
     // leak a solid backdrop through a transparent frame.
     if !frame_fill_is_transparent(frame.fill_color) {
-        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, fallback, palette, cmyk_xform)
+        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, fallback, palette, color_ctx)
         {
             emit_shadow(target, outer, shadow, page);
         }
@@ -110,7 +110,7 @@ pub(crate) fn drop_shadow_module(
     // Resolving via `resolve_frame_shadow(..., None, ...)` so the
     // synthetic fallback only ever supplies the *fill* shadow.
     if frame_stroke_is_visible(frame.stroke_color, frame.effective_stroke_weight()) {
-        if let Some(shadow) = resolve_frame_shadow(stroke_drop_shadow, None, palette, cmyk_xform) {
+        if let Some(shadow) = resolve_frame_shadow(stroke_drop_shadow, None, palette, color_ctx) {
             emit_shadow(target, outer, shadow, page);
         }
     }

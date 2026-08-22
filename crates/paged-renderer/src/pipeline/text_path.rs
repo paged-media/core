@@ -170,7 +170,7 @@ pub(super) fn emit_polygon_into(
     document: &Document,
     palette: &Graphic,
     fallback: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     let mut resolved = ResolvedFrame::from_polygon(poly);
     let style = crate::module::resolve_applied_style(&resolved, document);
@@ -235,13 +235,13 @@ pub(super) fn emit_polygon_into(
     // the page-origin shift, so `effects_unit_normalize = None` (the
     // effects module reads coordinates from the path directly).
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
-        crate::module::emit_effects_pre_fill(page, effects, pid, outer, palette, cmyk_xform);
+        crate::module::emit_effects_pre_fill(page, effects, pid, outer, palette, color_ctx);
     }
     crate::module::fill_paint_module(
-        &resolved, page, palette, cmyk_xform, fallback, outer, path_id,
+        &resolved, page, palette, color_ctx, fallback, outer, path_id,
     );
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
-        crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, cmyk_xform, None);
+        crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, color_ctx, None);
     }
     // W1.5 — Inside/Outside StrokeAlignment on the polygon outline:
     // offset each closed contour inward / outward by weight/2 and
@@ -273,7 +273,7 @@ pub(super) fn emit_polygon_into(
         &resolved,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         outer,
         aligned_poly_id.or(path_id),
         stroke_for(
@@ -469,7 +469,7 @@ pub(super) fn emit_text_path_into(
     document: &Document,
     options: &PipelineOptions,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     font_table: &FontTable,
 ) {
     if anchors.len() < 2 {
@@ -571,7 +571,7 @@ pub(super) fn emit_text_path_into(
             let paint = resolved
                 .fill_color
                 .as_deref()
-                .and_then(|id| color_id_to_paint(id, palette, cmyk_xform))
+                .and_then(|id| color_id_to_paint(id, palette, color_ctx))
                 .map(|p| apply_fill_tint(p, resolved.fill_tint))
                 .unwrap_or(default_paint);
             // Pull the pre-configured (wght-baked) Face from the

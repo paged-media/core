@@ -30,7 +30,8 @@ use paged_compose::{
     Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
 use paged_model::{
-    to_linear_rgb, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame, TextPath,
+    to_linear_rgb, Graphic, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, SectionWalk,
+    TextFrame, TextPath,
 };
 use paged_scene::Document;
 
@@ -106,7 +107,7 @@ use color_paint::{
 pub use color_paint::{
     build_run_paint_picker, build_run_paint_picker_with_cmyk, color_id_to_paint,
     color_id_to_paint_with_list, color_id_to_paint_with_list_dir, gradient_midpoint_paint,
-    resolve_fill, resolve_rect_fill, resolve_rect_stroke, resolve_stroke, RunPaintPicker,
+    resolve_fill, resolve_rect_fill, resolve_rect_stroke, resolve_stroke, ColorCtx, RunPaintPicker,
     RunStrokePicker,
 };
 #[cfg(test)]
@@ -253,6 +254,14 @@ pub struct PipelineOptions<'a> {
     /// Concept 2 — black-point compensation for the CMYK display
     /// transform. Default `true` (the previously hardcoded value).
     pub cmyk_bpc: bool,
+    /// Concept 2 — the Ink Manager's "Use Standard Lab Values for
+    /// Spots". With this on, a spot swatch whose PRIMARY space is Lab
+    /// is displayed from those measured values instead of through its
+    /// CMYK alternate; the alternate still supplies the paint's CMYK
+    /// channels, so separations and overprint are untouched. Default
+    /// `false` — InDesign's default, and the setting the fidelity
+    /// corpus's reference PDFs were exported under.
+    pub use_standard_lab_for_spots: bool,
     /// Concept 3 (PDF export) — record the glyph-run side-channel
     /// on every page's display list so the exporter can emit real
     /// text. Default `false`: the live canvas build never pays for
@@ -478,6 +487,7 @@ impl Default for PipelineOptions<'_> {
             cmyk_icc_profile: None,
             cmyk_intent: paged_color::Intent::RelativeColorimetric,
             cmyk_bpc: true,
+            use_standard_lab_for_spots: false,
             collect_glyph_runs: false,
             collect_link_regions: false,
             frame_drop_shadow: None,
@@ -934,79 +944,6 @@ pub struct PipelineStats {
     /// Surfaced for diagnostics; non-zero means a story didn't fit
     /// its declared frame chain (P-13).
     pub dropped_overflow_lines: usize,
-}
-
-/// Walks body pages in document order, computing each page's
-/// user-visible label from the document's `<Section>` numbering rules.
-/// `<Page Name>` (the label InDesign baked at export) stays
-/// authoritative when present; the section rules fill the gap for
-/// `Name`-absent pages and keep the running counter coherent so a later
-/// `Name`-absent page still numbers correctly. With no sections and no
-/// `Name`, this reproduces the historical 1-based body-page fallback
-/// exactly (`current_number == pages.len() + 1`).
-struct SectionWalk<'a> {
-    sections: &'a [paged_model::Section],
-    /// page `Self` → index into `sections` for the section starting there.
-    starts: HashMap<&'a str, usize>,
-    active: Option<usize>,
-    /// Number assigned to the most recently processed page (0 before any).
-    current_number: u32,
-    /// True once any page fell back to a computed (non-`Name`) label.
-    used_fallback: bool,
-}
-
-impl<'a> SectionWalk<'a> {
-    fn new(sections: &'a [paged_model::Section]) -> Self {
-        let mut starts = HashMap::new();
-        for (i, s) in sections.iter().enumerate() {
-            if let Some(ps) = s.page_start.as_deref() {
-                starts.entry(ps).or_insert(i);
-            }
-        }
-        Self {
-            sections,
-            starts,
-            active: None,
-            current_number: 0,
-            used_fallback: false,
-        }
-    }
-
-    /// Advance to the next body page and return its label.
-    fn next_label(&mut self, page_self_id: Option<&str>, page_name: Option<&str>) -> String {
-        // A section starting at this page reseeds the counter; otherwise
-        // it just advances by one within the active (or implicit) section.
-        match page_self_id.and_then(|sid| self.starts.get(sid).copied()) {
-            Some(si) => {
-                let sec = &self.sections[si];
-                self.active = Some(si);
-                self.current_number = if sec.continue_numbering {
-                    self.current_number + 1
-                } else {
-                    sec.start_at.unwrap_or(1)
-                };
-            }
-            None => self.current_number += 1,
-        }
-
-        if let Some(name) = page_name {
-            return name.to_string();
-        }
-        self.used_fallback = true;
-        let style = self
-            .active
-            .map(|si| self.sections[si].numbering_style)
-            .unwrap_or(paged_model::NumberingStyle::Arabic);
-        let mut label = style.format(self.current_number);
-        if let Some(sec) = self.active.map(|si| &self.sections[si]) {
-            if sec.include_prefix {
-                if let Some(prefix) = &sec.section_prefix {
-                    label = format!("{prefix}{label}");
-                }
-            }
-        }
-        label
-    }
 }
 
 /// W1.18c / W1.19 — the post-layout resolution context handed to the

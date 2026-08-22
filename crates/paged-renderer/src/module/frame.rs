@@ -24,7 +24,7 @@ use paged_model::{
     DropShadowSetting, GraphicLine, Oval, PathAnchor, Polygon, Rectangle, TextFrame,
 };
 
-use crate::pipeline::BuiltPage;
+use crate::pipeline::{BuiltPage, ColorCtx};
 
 /// Cross-cutting state of a page item, flattened from the parser
 /// shape structs. Built once by the per-shape adapters at the top of
@@ -149,7 +149,7 @@ pub(crate) enum Geometry<'a> {
 pub(crate) struct RenderCtx<'a> {
     pub page: &'a mut BuiltPage,
     pub palette: &'a paged_model::Graphic,
-    pub cmyk_xform: Option<&'a paged_color::IccTransform>,
+    pub color_ctx: ColorCtx<'a>,
     pub fallback_paint: Paint,
     pub fallback_drop_shadow: Option<paged_compose::DropShadow>,
     /// Composed `spread_origin × ItemTransform`; used by every paint

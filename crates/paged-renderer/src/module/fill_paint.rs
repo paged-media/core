@@ -26,6 +26,7 @@ use super::geometry::{emit_filled, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
     apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
+    ColorCtx,
 };
 
 /// Resolve and emit the frame fill. `fill_path`, when `Some`, routes
@@ -41,7 +42,7 @@ pub(crate) fn fill_paint_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     fallback: Paint,
     outer: Transform,
     fill_path: Option<PathId>,
@@ -66,7 +67,7 @@ pub(crate) fn fill_paint_module(
             color_id_to_paint_with_list_dir(
                 id,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 &mut page.list,
                 frame.gradient_fill_angle,
                 frame.gradient_fill_length,

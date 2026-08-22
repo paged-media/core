@@ -37,6 +37,65 @@ pub(super) fn numbering_style_to_idml(s: paged_model::NumberingStyle) -> &'stati
     }
 }
 
+/// Re-derive the baked `Page@Name` labels that a section edit
+/// invalidated, from `from_page` to the end of the document.
+///
+/// `Page@Name` is DERIVED data. InDesign applies the section's start
+/// number, numbering style and prefix when it exports and writes the
+/// *result* onto every page, which is why the renderer trusts the baked
+/// name on import and only computes a label when one is missing (see
+/// [`paged_model::SectionWalk`]): the baked name is the label InDesign
+/// itself resolved, from rules richer than the ones we model — a Kanji
+/// or Katakana `PageNumberStyle` folds to Arabic in
+/// [`paged_model::NumberingStyle::from_idml`], so recomputing a
+/// round-tripped document's folios would *lose* fidelity, not gain it.
+///
+/// The corollary is this function. If the baked name stays authoritative
+/// on read, then whoever edits the rules that derived it owes the
+/// document a re-derivation — otherwise a section edit changes nothing a
+/// reader can see: every page-number marker keeps resolving to the label
+/// the OLD rules produced, and on a real InDesign document (where every
+/// page carries a `Name`) sections are uneditable by construction.
+///
+/// Pages BEFORE the anchor keep their names: numbering ahead of a
+/// section's start page is not that section's business, and leaving
+/// those alone preserves any label the walk cannot reproduce.
+///
+/// Undo needs no captured names. Each section op's inverse is another
+/// section op, so undo re-derives against the RESTORED rules — exact
+/// for any document whose names were section-derived to begin with,
+/// which is every document InDesign wrote. The one thing it does not
+/// restore is a name that never was a label: a page inside the edited
+/// range whose `Name` was hand-set to something the rules could not
+/// produce (paged-gen's `showcase-base` writes descriptors there)
+/// comes back as its section number.
+pub(super) fn rebake_page_labels(doc: &mut Document, from_page: Option<&str>) {
+    // An anchor we cannot find (a section with no `PageStart`, or one
+    // naming a page that has since been deleted) re-bakes the whole
+    // document rather than silently nothing.
+    let anchored = from_page.is_some_and(|id| {
+        doc.spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter())
+            .any(|p| p.self_id.as_deref() == Some(id))
+    });
+    let mut writing = !anchored;
+    // The walk runs from the first page either way: the running counter
+    // a later section continues from depends on every page before it.
+    let mut walk = paged_model::SectionWalk::new(&doc.designmap.sections);
+    for parsed in &mut doc.spreads {
+        for page in &mut parsed.spread.pages {
+            let label = walk.derived_label(page.self_id.as_deref());
+            if !writing && page.self_id.as_deref() == from_page {
+                writing = true;
+            }
+            if writing {
+                page.name = Some(label);
+            }
+        }
+    }
+}
+
 pub(super) fn apply_insert_section(
     doc: &mut Document,
     at_page: &str,
@@ -82,6 +141,7 @@ pub(super) fn apply_insert_section(
         include_prefix: prefix.is_some(),
     };
     sections.push(section);
+    rebake_page_labels(doc, Some(at_page));
     Ok(AppliedOperation {
         op: Operation::InsertSection {
             at_page: at_page.to_string(),
@@ -128,6 +188,8 @@ pub(super) fn apply_edit_section(
     if let Some(s) = &start_at {
         section.start_at = *s;
     }
+    let page_start = section.page_start.clone();
+    rebake_page_labels(doc, page_start.as_deref());
 
     Ok(AppliedOperation {
         op: Operation::EditSection {
@@ -164,6 +226,7 @@ pub(super) fn apply_delete_section(
     let removed = sections.remove(pos);
     let style_str = numbering_style_to_idml(removed.numbering_style).to_string();
     let at_page = removed.page_start.clone().unwrap_or_default();
+    rebake_page_labels(doc, removed.page_start.as_deref());
     Ok(AppliedOperation {
         op: Operation::DeleteSection {
             section_id: section_id.to_string(),
