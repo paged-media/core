@@ -944,7 +944,7 @@ pub(super) fn apply_join_paths(
             },
         ],
     };
-    let applied = apply(doc, &batch)?;
+    let applied = apply_inner(doc, &batch)?;
     // The op we record is the original JoinPaths (meaningful in
     // logs / redo replays it deterministically); the inverse is the
     // Batch's inverse (restore the kept triple + re-insert other).

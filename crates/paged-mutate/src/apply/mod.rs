@@ -27,14 +27,20 @@
 //! state it was in before the batch began. The error carries the
 //! index that failed.
 //!
+//! `Document`'s pre-built indices (`text_frame_index`,
+//! `frame_for_story`, `anchors`) are NOT surgically maintained — they
+//! are recomputed wholesale at the end of every top-level [`apply`], so
+//! the parse-layer leaf data stays the single source of truth and no
+//! caller has to remember to refresh. This used to be a Stage-1
+//! limitation ("consumers that want them fresh should rebuild"), and
+//! the render-effect sweep found what it cost: `LinkFrames` threaded
+//! into a wire-created frame and painted nothing, because the chain
+//! walk resolves `NextTextFrame` through the stale index. See [`apply`]
+//! for why the whole-index rebuild is the right shape here and what it
+//! measures.
+//!
 //! Stage 1 limitations (flagged in `docs/paged/scripting-layer.md`'s
 //! Stage-1 deliverables):
-//!   - `Document`'s pre-built indices (`text_frame_index`,
-//!     `frame_for_story`) are not surgically maintained — they're
-//!     valid for the unmutated open, and consumers that want them
-//!     fresh after Insert/Remove/Move should rebuild via
-//!     `Document::open` or a future `rebuild_indices` helper. The
-//!     parse-layer leaf data is the source of truth.
 //!   - `InsertNode`/`RemoveNode`/`MoveNode` support TextFrame and
 //!     Rectangle children under a Spread parent. Group nesting,
 //!     Page-level routing, and the other shape kinds (Oval, Polygon,
@@ -51,7 +57,58 @@ use crate::pathfinder::{pathfinder_boolean, PathfinderKind as InternalPathfinder
 /// Apply an operation to `doc`. Returns the captured `AppliedOperation`
 /// (carrying op + inverse + invalidation hint) on success. The only
 /// mutation entry point in the crate.
+///
+/// **Post-condition: `doc`'s derived caches are fresh.** `Document`
+/// keeps three `#[serde(skip)]` indices — `text_frame_index`,
+/// `frame_for_story` and the heading `anchors` table — that are pure
+/// functions of `spreads` + `stories`. They used to be built by
+/// `Document::open` and by nothing that ran after a mutation, which
+/// made every one of them a lie the moment the wire created a frame:
+/// `Document::frame_chain` follows `NextTextFrame` through
+/// `Document::text_frame`, an O(1) lookup in `text_frame_index`, so a
+/// `LinkFrames` into a frame `InsertTextFrame` had just minted threaded
+/// the model and rendered nothing at all — the walk stopped at a frame
+/// the index had never heard of. Rebuilding here makes the invariant
+/// the mutation layer's own rather than a note asking consumers to
+/// remember (none did).
+///
+/// Rebuilt ONCE per top-level call: [`apply_inner`] is what a `Batch`'s
+/// children and the composite ops (`PathfinderBoolean`, the planar
+/// verbs, path topology) recurse through, so an N-child batch pays for
+/// one rebuild, not N — which matters, because a pour is a batch of
+/// thousands and a per-child rebuild would make it quadratic in the
+/// document. Nothing inside the apply layer reads the indices for
+/// anything but an advisory `InvalidationHint`, so a child seeing the
+/// pre-batch index cannot mis-apply — it can only name one fewer frame
+/// in a hint the batch is about to merge anyway.
+///
+/// **Why wholesale, and what it costs.** Measured (release, macOS
+/// arm64) on the largest documents to hand: a 48-page, 576-text-frame,
+/// 572-story InDesign export rebuilds its indices in **351 µs**, against
+/// **2.66 s** for one `CanvasModel::apply_mutation` on the same document
+/// — which already runs a full `pipeline::build_document` — i.e. **0.013
+/// %** of a mutation. A 255-frame newspaper template: 141 µs against 900
+/// ms, 0.016 %. Across seven documents the worst share was 0.02 %. The
+/// narrower designs were weighed and rejected on correctness, not cost:
+/// rebuilding only when a node was added or removed would leave
+/// `frame_for_story` stale, because it stores CLONED `TextFrame`s and so
+/// goes stale on any property write to a frame; and `anchors` is derived
+/// from the stories, which text edits change. Wholesale is the only one
+/// of the three that closes the whole class, and at 1/5000th of the cost
+/// a mutation already pays there is nothing to buy by being cleverer.
 pub fn apply(doc: &mut Document, op: &Operation) -> Result<AppliedOperation, OperationError> {
+    let applied = apply_inner(doc, op)?;
+    doc.rebuild_indexes();
+    Ok(applied)
+}
+
+/// The dispatch itself, without the index-refresh post-condition. In-crate
+/// recursion goes through here so one logical mutation rebuilds once; see
+/// [`apply`].
+pub(crate) fn apply_inner(
+    doc: &mut Document,
+    op: &Operation,
+) -> Result<AppliedOperation, OperationError> {
     match op {
         Operation::SetProperty { node, path, value } => apply_set_property(doc, node, *path, value),
         Operation::InsertNode {
@@ -541,7 +598,7 @@ fn apply_pathfinder(
     };
     // 4. Apply the Batch — the existing `apply_batch` machinery
     //    rolls back on any child failure and produces the inverse.
-    let applied = apply(doc, &batch)?;
+    let applied = apply_inner(doc, &batch)?;
     // The op we record is the original PathfinderBoolean (so the
     // forward op is meaningful in logs); the inverse is the
     // Batch's inverse (which restores the removed frames + the

@@ -774,7 +774,20 @@ pub(super) fn emit_rectangle_into(
     // `<GradientFeatherSetting>`'s `GradientStart`) into unit-rect
     // space. The corner-rounded path is already in path-local coords,
     // so it skips the conversion.
-    let (effects_path, effects_xform, effects_unit_normalize) = match corner.fill {
+    //
+    // Resolved ONLY when the rect declares effects. The interning is a
+    // side effect on the page's path pool, and `DisplayList::digest` —
+    // the render-effect sweep's oracle — folds that pool, so an
+    // unconditional intern makes an invisible rect (no fill, no stroke,
+    // no effects: an empty anchored frame, a bare placement box) claim a
+    // changed page while emitting not one command. The render-effect
+    // sweep read exactly that as `InsertAnchoredFrame` "renders in the
+    // export build but not on the canvas"; the live build merely
+    // happened to have interned the unit rect already, for the A5
+    // substituted-font highlight. `emit_text_frame_into` has always
+    // gated this resolution on `frame.effects.is_some()` — the
+    // Rectangle path was the one that did not.
+    let effects_target = rect.effects.as_ref().map(|_| match corner.fill {
         Some(id) => (id, outer, None),
         None => {
             let (id, _) = page.list.paths.intern(
@@ -791,8 +804,10 @@ pub(super) fn emit_rectangle_into(
             );
             (id, Transform::for_rect_in(r, outer), Some(r))
         }
-    };
-    if let Some(effects) = rect.effects.as_ref() {
+    });
+    if let (Some(effects), Some((effects_path, effects_xform, _))) =
+        (rect.effects.as_ref(), effects_target)
+    {
         crate::module::emit_effects_pre_fill(
             page,
             effects,
@@ -813,7 +828,9 @@ pub(super) fn emit_rectangle_into(
         corner.fill,
     );
 
-    if let Some(effects) = rect.effects.as_ref() {
+    if let (Some(effects), Some((effects_path, effects_xform, effects_unit_normalize))) =
+        (rect.effects.as_ref(), effects_target)
+    {
         crate::module::emit_effects_post_fill(
             page,
             effects,

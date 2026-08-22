@@ -61,7 +61,7 @@ use crate::planar::{
     arrangement_edges, build_arrangement, union_faces, PlanarError, PlanarFace, MAX_PLANAR_INPUTS,
 };
 
-use super::apply;
+use super::apply_inner;
 use super::helpers::spread_parent_id;
 
 /// IDML's "no paint" swatch. Trim / Merge / Crop drop strokes (that is
@@ -510,7 +510,7 @@ fn materialize(
     }
 
     let batch = Operation::Batch { ops: children };
-    let applied = apply(doc, &batch)?;
+    let applied = apply_inner(doc, &batch)?;
     Ok(AppliedOperation {
         op: recorded,
         inverse: applied.inverse,
