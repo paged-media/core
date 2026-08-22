@@ -2061,7 +2061,7 @@ pub(super) fn apply_batch(
     let mut combined_invalidation = InvalidationHint::default();
 
     for (index, child) in children.iter().enumerate() {
-        match apply(doc, child) {
+        match apply_inner(doc, child) {
             Ok(applied) => {
                 combined_invalidation.merge(applied.invalidation.clone());
                 applied_children.push(applied);
@@ -2073,7 +2073,7 @@ pub(super) fn apply_batch(
                     // genuinely wedged. This shouldn't happen because
                     // we just applied the forward op and captured its
                     // inverse.
-                    let _ = apply(doc, &applied.inverse);
+                    let _ = apply_inner(doc, &applied.inverse);
                 }
                 return Err(OperationError::BatchFailed {
                     failed_at: index,

@@ -71,6 +71,14 @@ pub struct Document {
     /// `Self` id. Built at open time so [`text_frame`] is O(1) and
     /// [`frame_chain`] walks long NextTextFrame chains in linear
     /// time rather than O(K × total_frames).
+    ///
+    /// A positional index, so it is only true of the spreads it was
+    /// built from — [`rebuild_indexes`](Self::rebuild_indexes) is what
+    /// keeps it true, and `paged_mutate::apply` calls it on every
+    /// mutation. A frame missing from here is not a slow lookup, it is
+    /// an ABSENT one: [`frame_chain`](Self::frame_chain) ends its walk
+    /// there, so an unindexed continuation frame renders as if the
+    /// thread had never been made.
     #[serde(skip)]
     pub text_frame_index: HashMap<String, (usize, usize)>,
     /// Paragraph + character style definitions loaded from
@@ -169,10 +177,12 @@ impl Document {
     /// Rebuild the derived caches (`frame_for_story`, `text_frame_index`,
     /// `anchors`) purely from the primary `spreads` / `stories` fields.
     ///
-    /// Called at the end of [`Document::open`] and by the native codec after
+    /// Called at the end of [`Document::open`], by the native codec after
     /// deserialize (N1, Approach A) — the caches are `#[serde(skip)]`, so this
     /// is what lets a `Document` reconstruct from native bytes with no IDML
-    /// parse. Must reproduce exactly what `open` used to build inline.
+    /// parse — and at the end of every top-level `paged_mutate::apply`, which
+    /// is what keeps the caches true of a MUTATED document. Must reproduce
+    /// exactly what `open` used to build inline.
     pub fn rebuild_indexes(&mut self) {
         let mut frame_for_story = HashMap::new();
         let mut text_frame_index: HashMap<String, (usize, usize)> = HashMap::new();

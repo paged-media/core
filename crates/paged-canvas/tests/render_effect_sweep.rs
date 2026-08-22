@@ -100,7 +100,7 @@
 //!
 //! ## The findings ratchet
 //!
-//! Twelve ops really do apply-and-render-nothing. They live in [`KNOWN`]
+//! The ops that really do apply-and-render-nothing live in [`KNOWN`]
 //! with a diagnosis apiece — what the op writes, what the renderer
 //! reads, and why they miss each other — so the sweep runs green in CI
 //! while nothing is swept under it. The list is enforced in BOTH
@@ -815,31 +815,6 @@ struct Known {
 
 const KNOWN: &[Known] = &[
     Known {
-        op: "LinkFrames",
-        kind: Kind::Defect,
-        diagnosis: "\
-Still renders nothing after `59c98b5`, and the cause is one layer below \
-where that commit looked. `Document::frame_chain` finds a story's frames by \
-scanning the spreads, but follows `next_text_frame` through \
-`Document::text_frame` — an O(1) lookup in `text_frame_index`, a \
-`#[serde(skip)]` cache built by `Document::open` and by `paged-store` after \
-deserialize, and by NOTHING that runs after a mutation. \
-`paged-mutate`'s `apply/mod.rs` states this as a Stage-1 limitation \
-('not surgically maintained ... consumers that want them fresh should \
-rebuild') and no consumer does: `CanvasModel::apply_mutation` never calls \
-`rebuild_indexes`. So the chain walk breaks at the first frame the WIRE \
-created — precisely the frame `linkFrames` exists to thread into, since \
-`insertTextFrame` is how you get one. Calling `rebuild_indexes()` after the \
-link, touching no model field, makes the same document render the threaded \
-text. Note also what that measurement says about the other half of \
-`59c98b5`: with a fresh index the PRE-fix shape (forward pointer set, target \
-still on its own story) renders identically to the fixed one, because the \
-chain walk never checks a continuation frame's `parent_story`. The \
-`parent_story` write is right for the model and for every other reader \
-(`frame_for_story`, overset accounting, IDML export) — it is just not the \
-half that was standing between the op and the pixels.",
-    },
-    Known {
         op: "InsertTable",
         kind: Kind::Defect,
         diagnosis: "\
@@ -955,11 +930,33 @@ a real difference to show.",
         op: "InsertAnchoredFrame",
         kind: Kind::Defect,
         diagnosis: "\
-The other half of the class: the model write is correct and the CANVAS is not \
-invalidated. A full rebuild of the mutated scene renders the anchored frame and \
-the reflowed text around it; the incrementally-rebuilt `BuiltDocument` the \
-canvas paints is unchanged, so the user sees nothing until some later edit \
-forces a rebuild.",
+The minted-invisible-object class, the same shape as `InsertTable` — NOT the \
+invalidation defect this entry claimed until the two builds were compared \
+command by command. The op emits ZERO draw commands, in the cold build and \
+the live one alike, and page 0's command stream is byte-identical across it: \
+`apply_insert_anchored_frame` mints an `AnchoredFrame` with \
+`fill_color: None`, `stroke_color: None` and — for the `image_uri: None` \
+shape — no image, and `emit_anchored_rect_via_pipeline` hands that to the \
+same `emit_rectangle_into` a spread Rectangle uses, where `fill_paint_module` \
+returns early on a transparent fill and the stroke module on a zero weight. \
+Nor does the text move around it: the engine places anchored frames at the \
+paragraph origin and gives them no inline advance at all (the standing \
+`TODO(anchored-position)` in `anchored.rs` — the composer surfaces no \
+anchor-character position, and an IDML anchored object IS a character \
+position), so the InDesign behaviour that makes an empty anchored box \
+visible — it displaces the text it sits in — is a larger engine gap this \
+door cannot close on its own. What made the row read `MovedColdOnly` was an \
+oracle artefact, now fixed: `emit_rectangle_into` interned the UNIT_RECT path \
+unconditionally for its effects stamp, so an invisible rect grew the page's \
+path pool, which `DisplayList::digest` folds — while the LIVE build happened \
+to hold that pool entry already (the A5 substituted-font highlight is a \
+rect), so only the cold print moved. With the intern made conditional the row \
+reads honestly: applied cleanly, rendered nothing. Two ways out, both a \
+decision rather than a bug fix: give the composer real inline \
+anchored-object metrics, or reclassify the row `PaintsWhenUsed` — which \
+needs a third fix first, because `find_rectangle_mut` scans only the spreads, \
+so the `createdId` this op hands back cannot be given a fill by any \
+`setElementProperty` on the wire.",
     },
     Known {
         op: "PlaceImage",
@@ -1108,31 +1105,32 @@ fn the_sweep_covers_the_whole_mutation_vocabulary() {
 }
 
 /// The harness has to be able to see the bug it was built for — and,
-/// having found that the bug is not fixed, to say exactly where it
-/// lives.
+/// now that the bug is fixed, to hold the fix down at the exact seam
+/// that carried it.
 ///
 /// Three measurements on ONE document, in order:
 ///
 /// 1. `linkFrames` between an overset frame and a wire-created target
-///    leaves the page BYTE-IDENTICAL. That is the live defect, and it is
-///    what the `LinkFrames` row of the sweep reports.
-/// 2. Calling `Document::rebuild_indexes()` — touching nothing else, not
-///    one model field — makes the same document render the threaded
-///    text. So the model is right and only the derived
-///    `text_frame_index` was stale: `frame_chain` follows
-///    `next_text_frame` through `Document::text_frame`, an O(1) lookup
-///    in a cache built by `Document::open` and by nothing that runs
-///    after a mutation.
+///    MOVES the page: the story pours into the second frame. That is the
+///    `LinkFrames` row of the sweep, green since `paged_mutate::apply`
+///    began refreshing `Document`'s derived indices.
+/// 2. The cause, proven by inverting it: clear `text_frame_index` and
+///    nothing else — not one model field — and the threaded render goes
+///    away. `frame_chain` collects a story's frames by scanning the
+///    spreads (always fresh) but follows `next_text_frame` through
+///    `Document::text_frame`, an O(1) lookup in that index, so an index
+///    missing the wire-created frame ends the walk one frame short.
+///    Rebuilding restores the threaded render exactly.
 /// 3. With that fresh index, reverting the half `59c98b5` added (target
 ///    back on its own story, forward pointer kept) renders IDENTICALLY
-///    to the fixed shape — `frame_chain` never checks a continuation
+///    to the linked shape — `frame_chain` never checks a continuation
 ///    frame's `parent_story`, so that write, right as it is for every
 ///    other reader, is not the half that was blocking the pixels.
 ///
-/// If step 2 ever stops moving the page, the oracle has gone blind and
-/// every green row in the sweep is worthless.
+/// If step 2 ever stops changing the page, the oracle has gone blind
+/// and every green row in the sweep is worthless.
 #[test]
-fn a_thread_that_threads_nothing_is_a_stale_index_not_a_bad_write() {
+fn a_thread_threads_because_the_index_is_fresh_not_because_of_the_story_write() {
     let mut m = load_sample("text-overset");
     let from = lone_overset_frame(&m);
     let to = add_text_frame(&mut m, (500.0, 60.0, 800.0, 500.0));
@@ -1145,28 +1143,37 @@ fn a_thread_that_threads_nothing_is_a_stale_index_not_a_bad_write() {
     })
     .expect("link");
 
-    // 1 — the live defect.
-    assert_eq!(
-        cold(&m),
-        unlinked,
-        "linkFrames into a wire-created frame is expected to render \
-         nothing today (see the LinkFrames entry in KNOWN). If this now \
-         differs, the defect is FIXED — delete that entry and this \
-         assertion's polarity."
-    );
-
-    // 2 — the cause, isolated: refresh the derived index and nothing else.
-    m.scene_mut().rebuild_indexes();
+    // 1 — the fix: the thread renders.
     let threaded = cold(&m);
     assert_ne!(
         threaded, unlinked,
-        "rebuilding the frame index must make the thread render — if it \
-         does not, the cause is somewhere else and this diagnosis is wrong"
+        "linkFrames into a wire-created frame must pour the overset text \
+         into the target — if this is byte-identical again, the derived \
+         indices have gone stale after a mutation and the whole class is \
+         back"
     );
 
-    // 3 — and the sharp edge: with a FRESH index, the pre-fix shape (drop
-    // the target back onto its own story, keep the forward pointer)
-    // renders identically to the fixed one. `frame_chain` never checks a
+    // 2 — the cause, isolated by inverting it: stale JUST
+    // `text_frame_index` and the threaded render goes away again, with
+    // every model field still saying "threaded". Not asserted equal to
+    // `unlinked` — `frame_for_story` is a separate cache and stays
+    // fresh here, so the page is not bit-for-bit the pre-link one; the
+    // claim under test is narrower and exact: the pour depends on the
+    // frame index, so the index is where the fix belongs.
+    m.scene_mut().text_frame_index.clear();
+    assert_ne!(
+        cold(&m),
+        threaded,
+        "a chain walk that cannot resolve the target stops one frame \
+         short and the overset text stays overset — which is what the op \
+         did on every document before the fix"
+    );
+    m.scene_mut().rebuild_indexes();
+    assert_eq!(cold(&m), threaded, "and rebuilding brings the thread back");
+
+    // 3 — and the sharp edge: with a FRESH index, the pre-`59c98b5`
+    // shape (drop the target back onto its own story, keep the forward
+    // pointer) renders identically. `frame_chain` never checks a
     // continuation frame's `parent_story`, so the story half of
     // `59c98b5` — correct as it is for `frame_for_story`, overset
     // accounting and IDML export — is not what was standing between the
@@ -1193,7 +1200,7 @@ fn a_thread_that_threads_nothing_is_a_stale_index_not_a_bad_write() {
         threaded,
         "a fresh index threads on the forward pointer alone — if this now \
          differs, `frame_chain` has learned to check the continuation \
-         frame's story and the KNOWN diagnosis needs revisiting"
+         frame's story"
     );
 }
 
@@ -1314,10 +1321,14 @@ fn text_cases(c: &mut Vec<Case>) {
         }
     }));
     c.push(paints("LinkFrames", "text-overset", |m| {
-        // The known-positive control. Pre-`59c98b5` this rendered
-        // NOTHING: the op set the source's `next_text_frame` and left the
-        // target on the story `insertTextFrame` had just minted, so the
-        // composer's chain walk never reached it.
+        // The op this whole file was written for. It rendered NOTHING
+        // for its entire life, in two layers: `59c98b5` fixed the model
+        // half (the target stayed on the story `insertTextFrame` minted,
+        // so the composer walked a chain of one), and the pixels still
+        // did not move because `Document::frame_chain` resolves
+        // `next_text_frame` through `text_frame_index` — a derived cache
+        // nothing refreshed after a mutation. `paged_mutate::apply` now
+        // rebuilds it, and this row is the pixel-level proof.
         let from = lone_overset_frame(m);
         let to = add_text_frame(m, (500.0, 60.0, 800.0, 500.0));
         Mutation::LinkFrames { from, to }
