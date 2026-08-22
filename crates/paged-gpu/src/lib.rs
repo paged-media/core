@@ -53,13 +53,18 @@ pub fn cmyk_unit_to_linear_rgb(c: f32, m: f32, y: f32, k: f32) -> Color {
 }
 
 /// Naive 8-bit RGB→CMYK (Adobe-style: K = 255 - max(R,G,B), then the
-/// chromatic channels relative to the remaining range). Only the CPU
-/// rasterizer calls the Rust form — the Vello/`vello-backend`
-/// overprint-compute path mirrors the exact math in WGSL
-/// (`cmyk_compute/shaders/splat_or_overprint.wgsl`), so a cpu-less
-/// build (e.g. paged-export-pdf's cli graph) has no caller and the
-/// workspace's denied dead_code fails it without the gate.
-#[cfg(feature = "cpu")]
+/// chromatic channels relative to the remaining range).
+///
+/// Gated because a build with NEITHER rasterizer has no caller and the
+/// workspace's denied `dead_code` fails on it. It used to say `cpu`
+/// alone, on the reasoning that the Vello path mirrors this math in
+/// WGSL (`cmyk_compute/shaders/splat_or_overprint.wgsl`) and so never
+/// needs the Rust form. That stopped being true: `vello_rs`'s
+/// overprint orchestrator calls it on the non-CMYK-paint fallback
+/// path, so a `vello-backend` build WITHOUT `cpu` — which is exactly
+/// what the wasm publish builds — failed to compile. It did not show
+/// up in `cargo test`, because the workspace default enables `cpu`.
+#[cfg(any(feature = "cpu", feature = "vello-backend"))]
 pub(crate) fn rgb_to_naive_cmyk_8bit(r: u8, g: u8, b: u8) -> (u8, u8, u8, u8) {
     let max_rgb = r.max(g).max(b);
     let k = 255u8.saturating_sub(max_rgb);
