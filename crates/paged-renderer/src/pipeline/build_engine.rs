@@ -1051,18 +1051,11 @@ pub(super) fn build_document_inner(
                                 end: after,
                             });
                         }
-                        // C-1: a plugin scene layer renders inside this frame.
-                        emit_frame_scene_layer(
-                            &mut pages[page_idx],
-                            frame.self_id.as_deref(),
-                            frame.bounds,
-                            frame.inset_spacing,
-                            frame.item_transform,
-                            options.scene_layers,
-                            options.font,
-                        );
                         // C-6: a claimed image provider assembles pyramid
-                        // tiles inside this frame.
+                        // tiles inside this frame. This is the frame's OWN
+                        // image content (the tiled form of the placed-image
+                        // lane a claim replaces), so it paints with the
+                        // native content — BEFORE the C-1 layer above.
                         emit_frame_resource_tiles(
                             &mut pages[page_idx],
                             frame.self_id.as_deref(),
@@ -1071,6 +1064,19 @@ pub(super) fn build_document_inner(
                             frame.item_transform,
                             options.resource_providers,
                             options.render_scale,
+                        );
+                        // C-1: the plugin's own render of this frame's
+                        // content, ON TOP of everything native — the frame
+                        // fill, the placed image, and the C-6 tiles emitted
+                        // immediately before it.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            frame.self_id.as_deref(),
+                            frame.bounds,
+                            frame.inset_spacing,
+                            frame.item_transform,
+                            options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -1134,19 +1140,11 @@ pub(super) fn build_document_inner(
                                 end: after,
                             });
                         }
-                        // C-1: a plugin scene layer renders inside this frame
-                        // (a rectangle's content box is its bounds — no inset).
-                        emit_frame_scene_layer(
-                            &mut pages[page_idx],
-                            rect.self_id.as_deref(),
-                            rect.bounds,
-                            None,
-                            rect.item_transform,
-                            options.scene_layers,
-                            options.font,
-                        );
                         // C-6: a claimed image provider assembles pyramid
-                        // tiles inside this frame.
+                        // tiles inside this frame. This is the frame's OWN
+                        // image content (the tiled form of the placed-image
+                        // lane a claim replaces), so it paints with the
+                        // native content — BEFORE the C-1 layer above.
                         emit_frame_resource_tiles(
                             &mut pages[page_idx],
                             rect.self_id.as_deref(),
@@ -1155,6 +1153,19 @@ pub(super) fn build_document_inner(
                             rect.item_transform,
                             options.resource_providers,
                             options.render_scale,
+                        );
+                        // C-1: the plugin's own render of this frame's
+                        // content, ON TOP of everything native — the frame
+                        // fill, the placed image, and the C-6 tiles emitted
+                        // immediately before it.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            rect.self_id.as_deref(),
+                            rect.bounds,
+                            None,
+                            rect.item_transform,
+                            options.scene_layers,
+                            options.font,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1220,18 +1231,11 @@ pub(super) fn build_document_inner(
                                 end: after,
                             });
                         }
-                        // C-1: a plugin scene layer renders inside this frame.
-                        emit_frame_scene_layer(
-                            &mut pages[page_idx],
-                            oval.self_id.as_deref(),
-                            oval.bounds,
-                            None,
-                            oval.item_transform,
-                            options.scene_layers,
-                            options.font,
-                        );
                         // C-6: a claimed image provider assembles pyramid
-                        // tiles inside this frame.
+                        // tiles inside this frame. This is the frame's OWN
+                        // image content (the tiled form of the placed-image
+                        // lane a claim replaces), so it paints with the
+                        // native content — BEFORE the C-1 layer above.
                         emit_frame_resource_tiles(
                             &mut pages[page_idx],
                             oval.self_id.as_deref(),
@@ -1240,6 +1244,19 @@ pub(super) fn build_document_inner(
                             oval.item_transform,
                             options.resource_providers,
                             options.render_scale,
+                        );
+                        // C-1: the plugin's own render of this frame's
+                        // content, ON TOP of everything native — the frame
+                        // fill, the placed image, and the C-6 tiles emitted
+                        // immediately before it.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            oval.self_id.as_deref(),
+                            oval.bounds,
+                            None,
+                            oval.item_transform,
+                            options.scene_layers,
+                            options.font,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1291,18 +1308,11 @@ pub(super) fn build_document_inner(
                                 end: after,
                             });
                         }
-                        // C-1: a plugin scene layer renders inside this frame.
-                        emit_frame_scene_layer(
-                            &mut pages[page_idx],
-                            line.self_id.as_deref(),
-                            line.bounds,
-                            None,
-                            line.item_transform,
-                            options.scene_layers,
-                            options.font,
-                        );
                         // C-6: a claimed image provider assembles pyramid
-                        // tiles inside this frame.
+                        // tiles inside this frame. This is the frame's OWN
+                        // image content (the tiled form of the placed-image
+                        // lane a claim replaces), so it paints with the
+                        // native content — BEFORE the C-1 layer above.
                         emit_frame_resource_tiles(
                             &mut pages[page_idx],
                             line.self_id.as_deref(),
@@ -1311,6 +1321,19 @@ pub(super) fn build_document_inner(
                             line.item_transform,
                             options.resource_providers,
                             options.render_scale,
+                        );
+                        // C-1: the plugin's own render of this frame's
+                        // content, ON TOP of everything native — the frame
+                        // fill, the placed image, and the C-6 tiles emitted
+                        // immediately before it.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            line.self_id.as_deref(),
+                            line.bounds,
+                            None,
+                            line.item_transform,
+                            options.scene_layers,
+                            options.font,
                         );
                     }
                 }
@@ -1356,18 +1379,11 @@ pub(super) fn build_document_inner(
                                 end: after,
                             });
                         }
-                        // C-1: a plugin scene layer renders inside this frame.
-                        emit_frame_scene_layer(
-                            &mut pages[page_idx],
-                            poly.self_id.as_deref(),
-                            poly.bounds,
-                            None,
-                            poly.item_transform,
-                            options.scene_layers,
-                            options.font,
-                        );
                         // C-6: a claimed image provider assembles pyramid
-                        // tiles inside this frame.
+                        // tiles inside this frame. This is the frame's OWN
+                        // image content (the tiled form of the placed-image
+                        // lane a claim replaces), so it paints with the
+                        // native content — BEFORE the C-1 layer above.
                         emit_frame_resource_tiles(
                             &mut pages[page_idx],
                             poly.self_id.as_deref(),
@@ -1376,6 +1392,19 @@ pub(super) fn build_document_inner(
                             poly.item_transform,
                             options.resource_providers,
                             options.render_scale,
+                        );
+                        // C-1: the plugin's own render of this frame's
+                        // content, ON TOP of everything native — the frame
+                        // fill, the placed image, and the C-6 tiles emitted
+                        // immediately before it.
+                        emit_frame_scene_layer(
+                            &mut pages[page_idx],
+                            poly.self_id.as_deref(),
+                            poly.bounds,
+                            None,
+                            poly.item_transform,
+                            options.scene_layers,
+                            options.font,
                         );
                     }
                     // B-18 paste-into: nested children paint inside

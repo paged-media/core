@@ -220,3 +220,113 @@ fn empty_registry_is_identical_to_no_registry() {
         "an empty registry is the no-plugin path"
     );
 }
+
+/// A one-tile provider: the whole level-0 image as a single opaque tile.
+struct OneTile {
+    revision: u64,
+}
+impl paged_renderer::resource_provider::ImageResourceProvider for OneTile {
+    fn tile(
+        &self,
+        _image_id: &str,
+        level: u8,
+        x: u32,
+        y: u32,
+    ) -> Option<paged_renderer::resource_provider::ProviderTile> {
+        if level != 0 || x != 0 || y != 0 {
+            return None;
+        }
+        Some(paged_renderer::resource_provider::ProviderTile {
+            rgba: vec![255u8; 8 * 8 * 4].into(),
+            width: 8,
+            height: 8,
+            dest: [0, 0],
+        })
+    }
+    fn revision(&self, _image_id: &str) -> u64 {
+        self.revision
+    }
+}
+
+/// C-1 over C-6 — a frame carrying BOTH a plugin scene layer and a claimed
+/// tile provider paints the tiles FIRST and the plugin's layer OVER them.
+///
+/// The two channels are not peers. C-6 tiles are the frame's OWN image
+/// content — the claim's own doc comment says releasing one "restores the
+/// native whole-image fallback lane" — while a C-1 layer is the plugin's
+/// render of that frame, spliced in "right after the frame's own content".
+/// Emitting the tiles last inverted that, and because a display list is
+/// painted in order the tiles covered the layer completely.
+///
+/// It was not theoretical: paged.image claims tiles for every frame it
+/// ingests and composites its adjustments as a Stage-A scene layer, so
+/// Apply changed the page by exactly 0 px — the whole "adjust an image,
+/// see the adjustment" loop was invisible. Measured in the editor on the
+/// showcase's raster page before this fix; 25,760 px of a red cover layer
+/// on a bare frame, 318 px of the same layer on a tiled one.
+#[test]
+fn a_scene_layer_paints_over_the_frames_claimed_tiles() {
+    let doc = sample_doc();
+    let id = first_text_frame_id(&doc);
+
+    let mut layers = HashMap::new();
+    layers.insert(id.clone(), one_fill_layer());
+
+    let provider = OneTile { revision: 1 };
+    let mut providers = HashMap::new();
+    providers.insert(
+        id.clone(),
+        pipeline::ResourceProviderEntry {
+            image_id: "x-paged-image:probe",
+            pyramid: paged_renderer::resource_provider::ResourcePyramid {
+                base_width: 8,
+                base_height: 8,
+                levels: 1,
+                tile_size: 8,
+            },
+            provider: &provider,
+        },
+    );
+
+    let built = pipeline::build_document(
+        &doc,
+        &PipelineOptions {
+            scene_layers: Some(&layers),
+            resource_providers: Some(&providers),
+            ..PipelineOptions::default()
+        },
+    )
+    .unwrap();
+
+    // Find the page carrying both, and the index of each contribution.
+    let mut checked = false;
+    for page in &built.pages {
+        let tile_at = page
+            .list
+            .commands
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::Image { .. }));
+        // The scene layer's fill is the LAST FillPath on the page: the
+        // frame's own fills are emitted before either plugin channel.
+        let layer_at = page
+            .list
+            .commands
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::FillPath { .. }));
+        let (Some(tile_at), Some(layer_at)) = (tile_at, layer_at) else {
+            continue;
+        };
+        assert!(
+            tile_at < layer_at,
+            "the C-6 tiles must paint BEFORE the C-1 scene layer \
+             (tiles at {tile_at}, layer at {layer_at}) — emitted after, \
+             they cover the plugin's in-frame render completely"
+        );
+        checked = true;
+    }
+    assert!(
+        checked,
+        "no page carried both a claimed tile and a scene-layer fill — the \
+         test proved nothing"
+    );
+}
