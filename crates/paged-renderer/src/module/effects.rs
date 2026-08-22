@@ -53,7 +53,7 @@ use paged_model::{
     SatinParams,
 };
 
-use crate::pipeline::{blend_mode_from_idml, color_id_to_paint_with_list, BuiltPage};
+use crate::pipeline::{blend_mode_from_idml, color_id_to_paint_with_list, BuiltPage, ColorCtx};
 
 /// Default opacity for shadow/glow/satin effects (75%) — matches
 /// InDesign's slider default. Used when the IDML omits `Opacity`.
@@ -81,10 +81,10 @@ pub(crate) fn emit_effects_pre_fill(
     fill_path_id: PathId,
     transform: Transform,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     if let Some(p) = effects.outer_glow.as_ref() {
-        let params = outer_glow_from_parser(p, palette, cmyk_xform, &mut page.list);
+        let params = outer_glow_from_parser(p, palette, color_ctx, &mut page.list);
         page.list.commands.push(DisplayCommand::OuterGlow {
             path_id: fill_path_id,
             transform,
@@ -109,11 +109,11 @@ pub(crate) fn emit_effects_post_fill(
     fill_path_id: PathId,
     transform: Transform,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     unit_normalize: Option<Rect>,
 ) {
     if let Some(p) = effects.inner_shadow.as_ref() {
-        let params = inner_shadow_from_parser(p, palette, cmyk_xform, &mut page.list);
+        let params = inner_shadow_from_parser(p, palette, color_ctx, &mut page.list);
         page.list.commands.push(DisplayCommand::InnerShadow {
             path_id: fill_path_id,
             transform,
@@ -121,7 +121,7 @@ pub(crate) fn emit_effects_post_fill(
         });
     }
     if let Some(p) = effects.inner_glow.as_ref() {
-        let params = inner_glow_from_parser(p, palette, cmyk_xform, &mut page.list);
+        let params = inner_glow_from_parser(p, palette, color_ctx, &mut page.list);
         page.list.commands.push(DisplayCommand::InnerGlow {
             path_id: fill_path_id,
             transform,
@@ -129,7 +129,7 @@ pub(crate) fn emit_effects_post_fill(
         });
     }
     if let Some(p) = effects.bevel.as_ref() {
-        let params = bevel_emboss_from_parser(p, palette, cmyk_xform, &mut page.list);
+        let params = bevel_emboss_from_parser(p, palette, color_ctx, &mut page.list);
         page.list.commands.push(DisplayCommand::BevelEmboss {
             path_id: fill_path_id,
             transform,
@@ -137,7 +137,7 @@ pub(crate) fn emit_effects_post_fill(
         });
     }
     if let Some(p) = effects.satin.as_ref() {
-        let params = satin_from_parser(p, palette, cmyk_xform, &mut page.list);
+        let params = satin_from_parser(p, palette, color_ctx, &mut page.list);
         page.list.commands.push(DisplayCommand::Satin {
             path_id: fill_path_id,
             transform,
@@ -183,10 +183,10 @@ pub(crate) fn emit_effects_post_fill(
 fn resolve_effect_color(
     id: Option<&str>,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> Color {
-    resolve_effect_color_or(id, Color::BLACK, palette, cmyk_xform, list)
+    resolve_effect_color_or(id, Color::BLACK, palette, color_ctx, list)
 }
 
 /// As [`resolve_effect_color`] but with a caller-supplied fallback for
@@ -199,13 +199,13 @@ fn resolve_effect_color_or(
     id: Option<&str>,
     fallback: Color,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> Color {
     let Some(id) = id else {
         return fallback;
     };
-    match color_id_to_paint_with_list(id, palette, cmyk_xform, list) {
+    match color_id_to_paint_with_list(id, palette, color_ctx, list) {
         Some(Paint::Solid(c)) => c,
         Some(Paint::Cmyk { rgb, .. }) => rgb,
         _ => fallback,
@@ -231,10 +231,10 @@ fn polar_to_offset(angle_deg: f32, distance: f32) -> (f32, f32) {
 fn inner_shadow_from_parser(
     p: &InnerShadowParams,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeInnerShadow {
-    let color = resolve_effect_color(p.effect_color.as_deref(), palette, cmyk_xform, list);
+    let color = resolve_effect_color(p.effect_color.as_deref(), palette, color_ctx, list);
     // Prefer explicit (XOffset, YOffset). Fall back to polar
     // (angle, distance) when only those are set; otherwise (0, 0).
     let (offset_x, offset_y) = match (p.x_offset, p.y_offset, p.angle_deg, p.distance) {
@@ -257,7 +257,7 @@ fn inner_shadow_from_parser(
 fn outer_glow_from_parser(
     p: &OuterGlowParams,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeOuterGlow {
     // FINDING #7.4 — glow default color is white (visible under Screen).
@@ -265,7 +265,7 @@ fn outer_glow_from_parser(
         p.effect_color.as_deref(),
         Color::WHITE,
         palette,
-        cmyk_xform,
+        color_ctx,
         list,
     );
     ComposeOuterGlow {
@@ -280,7 +280,7 @@ fn outer_glow_from_parser(
 fn inner_glow_from_parser(
     p: &InnerGlowParams,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeInnerGlow {
     // FINDING #7.4 — glow default color is white (visible under Screen).
@@ -288,7 +288,7 @@ fn inner_glow_from_parser(
         p.effect_color.as_deref(),
         Color::WHITE,
         palette,
-        cmyk_xform,
+        color_ctx,
         list,
     );
     ComposeInnerGlow {
@@ -303,18 +303,18 @@ fn inner_glow_from_parser(
 fn bevel_emboss_from_parser(
     p: &BevelEmbossParams,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeBevelEmboss {
     let highlight_color = p
         .highlight_color
         .as_deref()
-        .map(|id| resolve_effect_color(Some(id), palette, cmyk_xform, list))
+        .map(|id| resolve_effect_color(Some(id), palette, color_ctx, list))
         .unwrap_or(Color::WHITE);
     let shadow_color = p
         .shadow_color
         .as_deref()
-        .map(|id| resolve_effect_color(Some(id), palette, cmyk_xform, list))
+        .map(|id| resolve_effect_color(Some(id), palette, color_ctx, list))
         .unwrap_or(Color::BLACK);
     // W1.4 parity — map the IDML enum strings onto the compose
     // style/direction/technique knobs the rasterizer now honours.
@@ -359,10 +359,10 @@ fn bevel_emboss_from_parser(
 fn satin_from_parser(
     p: &SatinParams,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     list: &mut paged_compose::DisplayList,
 ) -> ComposeSatin {
-    let color = resolve_effect_color(p.effect_color.as_deref(), palette, cmyk_xform, list);
+    let color = resolve_effect_color(p.effect_color.as_deref(), palette, color_ctx, list);
     ComposeSatin {
         blur_radius: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         angle_deg: p.angle_deg.unwrap_or(19.0),

@@ -534,7 +534,7 @@ pub(super) fn emit_table_into_chain(
             let Some((fill_id, tint)) = axis.fill_for(body_idx) else {
                 continue;
             };
-            let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
+            let Some(paint) = color_id_to_paint(fill_id, em.palette, em.color_ctx) else {
                 continue;
             };
             let paint = apply_fill_tint(paint, tint);
@@ -572,7 +572,7 @@ pub(super) fn emit_table_into_chain(
                 let Some((fill_id, tint)) = axis.fill_for(c) else {
                     continue;
                 };
-                let Some(paint) = color_id_to_paint(fill_id, em.palette, em.cmyk_xform) else {
+                let Some(paint) = color_id_to_paint(fill_id, em.palette, em.color_ctx) else {
                     continue;
                 };
                 let paint = apply_fill_tint(paint, tint);
@@ -696,7 +696,7 @@ pub(super) fn emit_table_into_chain(
                 .filter(|c| !is_none_swatch_id(c))
                 .or(resolved_cell.fill_color.as_deref());
             if let Some(fill) =
-                cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+                cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
             {
                 emit_rect(
                     Rect {
@@ -752,7 +752,7 @@ pub(super) fn emit_table_into_chain(
             for (color, weight, tint, x, y, w) in edges {
                 if let (Some(color_id), Some(weight)) = (color, weight) {
                     if weight > 0.0 {
-                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                             .map(|p| apply_fill_tint(p, tint))
                         {
                             emit_rect(
@@ -806,7 +806,7 @@ pub(super) fn emit_table_into_chain(
             for (color, weight, tint, x, y, h) in v_edges {
                 if let (Some(color_id), Some(weight)) = (color, weight) {
                     if weight > 0.0 {
-                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                             .map(|p| apply_fill_tint(p, tint))
                         {
                             emit_rect(
@@ -850,7 +850,7 @@ pub(super) fn emit_table_into_chain(
                     let Some(color_id) = color else {
                         return;
                     };
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform)
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                         .map(|p| apply_fill_tint(p, tint))
                     {
                         paged_compose::emit_line(
@@ -1186,7 +1186,7 @@ pub(super) fn emit_table_into_chain(
             if sweight <= 0.0 {
                 continue;
             }
-            let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) else {
+            let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) else {
                 continue;
             };
             emit_table_vertical_edge(
@@ -1217,7 +1217,7 @@ pub(super) fn emit_table_into_chain(
         if sweight <= 0.0 {
             continue;
         }
-        let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) else {
+        let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) else {
             continue;
         };
         let y = curr.row_top_in_page + curr.height;
@@ -1245,7 +1245,7 @@ pub(super) fn emit_table_into_chain(
         if is_first {
             if let Some(color_id) = top_color.as_deref() {
                 if top_weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) {
                         emit_table_horizontal_edge(
                             *frame_table_left,
                             *top_y,
@@ -1262,7 +1262,7 @@ pub(super) fn emit_table_into_chain(
         if is_last {
             if let Some(color_id) = bot_color.as_deref() {
                 if bot_weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) {
                         emit_table_horizontal_edge(
                             *frame_table_left,
                             *bottom_y,
@@ -1280,7 +1280,7 @@ pub(super) fn emit_table_into_chain(
         let segment_h = bottom_y - top_y;
         if let Some(color_id) = left_color.as_deref() {
             if left_weight > 0.0 {
-                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) {
                     emit_table_vertical_edge(
                         *frame_table_left,
                         *top_y,
@@ -1295,7 +1295,7 @@ pub(super) fn emit_table_into_chain(
         }
         if let Some(color_id) = right_color.as_deref() {
             if right_weight > 0.0 {
-                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.cmyk_xform) {
+                if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx) {
                     emit_table_vertical_edge(
                         *frame_table_left + total_w,
                         *top_y,
@@ -2269,12 +2269,12 @@ pub(super) fn emit_cell_paragraph(
         paragraph,
         &resolved_runs,
         em.palette,
-        em.cmyk_xform,
+        em.color_ctx,
         em.options.fallback_text_paint,
         None,
     );
     let stroke_picker =
-        build_run_stroke_picker(paragraph, &resolved_runs, em.palette, em.cmyk_xform, 0);
+        build_run_stroke_picker(paragraph, &resolved_runs, em.palette, em.color_ctx, 0);
     let any_text_stroke = stroke_picker.any_visible();
     let leading_pt = paragraph_size * 1.2;
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);

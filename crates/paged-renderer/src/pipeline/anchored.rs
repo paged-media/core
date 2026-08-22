@@ -713,7 +713,7 @@ fn emit_anchored_rect_via_pipeline(
         em.document,
         em.palette,
         em.options.fallback_frame_fill,
-        em.cmyk_xform,
+        em.color_ctx,
         None,
     );
 }
@@ -926,7 +926,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         em.document,
         em.options,
         em.palette,
-        em.cmyk_xform,
+        em.color_ctx,
         em.font_table,
         chain,
         chain_pages,

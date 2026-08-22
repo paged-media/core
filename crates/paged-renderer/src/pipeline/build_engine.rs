@@ -333,6 +333,13 @@ pub(super) fn build_document_inner(
             }
         }
     });
+    // One colour-resolution context for the whole build: the transform
+    // above plus the ink-manager policy. Every paint resolver takes it,
+    // so the page cannot disagree with itself about what a spot is.
+    let color_ctx = ColorCtx {
+        icc: cmyk_xform.as_ref(),
+        standard_lab_for_spots: options.use_standard_lab_for_spots,
+    };
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
     let mut breaks: Vec<BreakRecord> = Vec::new();
@@ -449,7 +456,7 @@ pub(super) fn build_document_inner(
     // Surface that one or more page labels were computed rather than
     // read from a baked `<Page Name>` — an honest signal that numbering
     // came from section rules / the 1-based fallback, not InDesign.
-    if section_walk.used_fallback {
+    if section_walk.used_fallback() {
         let detail = if document.designmap.sections.is_empty() {
             "page label(s) computed via 1-based fallback (no <Page Name>, no <Section>)"
         } else {
@@ -715,7 +722,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
+                color_ctx,
                 None, // master items don't carry a drop shadow today.
                 None, // master frames don't auto-size in our model.
             );
@@ -749,7 +756,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
+                color_ctx,
                 None,
             );
         }
@@ -779,7 +786,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
+                color_ctx,
             );
         }
         for oval in &master.spread.ovals {
@@ -803,7 +810,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options.fallback_frame_fill,
-                cmyk_xform.as_ref(),
+                color_ctx,
             );
         }
         for line in &master.spread.graphic_lines {
@@ -821,7 +828,7 @@ pub(super) fn build_document_inner(
             total_stats.frames += 1;
             let mut copy = line.clone();
             copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_line_into(&mut pages[i], &copy, document, palette, cmyk_xform.as_ref());
+            emit_line_into(&mut pages[i], &copy, document, palette, color_ctx);
         }
     }
 
@@ -993,7 +1000,7 @@ pub(super) fn build_document_inner(
             document: &Document,
             palette: &Graphic,
             options: &PipelineOptions,
-            cmyk_xform: Option<&paged_color::IccTransform>,
+            color_ctx: ColorCtx<'_>,
             auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
         ) {
             match fr {
@@ -1039,7 +1046,7 @@ pub(super) fn build_document_inner(
                             document,
                             palette,
                             options.fallback_frame_fill,
-                            cmyk_xform,
+                            color_ctx,
                             options.frame_drop_shadow,
                             grown,
                         );
@@ -1119,7 +1126,7 @@ pub(super) fn build_document_inner(
                             document,
                             palette,
                             options.fallback_frame_fill,
-                            cmyk_xform,
+                            color_ctx,
                             options.frame_drop_shadow,
                         );
                         // emit_rectangle_image runs paired with the
@@ -1185,7 +1192,7 @@ pub(super) fn build_document_inner(
                         document,
                         palette,
                         options,
-                        cmyk_xform,
+                        color_ctx,
                         auto_sized_bounds,
                     );
                 }
@@ -1214,7 +1221,7 @@ pub(super) fn build_document_inner(
                             document,
                             palette,
                             options.fallback_frame_fill,
-                            cmyk_xform,
+                            color_ctx,
                         );
                         emit_oval_image(
                             &mut pages[page_idx],
@@ -1276,7 +1283,7 @@ pub(super) fn build_document_inner(
                         document,
                         palette,
                         options,
-                        cmyk_xform,
+                        color_ctx,
                         auto_sized_bounds,
                     );
                 }
@@ -1299,7 +1306,7 @@ pub(super) fn build_document_inner(
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
-                        emit_line_into(&mut pages[page_idx], line, document, palette, cmyk_xform);
+                        emit_line_into(&mut pages[page_idx], line, document, palette, color_ctx);
                         let after = pages[page_idx].list.commands.len();
                         if after > before && frame_spans.graphic_lines[idx].is_none() {
                             frame_spans.graphic_lines[idx] = Some(crate::module::FrameCmdSpan {
@@ -1362,7 +1369,7 @@ pub(super) fn build_document_inner(
                             document,
                             palette,
                             options.fallback_frame_fill,
-                            cmyk_xform,
+                            color_ctx,
                         );
                         emit_polygon_image(
                             &mut pages[page_idx],
@@ -1424,7 +1431,7 @@ pub(super) fn build_document_inner(
                         document,
                         palette,
                         options,
-                        cmyk_xform,
+                        color_ctx,
                         auto_sized_bounds,
                     );
                 }
@@ -1445,7 +1452,7 @@ pub(super) fn build_document_inner(
                                 document,
                                 palette,
                                 options,
-                                cmyk_xform,
+                                color_ctx,
                                 auto_sized_bounds,
                             );
                         }
@@ -1485,7 +1492,7 @@ pub(super) fn build_document_inner(
             document: &Document,
             palette: &Graphic,
             options: &PipelineOptions,
-            cmyk_xform: Option<&paged_color::IccTransform>,
+            color_ctx: ColorCtx<'_>,
             auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
         ) {
             let Some(host_id) = host_id else { return };
@@ -1521,7 +1528,7 @@ pub(super) fn build_document_inner(
                     document,
                     palette,
                     options,
-                    cmyk_xform,
+                    color_ctx,
                     auto_sized_bounds,
                 );
             }
@@ -1560,7 +1567,7 @@ pub(super) fn build_document_inner(
             document: &Document,
             palette: &Graphic,
             options: &PipelineOptions,
-            cmyk_xform: Option<&paged_color::IccTransform>,
+            color_ctx: ColorCtx<'_>,
             auto_sized_bounds: &HashMap<String, paged_model::Bounds>,
         ) {
             let mask_entry = frame_ref_self_id(spread, fr)
@@ -1581,7 +1588,7 @@ pub(super) fn build_document_inner(
                     document,
                     palette,
                     options,
-                    cmyk_xform,
+                    color_ctx,
                     auto_sized_bounds,
                 );
                 return;
@@ -1619,7 +1626,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options,
-                cmyk_xform,
+                color_ctx,
                 auto_sized_bounds,
             );
             for &local_idx in &union {
@@ -1641,7 +1648,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options,
-                cmyk_xform,
+                color_ctx,
                 auto_sized_bounds,
             );
             for &local_idx in &union {
@@ -1678,7 +1685,7 @@ pub(super) fn build_document_inner(
                 document,
                 palette,
                 options,
-                cmyk_xform.as_ref(),
+                color_ctx,
                 &auto_sized_bounds,
             );
         }
@@ -1818,7 +1825,7 @@ pub(super) fn build_document_inner(
             document,
             options,
             palette,
-            cmyk_xform.as_ref(),
+            color_ctx,
             font_table,
             chain,
             chain_pages,
@@ -1916,7 +1923,7 @@ pub(super) fn build_document_inner(
                     document,
                     options,
                     palette,
-                    cmyk_xform.as_ref(),
+                    color_ctx,
                     font_table,
                 );
             }
@@ -1973,7 +1980,7 @@ pub(super) fn build_document_inner(
                     document,
                     options,
                     palette,
-                    cmyk_xform.as_ref(),
+                    color_ctx,
                     font_table,
                 );
             }
@@ -2020,7 +2027,7 @@ pub(super) fn build_document_inner(
                     document,
                     options,
                     palette,
-                    cmyk_xform.as_ref(),
+                    color_ctx,
                     font_table,
                 );
             }
@@ -2236,7 +2243,7 @@ pub(super) fn build_document_inner(
                 document,
                 options,
                 palette,
-                cmyk_xform.as_ref(),
+                color_ctx,
                 font_table,
                 chain_for_post.clone(),
                 chain_pages_for_post.clone(),
@@ -2313,14 +2320,8 @@ pub(super) fn build_document_inner(
             if !any_footnotes {
                 break;
             }
-            let pool_heights = measure_footnote_pools(
-                &pages,
-                options,
-                document,
-                font_table,
-                palette,
-                cmyk_xform.as_ref(),
-            );
+            let pool_heights =
+                measure_footnote_pools(&pages, options, document, font_table, palette, color_ctx);
             let mut next_reserved = vec![0i32; reserved_64.len()];
             for (frame_idx, key) in frame_host_keys.iter().enumerate() {
                 if let Some(h_pt) = pool_heights.get(key) {
@@ -2439,7 +2440,7 @@ pub(super) fn build_document_inner(
         &footnote_options,
         document,
         palette,
-        cmyk_xform.as_ref(),
+        color_ctx,
     );
 
     // Size every transparency group to what it actually PAINTS.
@@ -2535,7 +2536,7 @@ pub(super) struct StoryEmitter<'a> {
     /// Reserved for the upcoming CMYK text-fill path. The current
     /// per-glyph paint picker resolves through `palette` directly.
     #[allow(dead_code)]
-    pub(super) cmyk_xform: Option<&'a paged_color::IccTransform>,
+    pub(super) color_ctx: ColorCtx<'a>,
     pub(super) font_table: &'a FontTable,
     pub(super) chain: Vec<&'a TextFrame>,
     pub(super) chain_pages: Vec<usize>,
@@ -2723,7 +2724,7 @@ impl<'a> StoryEmitter<'a> {
         document: &'a Document,
         options: &'a PipelineOptions<'a>,
         palette: &'a Graphic,
-        cmyk_xform: Option<&'a paged_color::IccTransform>,
+        color_ctx: ColorCtx<'a>,
         font_table: &'a FontTable,
         chain: Vec<&'a TextFrame>,
         chain_pages: Vec<usize>,
@@ -2840,7 +2841,7 @@ impl<'a> StoryEmitter<'a> {
             document,
             options,
             palette,
-            cmyk_xform,
+            color_ctx,
             font_table,
             chain,
             chain_pages,
@@ -3347,7 +3348,7 @@ impl<'a> StoryEmitter<'a> {
                         frame.stroke_drop_shadow.as_ref(),
                         None,
                         self.palette,
-                        self.cmyk_xform,
+                        self.color_ctx,
                     )
                 } else {
                     None
@@ -4309,7 +4310,7 @@ pub(super) fn emit_paragraph_into_chain(
             let cap_paint = resolved_runs
                 .first()
                 .and_then(|r| r.fill_color.as_deref())
-                .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+                .and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
                 .unwrap_or(fallback_paint);
             // Now overlay the carved widths onto lopts so the
             // remainder body wraps narrower for the first M lines.
@@ -4718,7 +4719,7 @@ pub(super) fn emit_paragraph_into_chain(
         let style_id = bullet_marker_character_style(&resolved_paragraph)?;
         let resolved = em.document.styles.resolve_character(style_id);
         let fill_id = resolved.fill_color.as_deref()?;
-        let base = color_id_to_paint(fill_id, em.palette, em.cmyk_xform)?;
+        let base = color_id_to_paint(fill_id, em.palette, em.color_ctx)?;
         let paint = apply_fill_tint(base, resolved.fill_tint);
         Some((bullet_len as u32, paint))
     });
@@ -4727,7 +4728,7 @@ pub(super) fn emit_paragraph_into_chain(
         paragraph,
         &resolved_runs,
         em.palette,
-        em.cmyk_xform,
+        em.color_ctx,
         em.options.fallback_text_paint,
         bullet_paint_override,
     );
@@ -4735,7 +4736,7 @@ pub(super) fn emit_paragraph_into_chain(
         paragraph,
         &resolved_runs,
         em.palette,
-        em.cmyk_xform,
+        em.color_ctx,
         bullet_paint_override.map(|(len, _)| len).unwrap_or(0),
     );
     let any_text_stroke = stroke_picker.any_visible();
@@ -4758,7 +4759,7 @@ pub(super) fn emit_paragraph_into_chain(
             .shading
             .color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            .and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
             .map(|p| {
                 let tint = resolved_paragraph.shading.tint.unwrap_or(100.0);
                 // IDML tint of -1 means "use stop color as-is"; 0..100
@@ -4786,7 +4787,7 @@ pub(super) fn emit_paragraph_into_chain(
             return None;
         }
         let id = r.color.as_deref()?;
-        let base = color_id_to_paint(id, em.palette, em.cmyk_xform)?;
+        let base = color_id_to_paint(id, em.palette, em.color_ctx)?;
         let tint = r.tint.unwrap_or(100.0);
         if tint < 0.0 {
             Some(base)
@@ -4804,7 +4805,7 @@ pub(super) fn emit_paragraph_into_chain(
             .border
             .color
             .as_deref()
-            .and_then(|id| color_id_to_paint(id, em.palette, em.cmyk_xform))
+            .and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
             .map(|p| {
                 let tint = resolved_paragraph.border.tint.unwrap_or(100.0);
                 if tint < 0.0 {

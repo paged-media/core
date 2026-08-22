@@ -1964,14 +1964,23 @@ impl CanvasModel {
         }
         if let Mutation::SetUseStandardLabForSpots { enabled } = mutation {
             self.use_standard_lab_for_spots = *enabled;
-            // Preview resolution changes for Lab-primary spots; the
-            // canvas itself repaints with Concept 3's separations
-            // threading. Clear the preview CMM so reads see the flag.
+            // Clear the preview CMM so the Swatches chip reads the flag,
+            // then rebuild: the flag is on `PipelineOptions`, so it
+            // changes what every Lab-primary spot PAINTS, exactly as
+            // `SetColorSettings` changes what every CMYK swatch paints.
+            // (Before that plumbing existed the chip moved and the page
+            // did not — the whole reason the render-effect sweep exists.)
             self.cmm_cache.borrow_mut().take();
+            self.rebuild_after_mutation().map_err(|e| {
+                crate::channel::WorkerError::NotImplemented {
+                    what: format!("rebuild after SetUseStandardLabForSpots: {e}"),
+                }
+            })?;
             let applied_seq = self.bump_applied_seq();
+            let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
             return Ok(MutationOutcome {
                 applied_seq,
-                page_ids: Vec::new(),
+                page_ids,
                 inverse: crate::mutate::TextOp::InsertText {
                     story_id: String::new(),
                     offset: 0,
@@ -7984,6 +7993,10 @@ impl CanvasModel {
             cmyk_icc_profile: self.icc_bytes.as_deref(),
             cmyk_intent: self.color_settings.intent,
             cmyk_bpc: self.color_settings.bpc,
+            // Ink-manager state IS honoured by an export — unlike the
+            // soft proof below, it describes the inks themselves, not a
+            // viewing condition.
+            use_standard_lab_for_spots: self.use_standard_lab_for_spots,
             collect_glyph_runs: true,
             // Image decode cache is content-addressed (URI →
             // DecodedImage), not positional — safe to share.
@@ -8065,6 +8078,11 @@ impl CanvasModel {
                 Some(p) => !p.simulate_paper_white && self.color_settings.bpc,
                 None => self.color_settings.bpc,
             },
+            // Ink Manager — "Use Standard Lab Values for Spots"
+            // (`SetUseStandardLabForSpots`). The Swatches chip reads the
+            // same flag through `color_preview`; this is what makes the
+            // PAGE agree with the chip.
+            use_standard_lab_for_spots: self.use_standard_lab_for_spots,
             // Perf-S — reuse the persistent image-decode cache so
             // placed images don't re-decode on every gesture rebuild.
             image_decode_cache: Some(&self.image_decode_cache),
@@ -8608,22 +8626,14 @@ fn working_color_of_with(
     use_standard_lab_for_spots: bool,
 ) -> Option<paged_color::WorkingColor> {
     use paged_model::ColorSpace;
-    if use_standard_lab_for_spots
-        && entry.model == paged_model::ColorModel::Spot
-        && entry.space == ColorSpace::Lab
-        && entry.value.len() == 3
-    {
-        // Swatch-level tint scales toward paper white in Lab: only
-        // L* lightens, chroma fades proportionally.
-        let t = entry
-            .tint
-            .map(|v| (v / 100.0).clamp(0.0, 1.0))
-            .unwrap_or(1.0);
-        return Some(paged_color::WorkingColor::Lab {
-            l: 100.0 - (100.0 - entry.value[0]) * t,
-            a: entry.value[1] * t,
-            b: entry.value[2] * t,
-        });
+    if use_standard_lab_for_spots && entry.model == paged_model::ColorModel::Spot {
+        // `effective_lab` folds the swatch-level tint (toward paper
+        // white in Lab: L* lightens, chroma fades proportionally) and
+        // is the same call the renderer's standard-Lab path makes, so
+        // the chip and the page cannot drift apart.
+        if let Some([l, a, b]) = entry.effective_lab() {
+            return Some(paged_color::WorkingColor::Lab { l, a, b });
+        }
     }
     if let Some([c, m, y, k]) = entry.effective_cmyk() {
         return Some(paged_color::WorkingColor::Cmyk(paged_color::Cmyk {

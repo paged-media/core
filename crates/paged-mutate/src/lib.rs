@@ -6951,6 +6951,145 @@ mod tests {
             assert_eq!(p.document().designmap.sections.len(), 1);
         }
 
+        /// Three body pages on one spread, each carrying a baked
+        /// `Page@Name` the way every real InDesign export does.
+        fn doc_with_named_pages() -> Document {
+            let mut spread = Spread {
+                self_id: Some("Spread/u_main".to_string()),
+                ..Default::default()
+            };
+            for (id, name) in [("Page/u1", "cover"), ("Page/u2", "2"), ("Page/u3", "3")] {
+                let mut p = page(id);
+                p.name = Some(name.to_string());
+                spread.pages.push(p);
+            }
+            let mut doc = base_doc();
+            doc.spreads.push(paged_scene::ParsedSpread {
+                src: "Spreads/Spread_u_main.xml".to_string(),
+                spread,
+            });
+            doc
+        }
+
+        fn page_names(p: &Project) -> Vec<Option<String>> {
+            p.document().spreads[0]
+                .spread
+                .pages
+                .iter()
+                .map(|pg| pg.name.clone())
+                .collect()
+        }
+
+        /// A section edit re-derives the baked `Page@Name` labels it
+        /// invalidated. Without that the whole section vocabulary is
+        /// invisible on any document InDesign wrote: the renderer
+        /// substitutes the baked name into every page-number marker
+        /// (and is right to — see `paged_model::SectionWalk`), so a
+        /// section whose rules never reach the names never reaches the
+        /// page either.
+        #[test]
+        fn section_ops_rebake_the_pages_baked_names() {
+            let mut p = Project::new(doc_with_named_pages());
+            let applied = p
+                .apply(Operation::InsertSection {
+                    at_page: "Page/u2".to_string(),
+                    prefix: Some("A-".to_string()),
+                    numbering_style: Some("UpperRoman".to_string()),
+                    start_at: Some(1),
+                    self_id: None,
+                })
+                .expect("insert section");
+            let sid = match &applied.op {
+                Operation::InsertSection { self_id, .. } => self_id.clone().unwrap(),
+                _ => unreachable!(),
+            };
+            // Page 1 is ahead of the section start: its name is none of
+            // the section's business and survives verbatim.
+            assert_eq!(
+                page_names(&p),
+                vec![
+                    Some("cover".to_string()),
+                    Some("A-I".to_string()),
+                    Some("A-II".to_string())
+                ]
+            );
+
+            // Editing the rules re-derives the same pages.
+            p.apply(Operation::EditSection {
+                section_id: sid.clone(),
+                prefix: Some(None),
+                numbering_style: Some("Arabic".to_string()),
+                start_at: Some(Some(5)),
+            })
+            .expect("edit section");
+            assert_eq!(
+                page_names(&p),
+                vec![
+                    Some("cover".to_string()),
+                    Some("5".to_string()),
+                    Some("6".to_string())
+                ]
+            );
+
+            // Deleting it returns those pages to the implicit 1-based
+            // numbering the walk falls back to.
+            p.apply(Operation::DeleteSection {
+                section_id: sid.clone(),
+            })
+            .expect("delete section");
+            assert_eq!(
+                page_names(&p),
+                vec![
+                    Some("cover".to_string()),
+                    Some("2".to_string()),
+                    Some("3".to_string())
+                ]
+            );
+
+            // Undo re-runs the derivation against the restored rules,
+            // so the labels come back with the section.
+            p.undo().expect("undo delete");
+            assert_eq!(
+                page_names(&p),
+                vec![
+                    Some("cover".to_string()),
+                    Some("5".to_string()),
+                    Some("6".to_string())
+                ]
+            );
+        }
+
+        /// A section anchored to a page that is not in the document
+        /// (`PageStart` absent, or naming a deleted page) re-bakes from
+        /// the first page rather than silently doing nothing.
+        #[test]
+        fn section_without_a_reachable_page_start_rebakes_everything() {
+            let mut doc = doc_with_named_pages();
+            doc.designmap.sections.push(paged_model::Section {
+                self_id: "Section/orphan".to_string(),
+                page_start: None,
+                continue_numbering: false,
+                start_at: Some(1),
+                numbering_style: paged_model::NumberingStyle::LowerRoman,
+                section_prefix: None,
+                marker: None,
+                include_prefix: false,
+            });
+            let mut p = Project::new(doc);
+            p.apply(Operation::DeleteSection {
+                section_id: "Section/orphan".to_string(),
+            })
+            .expect("delete section");
+            assert_eq!(
+                page_names(&p),
+                vec![
+                    Some("1".to_string()),
+                    Some("2".to_string()),
+                    Some("3".to_string())
+                ]
+            );
+        }
+
         // ---- Oval NodeSpec ----------------------------------------------
 
         #[test]

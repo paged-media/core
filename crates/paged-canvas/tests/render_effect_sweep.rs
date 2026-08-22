@@ -815,50 +815,6 @@ struct Known {
 
 const KNOWN: &[Known] = &[
     Known {
-        op: "InsertSection",
-        kind: Kind::Defect,
-        diagnosis: "\
-`SectionWalk::next_label` computes the section-derived number correctly — \
-reseeding from `start_at`, applying the numbering style and the prefix — and \
-then throws it away: `if let Some(name) = page_name { return name.to_string() }` \
-runs FIRST, so any page carrying a `Name` attribute keeps its baked label. \
-InDesign writes `Page@Name` on every page, so on real documents a section edit \
-is invisible by construction. Proven by stripping `page.name` in the scene and \
-re-running: the same `editSection` then moves the page.",
-    },
-    Known {
-        op: "EditSection",
-        kind: Kind::Defect,
-        diagnosis: "\
-Same cause as `InsertSection`: the walk recomputes the label from the edited \
-`start_at` / prefix / numbering style and `next_label` returns the page's \
-baked `Name` instead. Editing a section that exists is as invisible as \
-creating one, and for the same single line of code.",
-    },
-    Known {
-        op: "DeleteSection",
-        kind: Kind::Defect,
-        diagnosis: "\
-Same cause as `InsertSection`. Deleting a section returns the walk to implicit \
-1-based numbering, which the page never displayed in the first place — its \
-baked `Name` was winning throughout — so the removal is invisible for exactly \
-the reason the creation was.",
-    },
-    Known {
-        op: "SetUseStandardLabForSpots",
-        kind: Kind::Defect,
-        diagnosis: "\
-The flag never leaves `paged-canvas`. `Mutation::SetUseStandardLabForSpots` \
-sets `CanvasModel::use_standard_lab_for_spots`, which is read by \
-`color_preview` / `working_color_of_with` / `DocumentMeta` and by nothing \
-else — it is not on `PipelineOptions`, so `paged-renderer` and `paged-compose` \
-never see it. The Swatches panel chip changes and the page does not, which is \
-also exactly what the existing `standard_lab_for_spots_prefers_the_lab_primary` \
-test asserts (it compares `color_preview`, not a render). The `swatches` fixture \
-paints with a spot whose PRIMARY is Lab and whose alternate is CMYK, so there is \
-a real difference to show.",
-    },
-    Known {
         op: "InsertAnchoredFrame",
         kind: Kind::Defect,
         diagnosis: "\

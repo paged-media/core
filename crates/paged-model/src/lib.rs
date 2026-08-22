@@ -1934,6 +1934,34 @@ impl ColorEntry {
             base_value[3] * t,
         ])
     }
+
+    /// The swatch's *effective* Lab primary — its measured `L* a* b*`
+    /// with any swatch-level `TintValue` folded in. `None` unless the
+    /// swatch's own space is Lab with three channels.
+    ///
+    /// The Lab counterpart of [`effective_cmyk`](Self::effective_cmyk),
+    /// and the one place the tint interpolation lives: a tint mixes the
+    /// ink toward PAPER WHITE, which in Lab lightens `L*` toward 100
+    /// and fades the chroma proportionally — not the channel-wise scale
+    /// that is right in CMYK (where paper white is `0 0 0 0`).
+    ///
+    /// Read by the Ink Manager's "Use Standard Lab Values for Spots"
+    /// path in both the renderer (`pipeline::color_paint`) and the
+    /// canvas's swatch preview, so the chip and the page agree.
+    pub fn effective_lab(&self) -> Option<[f32; 3]> {
+        if self.space != ColorSpace::Lab || self.value.len() != 3 {
+            return None;
+        }
+        let t = self
+            .tint
+            .map(|v| (v / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+        Some([
+            100.0 - (100.0 - self.value[0]) * t,
+            self.value[1] * t,
+            self.value[2] * t,
+        ])
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2261,6 +2289,118 @@ pub struct Section {
     /// `IncludeSectionPrefix="true"` — whether the prefix shows in the
     /// page label.
     pub include_prefix: bool,
+}
+
+/// Walks body pages in document order, computing each page's
+/// user-visible label from the document's `<Section>` numbering rules.
+///
+/// Two readings of a page's label exist and both are needed:
+///
+/// * [`derived_label`](SectionWalk::derived_label) — what the SECTION
+///   RULES say the page is called. The mutation layer re-bakes
+///   `Page@Name` from this after a section edit (see
+///   `paged_mutate::apply::sections`), because `Page@Name` is derived
+///   data and a section edit is what derives it.
+/// * [`next_label`](SectionWalk::next_label) — what the page IS called:
+///   the baked `Page@Name` when present, the derived label otherwise.
+///   This is the renderer's reading, and `Page@Name` stays authoritative
+///   there on purpose: it is the label InDesign itself computed, from
+///   rules richer than the ones modelled here ([`NumberingStyle`] folds
+///   Kanji and Katakana into Arabic, for one), so a round-tripped
+///   document shows the folios InDesign showed.
+///
+/// Both advance the same running counter, so a `Name`-absent page still
+/// numbers correctly after `Name`-carrying ones. With no sections and no
+/// `Name`, this reproduces the historical 1-based body-page fallback
+/// exactly (`current_number == pages.len() + 1`).
+pub struct SectionWalk<'a> {
+    sections: &'a [Section],
+    /// page `Self` → index into `sections` for the section starting there.
+    starts: BTreeMap<&'a str, usize>,
+    active: Option<usize>,
+    /// Number assigned to the most recently processed page (0 before any).
+    current_number: u32,
+    /// True once any page fell back to a computed (non-`Name`) label.
+    used_fallback: bool,
+}
+
+impl<'a> SectionWalk<'a> {
+    pub fn new(sections: &'a [Section]) -> Self {
+        let mut starts = BTreeMap::new();
+        for (i, s) in sections.iter().enumerate() {
+            if let Some(ps) = s.page_start.as_deref() {
+                starts.entry(ps).or_insert(i);
+            }
+        }
+        Self {
+            sections,
+            starts,
+            active: None,
+            current_number: 0,
+            used_fallback: false,
+        }
+    }
+
+    /// Advance to the next body page and return the label the section
+    /// rules give it, ignoring any baked `Page@Name`.
+    pub fn derived_label(&mut self, page_self_id: Option<&str>) -> String {
+        self.advance(page_self_id);
+        let style = self
+            .active
+            .map(|si| self.sections[si].numbering_style)
+            .unwrap_or(NumberingStyle::Arabic);
+        let mut label = style.format(self.current_number);
+        if let Some(sec) = self.active.map(|si| &self.sections[si]) {
+            if sec.include_prefix {
+                if let Some(prefix) = &sec.section_prefix {
+                    label = format!("{prefix}{label}");
+                }
+            }
+        }
+        label
+    }
+
+    /// Advance to the next body page and return its label, preferring
+    /// the baked `Page@Name`.
+    pub fn next_label(&mut self, page_self_id: Option<&str>, page_name: Option<&str>) -> String {
+        match page_name {
+            // The counter still has to move — a later `Name`-less page
+            // numbers off it — but the label is already decided, so the
+            // formatting never runs.
+            Some(name) => {
+                self.advance(page_self_id);
+                name.to_string()
+            }
+            None => {
+                self.used_fallback = true;
+                self.derived_label(page_self_id)
+            }
+        }
+    }
+
+    /// Move to the next body page: a section starting here reseeds the
+    /// counter, otherwise it advances by one within the active (or
+    /// implicit) section.
+    fn advance(&mut self, page_self_id: Option<&str>) {
+        match page_self_id.and_then(|sid| self.starts.get(sid).copied()) {
+            Some(si) => {
+                let sec = &self.sections[si];
+                self.active = Some(si);
+                self.current_number = if sec.continue_numbering {
+                    self.current_number + 1
+                } else {
+                    sec.start_at.unwrap_or(1)
+                };
+            }
+            None => self.current_number += 1,
+        }
+    }
+
+    /// True once at least one page's label was computed rather than
+    /// read from a baked `<Page Name>`.
+    pub fn used_fallback(&self) -> bool {
+        self.used_fallback
+    }
 }
 
 /// IDML `<Article>` definition. Members reference stories via

@@ -69,10 +69,11 @@
 //!   usual `showcase-base · pNN · variant` descriptor — but
 //!   `SectionWalk::next_label` treats a present `Name` as authoritative,
 //!   so the footer's `<?ACE 18?>` marker resolves to that descriptor
-//!   rather than to "3". A demo that wants numeric folios clears or
-//!   rewrites the page names live (they are wire-addressable); the
-//!   descriptor is kept here because the attribution convention asked
-//!   for it.
+//!   rather than to "3". A demo that wants numeric folios starts a
+//!   section on page 1 (`insertSection`): a section edit re-bakes every
+//!   `Page@Name` from its start page on, which is how InDesign keeps
+//!   the derived labels true. The descriptor is kept here because the
+//!   attribution convention asked for it.
 //! * `Showcase Accent 20%` is built in CMYK, not RGB, even though its
 //!   parent `Showcase Accent` is the RGB brand oxblood. Swatch-level
 //!   `TintValue` is only honoured through `ColorEntry::effective_cmyk`,

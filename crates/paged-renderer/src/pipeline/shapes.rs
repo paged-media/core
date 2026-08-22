@@ -42,7 +42,7 @@ pub(super) fn emit_oval_into(
     document: &Document,
     palette: &Graphic,
     fallback: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     let mut frame = ResolvedFrame::from_oval(oval);
     let style = crate::module::resolve_applied_style(&frame, document);
@@ -67,7 +67,7 @@ pub(super) fn emit_oval_into(
         &frame,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         None,
         outer,
         oval.stroke_drop_shadow.as_ref(),
@@ -91,16 +91,9 @@ pub(super) fn emit_oval_into(
         (None, outer, None)
     };
     if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
-        crate::module::emit_effects_pre_fill(
-            page,
-            effects,
-            pid,
-            effects_xform,
-            palette,
-            cmyk_xform,
-        );
+        crate::module::emit_effects_pre_fill(page, effects, pid, effects_xform, palette, color_ctx);
     }
-    crate::module::fill_paint_module(&frame, page, palette, cmyk_xform, fallback, outer, None);
+    crate::module::fill_paint_module(&frame, page, palette, color_ctx, fallback, outer, None);
     if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
         crate::module::emit_effects_post_fill(
             page,
@@ -108,7 +101,7 @@ pub(super) fn emit_oval_into(
             pid,
             effects_xform,
             palette,
-            cmyk_xform,
+            color_ctx,
             effects_unit_normalize,
         );
     }
@@ -138,7 +131,7 @@ pub(super) fn emit_oval_into(
         &frame,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         outer,
         aligned_oval_id,
         stroke_for(
@@ -411,7 +404,7 @@ pub(super) fn emit_line_into(
     line: &GraphicLine,
     document: &Document,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     let mut resolved = ResolvedFrame::from_graphic_line(line);
     let style = crate::module::resolve_applied_style(&resolved, document);
@@ -435,14 +428,14 @@ pub(super) fn emit_line_into(
             color_id_to_paint_with_list_dir(
                 id,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 &mut page.list,
                 resolved.gradient_stroke_angle,
                 resolved.gradient_stroke_length,
                 None,
             )
         })
-        .or_else(|| color_id_to_paint("Color/Black", palette, cmyk_xform))
+        .or_else(|| color_id_to_paint("Color/Black", palette, color_ctx))
         .unwrap_or(Paint::Solid(Color::BLACK));
     let stroke_width = resolved.effective_stroke_weight();
     if stroke_width <= 0.0 {
@@ -572,7 +565,7 @@ fn emit_rectangle_polygon_path(
     document: &Document,
     palette: &Graphic,
     fallback: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
 ) {
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
@@ -616,9 +609,7 @@ fn emit_rectangle_polygon_path(
     } else {
         (None, None, 0)
     };
-    crate::module::fill_paint_module(
-        resolved, page, palette, cmyk_xform, fallback, outer, path_id,
-    );
+    crate::module::fill_paint_module(resolved, page, palette, color_ctx, fallback, outer, path_id);
     let stroke_width = resolved.effective_stroke_weight();
     let stroke = stroke_for(
         resolved.stroke_type,
@@ -656,7 +647,7 @@ fn emit_rectangle_polygon_path(
                 color_id_to_paint_with_list_dir(
                     id,
                     palette,
-                    cmyk_xform,
+                    color_ctx,
                     &mut page.list,
                     resolved.gradient_stroke_angle,
                     resolved.gradient_stroke_length,
@@ -673,7 +664,7 @@ fn emit_rectangle_polygon_path(
                 stroke_width,
                 paint,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 outer,
                 gap_override,
             )
@@ -694,7 +685,7 @@ fn emit_rectangle_polygon_path(
             resolved,
             page,
             palette,
-            cmyk_xform,
+            color_ctx,
             outer,
             aligned_id.or(path_id),
             stroke,
@@ -711,7 +702,7 @@ pub(super) fn emit_rectangle_into(
     document: &Document,
     palette: &Graphic,
     fallback: Paint,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     drop_shadow: Option<DropShadow>,
 ) {
     let mut resolved = ResolvedFrame::from_rectangle(rect);
@@ -726,7 +717,7 @@ pub(super) fn emit_rectangle_into(
     // route the polygon case through the same path emit
     // `emit_polygon_into` uses, then return.
     if matches!(resolved.geometry, Geometry::Polygon { .. }) {
-        emit_rectangle_polygon_path(page, &resolved, document, palette, fallback, cmyk_xform);
+        emit_rectangle_polygon_path(page, &resolved, document, palette, fallback, color_ctx);
         return;
     }
     let Geometry::Rect { rect: r } = resolved.geometry else {
@@ -748,7 +739,7 @@ pub(super) fn emit_rectangle_into(
         &resolved,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         drop_shadow,
         outer,
         rect.stroke_drop_shadow.as_ref(),
@@ -814,7 +805,7 @@ pub(super) fn emit_rectangle_into(
             effects_path,
             effects_xform,
             palette,
-            cmyk_xform,
+            color_ctx,
         );
     }
 
@@ -822,7 +813,7 @@ pub(super) fn emit_rectangle_into(
         &resolved,
         page,
         palette,
-        cmyk_xform,
+        color_ctx,
         fallback,
         outer,
         corner.fill,
@@ -837,7 +828,7 @@ pub(super) fn emit_rectangle_into(
             effects_path,
             effects_xform,
             palette,
-            cmyk_xform,
+            color_ctx,
             effects_unit_normalize,
         );
     }
@@ -863,7 +854,7 @@ pub(super) fn emit_rectangle_into(
             &resolved,
             page,
             palette,
-            cmyk_xform,
+            color_ctx,
             outer,
             corner.stroke,
             stroke,
@@ -880,7 +871,7 @@ pub(super) fn emit_rectangle_into(
             color_id_to_paint_with_list_dir(
                 id,
                 palette,
-                cmyk_xform,
+                color_ctx,
                 &mut page.list,
                 resolved.gradient_stroke_angle,
                 resolved.gradient_stroke_length,
@@ -922,7 +913,7 @@ pub(super) fn emit_rectangle_into(
                     stroke_width,
                     paint,
                     palette,
-                    cmyk_xform,
+                    color_ctx,
                     outer,
                     gap_override,
                 )
@@ -1346,7 +1337,7 @@ pub(crate) fn emit_styled_stroke(
     weight: f32,
     stroke_paint: Paint,
     palette: &Graphic,
-    cmyk_xform: Option<&paged_color::IccTransform>,
+    color_ctx: ColorCtx<'_>,
     outer: Transform,
     // FINDING #7.5 — the frame's INSTANCE `(GapColor, GapTint)`. When
     // present it overrides the `StrokeStyleDef`'s gap colour (W0.3's
@@ -1380,7 +1371,7 @@ pub(crate) fn emit_styled_stroke(
     // the gaps show the gap colour rather than the page beneath. Emitted
     // first (drawn first ⇒ underneath).
     if let Some(gc) = gap_color {
-        if let Some(gap_paint) = color_id_to_paint(gc, palette, cmyk_xform) {
+        if let Some(gap_paint) = color_id_to_paint(gc, palette, color_ctx) {
             let gap_paint = crate::pipeline::apply_fill_tint(gap_paint, gap_tint);
             let (gap_path_id, _) = page
                 .list
