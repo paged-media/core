@@ -3543,6 +3543,16 @@ fn js_value_to_wire(
             | P::FrameCornerOptionTopRight
             | P::FrameCornerOptionBottomLeft
             | P::FrameCornerOptionBottomRight
+            // C-35 (v62) — the layer an item sits on, carried as the
+            // layer's IDML Self. Protocol 62 added this path to the
+            // catalog (so `paged.set` PARSES it) and to the mutate
+            // layer (so the wire APPLIES it), and stopped there: the
+            // conversion below never learned it was string-valued, so
+            // `paged.set(id, "itemLayer", "u0")` parsed, failed to
+            // build a Value, and returned false with nothing written.
+            // Found by a spec demanding evidence for the registry's
+            // `editor.script: shipped` claim, which was not true.
+            | P::ItemLayer
             // W0.4 — transparency-effect enum / blend-mode strings.
             | P::FrameInnerShadowBlendMode
             | P::FrameOuterGlowBlendMode
