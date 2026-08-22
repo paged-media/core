@@ -117,7 +117,7 @@ use paged_canvas::channel::{ByteBuf, Mutation};
 use paged_canvas::element_selection::ElementId;
 use paged_canvas::selection::TextCellAddr;
 use paged_canvas::{CanvasModel, CanvasOptions, ColorProfileEntry, PageId};
-use paged_mutate::operation::PathAnchorSpec;
+use paged_mutate::operation::{GradientFeatherSpec, GradientFeatherStopSpec, PathAnchorSpec};
 use paged_mutate::{
     ColorGroupSpec, FaceSelectMode, FieldKind, GradientSpec, GradientStopSpec,
     GuideOrientationSpec, NumberingListSpec, PathPointRole, PathfinderKind, PropertyPath,
@@ -924,6 +924,58 @@ fn every_mutation_renders_what_it_claims_to() {
     );
 }
 
+/// The property-path axis, measured the same way and asserted the same
+/// way, but kept as its own test so a failure names WHICH axis moved.
+/// Shares `KNOWN` with the variant sweep — a ratcheted finding is a
+/// ratcheted finding whichever list found it.
+#[test]
+fn every_property_path_renders_what_it_claims_to() {
+    let cases = property_cases();
+    let mut rows = Vec::new();
+    let mut new_findings = Vec::new();
+    let mut fixed = Vec::new();
+
+    for case in &cases {
+        let obs = run_case(case);
+        let ok = satisfied(case.expect, &obs);
+        let v = verdict(case, &obs);
+        let tag = match (ok, known(case.op)) {
+            (true, None) => "ok",
+            (true, Some(_)) => {
+                fixed.push(case.op);
+                "FIXED"
+            }
+            (false, Some(_)) => "known",
+            (false, None) => {
+                new_findings.push(format!("{} ({}) — {}", case.op, case.fixture, v));
+                "FINDING"
+            }
+        };
+        rows.push(format!(
+            "{:<46} {:<10} {:<8} {}",
+            case.op, case.fixture, tag, v
+        ));
+    }
+
+    let table = rows.join("\n");
+    println!(
+        "\n── render-effect sweep · property-path axis · {} paths ──\n{table}\n",
+        cases.len()
+    );
+    assert!(
+        fixed.is_empty(),
+        "\nthese paths now render what they claim — delete their KNOWN entries \
+         so the ratchet cannot slip back: {fixed:?}\n\n{table}\n"
+    );
+    assert!(
+        new_findings.is_empty(),
+        "\n{} property path(s) apply cleanly and render nothing, with no \
+         diagnosis on file:\n  {}\n\n{table}\n",
+        new_findings.len(),
+        new_findings.join("\n  ")
+    );
+}
+
 /// Every diagnosis must name a real mutation, and must actually say
 /// something. A `KNOWN` entry whose op was renamed away would otherwise
 /// sit there forever describing a defect nobody can find.
@@ -1108,6 +1160,107 @@ fn cases() -> Vec<Case> {
     table_cases(&mut c);
     document_cases(&mut c);
     c
+}
+
+// ── frame effects (the SetProperty axis) ────────────────────────────
+//
+// Every case above measures a `Mutation` VARIANT. This group measures
+// `SetElementProperty` PATHS, which is a different axis and a much
+// larger one: there are 249 `PropertyPath`s behind that single variant,
+// and until this group the sweep covered none of them. A path can fail
+// to paint in exactly the ways a variant can — accepted by the wire,
+// stored in the model, never read by the composer — and nothing was
+// looking.
+//
+// Frame effects are the right first slice. They are pure render state
+// (an effect that paints nothing IS the bug, with no "the renderer is
+// right not to care" reading available), each is one enable flag plus a
+// numeric field, and `effects.idml` carries a rectangle to hang them on.
+//
+// The enable flag alone is deliberately what is measured. An effect
+// whose enable does not move the digest is not painting, whatever its
+// fields say — and a field-only case would hide that behind whatever
+// the default geometry happens to be.
+
+/// The SECOND axis. `cases()` above is one case per `Mutation`
+/// VARIANT, and `the_sweep_covers_the_whole_mutation_vocabulary` holds
+/// it to exactly that — every `op` must name a real discriminant, and
+/// every discriminant must appear. Property paths cannot ride in that
+/// list: they are all the SAME variant (`SetElementProperty`), so
+/// adding them there would make the vocabulary test call them
+/// mutations that do not exist.
+///
+/// They belong in the sweep regardless. There are 249 `PropertyPath`s
+/// behind that one variant and, until this list, the sweep measured
+/// none of them — a path can fail to paint in exactly the ways a
+/// variant can (accepted by the wire, stored in the model, never read
+/// by the composer) and nothing was looking.
+///
+/// Frame effects are the first slice because they are pure render
+/// state: an effect that paints nothing IS the bug, with no "the
+/// renderer is right not to care" reading available. The ENABLE flag
+/// is what each case measures — an effect whose enable does not move
+/// the digest is not painting, whatever its fields say, and a
+/// field-only case would hide that behind the default geometry.
+fn property_cases() -> Vec<Case> {
+    let mut c = Vec::new();
+    c.push(paints("SetProperty frameFeatherEnabled", "effects", |m| {
+        enable_effect(m, PropertyPath::FrameFeatherEnabled)
+    }));
+    c.push(paints(
+        "SetProperty frameDirectionalFeatherEnabled",
+        "effects",
+        |m| enable_effect(m, PropertyPath::FrameDirectionalFeatherEnabled),
+    ));
+    // Not an enable flag: this path takes the whole struct, so the
+    // case has to hand it a real gradient. A `Value::Bool` here is
+    // REJECTED by the wire, which the sweep would report as a finding
+    // — correctly, since a rejected op never had the chance to paint,
+    // but the defect would be the case's, not the engine's.
+    c.push(paints("SetProperty frameGradientFeather", "effects", |m| {
+        let id = rect_ids(m)
+            .first()
+            .expect("effects fixture carries a rectangle")
+            .clone();
+        Mutation::SetElementProperty {
+            element_id: ElementId::Rectangle(id),
+            path: PropertyPath::FrameGradientFeather,
+            value: Value::GradientFeather(Some(GradientFeatherSpec {
+                gradient_type: Some("Linear".into()),
+                start_point: Some([0.0, 0.0]),
+                end_point: Some([100.0, 0.0]),
+                angle_deg: Some(0.0),
+                stops: vec![
+                    GradientFeatherStopSpec {
+                        stop_color: None,
+                        location_pct: 0.0,
+                        alpha_pct: 100.0,
+                        midpoint_pct: 50.0,
+                    },
+                    GradientFeatherStopSpec {
+                        stop_color: None,
+                        location_pct: 100.0,
+                        alpha_pct: 0.0,
+                        midpoint_pct: 50.0,
+                    },
+                ],
+            })),
+        }
+    }));
+    c
+}
+
+/// Turn one frame effect on, on the fixture's first rectangle.
+fn enable_effect(m: &mut CanvasModel, path: PropertyPath) -> Mutation {
+    let id = rect_ids(m)
+        .first()
+        .expect("effects fixture carries a rectangle")
+        .clone();
+    Mutation::SetElementProperty {
+        element_id: ElementId::Rectangle(id),
+        path,
+        value: Value::Bool(true),
+    }
 }
 
 // ── text ────────────────────────────────────────────────────────────
