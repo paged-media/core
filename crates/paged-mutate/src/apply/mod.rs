@@ -754,6 +754,10 @@ mod path_topology;
 mod place_image;
 mod planar_ops;
 
+/// `NodeSpec::Table::to_parse_table` mints its cells through the same
+/// helper the row / column inserts use, so a table's first cells and
+/// every cell added to it later wear the same InDesign defaults.
+pub(crate) use path_topology::new_table_cell;
 pub use planar_ops::element_path;
 mod remove_node;
 mod reorder;

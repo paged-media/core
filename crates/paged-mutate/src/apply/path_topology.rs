@@ -2141,11 +2141,231 @@ pub(super) fn set_cell_name(cell: &mut paged_model::TableCell, col: u32, row: u3
     cell.name = Some(format!("{col}:{row}"));
 }
 
+/// InDesign's out-of-the-box cell edge — the look a table has the
+/// moment you make one, before anybody styles it.
+///
+/// IDML omits a cell's edge attributes in the ordinary case, so "no
+/// attribute" is an *inherited* edge rather than an absent one, and
+/// what it inherits is a 1 pt black stroke. Measured, not assumed:
+/// `paged-gen`'s `tables` sample writes `<Cell>` elements carrying no
+/// edge attributes at all, and the InDesign-exported reference for that
+/// very file (`corpus/generated/tables.pdf`) comes back with a full
+/// black grid — 8 px at 576 dpi = 1.000 pt, gray 0, on every cell
+/// boundary.
+///
+/// `paged-renderer` does not apply that floor at render time — an
+/// undeclared edge draws nothing there — so a table minted with bare
+/// defaults was a fully-formed grid that painted not one pixel. Moving
+/// the RENDERER instead was tried and reverted: it is the right fix and
+/// it trips the `tables` fidelity gate, because that fixture's
+/// reference PDF predates the sample's `nested` variant (every page
+/// from 2 on compares two different tables) and because InDesign
+/// re-flows the row heights on import, so our new gridlines land at
+/// their own y. Until that reference is re-exported, the mint side says
+/// out loud what InDesign would have inherited: every cell this module
+/// creates carries its edges explicitly.
+const NEW_CELL_EDGE_COLOR: &str = "Color/Black";
+const NEW_CELL_EDGE_WEIGHT_PT: f32 = 1.0;
+
+/// Track sizes for a minted row / column when nothing in the table
+/// declares one. IDML always writes `SingleRowHeight` and
+/// `SingleColumnWidth` — 536/536 rows and 276/276 columns across the
+/// Envato IDML corpus carry them — so this is a floor for tables our
+/// own wire built, not a shape InDesign emits. The numbers match
+/// `paged-gen`'s own fallbacks for an unsized line.
+const FALLBACK_ROW_HEIGHT_PT: f32 = 20.0;
+const FALLBACK_COLUMN_WIDTH_PT: f32 = 60.0;
+
+/// True when a cell expresses no opinion at all about its four edges —
+/// no colour and no weight on any side.
+fn cell_edges_undeclared(cell: &paged_model::TableCell) -> bool {
+    cell.top_edge_stroke_color.is_none()
+        && cell.bottom_edge_stroke_color.is_none()
+        && cell.left_edge_stroke_color.is_none()
+        && cell.right_edge_stroke_color.is_none()
+        && cell.top_edge_stroke_weight.is_none()
+        && cell.bottom_edge_stroke_weight.is_none()
+        && cell.left_edge_stroke_weight.is_none()
+        && cell.right_edge_stroke_weight.is_none()
+}
+
+/// Stamp [`NEW_CELL_EDGE_COLOR`] / [`NEW_CELL_EDGE_WEIGHT_PT`] on all
+/// four edges of a freshly minted cell.
+fn declare_default_cell_edges(cell: &mut paged_model::TableCell) {
+    for (color, weight) in [
+        (
+            &mut cell.top_edge_stroke_color,
+            &mut cell.top_edge_stroke_weight,
+        ),
+        (
+            &mut cell.bottom_edge_stroke_color,
+            &mut cell.bottom_edge_stroke_weight,
+        ),
+        (
+            &mut cell.left_edge_stroke_color,
+            &mut cell.left_edge_stroke_weight,
+        ),
+        (
+            &mut cell.right_edge_stroke_color,
+            &mut cell.right_edge_stroke_weight,
+        ),
+    ] {
+        *color = Some(NEW_CELL_EDGE_COLOR.to_string());
+        *weight = Some(NEW_CELL_EDGE_WEIGHT_PT);
+    }
+}
+
+/// S-03 — an empty cell for a table being created from nothing, wearing
+/// InDesign's new-table edges so the table is visible the moment it
+/// lands.
+pub(crate) fn new_table_cell(col: u32, row: u32) -> paged_model::TableCell {
+    let mut cell = paged_model::TableCell {
+        name: Some(format!("{col}:{row}")),
+        row_span: 1,
+        column_span: 1,
+        ..Default::default()
+    };
+    declare_default_cell_edges(&mut cell);
+    cell
+}
+
+/// The line a newly inserted row / column takes its formatting from:
+/// the one it is inserted *before*, or — when it is appended past the
+/// end — the one it is inserted *after*. That is InDesign's rule for
+/// both directions ("new rows take on the formatting of the row the
+/// insertion point was in"), and it is why an inserted row looks like
+/// its neighbours rather than like a blank.
+fn reference_line_index(line_count: usize, at: u32) -> Option<usize> {
+    (line_count > 0).then(|| (at as usize).min(line_count - 1))
+}
+
+/// Mint the cell for a newly inserted row / column at `(col, row)`.
+///
+/// The reference sibling's cell is cloned and stripped of the three
+/// things that belong to the CELL rather than to its formatting —
+/// identity, span and content — so insets, fill, per-edge strokes, cell
+/// style, justification and rotation all come along.
+///
+/// When the reference declares no edge strokes at all (or there is no
+/// reference), the new cell gets [`declare_default_cell_edges`]. That
+/// is what stops a minted row being an empty strokeless band: a footer
+/// row is appended *below* the last row, so it displaces nothing, and
+/// without edges of its own there would be nothing on the page to show
+/// the user the row they just inserted.
+fn mint_table_cell(
+    reference: Option<&paged_model::TableCell>,
+    col: u32,
+    row: u32,
+) -> paged_model::TableCell {
+    let Some(reference) = reference else {
+        return new_table_cell(col, row);
+    };
+    let mut cell = reference.clone();
+    cell.self_id = None;
+    cell.name = Some(format!("{col}:{row}"));
+    cell.row_span = 1;
+    cell.column_span = 1;
+    cell.paragraphs.clear();
+    if cell_edges_undeclared(&cell) {
+        declare_default_cell_edges(&mut cell);
+    }
+    cell
+}
+
+/// Mint the `<Row>` for an insert at `at`, inheriting the reference
+/// sibling's height constraints.
+///
+/// The renderer sizes a row as `max(SingleRowHeight, MinimumHeight,
+/// content)` and a minted row has no content, so a row that inherits
+/// nothing is 0 pt tall — present in the model, absent from the page.
+/// Falls back to any other declared height in the table, then to
+/// [`FALLBACK_ROW_HEIGHT_PT`]; the result is never `None`.
+fn mint_table_row(table: &paged_model::Table, at: u32) -> paged_model::TableRow {
+    let reference = reference_line_index(table.rows.len(), at).and_then(|i| table.rows.get(i));
+    let height = reference
+        .and_then(|r| r.single_row_height.or(r.minimum_height))
+        .or_else(|| {
+            table
+                .rows
+                .iter()
+                .find_map(|r| r.single_row_height.or(r.minimum_height))
+        })
+        .unwrap_or(FALLBACK_ROW_HEIGHT_PT);
+    paged_model::TableRow {
+        name: Some(at.to_string()),
+        single_row_height: Some(height),
+        minimum_height: reference.and_then(|r| r.minimum_height),
+        maximum_height: reference.and_then(|r| r.maximum_height),
+        ..Default::default()
+    }
+}
+
+/// Mint the `<Column>` for an insert at `at`. The column analogue of
+/// [`mint_table_row`] — `tables.rs` builds its x ladder from
+/// `single_column_width.unwrap_or(0.0)`, so an unsized column occupies
+/// no space at all.
+fn mint_table_column(table: &paged_model::Table, at: u32) -> paged_model::TableColumn {
+    let reference =
+        reference_line_index(table.columns.len(), at).and_then(|i| table.columns.get(i));
+    let width = reference
+        .and_then(|c| c.single_column_width)
+        .or_else(|| table.columns.iter().find_map(|c| c.single_column_width))
+        .unwrap_or(FALLBACK_COLUMN_WIDTH_PT);
+    paged_model::TableColumn {
+        name: Some(at.to_string()),
+        single_column_width: Some(width),
+        ..Default::default()
+    }
+}
+
+/// Snapshot the reference row's cells, column by column, BEFORE an
+/// insert renames anything. Index `c` holds the cell the new row's
+/// column `c` inherits from, when there is one.
+fn reference_row_cells(
+    table: &paged_model::Table,
+    at: u32,
+    col_count: u32,
+) -> Vec<Option<paged_model::TableCell>> {
+    let Some(row) = reference_line_index(table.rows.len(), at) else {
+        return vec![None; col_count as usize];
+    };
+    (0..col_count)
+        .map(|c| {
+            table
+                .cells
+                .iter()
+                .find(|cell| cell.coords() == Some((c, row as u32)))
+                .cloned()
+        })
+        .collect()
+}
+
+/// The column analogue of [`reference_row_cells`], row by row.
+fn reference_column_cells(
+    table: &paged_model::Table,
+    at: u32,
+    row_count: u32,
+) -> Vec<Option<paged_model::TableCell>> {
+    let Some(col) = reference_line_index(table.columns.len(), at) else {
+        return vec![None; row_count as usize];
+    };
+    (0..row_count)
+        .map(|r| {
+            table
+                .cells
+                .iter()
+                .find(|cell| cell.coords() == Some((col as u32, r)))
+                .cloned()
+        })
+        .collect()
+}
+
 /// W3.A1 — insert a row at `at`. Cells in rows ≥ `at` shift down (+1);
-/// a fresh empty cell per column is minted at the new row;
+/// a cell per column is minted at the new row, inheriting the reference
+/// sibling's formatting via [`mint_table_row`] / [`mint_table_cell`];
 /// `body_row_count` / the `rows` vec grow. When `restore` is `Some`
 /// (the `DeleteTableRow` inverse), the captured row + cells are
-/// re-inserted verbatim instead of minting empties.
+/// re-inserted verbatim instead of minting new ones.
 pub(super) fn apply_insert_table_row(
     doc: &mut Document,
     story_id: &str,
@@ -2168,6 +2388,11 @@ pub(super) fn apply_insert_table_row(
         });
     }
     let col_count = table.columns.len().max(table.column_count as usize);
+    // InDesign's rule: a new row takes the formatting of the row the
+    // insertion point was in. Snapshot that row's geometry + cells
+    // BEFORE the shift below renames them out from under us.
+    let inherited_row = mint_table_row(table, at);
+    let inherited_cells = reference_row_cells(table, at, col_count as u32);
 
     // Shift existing cells in rows ≥ `at` down by one (rewrite names).
     for cell in &mut table.cells {
@@ -2198,19 +2423,10 @@ pub(super) fn apply_insert_table_row(
             (row, cells)
         }
         None => {
-            let row = paged_model::TableRow {
-                name: Some(at.to_string()),
-                ..Default::default()
-            };
             let cells: Vec<paged_model::TableCell> = (0..col_count as u32)
-                .map(|c| paged_model::TableCell {
-                    name: Some(format!("{c}:{at}")),
-                    row_span: 1,
-                    column_span: 1,
-                    ..Default::default()
-                })
+                .map(|c| mint_table_cell(inherited_cells[c as usize].as_ref(), c, at))
                 .collect();
-            (row, cells)
+            (inherited_row, cells)
         }
     };
 
@@ -2313,8 +2529,9 @@ pub(super) fn apply_delete_table_row(
 }
 
 /// W3.A1 — insert a column at `at`. Cells in columns ≥ `at` shift
-/// right; a fresh empty cell per row is minted. `restore` re-inserts
-/// captured column content (the `DeleteTableColumn` inverse).
+/// right; a cell per row is minted, inheriting the reference column's
+/// width and its cells' formatting. `restore` re-inserts captured
+/// column content (the `DeleteTableColumn` inverse).
 pub(super) fn apply_insert_table_column(
     doc: &mut Document,
     story_id: &str,
@@ -2340,6 +2557,11 @@ pub(super) fn apply_insert_table_column(
         .rows
         .len()
         .max((table.header_row_count + table.body_row_count + table.footer_row_count) as usize);
+    // Same rule as the row insert: the new column takes the reference
+    // column's width and its cells' formatting. Snapshot before the
+    // shift renames them.
+    let inherited_column = mint_table_column(table, at);
+    let inherited_cells = reference_column_cells(table, at, row_count as u32);
 
     // Shift cells in columns ≥ `at` right by one.
     for cell in &mut table.cells {
@@ -2369,19 +2591,10 @@ pub(super) fn apply_insert_table_column(
                 (col, cells)
             }
             None => {
-                let col = paged_model::TableColumn {
-                    name: Some(at.to_string()),
-                    ..Default::default()
-                };
                 let cells: Vec<paged_model::TableCell> = (0..row_count as u32)
-                    .map(|r| paged_model::TableCell {
-                        name: Some(format!("{at}:{r}")),
-                        row_span: 1,
-                        column_span: 1,
-                        ..Default::default()
-                    })
+                    .map(|r| mint_table_cell(inherited_cells[r as usize].as_ref(), at, r))
                     .collect();
-                (col, cells)
+                (inherited_column, cells)
             }
         };
 
@@ -2494,7 +2707,8 @@ pub(super) enum TableBand {
 /// band, bumping the band's count. Header inserts land at row index 0
 /// (everything shifts down); footer inserts land after the last row.
 /// `restore` (the `Remove*` inverse) re-inserts the captured row + cells
-/// verbatim; otherwise a fresh empty cell per column is minted. Inverse:
+/// verbatim; otherwise a cell per column is minted from the band's
+/// neighbouring row, same rule as the body-row insert. Inverse:
 /// `Remove{Header,Footer}Row`.
 pub(super) fn apply_insert_band_row(
     doc: &mut Document,
@@ -2516,6 +2730,11 @@ pub(super) fn apply_insert_band_row(
         TableBand::Footer => total_rows,
     };
     let col_count = table.columns.len().max(table.column_count as usize);
+    // A header row is inserted above row 0 and a footer row below the
+    // last one, so `reference_line_index` picks the neighbour on the
+    // table's side of the band either way.
+    let inherited_row = mint_table_row(table, at);
+    let inherited_cells = reference_row_cells(table, at, col_count as u32);
 
     // Shift existing cells in rows ≥ `at` down by one (header insert
     // pushes the whole table down; a footer append shifts nothing).
@@ -2545,19 +2764,10 @@ pub(super) fn apply_insert_band_row(
             (row, cells)
         }
         None => {
-            let row = paged_model::TableRow {
-                name: Some(at.to_string()),
-                ..Default::default()
-            };
             let cells: Vec<paged_model::TableCell> = (0..col_count as u32)
-                .map(|c| paged_model::TableCell {
-                    name: Some(format!("{c}:{at}")),
-                    row_span: 1,
-                    column_span: 1,
-                    ..Default::default()
-                })
+                .map(|c| mint_table_cell(inherited_cells[c as usize].as_ref(), c, at))
                 .collect();
-            (row, cells)
+            (inherited_row, cells)
         }
     };
 

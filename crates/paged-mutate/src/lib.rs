@@ -7306,8 +7306,11 @@ mod tests {
             assert_eq!(t.rows.len(), 3);
             // The old row-1 cells (Color/C, Color/D) shifted to row 2.
             assert_eq!(cell_named(t, 0, 2).fill_color.as_deref(), Some("Color/C"));
-            // Fresh empty cells minted at row 1.
-            assert_eq!(cell_named(t, 0, 1).fill_color, None);
+            // The cells minted at row 1 take the reference row's
+            // FORMATTING (InDesign: "new rows take on the formatting of
+            // the row the insertion point was in") and none of its text.
+            assert_eq!(cell_named(t, 0, 1).fill_color.as_deref(), Some("Color/C"));
+            assert!(cell_named(t, 0, 1).paragraphs.is_empty());
             // Undo removes the inserted row and restores cell layout.
             p.undo().expect("undo");
             assert_eq!(table_of(p.document()).rows.len(), 2);
@@ -7353,7 +7356,10 @@ mod tests {
             assert_eq!(t.columns.len(), 3);
             // Old col-1 cells (Color/B at row 0) shifted to col 2.
             assert_eq!(cell_named(t, 2, 0).fill_color.as_deref(), Some("Color/B"));
-            assert_eq!(cell_named(t, 1, 0).fill_color, None);
+            // The minted column inherits the reference column's cell
+            // formatting, same rule as the row insert.
+            assert_eq!(cell_named(t, 1, 0).fill_color.as_deref(), Some("Color/B"));
+            assert!(cell_named(t, 1, 0).paragraphs.is_empty());
             p.undo().expect("undo insert col");
             assert_eq!(table_of(p.document()).columns.len(), 2);
 
@@ -7370,6 +7376,188 @@ mod tests {
             assert_eq!(t.columns.len(), 2);
             assert_eq!(cell_named(t, 0, 0).fill_color.as_deref(), Some("Color/A"));
             assert_eq!(cell_named(t, 0, 1).fill_color.as_deref(), Some("Color/C"));
+        }
+
+        /// A minted row that inherits nothing is 0 pt tall: the renderer
+        /// sizes a row as `max(SingleRowHeight, MinimumHeight, content)`
+        /// and a fresh row has no content. So the insert must arrive
+        /// with real geometry, taken from the line it was inserted next
+        /// to — InDesign's rule for both Insert Above and Insert Below.
+        #[test]
+        fn inserted_row_inherits_the_reference_rows_height() {
+            let insert_at = |at: u32| {
+                let mut p = Project::new(document_with_table());
+                p.apply(Operation::InsertTableRow {
+                    story_id: "Story/t1".into(),
+                    table_id: "Table/tbl1".into(),
+                    at,
+                    restore: None,
+                })
+                .expect("insert row");
+                table_of(p.document()).rows[at as usize].single_row_height
+            };
+            // Rows are 20pt then 30pt. Inserting at 0 or 1 takes the
+            // height of the row it pushes down; appending at 2 (past the
+            // end) takes the height of the row it lands under.
+            assert_eq!(insert_at(0), Some(20.0));
+            assert_eq!(insert_at(1), Some(30.0));
+            assert_eq!(insert_at(2), Some(30.0));
+        }
+
+        /// The column analogue: `tables.rs` builds its x ladder from
+        /// `single_column_width.unwrap_or(0.0)`, so an unsized column
+        /// occupies no space at all.
+        #[test]
+        fn inserted_column_inherits_the_reference_columns_width() {
+            let insert_at = |at: u32| {
+                let mut p = Project::new(document_with_table());
+                p.apply(Operation::InsertTableColumn {
+                    story_id: "Story/t1".into(),
+                    table_id: "Table/tbl1".into(),
+                    at,
+                    restore: None,
+                })
+                .expect("insert column");
+                table_of(p.document()).columns[at as usize].single_column_width
+            };
+            // Columns are 50pt then 60pt.
+            assert_eq!(insert_at(0), Some(50.0));
+            assert_eq!(insert_at(1), Some(60.0));
+            assert_eq!(insert_at(2), Some(60.0));
+        }
+
+        /// Header rows land above row 0 and footer rows below the last
+        /// one, so each takes the geometry of the row on the table's
+        /// side of the band.
+        #[test]
+        fn band_rows_inherit_their_neighbour_row() {
+            let mut p = Project::new(document_with_table());
+            p.apply(Operation::InsertHeaderRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                restore: None,
+            })
+            .expect("insert header row");
+            p.apply(Operation::InsertFooterRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                restore: None,
+            })
+            .expect("insert footer row");
+            let t = table_of(p.document());
+            assert_eq!(t.rows.len(), 4);
+            // Header took row 0's 20pt; footer took the last row's 30pt.
+            assert_eq!(t.rows[0].single_row_height, Some(20.0));
+            assert_eq!(t.rows[3].single_row_height, Some(30.0));
+        }
+
+        /// A row with height but no marks of its own is still invisible
+        /// when it displaces nothing — which is exactly a footer row,
+        /// appended below the last one. The minted cells therefore
+        /// declare InDesign's default edges when the reference row has
+        /// no opinion about its own, so the user sees the row.
+        #[test]
+        fn minted_cells_declare_visible_edges_when_the_reference_has_none() {
+            let mut p = Project::new(document_with_table());
+            p.apply(Operation::InsertFooterRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                restore: None,
+            })
+            .expect("insert footer row");
+            let t = table_of(p.document());
+            let cell = cell_named(t, 0, 2);
+            for (color, weight) in [
+                (&cell.top_edge_stroke_color, cell.top_edge_stroke_weight),
+                (
+                    &cell.bottom_edge_stroke_color,
+                    cell.bottom_edge_stroke_weight,
+                ),
+                (&cell.left_edge_stroke_color, cell.left_edge_stroke_weight),
+                (&cell.right_edge_stroke_color, cell.right_edge_stroke_weight),
+            ] {
+                assert_eq!(color.as_deref(), Some("Color/Black"));
+                assert_eq!(weight, Some(1.0));
+            }
+        }
+
+        /// …and when the reference row DOES have an opinion, the minted
+        /// cell copies it rather than overwriting it with the default.
+        #[test]
+        fn minted_cells_copy_the_reference_rows_declared_edges() {
+            let mut doc = document_with_table();
+            {
+                let t = doc.stories[0].story.paragraphs[0].table.as_mut().unwrap();
+                for cell in t.cells.iter_mut().filter(|c| c.coords().unwrap().1 == 1) {
+                    cell.top_edge_stroke_color = Some("Color/Rule".into());
+                    cell.top_edge_stroke_weight = Some(0.25);
+                }
+            }
+            let mut p = Project::new(doc);
+            p.apply(Operation::InsertTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+                restore: None,
+            })
+            .expect("insert row");
+            let t = table_of(p.document());
+            let cell = cell_named(t, 0, 1);
+            assert_eq!(cell.top_edge_stroke_color.as_deref(), Some("Color/Rule"));
+            assert_eq!(cell.top_edge_stroke_weight, Some(0.25));
+            // The edges the reference left undeclared stay undeclared —
+            // the default only fills in for a cell with no opinion at all.
+            assert_eq!(cell.bottom_edge_stroke_color, None);
+        }
+
+        /// Now that a minted cell DECLARES its edges, the inverse of a
+        /// delete has to hand them back — otherwise insert → delete →
+        /// undo returns a row whose gridlines have silently gone.
+        #[test]
+        fn deleting_a_minted_row_and_undoing_restores_its_edges() {
+            let mut p = Project::new(document_with_table());
+            p.apply(Operation::InsertTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+                restore: None,
+            })
+            .expect("insert row");
+            p.apply(Operation::DeleteTableRow {
+                story_id: "Story/t1".into(),
+                table_id: "Table/tbl1".into(),
+                at: 1,
+            })
+            .expect("delete the row again");
+            p.undo().expect("undo the delete");
+            let t = table_of(p.document());
+            let cell = cell_named(t, 0, 1);
+            assert_eq!(cell.top_edge_stroke_color.as_deref(), Some("Color/Black"));
+            assert_eq!(cell.top_edge_stroke_weight, Some(1.0));
+        }
+
+        /// `InsertTable` builds its cells from nothing, so there is no
+        /// sibling to inherit from: they carry the same InDesign default
+        /// edges, which is the difference between a new table appearing
+        /// and a new table being a fully-formed invisible grid.
+        #[test]
+        fn a_new_table_mints_cells_with_default_edges() {
+            let spec = NodeSpec::Table {
+                self_id: "Table/new".into(),
+                rows: 2,
+                cols: 2,
+                header_rows: 0,
+                footer_rows: 0,
+                column_widths: vec![80.0, 80.0],
+                row_heights: vec![20.0, 20.0],
+            };
+            let table = spec.to_parse_table();
+            assert_eq!(table.cells.len(), 4);
+            for cell in &table.cells {
+                assert_eq!(cell.top_edge_stroke_color.as_deref(), Some("Color/Black"));
+                assert_eq!(cell.top_edge_stroke_weight, Some(1.0));
+                assert_eq!(cell.right_edge_stroke_weight, Some(1.0));
+            }
         }
 
         #[test]

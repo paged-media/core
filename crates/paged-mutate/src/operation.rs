@@ -1720,13 +1720,13 @@ pub type TableLineRestoreJson = String;
 /// W3.A1 — `Deserialize`-able mirror of the round-trippable fields of a
 /// `paged_model::TableCell`, used inside the `DeleteTable{Row,Column}`
 /// restore blob. Captures the cell's structure + style (spans, insets,
-/// fill, applied style, vertical justification). **Does NOT carry the
-/// cell's `paragraphs`** — cell text content is out-of-band of the
-/// story-offset space and not addressable in W3.A1 (see the task's
-/// cell-text finding); restoring cell *text* on a delete-undo is a v2
-/// item. The renderer re-emits an empty cell from the restored
-/// structure, matching `NodeSpec`'s "minimal supported field set"
-/// precedent (drop_shadow / effects residue on re-insert).
+/// fill, per-edge strokes, applied style, vertical justification).
+/// **Does NOT carry the cell's `paragraphs`** — cell text content is
+/// out-of-band of the story-offset space and not addressable in W3.A1
+/// (see the task's cell-text finding); restoring cell *text* on a
+/// delete-undo is a v2 item. The renderer re-emits an empty cell from
+/// the restored structure, matching `NodeSpec`'s "minimal supported
+/// field set" precedent (drop_shadow / effects residue on re-insert).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TableCellSpec {
     pub name: Option<String>,
@@ -1739,6 +1739,36 @@ pub struct TableCellSpec {
     pub applied_cell_style: Option<String>,
     pub fill_color: Option<String>,
     pub vertical_justification: Option<String>,
+    /// Per-edge strokes. Added when the row / column inserts started
+    /// minting cells that DECLARE their edges (see
+    /// `path_topology::new_table_cell`): without these the inverse of a
+    /// delete handed back a cell whose gridlines had silently gone.
+    /// `#[serde(default)]` so a blob written before they existed still
+    /// decodes.
+    #[serde(default)]
+    pub top_edge_stroke_color: Option<String>,
+    #[serde(default)]
+    pub top_edge_stroke_weight: Option<f32>,
+    #[serde(default)]
+    pub top_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub bottom_edge_stroke_color: Option<String>,
+    #[serde(default)]
+    pub bottom_edge_stroke_weight: Option<f32>,
+    #[serde(default)]
+    pub bottom_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub left_edge_stroke_color: Option<String>,
+    #[serde(default)]
+    pub left_edge_stroke_weight: Option<f32>,
+    #[serde(default)]
+    pub left_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub right_edge_stroke_color: Option<String>,
+    #[serde(default)]
+    pub right_edge_stroke_weight: Option<f32>,
+    #[serde(default)]
+    pub right_edge_stroke_tint: Option<f32>,
 }
 
 impl TableCellSpec {
@@ -1754,6 +1784,18 @@ impl TableCellSpec {
             applied_cell_style: c.applied_cell_style.clone(),
             fill_color: c.fill_color.clone(),
             vertical_justification: c.vertical_justification.clone(),
+            top_edge_stroke_color: c.top_edge_stroke_color.clone(),
+            top_edge_stroke_weight: c.top_edge_stroke_weight,
+            top_edge_stroke_tint: c.top_edge_stroke_tint,
+            bottom_edge_stroke_color: c.bottom_edge_stroke_color.clone(),
+            bottom_edge_stroke_weight: c.bottom_edge_stroke_weight,
+            bottom_edge_stroke_tint: c.bottom_edge_stroke_tint,
+            left_edge_stroke_color: c.left_edge_stroke_color.clone(),
+            left_edge_stroke_weight: c.left_edge_stroke_weight,
+            left_edge_stroke_tint: c.left_edge_stroke_tint,
+            right_edge_stroke_color: c.right_edge_stroke_color.clone(),
+            right_edge_stroke_weight: c.right_edge_stroke_weight,
+            right_edge_stroke_tint: c.right_edge_stroke_tint,
         }
     }
     pub fn to_parse(&self) -> paged_model::TableCell {
@@ -1768,6 +1810,18 @@ impl TableCellSpec {
             applied_cell_style: self.applied_cell_style.clone(),
             fill_color: self.fill_color.clone(),
             vertical_justification: self.vertical_justification.clone(),
+            top_edge_stroke_color: self.top_edge_stroke_color.clone(),
+            top_edge_stroke_weight: self.top_edge_stroke_weight,
+            top_edge_stroke_tint: self.top_edge_stroke_tint,
+            bottom_edge_stroke_color: self.bottom_edge_stroke_color.clone(),
+            bottom_edge_stroke_weight: self.bottom_edge_stroke_weight,
+            bottom_edge_stroke_tint: self.bottom_edge_stroke_tint,
+            left_edge_stroke_color: self.left_edge_stroke_color.clone(),
+            left_edge_stroke_weight: self.left_edge_stroke_weight,
+            left_edge_stroke_tint: self.left_edge_stroke_tint,
+            right_edge_stroke_color: self.right_edge_stroke_color.clone(),
+            right_edge_stroke_weight: self.right_edge_stroke_weight,
+            right_edge_stroke_tint: self.right_edge_stroke_tint,
             ..Default::default()
         }
     }
@@ -2227,8 +2281,9 @@ pub enum NodeSpec {
     /// `item_transform`: a table is in-story content (it hangs off
     /// `Paragraph::table`), not a page item with its own affine. The
     /// apply layer builds a `paged_model::Table` of `rows × cols` empty
-    /// `TableCell`s (coordinate `Name="col:row"`), sets the header /
-    /// footer band counts, and applies the per-column / per-row sizing.
+    /// `TableCell`s (coordinate `Name="col:row"`, wearing InDesign's
+    /// new-table edges), sets the header / footer band counts, and
+    /// applies the per-column / per-row sizing.
     /// `column_widths` / `row_heights` are pt; a short / empty vec leaves
     /// the trailing lines unsized (`SingleColumnWidth` / `SingleRowHeight`
     /// `None`). `self_id` becomes the table's IDML `Self` (the table_id).
@@ -2298,10 +2353,11 @@ impl NodeSpec {
 
     /// S-03 — build a `paged_model::Table` of `rows × cols` empty cells
     /// from a `NodeSpec::Table`. Cells are keyed `Name="col:row"` (the
-    /// IDML convention, column-major document order). Header / footer
-    /// band counts and per-line sizing are honoured; the body row count
-    /// is the rows not covered by a band. Panics if called on a
-    /// non-table spec (apply only calls it inside the Table arm).
+    /// IDML convention, column-major document order) and carry
+    /// InDesign's new-table edges. Header / footer band counts and
+    /// per-line sizing are honoured; the body row count is the rows not
+    /// covered by a band. Panics if called on a non-table spec (apply
+    /// only calls it inside the Table arm).
     pub fn to_parse_table(&self) -> paged_model::Table {
         let NodeSpec::Table {
             self_id,
@@ -2337,15 +2393,15 @@ impl NodeSpec {
             })
             .collect();
         // Column-major document order: all cells in column 0, then 1, ….
+        // Each cell carries InDesign's new-table edges explicitly — see
+        // `new_table_cell`. Minted bare, a table was a fully-formed grid
+        // with real row heights and column widths that painted nothing:
+        // no content, no fills, and per-edge strokes the renderer reads
+        // as absent rather than as inherited.
         let mut cells: Vec<paged_model::TableCell> = Vec::with_capacity((rows * cols) as usize);
         for c in 0..cols {
             for r in 0..rows {
-                cells.push(paged_model::TableCell {
-                    name: Some(format!("{c}:{r}")),
-                    row_span: 1,
-                    column_span: 1,
-                    ..Default::default()
-                });
+                cells.push(crate::apply::new_table_cell(c, r));
             }
         }
         paged_model::Table {

@@ -778,3 +778,128 @@ fn build_with_fonts_doc(document: &Document) -> paged_renderer::BuiltDocument {
     };
     pipeline::build_document(document, &opts).unwrap()
 }
+
+// ── merged cells: a span owns the positions it covers ───────────────
+
+/// Build a 2-column x 2-row table whose FOUR cells each carry a
+/// distinct `FillColor`, with `cell00_attrs` spliced onto the first
+/// `<Cell>`.
+///
+/// Every `<Cell>` is written, including the ones a span covers. That is
+/// deliberate: IDML's own rule is that a covered grid position carries
+/// no `<Cell>` at all, but a table that arrives through the mutation
+/// wire keeps it — `setCellSpan` widens the spanning cell and leaves the
+/// covered one in place — and the renderer has to agree with InDesign
+/// about both shapes. One fill per cell makes "who painted" countable.
+fn build_covered_cell_table_idml(cell00_attrs: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let put = |zip: &mut ZipWriter<_>, name: &str, body: &[u8]| {
+        zip.start_file(name, deflated).unwrap();
+        zip.write_all(body).unwrap();
+    };
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    put(
+        &mut zip,
+        "designmap.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_u10.xml"/>
+</Document>"#,
+    );
+    put(
+        &mut zip,
+        "Resources/Graphic.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic>
+    <Color Self="Color/Cyan" Name="Cyan" Space="CMYK" ColorValue="100 0 0 0"/>
+    <Color Self="Color/Magenta" Name="Magenta" Space="CMYK" ColorValue="0 100 0 0"/>
+    <Color Self="Color/Yellow" Name="Yellow" Space="CMYK" ColorValue="0 0 100 0"/>
+    <Color Self="Color/Key" Name="Key" Space="CMYK" ColorValue="0 0 0 100"/>
+  </Graphic>
+</idPkg:Graphic>"#,
+    );
+    put(
+        &mut zip,
+        "Spreads/Spread_sp1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="0 0 400 400"
+               FillColor="Swatch/None" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#,
+    );
+    let cell = |name: &str, id: &str, fill: &str, extra: &str| {
+        format!(
+            r#"<Cell Self="{id}" Name="{name}" FillColor="{fill}" {extra}><ParagraphStyleRange><CharacterStyleRange><Content>x</Content></CharacterStyleRange></ParagraphStyleRange></Cell>"#
+        )
+    };
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange>
+      <CharacterStyleRange>
+        <Table Self="t1" BodyRowCount="2" ColumnCount="2">
+          <Row Self="r0" Name="0" SingleRowHeight="30"/>
+          <Row Self="r1" Name="1" SingleRowHeight="30"/>
+          <Column Self="c0" Name="0" SingleColumnWidth="100"/>
+          <Column Self="c1" Name="1" SingleColumnWidth="100"/>
+          {c00}
+          {c01}
+          {c10}
+          {c11}
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        c00 = cell("0:0", "cA", "Color/Cyan", cell00_attrs),
+        c01 = cell("0:1", "cB", "Color/Magenta", ""),
+        c10 = cell("1:0", "cC", "Color/Yellow", ""),
+        c11 = cell("1:1", "cD", "Color/Key", ""),
+    );
+    put(&mut zip, "Stories/Story_u10.xml", story.as_bytes());
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn unmerged_cells_each_paint_their_own_fill() {
+    // The control for the two tests below: four ordinary cells, four
+    // fills.
+    let cmds = build_commands(&build_covered_cell_table_idml(""));
+    assert_eq!(count_fills(&cmds), 4, "one fill per cell, got {cmds:#?}");
+}
+
+#[test]
+fn a_column_span_suppresses_the_cell_it_covers() {
+    // `0:0` spans both columns, so grid position `1:0` belongs to it —
+    // the yellow cell still present in the table must not paint its own
+    // fill at its own origin, or the merge renders as no merge at all.
+    let cmds = build_commands(&build_covered_cell_table_idml(r#"ColumnSpan="2""#));
+    assert_eq!(
+        count_fills(&cmds),
+        3,
+        "the covered cell must not paint, got {cmds:#?}"
+    );
+}
+
+#[test]
+fn a_row_span_suppresses_the_cell_below_it() {
+    // The same rule down the other axis: `RowSpan="2"` on `0:0` swallows
+    // `0:1`, so the magenta fill must not appear.
+    let cmds = build_commands(&build_covered_cell_table_idml(r#"RowSpan="2""#));
+    assert_eq!(
+        count_fills(&cmds),
+        3,
+        "the covered cell must not paint, got {cmds:#?}"
+    );
+}

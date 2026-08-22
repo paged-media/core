@@ -106,6 +106,8 @@ pub(super) fn emit_table_into_chain(
     }
     let total_w = col_x.last().copied().unwrap_or(0.0);
 
+    let covered = covered_grid_positions(table);
+
     let resolved_table = table
         .applied_table_style
         .as_deref()
@@ -146,6 +148,9 @@ pub(super) fn emit_table_into_chain(
         let Some((c, r)) = cell.coords() else {
             continue;
         };
+        if covered.contains(&(c, r)) {
+            continue;
+        }
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
             continue;
@@ -601,6 +606,12 @@ pub(super) fn emit_table_into_chain(
         let prow = physical_rows[prow_i];
         let r = prow.template_idx;
         for c in 0..col_widths.len() {
+            // A merged cell owns every grid position its span reaches;
+            // the positions it swallows are not drawn even when a
+            // `<Cell>` still exists for them.
+            if covered.contains(&(c as u32, r as u32)) {
+                continue;
+            }
             let Some(cell) = cell_by_origin.get(&(c as u32, r as u32)).copied() else {
                 continue;
             };
@@ -1310,6 +1321,42 @@ pub(super) fn emit_table_into_chain(
     total_stats.paragraphs += 1;
     let stat_page = em.chain_pages[em.frame_idx];
     pages[stat_page].stats.paragraphs += 1;
+}
+
+/// Every grid position a merged cell swallows.
+///
+/// IDML's own rule is that a covered position carries no `<Cell>` at
+/// all — "the covered grid positions have no `<Cell>` element of their
+/// own, they are absorbed by the spanning cell". A table that arrives
+/// through the mutation wire breaks that: `setCellSpan` widens the
+/// spanning cell and leaves the cell it now covers in place, so without
+/// this mask the covered cell keeps painting its own fill, edges and
+/// text at its own origin and a merge renders as no merge at all.
+/// Deriving the mask from the spans rather than trusting the cell list
+/// makes both shapes render the same, whoever produced them.
+fn covered_grid_positions(table: &paged_model::Table) -> std::collections::HashSet<(u32, u32)> {
+    // Spans are clamped to the grid before they are walked: nothing in
+    // the format stops a `<Cell ColumnSpan="4000000000">`, and a span
+    // taken at its word would be a hang rather than a wrong picture.
+    let cols = table.columns.len().max(table.column_count as usize) as u32;
+    let rows = table.rows.len() as u32;
+    let mut covered = std::collections::HashSet::new();
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
+        let last_c = c.saturating_add(cell.column_span.max(1)).min(cols);
+        let last_r = r.saturating_add(cell.row_span.max(1)).min(rows);
+        for dc in c..last_c {
+            for dr in r..last_r {
+                if (dc, dr) == (c, r) {
+                    continue; // the span's own origin still draws
+                }
+                covered.insert((dc, dr));
+            }
+        }
+    }
+    covered
 }
 
 /// Resolved row / column divider stroke decl: the start/end style

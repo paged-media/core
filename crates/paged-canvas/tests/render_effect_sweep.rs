@@ -100,7 +100,7 @@
 //!
 //! ## The findings ratchet
 //!
-//! Twelve ops really do apply-and-render-nothing. They live in [`KNOWN`]
+//! The ops that really do apply-and-render-nothing live in [`KNOWN`]
 //! with a diagnosis apiece — what the op writes, what the renderer
 //! reads, and why they miss each other — so the sweep runs green in CI
 //! while nothing is swept under it. The list is enforced in BOTH
@@ -838,74 +838,6 @@ chain walk never checks a continuation frame's `parent_story`. The \
 `parent_story` write is right for the model and for every other reader \
 (`frame_for_story`, overset accounting, IDML export) — it is just not the \
 half that was standing between the op and the pixels.",
-    },
-    Known {
-        op: "InsertTable",
-        kind: Kind::Defect,
-        diagnosis: "\
-A table's visible output is its CELL CONTENT plus explicitly declared strokes \
-and fills: `tables.rs` resolves every cell edge as `cell.<edge>_stroke_weight \
-.or(resolved_cell.<edge>_stroke_weight)` and draws nothing when both are None. \
-`NodeSpec::Table::to_parse_table` mints `TableBorder::default()`, default row / \
-column strokes, and empty cells — no weight, no colour, no paragraphs. So the \
-op returns a `createdId`, the model gains a fully-formed 3x3 table with real \
-row heights and column widths, and the page is byte-identical. Confirmed \
-against the `tables` fixture too: a SECOND table inserted beside one that \
-renders is equally invisible (the fixture's own table is visible only because \
-its cells carry text).",
-    },
-    Known {
-        op: "InsertTableRow",
-        kind: Kind::Defect,
-        diagnosis: "\
-`apply_insert_table_row` mints `TableRow { name, ..Default::default() }`, so \
-`single_row_height` and `minimum_height` are None. The renderer sizes a row as \
-`max(single_row_height.unwrap_or(0), minimum_height.unwrap_or(0), content)` and \
-the new cells have no paragraphs, so the row is 0 pt tall — and, carrying no \
-stroke weight either, draws nothing at zero height. Insert-then-`setRowHeight` \
-DOES move the page, which isolates the cause to the minted geometry rather than \
-to the emit path.",
-    },
-    Known {
-        op: "InsertTableColumn",
-        kind: Kind::Defect,
-        diagnosis: "\
-The column analogue of `InsertTableRow`: the minted `TableColumn` carries no \
-`single_column_width`, and `tables.rs` builds its x ladder from \
-`single_column_width.unwrap_or(0.0)`. A zero-width column occupies no space and \
-its empty, strokeless cells draw nothing. Insert-then-`setColumnWidth` moves the \
-page.",
-    },
-    Known {
-        op: "InsertHeaderRow",
-        kind: Kind::Defect,
-        diagnosis: "\
-Same minted-geometry cause as `InsertTableRow` — `TableRow::default()` with no \
-height — one band along. The header band grows in the model \
-(`header_row_count` + 1) and nothing appears, including on the continuation \
-frames the band is supposed to repeat on.",
-    },
-    Known {
-        op: "InsertFooterRow",
-        kind: Kind::Defect,
-        diagnosis: "\
-The footer analogue of `InsertHeaderRow`, with the same minted-geometry \
-cause and one extra twist that makes it harder to notice: a footer row is \
-appended BELOW the last row, so unlike a header row it displaces nothing \
-either. An empty, strokeless, zero-height row at the bottom of a table is \
-invisible twice over — it draws nothing of its own and moves nothing else.",
-    },
-    Known {
-        op: "SetCellSpan",
-        kind: Kind::Defect,
-        diagnosis: "\
-The span is written (the spanning cell's box widens correctly) but nothing \
-suppresses the cell it COVERS. `tables.rs` emits cells by iterating every \
-column and looking each up in a `(col, row) -> cell` origin map; there is no \
-coverage mask, so the covered cell keeps painting its own content at its own \
-origin. Merging (0,0) across two columns in the `tables` fixture leaves the page \
-byte-identical: cell (1,0) still draws its text, and the divider that should \
-vanish was never declared by that fixture to begin with.",
     },
     Known {
         op: "InsertSection",
@@ -2802,10 +2734,10 @@ fn table_cases(c: &mut Vec<Case>) {
             table_id: table_id.clone(),
         })
         .expect("seed a header row");
-        // The seeded row is minted with NO height (that is
-        // `InsertHeaderRow`'s own finding), so removing it again would be
-        // invisible for the wrong reason. Give it one, so this case
-        // measures the removal rather than inheriting the insert's bug.
+        // The seeded row now arrives with the reference row's height, so
+        // this is no longer load-bearing — but pinning an unmistakable
+        // 36pt keeps the case measuring the REMOVAL rather than whatever
+        // the insert happened to inherit.
         m.apply_mutation(&Mutation::SetRowHeight {
             story_id: story_id.clone(),
             table_id: table_id.clone(),
@@ -2826,13 +2758,13 @@ fn table_cases(c: &mut Vec<Case>) {
             table_id: table_id.clone(),
         })
         .expect("seed a footer row");
-        // Sizing the seeded row is not enough here, and the difference is
-        // instructive: a HEADER row at index 0 displaces every body row
-        // below it, so height alone makes it observable — a FOOTER row
-        // appended below the last row displaces nothing, and an empty,
-        // strokeless row draws nothing of its own. So this case puts TEXT
-        // in the footer cell. Without it the case would be red for
-        // `InsertFooterRow`'s reason rather than its own.
+        // Sizing the seeded row alone used not to be enough here, and the
+        // difference is instructive: a HEADER row at index 0 displaces
+        // every body row below it, so height alone makes it observable —
+        // a FOOTER row appended below the last row displaces nothing, so
+        // it has to draw something of its own. It now does (the minted
+        // cells carry edges), but this case still puts TEXT in the footer
+        // cell so the removal is unmistakable either way.
         let last = m
             .scene()
             .stories
