@@ -91,9 +91,9 @@ fn a_flat_document_reports_no_parentage() {
 // overlapping, and the renderer sorts by layer before it paints. Move
 // the black one up and the occlusion inverts.
 
-use paged_mutate::{PropertyPath, Value};
 use paged_canvas::channel::Mutation;
 use paged_canvas::element_selection::ElementId;
+use paged_mutate::{PropertyPath, Value};
 
 /// The two rectangles the fixture ships, with the layer each is on.
 fn rect_layers(m: &CanvasModel) -> Vec<(String, Option<String>)> {
@@ -101,12 +101,7 @@ fn rect_layers(m: &CanvasModel) -> Vec<(String, Option<String>)> {
         .spreads
         .iter()
         .flat_map(|p| p.spread.rectangles.iter())
-        .map(|r| {
-            (
-                r.self_id.clone().unwrap_or_default(),
-                r.item_layer.clone(),
-            )
-        })
+        .map(|r| (r.self_id.clone().unwrap_or_default(), r.item_layer.clone()))
         .collect()
 }
 
