@@ -187,6 +187,150 @@ pub fn write_spread(s: &Spread) -> Vec<u8> {
     b.into_bytes()
 }
 
+// ── Facing spreads (verso + recto in ONE `<Spread>`) ────────────────
+//
+// Added ALONGSIDE the single-page `Spread` on purpose: every existing
+// sample's emitted bytes stay identical, and the ~35 `Spread { .. }`
+// literals never learn about a second page. A facing spread is IDML's
+// native "reader spread" shape: `PageCount="2"`, two `<Page>` children
+// (verso first, then recto), spread-local coordinates with the spine at
+// x = 0 — the verso page maps in via `ItemTransform="1 0 0 1 -W 0"`,
+// the recto via identity, and each page's `GeometricBounds` stays
+// `0 0 H W` (bounds are page-INNER coords; the ItemTransform places
+// them in the spread, spec §10.3.3). Page items are spread children
+// positioned in SPREAD coords, so verso items live at negative x; the
+// renderer routes each item to the page containing its centroid.
+
+/// One side of a [`FacingSpread`]: the per-page knobs the single-page
+/// [`Spread`] carries on itself (name, master, overrides, margins).
+pub struct FacingPage {
+    pub self_id: String,
+    pub name: String,
+    /// `AppliedMaster` ref (`MasterSpread/<id>` or bare — the type
+    /// prefix is stripped, matching [`Spread::applied_master`]).
+    pub applied_master: String,
+    /// Master-item `Self` ids THIS side has overridden (per-page
+    /// `OverrideList`, same semantics as [`Spread::override_list`]).
+    pub override_list: Vec<String>,
+    /// Per-page `<MarginPreference>` — the seat of mirrored
+    /// inside/outside margins (verso and recto swap left/right).
+    pub margins: Option<MarginPreference>,
+}
+
+/// A two-page reader spread: verso (left, even folio) + recto (right,
+/// odd folio) sharing one spread coordinate system.
+pub struct FacingSpread {
+    pub self_id: String,
+    pub page_width_pt: f32,
+    pub page_height_pt: f32,
+    /// Emitted first — IDML lists a reader spread's pages left to
+    /// right, so the verso is `pages[0]` (`local_page_idx` 0 in the
+    /// renderer, which is also what routes it to a facing master's
+    /// FIRST master page).
+    pub verso: FacingPage,
+    pub recto: FacingPage,
+    /// Page items in SPREAD coords (spine at x = 0; verso items at
+    /// negative x). Routed to a page by centroid containment.
+    pub page_items: Vec<PageItem>,
+}
+
+pub fn write_facing_spread(s: &FacingSpread) -> Vec<u8> {
+    let mut b = XmlBuilder::new();
+    b.write_decl();
+    b.start("idPkg:Spread", &[PKG_NS, DOM_VERSION]);
+
+    let identity = format_matrix_str(IDENTITY);
+    b.start(
+        "Spread",
+        &[
+            ("Self", s.self_id.as_str()),
+            ("PageCount", "2"),
+            // Interior reader spreads bind at location 1 (the spine
+            // sits between the two pages); location 0 is the
+            // single-page "everything right of the spine" shape.
+            ("BindingLocation", "1"),
+            ("ShowMasterItems", "true"),
+            ("AllowPageShuffle", "true"),
+            ("ItemTransform", &identity),
+        ],
+    );
+
+    let verso_xform = format!("1 0 0 1 {} 0", crate::xml::format_f32(-s.page_width_pt));
+    write_facing_page(&mut b, &s.verso, s, &verso_xform, &identity);
+    write_facing_page(&mut b, &s.recto, s, &identity, &identity);
+
+    for item in &s.page_items {
+        item.write(&mut b);
+    }
+    b.end("Spread");
+    b.end("idPkg:Spread");
+    b.into_bytes()
+}
+
+fn write_facing_page(
+    b: &mut XmlBuilder,
+    p: &FacingPage,
+    s: &FacingSpread,
+    item_transform: &str,
+    identity: &str,
+) {
+    let bounds = format!(
+        "0 0 {} {}",
+        format_f32(s.page_height_pt),
+        format_f32(s.page_width_pt),
+    );
+    let applied_master = strip_type_prefix(&p.applied_master);
+    let override_list = p.override_list.join(" ");
+    let mut attrs: Vec<(&str, &str)> = vec![
+        ("Self", p.self_id.as_str()),
+        ("Name", p.name.as_str()),
+        ("AppliedMaster", applied_master),
+        ("ItemTransform", item_transform),
+        ("GeometricBounds", &bounds),
+        ("MasterPageTransform", identity),
+    ];
+    if !override_list.is_empty() {
+        attrs.push(("OverrideList", override_list.as_str()));
+    }
+    if let Some(m) = p.margins {
+        b.start("Page", &attrs);
+        let (top, bottom, left, right) = (
+            format_f32(m.top),
+            format_f32(m.bottom),
+            format_f32(m.left),
+            format_f32(m.right),
+        );
+        let column_count = m.column_count.to_string();
+        let column_gutter = format_f32(m.column_gutter);
+        b.empty(
+            "MarginPreference",
+            &[
+                ("ColumnCount", &column_count),
+                ("ColumnGutter", &column_gutter),
+                ("Top", &top),
+                ("Bottom", &bottom),
+                ("Left", &left),
+                ("Right", &right),
+            ],
+        );
+        b.end("Page");
+    } else {
+        b.empty("Page", &attrs);
+    }
+}
+
+fn format_matrix_str(m: [f32; 6]) -> String {
+    format!(
+        "{} {} {} {} {} {}",
+        format_f32(m[0]),
+        format_f32(m[1]),
+        format_f32(m[2]),
+        format_f32(m[3]),
+        format_f32(m[4]),
+        format_f32(m[5]),
+    )
+}
+
 fn strip_type_prefix(id: &str) -> &str {
     id.split_once('/').map(|(_, rest)| rest).unwrap_or(id)
 }

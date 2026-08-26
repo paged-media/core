@@ -1793,3 +1793,233 @@ fn no_emitted_sample_has_a_duplicate_attribute() {
         }
     }
 }
+
+// ── Facing spreads: verso + recto in ONE <Spread>, real pipeline ─────
+
+/// The go/no-go gate for the facing-spread builders: a two-page reader
+/// spread (verso + recto), one distinctly-coloured body rect per side,
+/// plus a facing MASTER carrying a distinctly-coloured furniture bar
+/// per side — written as IDML, opened through `import_idml_doc`, built
+/// through the real render pipeline. Proves (1) both pages materialise
+/// with the right geometry, (2) body items in spread coords route to
+/// the page containing them (verso items live at negative x), (3) the
+/// facing master's per-side furniture stamps onto the SAME-side body
+/// page only, and (4) the mirrored per-page margins round-trip.
+#[test]
+fn facing_spread_routes_items_and_master_furniture_per_side() {
+    use paged_gen::builders::designmap::{write_designmap, DesignMap};
+    use paged_gen::builders::master::{write_facing_master, FacingMaster};
+    use paged_gen::builders::page_item::Rect;
+    use paged_gen::builders::resources::{
+        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml, styles_xml, ExtraColor,
+    };
+    use paged_gen::builders::spread::{
+        write_facing_spread, FacingPage, FacingSpread, MarginPreference,
+    };
+    use paged_gen::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
+    use paged_gen::geometry::translate;
+
+    const NAME: &str = "facing-probe";
+    const W: f32 = 540.0;
+    const H: f32 = 720.0;
+
+    let rect = |id: &str, x: f32, y: f32, w: f32, h: f32, fill: &str| Rect {
+        self_id: id.to_string(),
+        width_pt: w,
+        height_pt: h,
+        item_transform: translate(x, y),
+        fill_color: Some(fill.to_string()),
+        stroke_color: None,
+        stroke_weight_pt: None,
+        parent_story: None,
+        next_text_frame: None,
+        previous_text_frame: None,
+        extra_attrs: Vec::new(),
+        blending: None,
+        drop_shadow: None,
+        placed_image: None,
+        text_wrap: None,
+        anchored_setting: None,
+        frame_effects: Vec::new(),
+        text_frame_pref: None,
+        custom_subpaths: None,
+    };
+
+    // Four one-hue swatches so a dominant-channel test attributes every
+    // painted fill to its authoring side unambiguously.
+    let colors = [
+        ("Color/VersoBody", "VersoBody", "230 20 20"), // red
+        ("Color/RectoBody", "RectoBody", "20 40 230"), // blue
+        ("Color/VersoBar", "VersoBar", "20 200 20"),   // green
+        ("Color/RectoBar", "RectoBar", "240 200 20"),  // yellow
+    ];
+    let extras: Vec<ExtraColor> = colors
+        .iter()
+        .map(|(id, name, value)| ExtraColor {
+            self_id: id.to_string(),
+            name: name.to_string(),
+            space: "RGB",
+            value: value.to_string(),
+        })
+        .collect();
+
+    let master_id = paged_gen::ids::self_id(NAME, "MasterSpread", 0);
+    let master_bytes = write_facing_master(&FacingMaster {
+        self_id: format!("MasterSpread/{master_id}"),
+        name_prefix: "P".to_string(),
+        base_name: "Probe".to_string(),
+        verso_page_self_id: paged_gen::ids::self_id(NAME, "MasterPage", 0),
+        recto_page_self_id: paged_gen::ids::self_id(NAME, "MasterPage", 1),
+        page_width_pt: W,
+        page_height_pt: H,
+        page_items: vec![
+            // Verso furniture bar at negative x (spread coords).
+            rect("mbar_v", -W + 20.0, 20.0, 100.0, 10.0, "Color/VersoBar").into(),
+            rect("mbar_r", 20.0, 20.0, 100.0, 10.0, "Color/RectoBar").into(),
+        ],
+    });
+
+    let spread_id = paged_gen::ids::self_id(NAME, "Spread", 0);
+    let verso_page_id = paged_gen::ids::self_id(NAME, "Page", 0);
+    let recto_page_id = paged_gen::ids::self_id(NAME, "Page", 1);
+    let spread_bytes = write_facing_spread(&FacingSpread {
+        self_id: spread_id.clone(),
+        page_width_pt: W,
+        page_height_pt: H,
+        verso: FacingPage {
+            self_id: verso_page_id.clone(),
+            name: "facing-probe · verso".to_string(),
+            applied_master: format!("MasterSpread/{master_id}"),
+            override_list: Vec::new(),
+            // Mirrored: outside (left) 60, inside (right) 48.
+            margins: Some(MarginPreference {
+                top: 54.0,
+                bottom: 81.0,
+                left: 60.0,
+                right: 48.0,
+                column_count: 6,
+                column_gutter: 12.0,
+            }),
+        },
+        recto: FacingPage {
+            self_id: recto_page_id.clone(),
+            name: "facing-probe · recto".to_string(),
+            applied_master: format!("MasterSpread/{master_id}"),
+            override_list: Vec::new(),
+            // Mirrored: inside (left) 48, outside (right) 60.
+            margins: Some(MarginPreference {
+                top: 54.0,
+                bottom: 81.0,
+                left: 48.0,
+                right: 60.0,
+                column_count: 6,
+                column_gutter: 12.0,
+            }),
+        },
+        page_items: vec![
+            rect("body_v", -W + 40.0, 200.0, 80.0, 80.0, "Color/VersoBody").into(),
+            rect("body_r", 40.0, 200.0, 80.0, 80.0, "Color/RectoBody").into(),
+        ],
+    });
+
+    let sample = paged_gen::package::Sample {
+        container_xml: container_xml(),
+        designmap_xml: write_designmap(&DesignMap {
+            self_id: "d".to_string(),
+            master_spreads: vec![master_id.clone()],
+            spreads: vec![spread_id.clone()],
+            stories: Vec::new(),
+        }),
+        graphic_xml: graphic_xml_with_extras(&extras),
+        fonts_xml: fonts_xml(),
+        styles_xml: styles_xml(),
+        preferences_xml: preferences_xml(),
+        backing_story_xml: backing_story_xml(),
+        tags_xml: tags_xml(),
+        mapping_xml: mapping_xml(),
+        master_spreads: vec![(master_id, master_bytes)],
+        spreads: vec![(spread_id, spread_bytes)],
+        stories: Vec::new(),
+    };
+
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+
+    // Parse level: ONE spread, TWO pages, mirrored margins per page.
+    assert_eq!(doc.spreads.len(), 1);
+    let spread = &doc.spreads[0].spread;
+    assert_eq!(spread.pages.len(), 2, "PageCount=2 parses as two pages");
+    let vm = spread
+        .page_margins
+        .get(&verso_page_id)
+        .expect("verso margins");
+    let rm = spread
+        .page_margins
+        .get(&recto_page_id)
+        .expect("recto margins");
+    assert_eq!((vm.left, vm.right), (60.0, 48.0), "verso outside/inside");
+    assert_eq!((rm.left, rm.right), (48.0, 60.0), "recto inside/outside");
+
+    // Render level: both pages materialise at trim size; the verso page
+    // carries the red body rect + the green verso master bar and none
+    // of the recto's paints — and vice versa.
+    let built = paged_renderer::pipeline::build_document(
+        &doc,
+        &paged_renderer::pipeline::PipelineOptions::default(),
+    )
+    .expect("build_document");
+    assert_eq!(built.pages.len(), 2);
+    for p in &built.pages {
+        assert!((p.width_pt - W).abs() < 1e-3 && (p.height_pt - H).abs() < 1e-3);
+    }
+    // The verso page's spread origin sits left of the spine.
+    assert!((built.pages[0].spread_origin.0 + W).abs() < 1e-3);
+    assert!(built.pages[1].spread_origin.0.abs() < 1e-3);
+
+    let solids = |page: &paged_renderer::BuiltPage| -> Vec<paged_compose::Color> {
+        page.list
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                paged_compose::DisplayCommand::FillPath {
+                    paint: paged_compose::Paint::Solid(col),
+                    ..
+                } => Some(*col),
+                _ => None,
+            })
+            .collect()
+    };
+    let is_red = |c: &paged_compose::Color| c.r > 0.3 && c.g < 0.15 && c.b < 0.15;
+    let is_blue = |c: &paged_compose::Color| c.b > 0.3 && c.r < 0.15;
+    let is_green = |c: &paged_compose::Color| c.g > 0.3 && c.r < 0.15 && c.b < 0.15;
+    let is_yellow = |c: &paged_compose::Color| c.r > 0.3 && c.g > 0.2 && c.b < 0.15;
+
+    let verso = solids(&built.pages[0]);
+    let recto = solids(&built.pages[1]);
+    assert!(!verso.is_empty(), "verso page renders non-blank");
+    assert!(!recto.is_empty(), "recto page renders non-blank");
+    assert!(
+        verso.iter().any(is_red),
+        "verso body rect on verso: {verso:?}"
+    );
+    assert!(
+        verso.iter().any(is_green),
+        "verso master bar stamped on verso: {verso:?}"
+    );
+    assert!(
+        !verso.iter().any(is_blue) && !verso.iter().any(is_yellow),
+        "no recto paint leaks onto the verso: {verso:?}"
+    );
+    assert!(
+        recto.iter().any(is_blue),
+        "recto body rect on recto: {recto:?}"
+    );
+    assert!(
+        recto.iter().any(is_yellow),
+        "recto master bar stamped on recto: {recto:?}"
+    );
+    assert!(
+        !recto.iter().any(is_red) && !recto.iter().any(is_green),
+        "no verso paint leaks onto the recto: {recto:?}"
+    );
+}

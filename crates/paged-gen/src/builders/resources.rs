@@ -168,6 +168,22 @@ pub fn graphic_xml_rich(
     groups: &[ColorGroupSpec],
     swatches: &[SwatchSpec],
 ) -> Vec<u8> {
+    graphic_xml_rich_full(colors, &[], groups, swatches)
+}
+
+/// Like [`graphic_xml_rich`] but also emits `<Gradient>` swatches
+/// (stops referencing any of the declared colours). The rich builder
+/// historically had no gradient lane — gradients only existed on the
+/// minimal [`graphic_xml_with_extras_and_gradients`] path, which can't
+/// express spot/tint/Lab colours — so a fixture wanting BOTH (the
+/// annual-base brand ramp) goes through here. An empty `gradients`
+/// slice makes this byte-identical to [`graphic_xml_rich`].
+pub fn graphic_xml_rich_full(
+    colors: &[RichColor],
+    gradients: &[ExtraGradient],
+    groups: &[ColorGroupSpec],
+    swatches: &[SwatchSpec],
+) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -229,6 +245,27 @@ pub fn graphic_xml_rich(
             attrs.push(("TintValue", tint_str.as_str()));
         }
         b.empty("Color", &attrs);
+    }
+    for grad in gradients {
+        b.start(
+            "Gradient",
+            &[
+                ("Self", grad.self_id.as_str()),
+                ("Name", grad.name.as_str()),
+                ("Type", grad.kind),
+            ],
+        );
+        for stop in &grad.stops {
+            let loc = crate::xml::format_f32(stop.location_pct);
+            b.empty(
+                "GradientStop",
+                &[
+                    ("StopColor", stop.stop_color.as_str()),
+                    ("Location", loc.as_str()),
+                ],
+            );
+        }
+        b.end("Gradient");
     }
     for s in swatches {
         b.empty(
