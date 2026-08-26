@@ -1251,6 +1251,125 @@ fn write_exhibit_story(story_id: &str, paragraph_style: &str, segs: &[XSeg]) -> 
     b.into_bytes()
 }
 
+/// A body paragraph whose run anchors real `<Footnote>`s — the ONE
+/// construct no wire op can author (there is no insert-footnote
+/// mutation), so the story chapter's footnote page reads its exhibit
+/// from the fixture. Bodies are set in the Footnote style; the
+/// document `<FootnoteOption>` supplies the rule.
+fn write_footnote_exhibit_story(story_id: &str, body: &str, notes: &[(&str, &str)]) -> Vec<u8> {
+    let mut b = XmlBuilder::new();
+    b.write_decl();
+    b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
+    b.start("Story", &[("Self", story_id)]);
+    b.start(
+        "ParagraphStyleRange",
+        &[("AppliedParagraphStyle", STYLE_BODY)],
+    );
+    b.start(
+        "CharacterStyleRange",
+        &[("AppliedCharacterStyle", NO_CHAR_STYLE)],
+    );
+    b.start("Content", &[]);
+    b.text(body);
+    b.end("Content");
+    b.end("CharacterStyleRange");
+    // Anchors ride at the end of the run, footnotes.rs-style; the
+    // renderer pools them onto the host page in order.
+    for (id, note) in notes {
+        b.start(
+            "CharacterStyleRange",
+            &[("AppliedCharacterStyle", NO_CHAR_STYLE)],
+        );
+        b.start("Footnote", &[("Self", id), ("Hidden", "false")]);
+        b.start(
+            "ParagraphStyleRange",
+            &[("AppliedParagraphStyle", STYLE_FOOTNOTE)],
+        );
+        b.start(
+            "CharacterStyleRange",
+            &[("AppliedCharacterStyle", NO_CHAR_STYLE)],
+        );
+        b.start("Content", &[]);
+        b.text(note);
+        b.end("Content");
+        b.end("CharacterStyleRange");
+        b.end("ParagraphStyleRange");
+        b.end("Footnote");
+        b.end("CharacterStyleRange");
+    }
+    b.end("ParagraphStyleRange");
+    b.end("Story");
+    b.end("idPkg:Story");
+    b.into_bytes()
+}
+
+/// A vertical-writing exhibit: `StoryDirection="VerticalWritingDirection"`
+/// with real Japanese set in Noto Sans JP — story direction is content
+/// state no mutation writes, so the scripts chapter's vertical pages
+/// read from here. One run carries GroupRuby, one a kenten mark (both
+/// render at their recorded MVP limits — the chapter's margin notes say
+/// so).
+fn write_vertical_exhibit_story(story_id: &str, lead: &str, ruby_base: &str, ruby: &str, tail: &str) -> Vec<u8> {
+    let mut b = XmlBuilder::new();
+    b.write_decl();
+    b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
+    b.start(
+        "Story",
+        &[
+            ("Self", story_id),
+            ("StoryDirection", "VerticalWritingDirection"),
+        ],
+    );
+    b.start(
+        "ParagraphStyleRange",
+        &[("AppliedParagraphStyle", STYLE_BODY)],
+    );
+    b.start(
+        "CharacterStyleRange",
+        &[
+            ("AppliedCharacterStyle", NO_CHAR_STYLE),
+            ("AppliedFont", "Noto Sans JP"),
+            ("PointSize", "13"),
+        ],
+    );
+    b.start("Content", &[]);
+    b.text(lead);
+    b.end("Content");
+    b.end("CharacterStyleRange");
+    b.start(
+        "CharacterStyleRange",
+        &[
+            ("AppliedCharacterStyle", NO_CHAR_STYLE),
+            ("AppliedFont", "Noto Sans JP"),
+            ("PointSize", "13"),
+            ("Ruby", "true"),
+            ("RubyString", ruby),
+            ("RubyType", "GroupRuby"),
+        ],
+    );
+    b.start("Content", &[]);
+    b.text(ruby_base);
+    b.end("Content");
+    b.end("CharacterStyleRange");
+    b.start(
+        "CharacterStyleRange",
+        &[
+            ("AppliedCharacterStyle", NO_CHAR_STYLE),
+            ("AppliedFont", "Noto Sans JP"),
+            ("PointSize", "13"),
+            ("KentenKind", "KentenSesameDot"),
+        ],
+    );
+    b.start("Content", &[]);
+    b.text(tail);
+    b.end("Content");
+    b.end("CharacterStyleRange");
+    b.end("ParagraphStyleRange");
+    b.end("Story");
+    b.end("idPkg:Story");
+    b.into_bytes()
+}
+
 // ── Page items ───────────────────────────────────────────────────────
 
 /// A furniture / exhibit text frame in SPREAD coords: no fill, no
@@ -1953,6 +2072,71 @@ pub fn build() -> Sample {
             .into(),
         );
     }
+    // p35 (recto): the footnote exhibit — see write_footnote_exhibit_story.
+    let footnote_story = self_id(SAMPLE, "Story", story_seq);
+    story_seq += 1;
+    stories.push((
+        footnote_story.clone(),
+        write_footnote_exhibit_story(
+            &footnote_story,
+            "A footnote is the page apologising for an interruption it \
+refuses to omit. The engine reserves its space through a compose, \
+measure, and re-compose fixpoint that vertical justification then \
+respects; the rule above the pool comes from the document footnote \
+options, authored in the base fixture because no mutation writes \
+them.",
+            &[
+                (
+                    "Footnote/AnnualFn1",
+                    "The reservation fixpoint: compose, measure the pool, compose again.",
+                ),
+                (
+                    "Footnote/AnnualFn2",
+                    "An oversized footnote does not yet split across frames — a recorded limit.",
+                ),
+            ],
+        ),
+    ));
+    extra_items.entry(34).or_default().push(
+        text_frame(
+            self_id(SAMPLE, "Exhibit", 2),
+            recto_x,
+            104.0,
+            336.0,
+            240.0,
+            &footnote_story,
+        )
+        .into(),
+    );
+
+    // p43 (recto) + p44 (verso): vertical-writing exhibits. Tall narrow
+    // frames; columns run top-to-bottom, lines right-to-left.
+    for (page_idx, exhibit_seq, x) in [(42usize, 3u32, recto_x + 96.0), (43usize, 4u32, verso_x + 96.0)] {
+        let story = self_id(SAMPLE, "Story", story_seq);
+        story_seq += 1;
+        stories.push((
+            story.clone(),
+            write_vertical_exhibit_story(
+                &story,
+                "\u{7e26}\u{66f8}\u{304d}\u{306f}\u{6587}\u{5b57}\u{3092}\u{4e0a}\u{304b}\u{3089}\u{4e0b}\u{3078}\u{7d44}\u{307f}\u{3001}\u{884c}\u{306f}\u{53f3}\u{304b}\u{3089}\u{5de6}\u{3078}\u{9032}\u{3080}\u{3002}",
+                "\u{6f22}\u{5b57}",
+                "\u{304b}\u{3093}\u{3058}",
+                "\u{5f37}\u{8abf}\u{70b9}\u{3002}",
+            ),
+        ));
+        extra_items.entry(page_idx).or_default().push(
+            text_frame(
+                self_id(SAMPLE, "Exhibit", exhibit_seq),
+                x,
+                104.0,
+                240.0,
+                480.0,
+                &story,
+            )
+            .into(),
+        );
+    }
+
     let _ = story_seq;
 
     // ── Spreads: p1 single, 66 facing, p134 single.
