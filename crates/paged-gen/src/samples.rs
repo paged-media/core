@@ -16,6 +16,7 @@
 //! function returning a fully-populated `Sample`.
 
 pub mod anchored;
+pub mod annual_base;
 pub mod conditions;
 pub mod corners;
 pub mod effects;
@@ -100,6 +101,7 @@ pub const SAMPLES: &[&str] = &[
     "paste-into",
     "layers-z",
     "showcase-base",
+    "annual-base",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -141,6 +143,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "paste-into" => paste_into::build(),
         "layers-z" => layers_z::build(),
         "showcase-base" => showcase_base::build(),
+        "annual-base" => annual_base::build(),
         _ => return None,
     })
 }
@@ -169,7 +172,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            36,
+            37,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
