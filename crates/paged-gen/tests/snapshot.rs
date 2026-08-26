@@ -1677,6 +1677,7 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
     type Builder = fn() -> paged_gen::package::Sample;
     let builders: Vec<(&str, Builder)> = vec![
         ("anchored", anchored::build),
+        ("annual_base", annual_base::build),
         ("conditions", conditions::build),
         ("corners", corners::build),
         ("effects", effects::build),
@@ -2022,4 +2023,357 @@ fn facing_spread_routes_items_and_master_furniture_per_side() {
         !recto.iter().any(is_red) && !recto.iter().any(is_green),
         "no verso paint leaks onto the recto: {recto:?}"
     );
+}
+
+// ── annual-base: the 134-page Paged Annual base document ─────────────
+
+#[test]
+fn annual_base_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::annual_base::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::annual_base::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+/// Parse-level: the whole named surface the live generator addresses
+/// must round-trip — masters, layers, the style cascade, swatches
+/// (spot / tint / Lab / gradient / group), conditions + sets, the TOC,
+/// the navigation battery, the footnote options — plus the structural
+/// facts: 68 spreads carrying 134 pages, mirrored margins, no
+/// sections.
+#[test]
+fn annual_base_round_trips_named_entities() {
+    use paged_gen::samples::annual_base as ab;
+
+    let sample = ab::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+
+    // Structure: 1 + 66 + 1 spreads, 134 pages.
+    assert_eq!(doc.spreads.len(), 68);
+    let total_pages: usize = doc.spreads.iter().map(|s| s.spread.pages.len()).sum();
+    assert_eq!(total_pages, ab::PAGE_COUNT);
+    assert_eq!(doc.master_spreads.len(), 7);
+    for master in doc.master_spreads.values() {
+        assert_eq!(master.spread.pages.len(), 2, "every master is facing");
+    }
+    // The parsed model drops MasterSpread@Name, so assert the seven
+    // names at the emitted-XML level.
+    let archive = idml_import::open_source_archive(&bytes).expect("open_source_archive");
+    let master_xml: String = archive
+        .entries
+        .iter()
+        .filter(|(path, _)| path.starts_with("MasterSpreads/"))
+        .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+        .collect();
+    for name in ab::MASTER_NAMES {
+        assert!(
+            master_xml.contains(&format!("Name=\"{name}\"")),
+            "master {name} must be emitted by name"
+        );
+    }
+
+    // Mirrored margins on a facing spread: spread 7 carries p14
+    // (verso) and p15 (recto).
+    let spread7 = &doc.spreads[7].spread;
+    let p14 = paged_gen::ids::self_id("annual-base", "Page", 13);
+    let p15 = paged_gen::ids::self_id("annual-base", "Page", 14);
+    let vm = spread7.page_margins.get(&p14).expect("verso margins");
+    let rm = spread7.page_margins.get(&p15).expect("recto margins");
+    assert_eq!((vm.left, vm.right), (60.0, 48.0), "verso outside/inside");
+    assert_eq!((rm.left, rm.right), (48.0, 60.0), "recto inside/outside");
+    assert_eq!((vm.top, vm.bottom), (54.0, 81.0));
+    assert_eq!(vm.column_count, 6, "body grid");
+    // A data page mirrors too but carries the 12-column fine grid:
+    // p124 is the verso of spread 62.
+    let p124 = paged_gen::ids::self_id("annual-base", "Page", 123);
+    let dm124 = doc.spreads[62]
+        .spread
+        .page_margins
+        .get(&p124)
+        .expect("data-page margins");
+    assert_eq!(dm124.column_count, 12, "data grid");
+    assert_eq!((dm124.left, dm124.right), (60.0, 48.0), "p124 is a verso");
+
+    // The p15 override names the master's recto head frame.
+    let p15_page = spread7
+        .pages
+        .iter()
+        .find(|p| p.self_id.as_deref() == Some(p15.as_str()))
+        .expect("p15 present");
+    assert_eq!(
+        p15_page.override_list.len(),
+        1,
+        "one overridden master item"
+    );
+
+    // Layers, bottom-first.
+    let layer_names: Vec<_> = doc
+        .designmap
+        .layers
+        .iter()
+        .map(|l| l.name.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(layer_names, ab::LAYER_NAMES);
+
+    // The style cascade: every exported name resolves.
+    for id in ab::PARAGRAPH_STYLES {
+        assert!(
+            doc.styles.paragraph_styles.contains_key(id),
+            "missing paragraph style {id}"
+        );
+    }
+    for id in ab::CHARACTER_STYLES {
+        assert!(
+            doc.styles.character_styles.contains_key(id),
+            "missing character style {id}"
+        );
+    }
+    for id in ab::OBJECT_STYLES {
+        assert!(
+            doc.styles.object_styles.contains_key(id),
+            "missing object style {id}"
+        );
+    }
+    assert!(doc.styles.table_styles.contains_key(ab::TABLE_STYLE_ANNUAL));
+    for id in [ab::CELL_TH, ab::CELL_TD, ab::CELL_TD_NUMBER] {
+        assert!(
+            doc.styles.cell_styles.contains_key(id),
+            "missing cell style {id}"
+        );
+    }
+    // Cascade shape spot-checks.
+    assert_eq!(
+        doc.styles.paragraph_styles[ab::STYLE_BODY_FIRST]
+            .based_on
+            .as_deref(),
+        Some(ab::STYLE_BODY)
+    );
+    assert_eq!(
+        doc.styles.paragraph_styles[ab::STYLE_NUMBERED_2]
+            .based_on
+            .as_deref(),
+        Some(ab::STYLE_NUMBERED_1)
+    );
+    assert_eq!(
+        doc.styles.paragraph_styles[ab::STYLE_CATALOG_ENTRY]
+            .nested_styles
+            .len(),
+        1,
+        "Catalog Entry carries its nested style"
+    );
+    assert_eq!(
+        doc.styles.paragraph_styles[ab::STYLE_CHAPTER_TITLE]
+            .next_style
+            .as_deref(),
+        Some(ab::STYLE_DECK)
+    );
+
+    // TOC: three levels.
+    let toc = doc.styles.toc_styles.get(ab::TOC_STYLE).expect("TOC style");
+    assert_eq!(toc.entries.len(), 3);
+    assert_eq!(toc.entries[0].level, Some(1));
+    assert_eq!(
+        toc.entries[2].include_style.as_deref(),
+        Some(ab::STYLE_HEAD_1)
+    );
+
+    // Conditions + sets (membership only — per-set visibility states
+    // are not modelled, see the sample's module doc).
+    for id in [
+        ab::CONDITION_PRINT_ONLY,
+        ab::CONDITION_SCREEN_ONLY,
+        ab::CONDITION_SPEC_NOTES,
+    ] {
+        assert!(
+            doc.styles.conditions.contains_key(id),
+            "missing condition {id}"
+        );
+    }
+    let press = doc
+        .styles
+        .condition_sets
+        .get(ab::CONDITION_SET_PRESS)
+        .expect("Press set");
+    assert_eq!(press.conditions, vec![ab::CONDITION_PRINT_ONLY.to_string()]);
+    let working = doc
+        .styles
+        .condition_sets
+        .get(ab::CONDITION_SET_WORKING_COPY)
+        .expect("Working Copy set");
+    assert_eq!(working.conditions.len(), 3);
+
+    // Swatches: the spot vermilion (with its CMYK alternate), the
+    // CMYK-built 20% tint, the Lab primary, the RGB warning specimen,
+    // the gradient, and the brand group.
+    use idml_import::graphic::{ColorModel, ColorSpace};
+    let g = &doc.palette;
+    let vermilion = g.colors.get(ab::SWATCH_VERMILION).expect("vermilion");
+    assert_eq!(vermilion.model, ColorModel::Spot);
+    assert!(
+        vermilion.effective_cmyk().is_some(),
+        "spot resolves via alternate"
+    );
+    let tint = g.colors.get(ab::SWATCH_VERMILION_TINT).expect("tint");
+    assert_eq!(tint.tint, Some(20.0));
+    let tint_cmyk = tint.effective_cmyk().expect("tint resolves");
+    let full_cmyk = vermilion.effective_cmyk().unwrap();
+    for ch in 0..4 {
+        assert!(
+            (tint_cmyk[ch] - full_cmyk[ch] * 0.2).abs() < 0.01,
+            "channel {ch}: 20% of the vermilion build"
+        );
+    }
+    let marigold = g.colors.get(ab::SWATCH_LAB_MARIGOLD).expect("marigold");
+    assert_eq!(marigold.space, ColorSpace::Lab);
+    assert!(g.colors.contains_key(ab::SWATCH_SCREEN_BLUE));
+    assert!(g.colors.contains_key(ab::SWATCH_INK));
+    assert!(g.colors.contains_key(ab::SWATCH_PAPER_WARM));
+    assert!(g.colors.contains_key(ab::SWATCH_SLATE));
+    let ramp = g.gradients.get(ab::GRADIENT_RAMP).expect("gradient");
+    assert_eq!(ramp.stops.len(), 2);
+    assert_eq!(ramp.stops[0].stop_color, ab::SWATCH_VERMILION);
+    let brand = g
+        .color_groups
+        .get(ab::COLOR_GROUP_BRAND)
+        .expect("brand group");
+    assert_eq!(brand.members.len(), 6);
+    assert!(
+        !brand.members.iter().any(|m| m == ab::SWATCH_SCREEN_BLUE),
+        "the RGB warning specimen is not brand"
+    );
+
+    // Navigation battery.
+    let dm = &doc.designmap;
+    assert_eq!(dm.text_variables.len(), 4);
+    assert!(dm
+        .text_variables
+        .iter()
+        .any(|v| v.self_id == ab::VAR_RUNNING_HEADER));
+    assert_eq!(dm.bookmarks.len(), 3);
+    assert_eq!(dm.index_topics.len(), 10);
+    assert_eq!(dm.hyperlinks.len(), 3);
+    assert!(dm.sections.is_empty(), "sections are the live demo's job");
+    // Index markers across the exhibit + tab stories: 2 (p45) + 1
+    // (p46) + 9 (six tabs) = 12.
+    let marker_count: usize = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .map(|p| p.index_markers.len())
+        .sum();
+    assert_eq!(marker_count, 12);
+    // The xref source span tags a run in the p45 exhibit story.
+    let xref_runs = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .filter(|r| {
+            r.hyperlink_source
+                .as_deref()
+                .is_some_and(|s| s.starts_with("CrossReferenceSource/"))
+        })
+        .count();
+    assert_eq!(xref_runs, 1, "one cross-reference source run");
+}
+
+/// Render-level: build all 134 pages through the real pipeline with a
+/// real font and prove the furniture story — verso vs recto running
+/// heads, folios resolving page labels, the p15 override suppressing
+/// the master head, and the deliberately-empty plate cover.
+#[test]
+fn annual_base_renders_furniture_override_and_facing_sides() {
+    use paged_gen::samples::annual_base as ab;
+
+    let Some(font) = inter_font() else {
+        eprintln!("skip: Inter.ttf not present");
+        return;
+    };
+    let bytes = paged_gen::write_idml(&ab::build()).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    let opts = paged_renderer::pipeline::PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..Default::default()
+    };
+    let built = paged_renderer::pipeline::build_document(&doc, &opts).expect("build_document");
+    assert_eq!(built.pages.len(), ab::PAGE_COUNT);
+    for p in &built.pages {
+        assert!((p.width_pt - 540.0).abs() < 1e-3 && (p.height_pt - 720.0).abs() < 1e-3);
+    }
+
+    let glyphs = |idx: usize| -> String {
+        let table = built.pages[idx]
+            .list
+            .glyph_runs
+            .as_ref()
+            .expect("collect_glyph_runs on");
+        let mut entries: Vec<_> = table.entries.iter().collect();
+        entries.sort_by_key(|e| e.command_index);
+        entries
+            .iter()
+            .filter_map(|e| e.unicode)
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    };
+
+    // p1 — D-Plate cover: EMPTY by design (the live demo authors it).
+    assert!(
+        built.pages[0].list.commands.is_empty(),
+        "the plate cover carries no fixture content"
+    );
+
+    // p14 (verso body): the verso running head + a folio resolving the
+    // page's label (Page.Name is authoritative pre-section).
+    let p14 = glyphs(13);
+    assert!(p14.contains("THEPAGEDANNUAL"), "verso head on p14: {p14}");
+    assert!(p14.contains("p014"), "folio label on p14: {p14}");
+
+    // p15: the override replaces the master's recto head — the
+    // replacement text renders, the RunningHeader variable's baked
+    // text does NOT.
+    let p15 = glyphs(14);
+    assert!(
+        p15.contains("SPECIMENSRECONSIDERED"),
+        "override head on p15: {p15}"
+    );
+    // (Running Head sets Capitalization="AllCaps", so the baked
+    // "Chapter" renders as "CHAPTER".)
+    assert!(
+        !p15.contains("CHAPTER"),
+        "master recto head suppressed on p15: {p15}"
+    );
+    // …while the un-overridden recto p17 still shows the variable's
+    // baked ResultText (no Chapter Title paragraphs exist yet to pick
+    // up).
+    let p17 = glyphs(16);
+    assert!(p17.contains("CHAPTER"), "master recto head on p17: {p17}");
+    assert!(
+        !p17.contains("THEPAGEDANNUAL"),
+        "no verso furniture leaks onto a recto: {p17}"
+    );
+
+    // p43 (recto vertical): folio-only furniture.
+    let p43 = glyphs(42);
+    assert!(p43.contains("p043"), "folio on p43: {p43}");
+
+    // p124 (verso data): B-style furniture on the fine grid.
+    let p124 = glyphs(123);
+    assert!(p124.contains("THEPAGEDANNUAL"), "data verso head: {p124}");
+    assert!(p124.contains("p124"), "folio on p124: {p124}");
+
+    // Pixel-level non-blank proof for the requested pages.
+    let white = paged_compose::Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    for idx in [13usize, 14, 16, 42, 123] {
+        let img = paged_renderer::pipeline::render_built_page(&built.pages[idx], 72.0, white);
+        let non_white = img
+            .pixels()
+            .any(|px| px.0[0] < 250 || px.0[1] < 250 || px.0[2] < 250);
+        assert!(non_white, "page idx {idx} rasterises non-blank");
+    }
 }
