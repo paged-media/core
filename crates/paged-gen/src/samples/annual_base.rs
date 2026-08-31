@@ -93,11 +93,15 @@
 //!     p1 re-bakes every `Page@Name` from its start page on (the
 //!     sections mutation re-derives labels), which is how the demo
 //!     turns the descriptors into clean numeric folios.
-//!   * `Vermilion 20%` is built in CMYK with a swatch-level
-//!     `TintValue`, not as an RGB tint: `TintValue` is only honoured
-//!     through `ColorEntry::effective_cmyk`, which is CMYK-only — an
-//!     RGB swatch carrying a tint would paint at full strength (the
-//!     same gotcha `showcase_base` documents).
+//!   * `Vermilion 20%` is a `<Tint>` element with `BaseColor` pointing
+//!     at the spot, which is the only tint spelling InDesign reads. It
+//!     is built in CMYK, not RGB, because the tint scales through
+//!     `ColorEntry::effective_cmyk`, which is CMYK-only — an RGB swatch
+//!     carrying a tint paints at full strength (the same gotcha
+//!     `showcase_base` documents). It used to be a `<Color>` carrying a
+//!     `TintValue` attribute, which our own reader honours and Adobe's
+//!     silently discards: opened in real InDesign, every panel wearing
+//!     it printed at full strength.
 //!   * `Screen Blue` is the deliberate RGB-warning specimen (an RGB
 //!     swatch in a print document) and is therefore NOT a member of
 //!     the "Annual Brand" colour group.
@@ -468,6 +472,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_PAPER_WARM.to_string(),
@@ -478,6 +483,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_VERMILION.to_string(),
@@ -491,6 +497,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: Some("CMYK"),
             alternate_value: Some(VERMILION_CMYK.to_string()),
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_VERMILION_TINT.to_string(),
@@ -503,6 +510,12 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: Some(20.0),
+            // Named, so this writes IDML's `<Tint>` element instead of a
+            // `TintValue` attribute on `<Color>`. InDesign reads the
+            // element and drops the attribute — every panel wearing this
+            // swatch printed full-strength red out of a real InDesign
+            // re-export until the spelling changed.
+            base_color: Some(SWATCH_VERMILION.to_string()),
         },
         RichColor {
             self_id: SWATCH_SLATE.to_string(),
@@ -513,6 +526,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_LAB_MARIGOLD.to_string(),
@@ -525,6 +539,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_SCREEN_BLUE.to_string(),
@@ -536,6 +551,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
     ];
     let gradients = [ExtraGradient {

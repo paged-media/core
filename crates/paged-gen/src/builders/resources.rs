@@ -138,6 +138,22 @@ pub struct RichColor {
     /// `TintValue` (0..=100) — a standalone tint swatch's swatch-level
     /// tint. `None` ⇒ omit (full strength).
     pub tint: Option<f32>,
+    /// The swatch this one is a TINT OF — `Color/<id>`. Set it together
+    /// with [`tint`](Self::tint) and the swatch is written as IDML's
+    /// `<Tint>` element, which is the only spelling InDesign reads.
+    ///
+    /// A `TintValue` attribute on a `<Color>` is a private convention:
+    /// our own `ColorEntry::effective_cmyk` multiplies it into the
+    /// channels, so a document written that way looks right in every
+    /// paged surface and round-trips through us perfectly — and opens
+    /// in InDesign at FULL STRENGTH, because InDesign drops the
+    /// attribute. Measured, not guessed: a 20% vermilion panel came
+    /// back from an InDesign re-export as `ColorValue="0 85 90 5"` with
+    /// no tint of any kind, and printed red.
+    ///
+    /// `None` keeps the legacy `<Color TintValue>` spelling for callers
+    /// that have not been moved over.
+    pub base_color: Option<String>,
 }
 
 /// W4.7 — a `<ColorGroup>` named grouping of swatch self-ids.
@@ -244,7 +260,17 @@ pub fn graphic_xml_rich_full(
             tint_str = crate::xml::format_f32(t);
             attrs.push(("TintValue", tint_str.as_str()));
         }
-        b.empty("Color", &attrs);
+        match (&c.base_color, c.tint) {
+            // A named tint swatch: IDML spells it `<Tint>` with a
+            // `BaseColor`, and that is what InDesign reads. The channel
+            // values ride along so a reader that resolves the base
+            // itself and one that trusts the written values agree.
+            (Some(base), Some(_)) => {
+                attrs.push(("BaseColor", base.as_str()));
+                b.empty("Tint", &attrs);
+            }
+            _ => b.empty("Color", &attrs),
+        }
     }
     for grad in gradients {
         b.start(

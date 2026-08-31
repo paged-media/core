@@ -94,6 +94,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: Some("CMYK"),
             alternate_value: Some(INK_ALTERNATE_CMYK.to_string()),
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: INK_HALF.to_string(),
@@ -105,6 +106,7 @@ fn graphic() -> Vec<u8> {
             alternate_value: Some(INK_ALTERNATE_CMYK.to_string()),
             // The standalone tint swatch — same ink, carried at 50%.
             tint: Some(50.0),
+            base_color: None,
         },
         RichColor {
             self_id: INK_MIXED.to_string(),
@@ -117,6 +119,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: Some("CMYK"),
             alternate_value: Some("20 80 40 0".to_string()),
             tint: None,
+            base_color: None,
         },
     ];
     let groups = [ColorGroupSpec {

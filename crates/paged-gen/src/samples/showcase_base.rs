@@ -220,6 +220,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_ACCENT.to_string(),
@@ -230,6 +231,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: None,
+            base_color: None,
         },
         RichColor {
             self_id: SWATCH_ACCENT_TINT.to_string(),
@@ -242,6 +244,7 @@ fn graphic() -> Vec<u8> {
             alternate_space: None,
             alternate_value: None,
             tint: Some(20.0),
+            base_color: None,
         },
     ];
     graphic_xml_rich(&colors, &[], &[])
