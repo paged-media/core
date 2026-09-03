@@ -494,6 +494,36 @@ pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(62);
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 pub struct ProtocolVersion(pub u32);
 
+/// One element a mutation minted, in the order it was minted.
+///
+/// A single mutation reports its one creation as
+/// `MutationApplied::created_id`. A `Batch` mints as many as it has
+/// creating children and used to report only the LAST — so a caller
+/// authoring through batches could not learn what it had just made, and
+/// had to either send one mutation per element (paying a full rebuild
+/// each) or re-discover the ids with a scene walk. This is the list it
+/// could not get.
+///
+/// `handle` is the name a C-15 `BindCreated` child gave the element
+/// (`None` when nothing named it); `story_id` is the story the creating
+/// child minted alongside it — a text frame's `ParentStory` — which is
+/// what a later `insertText` addresses.
+///
+/// Additive per governance rule 1 (`#[serde(default)]` on the reply
+/// field): an older main thread that ignores it reads exactly what it
+/// read before, so this is not a PROTOCOL_VERSION bump.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct MintedElement {
+    /// The C-15 handle bound to this element, if any.
+    pub handle: Option<String>,
+    /// The element the creating child minted.
+    pub element: crate::element_selection::ElementId,
+    /// The story minted with it, for the kinds that carry one.
+    pub story_id: Option<String>,
+}
+
 /// Concept 3 — PDF export options as the dialog sends them. Every
 /// field is optional/defaulted so the wire stays forward-compatible;
 /// the worker maps it onto `paged_export_pdf::ExportOptions`.
@@ -1378,6 +1408,14 @@ pub enum WorkerToMainKind {
         /// page is discoverable from `page_ids` + `page_sizes_pt`.
         #[serde(default)]
         created_id: Option<crate::element_selection::ElementId>,
+        /// Every element the mutation minted, in mint order, each with
+        /// the C-15 handle that named it. Populated for a `Batch` —
+        /// where `created_id` can only report the last — and empty for
+        /// a single mutation, whose one mint `created_id` already
+        /// names. Additive (governance rule 1): omitted by an older
+        /// worker, deserialises to empty.
+        #[serde(default)]
+        minted: Vec<MintedElement>,
         /// Editor-ops — `true` when the mutation changed the page
         /// LIST itself (insert/delete/resize page); the editor must
         /// refresh its page grid from `page_sizes_pt` + `page_ids`

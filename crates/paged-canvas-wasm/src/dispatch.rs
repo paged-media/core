@@ -329,6 +329,10 @@ impl WorkerCore {
                             // (§8.5 resize-vs-transform: never for a
                             // MoveFrame / transform-only edit).
                             reflow: outcome.reflow,
+                            // Perf-Batch — every id a batch minted, in
+                            // mint order. Empty for a single mutation,
+                            // whose one mint `created_id` names.
+                            minted: outcome.minted,
                         }
                     }
                     Err(error) => WorkerToMainKind::MutationFailed { error },

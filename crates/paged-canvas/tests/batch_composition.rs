@@ -849,3 +849,286 @@ fn a_group_id_minted_at_translation_matches_the_applier() {
         "the group takes the next id in the shared space, not a private one"
     );
 }
+
+// ── One rebuild ────────────────────────────────────────────────────
+
+/// The children of an authoring gesture, in the order a page module
+/// writes them: mint a frame, name it, pour its story, paint it. Spans
+/// both lanes (the pour has no `Operation` form), so it takes the mixed
+/// path.
+fn authoring_gesture() -> Vec<Mutation> {
+    vec![
+        Mutation::InsertTextFrame {
+            page_id: PageId("p1".into()),
+            bounds: (10.0, 10.0, 200.0, 300.0),
+        },
+        bind("frame"),
+        Mutation::InsertText {
+            story_id: "$h:frame".into(),
+            offset: 0,
+            text: "poured".into(),
+            cell: None,
+        },
+        fill("frame", "Color/Black"),
+    ]
+}
+
+/// What a mutation actually costs is the REBUILD — `build_document`
+/// walks the whole document, so the price scales with the content
+/// already on the page rather than with the edit. A mixed batch used to
+/// pay it per child: measured on the annual's 134-page book, ~16 ms per
+/// operation natively and ~14 s in wasm, which is why authoring it
+/// through one mutation per op took fifteen hours.
+///
+/// One batch is one build. This is the assertion that keeps it that way.
+#[test]
+fn a_mixed_batch_rebuilds_once() {
+    let mut model = load();
+    let before = model.last_rebuild_stats().rebuilds;
+
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: authoring_gesture(),
+        })
+        .expect("the authoring gesture applies");
+
+    assert_eq!(
+        model.last_rebuild_stats().rebuilds - before,
+        1,
+        "a four-child batch must build the document ONCE, not once per child",
+    );
+}
+
+/// The contrast, and the equivalence in one test: the same gesture sent
+/// one mutation at a time pays a build per op — and lands the document
+/// in exactly the same place, scene and built pages alike. Deferring the
+/// rebuild may not change what a batch produces.
+#[test]
+fn the_deferred_build_lands_where_the_per_op_builds_do() {
+    let mut batched = load();
+    let batched_before = batched.last_rebuild_stats().rebuilds;
+    batched
+        .apply_mutation(&Mutation::Batch {
+            ops: authoring_gesture(),
+        })
+        .expect("batched gesture");
+    let batched_builds = batched.last_rebuild_stats().rebuilds - batched_before;
+
+    // The same children, one mutation each. No handles: the sequential
+    // lane addresses the ids the engine minted, which is exactly what
+    // the handle resolver substitutes inside the batch.
+    let mut sequential = load();
+    let sequential_before = sequential.last_rebuild_stats().rebuilds;
+    sequential
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: PageId("p1".into()),
+            bounds: (10.0, 10.0, 200.0, 300.0),
+        })
+        .expect("frame");
+    let minted = sequential.scene().spreads[0]
+        .spread
+        .text_frames
+        .last()
+        .expect("the minted frame");
+    let frame_id = minted.self_id.clone().expect("frame self id");
+    let story_id = minted.parent_story.clone().expect("frame's minted story");
+    sequential
+        .apply_mutation(&Mutation::InsertText {
+            story_id,
+            offset: 0,
+            text: "poured".into(),
+            cell: None,
+        })
+        .expect("pour");
+    sequential
+        .apply_mutation(&Mutation::SetElementProperty {
+            element_id: ElementId::TextFrame(frame_id),
+            path: paged_mutate::PropertyPath::FrameFillColor,
+            value: paged_mutate::Value::ColorRef(Some("Color/Black".into())),
+        })
+        .expect("paint");
+    let sequential_builds = sequential.last_rebuild_stats().rebuilds - sequential_before;
+
+    assert_eq!(
+        (batched_builds, sequential_builds),
+        (1, 3),
+        "one build for the batch, one per op for the sequence",
+    );
+    assert_eq!(
+        batched.current_state_hash(),
+        sequential.current_state_hash(),
+        "the batched gesture must leave the SCENE where the sequence does",
+    );
+    assert_eq!(
+        format!("{:?}", batched.built().pages),
+        format!("{:?}", sequential.built().pages),
+        "and the BUILT pages too — a deferred build that never ran would \
+         leave the batched model displaying the document it started from",
+    );
+}
+
+/// A batch that fails still owes its build: the rollback restores the
+/// scene, and `built` must describe THAT scene rather than the
+/// half-applied one the failing child left behind.
+#[test]
+fn a_rolled_back_batch_rebuilds_from_the_restored_scene() {
+    let mut model = load();
+    let before = format!("{:?}", model.built().pages);
+    let builds_before = model.last_rebuild_stats().rebuilds;
+
+    let err = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (10.0, 10.0, 200.0, 300.0),
+                },
+                bind("frame"),
+                Mutation::InsertText {
+                    story_id: "$h:frame".into(),
+                    offset: 0,
+                    text: "poured".into(),
+                    cell: None,
+                },
+                // Nothing bound this one — the batch fails here.
+                fill("never-bound", "Color/Black"),
+            ],
+        })
+        .expect_err("the unresolvable handle fails the batch");
+    assert!(
+        format!("{err:?}").contains("never-bound"),
+        "the error names the handle: {err:?}",
+    );
+    assert_eq!(
+        format!("{:?}", model.built().pages),
+        before,
+        "the rolled-back batch leaves the built document where it was",
+    );
+    assert!(
+        model.last_rebuild_stats().rebuilds > builds_before,
+        "and it did rebuild — the restored scene has to reach `built`",
+    );
+}
+
+// ── What a batch minted ────────────────────────────────────────────
+
+/// A batch mints one element per creating child and `createdId` can
+/// name only the last, so a caller authoring through batches could not
+/// address what it had just made — it had to send one mutation per
+/// element (a full rebuild each) or re-discover the ids with a scene
+/// walk. `minted` is that list, in mint order, carrying the handle each
+/// element was bound to.
+#[test]
+fn a_mixed_batch_reports_every_id_it_minted() {
+    let mut model = load();
+    let outcome = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (10.0, 10.0, 200.0, 300.0),
+                },
+                bind("frame"),
+                Mutation::InsertText {
+                    story_id: "$h:frame".into(),
+                    offset: 0,
+                    text: "poured".into(),
+                    cell: None,
+                },
+                insert_path(400.0),
+                bind("mark"),
+            ],
+        })
+        .expect("gesture applies");
+
+    let names: Vec<Option<&str>> = outcome
+        .minted
+        .iter()
+        .map(|m| m.handle.as_deref())
+        .collect();
+    assert_eq!(
+        names,
+        vec![Some("frame"), Some("mark")],
+        "both mints reported, each under the name that bound it",
+    );
+    let frame = &outcome.minted[0];
+    assert!(
+        matches!(&frame.element, ElementId::TextFrame(_)),
+        "the first mint is the text frame, got {:?}",
+        frame.element,
+    );
+    let scene_story = model.scene().spreads[0]
+        .spread
+        .text_frames
+        .last()
+        .and_then(|f| f.parent_story.clone());
+    assert_eq!(
+        frame.story_id, scene_story,
+        "the frame's mint carries the story its insert minted — what a \
+         later pour addresses",
+    );
+    assert_eq!(
+        outcome.created_id.as_ref(),
+        Some(&outcome.minted[1].element),
+        "createdId still names the LAST mint, as it always did",
+    );
+}
+
+/// The same on the lane that translates whole (no text child): a pure
+/// geometry batch is applied as ONE `Operation::Batch`, and it reports
+/// its mints in the order the children ran. Handles are resolved before
+/// apply on this lane, so the names do not come back — the ORDER is the
+/// contract, and it is the same order the caller wrote.
+#[test]
+fn a_translatable_batch_reports_its_mints_in_order() {
+    let mut model = load();
+    let outcome = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![insert_path(10.0), bind("a"), insert_path(80.0), bind("b")],
+        })
+        .expect("two paths apply");
+
+    assert_eq!(outcome.minted.len(), 2, "one entry per creating child");
+    let ids: Vec<String> = outcome
+        .minted
+        .iter()
+        .map(|m| match &m.element {
+            ElementId::Polygon(id) => id.clone(),
+            other => panic!("expected a polygon, got {other:?}"),
+        })
+        .collect();
+    let by_geometry: Vec<String> = [10.0_f32, 80.0]
+        .into_iter()
+        .map(|x| {
+            model.scene().spreads[0]
+                .spread
+                .polygons
+                .iter()
+                .find(|p| {
+                    p.anchors
+                        .first()
+                        .is_some_and(|a| (a.anchor.0 - x).abs() < 1e-3)
+                })
+                .and_then(|p| p.self_id.clone())
+                .expect("polygon at x")
+        })
+        .collect();
+    assert_eq!(
+        ids, by_geometry,
+        "mint order matches the order the children were written",
+    );
+}
+
+/// A single mutation reports nothing new: its one mint is `createdId`,
+/// and a caller that reads `minted` on every reply must not see a
+/// phantom second source of truth.
+#[test]
+fn a_single_mutation_mints_into_created_id_only() {
+    let mut model = load();
+    let outcome = model.apply_mutation(&insert_path(10.0)).expect("one path");
+    assert!(outcome.created_id.is_some());
+    assert!(
+        outcome.minted.is_empty(),
+        "minted is the batch's list; a single mutation leaves it empty",
+    );
+}

@@ -251,6 +251,12 @@ pub struct MutationOutcome {
     /// re-paginate (the §8.5 resize-vs-transform distinction). The
     /// dispatch threads this onto `MutationApplied.reflow`.
     pub reflow: Option<crate::channel::FrameReflowInfo>,
+    /// Every element this mutation minted, in mint order, each with the
+    /// C-15 handle that named it. A `Batch` fills it; a single mutation
+    /// leaves it empty, because `created_id` already names its one mint.
+    /// Threaded onto `MutationApplied::minted` so a caller that authors
+    /// through batches can address what it just made.
+    pub minted: Vec<crate::channel::MintedElement>,
 }
 
 /// S-13 — result of [`CanvasModel::measure_text`]. All fields in
@@ -310,6 +316,22 @@ fn element_to_member_node_id(
         ElementId::Group(s) => paged_mutate::NodeId::Group(s.clone()),
         other => return element_to_leaf_node_id(other),
     })
+}
+
+/// Every element an applied operation minted, in the order its children
+/// ran. A `Batch` mints one per creating child; anything else mints at
+/// most one. Sibling of [`created_element_id`], which reports only the
+/// LAST — the contract a single-mutation reply carries.
+///
+/// ORDER is the contract: a caller that sent N creating children reads
+/// them back in the order it wrote them.
+fn created_element_ids(
+    op: &paged_mutate::Operation,
+) -> Vec<crate::element_selection::ElementId> {
+    if let paged_mutate::Operation::Batch { ops } = op {
+        return ops.iter().flat_map(created_element_ids).collect();
+    }
+    created_element_id(op).into_iter().collect()
 }
 
 fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_selection::ElementId> {
@@ -1290,6 +1312,22 @@ pub struct CanvasModel {
     /// it is consumed, so a view-state rebuild (no preceding edit) reads
     /// 0 rather than a stale value.
     pending_op_apply_ms: f64,
+    /// Perf-Batch — while set, `rebuild_after_mutation` records that a
+    /// rebuild is OWED and returns without building. The mixed-batch
+    /// executor sets it so an N-child batch pays ONE
+    /// `pipeline::build_document` instead of N.
+    ///
+    /// The rebuild is what a mutation actually costs: it walks the whole
+    /// document, so it scales with content rather than with the edit
+    /// (measured on a 134-page book: ~16 ms native, ~14 s in wasm, per
+    /// operation). Every compound authoring gesture — insert a frame,
+    /// pour its text, style it, put it on a layer — used to pay that
+    /// per child.
+    rebuild_deferred: bool,
+    /// Set by a deferred `rebuild_after_mutation`; consumed by the one
+    /// build the batch executor runs when its children are done. A batch
+    /// whose children changed nothing owes nothing and builds nothing.
+    rebuild_owed: bool,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1636,6 +1674,8 @@ impl CanvasModel {
                 applied_log_len: 0,
             },
             pending_op_apply_ms: 0.0,
+            rebuild_deferred: false,
+            rebuild_owed: false,
         })
     }
 
@@ -1806,6 +1846,7 @@ impl CanvasModel {
                 created_id: None,
                 page_structure_changed: false,
                 reflow: None,
+                minted: Vec::new(),
             });
         }
         // Concept 2 — colour-management settings: whole-state app
@@ -1867,6 +1908,7 @@ impl CanvasModel {
                 created_id: None,
                 page_structure_changed: false,
                 reflow: None,
+                minted: Vec::new(),
             });
         }
         // Concept 2 — soft-proof toggle/setup: swap the display
@@ -1919,6 +1961,7 @@ impl CanvasModel {
                 created_id: None,
                 page_structure_changed: false,
                 reflow: None,
+                minted: Vec::new(),
             });
         }
         // Concept 2 (Ink Manager) — output-time ink settings.
@@ -1960,6 +2003,7 @@ impl CanvasModel {
                 created_id: None,
                 page_structure_changed: false,
                 reflow: None,
+                minted: Vec::new(),
             });
         }
         if let Mutation::SetUseStandardLabForSpots { enabled } = mutation {
@@ -1990,6 +2034,7 @@ impl CanvasModel {
                 created_id: None,
                 page_structure_changed: false,
                 reflow: None,
+                minted: Vec::new(),
             });
         }
         // Phase B — route frame-shape mutations through the canonical
@@ -2001,6 +2046,29 @@ impl CanvasModel {
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
             let outcome = self.apply_operation(op)?;
             let created_id = created_element_id(&outcome.applied.op);
+            // Perf-Batch — a batch that translates whole still mints one
+            // id per creating child, and `created_id` names only the
+            // last. Report the list in mint order. The `handle` names
+            // stay `None` on this lane: translation resolves handles
+            // before apply and drops the `bindCreated` children, so the
+            // binding is not recoverable from the applied operation —
+            // ORDER is the contract a caller reads either way.
+            let minted: Vec<crate::channel::MintedElement> =
+                if matches!(mutation, Mutation::Batch { .. }) {
+                    created_element_ids(&outcome.applied.op)
+                        .into_iter()
+                        .map(|element| {
+                            let story_id = self.story_of_element(&element);
+                            crate::channel::MintedElement {
+                                handle: None,
+                                element,
+                                story_id,
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             // Page-list mutations (M7 extends this set with ResizePage)
             // require the editor to rebuild its page grid.
             let page_structure_changed = matches!(
@@ -2050,6 +2118,7 @@ impl CanvasModel {
                 created_id,
                 page_structure_changed,
                 reflow,
+                minted,
             });
         }
         // A Batch that reaches HERE could not translate as a whole: at
@@ -2156,6 +2225,7 @@ impl CanvasModel {
             created_id: None,
             page_structure_changed: false,
             reflow: None,
+            minted: Vec::new(),
         })
     }
 
@@ -2175,12 +2245,55 @@ impl CanvasModel {
     /// error names the child that failed. The rollback replays the same
     /// inverses undo would, through the same lanes.
     ///
-    /// NOT YET: children each trigger their own rebuild, so an N-child
-    /// batch rebuilds N times where one would do. Correctness first —
-    /// this path previously applied nothing at all. Folding the rebuild
-    /// to the end needs the per-lane apply split from the rebuild it
-    /// currently drives.
+    /// ONE REBUILD: the children apply through the single-mutation
+    /// dispatch, but their rebuilds are DEFERRED and settled once here,
+    /// after the last child (`rebuild_deferred`). A rebuild costs a walk
+    /// of the whole document, so an N-child batch used to pay N of them
+    /// — which is what made a compound authoring gesture on a large
+    /// document (insert frame, pour text, style it, assign a layer)
+    /// cost N full builds where one would do. The children see the
+    /// scene, which is edited immediately; only `built` lags, and
+    /// nothing in the apply path reads it.
+    ///
+    /// The rollback path settles the same debt: `roll_back_batch` asks
+    /// for its rebuild under the deferral, and this wrapper runs it.
     fn apply_mixed_batch(
+        &mut self,
+        ops: &[Mutation],
+    ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        // A nested batch keeps the outer deferral (restore, don't clear).
+        let outer = std::mem::replace(&mut self.rebuild_deferred, true);
+        let result = self.apply_mixed_batch_children(ops);
+        self.rebuild_deferred = outer;
+        // An inner batch leaves the debt to the outer one, which owns
+        // the single build.
+        if outer {
+            return result;
+        }
+        let rebuilt = if std::mem::take(&mut self.rebuild_owed) {
+            self.rebuild_after_mutation()
+        } else {
+            Ok(())
+        };
+        // A child's failure is the more useful error; the rollback has
+        // already restored the scene either way.
+        let outcome = result?;
+        rebuilt.map_err(|e| crate::channel::WorkerError::NotImplemented {
+            what: format!("rebuild after batch: {e}"),
+        })?;
+        Ok(MutationOutcome {
+            // Read from the FRESH build: the page ids the children saw
+            // predate the batch's own structural changes.
+            page_ids: self.built.pages.iter().map(|p| p.id.clone()).collect(),
+            ..outcome
+        })
+    }
+
+    /// The children of a mixed batch, applied in order under the
+    /// caller's rebuild deferral. Split from [`Self::apply_mixed_batch`]
+    /// so every exit — success, a child's error, an unresolvable handle
+    /// — returns through the one place that settles the rebuild.
+    fn apply_mixed_batch_children(
         &mut self,
         ops: &[Mutation],
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
@@ -2188,6 +2301,8 @@ impl CanvasModel {
 
         let log_base = self.applied_log.len();
         let mut created_id = None;
+        // Every mint, in order — what `created_id` alone could not say.
+        let mut minted: Vec<crate::channel::MintedElement> = Vec::new();
         let mut page_structure_changed = false;
         // C-15 — handle resolution is OFF unless the batch binds a
         // name. A batch that binds nothing takes byte-identical
@@ -2203,6 +2318,12 @@ impl CanvasModel {
             if let Mutation::BindCreated { handle } = child {
                 match scope.created().cloned() {
                     Some(bound) => {
+                        // The name also travels back on the reply, so a
+                        // caller reads its own handles rather than
+                        // guessing which minted id is which.
+                        if let Some(last) = minted.last_mut() {
+                            last.handle = Some(handle.clone());
+                        }
                         scope.bind(handle.clone(), bound);
                         continue;
                     }
@@ -2263,14 +2384,28 @@ impl CanvasModel {
                     // The batch reports the LAST id minted by any child,
                     // matching the single-mutation contract (the editor
                     // selects the fresh element).
+                    // A nested batch already carries the full list of
+                    // its own mints; taking its `created_id` too would
+                    // count the last one twice.
+                    if !outcome.minted.is_empty() {
+                        minted.extend(outcome.minted.iter().cloned());
+                    }
                     if let Some(element) = outcome.created_id {
+                        // The story comes off the freshly-mutated scene:
+                        // a text frame carries the `ParentStory` its
+                        // insert minted, so `$h:f` in a `storyId`
+                        // position addresses it — and so does a caller
+                        // reading `minted` off the reply.
+                        let story_id = self.story_of_element(&element);
+                        if outcome.minted.is_empty() {
+                            minted.push(crate::channel::MintedElement {
+                                handle: None,
+                                element: element.clone(),
+                                story_id: story_id.clone(),
+                            });
+                        }
                         if uses_handles {
-                            // What the next `bindCreated` names. The
-                            // story comes off the freshly-mutated scene:
-                            // a text frame carries the `ParentStory` its
-                            // insert minted, so `$h:f` in a `storyId`
-                            // position addresses it.
-                            let story_id = self.story_of_element(&element);
+                            // What the next `bindCreated` names.
                             scope.set_created(Some(BoundHandle {
                                 element: element.clone(),
                                 story_id,
@@ -2319,6 +2454,7 @@ impl CanvasModel {
             created_id,
             page_structure_changed,
             reflow: None,
+            minted,
         })
     }
 
@@ -8050,6 +8186,16 @@ impl CanvasModel {
     }
 
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
+        // Perf-Batch — inside a batch the children each ask for a
+        // rebuild and only the last one is worth running. Record the
+        // debt; `apply_mixed_batch` settles it once, after the last
+        // child. Nothing else may set this flag: a deferral that is
+        // never settled would leave `built` describing a document the
+        // scene no longer is.
+        if self.rebuild_deferred {
+            self.rebuild_owed = true;
+            return Ok(());
+        }
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         // C-6 — build the per-frame provider entry map, borrowing the tile
         // store as the shared provider. Built before `options` so it lives
