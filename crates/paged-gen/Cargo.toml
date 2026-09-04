@@ -19,7 +19,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "730db4574f98e74be94d58d39a2080b7e90bf82d" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "586dac3c5693b3e6714749cf2fef5a01f91fbfc5" }
 paged-scene = { path = "../paged-scene" }
 paged-renderer = { path = "../paged-renderer" }
 paged-compose = { path = "../paged-compose" }

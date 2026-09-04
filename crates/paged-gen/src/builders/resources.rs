@@ -698,16 +698,26 @@ fn styles_xml_full_with(
     );
     b.end("RootCharacterStyleGroup");
     b.start("RootParagraphStyleGroup", &[]);
-    b.empty(
+    // The applied font is a typed CHILD of `<Properties>`, never an
+    // attribute — the one high-frequency style field IDML spells that
+    // way. As an attribute InDesign ignores it and falls back to its
+    // own default, which is how a specimen set in twenty faces opened
+    // entirely in Minion Pro.
+    b.start(
         "ParagraphStyle",
         &[
             ("Self", "ParagraphStyle/$ID/[No paragraph style]"),
             ("Name", "$ID/[No paragraph style]"),
-            ("AppliedFont", "Open Sans"),
             ("PointSize", "12"),
             ("FillColor", "Color/Black"),
         ],
     );
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text("Open Sans");
+    b.end("AppliedFont");
+    b.end("Properties");
+    b.end("ParagraphStyle");
     // Extra named paragraph styles — emitted in paged-write's canonical
     // attribute order so the byte round-trip gate stays green.
     for ps in extra_paragraph_styles {
@@ -715,14 +725,18 @@ fn styles_xml_full_with(
         let attrs = [
             ("Self", ps.self_id),
             ("Name", ps.name),
-            ("AppliedFont", ps.applied_font),
             ("PointSize", point_size.as_str()),
             ("FillColor", ps.fill_color),
         ];
-        if ps.nested_styles.is_empty() {
-            b.empty("ParagraphStyle", &attrs);
-        } else {
+        {
+            // Same rule as above: the font is a `<Properties>` child, so
+            // every style here opens rather than self-closes.
             b.start("ParagraphStyle", &attrs);
+            b.start("Properties", &[]);
+            b.start("AppliedFont", &[("type", "string")]);
+            b.text(ps.applied_font);
+            b.end("AppliedFont");
+            b.end("Properties");
             for ns in &ps.nested_styles {
                 let rep = ns.repetition.to_string();
                 b.empty(

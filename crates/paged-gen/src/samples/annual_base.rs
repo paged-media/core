@@ -666,6 +666,46 @@ fn fonts() -> Vec<u8> {
 /// object/table/cell styles, spliced as one raw fragment (the parser
 /// keys every style element by `Self` regardless of wrapper). Leadings
 /// are typed `<Properties>` children; all sit the 13 pt rhythm.
+/// Split an `AppliedFont="…"` attribute out of a style's attribute
+/// string.
+///
+/// IDML spells the applied font as a typed CHILD of `<Properties>`,
+/// never as an attribute — a real InDesign-authored file carries
+/// `<AppliedFont type="string">Titillium</AppliedFont>` and not one
+/// attribute of that name. Written as an attribute it is silently
+/// ignored, which is how this book, set in twenty faces, opened in
+/// InDesign entirely in Minion Pro. Splitting it here lets every style
+/// below keep writing `AppliedFont="…"` in its attribute string while
+/// the FILE carries the spelling Adobe reads.
+fn split_applied_font(attrs: &str) -> (String, Option<String>) {
+    let Some(at) = attrs.find("AppliedFont=\"") else {
+        return (attrs.to_string(), None);
+    };
+    let value_start = at + "AppliedFont=\"".len();
+    let Some(rel_end) = attrs[value_start..].find('"') else {
+        return (attrs.to_string(), None);
+    };
+    let value_end = value_start + rel_end;
+    let font = attrs[value_start..value_end].to_string();
+    let mut rest = String::with_capacity(attrs.len());
+    rest.push_str(attrs[..at].trim_end());
+    let tail = attrs[value_end + 1..].trim_start();
+    if !rest.is_empty() && !tail.is_empty() {
+        rest.push(' ');
+    }
+    rest.push_str(tail);
+    (rest, Some(font))
+}
+
+/// `<AppliedFont type="string">…` for a `<Properties>` block, or
+/// nothing when the style pins no font.
+fn applied_font_property(font: Option<&str>) -> String {
+    match font {
+        Some(f) => format!("<AppliedFont type=\"string\">{f}</AppliedFont>"),
+        None => String::new(),
+    }
+}
+
 fn styles() -> Vec<u8> {
     let mut f = String::new();
 
@@ -674,13 +714,12 @@ fn styles() -> Vec<u8> {
     f.push_str(&format!(
         "<RootCharacterStyleGroup>\
 <CharacterStyle Self=\"{CHAR_EMPHASIS}\" Name=\"Annual Emphasis\" \
-AppliedFont=\"EB Garamond\" FontStyle=\"Italic\"/>\
+FontStyle=\"Italic\"><Properties><AppliedFont type=\"string\">EB Garamond</AppliedFont></Properties></CharacterStyle>\
 <CharacterStyle Self=\"{CHAR_STRONG}\" Name=\"Annual Strong\" \
-AppliedFont=\"Source Serif 4\" FontStyle=\"Bold\"/>\
+FontStyle=\"Bold\"><Properties><AppliedFont type=\"string\">Source Serif 4</AppliedFont></Properties></CharacterStyle>\
 <CharacterStyle Self=\"{CHAR_SMALL_CAPS}\" Name=\"Small Caps\" \
-AppliedFont=\"EB Garamond\" Capitalization=\"SmallCaps\" Tracking=\"20\"/>\
-<CharacterStyle Self=\"{CHAR_CODE_INLINE}\" Name=\"Code Inline\" \
-AppliedFont=\"JetBrains Mono\"/>\
+Capitalization=\"SmallCaps\" Tracking=\"20\"><Properties><AppliedFont type=\"string\">EB Garamond</AppliedFont></Properties></CharacterStyle>\
+<CharacterStyle Self=\"{CHAR_CODE_INLINE}\" Name=\"Code Inline\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
 <CharacterStyle Self=\"{CHAR_LEAD_IN}\" Name=\"Lead-In\" \
 Capitalization=\"SmallCaps\" Tracking=\"40\"/>\
 <CharacterStyle Self=\"{CHAR_SUPERIOR}\" Name=\"Superior\" \
@@ -690,7 +729,7 @@ FillColor=\"{SWATCH_SCREEN_BLUE}\" Underline=\"true\"/>\
 <CharacterStyle Self=\"{CHAR_ACCENT_INK}\" Name=\"Accent Ink\" \
 FillColor=\"{SWATCH_VERMILION}\"/>\
 <CharacterStyle Self=\"{CHAR_SPECIMEN_NUMBER}\" Name=\"Specimen Number\" \
-AppliedFont=\"JetBrains Mono\" FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\"/>\
+FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
 </RootCharacterStyleGroup>"
     ));
 
@@ -699,9 +738,11 @@ AppliedFont=\"JetBrains Mono\" FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\"/>\
     f.push_str("<RootParagraphStyleGroup>");
     let para =
         |f: &mut String, self_id: &str, name: &str, attrs: &str, leading: f32, child: &str| {
+            let (attrs, font) = split_applied_font(attrs);
+            let font_prop = applied_font_property(font.as_deref());
             f.push_str(&format!(
                 "<ParagraphStyle Self=\"{self_id}\" Name=\"{name}\" {attrs}>\
-<Properties><Leading type=\"unit\">{leading}</Leading></Properties>{child}\
+<Properties>{font_prop}<Leading type=\"unit\">{leading}</Leading></Properties>{child}\
 </ParagraphStyle>"
             ));
         };
@@ -1344,10 +1385,14 @@ fn write_vertical_exhibit_story(story_id: &str, lead: &str, ruby_base: &str, rub
         "CharacterStyleRange",
         &[
             ("AppliedCharacterStyle", NO_CHAR_STYLE),
-            ("AppliedFont", "Noto Sans JP"),
             ("PointSize", "13"),
         ],
     );
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text("Noto Sans JP");
+    b.end("AppliedFont");
+    b.end("Properties");
     b.start("Content", &[]);
     b.text(lead);
     b.end("Content");
@@ -1356,13 +1401,17 @@ fn write_vertical_exhibit_story(story_id: &str, lead: &str, ruby_base: &str, rub
         "CharacterStyleRange",
         &[
             ("AppliedCharacterStyle", NO_CHAR_STYLE),
-            ("AppliedFont", "Noto Sans JP"),
             ("PointSize", "13"),
             ("Ruby", "true"),
             ("RubyString", ruby),
             ("RubyType", "GroupRuby"),
         ],
     );
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text("Noto Sans JP");
+    b.end("AppliedFont");
+    b.end("Properties");
     b.start("Content", &[]);
     b.text(ruby_base);
     b.end("Content");
@@ -1371,11 +1420,15 @@ fn write_vertical_exhibit_story(story_id: &str, lead: &str, ruby_base: &str, rub
         "CharacterStyleRange",
         &[
             ("AppliedCharacterStyle", NO_CHAR_STYLE),
-            ("AppliedFont", "Noto Sans JP"),
             ("PointSize", "13"),
             ("KentenKind", "KentenSesameDot"),
         ],
     );
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text("Noto Sans JP");
+    b.end("AppliedFont");
+    b.end("Properties");
     b.start("Content", &[]);
     b.text(tail);
     b.end("Content");
