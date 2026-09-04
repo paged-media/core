@@ -1132,3 +1132,224 @@ fn a_single_mutation_mints_into_created_id_only() {
         "minted is the batch's list; a single mutation leaves it empty",
     );
 }
+
+// ── Chained children ───────────────────────────────────────────────
+
+/// The story a frame carries, by frame self id.
+fn story_of(model: &CanvasModel, frame: &str) -> Option<String> {
+    model.scene().spreads[0]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(frame))
+        .and_then(|f| f.parent_story.clone())
+}
+
+fn frame_ids(model: &CanvasModel) -> Vec<String> {
+    model.scene().spreads[0]
+        .spread
+        .text_frames
+        .iter()
+        .filter_map(|f| f.self_id.clone())
+        .collect()
+}
+
+/// THREADING IN ONE BATCH, REAL IDS — the shape the annual's flagship
+/// spread actually sends: the frames already exist (the driver flushes
+/// before a link, because `from`/`to` are not positions the handle
+/// resolver reaches), and the two links ride ONE batch.
+///
+/// The second link's meaning depends on what the first one DID: after
+/// `link(a,b)`, frame b carries a's story, and `link(b,c)` must thread c
+/// onto that story. This is the general case of a batch whose children
+/// depend on each other's scene effect rather than only on ids.
+#[test]
+fn chained_link_frames_with_real_ids_compose_inside_one_batch() {
+    let mut model = load();
+    let mut minted = Vec::new();
+    for x in [10.0_f32, 110.0, 210.0] {
+        let out = model
+            .apply_mutation(&Mutation::InsertTextFrame {
+                page_id: PageId("p1".into()),
+                bounds: (x, 10.0, x + 90.0, 100.0),
+            })
+            .expect("frame");
+        match out.created_id {
+            Some(ElementId::TextFrame(id)) => minted.push(id),
+            other => panic!("expected a text frame, got {other:?}"),
+        }
+    }
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::LinkFrames {
+                    from: minted[0].clone(),
+                    to: minted[1].clone(),
+                },
+                Mutation::LinkFrames {
+                    from: minted[1].clone(),
+                    to: minted[2].clone(),
+                },
+            ],
+        })
+        .expect("two links in one batch");
+
+    let stories: Vec<Option<String>> =
+        minted.iter().map(|id| story_of(&model, id)).collect();
+    assert_eq!(
+        stories[0], stories[1],
+        "frames 1 and 2 must share ONE story; got {stories:?}",
+    );
+    assert_eq!(
+        stories[1], stories[2],
+        "the SECOND link must thread onto the story the first one \
+         produced, not the one frame 2 was born with; got {stories:?}",
+    );
+}
+
+/// THREADING IN ONE BATCH — mint three frames and chain them,
+/// `link(a,b)` then `link(b,c)`, as a page module writes it.
+///
+/// The second link's meaning depends on what the FIRST one did: after
+/// `link(a,b)`, frame b carries a's story, and `link(b,c)` has to thread
+/// c onto THAT story. This is the shape the annual's flagship spread
+/// uses (one story, four frames), and it is the general case of a batch
+/// whose children depend on each other's scene effect rather than only
+/// on ids.
+#[test]
+fn chained_link_frames_compose_inside_one_batch() {
+    let mut model = load();
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (10.0, 10.0, 100.0, 100.0),
+                },
+                bind("a"),
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (110.0, 10.0, 200.0, 100.0),
+                },
+                bind("b"),
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (210.0, 10.0, 300.0, 100.0),
+                },
+                bind("c"),
+                Mutation::LinkFrames {
+                    from: "$h:a".into(),
+                    to: "$h:b".into(),
+                },
+                Mutation::LinkFrames {
+                    from: "$h:b".into(),
+                    to: "$h:c".into(),
+                },
+            ],
+        })
+        .expect("three frames threaded in one batch");
+
+    let ids = frame_ids(&model);
+    let minted: Vec<&String> = ids.iter().rev().take(3).collect();
+    let stories: Vec<Option<String>> =
+        minted.iter().map(|id| story_of(&model, id)).collect();
+    assert_eq!(
+        stories[0], stories[1],
+        "the chain's frames must share ONE story; got {stories:?}",
+    );
+    assert_eq!(
+        stories[1], stories[2],
+        "the chain's frames must share ONE story; got {stories:?}",
+    );
+}
+
+/// The same chain, one mutation at a time — the lane the annual fell
+/// back to. Pins what the batched case is being measured against.
+#[test]
+fn chained_link_frames_compose_one_mutation_at_a_time() {
+    let mut model = load();
+    let mut minted = Vec::new();
+    for (i, x) in [10.0_f32, 110.0, 210.0].into_iter().enumerate() {
+        let out = model
+            .apply_mutation(&Mutation::InsertTextFrame {
+                page_id: PageId("p1".into()),
+                bounds: (x, 10.0, x + 90.0, 100.0),
+            })
+            .unwrap_or_else(|e| panic!("frame {i}: {e:?}"));
+        match out.created_id {
+            Some(ElementId::TextFrame(id)) => minted.push(id),
+            other => panic!("expected a text frame, got {other:?}"),
+        }
+    }
+    for pair in minted.windows(2) {
+        model
+            .apply_mutation(&Mutation::LinkFrames {
+                from: pair[0].clone(),
+                to: pair[1].clone(),
+            })
+            .expect("link");
+    }
+    let stories: Vec<Option<String>> =
+        minted.iter().map(|id| story_of(&model, id)).collect();
+    assert_eq!(stories[0], stories[1], "got {stories:?}");
+    assert_eq!(stories[1], stories[2], "got {stories:?}");
+}
+
+/// The annual's EXACT shape: the frames are minted together in one
+/// batch (a module's whole spread rides one), and the links ride the
+/// next one. `135-story`'s threading oracle failed on this and the
+/// chapter fell back to one-mutation-per-op, so it is pinned here.
+#[test]
+fn frames_minted_in_one_batch_thread_in_the_next() {
+    let mut model = load();
+    let out = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (10.0, 10.0, 100.0, 100.0),
+                },
+                bind("a"),
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (110.0, 10.0, 200.0, 100.0),
+                },
+                bind("b"),
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (210.0, 10.0, 300.0, 100.0),
+                },
+                bind("c"),
+            ],
+        })
+        .expect("three frames in one batch");
+    let minted: Vec<String> = out
+        .minted
+        .iter()
+        .map(|m| match &m.element {
+            ElementId::TextFrame(id) => id.clone(),
+            other => panic!("expected a text frame, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(minted.len(), 3, "the batch reported its three mints");
+
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::LinkFrames {
+                    from: minted[0].clone(),
+                    to: minted[1].clone(),
+                },
+                Mutation::LinkFrames {
+                    from: minted[1].clone(),
+                    to: minted[2].clone(),
+                },
+            ],
+        })
+        .expect("two links in one batch");
+
+    let stories: Vec<Option<String>> =
+        minted.iter().map(|id| story_of(&model, id)).collect();
+    assert_eq!(stories[0], stories[1], "frames 1 and 2 share one story; got {stories:?}");
+    assert_eq!(stories[1], stories[2], "frames 2 and 3 share one story; got {stories:?}");
+}

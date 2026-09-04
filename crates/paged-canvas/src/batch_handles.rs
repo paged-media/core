@@ -148,8 +148,22 @@ fn is_reference(s: &str) -> bool {
 /// … Anything else (`text`, `key`, `name`, numbers) is content and is
 /// never rewritten, so a document may legitimately contain the literal
 /// `"$h:…"`.
+///
+/// The `Id`/`Ids` suffix covers almost every address the wire has, but
+/// not all of them: `LinkFrames { from, to }` and `UnlinkFrames
+/// { frame }` name frames in fields that read as prose. A handle in one
+/// of those used to fail the batch with "node not found:
+/// TextFrame(\"$h:a\")" — so threading, which is the one flow that
+/// inherently chains several minted frames, was the flow handles could
+/// not serve. The annual found it: its flagship spread mints four
+/// frames and links them, and the driver had to flush the batch before
+/// every link.
+///
+/// Naming these three is safe because only a REFERENCE string is ever
+/// rewritten (`is_reference`): `reorderElement`'s `to: "front"` and any
+/// other prose value in a same-named field passes through untouched.
 fn is_address_key(key: &str) -> bool {
-    key.ends_with("Id") || key.ends_with("Ids")
+    key.ends_with("Id") || key.ends_with("Ids") || matches!(key, "from" | "to" | "frame")
 }
 
 /// Rewrite every handle reference in one batch child. Returns the child
