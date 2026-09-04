@@ -1353,3 +1353,67 @@ fn frames_minted_in_one_batch_thread_in_the_next() {
     assert_eq!(stories[0], stories[1], "frames 1 and 2 share one story; got {stories:?}");
     assert_eq!(stories[1], stories[2], "frames 2 and 3 share one story; got {stories:?}");
 }
+
+/// The MIXED lane of the same thing: the links ride a batch that also
+/// pours text, which is what a page module actually sends (its whole
+/// spread is one batch, and any text child routes the batch through
+/// `apply_mixed_batch` instead of the translatable path).
+///
+/// The annual saw threading fail here twice — `135-story`'s oracle read
+/// `Story/u229` where the chain's was `u228`, and the manuscript
+/// chapter logged "linkFrames did not carry the story into the recto
+/// frame (the target kept its own story)" — so the two lanes are pinned
+/// separately.
+#[test]
+fn links_thread_in_a_batch_that_also_pours_text() {
+    let mut model = load();
+    let out = model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (10.0, 10.0, 100.0, 100.0),
+                },
+                bind("a"),
+                Mutation::InsertTextFrame {
+                    page_id: PageId("p1".into()),
+                    bounds: (110.0, 10.0, 200.0, 100.0),
+                },
+                bind("b"),
+            ],
+        })
+        .expect("two frames");
+    let minted: Vec<String> = out
+        .minted
+        .iter()
+        .map(|m| match &m.element {
+            ElementId::TextFrame(id) => id.clone(),
+            other => panic!("expected a text frame, got {other:?}"),
+        })
+        .collect();
+    let chain_story = story_of(&model, &minted[0]).expect("frame a's story");
+
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::LinkFrames {
+                    from: minted[0].clone(),
+                    to: minted[1].clone(),
+                },
+                Mutation::InsertText {
+                    story_id: chain_story.clone(),
+                    offset: 0,
+                    text: "poured through the chain".into(),
+                    cell: None,
+                },
+            ],
+        })
+        .expect("link + pour in one batch");
+
+    assert_eq!(
+        story_of(&model, &minted[1]),
+        Some(chain_story),
+        "the linked frame must carry the chain's story, not the one it \
+         was born with",
+    );
+}
