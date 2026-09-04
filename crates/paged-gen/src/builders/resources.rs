@@ -526,13 +526,71 @@ ContinueNumbersAcrossDocuments=\"false\"/>\
 /// `Root…Group` wrapper holds it, so the caller may inline whatever
 /// well-formed fragment it needs.
 pub fn styles_xml_with_raw(fragment: &str) -> Vec<u8> {
-    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
+    let mut text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
+    // MERGE INTO the root groups, never append a second one.
+    //
+    // Appending was the obvious splice and it produced a file with two
+    // `<RootParagraphStyleGroup>` elements — the defaults' and the
+    // sample's. Our own reader merges them, so nothing here ever
+    // complained; InDesign takes ONE and discards the other, which is
+    // how the annual's entire style sheet — every typeface it names —
+    // became invisible to Adobe while our round trip stayed green.
+    // Found by opening the book in InDesign 2025: three fonts, none of
+    // the book's twenty.
+    for group in [
+        "RootCharacterStyleGroup",
+        "RootParagraphStyleGroup",
+        "RootObjectStyleGroup",
+        "RootCellStyleGroup",
+        "RootTableStyleGroup",
+    ] {
+        let open = format!("<{group}>");
+        let close = format!("</{group}>");
+        let Some(frag_start) = fragment.find(&open) else {
+            continue;
+        };
+        let Some(frag_end) = fragment[frag_start..].find(&close) else {
+            continue;
+        };
+        let inner = &fragment[frag_start + open.len()..frag_start + frag_end];
+        if let Some(at) = text.find(&close) {
+            text.insert_str(at, inner);
+        } else if let Some(at) = text.rfind("</idPkg:Styles>") {
+            text.insert_str(at, &format!("{open}{inner}{close}"));
+        }
+    }
+    // Everything that is NOT one of those groups — conditions, TOC
+    // styles, numbering lists — still appends whole.
+    let rest = strip_known_groups(fragment);
     let closing = "</idPkg:Styles>";
     let spliced = match text.rfind(closing) {
-        Some(idx) => format!("{}{}{}", &text[..idx], fragment, &text[idx..]),
-        None => format!("{text}{fragment}"),
+        Some(idx) => format!("{}{}{}", &text[..idx], rest, &text[idx..]),
+        None => format!("{text}{rest}"),
     };
     spliced.into_bytes()
+}
+
+/// The fragment with each root style group removed — what is left after
+/// [`styles_xml_with_raw`] has merged those into the defaults'.
+fn strip_known_groups(fragment: &str) -> String {
+    let mut out = fragment.to_string();
+    for group in [
+        "RootCharacterStyleGroup",
+        "RootParagraphStyleGroup",
+        "RootObjectStyleGroup",
+        "RootCellStyleGroup",
+        "RootTableStyleGroup",
+    ] {
+        let open = format!("<{group}>");
+        let close = format!("</{group}>");
+        while let Some(start) = out.find(&open) {
+            let Some(rel_end) = out[start..].find(&close) else {
+                break;
+            };
+            out.replace_range(start..start + rel_end + close.len(), "");
+        }
+    }
+    out
 }
 
 /// One `<Condition>` definition for [`styles_xml_with_conditions`]:
