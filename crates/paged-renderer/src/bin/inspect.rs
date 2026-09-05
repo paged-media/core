@@ -837,12 +837,17 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     let dst = package_entries(&written)?;
     let mut entries_identical = 0usize;
     let mut entries_patched = 0usize;
+    let mut patched_names: Vec<String> = Vec::new();
     for (name, src_bytes) in &src {
         match dst.get(name) {
             Some(d) if d == src_bytes => entries_identical += 1,
-            _ => entries_patched += 1,
+            _ => {
+                entries_patched += 1;
+                patched_names.push(name.clone());
+            }
         }
     }
+    patched_names.sort();
 
     // (b) Re-parse + parsed-model stats equality.
     let reparse = idml_import::import_idml(&written);
@@ -866,6 +871,7 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
     let report = json!({
         "entries_identical": entries_identical,
         "entries_patched": entries_patched,
+        "entries_patched_names": patched_names,
         "stats_match": stats_match,
         "pages_identical": pages_identical,
         "page_count": page_count,

@@ -3239,6 +3239,14 @@ pub struct CharacterStyleDef {
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
+    /// `Leading` in pt — the attribute, or InDesign's own spelling, the
+    /// `<Properties><Leading type="unit">` child (an `enumeration`
+    /// `Auto` is `None`). Cascades like every other field; a run with
+    /// no leading of its own composes at its style's, not at auto
+    /// leading (measured 2026-09-05 in InDesign 20.0.1: a 6.5 pt label
+    /// style leading 13 on a 15 pt frame is one line, not two — 94 of
+    /// the annual's 134 overset stories were this).
+    pub leading: Option<f32>,
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
@@ -3381,6 +3389,14 @@ pub struct ParagraphStyleDef {
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
+    /// `Leading` in pt — the attribute, or InDesign's own spelling, the
+    /// `<Properties><Leading type="unit">` child (an `enumeration`
+    /// `Auto` is `None`). Cascades like every other field; a run with
+    /// no leading of its own composes at its style's, not at auto
+    /// leading (measured 2026-09-05 in InDesign 20.0.1: a 6.5 pt label
+    /// style leading 13 on a 15 pt frame is one line, not two — 94 of
+    /// the annual's 134 overset stories were this).
+    pub leading: Option<f32>,
     pub fill_color: Option<String>,
     /// `FillTint` — see `CharacterRun::fill_tint` for semantics.
     pub fill_tint: Option<f32>,
@@ -3631,6 +3647,7 @@ pub struct ResolvedCharacter {
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
+    pub leading: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
     /// Cascaded text-stroke colour. See
@@ -3681,6 +3698,7 @@ pub struct ResolvedParagraph {
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
+    pub leading: Option<f32>,
     pub fill_color: Option<String>,
     pub fill_tint: Option<f32>,
     /// Cascaded text-stroke colour. See
@@ -3898,6 +3916,7 @@ impl ResolvedCharacter {
             self.font_style = def.font_style.clone();
         }
         self.point_size = self.point_size.or(def.point_size);
+        self.leading = self.leading.or(def.leading);
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }
@@ -3954,6 +3973,7 @@ impl ResolvedParagraph {
             self.font_style = def.font_style.clone();
         }
         self.point_size = self.point_size.or(def.point_size);
+        self.leading = self.leading.or(def.leading);
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }

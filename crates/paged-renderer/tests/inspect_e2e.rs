@@ -317,9 +317,16 @@ fn roundtrip_flag_passes_the_gate_on_an_unmutated_package() {
     // 6 entries total: mimetype, designmap, Graphic, Spread, two Stories.
     let identical = json["entries_identical"].as_u64().unwrap();
     let patched = json["entries_patched"].as_u64().unwrap();
+    // Two entries are patched on purpose: the spread (every page item
+    // gains its `ItemTransform` — InDesign reads an absent one as the
+    // page transform, not identity) and the designmap (the fixture
+    // applies "Body Font", so `Resources/Fonts.xml` is minted and
+    // referenced). Everything else must ride through byte-identical.
     assert_eq!(identical + patched, 6, "{json}");
     // The whitespace-normalised spread is the only re-serialised entry.
-    assert_eq!(patched, 1, "{json}");
+    assert_eq!(
+        patched,
+        2, "{json}");
 }
 
 /// `--roundtrip` on a non-IDML input fails cleanly (non-zero exit), not

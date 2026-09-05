@@ -938,6 +938,7 @@ impl ResolvedRunAttrs {
             self.font_style = c.font_style.clone();
         }
         self.point_size = self.point_size.or(c.point_size);
+        self.leading = self.leading.or(c.leading);
         if self.fill_color.is_none() {
             self.fill_color = c.fill_color.clone();
         }
@@ -995,6 +996,9 @@ impl ResolvedRunAttrs {
             self.font_style = p.font_style.clone();
         }
         self.point_size = self.point_size.or(p.point_size);
+        // Style-level leading cascades like every other field — a run
+        // with none of its own composes at its paragraph style's.
+        self.leading = self.leading.or(p.leading);
         if self.fill_color.is_none() {
             self.fill_color = p.fill_color.clone();
         }

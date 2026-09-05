@@ -1466,7 +1466,10 @@ impl CanvasModel {
                     // (raw carry-through bytes) beside it so the parts door still
                     // serves every other container part and IDML export can
                     // still carry through.
-                    Some(doc) => (doc, Some(container)),
+                    Some(mut doc) => {
+                        adopt_style_leading(&mut doc, &container);
+                        (doc, Some(container))
+                    }
                     None => (
                         idml_import::import_idml_archive(&container)
                             .map_err(|e| LoadError::Parse(e.to_string()))?,
@@ -8988,6 +8991,33 @@ pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
         .into_iter()
         .filter(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
         .find_map(|n| n.to_string())
+}
+
+/// A native model part written before styles modelled their leading
+/// (every `.paged` up to 2026-09-05) carries `leading: None` on every
+/// style, while the package's own `Resources/Styles.xml` still spells
+/// it (`<Properties><Leading type="unit">13</Leading>`). Adopt the
+/// stylesheet's leading for every paragraph / character style that
+/// has none, so a document reopened from such a part composes the way
+/// InDesign composes its IDML — and the way a fresh import would.
+/// A part whose styles already carry leading is left alone.
+fn adopt_style_leading(doc: &mut Document, container: &idml_import::SourceArchive) {
+    let Some(bytes) = container.entry("Resources/Styles.xml") else {
+        return;
+    };
+    let Ok(sheet) = idml_import::styles::parse_stylesheet(bytes) else {
+        return;
+    };
+    for (id, style) in doc.styles.paragraph_styles.iter_mut() {
+        if style.leading.is_none() {
+            style.leading = sheet.paragraph_styles.get(id).and_then(|s| s.leading);
+        }
+    }
+    for (id, style) in doc.styles.character_styles.iter_mut() {
+        if style.leading.is_none() {
+            style.leading = sheet.character_styles.get(id).and_then(|s| s.leading);
+        }
+    }
 }
 
 /// The faces the worker registered bytes for, one per NAMED INSTANCE
