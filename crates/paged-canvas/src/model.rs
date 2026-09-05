@@ -325,9 +325,7 @@ fn element_to_member_node_id(
 ///
 /// ORDER is the contract: a caller that sent N creating children reads
 /// them back in the order it wrote them.
-fn created_element_ids(
-    op: &paged_mutate::Operation,
-) -> Vec<crate::element_selection::ElementId> {
+fn created_element_ids(op: &paged_mutate::Operation) -> Vec<crate::element_selection::ElementId> {
     if let paged_mutate::Operation::Batch { ops } = op {
         return ops.iter().flat_map(created_element_ids).collect();
     }
@@ -2654,7 +2652,23 @@ impl CanvasModel {
                     // counter makes every mint in a batch distinct; the
                     // scan below still guards against collisions with
                     // ids already in the document.
-                    let mut n = self.scene.stories.len() + *mint_offset as usize;
+                    //
+                    // The offset alone was not enough. `stories.len()`
+                    // is a COUNT, not a ceiling: once the document's
+                    // minted ids run past it (a deleted story, a rolled-
+                    // back mint, a story minted by another path) the
+                    // guard walks EVERY offset up to the same first free
+                    // number — it can only see stories already in the
+                    // document, and on the translatable lane no sibling
+                    // has applied yet. Four frames minted in one batch
+                    // then all named one story; the first apply created
+                    // it and the other three ADOPTED it (`insert_node`
+                    // reuses an existing `ParentStory`), so the annual's
+                    // flagship spread was born "threaded" before a link
+                    // was sent. Start past every minted id instead
+                    // (`story_id_floor`), so each offset has its own
+                    // number.
+                    let mut n = self.story_id_floor() + *mint_offset as usize;
                     let mut id = format!("Story/u{n}");
                     while self.scene.stories.iter().any(|s| s.self_id == id) {
                         n += 1;
@@ -3836,6 +3850,33 @@ impl CanvasModel {
     /// number of ids already minted earlier in the same translation pass;
     /// the caller bumps it by one after each mint so N successive calls
     /// yield `u<max+1>, u<max+2>, …`. Standalone inserts pass `&mut 0`.
+    /// The number a fresh `Story/u<n>` can start from without landing
+    /// on ANY story already in the document: one past the highest
+    /// decimal `Story/u<n>` present, and never below the story count
+    /// (where the minter has always started on a document with no
+    /// minted stories, so ids there do not move).
+    ///
+    /// The story analogue of the `max + 1` the page-item minter uses.
+    /// Only an all-decimal suffix can equal the decimal id this minter
+    /// formats, so the parser's `u<hex>` story ids (named from their
+    /// file, never `Story/…`) are not candidates and are skipped.
+    fn story_id_floor(&self) -> usize {
+        let mut floor = self.scene.stories.len();
+        for s in &self.scene.stories {
+            let Some(digits) = s.self_id.strip_prefix("Story/u") else {
+                continue;
+            };
+            if digits.is_empty() || digits.len() > 12 || !digits.bytes().all(|b| b.is_ascii_digit())
+            {
+                continue;
+            }
+            if let Ok(n) = digits.parse::<usize>() {
+                floor = floor.max(n + 1);
+            }
+        }
+        floor
+    }
+
     pub(crate) fn mint_page_item_id_with_offset(&self, offset: &mut u64) -> String {
         let mut max: u64 = 0;
         for parsed in &self.scene.spreads {
@@ -4251,38 +4292,52 @@ impl CanvasModel {
         idml_export::write_idml(&self.scene, &self.source_idml)
     }
 
-    /// C-28 — the paged-NATIVE constructs an `.idml` export cannot
-    /// carry, one human-readable line each. Empty for a document that
-    /// uses only IDML-expressible features.
+    /// The constructs an `.idml` export loses, one human-readable line
+    /// each. Empty for a document whose IDML export re-parses to the
+    /// same sections, guides, hyperlinks, conditions, tables, placed
+    /// images and groups the scene holds — and that uses no opacity
+    /// masks.
     ///
-    /// This exists because IDML has **no opacity-mask element** —
-    /// InDesign's transparency model has per-object opacity, blend
-    /// modes and feathering, but nothing that modulates one object's
-    /// alpha by another object's artwork. Rather than invent an
-    /// element InDesign would reject, or smuggle the relation through
-    /// `Properties/Label` (which round-trips on paper but leaves the
-    /// mask artwork rendering as an opaque object *inside InDesign*),
-    /// an opacity mask is accepted as native-only — and the loss is
-    /// made LOUD here instead of silently happening on save.
+    /// # MEASURED, not declared
     ///
-    /// The lossless path is `.paged`: [`Self::export_paged`] embeds a
-    /// fresh native model part, and `Spread::opacity_masks` is part of
-    /// that serialisation, so a `.paged` round-trip keeps every mask.
+    /// The document is exported through [`Self::export_idml`], the
+    /// bytes are re-parsed through the same importer [`Self::load`]
+    /// uses, and the re-parsed twin is diffed against the live scene
+    /// (see `export_losses`). Every element the scene has and the twin
+    /// lacks is one line naming the element id and the reason. The list
+    /// therefore tracks what the exporter actually does, not what
+    /// someone last remembered it doing: a 134-page book measured in
+    /// real InDesign 2025 had lost 3 sections, a guide, 7 tables, 14
+    /// placed images and 2 hyperlinks while this function reported only
+    /// opacity masks and the harness gate stayed green.
+    ///
+    /// Opacity masks keep their declared line (text unchanged — the
+    /// harness matches on it): IDML has **no opacity-mask element**, so
+    /// that one is a permanent, honest loss rather than an exporter gap.
+    /// The lossless path is `.paged` ([`Self::export_paged`]), whose
+    /// native model part carries every construct verbatim.
+    ///
+    /// Cost: one full export + re-parse. This is a save-time gate, not a
+    /// per-frame query.
     pub fn idml_export_losses(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for parsed in &self.scene.spreads {
-            let mut ids: Vec<(&String, &paged_model::OpacityMask)> =
-                parsed.spread.opacity_masks.iter().collect();
-            // HashMap iteration order is not stable; sort so the
-            // reported list is deterministic across runs.
-            ids.sort_by(|a, b| a.0.cmp(b.0));
-            for (target, mask) in ids {
-                out.push(format!(
-                    "opacity mask on `{target}` (artwork `{}`) is a paged-native construct — \
-                     IDML has no opacity-mask element, so the mask is dropped and its artwork \
-                     exports as an ordinary item. Save as `.paged` to keep it.",
-                    mask.mask_item
-                ));
+        let mut out = crate::export_losses::opacity_mask_losses(&self.scene);
+        match self.export_idml() {
+            Err(e) => out.push(format!(
+                "the IDML export itself failed ({e}) — no construct below it could be measured"
+            )),
+            Ok(bytes) => {
+                let twin = idml_import::open_source_archive(&bytes)
+                    .map_err(|e| e.to_string())
+                    .and_then(|archive| {
+                        idml_import::import_idml_archive(&archive).map_err(|e| e.to_string())
+                    });
+                match twin {
+                    Err(e) => out.push(format!(
+                        "the exported IDML does not re-parse ({e}) — every construct is at \
+                         risk and none below could be measured"
+                    )),
+                    Ok(twin) => out.extend(crate::export_losses::diff(&self.scene, &twin)),
+                }
             }
         }
         out

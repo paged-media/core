@@ -133,6 +133,7 @@ use crate::builders::resources::{
     container_xml, graphic_xml_rich_full, preferences_xml, styles_xml_with_raw, ColorGroupSpec,
     ExtraGradient, GradientStop, RichColor,
 };
+use crate::builders::resources::{ConditionSetSpec, ConditionSpec};
 use crate::builders::spread::{
     write_facing_spread, write_spread, FacingPage, FacingSpread, MarginPreference, Spread,
 };
@@ -1107,24 +1108,6 @@ EndRowFillColor=\"Color/Paper\" EndRowFillCount=\"1\"/>\
 </RootTableStyleGroup>"
     ));
 
-    // Conditions + the two sets. ◪ Per-set visibility STATES are not
-    // expressible (ConditionSetDef = membership only): "Press" lists
-    // its ON condition, "Working Copy" all three — see module doc.
-    f.push_str(&format!(
-        "<RootConditionalTextGroup>\
-<Condition Self=\"{CONDITION_PRINT_ONLY}\" Name=\"Print-only\" Visible=\"true\" \
-IndicatorMethod=\"UseUnderline\" IndicatorColor=\"Green\"/>\
-<Condition Self=\"{CONDITION_SCREEN_ONLY}\" Name=\"Screen-only\" Visible=\"true\" \
-IndicatorMethod=\"UseHighlight\" IndicatorColor=\"Cyan\"/>\
-<Condition Self=\"{CONDITION_SPEC_NOTES}\" Name=\"Spec-Notes\" Visible=\"true\" \
-IndicatorMethod=\"UseHighlight\" IndicatorColor=\"Magenta\"/>\
-<ConditionSet Self=\"{CONDITION_SET_PRESS}\" Name=\"Press\" \
-Conditions=\"{CONDITION_PRINT_ONLY}\"/>\
-<ConditionSet Self=\"{CONDITION_SET_WORKING_COPY}\" Name=\"Working Copy\" \
-Conditions=\"{CONDITION_PRINT_ONLY} {CONDITION_SCREEN_ONLY} {CONDITION_SPEC_NOTES}\"/>\
-</RootConditionalTextGroup>"
-    ));
-
     // TOC: three levels, page numbers on, tab separator.
     f.push_str(&format!(
         "<RootTOCStyleGroup>\
@@ -1366,7 +1349,13 @@ fn write_footnote_exhibit_story(story_id: &str, body: &str, notes: &[(&str, &str
 /// read from here. One run carries GroupRuby, one a kenten mark (both
 /// render at their recorded MVP limits — the chapter's margin notes say
 /// so).
-fn write_vertical_exhibit_story(story_id: &str, lead: &str, ruby_base: &str, ruby: &str, tail: &str) -> Vec<u8> {
+fn write_vertical_exhibit_story(
+    story_id: &str,
+    lead: &str,
+    ruby_base: &str,
+    ruby: &str,
+    tail: &str,
+) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
@@ -2180,7 +2169,10 @@ them.",
 
     // p43 (recto) + p44 (verso): vertical-writing exhibits. Tall narrow
     // frames; columns run top-to-bottom, lines right-to-left.
-    for (page_idx, exhibit_seq, x) in [(42usize, 3u32, recto_x + 96.0), (43usize, 4u32, verso_x + 96.0)] {
+    for (page_idx, exhibit_seq, x) in [
+        (42usize, 3u32, recto_x + 96.0),
+        (43usize, 4u32, verso_x + 96.0),
+    ] {
         let story = self_id(SAMPLE, "Story", story_seq);
         story_seq += 1;
         stories.push((
@@ -2436,6 +2428,47 @@ them.",
         // NO sections — a live `insertSection` on p1 re-bakes the
         // Page.Name labels to numeric folios (see module doc).
         sections: Vec::new(),
+        // Conditional text — designmap children in InDesign's spelling
+        // (measured 2026-09-05; the Styles.xml wrapper hid them). ◪ Per-set
+        // visibility STATES are not expressible (ConditionSetDef =
+        // membership only): "Press" lists its ON condition, "Working
+        // Copy" all three — see module doc.
+        conditions: vec![
+            ConditionSpec {
+                self_id: CONDITION_PRINT_ONLY,
+                name: "Print-only",
+                visible: true,
+                indicator_color: Some("Green"),
+            },
+            ConditionSpec {
+                self_id: CONDITION_SCREEN_ONLY,
+                name: "Screen-only",
+                visible: true,
+                indicator_color: Some("Cyan"),
+            },
+            ConditionSpec {
+                self_id: CONDITION_SPEC_NOTES,
+                name: "Spec-Notes",
+                visible: true,
+                indicator_color: Some("Magenta"),
+            },
+        ],
+        condition_sets: vec![
+            ConditionSetSpec {
+                self_id: CONDITION_SET_PRESS,
+                name: "Press",
+                conditions: &[CONDITION_PRINT_ONLY],
+            },
+            ConditionSetSpec {
+                self_id: CONDITION_SET_WORKING_COPY,
+                name: "Working Copy",
+                conditions: &[
+                    CONDITION_PRINT_ONLY,
+                    CONDITION_SCREEN_ONLY,
+                    CONDITION_SPEC_NOTES,
+                ],
+            },
+        ],
     };
 
     let designmap = write_designmap_with_markers(

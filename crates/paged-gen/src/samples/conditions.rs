@@ -35,18 +35,19 @@
 //!     inline `conditions_multiple_all_must_be_visible` unit test only
 //!     mirrors the rule against a hand-built run list.
 //!
-//! `Resources/Styles.xml` carries both `<Condition>` defs plus a
+//! `designmap.xml` carries both `<Condition>` defs plus a
 //! `<ConditionSet>` grouping them (W4.8) via
-//! [`styles_xml_with_conditions_and_sets`]. The renderer test asserts
+//! [`MarkerResources::conditions`] — InDesign's own spelling (measured
+//! 2026-09-05; the older Styles.xml wrapper hid them). The renderer test asserts
 //! the hidden + multi-gated runs' glyphs are absent while the ungated
 //! and visible-gated runs render.
 
-use crate::builders::designmap::{write_designmap, DesignMap};
+use crate::builders::designmap::{write_designmap_with_markers, DesignMap, MarkerResources};
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
 use crate::builders::resources::{
-    container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml_with_conditions_and_sets,
-    ConditionSetSpec, ConditionSpec,
+    container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml, ConditionSetSpec,
+    ConditionSpec,
 };
 use crate::builders::spread::{write_spread, Spread};
 use crate::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
@@ -184,39 +185,49 @@ pub fn build() -> Sample {
         item_transform: None,
     });
 
-    let designmap = write_designmap(&DesignMap {
-        self_id: "d".to_string(),
-        master_spreads: vec![master_id.clone()],
-        spreads: vec![spread_id.clone()],
-        stories: vec![story_id.clone()],
-    });
-
-    let conditions = [
+    let conditions = vec![
         ConditionSpec {
             self_id: CONDITION_VISIBLE,
             name: "Visible",
             visible: true,
+            indicator_color: Some("Green"),
         },
         ConditionSpec {
             self_id: CONDITION_HIDDEN,
             name: "Hidden",
             visible: false,
+            indicator_color: Some("Red"),
         },
     ];
     // W4.8 — one set grouping both conditions (round-trip only; the
     // renderer's visibility resolution walks individual conditions).
-    let condition_sets = [ConditionSetSpec {
+    let condition_sets = vec![ConditionSetSpec {
         self_id: CONDITION_SET,
         name: "Print preview",
         conditions: &[CONDITION_VISIBLE, CONDITION_HIDDEN],
     }];
+    // Conditions live in the designmap (InDesign's spelling), not in
+    // Styles.xml — see `ConditionSpec`.
+    let designmap = write_designmap_with_markers(
+        &DesignMap {
+            self_id: "d".to_string(),
+            master_spreads: vec![master_id.clone()],
+            spreads: vec![spread_id.clone()],
+            stories: vec![story_id.clone()],
+        },
+        &MarkerResources {
+            conditions,
+            condition_sets,
+            ..MarkerResources::default()
+        },
+    );
 
     Sample {
         container_xml: container_xml(),
         designmap_xml: designmap,
         graphic_xml: graphic_xml(),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml_with_conditions_and_sets(&conditions, &condition_sets),
+        styles_xml: styles_xml(),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),

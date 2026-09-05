@@ -121,10 +121,20 @@ fn unmutated_round_trip_is_byte_identical_per_entry() {
         );
         for (path, src_bytes) in &src {
             let dst_bytes = dst.get(path).expect("entry present");
-            assert_eq!(
-                src_bytes, dst_bytes,
-                "{name}: entry {path} not byte-identical on unmutated round-trip"
-            );
+            if src_bytes != dst_bytes {
+                // Show WHERE the bytes diverge — a raw byte dump of two
+                // XML parts is unreadable.
+                let a = String::from_utf8_lossy(src_bytes);
+                let b = String::from_utf8_lossy(dst_bytes);
+                let common = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+                let lo = common.saturating_sub(160);
+                panic!(
+                    "{name}: entry {path} not byte-identical on unmutated round-trip \
+                     (diverges at byte {common}):\n--- source\n{}\n--- export\n{}",
+                    &a[lo..(common + 240).min(a.len())],
+                    &b[lo..(common + 240).min(b.len())]
+                );
+            }
         }
     }
 }
@@ -204,7 +214,7 @@ fn inject_entry(idml: &[u8], name: &str, body: &[u8]) -> Vec<u8> {
 /// and the package stays valid IDML. This is the foundation the container
 /// format builds on — the carry-through writer preserves foreign entries.
 #[test]
-fn paged_namespace_part_survives_a_mutated_write() {
+fn paged_namespace_part_is_dropped_by_write_idml_and_kept_by_write_paged() {
     let name = "geometry";
     let original = build_sample(name);
     let part_path = "paged/media.paged.sheet/obj1/spec.json";
@@ -243,15 +253,25 @@ fn paged_namespace_part_survives_a_mutated_write() {
             value: Value::ColorRef(Some(new_fill)),
         })
         .expect("apply fill");
+    // A pure `.idml` carries NO container part: an export that smuggled
+    // `paged/**` along was the container under another name, and the
+    // engine's load sniff then preferred its stale `document.pgm` over
+    // the IDML parts (the parity gate compared the model with itself).
     let out = write_idml(project.document(), &injected).expect("write");
+    assert!(
+        !entries(&out).contains_key(part_path),
+        "write_idml must drop the paged/ part"
+    );
+    idml_import::import_idml_doc(&out).expect("written .idml re-opens");
 
-    // The plugin part round-tripped untouched, and the package re-opens.
-    let dst = entries(&out);
+    // The container lane is where it survives — through a MUTATED write.
+    let paged = write_paged(project.document(), &injected, &BTreeMap::new(), 61).expect("paged");
+    let dst = entries(&paged);
     let survived = dst
         .get(part_path)
-        .expect("paged/ part dropped by the writer");
+        .expect("paged/ part dropped by write_paged");
     assert_eq!(survived, &part_body, "paged/ part bytes diverged on write");
-    idml_import::import_idml_doc(&out).expect("written .paged re-opens");
+    idml_import::import_idml_doc(&paged).expect("written .paged re-opens");
 }
 
 /// `write_paged` appends the model-held `paged/` parts + a `manifest.json`

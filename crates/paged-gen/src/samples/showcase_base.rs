@@ -90,6 +90,7 @@ use crate::builders::page_item::{PageItem, Rect};
 use crate::builders::resources::{
     container_xml, fonts_xml, graphic_xml_rich, preferences_xml, styles_xml_with_raw, RichColor,
 };
+use crate::builders::resources::{ConditionSetSpec, ConditionSpec};
 use crate::builders::spread::{write_spread, MarginPreference, Spread};
 use crate::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
 use crate::geometry::translate;
@@ -304,14 +305,6 @@ NextStyle=\"{STYLE_BODY}\">\
 <Properties><Leading type=\"unit\">26</Leading></Properties>\
 </ParagraphStyle>\
 </RootParagraphStyleGroup>\
-<RootConditionalTextGroup>\
-<Condition Self=\"{CONDITION_DRAFT}\" Name=\"Draft\" Visible=\"true\" \
-IndicatorMethod=\"UseHighlight\" IndicatorColor=\"Yellow\"/>\
-<Condition Self=\"{CONDITION_PRINT_ONLY}\" Name=\"Print-only\" Visible=\"true\" \
-IndicatorMethod=\"UseUnderline\" IndicatorColor=\"Green\"/>\
-<ConditionSet Self=\"{CONDITION_SET_REVIEW}\" Name=\"Review\" \
-Conditions=\"{CONDITION_DRAFT} {CONDITION_PRINT_ONLY}\"/>\
-</RootConditionalTextGroup>\
 <RootTOCStyleGroup>\
 <TOCStyle Self=\"{TOC_STYLE}\" Name=\"Showcase Contents\" Title=\"Contents\" \
 TitleStyle=\"{STYLE_TITLE}\">\
@@ -605,6 +598,27 @@ pub fn build() -> Sample {
             spacer: Some(6.0),
             ..FootnoteOptionDef::default()
         }),
+        // Conditional text — designmap children in InDesign's spelling
+        // (measured 2026-09-05; the Styles.xml wrapper hid them).
+        conditions: vec![
+            ConditionSpec {
+                self_id: CONDITION_DRAFT,
+                name: "Draft",
+                visible: true,
+                indicator_color: Some("Yellow"),
+            },
+            ConditionSpec {
+                self_id: CONDITION_PRINT_ONLY,
+                name: "Print-only",
+                visible: true,
+                indicator_color: Some("Green"),
+            },
+        ],
+        condition_sets: vec![ConditionSetSpec {
+            self_id: CONDITION_SET_REVIEW,
+            name: "Review",
+            conditions: &[CONDITION_DRAFT, CONDITION_PRINT_ONLY],
+        }],
         ..MarkerResources::default()
     };
 

@@ -15,6 +15,7 @@
 //! `designmap.xml` — root manifest pointing at every Resources/,
 //! MasterSpreads/, Spreads/, Stories/ entry the package contains.
 
+use crate::builders::resources::{ConditionSetSpec, ConditionSpec};
 use crate::xml::XmlBuilder;
 
 const PKG_NS: (&str, &str) = (
@@ -57,6 +58,11 @@ pub struct MarkerResources {
     /// a layer via `ItemLayer="<self_id>"`; the renderer z-sorts by layer
     /// order then XML order. Empty for samples without explicit layers.
     pub layers: Vec<LayerDef>,
+    /// Conditional-text definitions, written as `<Document>` children in
+    /// InDesign's spelling (see [`ConditionSpec`]). Empty for samples
+    /// without conditional text.
+    pub conditions: Vec<ConditionSpec>,
+    pub condition_sets: Vec<ConditionSetSpec>,
 }
 
 /// A document-level `<Layer>` (z-order band). Mirrors
@@ -217,6 +223,49 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
         );
         b.end("Layer");
     }
+    // Conditional text — `<Document>` children after the layers, in the
+    // spelling InDesign 20.0.1 was measured to read (see `ConditionSpec`).
+    for c in &markers.conditions {
+        let visible = if c.visible { "true" } else { "false" };
+        b.start(
+            "Condition",
+            &[
+                ("Self", c.self_id),
+                ("Name", c.name),
+                ("IndicatorMethod", "UseHighlight"),
+                ("Visible", visible),
+            ],
+        );
+        b.start("Properties", &[]);
+        b.start("IndicatorColor", &[("type", "enumeration")]);
+        b.text(c.indicator_color.unwrap_or("Red"));
+        b.end("IndicatorColor");
+        b.end("Properties");
+        b.end("Condition");
+    }
+    for set in &markers.condition_sets {
+        b.start("ConditionSet", &[("Self", set.self_id), ("Name", set.name)]);
+        b.start("Properties", &[]);
+        b.start("SetConditions", &[]);
+        for member in set.conditions {
+            b.empty(
+                "VisibilityPair",
+                &[("Condition", member), ("Visibility", "true")],
+            );
+        }
+        b.end("SetConditions");
+        b.end("Properties");
+        b.end("ConditionSet");
+    }
+    if !(markers.conditions.is_empty() && markers.condition_sets.is_empty()) {
+        b.empty(
+            "ConditionalTextPreference",
+            &[
+                ("ShowConditionIndicators", "ShowIndicators"),
+                ("ActiveConditionSet", "n"),
+            ],
+        );
+    }
     // W1.4 — marker resources (text variables, hyperlinks,
     // destinations). Emitted before the idPkg refs, matching where
     // InDesign serialises document-level resources. Skipped entirely
@@ -248,95 +297,6 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
         }
         b.empty("TextVariablePreference", &attrs);
         b.end("TextVariable");
-    }
-    for sec in &markers.sections {
-        let mut attrs: Vec<(&str, &str)> = vec![
-            ("Self", sec.self_id.as_str()),
-            ("PageStart", sec.page_start.as_str()),
-        ];
-        let start_buf;
-        if let Some(start) = sec.start_at {
-            start_buf = start.to_string();
-            attrs.push(("PageNumberStart", &start_buf));
-        }
-        if let Some(style) = sec.number_style.as_deref() {
-            attrs.push(("PageNumberStyle", style));
-        }
-        if let Some(marker) = sec.marker.as_deref() {
-            attrs.push(("Marker", marker));
-        }
-        b.empty("Section", &attrs);
-    }
-    for d in &markers.hyperlink_destinations {
-        match d {
-            HyperlinkDestinationDef::Url { self_id, url } => {
-                b.empty(
-                    "HyperlinkURLDestination",
-                    &[
-                        ("Self", self_id.as_str()),
-                        ("Name", url.as_str()),
-                        ("DestinationURL", url.as_str()),
-                        ("Hidden", "false"),
-                    ],
-                );
-            }
-            HyperlinkDestinationDef::Page { self_id, page } => {
-                b.empty(
-                    "HyperlinkPageDestination",
-                    &[
-                        ("Self", self_id.as_str()),
-                        ("Name", self_id.as_str()),
-                        ("DestinationPage", page.as_str()),
-                        ("DestinationPageSetting", "FitVisible"),
-                        ("Hidden", "false"),
-                    ],
-                );
-            }
-            HyperlinkDestinationDef::TextAnchor { self_id, story } => {
-                b.empty(
-                    "HyperlinkTextDestination",
-                    &[
-                        ("Self", self_id.as_str()),
-                        ("Name", self_id.as_str()),
-                        ("DestinationText", story.as_str()),
-                        ("Hidden", "false"),
-                    ],
-                );
-            }
-        }
-    }
-    for h in &markers.hyperlinks {
-        b.empty(
-            "Hyperlink",
-            &[
-                ("Self", h.self_id.as_str()),
-                ("Name", h.name.as_str()),
-                ("Source", h.source.as_str()),
-                ("Destination", h.destination.as_str()),
-                ("Visible", "true"),
-                ("Hidden", "false"),
-            ],
-        );
-    }
-    // W4.8 — document-level `<Bookmark>` anchors. InDesign nests these
-    // in a `<RootBookmark>` tree; the parser keys each `<Bookmark>` by
-    // `Self` regardless of wrapper, so a flat emission round-trips.
-    for bm in &markers.bookmarks {
-        b.empty(
-            "Bookmark",
-            &[
-                ("Self", bm.self_id.as_str()),
-                ("Name", bm.name.as_str()),
-                ("Destination", bm.destination.as_str()),
-            ],
-        );
-    }
-    // W4.8 — document-level `<Topic>` definitions for the index.
-    for t in &markers.index_topics {
-        b.empty(
-            "Topic",
-            &[("Self", t.self_id.as_str()), ("Name", t.name.as_str())],
-        );
     }
     // W1.8 — document-level footnote separator/spacing settings. InDesign
     // wraps the `<FootnoteOption>` in a `<RootFootnoteStory>`; we mirror
@@ -395,8 +355,151 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
             &[("src", &format!("Spreads/Spread_{s}.xml"))],
         );
     }
+    // W1.18b — `<Section>` definitions, after the spread includes, the
+    // numbering style as InDesign's typed Properties child (a union type
+    // — it may also name a custom list — so never an attribute).
+    for sec in &markers.sections {
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("Self", sec.self_id.as_str()),
+            ("PageStart", sec.page_start.as_str()),
+        ];
+        let start_buf;
+        if let Some(start) = sec.start_at {
+            start_buf = start.to_string();
+            attrs.push(("PageNumberStart", &start_buf));
+        }
+        if let Some(marker) = sec.marker.as_deref() {
+            attrs.push(("Marker", marker));
+        }
+        match sec.number_style.as_deref() {
+            Some(style) => {
+                b.start("Section", &attrs);
+                b.start("Properties", &[]);
+                b.start("PageNumberStyle", &[("type", "enumeration")]);
+                b.text(style);
+                b.end("PageNumberStyle");
+                b.end("Properties");
+                b.end("Section");
+            }
+            None => b.empty("Section", &attrs),
+        }
+    }
     for s in &dm.stories {
         b.empty("idPkg:Story", &[("src", &format!("Stories/Story_{s}.xml"))]);
+    }
+    // W1.4 / W4.8 — the navigation block: destinations, hyperlinks,
+    // bookmarks, index topics. AFTER the story includes, in the spelling
+    // InDesign 20.0.1 was measured to read (2026-09-05): our block used to
+    // sit before the stories and InDesign bound nothing (0 hyperlinks);
+    // `<Hyperlink>` names its destination as a typed Properties child
+    // (the `Destination` attribute is ignored, and next to a
+    // `DestinationUniqueKey` makes the file unopenable). Keys are
+    // allocated 1..n over the destinations.
+    let mut keys: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (i, d) in markers.hyperlink_destinations.iter().enumerate() {
+        let id = match d {
+            HyperlinkDestinationDef::Url { self_id, .. }
+            | HyperlinkDestinationDef::Page { self_id, .. }
+            | HyperlinkDestinationDef::TextAnchor { self_id, .. } => self_id.as_str(),
+        };
+        keys.insert(id, i + 1);
+    }
+    for d in &markers.hyperlink_destinations {
+        match d {
+            HyperlinkDestinationDef::Url { self_id, url } => {
+                let key = keys[self_id.as_str()].to_string();
+                b.empty(
+                    "HyperlinkURLDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", url.as_str()),
+                        ("DestinationURL", url.as_str()),
+                        ("Hidden", "false"),
+                        ("DestinationUniqueKey", key.as_str()),
+                    ],
+                );
+            }
+            HyperlinkDestinationDef::Page { self_id, page } => {
+                let key = keys[self_id.as_str()].to_string();
+                b.empty(
+                    "HyperlinkPageDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", self_id.as_str()),
+                        ("NameManually", "true"),
+                        ("DestinationPage", page.as_str()),
+                        ("ViewSetting", "Fixed"),
+                        ("ViewPercentage", "100"),
+                        ("Hidden", "false"),
+                        ("DestinationUniqueKey", key.as_str()),
+                    ],
+                );
+            }
+            // ◪ InDesign keeps a text destination as an INLINE marker in
+            // its story, not as a designmap element; the story builders
+            // have no hook for that yet, so the designmap spelling stays
+            // (our importer reads it; `idml-export` normalises it to the
+            // inline marker on export).
+            HyperlinkDestinationDef::TextAnchor { self_id, story } => {
+                let key = keys[self_id.as_str()].to_string();
+                b.empty(
+                    "HyperlinkTextDestination",
+                    &[
+                        ("Self", self_id.as_str()),
+                        ("Name", self_id.as_str()),
+                        ("DestinationText", story.as_str()),
+                        ("Hidden", "false"),
+                        ("DestinationUniqueKey", key.as_str()),
+                    ],
+                );
+            }
+        }
+    }
+    for h in &markers.hyperlinks {
+        let key = keys.get(h.destination.as_str()).map(|k| k.to_string());
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("Self", h.self_id.as_str()),
+            ("Name", h.name.as_str()),
+            ("Source", h.source.as_str()),
+            ("Visible", "false"),
+            ("Highlight", "None"),
+            ("Width", "Thin"),
+            ("BorderStyle", "Solid"),
+            ("Hidden", "false"),
+        ];
+        if let Some(k) = key.as_deref() {
+            attrs.push(("DestinationUniqueKey", k));
+        }
+        b.start("Hyperlink", &attrs);
+        b.start("Properties", &[]);
+        b.start("BorderColor", &[("type", "enumeration")]);
+        b.text("Black");
+        b.end("BorderColor");
+        b.start("Destination", &[("type", "object")]);
+        b.text(h.destination.as_str());
+        b.end("Destination");
+        b.end("Properties");
+        b.end("Hyperlink");
+    }
+    // W4.8 — document-level `<Bookmark>` anchors. InDesign nests these
+    // in a `<RootBookmark>` tree; the parser keys each `<Bookmark>` by
+    // `Self` regardless of wrapper, so a flat emission round-trips.
+    for bm in &markers.bookmarks {
+        b.empty(
+            "Bookmark",
+            &[
+                ("Self", bm.self_id.as_str()),
+                ("Name", bm.name.as_str()),
+                ("Destination", bm.destination.as_str()),
+            ],
+        );
+    }
+    // W4.8 — document-level `<Topic>` definitions for the index.
+    for t in &markers.index_topics {
+        b.empty(
+            "Topic",
+            &[("Self", t.self_id.as_str()), ("Name", t.name.as_str())],
+        );
     }
     b.empty("idPkg:BackingStory", &[("src", "XML/BackingStory.xml")]);
     b.end("Document");

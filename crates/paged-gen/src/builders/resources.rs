@@ -593,91 +593,39 @@ fn strip_known_groups(fragment: &str) -> String {
     out
 }
 
-/// One `<Condition>` definition for [`styles_xml_with_conditions`]:
-/// a `Self` id (the value `AppliedConditions` references), a display
-/// `Name`, and a `Visible` toggle. `IndicatorMethod` is fixed to the
-/// InDesign default — only `Visible` matters to the renderer's
-/// pre-layout drop rule.
+/// One `<Condition>` definition for [`MarkerResources::conditions`]
+/// (`crate::builders::designmap`): a `Self` id (the value
+/// `AppliedConditions` references), a display `Name`, a `Visible`
+/// toggle, and the indicator colour InDesign shows for it.
+///
+/// Conditions are emitted into `designmap.xml`, direct children of
+/// `<Document>`, in InDesign's own spelling — MEASURED on InDesign
+/// 20.0.1 (2026-09-05): the `<RootConditionalTextGroup>` wrapper this
+/// generator used to write inside `Resources/Styles.xml` is unknown to
+/// InDesign and hid every condition inside it (0 read), the
+/// `IndicatorColor` attribute was ignored, and a set's `Conditions="a b"`
+/// attribute was ignored so every set silently captured ALL conditions.
 pub struct ConditionSpec {
     /// e.g. `"Condition/Draft"` — the exact token a run's
     /// `AppliedConditions` must carry to be gated by this condition.
     pub self_id: &'static str,
     pub name: &'static str,
     pub visible: bool,
-}
-
-/// W4.3 — `Resources/Styles.xml` carrying a `<RootConditionalTextGroup>`
-/// with the supplied `<Condition>` definitions (plus the default
-/// `[No ...]` styles). Closes the W2.14 honest gap: no corpus IDML
-/// previously carried `<Condition Visible="false">` defs, so the
-/// renderer's conditional-text DROP path had no end-to-end fixture. A
-/// run whose `AppliedConditions` reference a `Visible="false"` condition
-/// is dropped pre-layout; `Visible="true"` (and unknown) refs render.
-/// Built by post-processing `styles_xml()` exactly like
-/// [`styles_xml_with_numbering_list`] so the default structure stays the
-/// single source of truth.
-pub fn styles_xml_with_conditions(conditions: &[ConditionSpec]) -> Vec<u8> {
-    let mut group = String::from("<RootConditionalTextGroup>");
-    for c in conditions {
-        group.push_str(&format!(
-            "<Condition Self=\"{}\" Name=\"{}\" Visible=\"{}\" \
-IndicatorMethod=\"UseHighlight\"/>",
-            c.self_id, c.name, c.visible
-        ));
-    }
-    group.push_str("</RootConditionalTextGroup>");
-    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
-    let closing = "</idPkg:Styles>";
-    let spliced = match text.rfind(closing) {
-        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
-        None => format!("{text}{group}"),
-    };
-    spliced.into_bytes()
+    /// `<Properties><IndicatorColor type="enumeration">` — an InDesign
+    /// UI colour name (`Red`, `Green`, `Yellow`, `Cyan`, `Magenta`, …);
+    /// `None` emits InDesign's default (`Red`).
+    pub indicator_color: Option<&'static str>,
 }
 
 /// W4.8 — a `<ConditionSet>` definition: a named grouping of
 /// `Condition` self_ids the document organises into one toggleable
-/// set. The renderer doesn't branch on sets (visibility resolution
-/// walks individual conditions), but the data round-trips for the
-/// editor's Conditions panel.
+/// set. Emitted as `<Properties><SetConditions><VisibilityPair
+/// Condition="…" Visibility="true"/>…` (see [`ConditionSpec`]).
 pub struct ConditionSetSpec {
     pub self_id: &'static str,
     pub name: &'static str,
     /// Member `Condition/<id>` refs.
     pub conditions: &'static [&'static str],
-}
-
-/// W4.8 — like [`styles_xml_with_conditions`] but also emits
-/// `<ConditionSet>` groupings inside the `<RootConditionalTextGroup>`.
-/// Lets the conditions fixture exercise the condition-SET round-trip
-/// alongside the individual-condition drop rule.
-pub fn styles_xml_with_conditions_and_sets(
-    conditions: &[ConditionSpec],
-    sets: &[ConditionSetSpec],
-) -> Vec<u8> {
-    let mut group = String::from("<RootConditionalTextGroup>");
-    for c in conditions {
-        group.push_str(&format!(
-            "<Condition Self=\"{}\" Name=\"{}\" Visible=\"{}\" \
-IndicatorMethod=\"UseHighlight\"/>",
-            c.self_id, c.name, c.visible
-        ));
-    }
-    for s in sets {
-        let members = s.conditions.join(" ");
-        group.push_str(&format!(
-            "<ConditionSet Self=\"{}\" Name=\"{}\" Conditions=\"{members}\"/>",
-            s.self_id, s.name
-        ));
-    }
-    group.push_str("</RootConditionalTextGroup>");
-    let text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
-    let closing = "</idPkg:Styles>";
-    let spliced = match text.rfind(closing) {
-        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
-        None => format!("{text}{group}"),
-    };
-    spliced.into_bytes()
 }
 
 /// One extra named `<ParagraphStyle>` to emit inside the canonical
