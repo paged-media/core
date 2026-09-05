@@ -1041,11 +1041,7 @@ fn a_mixed_batch_reports_every_id_it_minted() {
         })
         .expect("gesture applies");
 
-    let names: Vec<Option<&str>> = outcome
-        .minted
-        .iter()
-        .map(|m| m.handle.as_deref())
-        .collect();
+    let names: Vec<Option<&str>> = outcome.minted.iter().map(|m| m.handle.as_deref()).collect();
     assert_eq!(
         names,
         vec![Some("frame"), Some("mark")],
@@ -1194,8 +1190,7 @@ fn chained_link_frames_with_real_ids_compose_inside_one_batch() {
         })
         .expect("two links in one batch");
 
-    let stories: Vec<Option<String>> =
-        minted.iter().map(|id| story_of(&model, id)).collect();
+    let stories: Vec<Option<String>> = minted.iter().map(|id| story_of(&model, id)).collect();
     assert_eq!(
         stories[0], stories[1],
         "frames 1 and 2 must share ONE story; got {stories:?}",
@@ -1251,8 +1246,7 @@ fn chained_link_frames_compose_inside_one_batch() {
 
     let ids = frame_ids(&model);
     let minted: Vec<&String> = ids.iter().rev().take(3).collect();
-    let stories: Vec<Option<String>> =
-        minted.iter().map(|id| story_of(&model, id)).collect();
+    let stories: Vec<Option<String>> = minted.iter().map(|id| story_of(&model, id)).collect();
     assert_eq!(
         stories[0], stories[1],
         "the chain's frames must share ONE story; got {stories:?}",
@@ -1289,8 +1283,7 @@ fn chained_link_frames_compose_one_mutation_at_a_time() {
             })
             .expect("link");
     }
-    let stories: Vec<Option<String>> =
-        minted.iter().map(|id| story_of(&model, id)).collect();
+    let stories: Vec<Option<String>> = minted.iter().map(|id| story_of(&model, id)).collect();
     assert_eq!(stories[0], stories[1], "got {stories:?}");
     assert_eq!(stories[1], stories[2], "got {stories:?}");
 }
@@ -1348,10 +1341,15 @@ fn frames_minted_in_one_batch_thread_in_the_next() {
         })
         .expect("two links in one batch");
 
-    let stories: Vec<Option<String>> =
-        minted.iter().map(|id| story_of(&model, id)).collect();
-    assert_eq!(stories[0], stories[1], "frames 1 and 2 share one story; got {stories:?}");
-    assert_eq!(stories[1], stories[2], "frames 2 and 3 share one story; got {stories:?}");
+    let stories: Vec<Option<String>> = minted.iter().map(|id| story_of(&model, id)).collect();
+    assert_eq!(
+        stories[0], stories[1],
+        "frames 1 and 2 share one story; got {stories:?}"
+    );
+    assert_eq!(
+        stories[1], stories[2],
+        "frames 2 and 3 share one story; got {stories:?}"
+    );
 }
 
 /// The MIXED lane of the same thing: the links ride a batch that also

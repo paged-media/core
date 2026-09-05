@@ -389,40 +389,14 @@ pub(super) fn gradient_spec_from_entry(entry: &paged_model::GradientEntry) -> Gr
     }
 }
 
-/// B-04 — mint a page-item id (`u<hex>`) unique across every page
-/// item in the document, groups included. Mutate-side twin of the
-/// canvas `mint_page_item_id_with_offset` scanner.
+/// B-04 — mint a page-item id (`u<hex>`) unique across every id in
+/// the document on the shared `u<hex>` line (page items, groups,
+/// tables, anchored frames, the hyperlink trio, …). Mutate-side twin
+/// of the canvas `mint_page_item_id_with_offset`; both read the same
+/// floor, [`crate::ids::highest_u_hex_id`], so a lone create and a
+/// batched one name the same id.
 pub(super) fn mint_group_id(doc: &paged_scene::Document) -> String {
-    fn scan(max: &mut u64, id: Option<&str>) {
-        if let Some(rest) = id.and_then(|s| s.strip_prefix('u')) {
-            if let Ok(n) = u64::from_str_radix(rest, 16) {
-                *max = (*max).max(n);
-            }
-        }
-    }
-    let mut max: u64 = 0;
-    for parsed in &doc.spreads {
-        let s = &parsed.spread;
-        for f in &s.text_frames {
-            scan(&mut max, f.self_id.as_deref());
-        }
-        for r in &s.rectangles {
-            scan(&mut max, r.self_id.as_deref());
-        }
-        for o in &s.ovals {
-            scan(&mut max, o.self_id.as_deref());
-        }
-        for l in &s.graphic_lines {
-            scan(&mut max, l.self_id.as_deref());
-        }
-        for p in &s.polygons {
-            scan(&mut max, p.self_id.as_deref());
-        }
-        for g in &s.groups {
-            scan(&mut max, g.self_id.as_deref());
-        }
-    }
-    format!("u{:x}", max + 1)
+    format!("u{:x}", crate::ids::highest_u_hex_id(doc) + 1)
 }
 
 /// Resolve a leaf-member NodeId to its `FrameRef` within `spread`.

@@ -399,20 +399,6 @@ fn created_story_id(op: &paged_mutate::Operation) -> Option<String> {
     }
 }
 
-/// Editor-ops — id-minting scan helper: track the max `u<hex>` suffix.
-fn scan_page_item_id(max: &mut u64, id: Option<&str>) {
-    let Some(id) = id else { return };
-    let Some(hex) = id.strip_prefix('u') else {
-        return;
-    };
-    if hex.is_empty() || hex.len() > 12 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return;
-    }
-    if let Ok(v) = u64::from_str_radix(hex, 16) {
-        *max = (*max).max(v);
-    }
-}
-
 /// Phase B — frame-mutation analogue of [`MutationOutcome`]. Carries
 /// the full `AppliedOperation` (op + inverse + invalidation hint)
 /// rather than just the inverse text op, since frame mutations come
@@ -3065,10 +3051,10 @@ impl CanvasModel {
             // with "node not found: Group(<the earlier insert's id>)".
             //
             // The minted value is IDENTICAL either way: this helper and
-            // `mint_group_id` scan the same `u<hex>` id space over the
-            // same six kind vectors, and threading `mint_offset` gives
-            // the same answer the applier would reach after the batch's
-            // earlier inserts had landed. The applier still validates it
+            // `mint_group_id` read the same floor
+            // (`paged_mutate::ids::highest_u_hex_id`), and threading
+            // `mint_offset` gives the same answer the applier would
+            // reach after the batch's earlier inserts had landed. The applier still validates it
             // (a duplicate is `DuplicateNodeId`), so nothing is trusted
             // blindly — the id is merely known one step sooner.
             Mutation::CreateGroup { member_ids } => Some(Operation::CreateGroup {
@@ -3583,7 +3569,10 @@ impl CanvasModel {
                 // A native link needs three cross-referencing ids. One minted
                 // suffix keyed under three distinct designmap namespaces keeps
                 // them collision-free (the run tag, the Hyperlink, and its URL
-                // destination), mirroring how IDML names the trio.
+                // destination), mirroring how IDML names the trio. The base
+                // comes off the shared `u<hex>` line, and the scan behind it
+                // SEES the trio once applied — a link minted a moment earlier
+                // is what the next base must start past.
                 let base = self.mint_page_item_id_with_offset(mint_offset);
                 Some(Operation::InsertHyperlink {
                     story_id: story_id.clone(),
@@ -3877,29 +3866,20 @@ impl CanvasModel {
         floor
     }
 
+    ///
+    /// The floor is the highest `u<hex>` number of ANY kind on the
+    /// shared line (`paged_mutate::ids::highest_u_hex_id`), not of the
+    /// page items alone. This minter also names tables, anchored
+    /// frames and the hyperlink trio — and those land in a story
+    /// paragraph or the designmap, where a page-item scan never looked.
+    /// On the mixed-batch lane (a text op in the batch, the DOCX
+    /// lowering's shape) every child is applied on its own with a
+    /// fresh offset, so the scan is all that separates one mint from
+    /// the next: a real document came back with `Hyperlink/ueef094`
+    /// twice and a table `ueef094` beside them, three successors of
+    /// the same unchanged page-item max.
     pub(crate) fn mint_page_item_id_with_offset(&self, offset: &mut u64) -> String {
-        let mut max: u64 = 0;
-        for parsed in &self.scene.spreads {
-            let s = &parsed.spread;
-            for f in &s.text_frames {
-                scan_page_item_id(&mut max, f.self_id.as_deref());
-            }
-            for r in &s.rectangles {
-                scan_page_item_id(&mut max, r.self_id.as_deref());
-            }
-            for o in &s.ovals {
-                scan_page_item_id(&mut max, o.self_id.as_deref());
-            }
-            for l in &s.graphic_lines {
-                scan_page_item_id(&mut max, l.self_id.as_deref());
-            }
-            for p in &s.polygons {
-                scan_page_item_id(&mut max, p.self_id.as_deref());
-            }
-            for g in &s.groups {
-                scan_page_item_id(&mut max, g.self_id.as_deref());
-            }
-        }
+        let max = paged_mutate::ids::highest_u_hex_id(&self.scene);
         let id = format!("u{:x}", max + 1 + *offset);
         *offset += 1;
         id

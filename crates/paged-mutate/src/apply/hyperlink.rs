@@ -156,6 +156,31 @@ pub(super) fn apply_insert_hyperlink(
             len: end as usize,
         });
     }
+    // Uniqueness across the document — the IDML `Self` invariant the
+    // page-item, table and anchored-frame inserts already enforce. A
+    // minter that hands out a taken id is REJECTED here (and a batch
+    // rolls back whole), never held as two hyperlinks under one id: a
+    // real document once came back with `Hyperlink/ueef094` twice.
+    if doc
+        .designmap
+        .hyperlinks
+        .iter()
+        .any(|h| h.self_id == hyperlink_id)
+    {
+        return Err(OperationError::DuplicateNodeId {
+            id: hyperlink_id.to_string(),
+        });
+    }
+    if doc
+        .designmap
+        .hyperlink_destinations
+        .iter()
+        .any(|d| d.self_id == dest_id)
+    {
+        return Err(OperationError::DuplicateNodeId {
+            id: dest_id.to_string(),
+        });
+    }
     let story_idx = doc
         .stories
         .iter()

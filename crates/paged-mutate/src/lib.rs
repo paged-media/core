@@ -48,6 +48,7 @@ pub mod apply;
 pub mod bezier_conv;
 pub mod error;
 pub mod history;
+pub mod ids;
 pub mod invert;
 pub mod kurbo_kernel;
 pub mod notify;
