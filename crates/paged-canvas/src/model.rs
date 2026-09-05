@@ -4305,6 +4305,7 @@ impl CanvasModel {
         idml_export::ExportOptions {
             link_base: link_base.map(str::to_string),
             fonts: registry_faces(&self.font_registry),
+            default_face: self.font_bytes.as_deref().and_then(default_face),
         }
     }
 
@@ -9012,6 +9013,38 @@ pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
 ///   synthesised face for the registered style.
 ///
 /// One entry per `(family, style)` — the first file to name it wins.
+/// The face the renderer composes unstyled text with — the host's
+/// fallback font bytes (`CanvasOptions::fonts[0]`, `PipelineOptions::
+/// font`) read the way the registry's are: family from the name table
+/// (typographic family, else family), the regular named instance of a
+/// variable font (else its one face). `None` when the bytes are not a
+/// font the parser reads. The exporter states it as the document's
+/// `<TextDefault>` so InDesign sets text no style reaches the way the
+/// engine did (measured 2026-09-05: 4,449 characters of the annual in
+/// Minion Pro otherwise).
+pub fn default_face(bytes: &[u8]) -> Option<FontFace> {
+    let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    let name = |id: u16| -> Option<String> {
+        face.names()
+            .into_iter()
+            .filter(|n| n.name_id == id)
+            .find_map(|n| n.to_string())
+            .filter(|s| !s.trim().is_empty())
+    };
+    let family = name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+        .or_else(|| name(ttf_parser::name_id::FAMILY))?;
+    let faces = registry_faces(&[FontEntry {
+        family,
+        style: None,
+        bytes: bytes.to_vec(),
+    }]);
+    faces
+        .iter()
+        .find(|f| f.style.eq_ignore_ascii_case("Regular"))
+        .or_else(|| faces.first())
+        .cloned()
+}
+
 pub fn registry_faces(registry: &[FontEntry]) -> Vec<FontFace> {
     let mut out: Vec<FontFace> = Vec::new();
     let mut push = |f: FontFace| {
@@ -9200,6 +9233,16 @@ mod tests {
     /// installed (`indesign-fonts.tsv`): the `Roman` / `Italic`
     /// infixes come from the files' `fvar` records, the axis names
     /// and coordinates too. Skipped when the corpus font dir is absent.
+    #[test]
+    fn default_face_reads_the_fallback_bytes_regular_instance() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
+        let bytes = std::fs::read(dir.join("Inter.ttf")).expect("Inter.ttf");
+        let face = default_face(&bytes).expect("a face");
+        assert_eq!(face.family, "Inter");
+        assert_eq!(face.style, "Regular");
+        assert!(default_face(b"not a font").is_none());
+    }
+
     #[test]
     fn registry_faces_name_variable_instances_like_indesign() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
