@@ -642,7 +642,17 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let natural_space = (raw_space as f32 * hs_factor).round() as i32;
     let space_width = (natural_space as f32 * opts.desired_space_ratio.max(0.0)).round() as i32;
     let stretch = (natural_space as f32 * opts.stretch_ratio).round() as i32;
-    let shrink = (natural_space as f32 * opts.shrink_ratio).round() as i32;
+    // Word-spacing minimum applies to JUSTIFIED text only: InDesign sets
+    // a ragged line's spaces at their natural width and wraps a word
+    // that does not fit, however little it is over. Shrinking ragged
+    // lines kept 12 of the annual's 6.5 pt labels — 0.9 to 4 pt over
+    // their measure with tracking — on one line where InDesign broke
+    // them onto two (measured 2026-09-05).
+    let shrink = if options.alignment == Alignment::Justify {
+        (natural_space as f32 * opts.shrink_ratio).round() as i32
+    } else {
+        0
+    };
 
     // Hyphenation-zone gate (W1.17). A word whose start falls within
     // `zone` of the right margin is kept whole rather than hyphenated,
