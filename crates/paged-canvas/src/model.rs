@@ -4297,11 +4297,71 @@ impl CanvasModel {
         link_base: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<ExportedLink>), idml_export::WriteError> {
         let out = idml_export::write_idml_with(
-            &self.scene,
+            &self.export_scene(),
             &self.source_idml,
             &self.idml_export_options(link_base),
         )?;
         Ok((out.bytes, out.links))
+    }
+
+    /// The scene as the exporters write it: the model, plus what the
+    /// last build measured where the model leaves a size open. A table
+    /// row the model never sized (`single_row_height: None`) takes the
+    /// height the renderer gave it, so InDesign lays the row at the
+    /// canvas's height instead of the exporter's 24 pt stand-in
+    /// (measured 2026-09-06: every unsized table's rows stood taller in
+    /// InDesign — and in the export's own twin — than on the canvas,
+    /// and two chart tables overflowed their frames there alone). A
+    /// spanning cell is taller than its first row, so a row takes the
+    /// smallest cell height recorded for it.
+    fn export_scene(&self) -> Document {
+        let mut heights: HashMap<&str, HashMap<u32, f32>> = HashMap::new();
+        for page in &self.built.pages {
+            for c in &page.cell_rects {
+                let h = c.rect[3];
+                if h <= 0.0 {
+                    continue;
+                }
+                heights
+                    .entry(c.table_id.as_str())
+                    .or_default()
+                    .entry(c.row)
+                    .and_modify(|v| *v = v.min(h))
+                    .or_insert(h);
+            }
+        }
+        let mut scene = self.scene.clone();
+        if heights.is_empty() {
+            return scene;
+        }
+        fn bake(
+            paragraphs: &mut [paged_model::Paragraph],
+            heights: &HashMap<&str, HashMap<u32, f32>>,
+        ) {
+            for p in paragraphs.iter_mut() {
+                if let Some(t) = p.table.as_mut() {
+                    if let Some(rows) = t.self_id.as_deref().and_then(|id| heights.get(id)) {
+                        for (r, row) in t.rows.iter_mut().enumerate() {
+                            if row.single_row_height.is_none() {
+                                if let Some(h) = rows.get(&(r as u32)) {
+                                    row.single_row_height = Some((h * 10_000.0).round() / 10_000.0);
+                                }
+                            }
+                        }
+                    }
+                    for c in t.cells.iter_mut() {
+                        bake(&mut c.paragraphs, heights);
+                    }
+                }
+                for f in p.footnotes.iter_mut() {
+                    bake(&mut f.paragraphs, heights);
+                }
+            }
+        }
+        for story in scene.stories.iter_mut() {
+            bake(&mut story.story.paragraphs, &heights);
+        }
+        scene
     }
 
     fn idml_export_options(&self, link_base: Option<&str>) -> idml_export::ExportOptions {
@@ -4503,7 +4563,12 @@ impl CanvasModel {
         if let Ok(pgm) = paged_store::to_bytes(self.scene()) {
             parts.insert(paged_store::DOCUMENT_PGM_PATH.to_string(), pgm);
         }
-        idml_export::write_paged(&self.scene, &self.source_idml, &parts, paged_protocol)
+        idml_export::write_paged(
+            &self.export_scene(),
+            &self.source_idml,
+            &parts,
+            paged_protocol,
+        )
     }
 
     /// S7 — the composition (`document.pgd`) **derived** from the current IDML
