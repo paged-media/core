@@ -3707,7 +3707,17 @@ pub(super) fn emit_paragraph_into_chain(
         });
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
-        let line_height_64 = (para_pt * 1.2 * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        // An empty paragraph advances by its leading too — the explicit
+        // one its runs or style carry, else auto (1.2 × size).
+        let line_height_64 = paragraph
+            .runs
+            .first()
+            .and_then(|r| em.document.resolved_run_attrs(paragraph, r).leading)
+            .filter(|l| *l > 0.0)
+            .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+            .unwrap_or_else(|| {
+                (para_pt * 1.2 * paged_text::shape::ADVANCE_PRECISION).round() as i32
+            });
         // Establish the first baseline if we haven't placed any
         // content yet — same convention as the populated branch
         // below — then advance by a full line height.
@@ -4239,7 +4249,8 @@ pub(super) fn emit_paragraph_into_chain(
         // heading) gain the extra leading Adobe expects. No-op when
         // previous and current leadings agree (the common case).
         if let Some(prev_lh) = em.prev_line_height_64 {
-            em.y_cursor += lopts.line_height - prev_lh;
+            let this_lh = lopts.leading_override.unwrap_or(lopts.line_height);
+            em.y_cursor += this_lh - prev_lh;
         }
     }
     lopts.first_baseline = em.y_cursor;
@@ -4843,8 +4854,18 @@ pub(super) fn emit_paragraph_into_chain(
         None
     };
     for mut line in laid_out.lines.into_iter() {
-        let line_h = paged_text::layout::max_line_height_for_glyphs(&line.glyphs)
-            .unwrap_or(lopts.line_height);
+        // A line advances by its leading: the explicit one (a run's, or
+        // its style's, cascaded) when there is one, else auto leading
+        // from the largest glyph. The composer already pitched the
+        // lines this way; the emitter's advance used to read the auto
+        // value regardless, so a one-line paragraph in a 13 pt-leaded
+        // style stepped 10.2 pt to the next (the annual's code block,
+        // 30 lines in a frame that holds 28 at 13 pt — measured
+        // 2026-09-06 against InDesign, which oversets it).
+        let line_h = lopts.leading_override.unwrap_or_else(|| {
+            paged_text::layout::max_line_height_for_glyphs(&line.glyphs)
+                .unwrap_or(lopts.line_height)
+        });
         let frame_height_64 = (em.chain[em.frame_idx].bounds.height()
             * paged_text::shape::ADVANCE_PRECISION)
             .round() as i32;
