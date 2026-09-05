@@ -475,6 +475,23 @@ impl FontTable {
         self.metrics.get(&font_id)
     }
 
+    /// Metrics of the face `(family, style)` shapes with — but only
+    /// when that face is the one asked for. A substitute's ascender
+    /// says nothing about where InDesign, which had the real face, put
+    /// the first baseline, so a substituted lookup yields `None` and
+    /// the caller keeps its heuristic.
+    pub(super) fn metrics_for_real_face(
+        &self,
+        family: Option<&str>,
+        style: Option<&str>,
+    ) -> Option<&FontMetrics> {
+        let (bytes, substituted) = self.bytes_for(family, style)?;
+        if substituted {
+            return None;
+        }
+        self.metrics.get(&fnv_1a_u32(bytes.as_ref()))
+    }
+
     /// Override-aware metrics lookup keyed by IDML family name.
     /// Returns the per-family override when present, otherwise falls
     /// through so the caller can try the byte-hash path.

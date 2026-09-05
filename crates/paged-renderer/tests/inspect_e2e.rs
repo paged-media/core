@@ -324,9 +324,7 @@ fn roundtrip_flag_passes_the_gate_on_an_unmutated_package() {
     // referenced). Everything else must ride through byte-identical.
     assert_eq!(identical + patched, 6, "{json}");
     // The whitespace-normalised spread is the only re-serialised entry.
-    assert_eq!(
-        patched,
-        2, "{json}");
+    assert_eq!(patched, 2, "{json}");
 }
 
 /// `--roundtrip` on a non-IDML input fails cleanly (non-zero exit), not

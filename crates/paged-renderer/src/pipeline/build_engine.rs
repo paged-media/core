@@ -3722,7 +3722,28 @@ pub(super) fn emit_paragraph_into_chain(
         // content yet — same convention as the populated branch
         // below — then advance by a full line height.
         if em.y_cursor < 0 {
-            em.y_cursor = (para_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+            // Same first-baseline rule as a populated head paragraph:
+            // the frame's policy and top inset, the real face's
+            // ascender when the run's face is the one it asked for.
+            let head_metrics = paragraph.runs.first().and_then(|r| {
+                let attrs = em.document.resolved_run_attrs(paragraph, r);
+                attrs
+                    .font
+                    .as_deref()
+                    .and_then(|f| em.font_table.metrics_for_family(f))
+                    .or_else(|| {
+                        em.font_table.metrics_for_real_face(
+                            attrs.font.as_deref(),
+                            attrs.font_style.as_deref(),
+                        )
+                    })
+            });
+            em.y_cursor = first_baseline_for_frame(
+                em.chain[0],
+                para_pt,
+                (para_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+                head_metrics,
+            );
         }
         em.y_cursor += space_before_64.round() as i32;
         // Adobe places the empty paragraph's virtual baseline at
@@ -4201,36 +4222,32 @@ pub(super) fn emit_paragraph_into_chain(
         }
     }
 
+    // First-baseline metrics for this paragraph's head run. A
+    // family-keyed override (`--font-metrics`) wins, so a documented
+    // Arial → Roboto substitution can pin Arial's ascender. Otherwise
+    // the face the run shapes with supplies its own ascender — but
+    // only when that face is the one the run asked for: InDesign sets
+    // the first baseline at the REAL font's hhea ascender (measured
+    // 2026-09-06: Source Serif 4 at 1.036 em, Space Grotesk at
+    // 0.984 em, both exactly the font's table), and the annual's
+    // caption frame that InDesign oversets on its third line fitted
+    // here only because the `0.8 × pt` heuristic sat every baseline
+    // 1.3 pt too high. A substitute's ascender says nothing about
+    // where InDesign put the baseline (it had the real face), so
+    // substituted runs keep the heuristic — empirically closer to
+    // Adobe's ~0.7–0.75 em typo ascenders than a stand-in's raw
+    // value (Cormorant Garamond 0.924, Roboto 1.048).
+    let head_font_metrics = resolved_runs
+        .first()
+        .and_then(|r| r.font.as_deref())
+        .and_then(|f| em.font_table.metrics_for_family(f))
+        .or_else(|| {
+            resolved_runs.first().and_then(|r| {
+                em.font_table
+                    .metrics_for_real_face(r.font.as_deref(), r.font_style.as_deref())
+            })
+        });
     if em.y_cursor < 0 {
-        // Family-keyed override wins over the byte-hash lookup so a
-        // documented Arial → Roboto substitution can pin Arial's
-        // ascender (0.728 em from sTypoAscender) via `--font-metrics`
-        // instead of letting the substitute font's metrics override
-        // every first baseline. See `manual-sample.fonts.sh` for the
-        // concrete numbers.
-        //
-        // The byte-hash fallback uses `font_ids[0]`, which XORs in
-        // the wght axis bits. `FontTable::metrics` is keyed by the
-        // raw bytes-fnv hash without wght, so this lookup misses by
-        // design: it forces AscentOffset to fall through to the
-        // `0.8 × pt` heuristic when no family override is set.
-        // Empirically `0.8 × pt` is closer to Adobe's actual baseline
-        // (~0.7–0.75 em sTypoAscender for typical fonts) than most
-        // substitute fonts' raw ascender values (Cormorant Garamond
-        // 0.924, Roboto 1.048, etc.) — switching to the unmixed
-        // lookup regressed the text-fixture's Minion Pro → Cormorant
-        // substitution by ~2.4 pt per first baseline. The fix is to
-        // pin the original font's metrics through `--font-metrics`
-        // (the family-override branch above) rather than trusting the
-        // substitute's metrics.
-        let head_family = resolved_runs.first().and_then(|r| r.font.as_deref());
-        let head_font_metrics = head_family
-            .and_then(|f| em.font_table.metrics_for_family(f))
-            .or_else(|| {
-                font_ids
-                    .first()
-                    .and_then(|id| em.font_table.metrics_for(*id))
-            });
         em.y_cursor = first_baseline_for_frame(
             em.chain[0],
             paragraph_size,
@@ -4890,8 +4907,14 @@ pub(super) fn emit_paragraph_into_chain(
         {
             let prev_baseline = line.baseline_y;
             em.frame_idx += 1;
-            let new_baseline =
-                (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+            // The continuation frame's own first-baseline policy and
+            // top inset, with the same real-face ascender as the head.
+            let new_baseline = first_baseline_for_frame(
+                em.chain[em.frame_idx],
+                paragraph_size,
+                (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+                head_font_metrics,
+            );
             let dy = new_baseline - prev_baseline;
             for g in &mut line.glyphs {
                 g.y += dy;
