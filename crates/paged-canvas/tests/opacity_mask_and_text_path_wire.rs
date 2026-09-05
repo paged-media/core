@@ -197,9 +197,15 @@ fn mask_type_defaults_to_luminosity() {
 #[test]
 fn a_mask_survives_paged_and_is_reported_lost_on_idml() {
     let mut model = load();
+    // The fixture's story flows in no frame: InDesign discards such a
+    // story on open (measured), so the export drops it and the ledger
+    // names it — the one loss a clean copy of THIS document has.
+    let clean = model.idml_export_losses();
+    assert_eq!(clean.len(), 1, "{clean:?}");
     assert!(
-        model.idml_export_losses().is_empty(),
-        "a clean document loses nothing"
+        clean[0].contains("st1") && clean[0].contains("referenced by no frame"),
+        "{}",
+        clean[0]
     );
 
     model
@@ -212,8 +218,12 @@ fn a_mask_survives_paged_and_is_reported_lost_on_idml() {
         .expect("applyOpacityMask");
 
     // --- LOSSY: .idml names the loss instead of swallowing it.
-    let losses = model.idml_export_losses();
-    assert_eq!(losses.len(), 1, "one masked item ⇒ one loss line");
+    let losses: Vec<String> = model
+        .idml_export_losses()
+        .into_iter()
+        .filter(|l| !clean.contains(l))
+        .collect();
+    assert_eq!(losses.len(), 1, "one masked item ⇒ one NEW loss line");
     assert!(losses[0].contains("target"), "{}", losses[0]);
     assert!(losses[0].contains("artwork"), "{}", losses[0]);
     assert!(

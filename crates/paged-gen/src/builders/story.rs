@@ -507,8 +507,15 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             if let Some(fill) = &run.fill_color {
                 r_attrs.push(("FillColor", fill.as_str()));
             }
+            // A run that pins a font spells its face too (InDesign
+            // instances a font-without-style from the point size and
+            // substitutes optical-size variable fonts — measured
+            // 2026-09-05, `idml-export::face`); `Regular` is what the
+            // engine composes with when the run names none.
             if let Some(style) = run.font_style {
                 r_attrs.push(("FontStyle", style));
+            } else if run.applied_font.is_some() {
+                r_attrs.push(("FontStyle", "Regular"));
             }
             if let Some(tracking) = run.tracking {
                 tracking_str = crate::xml::format_f32(tracking);
@@ -829,6 +836,10 @@ fn write_cell_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph) {
         }
         if let Some(style) = run.font_style {
             r_attrs.push(("FontStyle", style));
+        } else if run.applied_font.is_some() {
+            // Same rule as the main run writer: a pinned font spells
+            // its face.
+            r_attrs.push(("FontStyle", "Regular"));
         }
         b.start("CharacterStyleRange", &r_attrs);
         if let Some(font) = run.applied_font {

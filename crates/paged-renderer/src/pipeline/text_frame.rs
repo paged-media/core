@@ -492,6 +492,41 @@ pub(super) fn is_layer_visible(document: &Document, layer_ref: Option<&str>) -> 
     paged_scene::layer_render_visible(&document.designmap, layer_ref)
 }
 
+/// The box a path-bearing item actually covers: the AABB of its anchors
+/// and control handles when it has any, else its stored `bounds`. The
+/// stored box is whatever the minting op was handed — a tracer on the
+/// annual passed 10 of 94 polygons a two-point box while their paths
+/// spanned a page and a half (2026-09-05) — and page routing off that
+/// box dropped the gutter-crossing half from the facing page while
+/// InDesign, routing off the path, painted it. The path is the truth.
+pub(super) fn path_bounds_or(
+    bounds: paged_model::Bounds,
+    anchors: &[paged_model::PathAnchor],
+) -> paged_model::Bounds {
+    if anchors.is_empty() {
+        return bounds;
+    }
+    let mut out = paged_model::Bounds {
+        top: f32::INFINITY,
+        left: f32::INFINITY,
+        bottom: f32::NEG_INFINITY,
+        right: f32::NEG_INFINITY,
+    };
+    for a in anchors {
+        for (x, y) in [a.anchor, a.left, a.right] {
+            out.left = out.left.min(x);
+            out.right = out.right.max(x);
+            out.top = out.top.min(y);
+            out.bottom = out.bottom.max(y);
+        }
+    }
+    if out.left.is_finite() && out.top.is_finite() {
+        out
+    } else {
+        bounds
+    }
+}
+
 pub(super) fn page_for_frame(frame: &paged_model::Bounds, pages: &[PageGeom]) -> Option<usize> {
     let cx = (frame.left + frame.right) * 0.5;
     let cy = (frame.top + frame.bottom) * 0.5;

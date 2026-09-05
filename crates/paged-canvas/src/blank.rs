@@ -149,9 +149,16 @@ pub fn blank_idml(width_pt: f32, height_pt: f32) -> Vec<u8> {
     put("Resources/Graphic.xml", &graphic(), false);
     put("Resources/Fonts.xml", &empty_pkg("Fonts"), false);
     put("Resources/Styles.xml", &styles(), false);
+    // The one text preference the engine composes under: no optical
+    // sizing (InDesign's application default re-instances variable
+    // fonts by point size — see `paged_gen::builders::resources::
+    // preferences_xml`).
     put(
         "Resources/Preferences.xml",
-        &empty_pkg("Preferences"),
+        &xml(&format!(
+            "<idPkg:Preferences xmlns:idPkg=\"{NS}\" DOMVersion=\"20.0\">\
+<TextPreference UseOpticalSize=\"false\"/></idPkg:Preferences>"
+        )),
         false,
     );
     put("MasterSpreads/MasterSpread_um.xml", &master, false);

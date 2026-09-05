@@ -263,10 +263,16 @@ pub(super) fn insert_captured(
             stroke_weight,
             item_transform,
         } => {
+            // The path is the truth: its own box, not the one the wire
+            // handed us beside it (see `path_topology::anchors_bounds`).
+            let parsed_anchors: Vec<paged_model::PathAnchor> =
+                anchors.iter().map(PathAnchorSpec::to_parse).collect();
+            let bounds = super::path_topology::anchors_bounds(&parsed_anchors)
+                .unwrap_or_else(|| bounds_from_array(bounds));
             let mut poly = new_polygon(
                 self_id,
-                bounds_from_array(bounds),
-                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
+                bounds,
+                parsed_anchors,
                 subpath_starts,
                 subpath_open,
                 fill_color,

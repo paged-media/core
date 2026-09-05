@@ -829,6 +829,13 @@ fn styles_xml_full_with(
     // way. As an attribute InDesign ignores it and falls back to its
     // own default, which is how a specimen set in twenty faces opened
     // entirely in Minion Pro.
+    //
+    // And the face is SPELLED next to it: a style that names a font
+    // without a `FontStyle` is instanced by InDesign from the point size
+    // ("Optical size-9.500", "12pt"), which substitutes every variable
+    // font with an optical-size axis (measured 2026-09-05, see
+    // `idml-export::face`); `Regular` is the face the engine composes
+    // with when nothing in the cascade names one.
     b.start(
         "ParagraphStyle",
         &[
@@ -836,6 +843,7 @@ fn styles_xml_full_with(
             ("Name", "$ID/[No paragraph style]"),
             ("PointSize", "12"),
             ("FillColor", "Color/Black"),
+            ("FontStyle", "Regular"),
         ],
     );
     b.start("Properties", &[]);
@@ -853,6 +861,7 @@ fn styles_xml_full_with(
             ("Name", ps.name),
             ("PointSize", point_size.as_str()),
             ("FillColor", ps.fill_color),
+            ("FontStyle", "Regular"),
         ];
         {
             // Same rule as above: the font is a `<Properties>` child, so
@@ -1004,13 +1013,21 @@ fn styles_xml_full_with(
     b.into_bytes()
 }
 
-/// `Resources/Preferences.xml` — empty manifest. The renderer reads
-/// only what the document uses; InDesign opens the file regardless of
-/// which preferences are present.
+/// `Resources/Preferences.xml` — the one text preference the engine
+/// composes under. The renderer reads only what the document uses;
+/// InDesign opens the file regardless of which preferences are present,
+/// but fills the missing ones from the APPLICATION, and InDesign 2025
+/// ships `UseOpticalSize="true"` — every run set in a variable font
+/// with an optical-size axis is then re-instanced at its point size
+/// (measured 2026-09-05: Source Serif 4 / Fraunces come back
+/// SUBSTITUTED even in a native document). The engine applies no axis
+/// from the point size, so the default instance is what the document
+/// was composed with, and the package says so (the exporter states the
+/// same on an older package — `idml-export::preferences`).
 pub fn preferences_xml() -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
-    b.empty(
+    b.start(
         "idPkg:Preferences",
         &[
             (
@@ -1020,5 +1037,7 @@ pub fn preferences_xml() -> Vec<u8> {
             ("DOMVersion", "20.0"),
         ],
     );
+    b.empty("TextPreference", &[("UseOpticalSize", "false")]);
+    b.end("idPkg:Preferences");
     b.into_bytes()
 }

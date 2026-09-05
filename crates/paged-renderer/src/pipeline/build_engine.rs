@@ -1353,7 +1353,14 @@ pub(super) fn build_document_inner(
                         return;
                     }
                     total_stats.frames += 1;
-                    let spread_bounds = transform_bounds(poly.bounds, poly.item_transform);
+                    // Route by the PATH's box, not the stored one (see
+                    // `path_bounds_or`): a polygon whose stored bounds
+                    // undersell its path would otherwise skip the page
+                    // its far half lies on.
+                    let spread_bounds = transform_bounds(
+                        super::text_frame::path_bounds_or(poly.bounds, &poly.anchors),
+                        poly.item_transform,
+                    );
                     let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
                     let local_indices: Vec<usize> = if overlaps.is_empty() {
                         vec![page_for_frame(&spread_bounds, local_geoms).unwrap_or(0)]

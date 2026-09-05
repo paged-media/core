@@ -1378,6 +1378,31 @@ pub(super) fn apply_translate_in_place(
     }
 }
 
+/// The AABB of a path — anchors and control handles — or `None` for an
+/// empty path. A minted polygon's `bounds` come off the wire beside its
+/// anchors, and the two can disagree: paged.draw's tracer handed 10 of
+/// the annual's 94 trace polygons a two-point box while their paths
+/// spanned a page and a half (2026-09-05), and everything keyed on the
+/// box — page routing, hit-testing — was wrong for them. The path is
+/// the truth; the box is derived from it.
+pub(super) fn anchors_bounds(anchors: &[paged_model::PathAnchor]) -> Option<Bounds> {
+    let mut b = Bounds {
+        top: f32::INFINITY,
+        left: f32::INFINITY,
+        bottom: f32::NEG_INFINITY,
+        right: f32::NEG_INFINITY,
+    };
+    for a in anchors {
+        for (x, y) in [a.anchor, a.left, a.right] {
+            b.left = b.left.min(x);
+            b.right = b.right.max(x);
+            b.top = b.top.min(y);
+            b.bottom = b.bottom.max(y);
+        }
+    }
+    (b.left.is_finite() && b.top.is_finite()).then_some(b)
+}
+
 pub(super) fn bounds_to_array(b: Bounds) -> [f32; 4] {
     [b.top, b.left, b.bottom, b.right]
 }
