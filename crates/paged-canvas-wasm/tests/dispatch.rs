@@ -1299,3 +1299,27 @@ fn c34_submit_scene_layer_gives_a_frame_one_owner() {
     );
     assert_eq!(after["payload"]["applied"], true);
 }
+
+// ---------------------------------------------------------------------
+// 6b. Export IDML with a link base (additive field, no bump)
+// ---------------------------------------------------------------------
+
+#[test]
+fn export_idml_with_a_link_base_replies_links() {
+    let mut core = loaded_core();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 42,
+            "protocol": protocol(),
+            "kind": "exportIdml",
+            "payload": { "linkBase": "/Users/me/Book/Links" }
+        }),
+    );
+    assert_eq!(reply["kind"], "idmlExported", "{}", reply["kind"]);
+    assert!(!reply["payload"]["idmlBytes"].as_array().unwrap().is_empty());
+    // The fixture places no image, so the list is present and empty;
+    // `lost` is the measured ledger (also empty for this fixture).
+    assert_eq!(reply["payload"]["links"], serde_json::json!([]));
+    assert_eq!(reply["payload"]["lost"], serde_json::json!([]));
+}

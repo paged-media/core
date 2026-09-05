@@ -587,80 +587,123 @@ fn graphic() -> Vec<u8> {
     graphic_xml_rich_full(&colors, &gradients, &groups, &[])
 }
 
-/// `Resources/Fonts.xml` — the annual's editorial palette, declared
-/// with the EXACT family strings the engine's `RegisterFont` sees
-/// (they match `corpus/fonts/` and the editor's showcase driver:
-/// "Source Serif 4", "EB Garamond", "Fraunces", "JetBrains Mono",
-/// "Space Grotesk", "Noto Sans Arabic", "Noto Sans JP"). The variable
-/// fonts carry their weights (SourceSerif4.ttf spans wght 200–900, so
-/// `FontStyle="Bold"` on Annual Strong is real).
+/// `Resources/Fonts.xml` — the annual's families, each face spelled as
+/// the INSTANCE InDesign binds (values read off the corpus files' `fvar`
+/// records; see `resources::FontInstance`). InDesign 20.0.1 substituted
+/// the family-only form this used to write.
 fn fonts() -> Vec<u8> {
-    type FaceList = &'static [(&'static str, &'static str)];
-    let families: &[(&str, &str, FaceList)] = &[
-        (
-            "FontFamily/SourceSerif4",
-            "Source Serif 4",
-            &[("SourceSerif4", "Regular")],
-        ),
-        (
-            "FontFamily/EBGaramond",
-            "EB Garamond",
-            &[("EBGaramond", "Regular"), ("EBGaramond-Italic", "Italic")],
-        ),
-        (
-            "FontFamily/Fraunces",
-            "Fraunces",
-            &[("Fraunces", "Regular"), ("Fraunces-Italic", "Italic")],
-        ),
-        (
-            "FontFamily/JetBrainsMono",
-            "JetBrains Mono",
-            &[("JetBrainsMono", "Regular")],
-        ),
-        (
-            "FontFamily/SpaceGrotesk",
-            "Space Grotesk",
-            &[("SpaceGrotesk", "Regular")],
-        ),
-        (
-            "FontFamily/NotoSansArabic",
-            "Noto Sans Arabic",
-            &[("NotoSansArabic", "Regular")],
-        ),
-        (
-            "FontFamily/NotoSansJP",
-            "Noto Sans JP",
-            &[("NotoSansJP", "Regular")],
-        ),
-        (
-            "FontFamily/OpenSans",
-            "Open Sans",
-            &[("OpenSans", "Regular")],
-        ),
-    ];
-    let mut b = XmlBuilder::new();
-    b.write_decl();
-    b.start("idPkg:Fonts", &[PKG_NS, DOM_VERSION]);
-    for (family_self, family, faces) in families {
-        b.start("FontFamily", &[("Self", family_self), ("Name", family)]);
-        for (ps_name, style) in *faces {
-            b.empty(
-                "Font",
-                &[
-                    ("Self", &format!("Font/{ps_name}")),
-                    ("FontFamily", family),
-                    ("Name", family),
-                    ("PostScriptName", ps_name),
-                    ("Status", "Installed"),
-                    ("FontStyleName", style),
-                    ("FontType", "TrueType"),
-                ],
-            );
-        }
-        b.end("FontFamily");
-    }
-    b.end("idPkg:Fonts");
-    b.into_bytes()
+    use crate::builders::resources::{fonts_xml_for, FontFamilySpec, FontInstance, OPEN_SANS};
+    fonts_xml_for(&[
+        FontFamilySpec {
+            family: "Source Serif 4",
+            font_type: "OpenTypeTT",
+            version: "Version 4.004;hotconv 1.0.116;makeotfexe 2.5.65601",
+            instances: &[
+                FontInstance {
+                    style: "Regular",
+                    postscript_name: "SourceSerif4Roman-Regular",
+                    axes: &[("Weight", "400"), ("Optical Size", "20")],
+                },
+                FontInstance {
+                    style: "Bold",
+                    postscript_name: "SourceSerif4Roman-Bold",
+                    axes: &[("Weight", "700"), ("Optical Size", "20")],
+                },
+            ],
+        },
+        FontFamilySpec {
+            family: "EB Garamond",
+            font_type: "OpenTypeTT",
+            version: "Version 1.003",
+            instances: &[
+                FontInstance {
+                    style: "Regular",
+                    postscript_name: "EBGaramond-Regular",
+                    axes: &[("Weight", "400")],
+                },
+                FontInstance {
+                    style: "Italic",
+                    postscript_name: "EBGaramond-Italic",
+                    axes: &[("Weight", "400")],
+                },
+            ],
+        },
+        FontFamilySpec {
+            family: "Fraunces",
+            font_type: "OpenTypeTT",
+            version: "Version 1.000;[b76b70a41]",
+            instances: &[
+                FontInstance {
+                    style: "Regular",
+                    postscript_name: "Fraunces-Regular",
+                    axes: &[
+                        ("Optical Size", "9"),
+                        ("Weight", "400"),
+                        ("Softness", "0"),
+                        ("Wonky", "1"),
+                    ],
+                },
+                FontInstance {
+                    style: "Italic",
+                    postscript_name: "Fraunces-Italic",
+                    axes: &[
+                        ("Optical Size", "9"),
+                        ("Weight", "400"),
+                        ("Softness", "0"),
+                        ("Wonky", "1"),
+                    ],
+                },
+            ],
+        },
+        FontFamilySpec {
+            family: "JetBrains Mono",
+            font_type: "OpenTypeTT",
+            version: "Version 2.211",
+            instances: &[
+                FontInstance {
+                    style: "Regular",
+                    postscript_name: "JetBrainsMonoRoman-Regular",
+                    axes: &[("Weight", "400")],
+                },
+                FontInstance {
+                    style: "Italic",
+                    postscript_name: "JetBrainsMonoItalic-Regular",
+                    axes: &[("Weight", "400")],
+                },
+            ],
+        },
+        FontFamilySpec {
+            family: "Space Grotesk",
+            font_type: "OpenTypeTT",
+            version: "Version 2.000",
+            instances: &[FontInstance {
+                style: "Regular",
+                postscript_name: "SpaceGrotesk-Regular",
+                axes: &[("Weight", "400")],
+            }],
+        },
+        FontFamilySpec {
+            family: "Noto Sans Arabic",
+            font_type: "OpenTypeTT",
+            version: "Version 2.012",
+            instances: &[FontInstance {
+                style: "Regular",
+                postscript_name: "NotoSansArabic-Regular",
+                axes: &[("Weight", "400"), ("Width", "100")],
+            }],
+        },
+        FontFamilySpec {
+            family: "Noto Sans JP",
+            font_type: "OpenTypeTT",
+            version: "Version 2.004-H2;hotconv 1.0.118;makeotfexe 2.5.65603",
+            instances: &[FontInstance {
+                style: "Regular",
+                postscript_name: "NotoSansJP-Regular",
+                axes: &[("Weight", "400")],
+            }],
+        },
+        OPEN_SANS,
+    ])
 }
 
 /// `Resources/Styles.xml` — the whole named cascade, conditions, TOC,

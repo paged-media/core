@@ -259,3 +259,109 @@ fn an_unmutated_document_measures_no_loss() {
     let losses = model.idml_export_losses();
     assert!(losses.is_empty(), "{losses:#?}");
 }
+
+/// With a LINK BASE the image placed from bytes is no longer a loss:
+/// the export points its `<Link>` at `file:<base>/<name>` and hands the
+/// bytes back under that name, so the caller writes the file and
+/// InDesign reads exactly these pixels.
+#[test]
+fn with_a_link_base_the_bytes_placed_image_is_handed_back_and_is_no_loss() {
+    let a = author();
+    let (bytes, links) = a
+        .model
+        .export_idml_with_links(Some("/Users/me/Book Links/Links"))
+        .expect("export");
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert_eq!(links[0].file_name, "r1.png");
+    assert_eq!(links[0].bytes.as_deref(), Some(&tiny_png()[..]));
+    assert_eq!(links[0].source_uri, "", "minted from bytes: no source URI");
+    let spread = {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut e = zip.by_name("Spreads/Spread_s1.xml").unwrap();
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut e, &mut s).unwrap();
+        s
+    };
+    assert!(
+        spread.contains(r#"LinkResourceURI="file:/Users/me/Book%20Links/Links/r1.png""#),
+        "{spread}"
+    );
+    let losses = a
+        .model
+        .idml_export_losses_with_links(Some("/Users/me/Book Links/Links"));
+    assert!(losses.is_empty(), "{losses:#?}");
+    // Without a base the honest line stays (and names the way out).
+    let losses = a.model.idml_export_losses();
+    assert_eq!(losses.len(), 1, "{losses:#?}");
+    assert!(losses[0].contains("Export with a link base"), "{losses:#?}");
+    // `export_idml` is the base-less export, byte for byte.
+    assert_eq!(
+        a.model.export_idml().unwrap(),
+        a.model.export_idml_with_links(None).unwrap().0
+    );
+    assert!(a.model.export_idml_with_links(None).unwrap().1.is_empty());
+}
+
+/// A story whose frame was deleted is an ORPHAN: InDesign discards it
+/// on open, so the writer drops its part and its designmap reference,
+/// and the loss ledger says so in one line naming the story.
+#[test]
+fn an_orphan_story_reaches_no_part_and_one_loud_ledger_line() {
+    let mut model = CanvasModel::load("doc", &fixture(), CanvasOptions::default()).expect("load");
+    let out = model
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: PageId("p1".into()),
+            bounds: (420.0, 320.0, 560.0, 560.0),
+        })
+        .expect("frame");
+    let frame = match out.created_id {
+        Some(ElementId::TextFrame(id)) => id,
+        other => panic!("expected a text frame, got {other:?}"),
+    };
+    let story = minted_story_of(&model, &frame);
+    model
+        .apply_mutation(&Mutation::InsertText {
+            story_id: story.clone(),
+            offset: 0,
+            text: "Orphaned text".into(),
+            cell: None,
+        })
+        .expect("text");
+    model
+        .apply_mutation(&Mutation::DeleteFrame {
+            frame_id: frame.clone(),
+        })
+        .expect("delete frame");
+    assert!(
+        model.scene().stories.iter().any(|s| s.self_id == story),
+        "the engine keeps the story after its frame is deleted"
+    );
+
+    let bytes = model.export_idml().expect("export");
+    let names: Vec<String> = {
+        let zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        zip.file_names().map(str::to_string).collect()
+    };
+    let part = format!("Stories/Story_{}.xml", story.replace('/', "_"));
+    assert!(!names.contains(&part), "no part for the orphan: {names:?}");
+    let designmap = {
+        let mut zip = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        let mut e = zip.by_name("designmap.xml").unwrap();
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut e, &mut s).unwrap();
+        s
+    };
+    assert!(
+        !designmap.contains(&part),
+        "no reference either: {designmap}"
+    );
+
+    let losses = model.idml_export_losses();
+    assert_eq!(losses.len(), 1, "{losses:#?}");
+    assert!(
+        losses[0].contains(&format!(
+            "story `{story}` (13 chars, 0 tables) is referenced by no frame"
+        )) && losses[0].contains("dropped from the export; delete it or place it"),
+        "{losses:#?}"
+    );
+}

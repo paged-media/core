@@ -45,17 +45,33 @@ use paged_model::{
 };
 use paged_scene::{Document, ParsedStory};
 
+/// What the export was asked for, so the diff can tell a loss from a
+/// construct the caller has been handed the means to keep.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct LossContext {
+    /// The link base the export was made with (`None` ⇒ URIs as held).
+    pub link_base: Option<String>,
+    /// The `file_name`s of the [`idml_export::ExportedLink`]s that came
+    /// back WITH bytes: a frame whose twin links one of these is not a
+    /// loss — the caller writes the bytes and the link binds.
+    pub handed_back: HashSet<String>,
+    /// Every returned link's `source_uri` → `file_name`: the name the
+    /// export rebased a model URI to, so a twin link spelled
+    /// `file:<base>/<file_name>` is recognised as the model's link.
+    pub rebased: HashMap<String, String>,
+}
+
 /// Diff `scene` against `twin` (the scene as re-parsed from its own IDML
 /// export). One human-readable line per element the twin lacks or
 /// misrepresents, sorted for determinism.
-pub(crate) fn diff(scene: &Document, twin: &Document) -> Vec<String> {
+pub(crate) fn diff(scene: &Document, twin: &Document, ctx: &LossContext) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     diff_sections(scene, twin, &mut out);
     diff_guides(scene, twin, &mut out);
     diff_hyperlinks(scene, twin, &mut out);
     diff_conditions(scene, twin, &mut out);
     diff_stories(scene, twin, &mut out);
-    diff_page_items(scene, twin, &mut out);
+    diff_page_items(scene, twin, ctx, &mut out);
     out.sort();
     out.dedup();
     out
@@ -385,8 +401,33 @@ fn table_shape(t: &Table) -> (usize, usize) {
 }
 
 fn diff_stories(scene: &Document, twin: &Document, out: &mut Vec<String>) {
+    // The writer drops a story no frame references (InDesign discards
+    // one on open — measured), so the twin lacks it BY DESIGN; the loss
+    // line says so, loudly, instead of reporting it as an exporter gap.
+    // An orphan with neither text nor a table (a frame minted and
+    // deleted before anything was typed) is dropped silently.
+    let placed = idml_export::placed_story_ids(scene);
     for s in &scene.stories {
         let scene_tables = tables_of(&s.story);
+        if !idml_export::story_is_placed(&placed, &s.self_id) {
+            let text_chars: usize = s
+                .story
+                .paragraphs
+                .iter()
+                .flat_map(|p| p.runs.iter())
+                .map(|r| r.text.chars().count())
+                .sum();
+            if text_chars > 0 || !scene_tables.is_empty() {
+                out.push(format!(
+                    "story `{}` ({} chars, {} tables) is referenced by no frame — dropped from \
+                     the export; delete it or place it",
+                    s.self_id,
+                    text_chars,
+                    scene_tables.len()
+                ));
+            }
+            continue;
+        }
         let Some(t) = twin_story(twin, &s.self_id) else {
             let text_chars: usize = s
                 .story
@@ -524,7 +565,7 @@ fn image_frames(spread: &Spread) -> Vec<ImageFrame<'_>> {
     out
 }
 
-fn diff_page_items(scene: &Document, twin: &Document, out: &mut Vec<String>) {
+fn diff_page_items(scene: &Document, twin: &Document, ctx: &LossContext, out: &mut Vec<String>) {
     for parsed in &scene.spreads {
         let Some(t) = twin_spread(twin, &parsed.src, parsed.spread.self_id.as_deref()) else {
             continue;
@@ -544,27 +585,56 @@ fn diff_page_items(scene: &Document, twin: &Document, out: &mut Vec<String>) {
                 continue;
             };
             if let Some(n) = f.bytes {
-                if tf.bytes.is_none() {
+                // With a link base, the export handed the bytes back
+                // under the name its `<Link>` points at: the caller
+                // writes that file and InDesign reads exactly these
+                // pixels — nothing is lost.
+                let handed_back = tf
+                    .link
+                    .map(|l| {
+                        ctx.handed_back
+                            .contains(&idml_export::images::link_file_name(l))
+                    })
+                    .unwrap_or(false);
+                if tf.bytes.is_none() && !handed_back {
                     match (f.link, tf.link) {
                         (Some(uri), Some(_)) => out.push(format!(
                             "image bytes on `{}` ({} bytes) are not in the export — IDML cannot \
                              embed pixels; the frame links to `{}` instead, so InDesign re-reads \
-                             the asset and any edit to the pixels is lost. Save as `.paged` to keep \
-                             them",
+                             the asset and any edit to the pixels is lost. Export with a link \
+                             base to have the bytes written beside the package, or save as \
+                             `.paged` to keep them",
                             f.id, n, uri
                         )),
                         _ => out.push(format!(
                             "image placed from bytes on `{}` ({} bytes) is not in the export — an \
                              image placed from bytes has no IDML link to point at (IDML cannot embed \
-                             pixels), so the frame exports empty. Save as `.paged` to keep it, or \
-                             write the bytes as a sibling file and link it",
-                            f.id, n
+                             pixels), so the frame exports empty. Export with a link base to have \
+                             the bytes written as a file the frame links to{}, or save as `.paged` \
+                             to keep it",
+                            f.id,
+                            n,
+                            match &ctx.link_base {
+                                Some(_) => " (the bytes are in no format InDesign places)",
+                                None => "",
+                            }
                         )),
                     }
                 }
             }
             if let Some(uri) = f.link {
-                if tf.link != Some(uri) && !(tf.has_image_element && tf.bytes.is_some()) {
+                // The twin carries the link when it spells the model's
+                // URI, or — with a link base — the file the export
+                // rebased that URI to.
+                let carried = match tf.link {
+                    Some(t) if t == uri => true,
+                    Some(t) => ctx
+                        .rebased
+                        .get(uri)
+                        .is_some_and(|name| *name == idml_export::images::link_file_name(t)),
+                    None => false,
+                };
+                if !(carried || (tf.has_image_element && tf.bytes.is_some())) {
                     out.push(format!(
                         "image link `{}` on `{}` is missing from the export — the IDML exporter \
                          does not yet serialise <Image>/<Link> for a placed image",

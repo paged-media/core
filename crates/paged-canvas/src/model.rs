@@ -24,6 +24,8 @@
 
 use std::collections::HashMap;
 
+use idml_export::{ExportedLink, FontFace};
+
 use paged_renderer::{
     pipeline, BuiltDocument, BuiltPage, BytesResolver, DisplayList, Document, PageId,
     PipelineOptions,
@@ -4269,7 +4271,41 @@ impl CanvasModel {
     /// the edit touched. The model holds a `paged_scene::Document`,
     /// which is exactly the `&Document` the writer takes.
     pub fn export_idml(&self) -> Result<Vec<u8>, idml_export::WriteError> {
-        idml_export::write_idml(&self.scene, &self.source_idml)
+        self.export_idml_with_links(None).map(|(bytes, _)| bytes)
+    }
+
+    /// [`Self::export_idml`] with a LINK BASE: an absolute directory
+    /// the caller will write the returned [`ExportedLink`]s into. Every
+    /// placed image's `LinkResourceURI` is then written as
+    /// `file:<link_base>/<basename>` — the spelling InDesign resolves
+    /// (measured on 20.0.1: the model's relative `assets/…` URI binds
+    /// nothing, `doc.links` = 0) — and each distinct file comes back
+    /// with its bytes when the model holds them (`image_bytes`, Q-03)
+    /// or with `bytes: None` for a link-only frame the caller copies
+    /// from `source_uri`. An image that is only bytes gets a name
+    /// minted from its frame id. `None` is exactly [`Self::export_idml`]
+    /// (URIs as held, no links).
+    ///
+    /// The faces the worker registered bytes for ride along into
+    /// `Resources/Fonts.xml` with their real PostScript / full names
+    /// (see [`registry_faces`]).
+    pub fn export_idml_with_links(
+        &self,
+        link_base: Option<&str>,
+    ) -> Result<(Vec<u8>, Vec<ExportedLink>), idml_export::WriteError> {
+        let out = idml_export::write_idml_with(
+            &self.scene,
+            &self.source_idml,
+            &self.idml_export_options(link_base),
+        )?;
+        Ok((out.bytes, out.links))
+    }
+
+    fn idml_export_options(&self, link_base: Option<&str>) -> idml_export::ExportOptions {
+        idml_export::ExportOptions {
+            link_base: link_base.map(str::to_string),
+            fonts: registry_faces(&self.font_registry),
+        }
     }
 
     /// The constructs an `.idml` export loses, one human-readable line
@@ -4300,12 +4336,23 @@ impl CanvasModel {
     /// Cost: one full export + re-parse. This is a save-time gate, not a
     /// per-frame query.
     pub fn idml_export_losses(&self) -> Vec<String> {
+        self.idml_export_losses_with_links(None)
+    }
+
+    /// [`Self::idml_export_losses`] for an export made with a link base
+    /// (see [`Self::export_idml_with_links`]): an image placed from
+    /// bytes is no longer a loss when the base was given and its bytes
+    /// were handed back — the caller writes them and the link binds.
+    /// Without a base the line stays. A story no frame references is
+    /// reported here too: the writer drops it (InDesign would), so the
+    /// drop is loud rather than silent.
+    pub fn idml_export_losses_with_links(&self, link_base: Option<&str>) -> Vec<String> {
         let mut out = crate::export_losses::opacity_mask_losses(&self.scene);
-        match self.export_idml() {
+        match self.export_idml_with_links(link_base) {
             Err(e) => out.push(format!(
                 "the IDML export itself failed ({e}) — no construct below it could be measured"
             )),
-            Ok(bytes) => {
+            Ok((bytes, links)) => {
                 let twin = idml_import::open_source_archive(&bytes)
                     .map_err(|e| e.to_string())
                     .and_then(|archive| {
@@ -4316,7 +4363,22 @@ impl CanvasModel {
                         "the exported IDML does not re-parse ({e}) — every construct is at \
                          risk and none below could be measured"
                     )),
-                    Ok(twin) => out.extend(crate::export_losses::diff(&self.scene, &twin)),
+                    Ok(twin) => {
+                        let ctx = crate::export_losses::LossContext {
+                            link_base: link_base.map(str::to_string),
+                            handed_back: links
+                                .iter()
+                                .filter(|l| l.bytes.is_some())
+                                .map(|l| l.file_name.clone())
+                                .collect(),
+                            rebased: links
+                                .iter()
+                                .filter(|l| !l.source_uri.is_empty())
+                                .map(|l| (l.source_uri.clone(), l.file_name.clone()))
+                                .collect(),
+                        };
+                        out.extend(crate::export_losses::diff(&self.scene, &twin, &ctx));
+                    }
                 }
             }
         }
@@ -8927,6 +8989,196 @@ pub fn font_postscript_name(bytes: &[u8]) -> Option<String> {
         .find_map(|n| n.to_string())
 }
 
+/// The faces the worker registered bytes for, one per NAMED INSTANCE
+/// of each file, named the way `Resources/Fonts.xml` declares them and
+/// the way InDesign lists an installed instance (measured on 20.0.1:
+/// `Source Serif 4` Regular is `SourceSerif4Roman-Regular`, `JetBrains
+/// Mono` Italic is `JetBrainsMonoItalic-Regular` — infixes only the
+/// file's `fvar` records carry).
+///
+/// * `family` is the registry's — the `AppliedFont` value the document
+///   uses, which is what the resolver matches on (a file's own family
+///   name can be an instance: `Space Grotesk Light`).
+/// * A variable font (`fvar`) yields one face per named instance: the
+///   instance's subfamily name is the `FontStyleName`; its PostScript
+///   name comes from the record's `postScriptNameID` when the file
+///   carries one, else `<Family><Style>` with spaces removed joined by
+///   `-`; the axis names + the instance's coordinates become
+///   `DesignAxes*`. A file registered as an italic whose instance
+///   names do not say so gets "Italic" appended.
+/// * A static font yields its one face: the registered style (else
+///   the file's subfamily), its `name`-table PostScript / full name.
+/// * A payload the sfnt parser cannot read (woff/woff2) yields a
+///   synthesised face for the registered style.
+///
+/// One entry per `(family, style)` — the first file to name it wins.
+pub fn registry_faces(registry: &[FontEntry]) -> Vec<FontFace> {
+    let mut out: Vec<FontFace> = Vec::new();
+    let mut push = |f: FontFace| {
+        if !out
+            .iter()
+            .any(|o| o.family == f.family && o.style == f.style)
+        {
+            out.push(f);
+        }
+    };
+    for entry in registry {
+        let registered_style = entry
+            .style
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_string());
+        let Some(face) = ttf_parser::Face::parse(&entry.bytes, 0).ok() else {
+            push(FontFace::synthesized(
+                &entry.family,
+                registered_style.as_deref().unwrap_or("Regular"),
+            ));
+            continue;
+        };
+        let name = |id: u16| -> Option<String> {
+            face.names()
+                .into_iter()
+                .filter(|n| n.name_id == id)
+                .find_map(|n| n.to_string())
+                .filter(|s| !s.trim().is_empty())
+        };
+        let raw = face.raw_face();
+        let has = |t: &[u8; 4]| raw.table(ttf_parser::Tag::from_bytes(t)).is_some();
+        let font_type = if has(b"CFF ") || has(b"CFF2") {
+            "OpenTypeCFF"
+        } else if has(b"GSUB") || has(b"GPOS") {
+            "OpenTypeTT"
+        } else {
+            "TrueType"
+        };
+        let version = name(ttf_parser::name_id::VERSION);
+        let italic_file = registered_style
+            .as_deref()
+            .or(name(ttf_parser::name_id::SUBFAMILY).as_deref())
+            .is_some_and(|s| s.to_ascii_lowercase().contains("italic"));
+        let instances = raw
+            .table(ttf_parser::Tag::from_bytes(b"fvar"))
+            .map(|t| fvar_instances(t, &name))
+            .unwrap_or_default();
+        if instances.is_empty() {
+            let style = registered_style
+                .or_else(|| name(ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY))
+                .or_else(|| name(ttf_parser::name_id::SUBFAMILY))
+                .unwrap_or_else(|| "Regular".to_string());
+            let mut f = FontFace::synthesized(&entry.family, &style);
+            if let Some(ps) = name(ttf_parser::name_id::POST_SCRIPT_NAME) {
+                f.postscript_name = ps;
+            }
+            if let Some(full) = name(ttf_parser::name_id::FULL_NAME) {
+                f.full_name = full;
+            }
+            f.font_type = font_type.to_string();
+            f.version = version.clone();
+            push(f);
+            continue;
+        }
+        for inst in instances {
+            let mut style = inst.subfamily.trim().to_string();
+            if italic_file && !style.to_ascii_lowercase().contains("italic") {
+                style = if style.eq_ignore_ascii_case("regular") {
+                    "Italic".to_string()
+                } else {
+                    format!("{style} Italic")
+                };
+            }
+            let mut f = FontFace::synthesized(&entry.family, &style);
+            if let Some(ps) = inst.postscript_name {
+                f.postscript_name = ps;
+            }
+            // InDesign spells a variable instance's full name as
+            // "<Family> <Style>", the regular one included.
+            f.full_name = format!("{} {}", entry.family, style);
+            f.font_type = font_type.to_string();
+            f.version = version.clone();
+            f.axes = inst.axes;
+            push(f);
+        }
+    }
+    out
+}
+
+/// One `fvar` named-instance record, names resolved.
+struct FvarInstance {
+    subfamily: String,
+    postscript_name: Option<String>,
+    /// `(axis name, coordinate)` in axis order.
+    axes: Vec<(String, f32)>,
+}
+
+/// Read the named instances out of a raw `fvar` table (OpenType 1.8:
+/// header, axis records, instance records with an optional trailing
+/// `postScriptNameID`). Malformed tables yield nothing.
+fn fvar_instances(t: &[u8], name: &dyn Fn(u16) -> Option<String>) -> Vec<FvarInstance> {
+    fn u16_at(t: &[u8], at: usize) -> Option<u16> {
+        t.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]))
+    }
+    fn fixed_at(t: &[u8], at: usize) -> Option<f32> {
+        t.get(at..at + 4)
+            .map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]) as f32 / 65536.0)
+    }
+    let Some(axes_offset) = u16_at(t, 4).map(usize::from) else {
+        return Vec::new();
+    };
+    let (Some(axis_count), Some(axis_size), Some(instance_count), Some(instance_size)) = (
+        u16_at(t, 8).map(usize::from),
+        u16_at(t, 10).map(usize::from),
+        u16_at(t, 12).map(usize::from),
+        u16_at(t, 14).map(usize::from),
+    ) else {
+        return Vec::new();
+    };
+    if axis_size < 20 || instance_size < 4 + 4 * axis_count {
+        return Vec::new();
+    }
+    let mut axis_names: Vec<String> = Vec::with_capacity(axis_count);
+    for i in 0..axis_count {
+        let at = axes_offset + i * axis_size;
+        let tag = t
+            .get(at..at + 4)
+            .map(|b| String::from_utf8_lossy(b).trim().to_string())
+            .unwrap_or_default();
+        let id = u16_at(t, at + 18).unwrap_or(0xFFFF);
+        axis_names.push(name(id).unwrap_or(tag));
+    }
+    let has_ps = instance_size >= 6 + 4 * axis_count;
+    let base = axes_offset + axis_count * axis_size;
+    let mut out = Vec::with_capacity(instance_count);
+    for i in 0..instance_count {
+        let at = base + i * instance_size;
+        let Some(subfamily) = u16_at(t, at).and_then(name) else {
+            continue;
+        };
+        let mut axes = Vec::with_capacity(axis_count);
+        for (k, axis_name) in axis_names.iter().enumerate() {
+            let Some(v) = fixed_at(t, at + 4 + 4 * k) else {
+                break;
+            };
+            axes.push((axis_name.clone(), v));
+        }
+        if axes.len() != axis_count {
+            continue;
+        }
+        let postscript_name = if has_ps {
+            u16_at(t, at + 4 + 4 * axis_count)
+                .filter(|id| *id != 0xFFFF && *id != 0)
+                .and_then(name)
+        } else {
+            None
+        };
+        out.push(FvarInstance {
+            subfamily,
+            postscript_name,
+            axes,
+        });
+    }
+    out
+}
+
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
     let mut out: HashMap<String, Vec<PageId>> = HashMap::new();
     for page in &built.pages {
@@ -8943,6 +9195,106 @@ fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The instance names InDesign 20.0.1 lists for the corpus faces
+    /// installed (`indesign-fonts.tsv`): the `Roman` / `Italic`
+    /// infixes come from the files' `fvar` records, the axis names
+    /// and coordinates too. Skipped when the corpus font dir is absent.
+    #[test]
+    fn registry_faces_name_variable_instances_like_indesign() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
+        if !dir.exists() {
+            eprintln!("SKIP: {} absent", dir.display());
+            return;
+        }
+        let entry = |family: &str, style: Option<&str>, file: &str| FontEntry {
+            family: family.into(),
+            style: style.map(str::to_string),
+            bytes: std::fs::read(dir.join(file)).expect(file),
+        };
+        let faces = registry_faces(&[
+            entry("Fraunces", None, "Fraunces-VF.ttf"),
+            entry("JetBrains Mono", None, "JetBrainsMono-VF.ttf"),
+            entry(
+                "JetBrains Mono",
+                Some("Italic"),
+                "JetBrainsMono-Italic-VF.ttf",
+            ),
+            entry("Source Serif 4", None, "SourceSerif4.ttf"),
+            entry("Noto Sans JP", None, "NotoSansJP-VF.ttf"),
+            entry("Roboto", Some("Bold"), "Roboto-Bold.ttf"),
+        ]);
+        let face = |family: &str, style: &str| -> &FontFace {
+            faces
+                .iter()
+                .find(|f| f.family == family && f.style == style)
+                .unwrap_or_else(|| panic!("no {family} {style} in {faces:#?}"))
+        };
+        let fraunces = face("Fraunces", "Regular");
+        assert_eq!(fraunces.postscript_name, "Fraunces-Regular");
+        assert_eq!(fraunces.full_name, "Fraunces Regular");
+        assert_eq!(fraunces.font_type, "OpenTypeTT");
+        assert_eq!(
+            fraunces.version.as_deref(),
+            Some("Version 1.000;[b76b70a41]")
+        );
+        assert_eq!(
+            fraunces.axes,
+            vec![
+                ("Optical Size".to_string(), 9.0),
+                ("Weight".to_string(), 400.0),
+                ("Softness".to_string(), 0.0),
+                ("Wonky".to_string(), 1.0),
+            ]
+        );
+        assert_eq!(face("Fraunces", "Bold").postscript_name, "Fraunces-Bold");
+        assert_eq!(
+            face("JetBrains Mono", "Regular").postscript_name,
+            "JetBrainsMonoRoman-Regular"
+        );
+        assert_eq!(
+            face("JetBrains Mono", "Bold").postscript_name,
+            "JetBrainsMonoRoman-Bold"
+        );
+        assert_eq!(
+            face("JetBrains Mono", "Italic").postscript_name,
+            "JetBrainsMonoItalic-Regular"
+        );
+        assert_eq!(
+            face("JetBrains Mono", "Bold Italic").postscript_name,
+            "JetBrainsMonoItalic-Bold"
+        );
+        assert_eq!(
+            face("Source Serif 4", "Regular").postscript_name,
+            "SourceSerif4Roman-Regular"
+        );
+        assert_eq!(
+            face("Source Serif 4", "Bold").axes,
+            vec![
+                ("Weight".to_string(), 700.0),
+                ("Optical Size".to_string(), 20.0)
+            ]
+        );
+        // No `postScriptNameID` in this file: the `Family-Style` fallback.
+        assert_eq!(
+            face("Noto Sans JP", "Regular").postscript_name,
+            "NotoSansJP-Regular"
+        );
+        // A static font: its own names, no axes.
+        let roboto = face("Roboto", "Bold");
+        assert_eq!(roboto.postscript_name, "Roboto-Bold");
+        assert_eq!(roboto.full_name, "Roboto Bold");
+        assert!(roboto.axes.is_empty());
+        // Nothing family-only, nothing duplicated.
+        let mut keys: Vec<(String, String)> = faces
+            .iter()
+            .map(|f| (f.family.clone(), f.style.clone()))
+            .collect();
+        let n = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), n);
+    }
 
     // A minimum-viable IDML the canvas can load. Hand-rolled so the
     // model test stays independent of the heavier `paged-gen` fixture

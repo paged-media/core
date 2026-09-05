@@ -408,11 +408,62 @@ fn write_graphic(extras: &[ExtraColor], gradients: &[ExtraGradient]) -> Vec<u8> 
     b.into_bytes()
 }
 
-/// `Resources/Fonts.xml` — declares the `Open Sans` family. The
-/// renderer's existing fixture fonts include OpenSans.ttf so the
-/// generated samples render with the same face InDesign substitutes
-/// when importing.
-pub fn fonts_xml() -> Vec<u8> {
+/// One face of `Resources/Fonts.xml`, spelled as the INSTANCE InDesign
+/// binds: the `fvar` named instance's PostScript name (`OpenSansRoman-
+/// Regular` — the `Roman` infix only the file carries) and its design
+/// axes. InDesign 20.0.1 substitutes a family-only declaration
+/// (`Name="Open Sans" PostScriptName="OpenSans"`) even with the family
+/// installed; the values here were read off the corpus files' `fvar`
+/// records, and the attribute set + order is InDesign's own (an export
+/// of a variable-font document).
+pub struct FontInstance {
+    pub style: &'static str,
+    pub postscript_name: &'static str,
+    /// `(axis name, coordinate)`, in the file's axis order; empty for a
+    /// static face.
+    pub axes: &'static [(&'static str, &'static str)],
+}
+
+/// One `<FontFamily>` of `Resources/Fonts.xml` with its instances.
+pub struct FontFamilySpec {
+    pub family: &'static str,
+    /// `FontType` + `Version` as the corpus file reports them.
+    pub font_type: &'static str,
+    pub version: &'static str,
+    pub instances: &'static [FontInstance],
+}
+
+/// `Self` of a family element: `FontFamily/<family without
+/// non-alphanumerics>` — the same id the IDML exporter mints, so the
+/// two spell a family identically.
+fn font_family_self(family: &str) -> String {
+    format!(
+        "FontFamily/{}",
+        family
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect::<String>()
+    )
+}
+
+/// Percent-encode an axis name the way InDesign spells
+/// `DesignAxesName` (`Optical%20Size`).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Write `Resources/Fonts.xml` for `families`, one `<Font>` per
+/// instance in InDesign's attribute order.
+pub fn fonts_xml_for(families: &[FontFamilySpec]) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -425,25 +476,94 @@ pub fn fonts_xml() -> Vec<u8> {
             ("DOMVersion", "20.0"),
         ],
     );
-    b.start(
-        "FontFamily",
-        &[("Self", "FontFamily/OpenSans"), ("Name", "Open Sans")],
-    );
-    b.empty(
-        "Font",
-        &[
-            ("Self", "Font/OpenSans"),
-            ("FontFamily", "Open Sans"),
-            ("Name", "Open Sans"),
-            ("PostScriptName", "OpenSans"),
-            ("Status", "Installed"),
-            ("FontStyleName", "Regular"),
-            ("FontType", "TrueType"),
-        ],
-    );
-    b.end("FontFamily");
+    for fam in families {
+        let family_self = font_family_self(fam.family);
+        b.start(
+            "FontFamily",
+            &[("Self", &family_self), ("Name", fam.family)],
+        );
+        for inst in fam.instances {
+            let name = format!("{} {}", fam.family, inst.style);
+            let self_id = format!("{family_self}Fontn{name}");
+            let num_axes = inst.axes.len().to_string();
+            let axes_names = inst
+                .axes
+                .iter()
+                .map(|(n, _)| percent_encode(n))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let axes_values = inst
+                .axes
+                .iter()
+                .map(|(_, v)| *v)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut attrs: Vec<(&str, &str)> = vec![
+                ("Self", &self_id),
+                ("FontFamily", fam.family),
+                ("Name", &name),
+                ("PostScriptName", inst.postscript_name),
+                ("Status", "Installed"),
+                ("FontStyleName", inst.style),
+                ("FontType", fam.font_type),
+                ("WritingScript", "0"),
+                ("FullName", &name),
+                ("FullNameNative", &name),
+                ("FontStyleNameNative", inst.style),
+                ("PlatformName", "$ID/"),
+                ("Version", fam.version),
+                ("TypekitID", "$ID/"),
+            ];
+            if !inst.axes.is_empty() {
+                attrs.push(("NumDesignAxes", &num_axes));
+                attrs.push(("DesignAxesName", &axes_names));
+                attrs.push(("DesignAxesValues", &axes_values));
+            }
+            b.empty("Font", &attrs);
+        }
+        b.end("FontFamily");
+    }
     b.end("idPkg:Fonts");
     b.into_bytes()
+}
+
+/// The `Open Sans` family as the corpus files carry it
+/// (`OpenSans.ttf` / `OpenSans-Italic.ttf`, both variable): the four
+/// instances the generated samples apply.
+pub const OPEN_SANS: FontFamilySpec = FontFamilySpec {
+    family: "Open Sans",
+    font_type: "OpenTypeTT",
+    version: "Version 3.003",
+    instances: &[
+        FontInstance {
+            style: "Regular",
+            postscript_name: "OpenSansRoman-Regular",
+            axes: &[("Weight", "400"), ("Width", "100")],
+        },
+        FontInstance {
+            style: "Bold",
+            postscript_name: "OpenSansRoman-Bold",
+            axes: &[("Weight", "700"), ("Width", "100")],
+        },
+        FontInstance {
+            style: "Italic",
+            postscript_name: "OpenSansItalic-Regular",
+            axes: &[("Weight", "400"), ("Width", "100")],
+        },
+        FontInstance {
+            style: "Bold Italic",
+            postscript_name: "OpenSansItalic-Bold",
+            axes: &[("Weight", "700"), ("Width", "100")],
+        },
+    ],
+};
+
+/// `Resources/Fonts.xml` — declares the `Open Sans` family the samples
+/// apply, instance by instance (see [`FontInstance`]). The renderer's
+/// fixture fonts include OpenSans.ttf so the generated samples render
+/// with the face InDesign binds when importing.
+pub fn fonts_xml() -> Vec<u8> {
+    fonts_xml_for(&[OPEN_SANS])
 }
 
 /// One custom `<…StrokeStyle>` resource to emit in `Resources/Styles.xml`.

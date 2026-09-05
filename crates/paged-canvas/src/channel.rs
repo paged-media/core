@@ -527,6 +527,25 @@ pub struct MintedElement {
 /// Concept 3 — PDF export options as the dialog sends them. Every
 /// field is optional/defaulted so the wire stays forward-compatible;
 /// the worker maps it onto `paged_export_pdf::ExportOptions`.
+/// One file an IDML export's image links point at — the wire form of
+/// `idml_export::ExportedLink` (see `IdmlExported.links`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedLinkWire {
+    /// The basename the `<Link>` was written with (decoded: the name on
+    /// disk).
+    pub file_name: String,
+    /// The URI the model held for the asset — empty for an image that
+    /// existed only as bytes (its name was minted from the frame id).
+    pub source_uri: String,
+    /// Whether `bytes` carries the image's encoded file. `false` for a
+    /// link-only frame: the host copies the file from `source_uri`.
+    pub has_bytes: bool,
+    #[tsify(type = "number[]")]
+    pub bytes: ByteBuf,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -1125,7 +1144,17 @@ pub enum MainToWorkerKind {
     /// model-owned Spreads/Stories and copies every other entry
     /// verbatim), so there's no session/progress loop. Reply:
     /// `IdmlExported` (or `ExportIdmlFailed`).
-    ExportIdml {},
+    ///
+    /// `link_base` (additive, governance rule 1 — `#[serde(default)]`,
+    /// no bump): an ABSOLUTE directory the host will write the reply's
+    /// `links` into. Every placed image's `LinkResourceURI` is then
+    /// spelled `file:<link_base>/<basename>`, which InDesign resolves
+    /// (measured on 20.0.1: the model's relative URI binds nothing).
+    /// Omitted ⇒ URIs as the model holds them, no `links`.
+    ExportIdml {
+        #[serde(default)]
+        link_base: Option<String>,
+    },
     /// v51 (.paged container — the host.parts door) — write/overwrite a
     /// plugin-namespaced container part. `path` MUST be under `paged/`
     /// (the IDML parts + manifest are off-limits); the bytes are persisted
@@ -1719,6 +1748,17 @@ pub enum WorkerToMainKind {
         /// payload still deserialises.
         #[serde(default)]
         lost: Vec<String>,
+        /// The files the package's image links point at — one per
+        /// distinct file, populated only when the request carried a
+        /// `linkBase`. The host writes `bytes` (when `hasBytes`) as
+        /// `<linkBase>/<fileName>`, or copies the file `sourceUri`
+        /// names there. Bytes ride inline as `number[]` (the
+        /// `pdfBytes` / `idmlBytes` shape) rather than on a second
+        /// request kind, which would bump the protocol. Additive
+        /// (governance rule 1): omitted by an older worker,
+        /// deserialises to empty.
+        #[serde(default)]
+        links: Vec<ExportedLinkWire>,
     },
     /// W3.B2 (rides v29 — added before first editor sync) — `ExportIdml`
     /// failed (no document loaded, or the carry-through writer errored).
@@ -4986,7 +5026,9 @@ mod tests {
             r#"{"seq":1,"protocol":58,"kind":"idmlExported","payload":{"idmlBytes":[80,75]}}"#;
         let msg: WorkerToMain = serde_json::from_str(legacy).expect("legacy payload");
         match msg.kind {
-            WorkerToMainKind::IdmlExported { lost, idml_bytes } => {
+            WorkerToMainKind::IdmlExported {
+                lost, idml_bytes, ..
+            } => {
                 assert!(lost.is_empty(), "missing `lost` defaults to empty");
                 assert_eq!(idml_bytes.as_slice(), &[80, 75]);
             }
@@ -4999,6 +5041,7 @@ mod tests {
             kind: WorkerToMainKind::IdmlExported {
                 idml_bytes: ByteBuf::from(vec![80, 75]),
                 lost: vec!["opacity mask on `r1`".into()],
+                links: Vec::new(),
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -5962,7 +6005,7 @@ mod tests {
         let req = MainToWorker {
             seq: 11,
             protocol: PROTOCOL_VERSION,
-            kind: MainToWorkerKind::ExportIdml {},
+            kind: MainToWorkerKind::ExportIdml { link_base: None },
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -5970,7 +6013,10 @@ mod tests {
             "tag drift: {json}"
         );
         let back: MainToWorker = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back.kind, MainToWorkerKind::ExportIdml {}));
+        assert!(matches!(
+            back.kind,
+            MainToWorkerKind::ExportIdml { link_base: None }
+        ));
 
         // Success reply: idml_bytes renders as a number[] (ByteBuf) and
         // the field is camelCase on the wire.
@@ -5981,6 +6027,7 @@ mod tests {
                 idml_bytes: ByteBuf::from(vec![80, 75, 3, 4]), // "PK\x03\x04"
                 // v58 (C-28) — a clean document loses nothing.
                 lost: Vec::new(),
+                links: Vec::new(),
             },
         };
         let json = serde_json::to_string(&ok).unwrap();
@@ -5995,9 +6042,14 @@ mod tests {
         assert!(!json.contains("idml_bytes"), "snake leaked: {json}");
         let back: WorkerToMain = serde_json::from_str(&json).unwrap();
         match back.kind {
-            WorkerToMainKind::IdmlExported { idml_bytes, lost } => {
+            WorkerToMainKind::IdmlExported {
+                idml_bytes,
+                lost,
+                links,
+            } => {
                 assert_eq!(idml_bytes.as_slice(), &[80, 75, 3, 4]);
                 assert!(lost.is_empty());
+                assert!(links.is_empty());
             }
             other => panic!("wrong variant: {other:?}"),
         }
@@ -6019,6 +6071,89 @@ mod tests {
         match back.kind {
             WorkerToMainKind::ExportIdmlFailed { error } => {
                 assert_eq!(error, "no document loaded");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// The `linkBase` request field and the `links` reply field are
+    /// ADDITIVE (governance rule 1, no bump): a pre-existing empty
+    /// `exportIdml` payload still deserialises (`link_base: None`), a
+    /// reply without `links` deserialises to empty, and a populated
+    /// link rides camelCase with its bytes as a `number[]`.
+    #[test]
+    fn idml_export_link_base_and_links_are_additive() {
+        // An older host's request: no `linkBase` at all.
+        let old: MainToWorker = serde_json::from_str(&format!(
+            r#"{{"seq":1,"protocol":{},"kind":"exportIdml","payload":{{}}}}"#,
+            PROTOCOL_VERSION.0
+        ))
+        .unwrap();
+        assert!(matches!(
+            old.kind,
+            MainToWorkerKind::ExportIdml { link_base: None }
+        ));
+        // A host that asks for resolvable links.
+        let req = MainToWorker {
+            seq: 2,
+            protocol: PROTOCOL_VERSION,
+            kind: MainToWorkerKind::ExportIdml {
+                link_base: Some("/Users/me/Book/Links".into()),
+            },
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            json.contains(r#""linkBase":"/Users/me/Book/Links""#),
+            "camelCase: {json}"
+        );
+        let back: MainToWorker = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            MainToWorkerKind::ExportIdml { link_base } => {
+                assert_eq!(link_base.as_deref(), Some("/Users/me/Book/Links"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+
+        // An older worker's reply: no `links`.
+        let old: WorkerToMain = serde_json::from_str(&format!(
+            r#"{{"seq":2,"protocol":{},"kind":"idmlExported","payload":{{"idmlBytes":[80,75]}}}}"#,
+            PROTOCOL_VERSION.0
+        ))
+        .unwrap();
+        match old.kind {
+            WorkerToMainKind::IdmlExported { links, lost, .. } => {
+                assert!(links.is_empty());
+                assert!(lost.is_empty());
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        // A populated link.
+        let ok = WorkerToMain {
+            seq: Some(2),
+            protocol: PROTOCOL_VERSION,
+            kind: WorkerToMainKind::IdmlExported {
+                idml_bytes: ByteBuf::from(vec![80, 75]),
+                lost: Vec::new(),
+                links: vec![ExportedLinkWire {
+                    file_name: "CODE 1.jpg".into(),
+                    source_uri: "assets/CODE%201.jpg".into(),
+                    has_bytes: true,
+                    bytes: ByteBuf::from(vec![0xFF, 0xD8]),
+                }],
+            },
+        };
+        let json = serde_json::to_string(&ok).unwrap();
+        assert!(
+            json.contains(r#""links":[{"fileName":"CODE 1.jpg","sourceUri":"assets/CODE%201.jpg","hasBytes":true,"bytes":[255,216]}]"#),
+            "{json}"
+        );
+        let back: WorkerToMain = serde_json::from_str(&json).unwrap();
+        match back.kind {
+            WorkerToMainKind::IdmlExported { links, .. } => {
+                assert_eq!(links.len(), 1);
+                assert_eq!(links[0].file_name, "CODE 1.jpg");
+                assert!(links[0].has_bytes);
+                assert_eq!(links[0].bytes.as_slice(), &[0xFF, 0xD8]);
             }
             other => panic!("wrong variant: {other:?}"),
         }

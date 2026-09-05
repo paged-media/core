@@ -1026,18 +1026,29 @@ impl WorkerCore {
                 self.export_sessions.remove(&session);
                 WorkerToMainKind::ExportPdfCancelled { session }
             }
-            MainToWorkerKind::ExportIdml {} => match self.model.as_ref() {
+            MainToWorkerKind::ExportIdml { link_base } => match self.model.as_ref() {
                 // W3.B2 — one-shot IDML save-back. The carry-through
                 // writer is cheap (patch the model-owned entries, copy
                 // the rest verbatim) so there's no session loop like the
-                // PDF export.
-                Some(m) => match m.export_idml() {
-                    Ok(bytes) => WorkerToMainKind::IdmlExported {
+                // PDF export. With a `link_base` the placed images'
+                // URIs are rebased under it and the files to write
+                // there ride back in `links` (bytes inline).
+                Some(m) => match m.export_idml_with_links(link_base.as_deref()) {
+                    Ok((bytes, links)) => WorkerToMainKind::IdmlExported {
                         idml_bytes: bytes.into(),
                         // v58 (C-28) — a lossy IDML save is never
                         // silent: paged-native constructs the writer
                         // could not carry ride back with the bytes.
-                        lost: m.idml_export_losses(),
+                        lost: m.idml_export_losses_with_links(link_base.as_deref()),
+                        links: links
+                            .into_iter()
+                            .map(|l| paged_canvas::channel::ExportedLinkWire {
+                                file_name: l.file_name,
+                                source_uri: l.source_uri,
+                                has_bytes: l.bytes.is_some(),
+                                bytes: paged_canvas::channel::ByteBuf(l.bytes.unwrap_or_default()),
+                            })
+                            .collect(),
                     },
                     Err(e) => WorkerToMainKind::ExportIdmlFailed {
                         error: e.to_string(),
