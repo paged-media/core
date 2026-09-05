@@ -678,6 +678,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     } else {
         opts.hyphenation_zone.max(0)
     };
+    // The widest measure this paragraph composes into — the stretch a
+    // ragged line's glue is given (see the glue below).
+    let ragged_stretch: i32 = opts
+        .column_widths
+        .as_deref()
+        .and_then(|w| w.iter().copied().max())
+        .unwrap_or(options.column_width())
+        .max(0);
     let zone_ref_width = opts.column_width.max(1);
     let zone_threshold = (zone_ref_width - zone).max(0);
     let mut zone_natural_x: i64 = 0;
@@ -763,10 +771,29 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             // widening. Justified paragraphs have `zone == 0` here, so
             // their calibrated stretch is untouched.
             let glue_stretch = if zone > 0 { stretch.max(zone) } else { stretch };
+            // The gap's glue is as wide as the whitespace actually in it:
+            // a double space (or a tab-less run of spaces) is two glyphs
+            // wide in the line the reader sees, and a breaker that
+            // modelled every gap as one space believed a 447 pt label
+            // measured 421 pt and set it on one line, 15 pt over its
+            // measure (measured 2026-09-06 on the annual's spec labels).
+            // Stretch and shrink scale with the gap so its band keeps
+            // the configured proportions.
+            let gap_natural = sum_advances_in(&flat, w.end as u32..words[i + 1].start as u32);
+            let (gap_width, gap_stretch, gap_shrink) = if gap_natural > 0 && natural_space > 0 {
+                let k = gap_natural as f32 / natural_space as f32;
+                (
+                    (space_width as f32 * k).round() as i32,
+                    (glue_stretch as f32 * k).round() as i32,
+                    (shrink as f32 * k).round() as i32,
+                )
+            } else {
+                (space_width, glue_stretch, shrink)
+            };
             items.push(Item::Glue {
-                width: space_width,
-                stretch: glue_stretch,
-                shrink,
+                width: gap_width,
+                stretch: gap_stretch,
+                shrink: gap_shrink,
             });
             byte_ends.push(w.end);
             is_hyphen.push(false);
@@ -819,6 +846,33 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 break;
             }
         }
+    }
+    // A ragged paragraph that still has no fit — every candidate line
+    // ends too far short of the margin for its glue to stretch — is
+    // set with fill glue: every gap may stretch as far as the measure,
+    // so any line that ends before the margin is feasible and the
+    // breaker chooses among REAL breaks instead of degrading to one
+    // word per line below. The ratio is discarded at glyph-emit for
+    // ragged text (left-flush), so this only decides WHERE the lines
+    // break — the way InDesign's composer breaks a ragged line it
+    // cannot fill (measured 2026-09-06 on the annual's spec labels).
+    if breaks.is_empty() && !items.is_empty() && options.alignment != Alignment::Justify {
+        let filled: Vec<Item<()>> = items
+            .iter()
+            .map(|it| match it {
+                Item::Glue {
+                    width,
+                    stretch,
+                    shrink,
+                } if *stretch != paragraph_breaker::INFINITE_PENALTY => Item::Glue {
+                    width: *width,
+                    stretch: (*stretch).max(ragged_stretch),
+                    shrink: *shrink,
+                },
+                other => other.clone(),
+            })
+            .collect();
+        breaks = paragraph_breaker::total_fit(&filled, lengths, 1_000.0, opts.looseness);
     }
     // P-17: when even the loosest tolerance can't break (typically a
     // single token wider than every column width), synthesise one

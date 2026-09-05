@@ -241,16 +241,14 @@ fn the_loss_list_is_measured_against_a_reparsed_export() {
         );
     }
 
-    // --- The one honest, permanent loss: IDML cannot embed pixels. ---
+    // --- No image loss either: a base-less export EMBEDS the bytes ---
+    // (InDesign's `<Contents>` + `StoredState="Embedded"` spelling, read
+    // back by the importer), so the pixels survive the re-parse.
     assert!(
-        has("image placed from bytes on `r1`") && has("no IDML link to point at"),
+        !has("image placed from bytes on `r1`"),
         "image loss: {losses:#?}"
     );
-    assert_eq!(
-        losses.len(),
-        1,
-        "exactly the image line remains: {losses:#?}"
-    );
+    assert!(losses.is_empty(), "nothing remains: {losses:#?}");
 }
 
 #[test]
@@ -290,10 +288,9 @@ fn with_a_link_base_the_bytes_placed_image_is_handed_back_and_is_no_loss() {
         .model
         .idml_export_losses_with_links(Some("/Users/me/Book Links/Links"));
     assert!(losses.is_empty(), "{losses:#?}");
-    // Without a base the honest line stays (and names the way out).
+    // Without a base the bytes are embedded instead — no loss either.
     let losses = a.model.idml_export_losses();
-    assert_eq!(losses.len(), 1, "{losses:#?}");
-    assert!(losses[0].contains("Export with a link base"), "{losses:#?}");
+    assert!(losses.is_empty(), "{losses:#?}");
     // `export_idml` is the base-less export, byte for byte.
     assert_eq!(
         a.model.export_idml().unwrap(),

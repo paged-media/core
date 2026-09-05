@@ -784,6 +784,19 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             if let Some(v) = d.diagonal_in_front {
                 a.push(("DiagonalLineInFront", v.to_string()));
             }
+            // Every inset spelled, as InDesign's own files do: an absent
+            // inset is InDesign's 4 pt default, and both readers agree
+            // only when the number is on the element.
+            for k in [
+                "TextTopInset",
+                "TextLeftInset",
+                "TextBottomInset",
+                "TextRightInset",
+            ] {
+                if !a.iter().any(|(key, _)| *key == k) {
+                    a.push((k, "4".to_string()));
+                }
+            }
             let attr_refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             b.start("Cell", &attr_refs);
             for p in &cell.paragraphs {
