@@ -32,6 +32,17 @@ use crate::shape::{
     apply_tracking, shape_run, shape_run_with_features, Face, ShapedRun, ADVANCE_PRECISION,
 };
 
+/// Stretch of the finishing glue that ends every paragraph. Knuth–Plass
+/// gives the last line INFINITE stretch, so however short it is its
+/// adjustment ratio is 0 and it costs nothing. `paragraph_breaker`
+/// treats its `INFINITE_PENALTY` (10 000) as an ordinary stretch of
+/// 156 pt when it computes a ratio, so a short last line was scored
+/// like a badly loose one and the breaker preferred to lengthen it —
+/// hyphenating "car-ries" a line above where InDesign set "carries"
+/// whole (the annual's page 124 caption, 2026-09-06). A quarter of the
+/// `i32` range keeps the running stretch sum clear of overflow.
+pub(crate) const FINISHING_STRETCH: i32 = i32::MAX / 4;
+
 /// A glyph positioned in frame space, ready for rasterization.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PositionedGlyph {
@@ -812,7 +823,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     }
     items.push(Item::Glue {
         width: 0,
-        stretch: paragraph_breaker::INFINITE_PENALTY,
+        stretch: FINISHING_STRETCH,
         shrink: 0,
     });
     byte_ends.push(paragraph_text.len());
@@ -875,7 +886,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                     width,
                     stretch,
                     shrink,
-                } if *stretch != paragraph_breaker::INFINITE_PENALTY => Item::Glue {
+                } if *stretch != FINISHING_STRETCH => Item::Glue {
                     width: *width,
                     stretch: (*stretch).max(ragged_stretch),
                     shrink: *shrink,

@@ -510,11 +510,23 @@ fn main() -> Result<()> {
         let lines = built.story_layout(story_id);
         println!("{story_id}: {} lines", lines.len());
         for l in lines {
+            let x0 = l
+                .clusters
+                .iter()
+                .map(|c| c.x_pt)
+                .fold(f32::INFINITY, f32::min);
+            let x1 = l
+                .clusters
+                .iter()
+                .map(|c| c.x_pt + c.advance_pt)
+                .fold(f32::NEG_INFINITY, f32::max);
             println!(
-                "  base {:.2} asc {:.2} desc {:.2} bytes {}..{} page {:?} frame {:?}",
+                "  base {:.2} asc {:.2} desc {:.2} x {:.2}..{:.2} bytes {}..{} page {:?} frame {:?}",
                 l.baseline_y_pt,
                 l.ascent_pt,
                 l.descent_pt,
+                x0,
+                x1,
                 l.byte_range.start,
                 l.byte_range.end,
                 l.page_id,

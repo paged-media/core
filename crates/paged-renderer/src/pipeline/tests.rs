@@ -2325,12 +2325,18 @@ fn hyphenation_zone_is_noop_for_justified_but_active_for_ragged() {
     // Ragged (Left): the SAME zone DOES move a break — it suppresses
     // the "commu-" hyphen and pushes "communication" whole to the
     // next line, ending line 1 short (the hyphenation-zone trade).
+    // "communication" starts ~88 pt into the 140 pt measure — 52 pt
+    // from the right margin. A 36 pt zone leaves it outside (it may
+    // hyphenate); a 72 pt zone takes it in and keeps it whole. (The
+    // old fixture's zone-36 difference came from the breaker scoring
+    // a short LAST line as loose — fixed 2026-09-06 — not from the
+    // zone itself.)
     let rag_no_zone = breaks_for("LeftAlign", "0");
-    let rag_zone = breaks_for("LeftAlign", "36");
+    let rag_zone = breaks_for("LeftAlign", "72");
     assert_ne!(
         rag_no_zone, rag_zone,
         "HyphenationZone must change ragged breaks: \
-             zone-0={rag_no_zone:?} vs zone-36={rag_zone:?}"
+             zone-0={rag_no_zone:?} vs zone-72={rag_zone:?}"
     );
     assert!(
         rag_no_zone.iter().any(|l| l.ends_with("commu")),
@@ -2338,7 +2344,7 @@ fn hyphenation_zone_is_noop_for_justified_but_active_for_ragged() {
     );
     assert!(
         rag_zone.iter().all(|l| !l.ends_with("commu")),
-        "ragged zone-36 should suppress the commu- hyphen: {rag_zone:?}"
+        "ragged zone-72 should suppress the commu- hyphen: {rag_zone:?}"
     );
 }
 

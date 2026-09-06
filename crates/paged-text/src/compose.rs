@@ -787,7 +787,7 @@ pub fn compose_paragraph(
         &mut meta,
         Item::Glue {
             width: 0,
-            stretch: paragraph_breaker::INFINITE_PENALTY,
+            stretch: crate::layout::FINISHING_STRETCH,
             shrink: 0,
         },
         text.len(),
