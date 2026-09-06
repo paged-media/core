@@ -119,6 +119,10 @@ pub struct PageResources {
     pub fonts: BTreeMap<String, Ref>,
     pub x_objects: BTreeMap<String, Ref>,
     pub shadings: BTreeMap<String, Ref>,
+    /// Shading patterns — a gradient used as a STROKE colour (PDF has
+    /// no shading stroke operator; the gradient rides the `/Pattern`
+    /// colour space instead).
+    pub patterns: BTreeMap<String, Ref>,
 }
 
 /// Whole-document writer state, alive across the session.
@@ -264,6 +268,12 @@ impl DocState {
                 if !page.resources.shadings.is_empty() {
                     let mut d = res.shadings();
                     for (name, r) in &page.resources.shadings {
+                        d.pair(Name(name.as_bytes()), *r);
+                    }
+                }
+                if !page.resources.patterns.is_empty() {
+                    let mut d = res.patterns();
+                    for (name, r) in &page.resources.patterns {
                         d.pair(Name(name.as_bytes()), *r);
                     }
                 }

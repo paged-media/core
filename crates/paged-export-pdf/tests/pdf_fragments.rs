@@ -459,3 +459,85 @@ fn transparency_groups_share_page_resources_and_names_resolve() {
         }
     }
 }
+
+/// A gradient used as a STROKE colour paints through a shading pattern
+/// (`/Pattern CS` + `SCN`): PDF has no shading stroke operator, and the
+/// exporter used to fall back to plain black (the annual's page-56
+/// "10 pt gradient stroke" printed as a black frame).
+#[test]
+fn a_gradient_stroke_paints_through_a_shading_pattern() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::effects::build()).expect("emit");
+    let mut document = idml_import::import_idml_doc(&bytes).expect("import");
+    let (ink, red) = {
+        let mut ids = document.palette.colors.keys().cloned();
+        (
+            ids.next().expect("a colour"),
+            ids.next().expect("two colours"),
+        )
+    };
+    document.palette.gradients.insert(
+        "Gradient/dawn".to_string(),
+        paged_model::GradientEntry {
+            self_id: "Gradient/dawn".to_string(),
+            name: Some("Dawn".to_string()),
+            kind: paged_model::GradientKind::Linear,
+            stops: vec![
+                paged_model::GradientStopRef {
+                    stop_color: ink,
+                    location_pct: 0.0,
+                    midpoint_pct: None,
+                },
+                paged_model::GradientStopRef {
+                    stop_color: red,
+                    location_pct: 100.0,
+                    midpoint_pct: None,
+                },
+            ],
+        },
+    );
+    let rect = document.spreads[0]
+        .spread
+        .rectangles
+        .first_mut()
+        .expect("the effects sample has a rectangle");
+    rect.stroke_color = Some("Gradient/dawn".to_string());
+    rect.stroke_weight = Some(10.0);
+    let opts = PipelineOptions {
+        collect_glyph_runs: true,
+        ..Default::default()
+    };
+    let fonts = FontTable::build(&document, &opts);
+    let doc = {
+        let mut opts2 = PipelineOptions {
+            collect_glyph_runs: true,
+            ..Default::default()
+        };
+        opts2.pre_built_font_table = Some(&fonts);
+        pipeline::build_document(&document, &opts2).expect("build")
+    };
+    let built = Built {
+        doc,
+        fonts,
+        palette: document.palette.clone(),
+    };
+    let pdf = export_with(&built, ExportOptions::default());
+    let parsed = lopdf::Document::load_mem(&pdf).expect("re-parse");
+    let mut content = Vec::new();
+    for (_, page_id) in parsed.get_pages() {
+        content.extend(parsed.get_page_content(page_id).expect("page content"));
+    }
+    let text = String::from_utf8_lossy(&content);
+    assert!(
+        text.contains("/Pattern CS"),
+        "stroke colour space is /Pattern:\n{text}"
+    );
+    assert!(
+        text.contains("/P0 SCN"),
+        "the stroke names the shading pattern:\n{text}"
+    );
+    let pdf_text = String::from_utf8_lossy(&pdf);
+    assert!(
+        pdf_text.contains("/PatternType 2"),
+        "a shading pattern object is written"
+    );
+}

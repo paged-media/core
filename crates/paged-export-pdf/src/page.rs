@@ -119,6 +119,7 @@ pub fn export_page(
         pending_forms: Vec::new(),
         content_bbox,
         diagnostics,
+        base_ctm: [1.0, 0.0, 0.0, -1.0, off_left, off_bottom + trim_h],
     };
 
     let mut content = Content::new();
@@ -127,7 +128,7 @@ pub fn export_page(
     // Page-level CTM: translate the trim origin into the media box,
     // then flip y (content coordinates are y-down page-local pt).
     content.save_state();
-    content.transform([1.0, 0.0, 0.0, -1.0, off_left, off_bottom + trim_h]);
+    content.transform(walker.base_ctm);
 
     walker.walk(&mut content, &mut stack, 0..list.commands.len());
 
@@ -326,6 +327,10 @@ struct Walker<'a, 'b> {
     pending_forms: Vec<PendingForm>,
     content_bbox: pdf_writer::Rect,
     diagnostics: &'b mut Vec<ExportDiagnostic>,
+    /// The page-level CTM (trim origin + y-flip). A shading pattern's
+    /// matrix maps pattern space to the page's DEFAULT space, not the
+    /// CTM in force when it paints, so a gradient stroke needs it.
+    base_ctm: [f32; 6],
 }
 
 impl Walker<'_, '_> {
@@ -821,17 +826,59 @@ impl Walker<'_, '_> {
                 true,
             );
         }
-        crate::color::set_stroke_paint(
-            content,
-            self.state,
-            &mut self.resources,
-            self.input,
-            &list.spot_inks,
-            paint,
-        );
         // Stroke widths are document-space pt: transform the PATH
         // points instead of the CTM so `w` stays in pt.
         let transformed = transform_path(path, transform);
+        // A gradient stroke: PDF strokes have no shading operator, so
+        // the shading becomes a pattern and paints through the
+        // `/Pattern` colour space (the annual's page-56 gradient stroke
+        // printed solid black before this). The shading spans the
+        // stroked path's bbox in document space; the pattern matrix is
+        // the page CTM, which maps that space to the page's default
+        // space the pattern is defined in.
+        let shading = match paint {
+            Paint::LinearGradient(id) => list.linear_gradient(*id).map(|g| {
+                crate::color::write_linear_shading(
+                    self.state,
+                    self.input,
+                    g,
+                    path_bbox(&transformed),
+                )
+            }),
+            Paint::RadialGradient(id) => list.radial_gradient(*id).map(|g| {
+                crate::color::write_radial_shading(
+                    self.state,
+                    self.input,
+                    g,
+                    path_bbox(&transformed),
+                )
+            }),
+            _ => None,
+        };
+        match shading {
+            Some(sh_ref) => {
+                let pat_ref = self.state.refs.alloc();
+                {
+                    let mut pat = self.state.pdf.shading_pattern(pat_ref);
+                    pat.shading_ref(sh_ref);
+                    pat.matrix(self.base_ctm);
+                }
+                let name = format!("P{}", self.resources.patterns.len());
+                self.resources.patterns.insert(name.clone(), pat_ref);
+                content.set_stroke_color_space(pdf_writer::types::ColorSpaceOperand::Pattern);
+                content.set_stroke_pattern(std::iter::empty(), Name(name.as_bytes()));
+            }
+            None => {
+                crate::color::set_stroke_paint(
+                    content,
+                    self.state,
+                    &mut self.resources,
+                    self.input,
+                    &list.spot_inks,
+                    paint,
+                );
+            }
+        }
         crate::path::emit_stroke_params(content, stroke);
         crate::path::emit_path(content, &transformed);
         content.stroke();
