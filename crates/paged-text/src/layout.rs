@@ -880,7 +880,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                     stretch: (*stretch).max(ragged_stretch),
                     shrink: *shrink,
                 },
-                other => other.clone(),
+                other => *other,
             })
             .collect();
         breaks = paragraph_breaker::total_fit(&filled, lengths, 1_000.0, opts.looseness);

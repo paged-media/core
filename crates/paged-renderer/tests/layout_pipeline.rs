@@ -143,21 +143,23 @@ fn spread_scale_scales_body_rect_fill() {
 #[test]
 fn center_point_autosize_grows_above_top_left_control() {
     // The CenterPoint box and the TopLeft control are authored at the
-    // SAME top (200pt) with the same story. CenterPoint grows
+    // SAME top (200pt) with the same story. CenterPoint fits
     // symmetrically about its centre, so its painted box top rises ABOVE
     // the control's top, which stays pinned at the authored 200pt. We
     // read the painted-box tops from the two cyan fill rects (one per
     // box) — the autosize fill whose baked height exceeds the authored
-    // 36pt is the grown box.
+    // 36pt is the fitted box. (InDesign's HeightAndWidth fit is the
+    // narrowest column no line overflows — measured 2026-09-06 — so the
+    // fitted box is also NARROWER than the authored 200pt.)
     let built = build();
     let page = &built.pages[PAGE_CENTER_GROW];
 
-    // Collect axis-aligned fills that are clearly grown autosize boxes:
-    // width ~200pt and height well past the authored 36pt.
+    // Collect axis-aligned fills that are clearly fitted autosize boxes:
+    // no wider than the authored 200pt and well taller than 36pt.
     let mut grown: Vec<(f32, f32)> = fill_transforms(page)
         .into_iter()
         .filter(|m| m[1].abs() < 0.01 && m[2].abs() < 0.01)
-        .filter(|m| (m[0] - 200.0).abs() < 2.0 && m[3] > 36.0 * 1.5)
+        .filter(|m| m[0] <= 200.0 + 2.0 && m[3] > 36.0 * 1.5)
         .map(|m| (m[5], m[3])) // (top y, height)
         .collect();
     // Sort by top y so [0] is the higher (smaller y) box.

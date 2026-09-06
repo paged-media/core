@@ -2591,8 +2591,11 @@ fn autosize_phase_b_reference_point_anchors_box_growth() {
     let bottom_right =
         box_rect(r#" AutoSizingType="HeightAndWidth" AutoSizingReferencePoint="BottomRightPoint""#);
 
-    // All three grow to the SAME size (same content), differing only
-    // in where the top-left lands.
+    // All three fit to the SAME size (same content), differing only
+    // in where the box lands. InDesign's HeightAndWidth fit is the
+    // narrowest column no line overflows (measured 2026-09-06: every
+    // line one unbreakable fragment), so the 180 pt authored box gets
+    // NARROWER and much taller.
     let eq = |a: f32, b: f32| (a - b).abs() < 0.01;
     assert!(
         eq(top_left.2, center.2) && eq(center.2, bottom_right.2),
@@ -2601,6 +2604,12 @@ fn autosize_phase_b_reference_point_anchors_box_growth() {
     assert!(
         eq(top_left.3, center.3) && eq(center.3, bottom_right.3),
         "height should be identical across reference points"
+    );
+    assert!(
+        top_left.2 < 180.0 && top_left.3 > 40.0,
+        "HeightAndWidth fits a narrow, tall column, got {}×{}",
+        top_left.2,
+        top_left.3
     );
 
     // TopLeft: top-left pinned at the authored (100, 200).
@@ -2611,23 +2620,15 @@ fn autosize_phase_b_reference_point_anchors_box_growth() {
         top_left.1
     );
 
-    // Centre pinned ⇒ box extends left and up by HALF the delta:
-    // top-left sits left of and above the authored corner, but not as
-    // far as the BottomRight case (full delta).
+    // Centre pinned ⇒ the narrower box moves right by half the width
+    // loss and the taller box extends up by half the height gain.
     assert!(
-        center.0 < 100.0 && center.1 < 200.0,
-        "CenterPoint must extend the box up and left, got ({}, {})",
+        eq(center.0, 190.0 - center.2 * 0.5) && eq(center.1, 220.0 - center.3 * 0.5),
+        "CenterPoint must keep the authored centre (190, 220), got ({}, {}) {}×{}",
         center.0,
-        center.1
-    );
-    assert!(
-        bottom_right.0 < center.0 && bottom_right.1 < center.1,
-        "BottomRightPoint must move the top-left further than CenterPoint: \
-             br=({}, {}) center=({}, {})",
-        bottom_right.0,
-        bottom_right.1,
-        center.0,
-        center.1
+        center.1,
+        center.2,
+        center.3
     );
     // The bottom-right corner stays pinned at the authored (280, 240)
     // for the BottomRight case.
@@ -4135,4 +4136,385 @@ fn b23_polygon_container_clip_carries_the_corner_effect() {
         "one corner arc per vertex in the container clip path"
     );
     assert_ne!(format!("{:?}", plain.0), format!("{:?}", rounded.0));
+}
+
+/// Fixture for the measured auto-size rules: one page, the given
+/// spread items (a text frame `frameA` on story `a` plus anything
+/// else), and story `a` made of `paragraphs` set in Inter at
+/// `size`/`leading`.
+fn autosize_fixture(
+    spread_items: &str,
+    paragraphs: &[&str],
+    size: f32,
+    leading: f32,
+) -> BuiltDocument {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let font = inter_font_bytes();
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_a.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 1400"/>
+    {spread_items}
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    let mut story = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="a">"#,
+    );
+    for text in paragraphs {
+        story.push_str(&format!(
+            r#"<ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="{size}"><Properties><Leading type="unit">{leading}</Leading></Properties><Content>{text}</Content></CharacterStyleRange></ParagraphStyleRange>"#
+        ));
+    }
+    story.push_str("</Story></idPkg:Story>");
+    zip.start_file("Stories/Story_a.xml", deflated).unwrap();
+    zip.write_all(story.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let options = PipelineOptions {
+        font: Some(&font),
+        ..PipelineOptions::default()
+    };
+    build_document(&doc, &options).expect("build")
+}
+
+/// A filled text frame `frameA` on story `a` at `bounds` (IDML
+/// `GeometricBounds` order: top left bottom right) with the given
+/// `<TextFramePreference>` attributes.
+fn autosize_frame(bounds: &str, prefs: &str) -> String {
+    format!(
+        r#"<TextFrame Self="frameA" ParentStory="a" GeometricBounds="{bounds}" FillColor="Color/Black">
+      <Properties/>
+      <TextFramePreference{prefs}/>
+    </TextFrame>"#
+    )
+}
+
+/// The painted box of `frameA` as (x, y, w, h): `for_rect_in(rect, I)`
+/// bakes `[w, 0, 0, h, x, y]` into the FillPath transform.
+fn painted_box(built: &BuiltDocument) -> (f32, f32, f32, f32) {
+    built.pages[0]
+        .list
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            paged_compose::DisplayCommand::FillPath { transform, .. } => {
+                let t = transform.0;
+                Some((t[4], t[5], t[0], t[3]))
+            }
+            _ => None,
+        })
+        .expect("frame A should emit a fill box")
+}
+
+const AUTOSIZE_SENTENCE: &str = "Auto-sizing lets the box answer to the text instead of the text to the box: pour more and the frame grows in the directions its mode allows, holding whichever edges the mode pins in place.";
+
+#[test]
+fn width_only_fits_the_smallest_width_for_the_height_line_budget() {
+    // Measured 2026-09-06: a 42 pt-tall WidthOnly frame at 13 pt
+    // leading holds three lines, and InDesign makes the width the
+    // SMALLEST at which the text fits in three — 223.0 pt from a
+    // 130 pt start and 223.2 pt from a 400 pt start (the fit is not a
+    // growth). Inter's ascender differs from Source Serif's, so the
+    // absolute width is not compared, but the fit must be independent
+    // of the authored width, hold exactly three lines, and overset
+    // nothing.
+    let build = |bounds: &str| {
+        autosize_fixture(
+            &autosize_frame(
+                bounds,
+                r#" AutoSizingType="WidthOnly" AutoSizingReferencePoint="CenterPoint""#,
+            ),
+            &[AUTOSIZE_SENTENCE],
+            8.0,
+            13.0,
+        )
+    };
+    let narrow = build("100 60 142 190");
+    let wide = build("100 60 142 460");
+    let (nx, _, nw, nh) = painted_box(&narrow);
+    let (wx, _, ww, _) = painted_box(&wide);
+    assert!(
+        (nw - ww).abs() < 0.05,
+        "the fitted width must not depend on the authored width: {nw} vs {ww}"
+    );
+    assert!(
+        (nh - 42.0).abs() < 0.01,
+        "WidthOnly keeps the height, got {nh}"
+    );
+    assert!(
+        nw > 130.0 && nw < 400.0,
+        "three lines of 8 pt Inter need ~230 pt, got {nw}"
+    );
+    // Centre pinned: the box is centred on the authored centre.
+    assert!(
+        (nx + nw * 0.5 - 125.0).abs() < 0.01 && (wx + ww * 0.5 - 260.0).abs() < 0.01,
+        "CenterPoint keeps the authored centre, got {nx}+{nw}/2 and {wx}+{ww}/2"
+    );
+    for built in [&narrow, &wide] {
+        assert_eq!(built.stats.dropped_overflow_lines, 0, "nothing oversets");
+        assert_eq!(built.pages[0].story_layout.len(), 3, "exactly three lines");
+    }
+}
+
+#[test]
+fn width_only_shrinks_below_the_authored_width_for_a_short_text() {
+    // Measured 2026-09-06: "Short text." in a 130 × 42 WidthOnly frame
+    // → 32.8 pt wide, "Short" / "text." on two lines (the smallest
+    // width at which the text fits in the height's three-line budget).
+    let built = autosize_fixture(
+        &autosize_frame(
+            "100 60 142 190",
+            r#" AutoSizingType="WidthOnly" AutoSizingReferencePoint="CenterPoint""#,
+        ),
+        &["Short text."],
+        8.0,
+        13.0,
+    );
+    let (_, _, w, h) = painted_box(&built);
+    assert!(w < 40.0, "the box shrinks to the wider word, got {w}");
+    assert!((h - 42.0).abs() < 0.01);
+    assert_eq!(built.pages[0].story_layout.len(), 2, "Short / text.");
+    assert_eq!(built.stats.dropped_overflow_lines, 0);
+}
+
+#[test]
+fn height_only_ends_the_box_at_the_last_baseline() {
+    // Measured 2026-09-06: a HeightOnly frame's bottom lands ON the
+    // last baseline (one line → 8.29 pt tall for a 1.036 em ascender
+    // at 8 pt; six lines → 8.29 + 5 × 13), shrinking below the
+    // authored 42 pt as readily as growing past it.
+    let one = autosize_fixture(
+        &autosize_frame(
+            "100 60 142 190",
+            r#" AutoSizingType="HeightOnly" AutoSizingReferencePoint="TopLeftPoint""#,
+        ),
+        &["Short text."],
+        8.0,
+        13.0,
+    );
+    let (x, y, w, h) = painted_box(&one);
+    let baseline = one.pages[0].story_layout[0].baseline_y_pt;
+    assert!((x - 60.0).abs() < 0.01 && (y - 100.0).abs() < 0.01 && (w - 130.0).abs() < 0.01);
+    assert!(
+        (y + h - baseline).abs() < 0.03,
+        "bottom {} should sit on the baseline {baseline}",
+        y + h
+    );
+    assert!(h < 42.0, "one line shrinks the box, got {h}");
+
+    let six = autosize_fixture(
+        &autosize_frame(
+            "100 60 142 190",
+            r#" AutoSizingType="HeightOnly" AutoSizingReferencePoint="TopLeftPoint""#,
+        ),
+        &[AUTOSIZE_SENTENCE],
+        8.0,
+        13.0,
+    );
+    let (_, y6, _, h6) = painted_box(&six);
+    let lines = six.pages[0].story_layout.len();
+    let last = six.pages[0]
+        .story_layout
+        .iter()
+        .map(|l| l.baseline_y_pt)
+        .fold(0.0f32, f32::max);
+    assert!(
+        lines >= 5,
+        "8 pt Inter in 130 pt needs several lines, got {lines}"
+    );
+    assert!(
+        (y6 + h6 - last).abs() < 0.03,
+        "bottom {} vs last baseline {last}",
+        y6 + h6
+    );
+    assert!(
+        (h6 - (h + (lines as f32 - 1.0) * 13.0)).abs() < 0.05,
+        "leading stacks: {h6}"
+    );
+    assert_eq!(six.stats.dropped_overflow_lines, 0);
+}
+
+#[test]
+fn height_and_width_fits_the_narrowest_column_from_any_start() {
+    // Measured 2026-09-06: HeightAndWidth ends at the narrowest column
+    // no line overflows — 26 pt wide / 33–34 lines from BOTH a 130 pt
+    // and a 400 pt authored width, every line one unbreakable
+    // fragment ("Au / to-siz / ing / lets the / box …").
+    let build = |bounds: &str| {
+        autosize_fixture(
+            &autosize_frame(
+                bounds,
+                r#" AutoSizingType="HeightAndWidth" AutoSizingReferencePoint="TopLeftPoint""#,
+            ),
+            &[AUTOSIZE_SENTENCE],
+            8.0,
+            13.0,
+        )
+    };
+    let narrow = build("100 60 142 190");
+    let wide = build("100 60 142 460");
+    let (_, _, nw, nh) = painted_box(&narrow);
+    let (_, _, ww, wh) = painted_box(&wide);
+    assert!(
+        (nw - ww).abs() < 0.05 && (nh - wh).abs() < 0.05,
+        "{nw}×{nh} vs {ww}×{wh}"
+    );
+    assert!(
+        nw < 60.0,
+        "one fragment per line is a narrow column, got {nw}"
+    );
+    let lines = narrow.pages[0].story_layout.len();
+    assert!(
+        lines >= 20,
+        "one fragment per line is a tall column, got {lines} lines"
+    );
+    assert!(
+        (nh - (narrow.pages[0].story_layout[0].baseline_y_pt - 100.0
+            + (lines as f32 - 1.0) * 13.0))
+            .abs()
+            < 0.05
+    );
+    // No line overflows the fitted column.
+    for line in &narrow.pages[0].story_layout {
+        let right = line
+            .clusters
+            .iter()
+            .map(|c| c.x_pt + c.advance_pt)
+            .fold(0.0f32, f32::max);
+        assert!(
+            right <= 60.0 + nw + 0.05,
+            "line {} overflows: {right} > {}",
+            line.line_idx,
+            60.0 + nw
+        );
+    }
+    assert_eq!(narrow.stats.dropped_overflow_lines, 0);
+}
+
+#[test]
+fn proportional_fit_scales_both_axes_by_the_smallest_fitting_factor() {
+    // Measured 2026-09-06: 130 × 42 → 170.3 × 55.0 (×1.31, four lines)
+    // for the long sentence and 49.8 × 16.1 (×0.38, one line) for
+    // "Short text." — the aspect ratio holds to four decimals.
+    let build = |paragraphs: &[&str]| {
+        autosize_fixture(
+            &autosize_frame(
+                "100 60 142 190",
+                r#" AutoSizingType="HeightAndWidthProportionally" AutoSizingReferencePoint="CenterPoint""#,
+            ),
+            paragraphs,
+            8.0,
+            13.0,
+        )
+    };
+    let long = build(&[AUTOSIZE_SENTENCE]);
+    let (x, y, w, h) = painted_box(&long);
+    assert!(
+        ((w / h) - (130.0 / 42.0)).abs() < 0.002,
+        "aspect kept: {w}×{h}"
+    );
+    assert!(
+        w > 130.0 && h > 42.0,
+        "the long sentence grows the box: {w}×{h}"
+    );
+    assert!((x + w * 0.5 - 125.0).abs() < 0.02 && (y + h * 0.5 - 121.0).abs() < 0.02);
+    assert_eq!(long.stats.dropped_overflow_lines, 0);
+    let short = build(&["Short text."]);
+    let (_, _, sw, sh) = painted_box(&short);
+    assert!(
+        ((sw / sh) - (130.0 / 42.0)).abs() < 0.002,
+        "aspect kept: {sw}×{sh}"
+    );
+    assert!(
+        sw < 130.0 && sh < 42.0,
+        "a short text shrinks the box: {sw}×{sh}"
+    );
+    assert_eq!(short.pages[0].story_layout.len(), 1);
+}
+
+#[test]
+fn a_width_only_fit_stalls_on_a_next_column_obstacle_and_oversets_everything() {
+    // Measured 2026-09-06 on the annual's page 28: a centred WidthOnly
+    // frame (centre x 125) with a NextColumnTextWrap rectangle 507 pt
+    // to the right in the same vertical band ends up 1014.6 pt wide
+    // with NOTHING composed (`frameChars=0`, `overflows=true`) — the
+    // unbounded first composition runs into the obstacle and the text
+    // jumps to a column that doesn't exist. Out of the band, or with
+    // the wrap off, the frame fits to 223 pt / three lines.
+    let build = |obstacle_top: f32, mode: &str| {
+        let bottom = obstacle_top + 40.0;
+        let items = format!(
+            r#"{frame}
+    <Rectangle Self="wrapper" GeometricBounds="{obstacle_top} 632 {bottom} 696">
+      <Properties/>
+      <TextWrapPreference Inverse="false" TextWrapMode="{mode}">
+        <Properties>
+          <TextWrapOffset Top="0" Left="0" Bottom="0" Right="0"/>
+        </Properties>
+      </TextWrapPreference>
+    </Rectangle>"#,
+            frame = autosize_frame(
+                "400 60 442 190",
+                r#" AutoSizingType="WidthOnly" AutoSizingReferencePoint="CenterPoint""#,
+            ),
+        );
+        autosize_fixture(&items, &[AUTOSIZE_SENTENCE], 8.0, 13.0)
+    };
+    let stalled = build(408.0, "NextColumnTextWrap");
+    let (x, _, w, _) = painted_box(&stalled);
+    assert!(
+        (w - 1014.0).abs() < 0.05,
+        "stretched to twice the obstacle distance, got {w}"
+    );
+    assert!(
+        (x + w - 632.0).abs() < 0.05,
+        "the right edge touches the obstacle, got {}",
+        x + w
+    );
+    assert_eq!(stalled.pages[0].story_layout.len(), 0, "nothing composes");
+    assert!(
+        stalled.stats.dropped_overflow_lines > 0,
+        "the whole story is overset"
+    );
+    assert!(
+        stalled.diagnostics.overset_story_ids().contains("a"),
+        "the overset is reported for story a"
+    );
+
+    let clear = build(300.0, "NextColumnTextWrap");
+    let (_, _, cw, _) = painted_box(&clear);
+    assert!(
+        cw > 130.0 && cw < 400.0,
+        "out of the band the frame fits normally, got {cw}"
+    );
+    assert_eq!(clear.pages[0].story_layout.len(), 3);
+    let plain = build(408.0, "BoundingBoxTextWrap");
+    let (_, _, pw, _) = painted_box(&plain);
+    assert!(
+        (pw - cw).abs() < 0.05,
+        "only NextColumn stalls the fit: {pw} vs {cw}"
+    );
 }

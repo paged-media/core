@@ -40,6 +40,7 @@ use crate::module::{Geometry, ResolvedFrame};
 use crate::AssetResolver;
 
 mod anchored;
+mod auto_size;
 mod blend_shadow;
 mod build_engine;
 mod color_paint;

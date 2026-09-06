@@ -365,19 +365,73 @@ pub(super) fn build_document_inner(
         options.body_story_emit_cache
     };
 
-    // W1.7 Phase B: precompute each AutoSizing text frame's GROWN
-    // inner-coord bounds, keyed by `Self` id. Computed once up front so
-    // the frame-paint pass (the box stretches to fit) and the text-wrap
-    // collection (neighbours wrap around the grown box) both see the
-    // same extent. Only frames that actually grow get an entry.
-    let auto_sized_bounds: HashMap<String, paged_model::Bounds> = document
+    // Perf-FontTable — reuse the caller's pre-built table when
+    // provided; otherwise build a fresh one for this call. The
+    // `owned_font_table` binding holds the local value's storage
+    // for the duration of the build when we fall through to the
+    // None branch (its address is stable in that scope).
+    let owned_font_table: Option<FontTable> = match options.pre_built_font_table {
+        Some(_) => None,
+        None => Some(FontTable::build(document, options)),
+    };
+    let font_table: &FontTable = options
+        .pre_built_font_table
+        .unwrap_or_else(|| owned_font_table.as_ref().expect("set on None branch"));
+    // A4 — one FontSubstituted diagnostic per (family, style) the
+    // resolver served with its catch-all substitute (traced at the A1
+    // resolver seam; BTreeSet order keeps the report deterministic).
+    // Fired regardless of `degraded_asset_markers`: the substitution
+    // happened either way — the option only gates the visual marker.
+    for (family, style) in font_table.substituted_keys() {
+        let label = match style.as_deref() {
+            Some(s) => format!("{family} {s}"),
+            None => family.clone(),
+        };
+        emit_diagnostics.push(Diagnostic::new(
+            DiagnosticCode::FontSubstituted,
+            format!("font \"{label}\" is not available; a substitute face was used"),
+        ));
+    }
+    // One hyphenator per render. We currently only build English-US;
+    // the document's `AppliedLanguage` is honoured via the cascade,
+    // but unrecognised values fall back to this dictionary so we
+    // always have *some* hyphenation when a paragraph requests it.
+    // Multi-language docs will grow this into a HashMap keyed by
+    // resolved language string.
+    let hyphenator = paged_text::Hyphenator::for_language(paged_text::Language::EnglishUS);
+
+    // Auto-sizing text frames are FITTED to their text up front (see
+    // `auto_size` — every mode is a measured fit, the way InDesign
+    // resizes the box before composing it). The fitted bounds feed
+    // three consumers that must agree: the frame-paint pass (the box
+    // paints at the fitted extent), the text-wrap collection
+    // (neighbours wrap around the fitted box), and the story emit
+    // (the chain composes into a clone carrying the fitted bounds).
+    // Only frames whose fit differs from their authored bounds get an
+    // entry.
+    let measurer = auto_size::Measurer::new(
+        document,
+        options,
+        palette,
+        color_ctx,
+        font_table,
+        &hyphenator,
+    );
+    let auto_sized: HashMap<String, auto_size::AutoSized> = measurer.fit_all();
+    let auto_sized_bounds: HashMap<String, paged_model::Bounds> = auto_sized
+        .iter()
+        .map(|(id, fitted)| (id.clone(), fitted.bounds))
+        .collect();
+    let fitted_frames: HashMap<String, TextFrame> = document
         .spreads
         .iter()
         .flat_map(|parsed| parsed.spread.text_frames.iter())
         .filter_map(|frame| {
-            let id = frame.self_id.clone()?;
-            let grown = compute_auto_sized_bounds(document, frame)?;
-            Some((id, grown))
+            let id = frame.self_id.as_deref()?;
+            let fitted = auto_sized.get(id)?;
+            let mut clone = frame.clone();
+            clone.bounds = fitted.bounds;
+            Some((id.to_string(), clone))
         })
         .collect();
 
@@ -1031,7 +1085,13 @@ pub(super) fn build_document_inner(
                     if let Some(self_id) = frame.self_id.clone() {
                         frame_to_page.insert(self_id, centroid_page);
                     }
-                    let overlaps = pages_overlapping_frame(&spread_bounds, local_geoms);
+                    // The box paints on every page the FITTED extent
+                    // reaches (a stalled WidthOnly fit stretches across
+                    // the gutter onto the facing page).
+                    let painted_spread_bounds = grown
+                        .map(|g| transform_bounds(g, frame.item_transform))
+                        .unwrap_or(spread_bounds);
+                    let overlaps = pages_overlapping_frame(&painted_spread_bounds, local_geoms);
                     let local_indices: Vec<usize> = if overlaps.is_empty() {
                         vec![centroid_local]
                     } else {
@@ -1720,41 +1780,6 @@ pub(super) fn build_document_inner(
         crate::module::group_pass(&parsed.spread, spans, &mut pages);
     }
 
-    // Perf-FontTable — reuse the caller's pre-built table when
-    // provided; otherwise build a fresh one for this call. The
-    // `owned_font_table` binding holds the local value's storage
-    // for the duration of the build when we fall through to the
-    // None branch (its address is stable in that scope).
-    let owned_font_table: Option<FontTable> = match options.pre_built_font_table {
-        Some(_) => None,
-        None => Some(FontTable::build(document, options)),
-    };
-    let font_table: &FontTable = options
-        .pre_built_font_table
-        .unwrap_or_else(|| owned_font_table.as_ref().expect("set on None branch"));
-    // A4 — one FontSubstituted diagnostic per (family, style) the
-    // resolver served with its catch-all substitute (traced at the A1
-    // resolver seam; BTreeSet order keeps the report deterministic).
-    // Fired regardless of `degraded_asset_markers`: the substitution
-    // happened either way — the option only gates the visual marker.
-    for (family, style) in font_table.substituted_keys() {
-        let label = match style.as_deref() {
-            Some(s) => format!("{family} {s}"),
-            None => family.clone(),
-        };
-        emit_diagnostics.push(Diagnostic::new(
-            DiagnosticCode::FontSubstituted,
-            format!("font \"{label}\" is not available; a substitute face was used"),
-        ));
-    }
-    // One hyphenator per render. We currently only build English-US;
-    // the document's `AppliedLanguage` is honoured via the cascade,
-    // but unrecognised values fall back to this dictionary so we
-    // always have *some* hyphenation when a paragraph requests it.
-    // Multi-language docs will grow this into a HashMap keyed by
-    // resolved language string.
-    let hyphenator = paged_text::Hyphenator::for_language(paged_text::Language::EnglishUS);
-
     // Per-page wrap exclusion rectangles (spread coords, expanded by
     // the wrap's offsets). Only items with TextWrapMode != "None"
     // contribute. Used by StoryEmitter::new to shrink the head text
@@ -2067,10 +2092,28 @@ pub(super) fn build_document_inner(
 
     for parsed in &document.stories {
         total_stats.stories += 1;
-        let chain = document.frame_chain(&parsed.self_id);
+        // An auto-sizing frame composes at its FITTED bounds: swap in
+        // the clone the fit pass prepared (routing already ran on the
+        // authored bounds, so the chain's pages are unchanged).
+        let chain: Vec<&TextFrame> = document
+            .frame_chain(&parsed.self_id)
+            .into_iter()
+            .map(|f| {
+                f.self_id
+                    .as_deref()
+                    .and_then(|id| fitted_frames.get(id))
+                    .unwrap_or(f)
+            })
+            .collect();
         if chain.is_empty() {
             continue;
         }
+        let all_text_overset = chain.iter().any(|f| {
+            f.self_id
+                .as_deref()
+                .and_then(|id| auto_sized.get(id))
+                .is_some_and(|fitted| fitted.text_dropped)
+        });
         // Perf-BodyStory — try the cache before running the emit.
         // Signature hashes the chain's frames (bounds + transforms)
         // and the wrap_rects_per_page entries for every page the
@@ -2267,7 +2310,8 @@ pub(super) fn build_document_inner(
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
             .with_chapter_numbers(&chapter_numbers)
-            .with_footnote_reservation(&reserved_64);
+            .with_footnote_reservation(&reserved_64)
+            .with_all_text_overset(all_text_overset);
             // W1.18c — running-header pickup index on the post-layout pass.
             if let Some(index) = running_header_index {
                 emitter = emitter.with_running_headers(index);
@@ -2724,6 +2768,11 @@ pub(super) struct StoryEmitter<'a> {
     /// value; populated for the re-emit so they resolve to the matching
     /// on-page paragraph. Owned by the build.
     pub(super) running_headers: Option<&'a links::RunningHeaderIndex>,
+    /// The auto-size fit found InDesign composes NOTHING in this chain
+    /// (a `WidthOnly` fit stalled on a `NextColumnTextWrap` obstacle —
+    /// see `auto_size`): every line is treated as not fitting, so the
+    /// story oversets in full and reports it once.
+    pub(super) force_overset: bool,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -2800,43 +2849,10 @@ impl<'a> StoryEmitter<'a> {
         // rotated axis.
         let raw_width = (chain[0].bounds.width() - head_insets[1] - head_insets[3]).max(0.0);
         let wrapped_width = (raw_width - shrink_left - shrink_right).max(0.0);
-        // Q-02: when the head frame's AutoSizingType allows width
-        // growth, the IDML authored an *undersized* column expecting
-        // composition-time growth ("MAGAZINE" headline frame at
-        // ~40-80pt expecting to grow to fit the actual headline).
-        // Knuth-Plass at the authored width clips wrap output to
-        // "MAG" / "MA-/GA-/ZINE". Override the column upward to an
-        // estimate that fits the longest token in the story.
-        //
-        // Conservative estimator: take the longest WORD in the story,
-        // approximate its width as
-        //   point_size × char_count × 0.62
-        // (an average-glyph advance ratio across realistic display
-        // faces; 0.62 hits Inter Bold / Roboto Black / Source Serif
-        // within ~10%). Multiply by a 1.1 slack factor. The renderer
-        // doesn't measure here — that would require shape calls per
-        // word + face resolution — but the estimate is correct enough
-        // to unblock the wrap. Glyphs land where the actual shape
-        // puts them at render time; the column is only the wrap
-        // budget.
-        //
-        // Bound the override by the host page's width when known so
-        // we don't shove headlines off-page on layouts where the
-        // headline frame sits near the right edge.
-        let column_width_pt = {
-            let mut base = options.fallback_column_width_pt.or(Some(wrapped_width));
-            if let Some(at) = chain[0].auto_sizing {
-                if at.grows_width() {
-                    let est = q02_estimate_auto_sizing_width(document, chain[0]);
-                    let floor = chain[0].minimum_width_for_auto_sizing.unwrap_or(0.0);
-                    let target = est.max(floor).max(wrapped_width);
-                    if target > wrapped_width {
-                        base = Some(target);
-                    }
-                }
-            }
-            base
-        };
+        // The column is the frame's own inner width. An auto-sizing
+        // frame already arrives here as the clone carrying its FITTED
+        // bounds (see `auto_size`), so no estimate is layered on top.
+        let column_width_pt = options.fallback_column_width_pt.or(Some(wrapped_width));
         let len = chain.len();
         let chain_spread_bounds: Vec<paged_model::Bounds> = chain
             .iter()
@@ -2884,7 +2900,15 @@ impl<'a> StoryEmitter<'a> {
             page_index_map: None,
             chapter_numbers: &[],
             running_headers: None,
+            force_overset: false,
         }
+    }
+
+    /// Overset every line of the story regardless of room (the
+    /// auto-size fit's "InDesign composed nothing here" verdict).
+    pub(super) fn with_all_text_overset(mut self, force: bool) -> Self {
+        self.force_overset = force;
+        self
     }
 
     /// W1.4 — wire the `<Page Self=...>` → flat-index map used to
@@ -4943,7 +4967,9 @@ pub(super) fn emit_paragraph_into_chain(
         // them spill across following frames/pages with no clip. The
         // reference PDFs hide the overflow via the same out-of-frame
         // clip; matching this prevents large ΔE regions.
-        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64) || no_room_here)
+        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64)
+            || no_room_here
+            || em.force_overset)
             && em.frame_idx + 1 >= em.chain.len()
             && !last_frame_grows_height
         {
