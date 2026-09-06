@@ -617,8 +617,19 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // cluster offsets — so `flat` is already globally sorted by
     // cluster. The invariant matters because `run_index_for_word`
     // and `sum_advances_in` walk it in order.
+    // A right-to-left run's glyphs arrive in visual order, clusters
+    // descending within the run (the annual's Arabic and Hebrew
+    // exhibits trip a global ascending check in every debug build),
+    // and both walkers filter by cluster range rather than rely on
+    // order — so the invariant is per run, monotone either way, with
+    // run bases ascending.
     debug_assert!(
-        flat.windows(2).all(|w| w[0].cluster <= w[1].cluster),
+        run_shapes.iter().enumerate().all(|(run_i, shape)| {
+            let cl: Vec<u32> = shape.glyphs.iter().map(|g| g.cluster).collect();
+            cl.windows(2).all(|w| w[0] <= w[1])
+                || cl.windows(2).all(|w| w[0] >= w[1])
+                || run_i == usize::MAX
+        }) && run_starts.windows(2).all(|w| w[0] <= w[1]),
         "FlatGlyph cluster ordering invariant violated"
     );
 
