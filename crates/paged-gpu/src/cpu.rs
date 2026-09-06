@@ -2002,7 +2002,18 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 };
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_feather(target, target_xform, target_mask, &path, params, scale);
+                let paper_premul = linear_color_to_ts(options.background)
+                    .premultiply()
+                    .to_color_u8();
+                render_feather(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    params,
+                    scale,
+                    paper_premul,
+                );
             }
             DisplayCommand::DirectionalFeather {
                 path_id,
@@ -2017,7 +2028,18 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 };
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_directional_feather(target, target_xform, target_mask, &path, params, scale);
+                let paper_premul = linear_color_to_ts(options.background)
+                    .premultiply()
+                    .to_color_u8();
+                render_directional_feather(
+                    target,
+                    target_xform,
+                    target_mask,
+                    &path,
+                    params,
+                    scale,
+                    paper_premul,
+                );
             }
             DisplayCommand::GradientFeather {
                 path_id,
@@ -3761,6 +3783,7 @@ fn render_feather(
     path: &tiny_skia::Path,
     params: &Feather,
     scale: f32,
+    paper_premul: PremultipliedColorU8,
 ) {
     let pad_pt = params.width.abs() * 3.0 + 1.0;
     let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
@@ -3809,30 +3832,15 @@ fn render_feather(
         }
     }
 
-    // Tint at neutral 50% black — the renderer integration will pair
-    // this with a `FillPath` that applies the path's actual paint.
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let data = scratch.data_mut();
-    for (&mask, px) in feather_mask.iter().zip(data.chunks_exact_mut(4)) {
-        let m = mask as f32 / 255.0;
-        let a = (m * 0.5).clamp(0.0, 1.0);
-        px[0] = 0;
-        px[1] = 0;
-        px[2] = 0;
-        px[3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    let composite = PixmapPaint::default();
-    target.draw_pixmap(
+    fade_target_by_mask(
+        target,
+        target_mask,
         off_x_px,
         off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
+        w_px,
+        h_px,
+        &feather_mask,
+        paper_premul,
     );
 }
 
@@ -3852,6 +3860,7 @@ fn render_feather(
 ///   rotated rectangle's "left" side is the page-pt minimum-X side,
 ///   not the path's intrinsic left edge. The IDML `Angle` attribute
 ///   is captured by the parser but not consumed here.
+#[allow(clippy::too_many_arguments)]
 fn render_directional_feather(
     target: &mut Pixmap,
     target_xform: TsTransform,
@@ -3859,6 +3868,7 @@ fn render_directional_feather(
     path: &tiny_skia::Path,
     params: &DirectionalFeather,
     scale: f32,
+    paper_premul: PremultipliedColorU8,
 ) {
     // Pad scratch by max edge width so the soft edge doesn't clip.
     let max_w = params
@@ -3985,7 +3995,7 @@ fn render_directional_feather(
         }
     }
 
-    composite_alpha_mask(
+    fade_target_by_mask(
         target,
         target_mask,
         off_x_px,
@@ -3993,6 +4003,7 @@ fn render_directional_feather(
         w_px,
         h_px,
         &feather_mask,
+        paper_premul,
     );
 }
 
@@ -4170,11 +4181,68 @@ fn apply_alpha_factor(
     data[idx + 3] = (pa * f + qa * inv_f).clamp(0.0, 255.0) as u8;
 }
 
+/// Fade what is already painted toward the paper by a coverage mask:
+/// 255 leaves the pixel alone, 0 replaces it with paper.
+///
+/// This is what a feather IS — the object loses opacity toward its
+/// edge, revealing what is behind it. The rasterizer used to stamp a
+/// 50%-black tint modulated by the same mask instead, a self-declared
+/// placeholder that DARKENED whatever it touched (the annual's
+/// vermilion veil came out muddy), and it disagreed with both InDesign
+/// and our own PDF exporter, which masks the object's own paint.
+///
+/// The honest general form masks an isolated layer, so a feather over
+/// a tinted background reveals the tint rather than the paper; that
+/// needs the fill and its effects captured in their own buffer. Fading
+/// to paper is what the gradient feather beside it already does, and it
+/// is exact wherever the backdrop is the page.
+#[allow(clippy::too_many_arguments)]
+fn fade_target_by_mask(
+    target: &mut Pixmap,
+    target_mask: Option<&TsMask>,
+    off_x_px: i32,
+    off_y_px: i32,
+    w_px: u32,
+    h_px: u32,
+    mask: &[u8],
+    paper: PremultipliedColorU8,
+) {
+    let target_w = target.width() as i32;
+    let target_h = target.height() as i32;
+    let clip = target_mask.map(|m| (m.width() as i32, m.height() as i32));
+    let clip_data = target_mask.map(|m| m.data().to_vec());
+    let data = target.data_mut();
+    for y in 0..h_px as i32 {
+        let ty = off_y_px + y;
+        if ty < 0 || ty >= target_h {
+            continue;
+        }
+        for x in 0..w_px as i32 {
+            let tx = off_x_px + x;
+            if tx < 0 || tx >= target_w {
+                continue;
+            }
+            let m = mask[(y as u32 * w_px + x as u32) as usize] as f32 / 255.0;
+            let mut factor = m;
+            if let (Some((mw, mh)), Some(md)) = (clip, clip_data.as_ref()) {
+                if tx < mw && ty < mh {
+                    let mv = md[(ty * mw + tx) as usize] as f32 / 255.0;
+                    // Outside the clip the feather has no business
+                    // touching the pixel at all.
+                    factor = 1.0 + (factor - 1.0) * mv;
+                } else {
+                    continue;
+                }
+            }
+            apply_alpha_factor(data, tx, ty, target_w, factor, paper);
+        }
+    }
+}
+
 /// Composite a single-channel alpha mask onto `target` at
-/// `(off_x_px, off_y_px)` as a 50%-black tinted stamp — same
-/// convention as `render_feather`. Extracted so the directional /
-/// gradient feather helpers don't duplicate the scratch-pixmap
-/// allocation + premultiplied tint loop.
+/// `(off_x_px, off_y_px)` as a 50%-black tinted stamp. Retained for the
+/// directional feather until it moves to [`fade_target_by_mask`] too.
+#[allow(dead_code)]
 fn composite_alpha_mask(
     target: &mut Pixmap,
     target_mask: Option<&TsMask>,
@@ -5098,41 +5166,51 @@ mod tests {
 
     #[test]
     fn feather_softens_path_edge() {
-        // Feather of a 20x20 rect with width=4pt should produce a
-        // soft alpha edge: center of the rect is opaque (50% black
-        // tint), edge is partial-alpha, far outside is the
-        // background.
-        use paged_compose::{DisplayCommand as Cmd, DisplayList, Feather as F, FeatherCornerType};
+        // A feather fades the object's OWN paint out toward its edge —
+        // it does not add ink. So: fill a 20×20 black rect, feather it,
+        // and require the centre to stay dark while the edge lightens
+        // toward the paper. (This used to assert a 50%-grey tint on an
+        // EMPTY page, which was the placeholder's behaviour, not
+        // InDesign's.)
+        use paged_compose::{
+            Color, DisplayCommand as Cmd, DisplayList, Feather as F, FeatherCornerType, Paint,
+        };
         let mut list = DisplayList::new();
         let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
-        let params = F {
-            width: 4.0,
-            corner_type: FeatherCornerType::Sharp,
-            noise: 0.0,
-            choke: 0.0,
-        };
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint: Paint::Solid(Color::BLACK),
+            transform: xform,
+        });
         list.commands.push(Cmd::Feather {
             path_id,
             transform: xform,
-            params,
+            params: F {
+                width: 4.0,
+                corner_type: FeatherCornerType::Sharp,
+                noise: 0.0,
+                choke: 0.0,
+            },
         });
         let mut opts = RasterOptions::new(40.0, 40.0);
         opts.dpi = 72.0;
         let img = rasterize(&list, &opts);
-        // Centre of the path at (20, 20): feather is fully opaque
-        // there (interior mask = 1), painted with 50% black tint
-        // → ~half-grey pixel.
         let centre = at(&img, 20, 20);
         assert!(
-            centre[0] < 200 && centre[0] > 80,
-            "feather centre should be tinted grey; got {centre:?}"
+            centre[0] < 80,
+            "the feathered object keeps its paint at the centre; got {centre:?}"
         );
-        // Far outside the rect: the soft edge has fully fallen
-        // off, so the page stays the white background.
+        // One point inside the edge the fade has started, so it is
+        // lighter than the centre but still darker than paper.
+        let edge = at(&img, 11, 20);
+        assert!(
+            edge[0] > centre[0] && edge[0] < 250,
+            "the edge fades toward paper; centre={centre:?} edge={edge:?}"
+        );
         let far = at(&img, 2, 2);
         assert!(
             far[0] > 240 && far[1] > 240 && far[2] > 240,
-            "outside feather should be white; got {far:?}"
+            "outside the object stays paper; got {far:?}"
         );
     }
 
@@ -5193,54 +5271,51 @@ mod tests {
 
     #[test]
     fn directional_feather_softens_left_edge_more_than_right() {
-        // 20x20 rect at (10, 10), feather 8pt on the left edge only.
-        // The interior next to the left edge should fade out (ramp);
-        // pixels near the right edge stay opaque (50% grey).
-        use paged_compose::{DirectionalFeather, DisplayCommand as Cmd, FeatherCornerType};
+        // Per-side widths: the left edge fades over 8 pt, the right not
+        // at all. With the object's own paint under it, the left side
+        // must therefore be LIGHTER than the middle and the right side
+        // must keep the fill.
+        use paged_compose::{
+            Color, DirectionalFeather as DF, DisplayCommand as Cmd, DisplayList, FeatherCornerType,
+            Paint,
+        };
         let mut list = DisplayList::new();
         let (path_id, xform) = unit_rect_at(&mut list, 10.0, 10.0, 20.0, 20.0);
-        let params = DirectionalFeather {
-            left_width: 8.0,
-            right_width: 0.0,
-            top_width: 0.0,
-            bottom_width: 0.0,
-            angle_deg: 0.0,
-            noise: 0.0,
-            choke: 0.0,
-            corner_type: FeatherCornerType::Sharp,
-        };
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint: Paint::Solid(Color::BLACK),
+            transform: xform,
+        });
         list.commands.push(Cmd::DirectionalFeather {
             path_id,
             transform: xform,
-            params,
+            params: DF {
+                left_width: 8.0,
+                right_width: 0.0,
+                top_width: 0.0,
+                bottom_width: 0.0,
+                angle_deg: 0.0,
+                noise: 0.0,
+                choke: 0.0,
+                corner_type: FeatherCornerType::Sharp,
+            },
         });
         let mut opts = RasterOptions::new(40.0, 40.0);
         opts.dpi = 72.0;
         let img = rasterize(&list, &opts);
-        // Sample three points along y=20 (vertical centre):
-        //   x=11 → 1pt inside the left edge (heavy fade, near white)
-        //   x=20 → mid-rect (alpha rises toward 1; tinted grey)
-        //   x=28 → 2pt inside the right edge (full alpha; tinted)
         let near_left = at(&img, 11, 20);
         let mid = at(&img, 20, 20);
         let near_right = at(&img, 28, 20);
-        // Near-left should be lighter (less tint) than mid.
         assert!(
             near_left[0] > mid[0],
-            "left edge should be less tinted than mid; near_left={near_left:?} mid={mid:?}"
+            "the left edge fades; near_left={near_left:?} mid={mid:?}"
         );
-        // Near-right should be at least as tinted as mid (no fade
-        // there).
         assert!(
             near_right[0] <= mid[0] + 15,
-            "right edge shouldn't fade; near_right={near_right:?} mid={mid:?}"
+            "the right edge keeps its paint; near_right={near_right:?} mid={mid:?}"
         );
-        // Far outside the rect: white background.
         let far = at(&img, 2, 2);
-        assert!(
-            far[0] > 240,
-            "outside directional feather should be white; got {far:?}"
-        );
+        assert!(far[0] > 240, "outside the object stays paper; got {far:?}");
     }
 
     #[test]
@@ -5544,6 +5619,11 @@ mod tests {
                 choke: 0.0,
                 corner_type: FeatherCornerType::Sharp,
             };
+            list.commands.push(Cmd::FillPath {
+                path_id,
+                paint: paged_compose::Paint::Solid(paged_compose::Color::BLACK),
+                transform: xform,
+            });
             list.commands.push(Cmd::DirectionalFeather {
                 path_id,
                 transform: xform,
@@ -5553,9 +5633,9 @@ mod tests {
             opts.dpi = 72.0;
             rasterize(&list, &opts)
         };
-        // Tint = how dark the 50%-black feather mask is. The feathered
-        // edge fades toward white (less tint); the opaque edge stays
-        // 50% grey (more tint).
+        // Tint = how much of the object's own paint survives. The
+        // feathered edge fades toward paper (less tint); the untouched
+        // edge keeps the fill (more tint).
         let tint = |img: &RgbaImage, x: u32, y: u32| 255i32 - at(img, x, y)[0] as i32;
         let a0 = make(0.0);
         let a90 = make(90.0);

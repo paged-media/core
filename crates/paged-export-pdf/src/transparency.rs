@@ -127,26 +127,209 @@ fn short_hash(s: &str) -> u32 {
     h
 }
 
-/// A rasterised blurred-alpha stamp in the path's page space,
-/// expanded by 3σ.
-pub struct AlphaStamp {
-    pub alpha: Vec<u8>,
-    pub width_px: u32,
-    pub height_px: u32,
+/// The pixel grid one effect rasterises on: a page-space rectangle
+/// plus its resolution. Every mask for one effect shares a grid, which
+/// is what lets them be combined pixel for pixel.
+#[derive(Debug, Clone, Copy)]
+pub struct Grid {
     pub origin_pt: (f32, f32),
     pub size_pt: (f32, f32),
+    pub width_px: u32,
+    pub height_px: u32,
+    /// Pixels per point.
+    pub scale: f32,
 }
 
-/// Rasterise a blurred alpha stamp for a path (the shadow/glow
-/// encoding): scanline-fill the path's alpha at `dpi`, then a
-/// separable box-approximated Gaussian (3 passes ≈ true Gaussian).
-pub fn blurred_alpha_stamp(
-    path: &PathData,
-    transform: &Transform,
-    blur_radius_pt: f32,
-    dpi: f32,
-) -> Option<AlphaStamp> {
-    // Transform points into page space and find bounds.
+/// Largest mask we will rasterise, whatever the dpi asks for. A
+/// full-page feather at 150 dpi is ~2 Mpx; beyond this the dpi is
+/// scaled back rather than the effect dropped, and the blur makes the
+/// resampling invisible.
+const MAX_MASK_PX: u64 = 4_000_000;
+
+impl Grid {
+    /// The grid covering `path` under `transform`, inflated by `pad_pt`
+    /// on every side. `None` for a degenerate path.
+    pub fn for_path(path: &PathData, transform: &Transform, pad_pt: f32, dpi: f32) -> Option<Grid> {
+        let (min, max) = path_bounds_in_page(path, transform)?;
+        let pad = pad_pt.max(0.0);
+        let origin_pt = (min.0 - pad, min.1 - pad);
+        let size_pt = (
+            (max.0 - min.0 + pad * 2.0).max(0.01),
+            (max.1 - min.1 + pad * 2.0).max(0.01),
+        );
+        let mut scale = dpi.max(1.0) / 72.0;
+        let px = |sc: f32| -> u64 {
+            let w = (size_pt.0 * sc).ceil().max(1.0) as u64;
+            let h = (size_pt.1 * sc).ceil().max(1.0) as u64;
+            w * h
+        };
+        if px(scale) > MAX_MASK_PX {
+            let shrink = (MAX_MASK_PX as f32 / px(scale) as f32).sqrt();
+            scale = (scale * shrink).max(0.5);
+        }
+        let width_px = ((size_pt.0 * scale).ceil() as u32).clamp(1, 4096);
+        let height_px = ((size_pt.1 * scale).ceil() as u32).clamp(1, 4096);
+        Some(Grid {
+            origin_pt,
+            size_pt,
+            width_px,
+            height_px,
+            scale,
+        })
+    }
+}
+
+/// One 8-bit coverage raster on a [`Grid`], in page space.
+///
+/// InDesign's object effects are all the same construction: take the
+/// object's coverage, move / grow / blur / invert it, combine two of
+/// them, and paint a colour through the result. Rather than write that
+/// pipeline seven times, each effect composes these operations — and
+/// they are ports of `paged-gpu`'s CPU rasterizer, so the PDF and the
+/// canvas agree by construction rather than by eye.
+#[derive(Clone)]
+pub struct MaskRaster {
+    pub data: Vec<u8>,
+    pub grid: Grid,
+}
+
+impl MaskRaster {
+    /// Coverage of `path` under `transform`, offset by `offset_pt` in
+    /// page space. Scanline fill of the flattened outline.
+    pub fn interior(
+        grid: Grid,
+        path: &PathData,
+        transform: &Transform,
+        offset_pt: (f32, f32),
+    ) -> Self {
+        let polys = flatten_path_px(path, transform, &grid, offset_pt);
+        let (w, h) = (grid.width_px, grid.height_px);
+        let mut data = vec![0u8; (w as usize) * (h as usize)];
+        for yy in 0..h {
+            let sample_y = yy as f32 + 0.5;
+            let mut xs: Vec<f32> = Vec::new();
+            for poly in &polys {
+                for i in 0..poly.len() {
+                    let a = poly[i];
+                    let b = poly[(i + 1) % poly.len()];
+                    if (a.1 <= sample_y && b.1 > sample_y) || (b.1 <= sample_y && a.1 > sample_y) {
+                        let t = (sample_y - a.1) / (b.1 - a.1);
+                        xs.push(a.0 + t * (b.0 - a.0));
+                    }
+                }
+            }
+            xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            for pair in xs.chunks_exact(2) {
+                if pair[1] < 0.0 || pair[0] > w as f32 {
+                    continue;
+                }
+                let x0 = pair[0].max(0.0) as u32;
+                let x1 = pair[1].min(w as f32 - 1.0).max(0.0) as u32;
+                for xx in x0..=x1.min(w - 1) {
+                    data[(yy * w + xx) as usize] = 255;
+                }
+            }
+        }
+        Self { data, grid }
+    }
+
+    /// Separable triple-box blur ≈ Gaussian of `sigma_pt`.
+    ///
+    /// Three boxes of width `w` give σ² = (w² − 1)/4, so the radius
+    /// that realises a target σ is `(√(4σ² + 1) − 1)/2`. The older
+    /// `σ·1.88/3` here produced roughly ⅔ of the σ it was asked for,
+    /// which is why the PDF's shadows were visibly crisper than the
+    /// canvas's.
+    pub fn blur(&mut self, sigma_pt: f32) {
+        let sigma_px = sigma_pt.max(0.0) * self.grid.scale;
+        if sigma_px < 0.35 {
+            return;
+        }
+        let radius = (((4.0 * sigma_px * sigma_px + 1.0).sqrt() - 1.0) / 2.0)
+            .round()
+            .max(1.0) as i32;
+        for _ in 0..3 {
+            box_blur_h(
+                &mut self.data,
+                self.grid.width_px,
+                self.grid.height_px,
+                radius,
+            );
+            box_blur_v(
+                &mut self.data,
+                self.grid.width_px,
+                self.grid.height_px,
+                radius,
+            );
+        }
+    }
+
+    /// 255 − v everywhere: the outside of the shape.
+    pub fn invert(&mut self) {
+        for v in self.data.iter_mut() {
+            *v = 255 - *v;
+        }
+    }
+
+    /// Grow (`amount_pt` > 0) or shrink (< 0) the covered area — the
+    /// choke / spread knobs. Blur-then-threshold, the same
+    /// approximation the CPU rasterizer uses, so the two agree.
+    pub fn morph(&mut self, amount_pt: f32) {
+        if amount_pt.abs() < 0.01 {
+            return;
+        }
+        let grow = amount_pt > 0.0;
+        if !grow {
+            self.invert();
+        }
+        self.blur(amount_pt.abs());
+        for v in self.data.iter_mut() {
+            *v = if *v > 64 { 255 } else { 0 };
+        }
+        if !grow {
+            self.invert();
+        }
+    }
+
+    /// Keep only what both masks cover.
+    pub fn multiply(&mut self, other: &Self) {
+        for (a, b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a = ((*a as u16 * *b as u16) / 255) as u8;
+        }
+    }
+
+    /// Remove what `other` covers (`max(a − b, 0)`).
+    pub fn subtract(&mut self, other: &Self) {
+        for (a, b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a = a.saturating_sub(*b);
+        }
+    }
+
+    /// `|a − b|` — the satin wave between two offset copies.
+    pub fn abs_diff(&mut self, other: &Self) {
+        for (a, b) in self.data.iter_mut().zip(other.data.iter()) {
+            *a = a.abs_diff(*b);
+        }
+    }
+
+    /// Scale every value by `k` (0..=1), i.e. the effect's opacity.
+    pub fn scale(&mut self, k: f32) {
+        let k = k.clamp(0.0, 1.0);
+        for v in self.data.iter_mut() {
+            *v = (*v as f32 * k).round() as u8;
+        }
+    }
+
+    /// True when nothing is covered — the caller can then skip the
+    /// image entirely rather than write a blank XObject.
+    pub fn is_empty(&self) -> bool {
+        self.data.iter().all(|&v| v == 0)
+    }
+}
+
+/// Page-space bounds of a path under a transform (control points
+/// included, so a curve never escapes the box).
+fn path_bounds_in_page(path: &PathData, transform: &Transform) -> Option<((f32, f32), (f32, f32))> {
     let t = transform.0;
     let map =
         |x: f32, y: f32| -> (f32, f32) { (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]) };
@@ -181,23 +364,27 @@ pub fn blurred_alpha_stamp(
             S::Close => {}
         }
     }
-    if min.0 > max.0 || min.1 > max.1 {
-        return None;
-    }
-    let sigma_pt = blur_radius_pt.max(0.01) * 0.5;
-    let pad_pt = sigma_pt * 3.0;
-    let origin = (min.0 - pad_pt, min.1 - pad_pt);
-    let size_pt = (max.0 - min.0 + pad_pt * 2.0, max.1 - min.1 + pad_pt * 2.0);
-    let scale = dpi / 72.0;
-    let w = ((size_pt.0 * scale).ceil() as u32).clamp(1, 4096);
-    let h = ((size_pt.1 * scale).ceil() as u32).clamp(1, 4096);
+    (min.0 <= max.0 && min.1 <= max.1).then_some((min, max))
+}
 
-    // Scanline fill (NonZero) of the transformed, flattened path.
-    let mut alpha = vec![0u8; (w * h) as usize];
+/// Flatten a path into grid-pixel polygons, translated by `offset_pt`.
+fn flatten_path_px(
+    path: &PathData,
+    transform: &Transform,
+    grid: &Grid,
+    offset_pt: (f32, f32),
+) -> Vec<Vec<(f32, f32)>> {
+    let t = transform.0;
+    let map =
+        |x: f32, y: f32| -> (f32, f32) { (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]) };
+    let to_px = |p: (f32, f32)| -> (f32, f32) {
+        (
+            (p.0 + offset_pt.0 - grid.origin_pt.0) * grid.scale,
+            (p.1 + offset_pt.1 - grid.origin_pt.1) * grid.scale,
+        )
+    };
     let mut polys: Vec<Vec<(f32, f32)>> = Vec::new();
     let mut current: Vec<(f32, f32)> = Vec::new();
-    let to_px =
-        |p: (f32, f32)| -> (f32, f32) { ((p.0 - origin.0) * scale, (p.1 - origin.1) * scale) };
     let mut last = (0.0f32, 0.0f32);
     for seg in &path.segments {
         use paged_compose::PathSegment as S;
@@ -216,7 +403,6 @@ pub fn blurred_alpha_stamp(
                 current.push(to_px(map(x, y)));
             }
             S::QuadTo { cx, cy, x, y } => {
-                // Flatten with fixed steps — mask quality only.
                 for i in 1..=8 {
                     let s = i as f32 / 8.0;
                     let inv = 1.0 - s;
@@ -259,44 +445,42 @@ pub fn blurred_alpha_stamp(
     if current.len() > 2 {
         polys.push(current);
     }
-    for yy in 0..h {
-        let sample_y = yy as f32 + 0.5;
-        // Even-odd is fine for mask quality on flattened outlines.
-        let mut xs: Vec<f32> = Vec::new();
-        for poly in &polys {
-            for i in 0..poly.len() {
-                let a = poly[i];
-                let b = poly[(i + 1) % poly.len()];
-                if (a.1 <= sample_y && b.1 > sample_y) || (b.1 <= sample_y && a.1 > sample_y) {
-                    let t = (sample_y - a.1) / (b.1 - a.1);
-                    xs.push(a.0 + t * (b.0 - a.0));
-                }
-            }
-        }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        for pair in xs.chunks_exact(2) {
-            let x0 = pair[0].max(0.0) as u32;
-            let x1 = (pair[1].min(w as f32 - 1.0)) as u32;
-            for xx in x0..=x1.min(w - 1) {
-                alpha[(yy * w + xx) as usize] = 255;
-            }
-        }
-    }
+    polys
+}
 
-    // Separable triple-box blur ≈ Gaussian.
-    let sigma_px = sigma_pt * scale;
-    let radius = (sigma_px * 1.88 / 3.0).round().max(1.0) as i32;
-    for _ in 0..3 {
-        box_blur_h(&mut alpha, w, h, radius);
-        box_blur_v(&mut alpha, w, h, radius);
-    }
+/// A rasterised blurred-alpha stamp in the path's page space,
+/// expanded by 3σ.
+pub struct AlphaStamp {
+    pub alpha: Vec<u8>,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub origin_pt: (f32, f32),
+    pub size_pt: (f32, f32),
+}
 
+/// Rasterise a blurred alpha stamp for a path (the shadow/glow
+/// encoding): scanline-fill the path's alpha at `dpi`, then a
+/// separable box-approximated Gaussian (3 passes ≈ true Gaussian).
+pub fn blurred_alpha_stamp(
+    path: &PathData,
+    transform: &Transform,
+    blur_radius_pt: f32,
+    dpi: f32,
+) -> Option<AlphaStamp> {
+    // σ = half the IDML blur radius, the value this lane has always
+    // used. (The CPU rasterizer takes σ = the radius for the same
+    // command, so PDF shadows are crisper than canvas ones; aligning
+    // them is a separate, visible change.)
+    let sigma_pt = blur_radius_pt.max(0.01) * 0.5;
+    let grid = Grid::for_path(path, transform, sigma_pt * 3.0, dpi)?;
+    let mut mask = MaskRaster::interior(grid, path, transform, (0.0, 0.0));
+    mask.blur(sigma_pt);
     Some(AlphaStamp {
-        alpha,
-        width_px: w,
-        height_px: h,
-        origin_pt: origin,
-        size_pt,
+        alpha: mask.data,
+        width_px: grid.width_px,
+        height_px: grid.height_px,
+        origin_pt: grid.origin_pt,
+        size_pt: grid.size_pt,
     })
 }
 
@@ -349,6 +533,94 @@ fn box_blur_v(buf: &mut [u8], w: u32, h: u32, r: i32) {
 /// painted through a blurred-alpha /SMask'd image XObject, offset
 /// from the path. Returns the resource (name, ref) used.
 #[allow(clippy::too_many_arguments)]
+/// Write a mask as an 8-bit DeviceGray Flate image and return its ref.
+pub fn write_gray_mask_image(state: &mut DocState, mask: &MaskRaster) -> Ref {
+    let compressed = {
+        use std::io::Write as _;
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let _ = enc.write_all(&mask.data);
+        enc.finish().unwrap_or_default()
+    };
+    let mask_ref = state.refs.alloc();
+    let mut x = state.pdf.image_xobject(mask_ref, &compressed);
+    x.width(mask.grid.width_px as i32);
+    x.height(mask.grid.height_px as i32);
+    x.bits_per_component(8);
+    x.color_space().device_gray();
+    x.filter(pdf_writer::Filter::FlateDecode);
+    x.interpolate(true);
+    x.finish();
+    mask_ref
+}
+
+/// A 1×1 solid-colour image wearing `mask_ref` as its `/SMask`, interned
+/// on the page. Returns its resource name.
+pub fn write_tinted_stamp(
+    state: &mut DocState,
+    resources: &mut PageResources,
+    mask_ref: Ref,
+    color: Color,
+    xobject_counter: &mut u32,
+) -> String {
+    let px = [
+        (crate::color::linear_to_srgb(color.r) * 255.0) as u8,
+        (crate::color::linear_to_srgb(color.g) * 255.0) as u8,
+        (crate::color::linear_to_srgb(color.b) * 255.0) as u8,
+    ];
+    let fill_ref = state.refs.alloc();
+    {
+        let mut x = state.pdf.image_xobject(fill_ref, &px);
+        x.width(1);
+        x.height(1);
+        x.bits_per_component(8);
+        x.color_space().device_rgb();
+        x.s_mask(mask_ref);
+        x.finish();
+    }
+    let name = format!("Xs{}", *xobject_counter);
+    *xobject_counter += 1;
+    resources.x_objects.insert(name.clone(), fill_ref);
+    name
+}
+
+/// Paint a stamp over its grid's rectangle, offset by `offset_pt`.
+///
+/// Image XObjects paint into the unit square; this scales to the grid's
+/// bounds and flips vertically, because the mask's rows are y-down like
+/// the page's content space while the unit square is y-up.
+pub fn place_stamp(content: &mut Content, grid: &Grid, name: &str, offset_pt: (f32, f32)) {
+    content.save_state();
+    content.transform([
+        grid.size_pt.0,
+        0.0,
+        0.0,
+        -grid.size_pt.1,
+        grid.origin_pt.0 + offset_pt.0,
+        grid.origin_pt.1 + offset_pt.1 + grid.size_pt.1,
+    ]);
+    content.x_object(Name(name.as_bytes()));
+    content.restore_state();
+}
+
+/// Write a mask, tint it and paint it — the three steps every stamped
+/// effect shares.
+pub fn stamp_mask(
+    content: &mut Content,
+    state: &mut DocState,
+    resources: &mut PageResources,
+    mask: &MaskRaster,
+    color: Color,
+    offset_pt: (f32, f32),
+    xobject_counter: &mut u32,
+) {
+    if mask.is_empty() {
+        return;
+    }
+    let mask_ref = write_gray_mask_image(state, mask);
+    let name = write_tinted_stamp(state, resources, mask_ref, color, xobject_counter);
+    place_stamp(content, &mask.grid, &name, offset_pt);
+}
+
 pub fn emit_shadow_stamp(
     content: &mut Content,
     state: &mut DocState,

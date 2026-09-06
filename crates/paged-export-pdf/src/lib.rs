@@ -30,6 +30,7 @@
 //! same bytes (golden-file discipline).
 
 pub mod color;
+pub mod effects;
 pub mod gstate;
 pub mod image;
 pub mod marks;
@@ -118,7 +119,7 @@ pub enum RestrictedFontPolicy {
     Fail,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ExportOptions {
     pub standard: PdfStandard,
     pub color_policy: ExportColorPolicy,
@@ -139,6 +140,27 @@ pub struct ExportOptions {
     /// Document title for the Info dict / XMP (from document
     /// metadata, NOT wall-clock-derived).
     pub title: Option<String>,
+}
+
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self {
+            standard: PdfStandard::default(),
+            color_policy: ExportColorPolicy::default(),
+            output_condition: None,
+            page_range: None,
+            marks: MarkOptions::default(),
+            bleed: BleedOptions::default(),
+            images: ImageOptions::default(),
+            restricted_fonts: RestrictedFontPolicy::default(),
+            // The derived Default gave 0.0, which the walk clamps to the
+            // 72 dpi floor — so every default-options export stamped its
+            // effects at half the resolution this field documents, the
+            // in-repo tests included.
+            effect_dpi: 150.0,
+            title: None,
+        }
+    }
 }
 
 /// ICC payloads the exporter embeds.

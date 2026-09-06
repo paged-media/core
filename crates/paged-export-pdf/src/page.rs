@@ -115,6 +115,7 @@ pub fn export_page(
         upem_cache: HashMap::new(),
         resources: PageResources::default(),
         xobject_counter: 0,
+        feather_consumed: std::collections::HashSet::new(),
         form_counter: 0,
         pending_forms: Vec::new(),
         content_bbox,
@@ -327,6 +328,11 @@ struct Walker<'a, 'b> {
     pending_forms: Vec<PendingForm>,
     content_bbox: pdf_writer::Rect,
     diagnostics: &'b mut Vec<ExportDiagnostic>,
+    /// Feather commands whose run is already being painted under their
+    /// soft mask. The masked run is walked RECURSIVELY, and without
+    /// this the same fill would be detected as feathered again on the
+    /// way in — a loop with no bottom.
+    feather_consumed: std::collections::HashSet<usize>,
     /// The page-level CTM (trim origin + y-flip). A shading pattern's
     /// matrix maps pattern space to the page's DEFAULT space, not the
     /// CTM in force when it paints, so a gradient stroke needs it.
@@ -334,12 +340,147 @@ struct Walker<'a, 'b> {
 }
 
 impl Walker<'_, '_> {
+    /// Borrow what the effect emitters need in one shape.
+    fn effect_ctx(&mut self, input: &ExportInput<'_>) -> crate::effects::EffectCtx<'_> {
+        crate::effects::EffectCtx {
+            state: self.state,
+            resources: &mut self.resources,
+            effect_dpi: input.options.effect_dpi.max(72.0),
+            xobject_counter: &mut self.xobject_counter,
+        }
+    }
+
+    /// A feather applies to the object's OWN paint, so it cannot be
+    /// stamped like a glow — it has to mask the fill. The renderer
+    /// emits a frame as `[OuterGlow] FillPath [InnerShadow, InnerGlow,
+    /// BevelEmboss, Satin, Feather, DirectionalFeather,
+    /// GradientFeather]`, all sharing one `path_id`, so from a fill the
+    /// run that belongs to it is unambiguous.
+    ///
+    /// Returns `(feather index, last index of the run)` when the run
+    /// carries a feather.
+    fn feathered_run(&self, at: usize, range_end: usize) -> Option<(usize, usize)> {
+        let commands = &self.list.commands;
+        let fill_path = match commands.get(at)? {
+            DisplayCommand::FillPath { path_id, .. }
+            | DisplayCommand::FillPathBlend { path_id, .. }
+            | DisplayCommand::FillPathOverprint { path_id, .. } => *path_id,
+            _ => return None,
+        };
+        if self.feather_consumed.contains(&at) {
+            return None;
+        }
+        let mut feather = None;
+        let mut end = at;
+        let mut j = at + 1;
+        while j < range_end {
+            let same = |p: &paged_compose::PathId| *p == fill_path;
+            match &commands[j] {
+                DisplayCommand::Feather { path_id, .. }
+                | DisplayCommand::DirectionalFeather { path_id, .. }
+                    if same(path_id) =>
+                {
+                    feather.get_or_insert(j);
+                    end = j;
+                }
+                DisplayCommand::InnerShadow { path_id, .. }
+                | DisplayCommand::InnerGlow { path_id, .. }
+                | DisplayCommand::BevelEmboss { path_id, .. }
+                | DisplayCommand::Satin { path_id, .. }
+                | DisplayCommand::GradientFeather { path_id, .. }
+                    if same(path_id) =>
+                {
+                    end = j;
+                }
+                _ => break,
+            }
+            j += 1;
+        }
+        feather.map(|f| (f, end))
+    }
+
+    /// Paint `at..=end` under a luminosity soft mask built from the
+    /// feather's coverage — the PDF construct for "this object fades
+    /// out at its edges", and the one InDesign itself exports.
+    fn emit_feathered_run(
+        &mut self,
+        content: &mut Content,
+        stack: &mut StateStack,
+        at: usize,
+        feather_idx: usize,
+        end: usize,
+    ) -> bool {
+        let dpi = self.input.options.effect_dpi.max(72.0);
+        let mask =
+            match &self.list.commands[feather_idx] {
+                DisplayCommand::Feather {
+                    path_id,
+                    transform,
+                    params,
+                } => self
+                    .list
+                    .paths
+                    .get(*path_id)
+                    .and_then(|p| crate::effects::feather_mask(p, transform, params, dpi)),
+                DisplayCommand::DirectionalFeather {
+                    path_id,
+                    transform,
+                    params,
+                } => self.list.paths.get(*path_id).and_then(|p| {
+                    crate::effects::directional_feather_mask(p, transform, params, dpi)
+                }),
+                _ => None,
+            };
+        let Some(mask) = mask else { return false };
+        self.feather_consumed.insert(at);
+
+        let mask_ref = crate::transparency::write_gray_mask_image(self.state, &mask);
+        // The mask form paints just that image; everything the form does
+        // not cover reads as the backdrop (black ⇒ hidden), which is
+        // what a feather wants outside the object's own box.
+        let name = format!("Xm{}", self.xobject_counter);
+        self.xobject_counter += 1;
+        self.resources.x_objects.insert(name.clone(), mask_ref);
+        let mut form = Content::new();
+        crate::transparency::place_stamp(&mut form, &mask.grid, &name, (0.0, 0.0));
+        let form_ref = self.state.refs.alloc();
+        self.pending_forms.push(PendingForm {
+            form_ref,
+            data: form.finish().to_vec(),
+            bbox: self.content_bbox,
+            group: PendingFormGroup::LuminosityGray,
+        });
+        let gs_ref = self.state.refs.alloc();
+        {
+            let mut gs = self.state.pdf.ext_graphics(gs_ref);
+            let mut sm = gs.soft_mask();
+            sm.subtype(pdf_writer::types::MaskType::Luminosity);
+            sm.group(form_ref);
+            sm.backdrop([0.0]);
+            sm.finish();
+            gs.finish();
+        }
+        let gs_name = format!("GsSm{}", self.resources.ext_g_states.len());
+        self.resources.ext_g_states.insert(gs_name.clone(), gs_ref);
+        content.save_state();
+        content.set_parameters(Name(gs_name.as_bytes()));
+        self.walk(content, stack, at..end + 1);
+        content.restore_state();
+        true
+    }
+
     fn walk(&mut self, content: &mut Content, stack: &mut StateStack, range: Range<usize>) {
         let list = self.list;
         let input = self.input;
         let commands = &list.commands;
         let mut i = range.start;
         while i < range.end {
+            if let Some((feather_idx, end)) = self.feathered_run(i, range.end) {
+                if self.emit_feathered_run(content, stack, i, feather_idx, end) {
+                    i = end + 1;
+                    continue;
+                }
+            }
             // Glyph-paralleled command? Collect the consecutive slice
             // sharing (font, size, paint) and emit ONE text object at
             // this z-position.
@@ -713,17 +854,67 @@ impl Walker<'_, '_> {
                 // no-op, matching the `PopClip` / `EndBlendGroup`
                 // policy.
                 DisplayCommand::BeginMaskedContent(_) | DisplayCommand::EndSoftMask(_) => {}
-                // v1: the remaining blur-based effects are documented
-                // gaps (the canvas-side raster look is the reference;
-                // shadows — the headline effect — export above).
-                DisplayCommand::InnerShadow { .. }
-                | DisplayCommand::OuterGlow { .. }
-                | DisplayCommand::InnerGlow { .. }
-                | DisplayCommand::BevelEmboss { .. }
-                | DisplayCommand::Satin { .. }
-                | DisplayCommand::Feather { .. }
-                | DisplayCommand::DirectionalFeather { .. } => {
-                    tracing::debug!("paged-export-pdf: effect command not yet exported");
+                DisplayCommand::OuterGlow {
+                    path_id,
+                    transform,
+                    params,
+                } => {
+                    if let Some(path) = list.paths.get(*path_id) {
+                        let mut ctx = self.effect_ctx(input);
+                        crate::effects::emit_outer_glow(content, &mut ctx, path, transform, params);
+                    }
+                }
+                DisplayCommand::InnerShadow {
+                    path_id,
+                    transform,
+                    params,
+                } => {
+                    if let Some(path) = list.paths.get(*path_id) {
+                        let mut ctx = self.effect_ctx(input);
+                        crate::effects::emit_inner_shadow(
+                            content, &mut ctx, path, transform, params,
+                        );
+                    }
+                }
+                DisplayCommand::InnerGlow {
+                    path_id,
+                    transform,
+                    params,
+                } => {
+                    if let Some(path) = list.paths.get(*path_id) {
+                        let mut ctx = self.effect_ctx(input);
+                        crate::effects::emit_inner_glow(content, &mut ctx, path, transform, params);
+                    }
+                }
+                DisplayCommand::Satin {
+                    path_id,
+                    transform,
+                    params,
+                } => {
+                    if let Some(path) = list.paths.get(*path_id) {
+                        let mut ctx = self.effect_ctx(input);
+                        crate::effects::emit_satin(content, &mut ctx, path, transform, params);
+                    }
+                }
+                DisplayCommand::BevelEmboss {
+                    path_id,
+                    transform,
+                    params,
+                } => {
+                    if let Some(path) = list.paths.get(*path_id) {
+                        let mut ctx = self.effect_ctx(input);
+                        crate::effects::emit_bevel_emboss(
+                            content, &mut ctx, path, transform, params,
+                        );
+                    }
+                }
+                // A feather masks the object's OWN paint rather than
+                // adding ink, so it is folded into the fill it belongs
+                // to (see `feathered_run`). Reaching one here means the
+                // frame had no fill to mask — an image-only frame — and
+                // there is nothing to feather.
+                DisplayCommand::Feather { .. } | DisplayCommand::DirectionalFeather { .. } => {
+                    tracing::debug!("paged-export-pdf: feather with no fill to mask");
                 }
             }
             i += 1;
@@ -888,7 +1079,7 @@ impl Walker<'_, '_> {
 
 /// Clip path emission: transformed point-by-point into the CURRENT
 /// CTM (no q/Q — the clip must survive), then `W n`.
-fn emit_transformed_clip(
+pub(crate) fn emit_transformed_clip(
     content: &mut Content,
     path: &paged_compose::PathData,
     transform: &Transform,
