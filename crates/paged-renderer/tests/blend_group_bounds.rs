@@ -102,8 +102,10 @@ fn a_drop_shadow_fits_inside_its_own_transparency_group() {
 
     // The rasterizer stamps the shadow at `path + offset` and pads its
     // scratch by `3σ + 1`; every pixel of that has to be inside the
-    // group or it is cut with a hard edge.
-    let reach = SHADOW_OFFSET + 3.0 * SHADOW_BLUR + 1.0;
+    // group or it is cut with a hard edge. σ is half the IDML `Size`,
+    // which is what InDesign itself draws.
+    let sigma = paged_compose::mask::outer_sigma_pt(SHADOW_BLUR);
+    let reach = SHADOW_OFFSET + 3.0 * sigma + 1.0;
     assert!(
         b.x + b.w >= FRAME_X1 + reach,
         "group must reach {} pt to the right of the frame; bounds {b:?}",
@@ -116,7 +118,7 @@ fn a_drop_shadow_fits_inside_its_own_transparency_group() {
     );
     // The shadow moves down-RIGHT, so the leading edges only need the
     // blur tail, not the offset.
-    let tail = 3.0 * SHADOW_BLUR + 1.0 - SHADOW_OFFSET;
+    let tail = 3.0 * sigma + 1.0 - SHADOW_OFFSET;
     assert!(
         b.x <= FRAME_X0 - tail && b.y <= FRAME_Y0 - tail,
         "group must cover the shadow's leading blur tail; bounds {b:?}"

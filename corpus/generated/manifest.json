@@ -14,7 +14,7 @@
       "idml": "effects.idml",
       "pdf": "effects.pdf",
       "pages": 12,
-      "passing": 9,
+      "passing": 12,
       "diff_dir": "/tmp/idml-generated-diff/effects",
       "report": "/tmp/idml-generated-diff/effects/report.json"
     },

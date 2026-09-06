@@ -29,10 +29,9 @@
 
 use image::{Rgba, RgbaImage};
 use paged_compose::{
-    BevelDirection, BevelEmboss, BevelStyle, BevelTechnique, BlendMode, Color as CComposeColor,
-    DirectionalFeather, DisplayCommand, DisplayList, Feather, FeatherCornerType, GradientFeather,
-    GradientFeatherKind, InnerGlow, InnerShadow, LayerEffect, LineCap, LineJoin, OuterGlow, Paint,
-    PathData, PathSegment, Satin, SpotInkId, Transform as CTransform,
+    BlendMode, Color as CComposeColor, DirectionalFeather, DisplayCommand, DisplayList, Feather,
+    FeatherCornerType, GradientFeather, GradientFeatherKind, LayerEffect, LineCap, LineJoin, Paint,
+    PathData, PathSegment, SpotInkId, Transform as CTransform,
 };
 use tiny_skia::{
     BlendMode as TsBlendMode, FillRule, GradientStop as TsGradientStop, LineCap as TsLineCap,
@@ -1462,11 +1461,17 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 // path is unchanged (σ_scale = 1.0) so other corpus
                 // pages that funnel through that arm stay
                 // byte-identical.
-                let sigma_scale: f32 = match cmd {
-                    DisplayCommand::PathShadow { .. } => 3.5,
-                    _ => 1.0,
+                // The rect-stamp arm takes InDesign's own mapping,
+                // measured: `Size` is the width of the band the shadow
+                // occupies and σ is half of it. (We passed `Size`
+                // straight in as σ for years, so every canvas shadow
+                // was twice as soft as InDesign's and reached twice as
+                // far — the PDF lane had 0.5 all along and the two
+                // disagreed.) PathShadow keeps its own, larger scale.
+                let sigma_pt = match cmd {
+                    DisplayCommand::PathShadow { .. } => shadow.blur_radius.max(0.0) * 3.5,
+                    _ => paged_compose::mask::outer_sigma_pt(shadow.blur_radius),
                 };
-                let sigma_pt = shadow.blur_radius.max(0.0) * sigma_scale;
                 // σ in pt → σ in pixels via the renderer's pt→px scale.
                 let sigma_px = sigma_pt * scale;
                 if sigma_px <= 0.5 {
@@ -1963,12 +1968,15 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
-                let Some(path) = build_path_transformed(path_data, transform) else {
-                    continue;
-                };
+                let stamps = paged_compose::mask::inner_shadow_stamps(
+                    path_data,
+                    transform,
+                    params,
+                    (scale * 72.0).max(72.0),
+                );
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_inner_shadow(target, target_xform, target_mask, &path, params, scale);
+                render_effect_stamps(target, target_xform, target_mask, &stamps);
             }
             DisplayCommand::OuterGlow {
                 path_id,
@@ -1978,12 +1986,15 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
-                let Some(path) = build_path_transformed(path_data, transform) else {
-                    continue;
-                };
+                let stamps = paged_compose::mask::outer_glow_stamps(
+                    path_data,
+                    transform,
+                    params,
+                    (scale * 72.0).max(72.0),
+                );
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_outer_glow(target, target_xform, target_mask, &path, params, scale);
+                render_effect_stamps(target, target_xform, target_mask, &stamps);
             }
             DisplayCommand::InnerGlow {
                 path_id,
@@ -1993,12 +2004,15 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
-                let Some(path) = build_path_transformed(path_data, transform) else {
-                    continue;
-                };
+                let stamps = paged_compose::mask::inner_glow_stamps(
+                    path_data,
+                    transform,
+                    params,
+                    (scale * 72.0).max(72.0),
+                );
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_inner_glow(target, target_xform, target_mask, &path, params, scale);
+                render_effect_stamps(target, target_xform, target_mask, &stamps);
             }
             DisplayCommand::BevelEmboss {
                 path_id,
@@ -2008,12 +2022,15 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
-                let Some(path) = build_path_transformed(path_data, transform) else {
-                    continue;
-                };
+                let stamps = paged_compose::mask::bevel_emboss_stamps(
+                    path_data,
+                    transform,
+                    params,
+                    (scale * 72.0).max(72.0),
+                );
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_bevel_emboss(target, target_xform, target_mask, &path, params, scale);
+                render_effect_stamps(target, target_xform, target_mask, &stamps);
             }
             DisplayCommand::Satin {
                 path_id,
@@ -2023,12 +2040,15 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
-                let Some(path) = build_path_transformed(path_data, transform) else {
-                    continue;
-                };
+                let stamps = paged_compose::mask::satin_stamps(
+                    path_data,
+                    transform,
+                    params,
+                    (scale * 72.0).max(72.0),
+                );
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
-                render_satin(target, target_xform, target_mask, &path, params, scale);
+                render_effect_stamps(target, target_xform, target_mask, &stamps);
             }
             DisplayCommand::Feather {
                 path_id,
@@ -3302,561 +3322,53 @@ fn gaussian_blur_mask(mask: &mut [u8], width: u32, height: u32, kernel: &[f32]) 
     }
 }
 
-/// Inner shadow: paint a soft, offset shadow on the *inside* of the
-/// path. Algorithm:
-///   1. Build the path interior mask `M` (alpha channel).
-///   2. Build the offset+choked path interior mask `Moff` by
-///      stamping the path shifted by `(offset_x, offset_y)`, dilated
-///      by `choke` pt.
-///   3. The "shadow source" is `(1 - Moff)`: the area *outside* the
-///      offset path. Blur it.
-///   4. Composite the blurred source clipped to `M` (so the shadow
-///      stays inside the path interior), tinted with `params.color`
-///      at `params.opacity`.
-fn render_inner_shadow(
+/// Paint the stamps an effect command produces onto the target.
+///
+/// The masks come from `paged_compose::mask`, which is the SAME
+/// arithmetic the PDF exporter and the Vello lane run — a bevel that
+/// is right in one lane is right in all three by construction rather
+/// than by three implementations agreeing by eye. Each stamp is a
+/// page-space coverage raster plus a colour and a blend mode; placing
+/// it is a matter of mapping its grid rectangle through the target
+/// transform.
+fn render_effect_stamps(
     target: &mut Pixmap,
     target_xform: TsTransform,
     target_mask: Option<&TsMask>,
-    path: &tiny_skia::Path,
-    params: &InnerShadow,
-    scale: f32,
+    stamps: &[paged_compose::mask::EffectStamp],
 ) {
-    // The padding only needs to cover the path interior plus enough
-    // slack for the blur kernel — the shadow lives *inside* the
-    // path, so anything farther than 3σ from the edge is safely zero.
-    let pad_pt = 3.0 * params.blur_radius.max(0.0)
-        + params.choke.abs()
-        + params.offset_x.abs().max(params.offset_y.abs())
-        + 1.0;
-    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
-        effect_scratch_bounds(path, target_xform, pad_pt)
-    else {
-        return;
-    };
-    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
-        return;
-    };
-    let interior_mask = alpha_to_mask(interior_pix.data());
-
-    // Build the offset path mask: same path but translated by
-    // (offset_x, offset_y) in pt-space (pre-concat the translate
-    // *into* scratch_xform so it lands in pixel-space correctly).
-    let offset_xform = scratch_xform.pre_concat(TsTransform::from_translate(
-        params.offset_x,
-        params.offset_y,
-    ));
-    let Some(offset_pix) = stamp_path_alpha(w_px, h_px, path, offset_xform) else {
-        return;
-    };
-    let mut offset_mask = alpha_to_mask(offset_pix.data());
-
-    // Apply choke as an additional dilation: a positive choke grows
-    // the offset stamp inward (smaller blur footprint). We approximate
-    // by blurring the offset mask by a small Gaussian and then
-    // thresholding at `(0.5 - choke)` to bias the boundary; this is
-    // a cheap dilation/erosion with the same code path.
-    let choke_px = params.choke.max(0.0) * scale;
-    if choke_px > 0.5 {
-        let kernel = gaussian_kernel(choke_px);
-        gaussian_blur_mask(&mut offset_mask, w_px, h_px, &kernel);
-        // Re-threshold: anything brighter than ~64 is treated as
-        // "inside", which approximates a dilation by ~choke_px.
-        for v in offset_mask.iter_mut() {
-            *v = if *v > 64 { 255 } else { 0 };
+    for stamp in stamps {
+        if stamp.mask.is_empty() {
+            continue;
         }
-    }
-
-    // Source = (1 - offset_mask) — the "outside" of the offset path.
-    let mut source: Vec<u8> = offset_mask.iter().map(|&v| 255 - v).collect();
-
-    // Blur the source.
-    let sigma_px = params.blur_radius.max(0.0) * scale;
-    if sigma_px > 0.5 {
-        let kernel = gaussian_kernel(sigma_px);
-        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
-    }
-
-    // Mask source by the path interior so the shadow only paints
-    // inside the path. Final per-pixel alpha = source * interior /
-    // 255, scaled by opacity. Then build a premultiplied RGBA buffer
-    // tinted with `params.color`.
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let opacity = params.opacity.clamp(0.0, 1.0);
-    let ts_color = linear_color_to_ts(params.color);
-    let cr = ts_color.red();
-    let cg = ts_color.green();
-    let cb = ts_color.blue();
-    let ca = ts_color.alpha();
-    let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let inside = interior_mask[i] as f32 / 255.0;
-        let s = source[i] as f32 / 255.0;
-        let a = (inside * s * opacity * ca).clamp(0.0, 1.0);
-        // Premultiplied output: store (color * a, a).
-        let q = i * 4;
-        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    let composite = PixmapPaint {
-        blend_mode: blend_mode_to_ts(params.blend_mode),
-        ..Default::default()
-    };
-    target.draw_pixmap(
-        off_x_px,
-        off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
-    );
-}
-
-/// Outer glow: soft halo *outside* the path. Algorithm:
-///   1. Build the path interior mask `M`.
-///   2. Optionally dilate by `spread` pt (so glows can extend farther
-///      than the blur alone would carry them).
-///   3. Blur the mask by `blur_radius`.
-///   4. Subtract the path interior so the glow only paints outside.
-///   5. Tint and composite.
-fn render_outer_glow(
-    target: &mut Pixmap,
-    target_xform: TsTransform,
-    target_mask: Option<&TsMask>,
-    path: &tiny_skia::Path,
-    params: &OuterGlow,
-    scale: f32,
-) {
-    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.spread.abs() + 1.0;
-    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
-        effect_scratch_bounds(path, target_xform, pad_pt)
-    else {
-        return;
-    };
-    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
-        return;
-    };
-    let interior_mask = alpha_to_mask(interior_pix.data());
-    let mut halo = interior_mask.clone();
-
-    // Cheap "spread" dilation — same trick as in InnerShadow's choke.
-    let spread_px = params.spread.max(0.0) * scale;
-    if spread_px > 0.5 {
-        let kernel = gaussian_kernel(spread_px);
-        gaussian_blur_mask(&mut halo, w_px, h_px, &kernel);
-        for v in halo.iter_mut() {
-            *v = if *v > 64 { 255 } else { 0 };
-        }
-    }
-
-    // Blur.
-    let sigma_px = params.blur_radius.max(0.0) * scale;
-    if sigma_px > 0.5 {
-        let kernel = gaussian_kernel(sigma_px);
-        gaussian_blur_mask(&mut halo, w_px, h_px, &kernel);
-    }
-
-    // Subtract the path interior so the glow only lands outside it.
-    // This avoids the glow doubling up under the fill (which would
-    // wash out the colour where the path has its own paint).
-    let opacity = params.opacity.clamp(0.0, 1.0);
-    let ts_color = linear_color_to_ts(params.color);
-    let cr = ts_color.red();
-    let cg = ts_color.green();
-    let cb = ts_color.blue();
-    let ca = ts_color.alpha();
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let h = halo[i] as f32 / 255.0;
-        let m = interior_mask[i] as f32 / 255.0;
-        // Outside-only halo: max(halo - interior, 0).
-        let outside = (h - m).max(0.0);
-        let a = (outside * opacity * ca).clamp(0.0, 1.0);
-        let q = i * 4;
-        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    let composite = PixmapPaint {
-        blend_mode: blend_mode_to_ts(params.blend_mode),
-        ..Default::default()
-    };
-    target.draw_pixmap(
-        off_x_px,
-        off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
-    );
-}
-
-/// Inner glow: soft glow on the *inside* of the path's interior. This
-/// is the no-offset, glow-coloured cousin of [`render_inner_shadow`].
-fn render_inner_glow(
-    target: &mut Pixmap,
-    target_xform: TsTransform,
-    target_mask: Option<&TsMask>,
-    path: &tiny_skia::Path,
-    params: &InnerGlow,
-    scale: f32,
-) {
-    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.choke.abs() + 1.0;
-    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
-        effect_scratch_bounds(path, target_xform, pad_pt)
-    else {
-        return;
-    };
-    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
-        return;
-    };
-    let interior_mask = alpha_to_mask(interior_pix.data());
-
-    // Source = (1 - interior). Blurring this and clipping to the
-    // interior gives a glow at the path's inner edge fading inward.
-    let mut source: Vec<u8> = interior_mask.iter().map(|&v| 255 - v).collect();
-
-    let choke_px = params.choke.max(0.0) * scale;
-    if choke_px > 0.5 {
-        // Choke pulls the glow boundary inward by erosion: blur +
-        // re-threshold biased high.
-        let kernel = gaussian_kernel(choke_px);
-        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
-        for v in source.iter_mut() {
-            *v = if *v > 64 { 255 } else { 0 };
-        }
-    }
-
-    let sigma_px = params.blur_radius.max(0.0) * scale;
-    if sigma_px > 0.5 {
-        let kernel = gaussian_kernel(sigma_px);
-        gaussian_blur_mask(&mut source, w_px, h_px, &kernel);
-    }
-
-    let opacity = params.opacity.clamp(0.0, 1.0);
-    let ts_color = linear_color_to_ts(params.color);
-    let cr = ts_color.red();
-    let cg = ts_color.green();
-    let cb = ts_color.blue();
-    let ca = ts_color.alpha();
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let inside = interior_mask[i] as f32 / 255.0;
-        let s = source[i] as f32 / 255.0;
-        let a = (inside * s * opacity * ca).clamp(0.0, 1.0);
-        let q = i * 4;
-        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    let composite = PixmapPaint {
-        blend_mode: blend_mode_to_ts(params.blend_mode),
-        ..Default::default()
-    };
-    target.draw_pixmap(
-        off_x_px,
-        off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
-    );
-}
-
-/// Bevel and emboss. Algorithm:
-///   1. Build the path interior mask `M`.
-///   2. Blur `M` by `size` to get a smooth height field `H`.
-///   3. Compute the gradient `(∂H/∂x, ∂H/∂y)`; treat as a 2D normal
-///      with a fixed `z = (1 - |grad|)` term so flat regions have
-///      `n_z = 1` (face the viewer) and edges have a sloped normal.
-///   4. Compute Lambertian shading `n · L` against a light direction
-///      derived from `angle_deg` (azimuth) and `altitude_deg`
-///      (elevation). Positive shading paints the highlight colour;
-///      negative shading paints the shadow colour.
-///   5. Mask by the path interior and composite.
-fn render_bevel_emboss(
-    target: &mut Pixmap,
-    target_xform: TsTransform,
-    target_mask: Option<&TsMask>,
-    path: &tiny_skia::Path,
-    params: &BevelEmboss,
-    scale: f32,
-) {
-    let pad_pt = 3.0 * params.size.max(0.0) + 2.0;
-    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
-        effect_scratch_bounds(path, target_xform, pad_pt)
-    else {
-        return;
-    };
-    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
-        return;
-    };
-    let interior_mask = alpha_to_mask(interior_pix.data());
-    let mut height: Vec<f32> = interior_mask.iter().map(|&v| v as f32 / 255.0).collect();
-
-    // W1.4 parity — `technique` controls how hard the ramp is. Smooth
-    // uses the baseline 0.5× sigma; the chisel variants narrow the
-    // smoothing band so the normal turns over fewer pixels (a crisper
-    // facet). ChiselHard is the sharpest (near-linear ramp), ChiselSoft
-    // sits between hard and smooth.
-    let technique_sigma_scale = match params.technique {
-        BevelTechnique::Smooth => 0.5,
-        BevelTechnique::ChiselSoft => 0.25,
-        BevelTechnique::ChiselHard => 0.1,
-    };
-
-    // Smooth the height field. Larger `size` → softer bevel.
-    let sigma_px = params.size.max(0.0) * scale * technique_sigma_scale;
-    if sigma_px > 0.5 {
-        // Convert to u8, blur, convert back.
-        let mut h8: Vec<u8> = height.iter().map(|&v| (v * 255.0).round() as u8).collect();
-        let kernel = gaussian_kernel(sigma_px);
-        gaussian_blur_mask(&mut h8, w_px, h_px, &kernel);
-        for (slot, src) in height.iter_mut().zip(h8.iter()) {
-            *slot = *src as f32 / 255.0;
-        }
-    }
-
-    // W1.4 parity — reshape the height field per `style`. The baseline
-    // (InnerBevel) is a ramp that rises from the edge into the
-    // interior. The other styles transform that ramp so the lit/shaded
-    // sides land where InDesign puts them:
-    //
-    //   * OuterBevel — invert the height (`1 - h`). The interior
-    //     becomes the valley and the surround the plateau, so the
-    //     surface tilts the opposite way and highlight/shadow swap
-    //     sides versus the inner bevel.
-    //   * Emboss — fold the ramp into a ridge centred on the edge
-    //     (`1 - |2h - 1|`): both the inner and outer slopes light up,
-    //     the stamped-into-the-page look.
-    //   * PillowEmboss — invert that ridge (`|2h - 1|`) so the interior
-    //     dips while the edge bulges (a pillow).
-    //   * StrokeEmboss — no separate stroke band here; treat like the
-    //     inner bevel (closest visual). Noted for renderer-gaps.
-    match params.style {
-        BevelStyle::InnerBevel | BevelStyle::StrokeEmboss => {}
-        BevelStyle::OuterBevel => {
-            for v in height.iter_mut() {
-                *v = 1.0 - *v;
-            }
-        }
-        BevelStyle::Emboss => {
-            for v in height.iter_mut() {
-                *v = 1.0 - (2.0 * *v - 1.0).abs();
-            }
-        }
-        BevelStyle::PillowEmboss => {
-            for v in height.iter_mut() {
-                *v = (2.0 * *v - 1.0).abs();
-            }
-        }
-    }
-
-    // Light direction. IDML's angle is screen-azimuth in degrees;
-    // altitude is elevation in degrees. Compute the unit light vector
-    // in (x, y, z) — y is page-down so we negate sin(angle) for the
-    // "y points up" math used inside the shading kernel.
-    let az = params.angle_deg.to_radians();
-    let alt = params.altitude_deg.to_radians();
-    let cos_alt = alt.cos();
-    let lx = az.cos() * cos_alt;
-    let ly = -az.sin() * cos_alt; // page-down y → negate sin
-    let lz = alt.sin().max(0.0);
-
-    // W1.4 parity — `direction == Down` presses the surface away from
-    // the viewer (carved-in rather than raised). That inverts the
-    // surface normal's *lateral* tilt, so the edge that was a
-    // highlight becomes a shadow and vice-versa. We apply it as a sign
-    // on the height gradient (`dx`/`dy`) below: flipping the gradient
-    // flips `nx`/`ny`, swapping highlight and shadow sides — which is
-    // what flipping `lz` alone fails to do (the lateral `nx*lx + ny*ly`
-    // term dominates at the bevel edge).
-    let dir_sign = match params.direction {
-        BevelDirection::Up => 1.0,
-        BevelDirection::Down => -1.0,
-    };
-
-    let depth = params.depth.clamp(0.0, 4.0);
-    let hi_op = params.highlight_opacity.clamp(0.0, 1.0);
-    let sh_op = params.shadow_opacity.clamp(0.0, 1.0);
-    let hi_ts = linear_color_to_ts(params.highlight_color);
-    let sh_ts = linear_color_to_ts(params.shadow_color);
-
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let data = scratch.data_mut();
-    let w = w_px as usize;
-    let h = h_px as usize;
-    for y in 0..h {
-        for x in 0..w {
-            let i = y * w + x;
-            // Central differences. `depth` scales the normal slope.
-            let xm = if x == 0 { x } else { x - 1 };
-            let xp = if x + 1 >= w { x } else { x + 1 };
-            let ym = if y == 0 { y } else { y - 1 };
-            let yp = if y + 1 >= h { y } else { y + 1 };
-            let dx = (height[y * w + xp] - height[y * w + xm]) * depth * 4.0 * dir_sign;
-            let dy = (height[yp * w + x] - height[ym * w + x]) * depth * 4.0 * dir_sign;
-            // Normal: (-dx, -dy, 1) before normalise.
-            let nx = -dx;
-            let ny = -dy;
-            let nz = 1.0;
-            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
-            let dot = (nx * lx + ny * ly + nz * lz) / len;
-            let inside = interior_mask[i] as f32 / 255.0;
-            // Bevel only paints where the surface tilts (nonzero
-            // gradient). `slope = sqrt(dx² + dy²)` is large near the
-            // edge, zero deep inside. Multiply by `inside` so the
-            // bevel stays inside the path (the smoothed height
-            // bleeds past the path's true edge).
-            let slope = (dx * dx + dy * dy).sqrt().clamp(0.0, 1.0);
-            // Shadow when dot < 0, highlight when dot > 0.
+        let grid = stamp.mask.grid;
+        let Some(mut scratch) = Pixmap::new(grid.width_px, grid.height_px) else {
+            continue;
+        };
+        let c = linear_color_to_ts(stamp.color);
+        let (cr, cg, cb, ca) = (c.red(), c.green(), c.blue(), c.alpha());
+        let data = scratch.data_mut();
+        for (i, &m) in stamp.mask.data.iter().enumerate() {
+            let a = (m as f32 / 255.0) * ca;
             let q = i * 4;
-            let (cr, cg, cb, op);
-            if dot >= 0.0 {
-                cr = hi_ts.red();
-                cg = hi_ts.green();
-                cb = hi_ts.blue();
-                op = hi_op * hi_ts.alpha();
-            } else {
-                cr = sh_ts.red();
-                cg = sh_ts.green();
-                cb = sh_ts.blue();
-                op = sh_op * sh_ts.alpha();
-            }
-            let a = (dot.abs() * slope * inside * op).clamp(0.0, 1.0);
             data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
             data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
             data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
             data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
         }
+        let inv = 1.0 / grid.scale.max(1e-6);
+        let place = target_xform
+            .pre_concat(TsTransform::from_translate(
+                grid.origin_pt.0,
+                grid.origin_pt.1,
+            ))
+            .pre_concat(TsTransform::from_scale(inv, inv));
+        let paint = PixmapPaint {
+            blend_mode: blend_mode_to_ts(stamp.blend_mode),
+            ..Default::default()
+        };
+        target.draw_pixmap(0, 0, scratch.as_ref(), &paint, place, target_mask);
     }
-
-    // W1.4 parity — `Soften` (pt) blurs the shaded bevel layer so the
-    // highlight/shadow ramp reads less crisp. Applied after shading so
-    // it softens the final tint, matching InDesign's Soften slider
-    // (distinct from the height-field smoothing driven by `size`).
-    let soften_sigma_px = params.soften.max(0.0) * scale;
-    if soften_sigma_px > 0.5 {
-        let kernel = gaussian_kernel(soften_sigma_px);
-        gaussian_blur_premul(scratch.data_mut(), w_px, h_px, &kernel);
-    }
-
-    let composite = PixmapPaint::default();
-    target.draw_pixmap(
-        off_x_px,
-        off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
-    );
-}
-
-/// Satin: subtract two offset blurred path masks to produce a wave
-/// pattern, mask to the path interior, tint with `params.color`.
-fn render_satin(
-    target: &mut Pixmap,
-    target_xform: TsTransform,
-    target_mask: Option<&TsMask>,
-    path: &tiny_skia::Path,
-    params: &Satin,
-    scale: f32,
-) {
-    let pad_pt = 3.0 * params.blur_radius.max(0.0) + params.distance.abs() + 1.0;
-    let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
-        effect_scratch_bounds(path, target_xform, pad_pt)
-    else {
-        return;
-    };
-    let Some(interior_pix) = stamp_path_alpha(w_px, h_px, path, scratch_xform) else {
-        return;
-    };
-    let interior_mask = alpha_to_mask(interior_pix.data());
-
-    // Two offset stamps along ±(angle_deg, distance/2).
-    let theta = params.angle_deg.to_radians();
-    let dx_pt = theta.cos() * params.distance * 0.5;
-    let dy_pt = -theta.sin() * params.distance * 0.5;
-    let xform_a = scratch_xform.pre_concat(TsTransform::from_translate(dx_pt, dy_pt));
-    let xform_b = scratch_xform.pre_concat(TsTransform::from_translate(-dx_pt, -dy_pt));
-    let Some(stamp_a) = stamp_path_alpha(w_px, h_px, path, xform_a) else {
-        return;
-    };
-    let Some(stamp_b) = stamp_path_alpha(w_px, h_px, path, xform_b) else {
-        return;
-    };
-    let mut a_mask = alpha_to_mask(stamp_a.data());
-    let mut b_mask = alpha_to_mask(stamp_b.data());
-    let sigma_px = params.blur_radius.max(0.0) * scale;
-    if sigma_px > 0.5 {
-        let kernel = gaussian_kernel(sigma_px);
-        gaussian_blur_mask(&mut a_mask, w_px, h_px, &kernel);
-        gaussian_blur_mask(&mut b_mask, w_px, h_px, &kernel);
-    }
-
-    let opacity = params.opacity.clamp(0.0, 1.0);
-    let ts_color = linear_color_to_ts(params.color);
-    let cr = ts_color.red();
-    let cg = ts_color.green();
-    let cb = ts_color.blue();
-    let ca = ts_color.alpha();
-    let mut scratch = match Pixmap::new(w_px, h_px) {
-        Some(p) => p,
-        None => return,
-    };
-    let data = scratch.data_mut();
-    for i in 0..(w_px as usize * h_px as usize) {
-        let am = a_mask[i] as f32 / 255.0;
-        let bm = b_mask[i] as f32 / 255.0;
-        // Wave intensity: `|am - bm|` peaks at the path edges where
-        // the two stamps disagree. Multiply by interior mask so the
-        // satin highlight only paints inside the path. `invert` flips
-        // the band — `1 - |am - bm|` is bright where the stamps agree
-        // (the interior plateaus) and dark along the contour, matching
-        // InDesign's "Invert" checkbox.
-        let inside = interior_mask[i] as f32 / 255.0;
-        let diff = (am - bm).abs();
-        let wave = if params.invert { 1.0 - diff } else { diff };
-        let a = (wave * inside * opacity * ca).clamp(0.0, 1.0);
-        let q = i * 4;
-        data[q] = (cr * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 1] = (cg * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 2] = (cb * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        data[q + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
-    }
-
-    let composite = PixmapPaint {
-        blend_mode: blend_mode_to_ts(params.blend_mode),
-        ..Default::default()
-    };
-    target.draw_pixmap(
-        off_x_px,
-        off_y_px,
-        scratch.as_ref(),
-        &composite,
-        TsTransform::identity(),
-        target_mask,
-    );
 }
 
 /// Feather: paint the path with a soft alpha gradient at the edge.
@@ -4449,7 +3961,10 @@ fn sample_gradient_alpha(stops: &[(f32, f32)], t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paged_compose::{emit_rect, emit_stroke_rect, Color, DisplayList, Paint, Rect};
+    use paged_compose::{
+        emit_rect, emit_stroke_rect, BevelDirection, BevelStyle, BevelTechnique, Color,
+        DisplayList, Paint, Rect,
+    };
 
     fn at(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
         img.get_pixel(x, y).0
@@ -5711,25 +5226,30 @@ mod tests {
     }
 
     #[test]
-    fn bevel_outer_style_swaps_shadow_side_vs_inner() {
-        // W1.4 parity — OuterBevel inverts the height field, so the
-        // surface tilts the opposite way and the shadow corner swaps
-        // relative to the InnerBevel (same light, same direction).
+    fn an_outer_bevel_puts_its_facet_outside_the_object() {
+        // This test used to assert that OuterBevel "inverts the height
+        // field" and moves the shadow to the opposite corner INSIDE
+        // the object. InDesign does no such thing: measured, an outer
+        // bevel lays its facet on the page AROUND the outline, lit on
+        // the same side as an inner bevel, and leaves the interior
+        // alone. Our old code masked every style to the interior, so
+        // an outer bevel drew nothing whatsoever.
         let inner = bevel_img(BevelStyle::InnerBevel, BevelDirection::Up);
         let outer = bevel_img(BevelStyle::OuterBevel, BevelDirection::Up);
-        let inner_br = bevel_darkness(&inner, 35, 35);
-        let inner_tl = bevel_darkness(&inner, 12, 12);
-        let outer_br = bevel_darkness(&outer, 35, 35);
-        let outer_tl = bevel_darkness(&outer, 12, 12);
-        // Inner: shadow bottom-right.
+        // The rect spans 10..40 with a 4 pt facet; 35 is inside the
+        // bottom-right corner and 41 just outside it.
         assert!(
-            inner_br > inner_tl,
-            "inner bevel shadow bottom-right: tl={inner_tl}, br={inner_br}"
+            bevel_darkness(&inner, 35, 35) > bevel_darkness(&inner, 12, 12),
+            "the light comes from the upper left, so an inner bevel shades bottom-right"
         );
-        // Outer: the inverted height swaps the shadow to top-left.
         assert!(
-            outer_tl > outer_br,
-            "outer bevel shadow should swap to top-left: tl={outer_tl}, br={outer_br}"
+            bevel_darkness(&outer, 41, 41) > bevel_darkness(&outer, 5, 5),
+            "and an outer bevel shades the page just outside that same corner"
+        );
+        assert_eq!(
+            bevel_darkness(&outer, 22, 22),
+            0,
+            "with nothing at all inside the object"
         );
     }
 
@@ -6786,9 +6306,12 @@ mod tests {
             at_origin[0] > 230,
             "no fill at the un-offset box position; got {at_origin:?}"
         );
-        // Blur tail: a few px outside the hard offset rect (x≈45) is
-        // softer than dead centre but still darkened below paper.
-        let tail = at(&img, 45, 32);
+        // Blur tail: just outside the hard offset rect (x≈43) is
+        // softer than dead centre but still darkened below paper. The
+        // tail is one σ = Size/2 = 1.5 pt wide, InDesign's own mapping
+        // — it used to be sampled at 45, which is 2σ out and now sits
+        // in the last 1 % of the kernel.
+        let tail = at(&img, 43, 32);
         assert!(
             tail[0] < 250,
             "blur should leave a soft tail outside the offset rect; got {tail:?}"

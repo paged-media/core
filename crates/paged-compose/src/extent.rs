@@ -72,21 +72,21 @@
 //! |---|---|
 //! | `FillPath` / `FillPathBlend` / `FillPathOverprint` | path bbox |
 //! | `StrokePath` / `StrokePathOverprint` | bbox + half the weight (× the miter limit on a miter join) |
-//! | `DropShadow` | bbox + shadow offset, + `3σ + 1` |
-//! | `PathShadow` | as above with σ = `3.5 × blur_radius` (the glyph-shadow scale) |
+//! | `DropShadow` | bbox + shadow offset, + `3σ + 1`, σ = `Size / 2` |
+//! | `PathShadow` | as above with σ = `3.5 × Size` (the glyph-shadow scale) |
 //! | `Image` | the source pixel grid through `transform` |
-//! | `OuterGlow` | bbox + `3σ + spread + 1` |
+//! | `OuterGlow` | bbox + `3σ + Spread × Size + 1`, σ = `Size / 2` |
 //! | `Feather` | bbox + `3 × width + 1` |
 //! | `DirectionalFeather` | bbox + `3 × max edge width + 1` |
-//! | `BevelEmboss` | bbox + `3 × soften` (0 in the common case) |
+//! | `BevelEmboss` | bbox + the outer facet's width + `0.75 × soften` |
 //! | `InnerShadow` / `InnerGlow` / `Satin` | bbox — masked to the path interior |
 //! | `GradientFeather` | bbox — modulates alpha in place, adds no coverage |
 //! | `PushClip` / `PopClip` / bracket markers | nothing |
 //!
-//! `BevelEmboss` is the odd one: its shading is interior-masked, but
-//! `soften` blurs the shaded layer AFTERWARDS, so a nonzero soften does
-//! reach outside. It is capped by the rasterizer's own `3 × size + 2`
-//! scratch.
+//! `BevelEmboss` is the odd one: an INNER bevel's shading is
+//! interior-masked and claims only the bbox, but the outer and emboss
+//! styles lay a facet `Size` wide on the page outside the outline, and
+//! `soften` blurs whichever facet it is afterwards.
 
 use std::collections::HashMap;
 
@@ -377,12 +377,14 @@ fn painted_extent(
             transform,
             shadow,
         } => {
-            let sigma_scale = if matches!(cmd, C::PathShadow { .. }) {
-                3.5
+            // Mirrors the rasterizer: a rect-stamp shadow's σ is half
+            // its `Size`, a glyph PathShadow's is 3.5 × `Size`.
+            let sigma = if matches!(cmd, C::PathShadow { .. }) {
+                shadow.blur_radius.max(0.0) * 3.5
             } else {
-                1.0
+                crate::mask::outer_sigma_pt(shadow.blur_radius)
             };
-            let pad = 3.0 * shadow.blur_radius.max(0.0) * sigma_scale + 1.0;
+            let pad = 3.0 * sigma + 1.0;
             cache
                 .page(paths, *path_id, transform)
                 .map(|e| e.translate(shadow.offset_x, shadow.offset_y).inflate(pad))
@@ -412,7 +414,9 @@ fn painted_extent(
             transform,
             params,
         } => {
-            let pad = 3.0 * params.blur_radius.max(0.0) + params.spread.abs() + 1.0;
+            let pad = 3.0 * crate::mask::outer_sigma_pt(params.blur_radius)
+                + params.blur_radius.max(0.0) * params.spread.clamp(0.0, 1.0)
+                + 1.0;
             cache
                 .page(paths, *path_id, transform)
                 .map(|e| e.inflate(pad))
@@ -469,8 +473,11 @@ fn painted_extent(
             transform,
             params,
         } => {
-            let scratch = 3.0 * params.size.max(0.0) + 2.0;
-            let pad = (3.0 * params.soften.max(0.0)).min(scratch);
+            // An inner bevel stays inside the outline; the outer and
+            // emboss styles put a facet `Size` wide on the page around
+            // it, and `Soften` blurs whatever the facet is by a
+            // quarter of the slider.
+            let pad = crate::mask::bevel_outer_reach_pt(params) + 0.75 * params.soften.max(0.0);
             cache
                 .page(paths, *path_id, transform)
                 .map(|e| e.inflate(pad))
@@ -815,8 +822,9 @@ mod tests {
         );
         fit_transparency_group_bounds(&mut list);
         let b = group_bounds(&list, 0);
-        // 3σ + 1 = 19 pt of stamp pad, ±8 pt of offset, +0.5 AA.
-        let pad = 3.0 * 6.0 + 1.0;
+        // σ is half the `Size` InDesign writes, so 3σ + 1 = 10 pt of
+        // stamp pad, ±8 pt of offset, +0.5 AA.
+        let pad = 3.0 * crate::mask::outer_sigma_pt(6.0) + 1.0;
         assert!(
             b.x <= geom.x - pad + 8.0 && b.y <= geom.y - pad + 8.0,
             "shadow's leading edge must be inside the group: {b:?}"
@@ -959,7 +967,9 @@ mod tests {
             transform: Transform::for_rect_in(geom, Transform::IDENTITY),
             params: crate::display_list::OuterGlow {
                 blur_radius: 6.0,
-                spread: 3.0,
+                // Spread is a FRACTION of Size, so half of a 6 pt glow
+                // is 3 pt of hard growth and 1.5 pt of σ left over.
+                spread: 0.5,
                 ..crate::display_list::OuterGlow::default_soft()
             },
         });
@@ -967,8 +977,8 @@ mod tests {
             .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
         fit_transparency_group_bounds(&mut list);
         let b = group_bounds(&list, 0);
-        // 3σ + spread + 1 = 22 pt.
-        assert!(b.x <= 50.0 - 22.0 && b.x + b.w >= 70.0 + 22.0, "{b:?}");
+        // 3σ + Spread × Size + 1 = 8.5 pt.
+        assert!(b.x <= 50.0 - 8.5 && b.x + b.w >= 70.0 + 8.5, "{b:?}");
     }
 
     /// Content clipped away doesn't grow the group — the clip is what

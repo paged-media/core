@@ -218,14 +218,35 @@ fn pct_to_unit(pct: Option<f32>, default: f32) -> f32 {
     pct.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(default)
 }
 
-/// Compute `(x_offset, y_offset)` from `(angle_deg, distance)` using
-/// IDML's screen-down Y convention: `x = distance * cos(angle)`,
-/// `y = -distance * sin(angle)` (a 90° angle points up the page, so
-/// the Y component flips relative to math convention).
+/// Map a percentage that is allowed to exceed 100 % to its multiple,
+/// clamped at InDesign's own ceiling. `Depth` is the one such knob:
+/// its slider runs to 1000 %, and passing it through [`pct_to_unit`]
+/// silently pinned every strong bevel — the annual's 120 % included —
+/// back to 1.0.
+fn pct_to_scale(pct: Option<f32>, default: f32) -> f32 {
+    pct.map(|p| (p / 100.0).clamp(0.0, 10.0)).unwrap_or(default)
+}
+
+/// Compute `(x_offset, y_offset)` from `(angle_deg, distance)`.
+///
+/// IDML's `Angle` is where the LIGHT comes from, so the shadow falls
+/// the other way: `x = −distance · cos(angle)`, `y = +distance ·
+/// sin(angle)` in the page's y-down coordinates. Asked directly,
+/// InDesign 20.0.1 computes exactly that — `Angle = 180` (light from
+/// the left) with `Distance = 10` reports `xOffset = +10`, and
+/// `Angle = 90` (light from above) reports `yOffset = +10`, i.e. the
+/// shadow drops down the page.
+///
+/// This used to be the negative of that on both axes, so every effect
+/// whose IDML gives only `Angle`/`Distance` was cast on the wrong side.
+/// The corpus never caught it: InDesign writes explicit
+/// `XOffset`/`YOffset` for the fixtures' drop and inner shadows, and
+/// satin's two offsets are symmetric, so the polar path is only taken
+/// by files InDesign wrote — like the annual.
 fn polar_to_offset(angle_deg: f32, distance: f32) -> (f32, f32) {
     let rad = angle_deg.to_radians();
     let (sin, cos) = rad.sin_cos();
-    (distance * cos, -distance * sin)
+    (-distance * cos, distance * sin)
 }
 
 fn inner_shadow_from_parser(
@@ -337,9 +358,9 @@ fn bevel_emboss_from_parser(
         _ => BevelTechnique::Smooth,
     };
     ComposeBevelEmboss {
-        // Depth is a 0..=100 IDML percentage; the rasterizer's bump
-        // strength is a 0..=1 multiplier (1.0 = "100% depth").
-        depth: pct_to_unit(p.depth_pct, 1.0),
+        // Depth is an IDML percentage that runs to 1000 %; the
+        // rasterizer's contrast multiplier is 1.0 at "100% depth".
+        depth: pct_to_scale(p.depth_pct, 1.0),
         size: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         angle_deg: p.angle_deg.unwrap_or(120.0),
         altitude_deg: p.altitude_deg.unwrap_or(30.0),
@@ -539,6 +560,38 @@ impl BlendModeDefault for BlendMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shadow_falls_away_from_the_light_the_angle_names() {
+        // Asked directly, InDesign 20.0.1 turns Angle/Distance into
+        // xOffset/yOffset like this: 180° (light from the left) gives
+        // (+d, 0), and 90° (light from above) gives (0, +d), i.e. the
+        // shadow drops DOWN the y-down page. We had both axes negated,
+        // so every effect whose IDML omits XOffset/YOffset — which is
+        // what InDesign writes for an inner shadow — was cast on the
+        // wrong side.
+        let near = |a: (f32, f32), b: (f32, f32)| {
+            assert!(
+                (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3,
+                "{a:?} vs {b:?}"
+            );
+        };
+        near(polar_to_offset(180.0, 10.0), (10.0, 0.0));
+        near(polar_to_offset(0.0, 10.0), (-10.0, 0.0));
+        near(polar_to_offset(90.0, 10.0), (0.0, 10.0));
+        near(polar_to_offset(-90.0, 10.0), (0.0, -10.0));
+        near(polar_to_offset(135.0, 10.0), (7.071_068, 7.071_068));
+    }
+
+    #[test]
+    fn depth_is_a_multiple_not_a_fraction() {
+        // InDesign's Depth slider runs to 1000 %. Passing it through
+        // the 0..=1 percentage helper pinned the annual's 120 % bevel
+        // — and every stronger one — back to 100 %.
+        assert_eq!(pct_to_scale(Some(120.0), 1.0), 1.2);
+        assert_eq!(pct_to_scale(Some(1000.0), 1.0), 10.0);
+        assert_eq!(pct_to_unit(Some(120.0), 1.0), 1.0);
+    }
 
     #[test]
     fn a_gradient_feather_with_no_stops_is_indesigns_default_fade() {

@@ -71,10 +71,10 @@
     {
       "name": "effects",
       "max_pages_with_pdf": 12,
-      "max_mean_de": 0.42,
-      "max_p99_de": 6.5,
-      "min_ssim": 0.99,
-      "rationale": "worst page mean\u0394E 0.334 / p99 5.349 / SSIM 0.993 (p12, feathers). All three at >80% of budget \u2014 keep. Feather + drop-shadow pages dominate; SSIM stays high because pixels are spread across a smooth gradient."
+      "max_mean_de": 0.15,
+      "max_p99_de": 1.0,
+      "min_ssim": 0.992,
+      "rationale": "worst page mean\u0394E 0.113 / p99 0.737 / SSIM 0.994 (p12). Tightened 2026-09-06 from 0.42 / 6.5 / 0.99 after the soft effects were calibrated against InDesign 20.0.1: `Size` is the WIDTH of an effect's band, not a Gaussian \u03c3 (\u03c3 = Size/2 outside the outline, 0.4\u00d7Size inside), and Choke/Spread are fractions of it. p10\u2013p12 went mean 0.170/0.195/0.345 \u2192 0.100/0.112/0.113 and p99 3.9/4.7/5.3 \u2192 0.63/0.71/0.74. ~1.3\u00d7 headroom over the new worst page."
     },
     {
       "name": "gradients",

@@ -154,11 +154,11 @@ pub fn blurred_alpha_stamp(
     blur_radius_pt: f32,
     dpi: f32,
 ) -> Option<AlphaStamp> {
-    // σ = half the IDML blur radius, the value this lane has always
-    // used. (The CPU rasterizer takes σ = the radius for the same
-    // command, so PDF shadows are crisper than canvas ones; aligning
-    // them is a separate, visible change.)
-    let sigma_pt = blur_radius_pt.max(0.01) * 0.5;
+    // σ = half the IDML `Size`, which is what InDesign itself draws:
+    // its shadow reads Φ(−1) at Size/2 outside the outline and Φ(−2)
+    // at Size. This lane always had it right; the CPU rasterizer took
+    // σ = Size and drew shadows twice as soft, and now shares this.
+    let sigma_pt = paged_compose::mask::outer_sigma_pt(blur_radius_pt.max(0.01));
     let grid = Grid::for_path(path, transform, sigma_pt * 3.0, dpi)?;
     let mut mask = MaskRaster::interior(grid, path, transform, (0.0, 0.0));
     mask.blur(sigma_pt);
