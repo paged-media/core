@@ -2081,6 +2081,7 @@ fn measure_cell_paragraph(
                 resolved_runs[i].ligatures_on,
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
+                resolved_runs[i].capitalization.as_deref(),
             ),
         })
         .collect();
@@ -2314,6 +2315,7 @@ pub(super) fn emit_cell_paragraph(
                 resolved_runs[i].ligatures_on,
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
+                resolved_runs[i].capitalization.as_deref(),
             ),
         })
         .collect();

@@ -26,6 +26,7 @@
 
 pub mod cache;
 pub mod compose;
+pub(crate) mod first_fit;
 pub mod frame_shape;
 pub mod hyphenate;
 pub mod layout;
@@ -38,7 +39,7 @@ pub use compose::{
     ComposedLine, DropCapComposition, DropCapSpec, HarfrustMeasurer, MonospaceMeasurer, TextShaper,
 };
 pub use frame_shape::{cubic_steps_for_tolerance, flatten_cubic, Contour, FrameShape};
-pub use hyphenate::{Hyphenator, Language};
+pub use hyphenate::{HyphenationLimits, Hyphenator, Language, SOFT_HYPHEN};
 pub use layout::{
     apply_bidi_reorder, layout_paragraph, layout_runs, position_line, Alignment, BidiDirection,
     LaidOutLine, LaidOutParagraph, LayoutOptions, PositionedGlyph, StyledRun,
@@ -46,5 +47,5 @@ pub use layout::{
 pub use shape::{
     apply_optical_margin, apply_tracking, optical_margin_offset, shape_run,
     shape_run_with_features, Face, FigureStyle, KerningMethod, MarginSide, ShapedGlyph, ShapedRun,
-    ShapingFeatures, Variation,
+    ShapingFeatures, SmallCaps, Variation,
 };

@@ -202,6 +202,41 @@ pub struct ShapingFeatures {
     /// `OTFStylisticSets` bitfield. Bit `i` (0-based) enables `ss{i+1}`
     /// (`ss01`..`ss20`). `0` ⇒ no stylistic set.
     pub stylistic_sets: u32,
+    /// `Capitalization`, for the two values that are a shaping
+    /// question rather than a text transform.
+    pub small_caps: SmallCaps,
+}
+
+/// InDesign's small-capital settings, as OpenType features.
+///
+/// `SmallCaps` turns lowercase into small capitals (`smcp`) and leaves
+/// existing capitals full height; `CapToSmallCap` also shrinks the
+/// capitals (`c2sc`), so the whole run is small. Both were passed
+/// through unchanged before, on the grounds that uppercasing them gave
+/// a row of full-height capitals where the IDML asked for the
+/// capital-tall / small-tall rhythm — true, but the fix was the OT
+/// feature, not doing nothing. Fonts without `smcp` still render
+/// unchanged: the shaper drops a feature the font does not define.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SmallCaps {
+    /// `Capitalization="Normal"` / `"AllCaps"` — no small-cap feature.
+    #[default]
+    None,
+    /// `Capitalization="SmallCaps"` — `smcp`.
+    Lowercase,
+    /// `Capitalization="CapToSmallCap"` — `smcp` + `c2sc`.
+    All,
+}
+
+impl SmallCaps {
+    /// Map an IDML `Capitalization` value.
+    pub fn from_idml(s: Option<&str>) -> Self {
+        match s {
+            Some("SmallCaps") => SmallCaps::Lowercase,
+            Some("CapToSmallCap") => SmallCaps::All,
+            _ => SmallCaps::None,
+        }
+    }
 }
 
 /// OpenType digit (figure) style. Maps to a lining/oldstyle pair
@@ -283,6 +318,7 @@ impl Default for ShapingFeatures {
             slashed_zero: false,
             titling: false,
             contextual_alternates: true,
+            small_caps: SmallCaps::None,
             figure_style: FigureStyle::Default,
             stylistic_sets: 0,
         }
@@ -334,6 +370,14 @@ impl ShapingFeatures {
         }
         if let Some(t) = width_tag {
             on(&mut out, t);
+        }
+        match self.small_caps {
+            SmallCaps::None => {}
+            SmallCaps::Lowercase => on(&mut out, b"smcp"),
+            SmallCaps::All => {
+                on(&mut out, b"smcp");
+                on(&mut out, b"c2sc");
+            }
         }
         // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. The shaper needs a
         // 4-byte tag per set, so format `ss01`..`ss20` (the OpenType
@@ -774,6 +818,38 @@ mod tests {
 
     fn has_tag_on(features: &[harfrust::Feature], tag: &str) -> bool {
         features.iter().any(|f| f.tag == tag && f.value == 1)
+    }
+
+    #[test]
+    fn small_caps_asks_the_font_for_its_small_capitals() {
+        // `Capitalization="SmallCaps"` is a shaping request, not a
+        // text transform: uppercasing the run gives full-height
+        // capitals where InDesign shows capital-tall + small-tall.
+        let mut f = ShapingFeatures::default();
+        assert!(f.to_harfrust().is_empty(), "Normal asks for no feature");
+        f.small_caps = SmallCaps::Lowercase;
+        let tags = tag_pairs(&f.to_harfrust());
+        assert_eq!(tags, vec![("smcp".to_string(), 1)]);
+        f.small_caps = SmallCaps::All;
+        let tags = tag_pairs(&f.to_harfrust());
+        assert_eq!(
+            tags,
+            vec![("smcp".to_string(), 1), ("c2sc".to_string(), 1)],
+            "CapToSmallCap shrinks the capitals too"
+        );
+    }
+
+    #[test]
+    fn small_caps_maps_from_the_idml_capitalization_values() {
+        assert_eq!(
+            SmallCaps::from_idml(Some("SmallCaps")),
+            SmallCaps::Lowercase
+        );
+        assert_eq!(SmallCaps::from_idml(Some("CapToSmallCap")), SmallCaps::All);
+        // AllCaps is an uppercase transform upstream, not a feature.
+        assert_eq!(SmallCaps::from_idml(Some("AllCaps")), SmallCaps::None);
+        assert_eq!(SmallCaps::from_idml(Some("Normal")), SmallCaps::None);
+        assert_eq!(SmallCaps::from_idml(None), SmallCaps::None);
     }
 
     #[test]

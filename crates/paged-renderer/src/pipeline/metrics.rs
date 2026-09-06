@@ -75,6 +75,7 @@ pub fn shaping_features_from(
     ligatures_on: Option<bool>,
     kerning_method: Option<&str>,
     otf: &paged_model::OtfFeatures,
+    capitalization: Option<&str>,
 ) -> paged_text::ShapingFeatures {
     use paged_text::KerningMethod as K;
     paged_text::ShapingFeatures {
@@ -99,6 +100,10 @@ pub fn shaping_features_from(
         figure_style: paged_text::FigureStyle::from_idml(otf.figure_style.as_deref()),
         // Negative / absent bitfields ⇒ no stylistic set.
         stylistic_sets: otf.stylistic_sets.unwrap_or(0).max(0) as u32,
+        // `SmallCaps` / `CapToSmallCap` are shaping, not a text
+        // transform: `AllCaps` is uppercased upstream, these two ask
+        // the font for its small-capital glyphs.
+        small_caps: paged_text::SmallCaps::from_idml(capitalization),
     }
 }
 

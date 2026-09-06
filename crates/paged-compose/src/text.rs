@@ -336,6 +336,7 @@ mod tests {
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
+                hyphenation_limits: paged_text::HyphenationLimits::default(),
                 hyphenation_zone: 0,
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,

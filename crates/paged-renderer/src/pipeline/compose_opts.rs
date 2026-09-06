@@ -60,6 +60,46 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     } else {
         zone_64
     };
+    // The paragraph's own hyphenation limits. IDML's factory values
+    // (2 / 2 / 5, capitalised and last words hyphenatable) stand in
+    // where an attribute is absent — those were hard-coded in the
+    // composer until the attributes were modelled, so a paragraph that
+    // asked for four letters before the hyphen, or protected its
+    // capitalised words, got the defaults anyway.
+    let d = paged_text::HyphenationLimits::default();
+    lopts.compose.hyphenation_limits = paged_text::HyphenationLimits {
+        after_first: resolved
+            .hyphenate_after_first
+            .map(|n| n as usize)
+            .unwrap_or(d.after_first),
+        before_last: resolved
+            .hyphenate_before_last
+            .map(|n| n as usize)
+            .unwrap_or(d.before_last),
+        words_longer_than: resolved
+            .hyphenate_words_longer_than
+            .map(|n| n as usize)
+            .unwrap_or(d.words_longer_than),
+        capitalized_words: resolved
+            .hyphenate_capitalized_words
+            .unwrap_or(d.capitalized_words),
+        last_word: resolved.hyphenate_last_word.unwrap_or(d.last_word),
+        ladder_limit: resolved
+            .hyphenate_ladder_limit
+            .map(|n| n as usize)
+            .unwrap_or(d.ladder_limit),
+    };
+    // `HyphenWeight` is InDesign's "Better Spacing ↔ Fewer Hyphens"
+    // slider (0..=10, default 5). It trades line-fit quality against
+    // hyphen count, which is exactly what Knuth–Plass's hyphen penalty
+    // does — so map the slider onto the penalty: 0 (better spacing)
+    // makes a hyphen nearly free, 10 (fewer hyphens) makes it costly.
+    // The scale is a straight line through the composer's existing
+    // default of 50 at the slider's own default of 5; calibrating it
+    // against measured InDesign hyphen counts is still open.
+    if let Some(w) = resolved.hyphen_weight {
+        lopts.compose.hyphen_penalty = (w.min(10) as i32) * 10;
+    }
     // Word spacing: IDML carries percentages on the [Min..=Desired..=Max]
     // axis relative to the natural space-glyph advance. The composer's
     // `desired_space_ratio` scales the glue's natural width;

@@ -206,6 +206,12 @@ pub struct ComposeOptions<'a> {
     /// opportunity. Knuth-Plass convention: 50 = mildly penalised,
     /// 100 = costly. Only consulted when `hyphenator` is set.
     pub hyphen_penalty: i32,
+    /// The paragraph's own hyphenation limits (`HyphenateAfterFirst`
+    /// and friends). Only consulted when `hyphenator` is set; the
+    /// default is InDesign's factory 2 / 2 / 5 with capitalised and
+    /// last words hyphenatable, which is what the composer hard-coded
+    /// before the attributes were modelled.
+    pub hyphenation_limits: crate::hyphenate::HyphenationLimits,
     /// InDesign's "hyphenation zone" in 1/64 pt. A word is only
     /// hyphenation-eligible when its start would fall *before*
     /// `column_width - hyphenation_zone` (measured from the line's
@@ -277,6 +283,7 @@ impl ComposeOptions<'_> {
             shrink_ratio: 0.2,
             desired_space_ratio: 1.0,
             hyphenator: None,
+            hyphenation_limits: crate::hyphenate::HyphenationLimits::default(),
             hyphen_penalty: 50,
             hyphenation_zone: 0,
             kinsoku_enforce: false,
@@ -689,7 +696,10 @@ pub fn compose_paragraph(
             }
             Some(h) => {
                 let mut seg_start = 0usize;
-                for offset in h.opportunities(word_text) {
+                let is_last_word = i + 1 == words.len();
+                for offset in
+                    h.opportunities_for(word_text, &options.hyphenation_limits, is_last_word)
+                {
                     if offset <= seg_start || offset >= word_text.len() {
                         continue;
                     }
@@ -827,6 +837,13 @@ pub fn compose_paragraph(
                 break;
             }
         }
+    }
+    // Still nothing feasible — a token wider than the measure. Greedy
+    // first-fit keeps the text visible AND packed, the same last resort
+    // the multi-run path takes; this path had none, so a paragraph that
+    // defeated the breaker here simply vanished.
+    if breaks.is_empty() && !items.is_empty() {
+        breaks = crate::first_fit::first_fit_breaks(&items, lengths);
     }
 
     // Translate Breakpoints (item indices) into byte ranges. A break

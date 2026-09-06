@@ -741,7 +741,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         let breaks: Vec<usize> = match (opts.hyphenator, single_run) {
             (Some(h), Some(_)) if zone_allows_hyphenation => {
                 let word_text = &paragraph_text[w.start..w.end];
-                h.opportunities(word_text)
+                h.opportunities_for(word_text, &opts.hyphenation_limits, i + 1 == words.len())
                     .into_iter()
                     .filter(|&b| b > 0 && b < word_text.len())
                     .map(|b| w.start + b)
@@ -896,37 +896,15 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             .collect();
         breaks = paragraph_breaker::total_fit(&filled, lengths, 1_000.0, opts.looseness);
     }
-    // P-17: when even the loosest tolerance can't break (typically a
-    // single token wider than every column width), synthesise one
-    // breakpoint per Box so each "word" emits as its own line. The
-    // resulting glyphs overflow the right edge — same as InDesign's
-    // headline-overflow behaviour — instead of the whole paragraph
-    // disappearing.
+    // When even the loosest tolerance finds no feasible set of breaks
+    // — a single token wider than the measure, which is exactly what an
+    // auto-sizing fit bisects toward — fall back to greedy first-fit.
+    // It packs what fits and splits a word only when the word alone
+    // does not fit, which is what InDesign's composer does; the older
+    // fallback put every Box on its own line, so a HeightAndWidth frame
+    // came out 44 fragment lines against InDesign's 35.
     if breaks.is_empty() && !items.is_empty() {
-        let mut fallback: Vec<Breakpoint> = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            if matches!(item, Item::Box { .. }) {
-                fallback.push(Breakpoint {
-                    index: i,
-                    ratio: 0.0,
-                    width: 0,
-                });
-            }
-        }
-        // Final forced break (the paragraph-end Penalty entry).
-        if let Some((last_idx, _)) = items
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, it)| matches!(it, Item::Penalty { .. }))
-        {
-            fallback.push(Breakpoint {
-                index: last_idx,
-                ratio: 0.0,
-                width: 0,
-            });
-        }
-        breaks = fallback;
+        breaks = crate::first_fit::first_fit_breaks(&items, lengths);
     }
 
     // 4. For each chosen line, walk `flat` in cluster order and pull
@@ -1673,6 +1651,7 @@ mod tests {
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
+                hyphenation_limits: crate::hyphenate::HyphenationLimits::default(),
                 hyphenation_zone: 0,
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,
@@ -1807,19 +1786,23 @@ mod tests {
             out_floored.lines.len()
         );
 
-        // Raw failure case: stretch=0.0 either collapses to one word
-        // per line (12) or drops the paragraph entirely (0). Neither
-        // is acceptable rendered output — that's why the pipeline
-        // applies the floor.
+        // Raw failure case: with stretch = 0 the breaker finds no
+        // feasible set of breaks at any tolerance. It used to drop the
+        // paragraph or collapse it to one word per line — the reason
+        // the pipeline floors the ratio. Greedy first-fit now catches
+        // that fall (W5), so the raw input degrades GRACEFULLY: the
+        // same healthy wrap, just chosen greedily rather than
+        // optimally. The floor still earns its place — it keeps the
+        // total-fit path in play, and first-fit is a last resort, not
+        // a line-breaking policy.
         let mut raw = opts(40, Alignment::Left);
         raw.compose.desired_space_ratio = 1.0;
         raw.compose.stretch_ratio = 0.0;
         raw.compose.shrink_ratio = 0.1;
         let out_raw = layout_paragraph(text, &shaper, &raw);
-        let raw_degraded = out_raw.lines.is_empty() || out_raw.lines.len() >= 10;
         assert!(
-            raw_degraded,
-            "expected zero-stretch input to degrade (0 or many lines) so the floor is justified; got {} lines",
+            !out_raw.lines.is_empty() && out_raw.lines.len() <= 4,
+            "the greedy fallback should keep zero-stretch wrap healthy, got {} lines",
             out_raw.lines.len()
         );
     }

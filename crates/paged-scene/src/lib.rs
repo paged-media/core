@@ -461,9 +461,11 @@ impl Document {
         if let Some(id) = run.character_style.as_deref() {
             acc.merge_below_character(&self.styles.resolve_character(id));
         }
-        if let Some(id) = paragraph.paragraph_style.as_deref() {
-            acc.merge_below_paragraph(&self.styles.resolve_paragraph(id));
-        }
+        acc.merge_below_paragraph(
+            &self
+                .styles
+                .resolve_paragraph(applied_paragraph_style(paragraph)),
+        );
         acc
     }
 
@@ -472,9 +474,11 @@ impl Document {
     /// styles don't carry paragraph attrs in IDML.
     pub fn resolved_paragraph_attrs(&self, paragraph: &Paragraph) -> ResolvedParagraphAttrs {
         let mut acc = ResolvedParagraphAttrs::from_paragraph(paragraph);
-        if let Some(id) = paragraph.paragraph_style.as_deref() {
-            acc.merge_below(&self.styles.resolve_paragraph(id));
-        }
+        acc.merge_below(
+            &self
+                .styles
+                .resolve_paragraph(applied_paragraph_style(paragraph)),
+        );
         acc
     }
 
@@ -1054,8 +1058,19 @@ impl ResolvedParagraphAttrs {
             applied_numbering_list: paragraph.applied_numbering_list.clone(),
             // styles.next-style is style-level only (no inline form).
             next_style: None,
-            hyphenation: None,
-            hyphenation_zone: None,
+            // The importer reads `Hyphenation` and the limits off the
+            // `<ParagraphStyleRange>` itself; hardcoding None here threw
+            // every inline override away before the composer saw it.
+            hyphenation: paragraph.hyphenation,
+            hyphenation_zone: paragraph.hyphenation_zone,
+            hyphenate_after_first: paragraph.hyphenate_after_first,
+            hyphenate_before_last: paragraph.hyphenate_before_last,
+            hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
+            hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
+            hyphenate_last_word: paragraph.hyphenate_last_word,
+            hyphenate_across_columns: paragraph.hyphenate_across_columns,
+            hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
+            hyphen_weight: paragraph.hyphen_weight,
             applied_language: None,
             minimum_word_spacing: None,
             desired_word_spacing: None,
@@ -1137,6 +1152,19 @@ impl ResolvedParagraphAttrs {
         }
         self.hyphenation = self.hyphenation.or(p.hyphenation);
         self.hyphenation_zone = self.hyphenation_zone.or(p.hyphenation_zone);
+        self.hyphenate_after_first = self.hyphenate_after_first.or(p.hyphenate_after_first);
+        self.hyphenate_before_last = self.hyphenate_before_last.or(p.hyphenate_before_last);
+        self.hyphenate_words_longer_than = self
+            .hyphenate_words_longer_than
+            .or(p.hyphenate_words_longer_than);
+        self.hyphenate_capitalized_words = self
+            .hyphenate_capitalized_words
+            .or(p.hyphenate_capitalized_words);
+        self.hyphenate_last_word = self.hyphenate_last_word.or(p.hyphenate_last_word);
+        self.hyphenate_across_columns =
+            self.hyphenate_across_columns.or(p.hyphenate_across_columns);
+        self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(p.hyphenate_ladder_limit);
+        self.hyphen_weight = self.hyphen_weight.or(p.hyphen_weight);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
         }
@@ -1437,6 +1465,17 @@ pub struct ResolvedParagraphAttrs {
     /// Suppresses hyphenation for words that would otherwise start
     /// within this distance of the right margin. `None`/`0` ⇒ no zone
     /// restriction. See [`paged_model::ResolvedParagraph::hyphenation_zone`].
+    /// The paragraph's hyphenation limits, cascaded. See
+    /// [`paged_model::ResolvedParagraph::hyphenate_after_first`] and
+    /// its siblings; `None` everywhere means InDesign's defaults.
+    pub hyphenate_after_first: Option<u32>,
+    pub hyphenate_before_last: Option<u32>,
+    pub hyphenate_words_longer_than: Option<u32>,
+    pub hyphenate_capitalized_words: Option<bool>,
+    pub hyphenate_last_word: Option<bool>,
+    pub hyphenate_across_columns: Option<bool>,
+    pub hyphenate_ladder_limit: Option<u32>,
+    pub hyphen_weight: Option<u32>,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
@@ -1502,6 +1541,22 @@ pub struct ResolvedParagraphAttrs {
     /// text against this list to override the character style on
     /// leading byte ranges.
     pub nested_styles: Vec<paged_model::NestedStyle>,
+}
+
+/// IDML's `AppliedParagraphStyle` is OPTIONAL, and a range without one
+/// is not unstyled: InDesign applies `[No paragraph style]`, which
+/// carries the document's default font, size and colour.
+///
+/// Reading the absent attribute as "no cascade" left such runs with no
+/// font at all, so they shaped to nothing and their paragraphs
+/// composed zero lines — the annual's poured DOCX report (page 116,
+/// 29 paragraphs, every range bare) rendered as an empty table grid
+/// while InDesign set the whole story.
+fn applied_paragraph_style(paragraph: &Paragraph) -> &str {
+    paragraph
+        .paragraph_style
+        .as_deref()
+        .unwrap_or("ParagraphStyle/$ID/[No paragraph style]")
 }
 
 #[cfg(test)]
@@ -2064,5 +2119,76 @@ mod tests {
         }
 
         assert_eq!(acc.fill_color.as_deref(), Some("Color/Paper"));
+    }
+
+    #[test]
+    fn a_paragraph_with_no_applied_style_inherits_no_paragraph_style() {
+        // IDML's `AppliedParagraphStyle` is optional. InDesign reads an
+        // absent one as `[No paragraph style]`, which carries the
+        // document's default font and size; reading it as "no cascade"
+        // left the run with NO font, so it shaped to nothing and the
+        // paragraph composed zero lines.
+        use paged_model::{ParagraphStyleDef, StyleSheet};
+
+        let mut styles = StyleSheet::default();
+        styles.paragraph_styles.insert(
+            "ParagraphStyle/$ID/[No paragraph style]".to_string(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/$ID/[No paragraph style]".to_string(),
+                font: Some("Open Sans".to_string()),
+                point_size: Some(12.0),
+                fill_color: Some("Color/Black".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let bare = Paragraph {
+            paragraph_style: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            applied_paragraph_style(&bare),
+            "ParagraphStyle/$ID/[No paragraph style]"
+        );
+        let mut acc = ResolvedRunAttrs::from_run(&CharacterRun::default());
+        acc.merge_below_paragraph(&styles.resolve_paragraph(applied_paragraph_style(&bare)));
+        assert_eq!(acc.font.as_deref(), Some("Open Sans"));
+        assert_eq!(acc.point_size, Some(12.0));
+        assert_eq!(acc.fill_color.as_deref(), Some("Color/Black"));
+    }
+
+    #[test]
+    fn an_applied_paragraph_style_still_wins_over_the_default() {
+        use paged_model::{ParagraphStyleDef, StyleSheet};
+
+        let mut styles = StyleSheet::default();
+        styles.paragraph_styles.insert(
+            "ParagraphStyle/$ID/[No paragraph style]".to_string(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/$ID/[No paragraph style]".to_string(),
+                font: Some("Open Sans".to_string()),
+                point_size: Some(12.0),
+                ..Default::default()
+            },
+        );
+        styles.paragraph_styles.insert(
+            "ParagraphStyle/Body".to_string(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/Body".to_string(),
+                font: Some("EB Garamond".to_string()),
+                point_size: Some(9.5),
+                ..Default::default()
+            },
+        );
+
+        let styled = Paragraph {
+            paragraph_style: Some("ParagraphStyle/Body".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(applied_paragraph_style(&styled), "ParagraphStyle/Body");
+        let mut acc = ResolvedRunAttrs::from_run(&CharacterRun::default());
+        acc.merge_below_paragraph(&styles.resolve_paragraph(applied_paragraph_style(&styled)));
+        assert_eq!(acc.font.as_deref(), Some("EB Garamond"));
+        assert_eq!(acc.point_size, Some(9.5));
     }
 }

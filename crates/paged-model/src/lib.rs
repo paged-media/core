@@ -3515,6 +3515,30 @@ pub struct ParagraphStyleDef {
     /// hyphens (more raggedness tolerated); `0` ⇒ no zone restriction
     /// (the breaker may hyphenate anywhere). Only consulted for
     /// left-aligned / ragged paragraphs in InDesign; `None` ⇒ inherit.
+    /// `HyphenateAfterFirst` — the fewest letters a hyphen may leave at
+    /// the END of a line. InDesign's default is 2.
+    pub hyphenate_after_first: Option<u32>,
+    /// `HyphenateBeforeLast` — the fewest letters a hyphen may carry to
+    /// the NEXT line. InDesign's default is 2.
+    pub hyphenate_before_last: Option<u32>,
+    /// `HyphenateWordsLongerThan` — shorter words are never broken.
+    /// InDesign's default is 5.
+    pub hyphenate_words_longer_than: Option<u32>,
+    /// `HyphenateCapitalizedWords` — when false, a word starting with a
+    /// capital is left whole. InDesign's default is true.
+    pub hyphenate_capitalized_words: Option<bool>,
+    /// `HyphenateLastWord` — when false, the paragraph's last word is
+    /// left whole. InDesign's default is true.
+    pub hyphenate_last_word: Option<bool>,
+    /// `HyphenateAcrossColumns` — round-tripped only; the composer
+    /// never sees column boundaries (the emitter places lines after it).
+    pub hyphenate_across_columns: Option<bool>,
+    /// `HyphenateLadderLimit` — the most consecutive lines that may end
+    /// in a hyphen. `0` means unlimited. InDesign's default is 3.
+    pub hyphenate_ladder_limit: Option<u32>,
+    /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
+    /// hyphens" slider. Maps onto the breaker's hyphen penalty.
+    pub hyphen_weight: Option<u32>,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
@@ -3755,6 +3779,30 @@ pub struct ResolvedParagraph {
     /// Cascaded `HyphenationZone` in pt. See
     /// [`ParagraphStyleDef::hyphenation_zone`].
     pub hyphenation_zone: Option<f32>,
+    /// `HyphenateAfterFirst` — the fewest letters a hyphen may leave at
+    /// the END of a line. InDesign's default is 2.
+    pub hyphenate_after_first: Option<u32>,
+    /// `HyphenateBeforeLast` — the fewest letters a hyphen may carry to
+    /// the NEXT line. InDesign's default is 2.
+    pub hyphenate_before_last: Option<u32>,
+    /// `HyphenateWordsLongerThan` — shorter words are never broken.
+    /// InDesign's default is 5.
+    pub hyphenate_words_longer_than: Option<u32>,
+    /// `HyphenateCapitalizedWords` — when false, a word starting with a
+    /// capital is left whole. InDesign's default is true.
+    pub hyphenate_capitalized_words: Option<bool>,
+    /// `HyphenateLastWord` — when false, the paragraph's last word is
+    /// left whole. InDesign's default is true.
+    pub hyphenate_last_word: Option<bool>,
+    /// `HyphenateAcrossColumns` — round-tripped only; the composer
+    /// never sees column boundaries (the emitter places lines after it).
+    pub hyphenate_across_columns: Option<bool>,
+    /// `HyphenateLadderLimit` — the most consecutive lines that may end
+    /// in a hyphen. `0` means unlimited. InDesign's default is 3.
+    pub hyphenate_ladder_limit: Option<u32>,
+    /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
+    /// hyphens" slider. Maps onto the breaker's hyphen penalty.
+    pub hyphen_weight: Option<u32>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -4034,6 +4082,20 @@ impl ResolvedParagraph {
         }
         self.hyphenation = self.hyphenation.or(def.hyphenation);
         self.hyphenation_zone = self.hyphenation_zone.or(def.hyphenation_zone);
+        self.hyphenate_after_first = self.hyphenate_after_first.or(def.hyphenate_after_first);
+        self.hyphenate_before_last = self.hyphenate_before_last.or(def.hyphenate_before_last);
+        self.hyphenate_words_longer_than = self
+            .hyphenate_words_longer_than
+            .or(def.hyphenate_words_longer_than);
+        self.hyphenate_capitalized_words = self
+            .hyphenate_capitalized_words
+            .or(def.hyphenate_capitalized_words);
+        self.hyphenate_last_word = self.hyphenate_last_word.or(def.hyphenate_last_word);
+        self.hyphenate_across_columns = self
+            .hyphenate_across_columns
+            .or(def.hyphenate_across_columns);
+        self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(def.hyphenate_ladder_limit);
+        self.hyphen_weight = self.hyphen_weight.or(def.hyphen_weight);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -4233,6 +4295,32 @@ pub struct Paragraph {
     /// today; W0.2 surfaces this per-paragraph override via the
     /// mutate API.
     pub hyphenation: Option<bool>,
+    /// `HyphenationZone` override on the range, in pt.
+    pub hyphenation_zone: Option<f32>,
+    /// `HyphenateAfterFirst` — the fewest letters a hyphen may leave at
+    /// the END of a line. InDesign's default is 2.
+    pub hyphenate_after_first: Option<u32>,
+    /// `HyphenateBeforeLast` — the fewest letters a hyphen may carry to
+    /// the NEXT line. InDesign's default is 2.
+    pub hyphenate_before_last: Option<u32>,
+    /// `HyphenateWordsLongerThan` — shorter words are never broken.
+    /// InDesign's default is 5.
+    pub hyphenate_words_longer_than: Option<u32>,
+    /// `HyphenateCapitalizedWords` — when false, a word starting with a
+    /// capital is left whole. InDesign's default is true.
+    pub hyphenate_capitalized_words: Option<bool>,
+    /// `HyphenateLastWord` — when false, the paragraph's last word is
+    /// left whole. InDesign's default is true.
+    pub hyphenate_last_word: Option<bool>,
+    /// `HyphenateAcrossColumns` — round-tripped only; the composer
+    /// never sees column boundaries (the emitter places lines after it).
+    pub hyphenate_across_columns: Option<bool>,
+    /// `HyphenateLadderLimit` — the most consecutive lines that may end
+    /// in a hyphen. `0` means unlimited. InDesign's default is 3.
+    pub hyphenate_ladder_limit: Option<u32>,
+    /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
+    /// hyphens" slider. Maps onto the breaker's hyphen penalty.
+    pub hyphen_weight: Option<u32>,
     /// `KeepLinesTogether` boolean — when `true`, InDesign tries to
     /// keep all lines of the paragraph in the same column / frame.
     /// `None` ⇒ inherit. Parser+mutate only (the frame-breaker does
