@@ -77,7 +77,7 @@
       "idml": "text.idml",
       "pdf": "text.pdf",
       "pages": 19,
-      "passing": 16,
+      "passing": 18,
       "diff_dir": "/tmp/idml-generated-diff/text",
       "report": "/tmp/idml-generated-diff/text/report.json"
     },
@@ -86,7 +86,7 @@
       "idml": "text-advanced.idml",
       "pdf": "text-advanced.pdf",
       "pages": 17,
-      "passing": 9,
+      "passing": 10,
       "diff_dir": "/tmp/idml-generated-diff/text-advanced",
       "report": "/tmp/idml-generated-diff/text-advanced/report.json"
     },

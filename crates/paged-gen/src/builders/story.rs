@@ -370,7 +370,8 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         story_attrs.push((*k, *v));
     }
     b.start("Story", &story_attrs);
-    for paragraph in &s.paragraphs {
+    let paragraph_count = s.paragraphs.len();
+    for (para_idx, paragraph) in s.paragraphs.iter().enumerate() {
         let space_before_str: String;
         let space_after_str: String;
         let first_line_indent_str: String;
@@ -458,16 +459,39 @@ pub fn write_story(s: &Story) -> Vec<u8> {
                 );
             }
             if !paragraph.tab_list.is_empty() {
-                b.start("TabList", &[]);
+                // InDesign spells a tab stop as a `<ListItem
+                // type="record">` of TYPED CHILD ELEMENTS inside a
+                // `<TabList type="list">` — measured 2026-09-06 by
+                // adding two stops in InDesign and reading back its own
+                // IDML export. The `<TabStop Position=… Alignment=…/>`
+                // attribute form was ours, and InDesign ignores it:
+                // the fixture's declared stops and dotted leaders never
+                // reached the reference, which fell back to the default
+                // half-inch stops. The exporter already writes the
+                // record form; this is the generator catching up.
+                b.start("TabList", &[("type", "list")]);
                 for stop in &paragraph.tab_list {
                     let pos = crate::xml::format_f32(stop.position_pt);
-                    b.start("ListItem", &[("type", "object")]);
-                    let mut attrs: Vec<(&str, &str)> =
-                        vec![("Position", pos.as_str()), ("Alignment", stop.alignment)];
-                    if let Some(ld) = &stop.leader {
-                        attrs.push(("Leader", ld.as_str()));
+                    b.start("ListItem", &[("type", "record")]);
+                    b.start("Alignment", &[("type", "enumeration")]);
+                    b.text(stop.alignment);
+                    b.end("Alignment");
+                    b.start("AlignmentCharacter", &[("type", "string")]);
+                    b.text(".");
+                    b.end("AlignmentCharacter");
+                    // All four fields, in InDesign's own order. A stop
+                    // with no leader still carries an EMPTY `<Leader>`;
+                    // writing `b.text("")` would put a newline between
+                    // the tags and read back as the leader character,
+                    // so the empty case is an empty element pair.
+                    b.start("Leader", &[("type", "string")]);
+                    if let Some(ld) = stop.leader.as_deref().filter(|l| !l.is_empty()) {
+                        b.text(ld);
                     }
-                    b.empty("TabStop", &attrs);
+                    b.end("Leader");
+                    b.start("Position", &[("type", "unit")]);
+                    b.text(&pos);
+                    b.end("Position");
                     b.end("ListItem");
                 }
                 b.end("TabList");
@@ -567,6 +591,19 @@ pub fn write_story(s: &Story) -> Vec<u8> {
                 frame.write(&mut b);
             }
             write_run_content(&mut b, &run.text);
+            // The paragraph MARK. In IDML a paragraph boundary is the
+            // `<Br/>` character, not the `<ParagraphStyleRange>`
+            // boundary — InDesign's own export puts two paragraphs in
+            // ONE range separated by a `<Br />` (measured 2026-09-06),
+            // and a range that ends without one simply runs on into
+            // the next. Omitting it merged this fixture's three tab
+            // rows into a single line in InDesign while our own reader
+            // treated each range as a paragraph and showed three.
+            // The story's LAST paragraph carries no mark, exactly as
+            // InDesign writes it.
+            if idx + 1 == paragraph.runs.len() && para_idx + 1 < paragraph_count {
+                b.empty("Br", &[]);
+            }
             b.end("CharacterStyleRange");
         }
         b.end("ParagraphStyleRange");
