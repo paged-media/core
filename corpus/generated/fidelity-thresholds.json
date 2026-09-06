@@ -66,7 +66,7 @@
       "max_mean_de": 0.9,
       "max_p99_de": 34.0,
       "min_ssim": 0.955,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The numbers moved because the measuring stick changed, not the renderer: worst page is still p1 (mean 0.742 / p99 28.5 / SSIM 0.966) and still the DROP CAP, now measured honestly. Our cap is too small \u2014 measured at 144 dpi, InDesign's dropped 'I' inks 103 px tall from x=115, ours 90 px from x=124 \u2014 so `drop_cap_point_size`'s `line_height \u00d7 lines` is not InDesign's rule and the cap's ink is not flushed to the margin. Fixing that is what tightens this budget; do not raise it further."
+      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute, so the numbers moved because the measuring stick changed, not the renderer. The DROP CAP that dominated p1 is now measured and fixed \u2014 its ink is 105 px tall from x=115 at 144 dpi against InDesign's 103 from 115, where it used to be 90 px from 124. What is left on p1 is a LINE BREAK: our justified measure fits one more syllable per line than InDesign's, so the third line carries a different word. Worst page p1 mean 0.732 / p99 28.5 / SSIM 0.964; the budget encodes that break difference rather than hiding it."
     },
     {
       "name": "effects",
