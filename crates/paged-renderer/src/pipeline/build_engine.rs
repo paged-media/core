@@ -3579,8 +3579,21 @@ pub(super) fn emit_paragraph_into_chain(
 ) {
     // Tables ride on a paragraph but render with their own
     // grid-of-mini-frames pipeline. Hand off here so the rest of
-    // this function stays focused on the run/glyph case.
+    // this function stays focused on the run/glyph case. A paragraph
+    // that carries TEXT as well as the table (`…text<Br/><Table>` in
+    // one range — the break before a table is a paragraph end to
+    // InDesign, so the text is its own paragraph and the table
+    // follows it; measured 2026-09-06 on the annual's page 117, where
+    // a four-line paragraph vanished under its table) composes the
+    // text first, then the table.
     if let Some(table) = paragraph.table.as_ref() {
+        if paragraph.runs.iter().any(|r| !r.text.is_empty()) {
+            let text_only = paged_model::Paragraph {
+                table: None,
+                ..paragraph.clone()
+            };
+            emit_paragraph_into_chain(em, &text_only, pages, total_stats);
+        }
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }

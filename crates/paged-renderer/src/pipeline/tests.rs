@@ -4518,3 +4518,114 @@ fn a_width_only_fit_stalls_on_a_next_column_obstacle_and_oversets_everything() {
         "only NextColumn stalls the fit: {pw} vs {cw}"
     );
 }
+
+#[test]
+fn a_paragraph_that_carries_text_and_a_table_composes_both() {
+    // `…text<Br/><Table>` in one range: the break before the table ends
+    // the text's paragraph, so InDesign shows the text and THEN the
+    // table (measured 2026-09-06 on the annual's page 117, where a
+    // four-line paragraph vanished under its table on the canvas). The
+    // importer attaches the table to the text's paragraph; the emitter
+    // must compose the text before handing off to the table.
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let font = inter_font_bytes();
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_a.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 800 600"/>
+    <TextFrame Self="frameA" ParentStory="a" GeometricBounds="50 50 500 450">
+      <Properties/>
+    </TextFrame>
+  </Spread>
+</idPkg:Spread>"#,
+    )
+    .unwrap();
+    zip.start_file("Stories/Story_a.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="a">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Content>Circulation by region</Content><Br/>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Content>The Alpine routes remain the backbone of the house.</Content><Br/>
+        <Table Self="t" HeaderRowCount="0" FooterRowCount="0" BodyRowCount="1" ColumnCount="2">
+          <Row Self="r0" Name="0" SingleRowHeight="20"/>
+          <Column Self="c0" Name="0" SingleColumnWidth="150"/>
+          <Column Self="c1" Name="1" SingleColumnWidth="150"/>
+          <Cell Self="c0r0" Name="0:0" RowSpan="1" ColumnSpan="1">
+            <ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Region</Content></CharacterStyleRange></ParagraphStyleRange>
+          </Cell>
+          <Cell Self="c1r0" Name="1:0" RowSpan="1" ColumnSpan="1">
+            <ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>Copies</Content></CharacterStyleRange></ParagraphStyleRange>
+          </Cell>
+        </Table>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="10">
+        <Content>Digital editions</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+    )
+    .unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let options = PipelineOptions {
+        font: Some(&font),
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let page = &built.pages[0];
+    let body: Vec<&LineLayout> = page
+        .story_layout
+        .iter()
+        .filter(|l| l.cell.is_none())
+        .collect();
+    let cells: Vec<&LineLayout> = page
+        .story_layout
+        .iter()
+        .filter(|l| l.cell.is_some())
+        .collect();
+    assert_eq!(
+        body.len(),
+        3,
+        "three body lines: heading, the text, the trailing paragraph"
+    );
+    assert_eq!(cells.len(), 2, "both cells compose");
+    let text_line = body[1].baseline_y_pt;
+    let cell_line = cells
+        .iter()
+        .map(|l| l.baseline_y_pt)
+        .fold(f32::MAX, f32::min);
+    let trailing = body[2].baseline_y_pt;
+    assert!(
+        text_line < cell_line && cell_line < trailing,
+        "text {text_line} above the table {cell_line} above the trailing paragraph {trailing}"
+    );
+}
