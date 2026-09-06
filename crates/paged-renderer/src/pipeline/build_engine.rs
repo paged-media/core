@@ -4963,12 +4963,23 @@ pub(super) fn emit_paragraph_into_chain(
 
     // Drop cap indent: when a drop cap is active, the body text on
     // the first M=drop_cap_lines lines must start to the right of
-    // the dropped glyph + gutter. The carved column widths got
-    // layout_runs to break tighter; this shift moves the laid-out
-    // glyphs from x=0 to x=glyph_advance + gutter so the body
-    // doesn't overstrike the drop cap. Lines past M are unindented.
+    // the dropped glyph. The carved column widths got `layout_runs`
+    // to break tighter; this shift moves the laid-out glyphs to the
+    // cap's right edge so the body doesn't overstrike it. Lines past
+    // M are unindented.
+    //
+    // The shift is `advance - ink_left`, the SAME figure the carve
+    // uses: the cap hangs `ink_left` to the left of the margin, so
+    // its advance ends that much closer to it. Shifting by the bare
+    // advance while the measure had already been narrowed pushed the
+    // body 6 pt too far right and cost the third line a word
+    // (measured on `text-advanced` page 1: InDesign indents 41.98 pt,
+    // we indented 47.98).
     if let Some((_, spec, _, _, _, _, _)) = &drop_cap_spec_emit {
-        let indent_64 = spec.glyph_advance.saturating_add(spec.gutter);
+        let indent_64 = spec
+            .glyph_advance
+            .saturating_add(spec.gutter)
+            .saturating_sub(spec.ink_left);
         for (i, line) in laid_out.lines.iter_mut().enumerate() {
             if (i as u32) >= spec.lines {
                 break;
