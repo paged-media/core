@@ -1125,6 +1125,15 @@ pub struct CanvasModel {
     /// few MB at most. Cleared/replaced on every `load` (a fresh
     /// `CanvasModel` ⇒ fresh bytes), so it never accumulates.
     pub(crate) source_idml: Vec<u8>,
+    /// The highest `u<hex>` id any ENTRY NAME of the source package
+    /// carries (`Stories/Story_u…`, `Spreads/Spread_u…`, …). A
+    /// checkpoint keeps parts for stories the model no longer holds, and
+    /// a minter that floored on the model alone reused their ids: the
+    /// annual's sheet-chart table was minted as `Story/u937` beside a
+    /// stale `Story_Story_u937.xml` holding a prose paragraph, and the
+    /// exporter then patched that part as the table's source
+    /// (2026-09-06). Every mint clears this floor too.
+    pub(crate) source_id_floor: u64,
     /// `.paged` container — plugin-owned parts (`paged/<plugin>/<id>/…`)
     /// ADDED or UPDATED since load. The parts present in the loaded file
     /// already ride in `source_idml` and round-trip via the carry-through
@@ -1608,6 +1617,7 @@ impl CanvasModel {
             // W3.B2 — retain the source package for save-back. One
             // compressed copy; replaced wholesale on the next load.
             source_idml: bytes.to_vec(),
+            source_id_floor: source_id_floor(bytes),
             paged_parts: std::collections::BTreeMap::new(),
             built,
             page_index,
@@ -3884,10 +3894,16 @@ impl CanvasModel {
     /// twice and a table `ueef094` beside them, three successors of
     /// the same unchanged page-item max.
     pub(crate) fn mint_page_item_id_with_offset(&self, offset: &mut u64) -> String {
-        let max = paged_mutate::ids::highest_u_hex_id(&self.scene);
+        let max = paged_mutate::ids::highest_u_hex_id(&self.scene).max(self.source_id_floor);
         let id = format!("u{:x}", max + 1 + *offset);
         *offset += 1;
         id
+    }
+
+    /// See [`Self::source_id_floor`].
+    #[cfg(test)]
+    pub(crate) fn source_id_floor_for_test(&self) -> u64 {
+        self.source_id_floor
     }
 
     /// Editor-ops — resolve the spread hosting `page_id` plus the
@@ -9320,9 +9336,61 @@ fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
     out
 }
 
+/// The highest `u<hex>` id spelled by an entry name of `package`
+/// (`Stories/Story_u12.xml`, `Stories/Story_Story_u12.xml`,
+/// `Spreads/Spread_u12.xml`, `MasterSpreads/MasterSpread_u12.xml`), or 0
+/// when the bytes are not a readable package. See
+/// `CanvasModel::source_id_floor`.
+pub(crate) fn source_id_floor(package: &[u8]) -> u64 {
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(package)) else {
+        return 0;
+    };
+    let mut max = 0u64;
+    for i in 0..zip.len() {
+        let Ok(entry) = zip.by_index(i) else {
+            continue;
+        };
+        let name = entry.name();
+        let stem = match name.rsplit_once('/') {
+            Some((_, stem)) => stem,
+            None => continue,
+        };
+        let stem = stem.strip_suffix(".xml").unwrap_or(stem);
+        // The id is the last `_`-separated piece (`Story_Story_u12` → `u12`).
+        let id = stem.rsplit('_').next().unwrap_or(stem);
+        if let Some(n) = paged_mutate::ids::u_hex_number(id) {
+            max = max.max(n);
+        }
+    }
+    max
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_part_in_the_source_floors_the_minter() {
+        let names = [
+            "Stories/Story_st1.xml",
+            "Stories/Story_Story_u937.xml",
+            "Spreads/Spread_u12.xml",
+            "MasterSpreads/MasterSpread_uabc.xml",
+            "Resources/Styles.xml",
+        ];
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            for n in names {
+                w.start_file(n, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                std::io::Write::write_all(&mut w, b"<x/>").unwrap();
+            }
+            w.finish().unwrap();
+        }
+        assert_eq!(source_id_floor(&buf.into_inner()), 0xabc);
+        assert_eq!(source_id_floor(b"not a zip"), 0);
+    }
 
     /// The instance names InDesign 20.0.1 lists for the corpus faces
     /// installed (`indesign-fonts.tsv`): the `Roman` / `Italic`
