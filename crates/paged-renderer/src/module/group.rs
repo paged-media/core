@@ -40,7 +40,7 @@
 //! `Group` member reference. We resolve the nested group's members
 //! recursively so the outer bracket covers every leaf frame.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use paged_compose::{DisplayCommand, Rect, Transform};
 use paged_model::{FrameRef, Group, Spread};
@@ -60,6 +60,23 @@ pub(crate) struct FrameCmdSpan {
     pub end: usize,
 }
 
+/// Where a text frame's story glyphs BELONG on one page: `slot` is the
+/// index in `pages[page_idx].list.commands` the glyph block is spliced
+/// in before, so the text lands at its frame's own z position instead
+/// of on top of every page item.
+///
+/// Unlike [`FrameCmdSpan`], a slot is recorded for EVERY page the frame
+/// touches and whether or not the box painted anything — most text
+/// frames carry no fill and no stroke, so they emit no commands at all
+/// and would otherwise have no anchor. `z_seq` is the walk order, which
+/// breaks ties when two frames on a page resolve to the same slot.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextSlot {
+    pub page_idx: usize,
+    pub slot: usize,
+    pub z_seq: u32,
+}
+
 /// Per-spread per-frame-kind command ranges. Indexing mirrors the
 /// `Spread` shape vecs: `text_frames[i]` lives at
 /// `text_frames_spans[i]`, etc. Empty entries (`None`) signal a
@@ -71,6 +88,10 @@ pub(crate) struct SpreadFrameSpans {
     pub ovals: Vec<Option<FrameCmdSpan>>,
     pub graphic_lines: Vec<Option<FrameCmdSpan>>,
     pub polygons: Vec<Option<FrameCmdSpan>>,
+    /// Indexed like `text_frames`; one entry per page the frame reached.
+    pub text_slots: Vec<Vec<TextSlot>>,
+    /// Monotone walk counter, stamped into each `TextSlot`.
+    pub z_seq: u32,
 }
 
 /// Resolve a `FrameRef` to its recorded command span. Recurses
@@ -151,7 +172,7 @@ fn group_needs_bracket(g: &Group) -> bool {
 /// nested transparency wants.
 pub(crate) fn group_pass(
     spread: &Spread,
-    spread_frame_spans: &SpreadFrameSpans,
+    spread_frame_spans: &mut SpreadFrameSpans,
     pages: &mut [BuiltPage],
 ) {
     if spread.groups.is_empty() {
@@ -164,8 +185,7 @@ pub(crate) fn group_pass(
     // `PageWindow` = (page_idx, start, end); `GroupEntry` pairs a group
     // index with its per-page windows.
     type PageWindow = (usize, usize, usize);
-    type GroupEntry = (usize, Vec<PageWindow>);
-    let mut entries: Vec<GroupEntry> = Vec::new();
+    let mut entries: Vec<(usize, Vec<PageWindow>, HashSet<usize>)> = Vec::new();
     for (gi, group) in spread.groups.iter().enumerate() {
         if !group_needs_bracket(group) {
             continue;
@@ -176,6 +196,10 @@ pub(crate) fn group_pass(
         }
         if members.is_empty() {
             continue;
+        }
+        let mut member_text: HashSet<usize> = HashSet::new();
+        for &m in &group.members {
+            collect_member_text_frames(m, spread, &mut member_text);
         }
         let mut by_page: HashMap<usize, (usize, usize)> = HashMap::new();
         for s in &members {
@@ -188,13 +212,13 @@ pub(crate) fn group_pass(
             }
         }
         let per_page: Vec<PageWindow> = by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect();
-        entries.push((gi, per_page));
+        entries.push((gi, per_page, member_text));
     }
 
     // Reverse splice order so earlier groups' ranges stay valid.
     entries.sort_by(|a, b| b.0.cmp(&a.0));
 
-    for (gi, per_page) in entries {
+    for (gi, per_page, member_text) in entries {
         let group = &spread.groups[gi];
         let blend_mode = blend_mode_from_idml(group.transparency.blend_mode.as_deref());
         let opacity = group
@@ -218,7 +242,7 @@ pub(crate) fn group_pass(
             page.list
                 .commands
                 .insert(end, DisplayCommand::EndBlendGroup(Transform::IDENTITY));
-            page.list.commands.insert(
+            page.list.insert_command(
                 start,
                 DisplayCommand::BeginBlendGroup {
                     bounds,
@@ -227,6 +251,56 @@ pub(crate) fn group_pass(
                     transform: Transform::IDENTITY,
                 },
             );
+            shift_text_slots(spread_frame_spans, page_idx, start, end, &member_text);
+        }
+    }
+}
+
+/// Every text-frame index reachable from `fr`, recursing through nested
+/// groups — the set that decides which side of a bracket a slot lands on.
+fn collect_member_text_frames(fr: FrameRef, spread: &Spread, out: &mut HashSet<usize>) {
+    match fr {
+        FrameRef::TextFrame(i) => {
+            out.insert(i);
+        }
+        FrameRef::Group(i) => {
+            if let Some(g) = spread.groups.get(i) {
+                for &m in &g.members {
+                    collect_member_text_frames(m, spread, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Keep the recorded text slots pointing at the same place after a
+/// `BeginBlendGroup` was inserted at `start` and an `EndBlendGroup` at
+/// `end` (end first, so Begin sits at `start` and End at `end + 1`).
+///
+/// The two ties are what make this more than an offset: a slot exactly
+/// AT `start` belongs inside the bracket when its frame is a member of
+/// the group and outside when it is not, and a slot exactly at `end` is
+/// the mirror image — the last member's own anchor when it painted no
+/// box, and the next item's anchor otherwise.
+fn shift_text_slots(
+    spans: &mut SpreadFrameSpans,
+    page_idx: usize,
+    start: usize,
+    end: usize,
+    member_text: &HashSet<usize>,
+) {
+    for (frame_idx, slots) in spans.text_slots.iter_mut().enumerate() {
+        let member = member_text.contains(&frame_idx);
+        for s in slots.iter_mut().filter(|s| s.page_idx == page_idx) {
+            let mut delta = 0usize;
+            if s.slot > end || (s.slot == end && !member) {
+                delta += 1;
+            }
+            if s.slot > start || (s.slot == start && member) {
+                delta += 1;
+            }
+            s.slot += delta;
         }
     }
 }

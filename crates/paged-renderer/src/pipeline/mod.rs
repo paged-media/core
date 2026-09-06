@@ -68,6 +68,7 @@ mod stroke_geom;
 mod tables;
 mod text_frame;
 mod text_path;
+mod text_slots;
 
 pub use anchored::AnchoredImageEmit;
 use anchored::{emit_anchored_frames_for_paragraph, emit_anchored_rect_image};
@@ -239,6 +240,17 @@ pub struct PipelineOptions<'a> {
     /// Fallback column width in pt when a paragraph has no frame
     /// (extremely rare).
     pub fallback_column_width_pt: Option<f32>,
+    /// W2 — paint a story's glyphs at their text frame's z position
+    /// instead of on top of every page item.
+    ///
+    /// A story is emitted after the whole page walk (the emitter needs
+    /// the frame chain, which spans pages), so its glyphs land at the
+    /// end of each page's command list. InDesign paints them at the
+    /// frame's own slot: a panel above a text frame HIDES its text, and
+    /// our canvas hit-tester already sorts that way, so paint and
+    /// selection disagree when this is off. Default `true`; `false`
+    /// reproduces the pre-W2 command stream byte for byte.
+    pub text_at_frame_z: bool,
     /// Fill paint for frames that have no resolvable FillColor.
     pub fallback_frame_fill: Paint,
     /// Fill paint for runs that have no resolvable FillColor.
@@ -440,6 +452,12 @@ pub struct BodyStoryPageDelta {
     pub commands: Vec<paged_compose::DisplayCommand>,
     pub story_layout: Vec<LineLayout>,
     pub footnotes: Vec<EmittedFootnote>,
+    /// W2 — where each chain frame's piece of `commands` begins,
+    /// relative to the start of the delta: `(chain_idx, rel_start)`,
+    /// ascending. A replayed delta is appended at the page tail, so
+    /// these are what let the relocation pass cut it back into
+    /// per-frame blocks and move each to its own z-slot.
+    pub segments: Vec<(usize, usize)>,
 }
 
 /// Perf-MasterText — captured DisplayList delta for one
@@ -483,6 +501,7 @@ impl Default for PipelineOptions<'_> {
             assets: None,
             default_point_size: 12.0,
             fallback_column_width_pt: None,
+            text_at_frame_z: true,
             fallback_frame_fill: Paint::Solid(Color::rgba(0.92, 0.92, 0.92, 1.0)),
             fallback_text_paint: Paint::Solid(Color::BLACK),
             cmyk_icc_profile: None,

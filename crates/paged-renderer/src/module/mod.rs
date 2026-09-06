@@ -52,6 +52,6 @@ pub(crate) use drop_shadow::drop_shadow_module;
 pub(crate) use effects::{emit_effects_post_fill, emit_effects_pre_fill};
 pub(crate) use fill_paint::fill_paint_module;
 pub(crate) use glyph_shadow::emit_glyph_shadow_pass;
-pub(crate) use group::{group_pass, FrameCmdSpan, SpreadFrameSpans};
+pub(crate) use group::{group_pass, FrameCmdSpan, SpreadFrameSpans, TextSlot};
 pub(crate) use object_style::{object_style_cascade, resolve_applied_style};
 pub(crate) use stroke_paint::stroke_paint_module;

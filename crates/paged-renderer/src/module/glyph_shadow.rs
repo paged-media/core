@@ -139,7 +139,7 @@ pub(crate) fn emit_glyph_shadow_pass(
     // so the order at `abs_start..abs_start+n` matches the original
     // glyph emission order.
     for (_idx, transform, path_id) in inserts.into_iter().rev() {
-        page.list.commands.insert(
+        page.list.insert_command(
             abs_start,
             DisplayCommand::PathShadow {
                 path_id,
@@ -148,11 +148,11 @@ pub(crate) fn emit_glyph_shadow_pass(
             },
         );
     }
-    page.list.commands.insert(
+    page.list.insert_command(
         abs_start + inserted_shadow_count,
         DisplayCommand::EndBlendGroup(Transform::IDENTITY),
     );
-    page.list.commands.insert(
+    page.list.insert_command(
         abs_start,
         DisplayCommand::BeginBlendGroup {
             bounds: group_bounds,

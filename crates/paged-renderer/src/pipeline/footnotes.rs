@@ -575,6 +575,15 @@ pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPage
         page.list.images.truncate(s.images);
         page.story_layout.truncate(s.story_layout);
         page.footnotes.truncate(s.footnotes);
+        // The glyph-run side channel indexes commands ABSOLUTELY, so a
+        // rolled-back pass leaves entries pointing past the end of the
+        // list — harmless while nothing renumbered commands, a real
+        // mis-address once W2's relocation remaps them.
+        if let Some(table) = page.list.glyph_runs.as_mut() {
+            table
+                .entries
+                .retain(|e| (e.command_index as usize) < s.commands);
+        }
         page.stats = s.stats;
     }
 }

@@ -1448,6 +1448,26 @@ impl DisplayList {
         self.commands.push(cmd);
     }
 
+    /// Insert `cmd` at `at`, keeping the glyph-run side channel in step.
+    ///
+    /// `GlyphRunEntry::command_index` is the one place a command is
+    /// addressed by POSITION, so every post-emit splice — the group
+    /// bracket, the clip pairs, the glyph-shadow wrapper — silently
+    /// mis-addresses it unless the entries move too. Use this rather
+    /// than `commands.insert` wherever the list may carry glyph runs.
+    /// The scan is skipped entirely when it does not (the interactive
+    /// canvas never collects them).
+    pub fn insert_command(&mut self, at: usize, cmd: DisplayCommand) {
+        self.commands.insert(at, cmd);
+        if let Some(table) = self.glyph_runs.as_mut() {
+            for entry in table.entries.iter_mut() {
+                if entry.command_index as usize >= at {
+                    entry.command_index += 1;
+                }
+            }
+        }
+    }
+
     /// Append a linear gradient and return its id.
     pub fn push_linear_gradient(&mut self, g: LinearGradient) -> GradientId {
         let id = GradientId(self.gradients.len() as u32);

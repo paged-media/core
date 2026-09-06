@@ -38,6 +38,55 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// (and the authored Bezier outline for path-shaped ones), the
 /// inscribed ellipse for ovals, the authored outline for polygons.
 /// C-28 — the `Self` id behind a `FrameRef` (leaf kinds and groups).
+/// Queue one contiguous command block for the z-slot of the text frame
+/// `frame_id` on `page_idx`. A frame with no recorded slot (no `Self`
+/// id, or a page the walk never gave it) keeps the block where it is.
+fn record_text_block(
+    pending: &mut [Vec<text_slots::TextBlock>],
+    slots: &HashMap<(usize, String), crate::module::TextSlot>,
+    frame_id: Option<&str>,
+    page_idx: usize,
+    start: usize,
+    end: usize,
+) {
+    if start >= end || page_idx >= pending.len() {
+        return;
+    }
+    let Some(id) = frame_id else { return };
+    let Some(slot) = slots.get(&(page_idx, id.to_string())) else {
+        return;
+    };
+    if slot.slot > start {
+        // The slot is inside or after the block — the text already sits
+        // where it belongs (a frame with nothing above it).
+        return;
+    }
+    pending[page_idx].push(text_slots::TextBlock {
+        start,
+        end,
+        slot: slot.slot,
+        z_seq: slot.z_seq,
+    });
+}
+
+/// Queue one block per chain frame, given the block's per-frame cut
+/// points (see [`text_slots::segment_story_block`]) and where the whole
+/// block ends.
+fn record_story_blocks(
+    pending: &mut [Vec<text_slots::TextBlock>],
+    slots: &HashMap<(usize, String), crate::module::TextSlot>,
+    chain: &[&TextFrame],
+    page_idx: usize,
+    segments: &[(usize, usize)],
+    block_end: usize,
+) {
+    for (n, (chain_idx, start)) in segments.iter().enumerate() {
+        let end = segments.get(n + 1).map(|(_, s)| *s).unwrap_or(block_end);
+        let frame_id = chain.get(*chain_idx).and_then(|f| f.self_id.as_deref());
+        record_text_block(pending, slots, frame_id, page_idx, *start, end);
+    }
+}
+
 pub(super) fn frame_ref_self_id(
     spread: &paged_model::Spread,
     fr: paged_model::FrameRef,
@@ -959,6 +1008,8 @@ pub(super) fn build_document_inner(
             ovals: vec![None; spread.ovals.len()],
             graphic_lines: vec![None; spread.graphic_lines.len()],
             polygons: vec![None; spread.polygons.len()],
+            text_slots: vec![Vec::new(); spread.text_frames.len()],
+            z_seq: 0,
         };
 
         // Q-10: build a flat (layer_z, xml_order, FrameRef) list from
@@ -1145,6 +1196,22 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                         );
+                        // W2 — the z-slot this frame's story text belongs
+                        // at. Recorded AFTER the box, the C-6 tiles and the
+                        // C-1 plugin layer, so relocating the glyphs keeps
+                        // their order against those three exactly as it is
+                        // today, and only moves them below the page items
+                        // that come LATER in z — which is where InDesign
+                        // draws them. Recorded unconditionally: a frame with
+                        // no fill and no stroke emits nothing, and that is
+                        // the common case.
+                        frame_spans.z_seq += 1;
+                        let z_seq = frame_spans.z_seq;
+                        frame_spans.text_slots[idx].push(crate::module::TextSlot {
+                            page_idx,
+                            slot: pages[page_idx].list.commands.len(),
+                            z_seq,
+                        });
                     }
                 }
                 paged_model::FrameRef::Rectangle(idx) => {
@@ -1774,11 +1841,39 @@ pub(super) fn build_document_inner(
     // via `apply_blend_groups`). Each spread's groups are resolved
     // against the per-frame command spans recorded above.
     for (spread_idx, parsed) in document.spreads.iter().enumerate() {
-        let Some(spans) = spread_frame_spans.get(spread_idx) else {
+        let Some(spans) = spread_frame_spans.get_mut(spread_idx) else {
             continue;
         };
         crate::module::group_pass(&parsed.spread, spans, &mut pages);
     }
+
+    // W2 — the z-slot table, flattened out of the per-spread spans and
+    // keyed the way the story passes can look it up: (page, frame Self
+    // id). `group_pass` has just run, so the slots already account for
+    // its brackets and nothing else moves commands until the relocation
+    // at the end of this function.
+    let text_slots: HashMap<(usize, String), crate::module::TextSlot> = document
+        .spreads
+        .iter()
+        .enumerate()
+        .filter_map(|(i, parsed)| spread_frame_spans.get(i).map(|s| (parsed, s)))
+        .flat_map(|(parsed, spans)| {
+            parsed
+                .spread
+                .text_frames
+                .iter()
+                .enumerate()
+                .filter_map(move |(idx, frame)| {
+                    let id = frame.self_id.clone()?;
+                    Some((id, spans.text_slots.get(idx)?))
+                })
+                .flat_map(|(id, slots)| slots.iter().map(move |s| ((s.page_idx, id.clone()), *s)))
+        })
+        .collect();
+    // Blocks of commands to move into those slots, per page. Filled by
+    // the master-text and body-story passes below.
+    let mut pending_text: Vec<Vec<text_slots::TextBlock>> =
+        (0..pages.len()).map(|_| Vec::new()).collect();
 
     // Per-page wrap exclusion rectangles (spread coords, expanded by
     // the wrap's offsets). Only items with TextWrapMode != "None"
@@ -1835,8 +1930,18 @@ pub(super) fn build_document_inner(
             .as_deref()
             .map(|id| (id.to_string(), *page_idx));
         if let (Some(ref key), Some(rc)) = (&cache_key, master_text_emit_cache) {
-            if let Some(delta) = rc.borrow().get(key) {
-                splice_master_text_delta(&mut pages[*page_idx].list, delta);
+            let hit = rc.borrow().get(key).cloned();
+            if let Some(delta) = hit {
+                let base = pages[*page_idx].list.commands.len();
+                splice_master_text_delta(&mut pages[*page_idx].list, &delta);
+                record_text_block(
+                    &mut pending_text,
+                    &text_slots,
+                    master_frame.self_id.as_deref(),
+                    *page_idx,
+                    base,
+                    pages[*page_idx].list.commands.len(),
+                );
                 continue;
             }
         }
@@ -1884,6 +1989,14 @@ pub(super) fn build_document_inner(
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_container_clip(&mut pages, &container_clips);
         emitter.apply_blend_groups(&mut pages);
+        record_text_block(
+            &mut pending_text,
+            &text_slots,
+            master_frame.self_id.as_deref(),
+            *page_idx,
+            cmd_base,
+            pages[*page_idx].list.commands.len(),
+        );
         let anchored_q = emitter.take_anchored_image_queue();
         let new_breaks = emitter.take_breaks();
         let new_diags = emitter.take_diagnostics();
@@ -2157,7 +2270,21 @@ pub(super) fn build_document_inner(
                 // miss and re-emit fresh.
                 if delta.per_page.iter().all(|(idx, _)| *idx < pages.len()) {
                     for (page_idx, page_delta) in &delta.per_page {
+                        let base = pages[*page_idx].list.commands.len();
                         splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
+                        let block_end = pages[*page_idx].list.commands.len();
+                        record_story_blocks(
+                            &mut pending_text,
+                            &text_slots,
+                            &chain,
+                            *page_idx,
+                            &page_delta
+                                .segments
+                                .iter()
+                                .map(|(i, rel)| (*i, base + rel))
+                                .collect::<Vec<_>>(),
+                            block_end,
+                        );
                     }
                     anchored_image_queue.extend(delta.anchored.iter().cloned());
                     breaks.extend(delta.breaks.iter().cloned());
@@ -2266,6 +2393,7 @@ pub(super) fn build_document_inner(
 
         // Captured from the FINAL emit pass for the cache + side
         // channels below.
+        let mut final_frame_ranges: Vec<Option<(usize, usize)>> = Vec::new();
         let mut new_anchored: Vec<AnchoredImageEmit> = Vec::new();
         let mut new_breaks: Vec<BreakRecord> = Vec::new();
         let mut new_diags: Vec<Diagnostic> = Vec::new();
@@ -2340,6 +2468,11 @@ pub(super) fn build_document_inner(
             emitter.apply_polygon_clip(&mut pages);
             emitter.apply_container_clip(&mut pages, &container_clips);
             emitter.apply_blend_groups(&mut pages);
+            // W2 — the per-frame command ranges as they stand after
+            // every pass that splices. The fixpoint below may roll this
+            // pass back and re-emit, so the LAST pass wins, which is
+            // exactly what `pages` ends up holding.
+            final_frame_ranges = emitter.frame_cmd_ranges.clone();
             // Phase 7 — vertical writing post-rotation. When the source
             // story declares `StoryDirection="VerticalWritingDirection"`,
             // rotate every command this story emitted by 90° CW around
@@ -2393,6 +2526,33 @@ pub(super) fn build_document_inner(
         breaks.extend(new_breaks.iter().cloned());
         emit_diagnostics.extend(new_diags.iter().cloned());
 
+        // W2 — cut this story's per-page output into per-frame blocks
+        // and queue each for its frame's z-slot. Computed once here and
+        // reused (as relative offsets) by the cache capture below.
+        let mut story_segments: Vec<(usize, Vec<(usize, usize)>)> = Vec::new();
+        for (page_idx, snap) in pre_snapshot.iter().enumerate() {
+            let block_end = pages[page_idx].list.commands.len();
+            if block_end <= snap.1 {
+                continue;
+            }
+            let segs = text_slots::segment_story_block(
+                &final_frame_ranges,
+                &chain_pages_for_post,
+                page_idx,
+                snap.1,
+                block_end,
+            );
+            record_story_blocks(
+                &mut pending_text,
+                &text_slots,
+                &chain_for_post,
+                page_idx,
+                &segs,
+                block_end,
+            );
+            story_segments.push((page_idx, segs));
+        }
+
         // Perf-BodyStory — capture the per-page delta if the emit
         // didn't touch gradient/image pools. Same conservative
         // policy as master_text: skip caching when gradient or
@@ -2427,6 +2587,15 @@ pub(super) fn build_document_inner(
                     }
                     let new_story_layout: Vec<LineLayout> = page.story_layout[snap.5..].to_vec();
                     let new_footnotes: Vec<EmittedFootnote> = page.footnotes[snap.6..].to_vec();
+                    let segments = story_segments
+                        .iter()
+                        .find(|(p, _)| *p == page_idx)
+                        .map(|(_, segs)| {
+                            segs.iter()
+                                .map(|(i, start)| (*i, start.saturating_sub(snap.1)))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     per_page.push((
                         page_idx,
                         BodyStoryPageDelta {
@@ -2434,6 +2603,7 @@ pub(super) fn build_document_inner(
                             commands: new_commands,
                             story_layout: new_story_layout,
                             footnotes: new_footnotes,
+                            segments,
                         },
                     ));
                 }
@@ -2514,6 +2684,19 @@ pub(super) fn build_document_inner(
     // glyph-shadow wrapper, `<Group>` transparency) and the footnote /
     // anchored-image post-passes above still add commands, so only
     // here is the list final.
+    // W2 — move every story's glyphs to their text frame's z-slot.
+    // Runs after the footnote pools and the anchored images (both of
+    // which append to the page tail, so their indices are settled) and
+    // before the transparency fit below, which must see the final list.
+    if options.text_at_frame_z {
+        for (page_idx, blocks) in pending_text.iter_mut().enumerate() {
+            if blocks.is_empty() || page_idx >= pages.len() {
+                continue;
+            }
+            text_slots::relocate_text_blocks(&mut pages[page_idx].list, blocks);
+        }
+    }
+
     for page in &mut pages {
         paged_compose::fit_transparency_group_bounds(&mut page.list);
     }
@@ -3137,6 +3320,28 @@ impl<'a> StoryEmitter<'a> {
     /// with <3 anchors, and rotated/sheared frames (where the polygon
     /// would need to be transformed *with* the frame at emit time —
     /// out of scope today).
+    /// A post-pass spliced `count` commands at `at` on `page_idx` on
+    /// behalf of chain frame `owner`. Every OTHER chain frame whose
+    /// range starts at or after that point has just moved, and W2's
+    /// relocation reads those starts to cut the story block into
+    /// per-frame pieces — so they have to be kept honest.
+    fn shift_ranges_for_insert(&mut self, page_idx: usize, at: usize, count: usize, owner: usize) {
+        if count == 0 {
+            return;
+        }
+        for (j, range) in self.frame_cmd_ranges.iter_mut().enumerate() {
+            if j == owner || self.chain_pages.get(j).copied() != Some(page_idx) {
+                continue;
+            }
+            if let Some((start, end)) = range {
+                if *start >= at {
+                    *start += count;
+                    *end += count;
+                }
+            }
+        }
+    }
+
     pub(super) fn apply_polygon_clip(&mut self, pages: &mut [BuiltPage]) {
         // Collect (frame_idx, start, end, shape) clip records grouped by
         // page so we can splice in reverse start-order. The `FrameShape`
@@ -3189,11 +3394,11 @@ impl<'a> StoryEmitter<'a> {
                 let clip_transform = Transform::translate(-ox, -oy);
                 // Splice in end-then-start order so the start-insert
                 // doesn't shift `end`.
-                page.list.commands.insert(
+                page.list.insert_command(
                     end,
                     paged_compose::DisplayCommand::PopClip(Transform::IDENTITY),
                 );
-                page.list.commands.insert(
+                page.list.insert_command(
                     start,
                     paged_compose::DisplayCommand::PushClip {
                         path_id,
@@ -3206,6 +3411,7 @@ impl<'a> StoryEmitter<'a> {
                 // the clip — clip nests inside the blend group,
                 // matching PDF state-vs-buffer semantics.
                 self.frame_cmd_ranges[frame_idx] = Some((start, end + 2));
+                self.shift_ranges_for_insert(page_idx, start, 2, frame_idx);
             }
         }
     }
@@ -3261,7 +3467,7 @@ impl<'a> StoryEmitter<'a> {
                 // End-then-start splice order so the start inserts
                 // don't shift `end`. Pops: one per ancestor.
                 for _ in clips {
-                    page.list.commands.insert(
+                    page.list.insert_command(
                         end,
                         paged_compose::DisplayCommand::PopClip(Transform::IDENTITY),
                     );
@@ -3272,12 +3478,13 @@ impl<'a> StoryEmitter<'a> {
                 for (path, host_transform) in clips.iter().rev() {
                     let path_id = page.list.paths.push_anon(path.clone());
                     let transform = super::text_frame::frame_outer_transform(page, *host_transform);
-                    page.list.commands.insert(
+                    page.list.insert_command(
                         start,
                         paged_compose::DisplayCommand::PushClip { path_id, transform },
                     );
                 }
                 self.frame_cmd_ranges[frame_idx] = Some((start, end + 2 * clips.len()));
+                self.shift_ranges_for_insert(page_idx, start, 2 * clips.len(), frame_idx);
             }
         }
     }
@@ -3291,7 +3498,7 @@ impl<'a> StoryEmitter<'a> {
     /// transparent fills, the manual-sample case); slightly different
     /// only when the body's painted pixels overlap the glyph pixels
     /// AND the blend is non-associative.
-    pub(super) fn apply_blend_groups(&self, pages: &mut [BuiltPage]) {
+    pub(super) fn apply_blend_groups(&mut self, pages: &mut [BuiltPage]) {
         // Per-frame post-emit work: optionally splice glyph-shaped
         // drop shadows in front of the frame's glyph fills, then
         // optionally bracket the (still-original) glyph range with
@@ -3316,6 +3523,10 @@ impl<'a> StoryEmitter<'a> {
             Option<DropShadow>,
             paged_compose::Rect,
             Option<(paged_compose::Rect, paged_compose::BlendMode, f32)>,
+            // W2 — the chain frame this entry belongs to, so the
+            // commands this pass splices can be accounted for against
+            // every OTHER frame's range on the same page.
+            usize,
         );
         let mut per_page: HashMap<usize, Vec<Entry>> = HashMap::new();
         for (i, frame) in self.chain.iter().enumerate() {
@@ -3393,13 +3604,15 @@ impl<'a> StoryEmitter<'a> {
                 glyph_shadow,
                 frame_bounds_in_page,
                 blend_group,
+                i,
             ));
         }
         // Splice in reverse start-order per page so earlier ranges
         // stay valid.
         for (page_idx, mut entries) in per_page {
             entries.sort_by(|a, b| b.0.cmp(&a.0));
-            for (start, end, glyph_shadow, frame_bounds_in_page, blend_group) in entries {
+            for (start, end, glyph_shadow, frame_bounds_in_page, blend_group, frame_idx) in entries
+            {
                 let page = &mut pages[page_idx];
                 // Step 1: splice glyph-shaped shadows in front of
                 // the original glyph range. The shadow stamps land
@@ -3437,12 +3650,12 @@ impl<'a> StoryEmitter<'a> {
                 // Step 2: bracket glyph fills with BeginBlendGroup /
                 // EndBlendGroup (when needed). Insert end-then-start
                 // so the start-insert doesn't shift `glyphs_end`.
-                if let Some((bounds, blend_mode, opacity)) = blend_group {
-                    page.list.commands.insert(
+                let bracketed = if let Some((bounds, blend_mode, opacity)) = blend_group {
+                    page.list.insert_command(
                         glyphs_end,
                         paged_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
                     );
-                    page.list.commands.insert(
+                    page.list.insert_command(
                         glyphs_start,
                         paged_compose::DisplayCommand::BeginBlendGroup {
                             bounds,
@@ -3451,6 +3664,17 @@ impl<'a> StoryEmitter<'a> {
                             transform: Transform::IDENTITY,
                         },
                     );
+                    2
+                } else {
+                    0
+                };
+                // W2 — this frame's block grew by the shadow stamps and
+                // the bracket; record its final extent and push every
+                // other frame on the page along.
+                let total = inserted + bracketed;
+                if total > 0 {
+                    self.frame_cmd_ranges[frame_idx] = Some((start, end + total));
+                    self.shift_ranges_for_insert(page_idx, start, total, frame_idx);
                 }
             }
         }
