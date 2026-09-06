@@ -406,7 +406,23 @@ pub fn shape_run_with_features(
     features: ShapingFeatures,
 ) -> ShapedRun {
     let mut buf = UnicodeBuffer::new();
-    buf.push_str(text);
+    // A TAB is blank ink that advances to a stop. The stop-snapping
+    // pass keys on the `\t` byte in the paragraph text and needs the
+    // glyph as its carrier, so the character stays in the stream —
+    // but shaped as U+0009 it comes back as the font's .notdef and
+    // draws a visible tofu box. InDesign draws nothing (measured
+    // 2026-09-06: it advances the following glyph to the next default
+    // stop and paints no mark), so shape it as a SPACE: no ink, a
+    // sane advance when no stop applies, and identical cluster bytes
+    // because both characters are one byte wide.
+    let sanitized;
+    let shaping_text = if text.as_bytes().contains(&b'\t') {
+        sanitized = text.replace('\t', " ");
+        sanitized.as_str()
+    } else {
+        text
+    };
+    buf.push_str(shaping_text);
     // rustybuzz's `shape()` guessed script/direction/language from the
     // buffer content implicitly; harfrust builds the plan from whatever
     // the buffer carries. Call the same guess explicitly so segment
@@ -818,6 +834,38 @@ mod tests {
 
     fn has_tag_on(features: &[harfrust::Feature], tag: &str) -> bool {
         features.iter().any(|f| f.tag == tag && f.value == 1)
+    }
+
+    #[test]
+    fn a_tab_shapes_as_blank_ink_not_a_tofu_box() {
+        // InDesign paints no mark for a tab; it advances the next
+        // glyph to a stop. Shaped as U+0009 the character comes back
+        // as .notdef and draws a visible box — the annual's page 117
+        // showed one between "(Q4)" and "2,390" where InDesign shows
+        // nothing. The character must stay in the stream, because the
+        // stop-snapping pass keys on it, so it is shaped as a space.
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let face = Face::from_slice(&bytes, 0).expect("parse Inter");
+        let tabbed = shape_run(&face, "a\tb", 12.0);
+        let spaced = shape_run(&face, "a b", 12.0);
+        assert_eq!(
+            tabbed.glyphs.len(),
+            spaced.glyphs.len(),
+            "the tab is still a glyph, so the stop pass can find it"
+        );
+        let tab_ids: Vec<u32> = tabbed.glyphs.iter().map(|g| g.glyph_id).collect();
+        let space_ids: Vec<u32> = spaced.glyphs.iter().map(|g| g.glyph_id).collect();
+        assert_eq!(tab_ids, space_ids, "and it carries the SPACE glyph");
+        // Cluster bytes are untouched: both characters are one byte,
+        // so the `\t` the stop pass looks for is still at index 1.
+        assert_eq!(
+            tabbed.glyphs.iter().map(|g| g.cluster).collect::<Vec<_>>(),
+            spaced.glyphs.iter().map(|g| g.cluster).collect::<Vec<_>>()
+        );
     }
 
     #[test]

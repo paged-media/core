@@ -597,10 +597,13 @@ fn write_run_content(b: &mut XmlBuilder, text: &str) {
     };
     for ch in text.chars() {
         match ch {
-            '\t' => {
-                flush(b, &mut buf);
-                b.empty("Tab", &[]);
-            }
+            // A TAB is a literal U+0009 inside `<Content>` — that is
+            // how InDesign's own IDML export spells it (measured
+            // 2026-09-06: `<Content>Largest single run (Q4)\t2,390
+            // copies</Content>`, no element). `<Tab/>` was ours, and
+            // InDesign silently DROPS it: the annual's page 117 set
+            // "(Q4)2,390" with no gap where the author wrote a tab.
+            // Same class as the `<Br/>` and `<Oval>` spellings.
             '\n' => {
                 flush(b, &mut buf);
                 b.empty("Br", &[]);
