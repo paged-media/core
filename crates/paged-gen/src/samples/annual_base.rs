@@ -1145,6 +1145,7 @@ BottomEdgeStrokeColor=\"{SWATCH_SLATE}\" BottomEdgeStrokeWeight=\"0.25\"/>\
 <RootTableStyleGroup>\
 <TableStyle Self=\"{TABLE_STYLE_ANNUAL}\" Name=\"Annual Table\" \
 HeaderRegionCellStyle=\"{CELL_TH}\" BodyRegionCellStyle=\"{CELL_TD}\" \
+HeaderRegionSameAsBodyRegion=\"false\" \
 AlternatingFills=\"AlternatingRows\" \
 StartRowFillColor=\"{SWATCH_PAPER_WARM}\" StartRowFillCount=\"1\" \
 EndRowFillColor=\"Color/Paper\" EndRowFillCount=\"1\"/>\

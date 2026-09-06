@@ -36,6 +36,19 @@ struct AlternatingFillAxis<'a> {
     end_tint: Option<f32>,
 }
 
+/// InDesign's default tint for the START of an alternating-fill cycle.
+///
+/// The attribute is omitted when it equals the default, and a file
+/// with no `StartRowFillTint` resolves to 20 in InDesign's own DOM
+/// (measured 2026-09-06 by stripping the attribute from an
+/// InDesign-authored IDML and reading `table.startRowFillTint` back).
+/// Painting the colour at full strength instead made the annual's
+/// preflight table a solid warm block where InDesign shows a wash:
+/// (250, 247, 240) against InDesign's (254, 254, 252).
+const ALTERNATING_START_TINT: f32 = 20.0;
+/// …and 100 for the END of the cycle, measured the same way.
+const ALTERNATING_END_TINT: f32 = 100.0;
+
 impl<'a> AlternatingFillAxis<'a> {
     fn fill_for(&self, line_idx: usize) -> Option<(&'a str, Option<f32>)> {
         if line_idx < self.skip_first || line_idx + self.skip_last >= self.n_lines {
@@ -47,9 +60,11 @@ impl<'a> AlternatingFillAxis<'a> {
         }
         let pos = (line_idx - self.skip_first) % cycle;
         if pos < self.start_count {
-            self.start_color.map(|c| (c, self.start_tint))
+            self.start_color
+                .map(|c| (c, Some(self.start_tint.unwrap_or(ALTERNATING_START_TINT))))
         } else {
-            self.end_color.map(|c| (c, self.end_tint))
+            self.end_color
+                .map(|c| (c, Some(self.end_tint.unwrap_or(ALTERNATING_END_TINT))))
         }
     }
 }
