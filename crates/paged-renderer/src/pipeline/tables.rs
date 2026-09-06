@@ -2145,7 +2145,33 @@ fn measure_cell_paragraph(
         .iter()
         .map(|l| l.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION)
         .fold(0.0f32, f32::max);
-    max_baseline_pt + leading_pt * 0.4
+    // What sits BELOW the last baseline is the HALF-LEADING, not a
+    // flat fraction of the leading.
+    //
+    // Measured in InDesign 20.0.1 on 2026-09-06, on the annual's
+    // preflight table: a two-line cell at 8 pt / 13 pt leading in
+    // Source Serif 4 (ascent 8.288, descent 2.68) resolved to a row
+    // 22.288 pt tall. That is `ascent + leading + (leading − ascent −
+    // descent) / 2` = 22.304 — the leading's slack split evenly above
+    // and below the type, with the half below the last baseline. The
+    // old `leading × 0.4` gave 26.488, so every auto-growing row in
+    // every table stood about a fifth too tall and the annual's
+    // page-123 rules drifted 60 px against InDesign's 50.5.
+    //
+    // Clamped at zero: leading tighter than the face's own
+    // ascent + descent leaves nothing below the last line.
+    let half_leading_pt = match head_metrics {
+        Some(m) => {
+            let asc = m.ascender * paragraph_size;
+            let desc = m.descender * paragraph_size;
+            ((leading_pt - asc - desc) * 0.5).max(0.0)
+        }
+        // A substituted face keeps the old heuristic for the same
+        // reason its first baseline does: a stand-in's metrics say
+        // nothing about the block InDesign measured.
+        None => leading_pt * 0.4,
+    };
+    max_baseline_pt + half_leading_pt
 }
 
 /// Lay out and emit a single cell paragraph at `(origin_pt.0,
