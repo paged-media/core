@@ -163,6 +163,26 @@ struct Args {
     /// gate; pass it for manual verification of degraded documents.
     #[arg(long)]
     degraded_asset_markers: bool,
+    /// A/B switch for the text z-order relocation: with this flag the
+    /// engine keeps the legacy behaviour of painting every story's
+    /// glyphs after the whole page walk, so text sits above every page
+    /// item whatever its frame's z position. Off (the default) each
+    /// story's glyph block is relocated to its frame's own z slot.
+    #[arg(long)]
+    legacy_text_on_top: bool,
+    /// Debug aid: print every display-list command of one page
+    /// (1-based) with its index, plus the glyph-run table, and exit.
+    /// The fast way to see where a story's glyph block sits relative
+    /// to the page items around it.
+    #[arg(long)]
+    dump_page: Option<usize>,
+    /// Rasterizer to render through: `cpu` (tiny-skia, the fidelity
+    /// harness's lane) or `vello` (the GPU lane the editor and the
+    /// showcase render on). `vello` needs the `gpu` feature and a
+    /// working GPU; it is how a GPU-only effect gap is measured
+    /// against the CPU lane without a browser.
+    #[arg(long, default_value = "cpu")]
+    backend: String,
     /// Install a tracing subscriber that prints debug-level events
     /// from the `paged_renderer::icc` target to stderr. Used to confirm
     /// the JPEG-embedded-ICC branch fires on a corpus pack — the
@@ -496,6 +516,7 @@ fn main() -> Result<()> {
         font_metrics_overrides: &metric_overrides,
         missing_image_placeholder: !args.no_missing_image_placeholder,
         degraded_asset_markers: args.degraded_asset_markers,
+        text_at_frame_z: !args.legacy_text_on_top,
         collect_breaks: args.emit_breaks.is_some(),
         break_story_filter: args.break_story_id.clone(),
         break_page_range,
@@ -562,7 +583,7 @@ fn main() -> Result<()> {
         for (i, page) in built.pages.iter().enumerate() {
             let mut raster_opts = paged_gpu::RasterOptions::new(page.width_pt, page.height_pt);
             raster_opts.dpi = args.dpi;
-            let img = paged_gpu::rasterize(&page.list, &raster_opts);
+            let img = rasterize_with_backend(&args.backend, &page.list, &raster_opts);
             let path = if multi {
                 page_output_path(out, i + 1)
             } else {
@@ -684,6 +705,24 @@ fn main() -> Result<()> {
             );
             for (code, n) in built.diagnostics.by_code() {
                 println!("    {code:?}: {n}");
+            }
+        }
+        if let Some(n) = args.dump_page {
+            if let Some(page) = built.pages.get(n.saturating_sub(1)) {
+                for (i, cmd) in page.list.commands.iter().enumerate() {
+                    let text = format!("{cmd:?}");
+                    let text = if text.len() > 600 {
+                        &text[..600]
+                    } else {
+                        &text[..]
+                    };
+                    println!("  [{i:5}] {text}");
+                }
+                if let Some(t) = page.list.glyph_runs.as_ref() {
+                    for e in &t.entries {
+                        println!("  run cmd={}", e.command_index);
+                    }
+                }
             }
         }
         if want_display_list {
@@ -1604,6 +1643,44 @@ fn first_line(s: &str) -> String {
     } else {
         line.to_string()
     }
+}
+
+/// Rasterise one page through the requested backend. The GPU arm only
+/// exists when the crate is built with `--features gpu`; without it
+/// `--backend vello` says so rather than silently rendering on the CPU
+/// and reporting a parity that was never measured.
+fn rasterize_with_backend(
+    backend: &str,
+    list: &paged_compose::DisplayList,
+    opts: &paged_gpu::RasterOptions,
+) -> image::RgbaImage {
+    match backend {
+        "vello" | "gpu" => rasterize_vello(list, opts),
+        _ => paged_gpu::rasterize(list, opts),
+    }
+}
+
+#[cfg(feature = "gpu")]
+fn rasterize_vello(
+    list: &paged_compose::DisplayList,
+    opts: &paged_gpu::RasterOptions,
+) -> image::RgbaImage {
+    use paged_gpu::PathRasterizer;
+    let (w, h) = opts.pixel_size();
+    let buf = paged_gpu::vello_rs::VelloRasterizer::new().rasterize(list, opts);
+    image::RgbaImage::from_raw(w, h, buf).unwrap_or_else(|| image::RgbaImage::new(w, h))
+}
+
+#[cfg(not(feature = "gpu"))]
+fn rasterize_vello(
+    list: &paged_compose::DisplayList,
+    opts: &paged_gpu::RasterOptions,
+) -> image::RgbaImage {
+    eprintln!(
+        "--backend vello needs the `gpu` feature: rebuild with \
+         `--features gpu`. Rendering on the CPU instead."
+    );
+    paged_gpu::rasterize(list, opts)
 }
 
 #[cfg(test)]

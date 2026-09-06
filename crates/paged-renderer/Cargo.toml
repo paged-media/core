@@ -22,6 +22,10 @@ mutate-roundtrip = ["dep:paged-mutate"]
 # different backend. `image` is now a non-optional dep because
 # the pipeline decodes placed-image bytes at build_document time.
 cpu = ["paged-gpu/cpu"]
+# Pulls in the GPU (Vello/wgpu) rasterizer as well, so `paged-inspect
+# --backend vello` can render a page through the lane the editor uses
+# without a browser. Off by default: it drags wgpu into every build.
+gpu = ["paged-gpu/vello-backend"]
 
 [[bin]]
 name = "paged-inspect"

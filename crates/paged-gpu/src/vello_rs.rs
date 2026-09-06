@@ -343,6 +343,199 @@ pub(crate) fn build_scene_with_transform(list: &DisplayList, page_to_px: kurbo::
 /// `skip_overprints = true` so the vello_target represents
 /// "everything below the overprint layer" — the splat shader uses
 /// that buffer to recover bottom-side CMYK on virgin pixels.
+/// The page-space rectangle the feather at `feather_idx` will cover:
+/// its path's bounds inflated by the same pad the mask uses. The run's
+/// isolated layer is clipped to it, so what the mask cannot reach is
+/// not in the layer to begin with.
+fn feather_layer_rect(
+    list: &DisplayList,
+    feather_idx: usize,
+    px_per_pt: f32,
+) -> Option<kurbo::Rect> {
+    let cmd = list.commands.get(feather_idx)?;
+    let pad_pt = paged_compose::mask::feather_pad_pt(cmd)?;
+    let (path_id, transform) = paged_compose::mask::cmd_path_and_transform(cmd)?;
+    let path_data = list.paths.get(path_id)?;
+    let grid = paged_compose::mask::Grid::for_path(
+        path_data,
+        transform,
+        pad_pt,
+        (px_per_pt * 72.0).max(72.0),
+    )?;
+    Some(kurbo::Rect::new(
+        grid.origin_pt.0 as f64,
+        grid.origin_pt.1 as f64,
+        (grid.origin_pt.0 + grid.size_pt.0) as f64,
+        (grid.origin_pt.1 + grid.size_pt.1) as f64,
+    ))
+}
+
+/// Take alpha away from the current layer by a feather's coverage
+/// mask.
+///
+/// This is the whole difference between a feather and a stamp: the
+/// object loses opacity toward its edge, revealing what is behind it.
+/// The mask is uploaded as an alpha image and composited with
+/// `DestIn`, which multiplies the layer's alpha by the image's — the
+/// GPU equivalent of the `/SMask` the PDF exporter writes and of the
+/// CPU rasterizer's backdrop blend.
+fn apply_feather_mask(
+    scene: &mut Scene,
+    list: &DisplayList,
+    cmd: &DisplayCommand,
+    page_to_px: kurbo::Affine,
+    px_per_pt: f32,
+) {
+    let Some((path_id, transform)) = paged_compose::mask::cmd_path_and_transform(cmd) else {
+        return;
+    };
+    let Some(path_data) = list.paths.get(path_id) else {
+        return;
+    };
+    let Some(mask) = paged_compose::mask::feather_command_mask(
+        cmd,
+        path_data,
+        transform,
+        (px_per_pt * 72.0).max(72.0),
+    ) else {
+        return;
+    };
+    let (w, h) = (mask.grid.width_px, mask.grid.height_px);
+    if w == 0 || h == 0 {
+        return;
+    }
+    // Straight-alpha RGBA8: only the alpha channel is read by DestIn,
+    // but a white RGB keeps the buffer meaningful if it is ever shown.
+    let mut rgba = vec![255u8; (w as usize) * (h as usize) * 4];
+    for (i, &a) in mask.data.iter().enumerate() {
+        rgba[i * 4 + 3] = a;
+    }
+    let blob = Blob::new(Arc::new(rgba.into_boxed_slice()));
+    let brush = ImageBrush::new(ImageData {
+        data: blob,
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: w,
+        height: h,
+    });
+    let place = page_to_px
+        * kurbo::Affine::translate((mask.grid.origin_pt.0 as f64, mask.grid.origin_pt.1 as f64))
+        * kurbo::Affine::scale_non_uniform(
+            mask.grid.size_pt.0 as f64 / w as f64,
+            mask.grid.size_pt.1 as f64 / h as f64,
+        );
+    let rect = kurbo::Rect::new(
+        mask.grid.origin_pt.0 as f64,
+        mask.grid.origin_pt.1 as f64,
+        (mask.grid.origin_pt.0 + mask.grid.size_pt.0) as f64,
+        (mask.grid.origin_pt.1 + mask.grid.size_pt.1) as f64,
+    );
+    scene.push_layer(
+        Fill::NonZero,
+        PenikoBlendMode::new(Mix::Normal, Compose::DestIn),
+        1.0,
+        page_to_px,
+        &rect,
+    );
+    scene.draw_image(&brush, place);
+    scene.pop_layer();
+}
+
+/// Upload one effect mask as a tinted alpha image and draw it.
+///
+/// Vello has no "paint a colour through an 8-bit mask" primitive, so
+/// the colour goes in the image's RGB and the coverage in its alpha.
+/// That is the same picture the PDF exporter writes as a gray-masked
+/// image XObject.
+fn draw_effect_stamp(
+    scene: &mut Scene,
+    stamp: &paged_compose::mask::EffectStamp,
+    page_to_px: kurbo::Affine,
+) {
+    if stamp.mask.is_empty() {
+        return;
+    }
+    let grid = stamp.mask.grid;
+    let (w, h) = (grid.width_px, grid.height_px);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let c = linear_to_peniko(stamp.color).to_rgba8();
+    let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
+    for (i, &a) in stamp.mask.data.iter().enumerate() {
+        rgba[i * 4] = c.r;
+        rgba[i * 4 + 1] = c.g;
+        rgba[i * 4 + 2] = c.b;
+        // The stamp colour may carry its own alpha (an effect's
+        // opacity is already folded into the mask by the builder).
+        rgba[i * 4 + 3] = ((a as u16 * c.a as u16) / 255) as u8;
+    }
+    let brush = ImageBrush::new(ImageData {
+        data: Blob::new(Arc::new(rgba.into_boxed_slice())),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: w,
+        height: h,
+    });
+    let place = page_to_px
+        * kurbo::Affine::translate((grid.origin_pt.0 as f64, grid.origin_pt.1 as f64))
+        * kurbo::Affine::scale_non_uniform(
+            grid.size_pt.0 as f64 / w as f64,
+            grid.size_pt.1 as f64 / h as f64,
+        );
+    scene.draw_image(&brush, place);
+}
+
+/// Paint every stamp one effect command produces, honouring each
+/// stamp's blend mode and its clip to the object's outline.
+fn paint_effect_stamps(
+    scene: &mut Scene,
+    list: &DisplayList,
+    cmd: &DisplayCommand,
+    page_to_px: kurbo::Affine,
+    px_per_pt: f32,
+) {
+    let Some((path_id, transform)) = paged_compose::mask::cmd_path_and_transform(cmd) else {
+        return;
+    };
+    let Some(path_data) = list.paths.get(path_id) else {
+        return;
+    };
+    let stamps = paged_compose::mask::effect_command_stamps(
+        cmd,
+        path_data,
+        transform,
+        (px_per_pt * 72.0).max(72.0),
+    );
+    if stamps.is_empty() {
+        return;
+    }
+    let clip = path_to_bez(path_data, transform);
+    for stamp in &stamps {
+        let blend = blend_to_peniko(stamp.blend_mode);
+        if stamp.clip_to_path {
+            scene.push_layer(Fill::NonZero, blend, 1.0, page_to_px, &clip);
+            draw_effect_stamp(scene, stamp, page_to_px);
+            scene.pop_layer();
+        } else {
+            scene.push_layer(
+                Fill::NonZero,
+                blend,
+                1.0,
+                page_to_px,
+                &kurbo::Rect::new(
+                    stamp.mask.grid.origin_pt.0 as f64,
+                    stamp.mask.grid.origin_pt.1 as f64,
+                    (stamp.mask.grid.origin_pt.0 + stamp.mask.grid.size_pt.0) as f64,
+                    (stamp.mask.grid.origin_pt.1 + stamp.mask.grid.size_pt.1) as f64,
+                ),
+            );
+            draw_effect_stamp(scene, stamp, page_to_px);
+            scene.pop_layer();
+        }
+    }
+}
+
 fn build_scene_with_transform_filtered(
     list: &DisplayList,
     page_to_px: kurbo::Affine,
@@ -368,7 +561,45 @@ fn build_scene_with_transform_filtered(
     // properly nested by the emitter.
     let mut layer_stack: Vec<LayerKind> = Vec::new();
 
+    // A feather takes alpha AWAY from the object it belongs to. This
+    // lane used to fake that by stamping white rings inside the path,
+    // which paints ink where InDesign removes it — on a tinted ground
+    // the halo is plainly wrong, and on the annual's page 59 it wiped
+    // the panel under the cloud and the veil. Instead the run gets an
+    // isolated layer here and the real coverage mask, the one the PDF
+    // exporter uses, is composited onto it with `DestIn` at the
+    // feather command.
+    let feather_runs = paged_compose::mask::feather_run_starts(list);
+    let mut feather_layer_open = false;
+    // Pixels per point, for sizing the mask rasters.
+    let px_per_pt = {
+        let c = page_to_px.as_coeffs();
+        (c[0].hypot(c[1])) as f32
+    };
+
     for (cmd_idx, cmd) in list.commands.iter().enumerate() {
+        if let Some(feather_idx) = feather_runs.get(&cmd_idx).copied() {
+            // Defensive: a previous run whose feather never executed
+            // (degenerate path) would otherwise leak its layer.
+            if feather_layer_open {
+                scene_stack
+                    .last_mut()
+                    .expect("scene_stack underflow")
+                    .pop_layer();
+                feather_layer_open = false;
+            }
+            if let Some(rect) = feather_layer_rect(list, feather_idx, px_per_pt) {
+                let scene = scene_stack.last_mut().expect("scene_stack underflow");
+                scene.push_layer(
+                    Fill::NonZero,
+                    PenikoBlendMode::default(),
+                    1.0,
+                    page_to_px,
+                    &rect,
+                );
+                feather_layer_open = true;
+            }
+        }
         match cmd {
             // C-28 — open a soft-mask bracket. Vello's mask layers
             // modulate the content already drawn in the enclosing
@@ -773,332 +1004,90 @@ fn build_scene_with_transform_filtered(
                     PenikoBlendMode::new(Mix::Normal, Compose::SrcOver),
                 );
             }
-            DisplayCommand::InnerShadow {
-                path_id,
-                transform,
-                params,
-            } => {
-                // Same multi-stamp approximation as PathShadow but
-                // clipped to the path's interior so the soft
-                // shadow falls *inside* the shape. The clip layer
-                // is the un-offset path; the stamps inside it are
-                // the offset path drawn in the shadow color with
-                // an additive blend.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let clip_path = path_to_bez(path_data, transform);
-                let mut shifted = *transform;
-                shifted.0[4] += params.offset_x;
-                shifted.0[5] += params.offset_y;
-                let stamp_path = path_to_bez(path_data, &shifted);
-                let mut shadow_color = params.color;
-                shadow_color.a *= params.opacity.clamp(0.0, 1.0);
-                // Push the path interior as a clip layer so the
-                // stamp paint can only land where the original path
-                // is filled. Inside the clip, draw the offset path
-                // in the shadow colour with the multi-stamp falloff;
-                // the soft edge of the offset stamp produces the
-                // inner shadow look (true inner shadow paints the
-                // *complement* of the offset path inside the clip,
-                // but the simpler stamp here is visually close for
-                // small offsets and avoids a second mask pass).
-                scene.push_layer(
-                    Fill::NonZero,
-                    PenikoBlendMode::default(),
-                    1.0,
+            DisplayCommand::InnerShadow { .. }
+            | DisplayCommand::OuterGlow { .. }
+            | DisplayCommand::InnerGlow { .. }
+            | DisplayCommand::BevelEmboss { .. }
+            | DisplayCommand::Satin { .. } => {
+                // All five build the same way — coverage, moved /
+                // grown / blurred / combined, painted through in a
+                // colour — so they all come from the shared mask
+                // builders in `paged-compose`. This lane used to
+                // approximate each with concentric path stamps and
+                // skip the bevel outright, which on the annual's
+                // effects pages read as a dark wash over the whole
+                // object instead of a lit edge.
+                paint_effect_stamps(
+                    scene_stack.last_mut().expect("scene_stack underflow"),
+                    list,
+                    cmd,
                     page_to_px,
-                    &clip_path,
+                    px_per_pt,
                 );
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &stamp_path,
-                    shadow_color,
-                    params.blur_radius,
-                    blend_to_peniko(params.blend_mode),
-                );
-                scene.pop_layer();
-                let _ = params.choke; // CPU rasterizer's dilation knob; not honoured here.
-            }
-            DisplayCommand::OuterGlow {
-                path_id,
-                transform,
-                params,
-            } => {
-                // Centred soft halo outside the path. Same multi-
-                // stamp approximation as PathShadow with no offset
-                // and the glow's own blend mode (typically Screen).
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let path = path_to_bez(path_data, transform);
-                let mut glow_color = params.color;
-                glow_color.a *= params.opacity.clamp(0.0, 1.0);
-                // `spread` widens the hard stamp before the blur;
-                // fold it into the blur radius so the falloff
-                // covers the dilated region.
-                let blur_pt = params.blur_radius + params.spread.max(0.0);
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path,
-                    glow_color,
-                    blur_pt,
-                    blend_to_peniko(params.blend_mode),
-                );
-            }
-            DisplayCommand::InnerGlow {
-                path_id,
-                transform,
-                params,
-            } => {
-                // Centred soft halo inside the path. Push the
-                // path as a clip layer, then stamp the same path
-                // with the multi-stamp falloff inside it. The
-                // overlap stack reads as a soft inner edge once
-                // clipped to the interior.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let path = path_to_bez(path_data, transform);
-                let mut glow_color = params.color;
-                glow_color.a *= params.opacity.clamp(0.0, 1.0);
-                scene.push_layer(
-                    Fill::NonZero,
-                    PenikoBlendMode::default(),
-                    1.0,
-                    page_to_px,
-                    &path,
-                );
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path,
-                    glow_color,
-                    params.blur_radius,
-                    blend_to_peniko(params.blend_mode),
-                );
-                scene.pop_layer();
-            }
-            DisplayCommand::BevelEmboss { .. } => {
-                // Skipped: the chisel-edge approximation (two
-                // offset stroke fills along the light angle)
-                // regresses sample geometry visibly without the
-                // per-pixel normal field the CPU rasterizer
-                // runs. The CPU path now also honours the W1.4
-                // parity knobs (style Inner/Outer/Emboss/Pillow,
-                // direction Up/Down, technique Smooth/Chisel*,
-                // soften) which require that same height-field
-                // pass — so Vello stays a renderer-gap. Keeping
-                // this as a log+skip is honest; the CPU pipeline
-                // remains the path of record.
-                tracing::trace!(
-                    "vello: BevelEmboss skipped (no normal-field path; style/direction/\
-                     technique/soften are CPU-only — renderer-gap)"
-                );
-            }
-            DisplayCommand::Satin {
-                path_id,
-                transform,
-                params,
-            } => {
-                // Approximate satin: stamp the path twice along
-                // the angle vector, blended with the satin colour
-                // and the configured blend mode (typically
-                // Multiply). Clipped to the path interior so the
-                // wave doesn't bleed outside. Blur is faked by the
-                // multi-stamp falloff.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let clip_path = path_to_bez(path_data, transform);
-                let theta = params.angle_deg.to_radians();
-                let dx = params.distance * theta.cos();
-                let dy = params.distance * theta.sin();
-                let mut color = params.color;
-                color.a *= params.opacity.clamp(0.0, 1.0);
-                // Reduce per-stamp opacity since two stamps
-                // overlap; matches the CPU rasterizer's
-                // "subtract-difference" intent loosely.
-                color.a *= 0.5;
-                scene.push_layer(
-                    Fill::NonZero,
-                    PenikoBlendMode::default(),
-                    1.0,
-                    page_to_px,
-                    &clip_path,
-                );
-                let mut a = *transform;
-                a.0[4] += dx;
-                a.0[5] += dy;
-                let path_a = path_to_bez(path_data, &a);
-                let mut b = *transform;
-                b.0[4] -= dx;
-                b.0[5] -= dy;
-                let path_b = path_to_bez(path_data, &b);
-                let blend = blend_to_peniko(params.blend_mode);
-                stamp_blurred_path(scene, page_to_px, &path_a, color, params.blur_radius, blend);
-                stamp_blurred_path(scene, page_to_px, &path_b, color, params.blur_radius, blend);
-                scene.pop_layer();
-                // `params.invert` (W1.4) flips a difference mask the
-                // CPU rasterizer computes; this two-stamp additive
-                // approximation has no such mask, so the Vello preview
-                // ignores it (renderer-gap — CPU is the path of
-                // record).
             }
             DisplayCommand::Feather {
                 path_id,
                 transform,
                 params,
             } => {
-                // Push the path as a clip, then approximate the
-                // soft edge by stamping the path in solid alpha
-                // and following with shrinking inset rings of
-                // diminishing opacity. The CPU rasterizer uses a
-                // distance-field; here we just paint the path,
-                // and let the multi-stamp falloff blur the edge
-                // outward into the clipped region. Visible but
-                // lossy — flagged in the docstring.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let path = path_to_bez(path_data, transform);
-                scene.push_layer(
-                    Fill::NonZero,
-                    PenikoBlendMode::default(),
-                    1.0,
+                // The run opened an isolated layer at its first
+                // command; take its alpha down by the object's real
+                // coverage mask, the same raster the PDF exporter
+                // paints through, and close the layer.
+                let _ = (path_id, transform, params);
+                apply_feather_mask(
+                    scene_stack.last_mut().expect("scene_stack underflow"),
+                    list,
+                    cmd,
                     page_to_px,
-                    &path,
+                    px_per_pt,
                 );
-                // Re-stamp with the multi-stamp falloff in white at
-                // alpha 1.0; the clip masks everything outside, so
-                // the falloff produces a soft inner edge. Width
-                // scales the falloff radius. We use Compose::SrcOver
-                // for the central stamps (full alpha) — the soft
-                // edge appears because successive stamps stack with
-                // additive blending in `stamp_blurred_path`.
-                let edge_color = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path,
-                    edge_color,
-                    params.width,
-                    PenikoBlendMode::new(Mix::Normal, Compose::SrcOver),
-                );
-                scene.pop_layer();
-                // corner_type / noise / choke are CPU-rasterizer
-                // distance-field knobs not honoured by this
-                // multi-stamp approximation — the falloff is the
-                // same regardless of corner shape or noise weight.
+                if feather_layer_open {
+                    scene_stack
+                        .last_mut()
+                        .expect("scene_stack underflow")
+                        .pop_layer();
+                    feather_layer_open = false;
+                }
             }
             DisplayCommand::DirectionalFeather {
                 path_id,
                 transform,
                 params,
             } => {
-                // Approximate directional feather with the plain
-                // Feather treatment using the max of the four
-                // per-edge widths. The CPU rasterizer is the path
-                // of record for per-edge gradients; this is just a
-                // visible soft edge for preview.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let path = path_to_bez(path_data, transform);
-                let width = params
-                    .left_width
-                    .max(params.right_width)
-                    .max(params.top_width)
-                    .max(params.bottom_width);
-                if width <= 0.0 {
-                    continue;
+                // Per-edge ramps, from the same shared mask builder
+                // the PDF lane uses — this lane used to fall back to
+                // the plain feather's widest edge.
+                let _ = (path_id, transform, params);
+                apply_feather_mask(
+                    scene_stack.last_mut().expect("scene_stack underflow"),
+                    list,
+                    cmd,
+                    page_to_px,
+                    px_per_pt,
+                );
+                if feather_layer_open {
+                    scene_stack
+                        .last_mut()
+                        .expect("scene_stack underflow")
+                        .pop_layer();
+                    feather_layer_open = false;
                 }
-                scene.push_layer(
-                    Fill::NonZero,
-                    PenikoBlendMode::default(),
-                    1.0,
-                    page_to_px,
-                    &path,
-                );
-                let edge_color = ComposeColor::rgba(1.0, 1.0, 1.0, 1.0);
-                stamp_blurred_path(
-                    scene,
-                    page_to_px,
-                    &path,
-                    edge_color,
-                    width,
-                    PenikoBlendMode::new(Mix::Normal, Compose::SrcOver),
-                );
-                scene.pop_layer();
             }
-            DisplayCommand::GradientFeather {
-                path_id,
-                transform,
-                params,
-            } => {
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                // Approximate gradient feather: paint a peniko brush
-                // along the gradient axis using the alpha stops
-                // (alpha = 0 → transparent, alpha = 1 → opaque
-                // white) clipped to the path's interior. The CPU
-                // rasterizer is the path of record for the exact
-                // alpha modulation; this version just shows
-                // *something* aligned with the gradient axis.
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                if params.stops.len() < 2 {
-                    continue;
-                }
-                let path = path_to_bez(path_data, transform);
-                let (sx, sy) = transform.apply(params.start_x, params.start_y);
-                let (ex, ey) = transform.apply(params.end_x, params.end_y);
-                let stops: Vec<PenikoColorStop> = params
-                    .stops
-                    .iter()
-                    .map(|s| PenikoColorStop {
-                        offset: s.location.clamp(0.0, 1.0),
-                        color: linear_to_peniko(ComposeColor::rgba(
-                            1.0,
-                            1.0,
-                            1.0,
-                            s.alpha.clamp(0.0, 1.0),
-                        ))
-                        .into(),
-                    })
-                    .collect();
-                let gradient = match params.kind {
-                    paged_compose::GradientFeatherKind::Linear => PenikoGradient::new_linear(
-                        kurbo::Point::new(sx as f64, sy as f64),
-                        kurbo::Point::new(ex as f64, ey as f64),
-                    )
-                    .with_stops(stops.as_slice()),
-                    paged_compose::GradientFeatherKind::Radial => {
-                        let radius = ((ex - sx) as f64).hypot((ey - sy) as f64);
-                        if radius <= 0.0 {
-                            continue;
-                        }
-                        PenikoGradient::new_radial(
-                            kurbo::Point::new(sx as f64, sy as f64),
-                            radius as f32,
-                        )
-                        .with_stops(stops.as_slice())
-                    }
-                };
-                scene.fill(
-                    Fill::NonZero,
+            DisplayCommand::GradientFeather { .. } => {
+                // A gradient feather is a MASK over the object's own
+                // paint: alpha 1 keeps it, alpha 0 takes it away along
+                // the axis. Painting white AT that alpha instead — the
+                // old approximation here — read as the fade running
+                // backwards, which is how the annual's gradient bar
+                // came out. The mask is the shared one the other
+                // lanes use, composited with `DestIn`.
+                apply_feather_mask(
+                    scene_stack.last_mut().expect("scene_stack underflow"),
+                    list,
+                    cmd,
                     page_to_px,
-                    BrushRef::Gradient(&gradient),
-                    None,
-                    &path,
+                    px_per_pt,
                 );
             }
         }

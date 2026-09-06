@@ -1037,7 +1037,48 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
         }
     }
 
-    for cmd in &list.commands {
+    // A feather fades its object back toward what was behind it, so
+    // the walk photographs the target just before each feathered
+    // object starts painting. Built once per list; empty for the
+    // overwhelming majority of pages.
+    let backdrop_starts = paged_compose::mask::feather_run_starts(list);
+    let mut feather_backdrop: Option<FeatherBackdrop> = None;
+
+    for (cmd_idx, cmd) in list.commands.iter().enumerate() {
+        if let Some(feather_idx) = backdrop_starts.get(&cmd_idx).copied() {
+            feather_backdrop = None;
+            if let Some(fcmd) = list.commands.get(feather_idx) {
+                if let (Some(pad_pt), Some((pid, xf))) = (
+                    paged_compose::mask::feather_pad_pt(fcmd),
+                    paged_compose::mask::cmd_path_and_transform(fcmd),
+                ) {
+                    if let Some(path_data) = list.paths.get(pid) {
+                        if let Some(path) = build_path_transformed(path_data, xf) {
+                            let depth = group_stack.len();
+                            let (target, target_xform, _) = resolve_target(
+                                &mut pixmap,
+                                &mut group_stack,
+                                page_to_px,
+                                &clip_stack,
+                            );
+                            if let Some((ox, oy, w, h, _)) =
+                                effect_scratch_bounds(&path, target_xform, pad_pt)
+                            {
+                                feather_backdrop =
+                                    snapshot_region(target, ox, oy, w, h).map(|pixmap| {
+                                        FeatherBackdrop {
+                                            off_x_px: ox,
+                                            off_y_px: oy,
+                                            pixmap,
+                                            depth,
+                                        }
+                                    });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         match cmd {
             DisplayCommand::FillPath {
                 path_id,
@@ -2000,11 +2041,13 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
+                let group_depth = group_stack.len();
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 let paper_premul = linear_color_to_ts(options.background)
                     .premultiply()
                     .to_color_u8();
+                let backdrop = feather_backdrop.as_ref().filter(|b| b.depth == group_depth);
                 render_feather(
                     target,
                     target_xform,
@@ -2013,7 +2056,9 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                     params,
                     scale,
                     paper_premul,
+                    backdrop,
                 );
+                feather_backdrop = None;
             }
             DisplayCommand::DirectionalFeather {
                 path_id,
@@ -2026,11 +2071,13 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let Some(path) = build_path_transformed(path_data, transform) else {
                     continue;
                 };
+                let group_depth = group_stack.len();
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
                 let paper_premul = linear_color_to_ts(options.background)
                     .premultiply()
                     .to_color_u8();
+                let backdrop = feather_backdrop.as_ref().filter(|b| b.depth == group_depth);
                 render_directional_feather(
                     target,
                     target_xform,
@@ -2039,7 +2086,9 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                     params,
                     scale,
                     paper_premul,
+                    backdrop,
                 );
+                feather_backdrop = None;
             }
             DisplayCommand::GradientFeather {
                 path_id,
@@ -2055,8 +2104,10 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let paper_premul = linear_color_to_ts(options.background)
                     .premultiply()
                     .to_color_u8();
+                let group_depth = group_stack.len();
                 let (target, target_xform, target_mask) =
                     resolve_target(&mut pixmap, &mut group_stack, page_to_px, &clip_stack);
+                let backdrop = feather_backdrop.as_ref().filter(|b| b.depth == group_depth);
                 render_gradient_feather(
                     target,
                     target_xform,
@@ -2066,7 +2117,9 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                     params,
                     scale,
                     paper_premul,
+                    backdrop,
                 );
+                feather_backdrop = None;
             }
             DisplayCommand::EndBlendGroup(_) | DisplayCommand::PopLayer(_) => {
                 let Some(top) = group_stack.pop() else {
@@ -3107,6 +3160,57 @@ fn blend_mode_to_ts(m: BlendMode) -> TsBlendMode {
 /// into the scratch buffer's local pixel grid (so the path can be
 /// re-rasterised into the buffer with the same control-point
 /// projection logic as the page render).
+/// The target as it stood before an object that carries a feather
+/// painted itself, over exactly the region that feather will touch.
+///
+/// A feather does not tint the page and does not fade it to paper: it
+/// takes opacity away from the object's OWN paint, revealing whatever
+/// was behind it. Without a copy of that backdrop the rasterizer can
+/// only guess, and the guess (fade to paper) erases every earlier
+/// command inside the feather's padded rectangle — on the annual's
+/// page 59 the two panel captions vanished under the cloud's and the
+/// veil's feathers the moment text stopped painting last.
+struct FeatherBackdrop {
+    off_x_px: i32,
+    off_y_px: i32,
+    pixmap: Pixmap,
+    /// Group-stack depth at capture time. A feather is only fed a
+    /// backdrop captured against the same target.
+    depth: usize,
+}
+
+/// Copy a rectangle of `target` (clipped to its bounds; out-of-page
+/// pixels come back transparent) into a standalone pixmap.
+fn snapshot_region(
+    target: &Pixmap,
+    off_x_px: i32,
+    off_y_px: i32,
+    w_px: u32,
+    h_px: u32,
+) -> Option<Pixmap> {
+    let mut out = Pixmap::new(w_px, h_px)?;
+    let tw = target.width() as i32;
+    let th = target.height() as i32;
+    let src = target.data();
+    let dst = out.data_mut();
+    for y in 0..h_px as i32 {
+        let ty = off_y_px + y;
+        if ty < 0 || ty >= th {
+            continue;
+        }
+        for x in 0..w_px as i32 {
+            let tx = off_x_px + x;
+            if tx < 0 || tx >= tw {
+                continue;
+            }
+            let si = ((ty * tw + tx) as usize) * 4;
+            let di = ((y * w_px as i32 + x) as usize) * 4;
+            dst[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    Some(out)
+}
+
 fn effect_scratch_bounds(
     path: &tiny_skia::Path,
     target_xform: TsTransform,
@@ -3784,6 +3888,7 @@ fn render_feather(
     params: &Feather,
     scale: f32,
     paper_premul: PremultipliedColorU8,
+    backdrop: Option<&FeatherBackdrop>,
 ) {
     let pad_pt = params.width.abs() * 3.0 + 1.0;
     let Some((off_x_px, off_y_px, w_px, h_px, scratch_xform)) =
@@ -3841,6 +3946,7 @@ fn render_feather(
         h_px,
         &feather_mask,
         paper_premul,
+        backdrop,
     );
 }
 
@@ -3869,6 +3975,7 @@ fn render_directional_feather(
     params: &DirectionalFeather,
     scale: f32,
     paper_premul: PremultipliedColorU8,
+    backdrop: Option<&FeatherBackdrop>,
 ) {
     // Pad scratch by max edge width so the soft edge doesn't clip.
     let max_w = params
@@ -4004,6 +4111,7 @@ fn render_directional_feather(
         h_px,
         &feather_mask,
         paper_premul,
+        backdrop,
     );
 }
 
@@ -4039,6 +4147,7 @@ fn render_gradient_feather(
     params: &GradientFeather,
     scale: f32,
     paper_premul: PremultipliedColorU8,
+    backdrop: Option<&FeatherBackdrop>,
 ) {
     if params.stops.is_empty() {
         return;
@@ -4139,7 +4248,28 @@ fn render_gradient_feather(
                     factor = 1.0 + (factor - 1.0) * mv_unit;
                 }
             }
-            apply_alpha_factor(target_data, tx, ty, target_w, factor, paper_premul);
+            let under = backdrop.and_then(|b| {
+                let bx = tx - b.off_x_px;
+                let by = ty - b.off_y_px;
+                if bx < 0
+                    || by < 0
+                    || bx >= b.pixmap.width() as i32
+                    || by >= b.pixmap.height() as i32
+                {
+                    return None;
+                }
+                let i = ((by * b.pixmap.width() as i32 + bx) as usize) * 4;
+                let d = b.pixmap.data();
+                PremultipliedColorU8::from_rgba(d[i], d[i + 1], d[i + 2], d[i + 3])
+            });
+            apply_alpha_factor(
+                target_data,
+                tx,
+                ty,
+                target_w,
+                factor,
+                under.unwrap_or(paper_premul),
+            );
         }
     }
 }
@@ -4191,11 +4321,13 @@ fn apply_alpha_factor(
 /// vermilion veil came out muddy), and it disagreed with both InDesign
 /// and our own PDF exporter, which masks the object's own paint.
 ///
-/// The honest general form masks an isolated layer, so a feather over
-/// a tinted background reveals the tint rather than the paper; that
-/// needs the fill and its effects captured in their own buffer. Fading
-/// to paper is what the gradient feather beside it already does, and it
-/// is exact wherever the backdrop is the page.
+/// `backdrop` is the target as it stood before the object painted
+/// itself, over the same region. With it the fade is exact: at mask 0
+/// the pixel returns to what was behind the object, so a feather over
+/// a tinted panel reveals the tint and a feather whose padded
+/// rectangle overlaps unrelated page content leaves that content
+/// alone. Without it the fade falls back to the paper colour, which is
+/// only right where the backdrop IS the page.
 #[allow(clippy::too_many_arguments)]
 fn fade_target_by_mask(
     target: &mut Pixmap,
@@ -4206,6 +4338,7 @@ fn fade_target_by_mask(
     h_px: u32,
     mask: &[u8],
     paper: PremultipliedColorU8,
+    backdrop: Option<&FeatherBackdrop>,
 ) {
     let target_w = target.width() as i32;
     let target_h = target.height() as i32;
@@ -4234,7 +4367,21 @@ fn fade_target_by_mask(
                     continue;
                 }
             }
-            apply_alpha_factor(data, tx, ty, target_w, factor, paper);
+            let under = backdrop.and_then(|b| {
+                let bx = tx - b.off_x_px;
+                let by = ty - b.off_y_px;
+                if bx < 0
+                    || by < 0
+                    || bx >= b.pixmap.width() as i32
+                    || by >= b.pixmap.height() as i32
+                {
+                    return None;
+                }
+                let i = ((by * b.pixmap.width() as i32 + bx) as usize) * 4;
+                let d = b.pixmap.data();
+                PremultipliedColorU8::from_rgba(d[i], d[i + 1], d[i + 2], d[i + 3])
+            });
+            apply_alpha_factor(data, tx, ty, target_w, factor, under.unwrap_or(paper));
         }
     }
 }
@@ -5211,6 +5358,90 @@ mod tests {
         assert!(
             far[0] > 240 && far[1] > 240 && far[2] > 240,
             "outside the object stays paper; got {far:?}"
+        );
+    }
+
+    #[test]
+    fn a_feather_reveals_the_backdrop_and_spares_what_is_beside_it() {
+        // The feather's scratch rectangle is padded well past the
+        // object (3 x width), and everything in that rectangle used to
+        // be faded to PAPER — so a caption sitting beside a feathered
+        // panel was erased, and a feather over a tinted ground faded
+        // to white instead of to the ground. Both are fixed by fading
+        // toward a photograph of the target taken before the object
+        // painted itself.
+        use paged_compose::{
+            Color, DisplayCommand as Cmd, DisplayList, Feather as F, FeatherCornerType, Paint,
+        };
+        let mut list = DisplayList::new();
+        // A wide mid-grey ground the feathered object sits on.
+        let (ground, ground_xf) = unit_rect_at(&mut list, 0.0, 0.0, 60.0, 30.0);
+        list.commands.push(Cmd::FillPath {
+            path_id: ground,
+            paint: Paint::Solid(Color::rgba(0.5, 0.5, 0.5, 1.0)),
+            transform: ground_xf,
+        });
+        // A black bar OUTSIDE the object but inside the feather's pad.
+        let (bar, bar_xf) = unit_rect_at(&mut list, 46.0, 12.0, 10.0, 6.0);
+        list.commands.push(Cmd::FillPath {
+            path_id: bar,
+            paint: Paint::Solid(Color::BLACK),
+            transform: bar_xf,
+        });
+        // The feathered object: a white square on the grey ground.
+        let (obj, obj_xf) = unit_rect_at(&mut list, 6.0, 6.0, 24.0, 18.0);
+        list.commands.push(Cmd::FillPath {
+            path_id: obj,
+            paint: Paint::Solid(Color::WHITE),
+            transform: obj_xf,
+        });
+        list.commands.push(Cmd::Feather {
+            path_id: obj,
+            transform: obj_xf,
+            params: F {
+                width: 6.0,
+                corner_type: FeatherCornerType::Sharp,
+                noise: 0.0,
+                choke: 0.0,
+            },
+        });
+        let mut opts = RasterOptions::new(60.0, 30.0);
+        opts.dpi = 72.0;
+        let img = rasterize(&list, &opts);
+
+        // The bar is 16pt from the object but only 10pt from the edge
+        // of its 19pt pad — it must come through untouched.
+        let on_bar = at(&img, 50, 15);
+        assert!(
+            on_bar[0] < 40,
+            "a feather leaves ink beside its object alone; got {on_bar:?}"
+        );
+        // The object's centre keeps its own white paint.
+        let centre = at(&img, 18, 15);
+        assert!(
+            centre[0] > 230,
+            "the object keeps its paint at the centre; got {centre:?}"
+        );
+        // At the faded edge the GROUND shows through, not the paper:
+        // mid-grey, not white.
+        // Along the fading edge the object gives way to the GROUND.
+        // Fading to paper instead would leave white-on-white here and
+        // never dip below the object's own value.
+        // Read the ground where no effect reaches, as the reference.
+        let plain_ground = at(&img, 58, 27)[0] as i32;
+        let profile: Vec<u8> = (5..14).map(|x| at(&img, x, 15)[0]).collect();
+        let dip = profile.iter().copied().min().unwrap_or(255) as i32;
+        assert!(
+            (dip - plain_ground).abs() <= 6,
+            "the fade lands on the grey ground, not the paper; \
+             profile={profile:?} ground={plain_ground}"
+        );
+        // And the ground inside the feather's pad but outside the
+        // object is bit-identical to the ground outside it.
+        let padded_ground = at(&img, 40, 27)[0] as i32;
+        assert_eq!(
+            padded_ground, plain_ground,
+            "the ground inside the feather's pad is untouched"
         );
     }
 

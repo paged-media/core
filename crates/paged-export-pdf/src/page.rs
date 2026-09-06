@@ -411,26 +411,25 @@ impl Walker<'_, '_> {
         end: usize,
     ) -> bool {
         let dpi = self.input.options.effect_dpi.max(72.0);
-        let mask =
-            match &self.list.commands[feather_idx] {
-                DisplayCommand::Feather {
-                    path_id,
-                    transform,
-                    params,
-                } => self
-                    .list
-                    .paths
-                    .get(*path_id)
-                    .and_then(|p| crate::effects::feather_mask(p, transform, params, dpi)),
-                DisplayCommand::DirectionalFeather {
-                    path_id,
-                    transform,
-                    params,
-                } => self.list.paths.get(*path_id).and_then(|p| {
-                    crate::effects::directional_feather_mask(p, transform, params, dpi)
-                }),
-                _ => None,
-            };
+        let mask = match &self.list.commands[feather_idx] {
+            DisplayCommand::Feather {
+                path_id,
+                transform,
+                params,
+            } => self
+                .list
+                .paths
+                .get(*path_id)
+                .and_then(|p| crate::transparency::feather_mask(p, transform, params, dpi)),
+            DisplayCommand::DirectionalFeather {
+                path_id,
+                transform,
+                params,
+            } => self.list.paths.get(*path_id).and_then(|p| {
+                crate::transparency::directional_feather_mask(p, transform, params, dpi)
+            }),
+            _ => None,
+        };
         let Some(mask) = mask else { return false };
         self.feather_consumed.insert(at);
 

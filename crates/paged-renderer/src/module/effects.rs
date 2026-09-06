@@ -481,14 +481,33 @@ fn gradient_feather_from_parser(
         }
         _ => (start, end),
     };
-    let stops = p
-        .stops
-        .iter()
-        .map(|s| ComposeGradientFeatherStop {
-            location: (s.location_pct / 100.0).clamp(0.0, 1.0),
-            alpha: (s.alpha_pct / 100.0).clamp(0.0, 1.0),
-        })
-        .collect();
+    // An applied `<GradientFeatherSetting>` with no `<GradientStop>`
+    // children is not "no gradient": it is InDesign's DEFAULT gradient
+    // feather, white (opaque) to black (transparent) across the axis.
+    // InDesign writes the element bare in that case, so a reader that
+    // treats the empty list as "nothing to do" draws no fade at all —
+    // which is what the annual's gradient-feather bar did next to
+    // InDesign's smooth fade to paper.
+    let stops: Vec<ComposeGradientFeatherStop> = if p.stops.is_empty() {
+        vec![
+            ComposeGradientFeatherStop {
+                location: 0.0,
+                alpha: 1.0,
+            },
+            ComposeGradientFeatherStop {
+                location: 1.0,
+                alpha: 0.0,
+            },
+        ]
+    } else {
+        p.stops
+            .iter()
+            .map(|s| ComposeGradientFeatherStop {
+                location: (s.location_pct / 100.0).clamp(0.0, 1.0),
+                alpha: (s.alpha_pct / 100.0).clamp(0.0, 1.0),
+            })
+            .collect()
+    };
     ComposeGradientFeather {
         kind,
         start_x: start.0,
@@ -514,5 +533,60 @@ impl BlendModeDefault for BlendMode {
             BlendMode::Normal => default,
             other => other,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gradient_feather_with_no_stops_is_indesigns_default_fade() {
+        // InDesign writes `<GradientFeatherSetting Applied="true"
+        // Type="Linear" Angle="0"/>` with no `<GradientStop>` children
+        // when the object carries the default gradient feather, and
+        // renders it as opaque-to-transparent along the axis. Reading
+        // the empty list as "no stops, nothing to fade" left the
+        // annual's feathered bar flat vermilion against InDesign's
+        // fade to paper.
+        let p = GradientFeatherParams {
+            gradient_type: Some("Linear".into()),
+            angle_deg: Some(0.0),
+            start_point: None,
+            end_point: None,
+            stops: Vec::new(),
+        };
+        let g = gradient_feather_from_parser(&p, None);
+        assert_eq!(g.stops.len(), 2, "the default gradient has two stops");
+        assert_eq!((g.stops[0].location, g.stops[0].alpha), (0.0, 1.0));
+        assert_eq!((g.stops[1].location, g.stops[1].alpha), (1.0, 0.0));
+    }
+
+    #[test]
+    fn declared_gradient_feather_stops_win_over_the_default() {
+        let p = GradientFeatherParams {
+            gradient_type: Some("Radial".into()),
+            angle_deg: None,
+            start_point: None,
+            end_point: None,
+            stops: vec![
+                paged_model::GradientFeatherStop {
+                    location_pct: 20.0,
+                    alpha_pct: 80.0,
+                    midpoint_pct: 50.0,
+                    stop_color: None,
+                },
+                paged_model::GradientFeatherStop {
+                    location_pct: 90.0,
+                    alpha_pct: 10.0,
+                    midpoint_pct: 50.0,
+                    stop_color: None,
+                },
+            ],
+        };
+        let g = gradient_feather_from_parser(&p, None);
+        assert_eq!(g.stops.len(), 2);
+        assert!((g.stops[0].alpha - 0.8).abs() < 1e-6);
+        assert!((g.stops[1].location - 0.9).abs() < 1e-6);
     }
 }
