@@ -3900,12 +3900,6 @@ impl CanvasModel {
         id
     }
 
-    /// See [`Self::source_id_floor`].
-    #[cfg(test)]
-    pub(crate) fn source_id_floor_for_test(&self) -> u64 {
-        self.source_id_floor
-    }
-
     /// Editor-ops — resolve the spread hosting `page_id` plus the
     /// page's spread-origin (for the page-local → spread-coordinate
     /// conversion the structural inserts need; same rule as

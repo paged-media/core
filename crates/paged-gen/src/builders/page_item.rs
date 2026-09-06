@@ -89,9 +89,17 @@ impl PageItem {
 }
 
 /// IDML `<Oval>` — an ellipse inscribed in `width_pt × height_pt` at
-/// inner origin. Emits the four-corner `<PathGeometry>` bounding box
-/// InDesign writes for an oval (the renderer derives the inscribed
-/// ellipse from the bounds). Used by the W1.5 stroke-alignment page.
+/// inner origin. Emits the four-arc Bézier `<PathGeometry>` InDesign
+/// writes for an oval: anchors at the edge midpoints in the order
+/// bottom, right, top, left, each with κ·r handles along its edge
+/// (measured on InDesign 20.0.1's own export, 2026-09-06).
+///
+/// This used to emit the four-corner bounding box, with a comment
+/// claiming that was InDesign's spelling. It is not — an `<Oval>` is an
+/// ellipse only by its PATH, so InDesign drew every generated oval as a
+/// RECTANGLE while our renderer drew the inscribed ellipse, and the
+/// reference PDF baked that disagreement in. Used by the W1.5
+/// stroke-alignment page.
 pub struct Oval {
     pub self_id: String,
     pub width_pt: f32,
@@ -142,7 +150,7 @@ impl Oval {
         let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         b.start("Oval", &attr_refs);
         b.start("Properties", &[]);
-        write_path_geometry(b, self.width_pt, self.height_pt);
+        write_oval_path_geometry(b, self.width_pt, self.height_pt);
         b.end("Properties");
         b.end("Oval");
     }
@@ -1152,6 +1160,42 @@ impl Rect {
         }
         kind
     }
+}
+
+/// The four-arc Bézier circle constant.
+const OVAL_KAPPA: f32 = 0.552_284_8;
+
+/// `<PathGeometry>` for an `<Oval>`: the ellipse inscribed in
+/// `w × h` at inner origin, spelled the way InDesign spells it —
+/// midpoint anchors bottom → right → top → left with κ·r handles.
+/// The anchors sit on the edge midpoints, so a parser reading the
+/// AABB of the anchors still recovers the authored box.
+fn write_oval_path_geometry(b: &mut XmlBuilder, w: f32, h: f32) {
+    b.start("PathGeometry", &[]);
+    b.start("GeometryPathType", &[("PathOpen", "false")]);
+    b.start("PathPointArray", &[]);
+    let (cx, cy) = (w * 0.5, h * 0.5);
+    let (kx, ky) = (cx * OVAL_KAPPA, cy * OVAL_KAPPA);
+    let points = [
+        ((cx, h), (cx - kx, h), (cx + kx, h)),
+        ((w, cy), (w, cy + ky), (w, cy - ky)),
+        ((cx, 0.0), (cx + kx, 0.0), (cx - kx, 0.0)),
+        ((0.0, cy), (0.0, cy - ky), (0.0, cy + ky)),
+    ];
+    let xy = |p: (f32, f32)| format!("{} {}", format_f32(p.0), format_f32(p.1));
+    for (anchor, left, right) in points {
+        b.empty(
+            "PathPointType",
+            &[
+                ("Anchor", &xy(anchor)),
+                ("LeftDirection", &xy(left)),
+                ("RightDirection", &xy(right)),
+            ],
+        );
+    }
+    b.end("PathPointArray");
+    b.end("GeometryPathType");
+    b.end("PathGeometry");
 }
 
 fn write_path_geometry(b: &mut XmlBuilder, w: f32, h: f32) {
