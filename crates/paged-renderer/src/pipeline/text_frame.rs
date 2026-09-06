@@ -823,22 +823,27 @@ pub(super) fn emit_text_frame_into(
 /// `metrics` carries the head font's OS/2 / hhea metrics; when
 /// present, `CapHeight` and `XHeight` policies use the font's
 /// real values instead of a 70% / 50% heuristic.
-pub(super) fn first_baseline_for_frame(
-    frame: &TextFrame,
+/// How far below the top of a text area its first baseline sits, for
+/// one `FirstBaselineOffset` policy.
+///
+/// Shared by frames and TABLE CELLS: InDesign applies the same rule in
+/// both (measured 2026-09-06 — a top-aligned cell's first line sits at
+/// `row_top + top_inset + ascender`, and `FixedHeight` with a minimum
+/// of 10 pt puts it at exactly 10). Cells had their own `0.8 × pt`
+/// heuristic long after frames adopted the real ascender.
+pub(super) fn first_baseline_offset_64(
+    policy: Option<paged_model::FirstBaselineOffset>,
+    minimum_offset_pt: Option<f32>,
     point_size: f32,
     default_64: i32,
     metrics: Option<&FontMetrics>,
 ) -> i32 {
     const CAP_HEIGHT_FALLBACK: f32 = 0.70;
     const X_HEIGHT_FALLBACK: f32 = 0.50;
-    let top_inset_64 = frame
-        .inset_spacing
-        .map(|i| (i[0] * paged_text::shape::ADVANCE_PRECISION).round() as i32)
-        .unwrap_or(0);
     let pt_to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
     let em_fraction_to_64 = |frac: f32| pt_to_64(point_size * frac);
     use paged_model::FirstBaselineOffset as F;
-    let policy_offset_64 = match frame.first_baseline_offset {
+    match policy {
         Some(F::CapHeight) => em_fraction_to_64(
             metrics
                 .and_then(|m| m.cap_height)
@@ -852,17 +857,38 @@ pub(super) fn first_baseline_for_frame(
         Some(F::EmBoxHeight) => pt_to_64(point_size),
         // FixedHeight / LeadingOffset use MinimumFirstBaselineOffset
         // verbatim. Falls back to default when missing.
-        Some(F::FixedHeight) | Some(F::LeadingOffset) => frame
-            .minimum_first_baseline_offset
-            .map(pt_to_64)
-            .unwrap_or(default_64),
+        Some(F::FixedHeight) | Some(F::LeadingOffset) => {
+            minimum_offset_pt.map(pt_to_64).unwrap_or(default_64)
+        }
         // AscentOffset (IDML default) and `None` (unrecognised /
         // absent attribute): use the font's ascender if available;
         // otherwise fall through to the LayoutOptions heuristic.
         Some(F::AscentOffset) | None => metrics
             .map(|m| em_fraction_to_64(m.ascender))
             .unwrap_or(default_64),
-    };
+    }
+}
+
+pub(super) fn first_baseline_for_frame(
+    frame: &TextFrame,
+    point_size: f32,
+    default_64: i32,
+    metrics: Option<&FontMetrics>,
+) -> i32 {
+    const CAP_HEIGHT_FALLBACK: f32 = 0.70;
+    let top_inset_64 = frame
+        .inset_spacing
+        .map(|i| (i[0] * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+        .unwrap_or(0);
+    let pt_to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let em_fraction_to_64 = |frac: f32| pt_to_64(point_size * frac);
+    let policy_offset_64 = first_baseline_offset_64(
+        frame.first_baseline_offset,
+        frame.minimum_first_baseline_offset,
+        point_size,
+        default_64,
+        metrics,
+    );
     // Display-headline clamp: when the frame is sized to the visual
     // letterform (cap height) rather than the typo ascent — common
     // on Envato cover-style templates where designers tight-fit

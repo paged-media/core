@@ -2089,13 +2089,41 @@ fn measure_cell_paragraph(
     let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
-    lopts.first_baseline =
-        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    // W4 — a cell's first baseline follows the SAME rule as a frame's:
+    // the real face's ascender under the default "Ascent" policy
+    // (measured 2026-09-06 — a top-aligned cell's first line sits at
+    // `row_top + top_inset + ascender`). Cells kept a `0.8 × pt`
+    // heuristic long after frames were fixed, which put every table's
+    // text a point or more too high. A substituted face keeps the
+    // heuristic, as frames do: a stand-in's ascender says nothing about
+    // where InDesign, which had the real one, put the baseline.
+    let head_metrics = bytes_font_ids
+        .first()
+        .and_then(|id| em.font_table.metrics_for(*id));
+    lopts.first_baseline = super::text_frame::first_baseline_offset_64(
+        Some(paged_model::FirstBaselineOffset::AscentOffset),
+        None,
+        paragraph_size,
+        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+        head_metrics,
+    );
+    // Cascaded `Leading` governs a cell's line spacing exactly as it
+    // governs a frame's; the cells used 1.2 × pt regardless.
+    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
+        if leading_pt > 0.0 {
+            lopts.leading_override =
+                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+        }
+    }
     let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
     if laid_out.lines.is_empty() {
         return 0.0;
     }
-    let leading_pt = paragraph_size * 1.2;
+    let leading_pt = resolved_runs
+        .first()
+        .and_then(|r| r.leading)
+        .filter(|l| *l > 0.0)
+        .unwrap_or(paragraph_size * 1.2);
     let max_baseline_pt = laid_out
         .lines
         .iter()
@@ -2294,8 +2322,32 @@ pub(super) fn emit_cell_paragraph(
     let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
-    lopts.first_baseline =
-        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    // W4 — a cell's first baseline follows the SAME rule as a frame's:
+    // the real face's ascender under the default "Ascent" policy
+    // (measured 2026-09-06 — a top-aligned cell's first line sits at
+    // `row_top + top_inset + ascender`). Cells kept a `0.8 × pt`
+    // heuristic long after frames were fixed, which put every table's
+    // text a point or more too high. A substituted face keeps the
+    // heuristic, as frames do: a stand-in's ascender says nothing about
+    // where InDesign, which had the real one, put the baseline.
+    let head_metrics = bytes_font_ids
+        .first()
+        .and_then(|id| em.font_table.metrics_for(*id));
+    lopts.first_baseline = super::text_frame::first_baseline_offset_64(
+        Some(paged_model::FirstBaselineOffset::AscentOffset),
+        None,
+        paragraph_size,
+        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+        head_metrics,
+    );
+    // Cascaded `Leading` governs a cell's line spacing exactly as it
+    // governs a frame's; the cells used 1.2 × pt regardless.
+    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
+        if leading_pt > 0.0 {
+            lopts.leading_override =
+                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+        }
+    }
 
     let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
     if laid_out.lines.is_empty() {
@@ -2313,7 +2365,11 @@ pub(super) fn emit_cell_paragraph(
     let stroke_picker =
         build_run_stroke_picker(paragraph, &resolved_runs, em.palette, em.color_ctx, 0);
     let any_text_stroke = stroke_picker.any_visible();
-    let leading_pt = paragraph_size * 1.2;
+    let leading_pt = resolved_runs
+        .first()
+        .and_then(|r| r.leading)
+        .filter(|l| *l > 0.0)
+        .unwrap_or(paragraph_size * 1.2);
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
 
     // Cycle-5 Track 4: emit BreakRecords for table-cell paragraphs so
