@@ -58,6 +58,39 @@ fn jpeg_components(bytes: &[u8]) -> Option<u8> {
     None
 }
 
+/// True when the JPEG carries Adobe's APP14 segment: Photoshop and
+/// InDesign write CMYK / YCCK JPEGs with INVERTED channel values under
+/// that marker, and a PDF consumer only un-inverts them when the image
+/// dictionary says so (`/Decode [1 0 1 0 1 0 1 0]`). Without the array
+/// every such image prints near-black — measured 2026-09-06 on the
+/// annual's page 73, where the CMYK apples came out as a dark slab
+/// while InDesign's own export showed the fruit.
+fn jpeg_has_adobe_marker(bytes: &[u8]) -> bool {
+    let mut i = 2usize;
+    while i + 4 <= bytes.len() {
+        if bytes[i] != 0xFF {
+            return false;
+        }
+        let marker = bytes[i + 1];
+        if (0xD0..=0xD9).contains(&marker) || marker == 0x01 {
+            i += 2;
+            continue;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        if len < 2 || i + 2 + len > bytes.len() {
+            return false;
+        }
+        if marker == 0xEE && bytes.get(i + 4..i + 9) == Some(b"Adobe") {
+            return true;
+        }
+        if marker == 0xDA {
+            return false;
+        }
+        i += 2 + len;
+    }
+    false
+}
+
 /// /N for an ICC stream, from the profile header's data colour
 /// space field (bytes 16..20).
 fn icc_component_count(icc: &[u8]) -> i32 {
@@ -154,6 +187,9 @@ pub fn write_image(
                     x.color_space().device_rgb();
                 }
             },
+        }
+        if components == 4 && jpeg_has_adobe_marker(&img.encoded) {
+            x.decode([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
         }
         x.filter(pdf_writer::Filter::DctDecode);
         x.finish();
@@ -297,5 +333,46 @@ mod tests {
             downsample_target(400, 400, Some((0.0, 72.0)), Some(150.0)),
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod adobe_marker_tests {
+    use super::*;
+
+    fn jpeg(with_adobe: bool, components: u8) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8];
+        if with_adobe {
+            // APP14 "Adobe": length 14, "Adobe", version, flags0, flags1, transform.
+            b.extend_from_slice(&[0xFF, 0xEE, 0x00, 0x0E]);
+            b.extend_from_slice(b"Adobe");
+            b.extend_from_slice(&[0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        }
+        // SOF0: length 8 + 3 × components, precision 8, 1 × 1 px.
+        b.extend_from_slice(&[
+            0xFF,
+            0xC0,
+            0x00,
+            8 + 3 * components,
+            8,
+            0,
+            1,
+            0,
+            1,
+            components,
+        ]);
+        for c in 0..components {
+            b.extend_from_slice(&[c + 1, 0x11, 0]);
+        }
+        b.extend_from_slice(&[0xFF, 0xD9]);
+        b
+    }
+
+    #[test]
+    fn the_adobe_marker_is_found_before_the_frame_header() {
+        assert!(jpeg_has_adobe_marker(&jpeg(true, 4)));
+        assert!(!jpeg_has_adobe_marker(&jpeg(false, 4)));
+        assert_eq!(jpeg_components(&jpeg(true, 4)), Some(4));
+        assert_eq!(jpeg_components(&jpeg(false, 3)), Some(3));
     }
 }
