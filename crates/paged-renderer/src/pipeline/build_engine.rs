@@ -4566,8 +4566,22 @@ pub(super) fn emit_paragraph_into_chain(
         && !styled_runs[0].text.is_empty()
     {
         let body_line_height_pt = lopts.line_height as f32 / paged_text::shape::ADVANCE_PRECISION;
-        let cap_point_size =
-            paged_text::drop_cap_point_size(body_line_height_pt, paragraph.drop_cap_lines);
+        // InDesign scales the cap so its CAP HEIGHT — not its em box —
+        // spans the dropped lines, so the size depends on the real
+        // face's cap-height ratio. A substituted face keeps the 0.7
+        // heuristic the frame rule already uses.
+        let cap_ratio = resolved_runs
+            .first()
+            .and_then(|r| r.font.as_deref())
+            .and_then(|f| em.font_table.metrics_for_family(f))
+            .and_then(|m| m.cap_height)
+            .unwrap_or(0.7);
+        let cap_point_size = paged_text::drop_cap_point_size(
+            body_line_height_pt,
+            styled_runs[0].point_size,
+            cap_ratio,
+            paragraph.drop_cap_lines,
+        );
         // Byte split: take `drop_cap_characters` Unicode scalars
         // off the front of run 0's text. Whitespace counts as a
         // character; IDML's serialisation matches char count not
@@ -4589,12 +4603,36 @@ pub(super) fn emit_paragraph_into_chain(
             // proxy for InDesign's `DropCapDetail` side-bearing.
             let space_shaped = paged_text::shape_run(cap_face_ref, " ", styled_runs[0].point_size);
             let gutter_64 = space_shaped.total_advance / 2;
+            // The first dropped glyph's ink left edge at the enlarged
+            // size. InDesign flushes that edge to the text margin, so
+            // the glyph is drawn this far LEFT of it and the carve
+            // narrows by that much less.
+            let ink_left_64 = cap_shaped
+                .glyphs
+                .first()
+                .and_then(|g| {
+                    cap_face_ref
+                        .glyph_bounding_box(ttf_parser::GlyphId(g.glyph_id as u16))
+                        .map(|bb| {
+                            let em_units = cap_face_ref.units_per_em() as f32;
+                            ((bb.x_min as f32 / em_units)
+                                * cap_point_size
+                                * paged_text::shape::ADVANCE_PRECISION)
+                                .round() as i32
+                        })
+                })
+                .unwrap_or(0)
+                .max(0);
             let spec = paged_text::DropCapSpec {
                 characters: paragraph.drop_cap_characters,
                 lines: paragraph.drop_cap_lines,
                 glyph_advance: cap_shaped.total_advance,
-                gutter: gutter_64,
+                // Measured: InDesign leaves NO gutter between the cap's
+                // advance and the body text.
+                gutter: 0,
+                ink_left: ink_left_64,
             };
+            let _ = gutter_64;
             // Outline face for the dropped glyphs. Shares bytes with
             // the body run's face but parses fresh because the
             // existing `outline_faces[cap_face_idx]` instance lives
@@ -5787,7 +5825,7 @@ pub(super) fn emit_paragraph_into_chain(
     // y reference (already adjusted for text_origin_pt). Cluster=0
     // routes the paint picker to run 0 — same fill as the body's
     // first character.
-    if let Some((_, _spec, cap_shaped, cap_point_size, cap_font_id, cap_outline, cap_paint)) =
+    if let Some((_, cap_spec, cap_shaped, cap_point_size, cap_font_id, cap_outline, cap_paint)) =
         drop_cap_spec_emit
     {
         let target_page = em.chain_pages[em.frame_idx];
@@ -5813,7 +5851,11 @@ pub(super) fn emit_paragraph_into_chain(
         };
         let mut positioned: Vec<paged_text::PositionedGlyph> =
             Vec::with_capacity(cap_shaped.glyphs.len());
-        let mut pen_x = 0i32;
+        // InDesign flushes the cap's INK to the text margin, not its
+        // pen origin: measured 2026-09-04..06, the dropped "I" starts
+        // one side bearing LEFT of where a normal glyph would, and its
+        // ink column lands on the margin to within a 600 dpi pixel.
+        let mut pen_x = -cap_spec.ink_left;
         for g in &cap_shaped.glyphs {
             positioned.push(paged_text::PositionedGlyph {
                 glyph_id: g.glyph_id,

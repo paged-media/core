@@ -340,10 +340,26 @@ pub struct DropCapSpec {
     /// via [`TextShaper::shape`] at [`drop_cap_point_size`].
     pub glyph_advance: i32,
     /// Extra space between the drop-cap glyph and the body text, in
-    /// 1/64 pt. IDML's `DropCapDetail` is the side-bearing tweak —
-    /// we approximate as a flat gutter. A reasonable default is
-    /// `space_width / 2`.
+    /// 1/64 pt. IDML's `DropCapDetail` is the side-bearing tweak.
+    ///
+    /// InDesign adds NO gutter: measured 2026-09-06, the carved lines
+    /// begin at exactly `cap_origin + cap_advance`, on every M from 2
+    /// to 5 and for a two-character cap. Since the origin sits left of
+    /// the margin by the first glyph's side bearing, the indent from
+    /// the margin is `advance - ink_left`, which is what `ink_left`
+    /// below carries.
     pub gutter: i32,
+    /// The first dropped glyph's ink left edge at the enlarged size,
+    /// in 1/64 pt — its bounding box's `x_min`, not its side bearing
+    /// as a metric.
+    ///
+    /// InDesign flushes a drop cap's INK to the text margin rather
+    /// than its pen origin, so the glyph is drawn `ink_left` to the
+    /// LEFT of the margin and the carve narrows by that much less.
+    /// Ours sat a whole side bearing inside the margin; at 144 dpi on
+    /// `text-advanced` page 1 that was InDesign's cap starting at
+    /// x = 115 px against ours at 124.
+    pub ink_left: i32,
 }
 
 impl DropCapSpec {
@@ -355,24 +371,41 @@ impl DropCapSpec {
     }
 }
 
-/// Compute the enlarged point size for a drop-cap glyph.
+/// The enlarged point size a drop-cap glyph is set at.
 ///
-/// IDML's drop cap height is "M body lines tall". We approximate as
-/// `body_line_height * drop_cap_lines` — the dropped glyph is shaped
-/// at this point size so its cap-height fills the spanned lines. In
-/// practice the shaped height is slightly smaller than the line
-/// height (cap-height vs em-square), which matches InDesign's visual
-/// (the drop cap doesn't quite touch the baseline of the M-th line).
+/// InDesign scales the dropped glyph so its CAP HEIGHT spans the gap
+/// between the first body baseline and the M-th, plus the body's own
+/// cap height:
 ///
-/// `body_line_height_pt` is the body paragraph's line height in pt
-/// (i.e. `LayoutOptions::line_height` divided by `ADVANCE_PRECISION`).
-/// `drop_cap_lines` is `DropCapSpec::lines`. Returns the point size
-/// to pass to the shaper / measurer for the dropped run.
-pub fn drop_cap_point_size(body_line_height_pt: f32, drop_cap_lines: u32) -> f32 {
+/// ```text
+/// cap_height = (M - 1) * leading + body_point_size * cap_ratio
+/// point_size = cap_height / cap_ratio
+/// ```
+///
+/// Measured in InDesign 20.0.1 (2026-09-06) over M = 2..5 at 12/14.4,
+/// 12/21 and 9/12 in Open Sans: the predicted glyph origin matched the
+/// DOM's `horizontalOffset` to within 0.001 pt on all six, and a
+/// 600 dpi raster put the cap's ink top within one pixel of the
+/// prediction. The old rule — `line_height * lines`, the em box
+/// spanning M lines — set the cap about a fifth too small, which is
+/// what `text-advanced` page 1 had been measuring all along.
+///
+/// `cap_ratio` is the head font's cap height as a fraction of the em;
+/// callers pass the real face's metric and fall back to 0.7 when the
+/// face is substituted or carries none.
+pub fn drop_cap_point_size(
+    body_line_height_pt: f32,
+    body_point_size_pt: f32,
+    cap_ratio: f32,
+    drop_cap_lines: u32,
+) -> f32 {
     if drop_cap_lines == 0 {
         return 0.0;
     }
-    body_line_height_pt * drop_cap_lines as f32
+    let ratio = if cap_ratio > 0.05 { cap_ratio } else { 0.7 };
+    let cap_height = (drop_cap_lines.saturating_sub(1) as f32) * body_line_height_pt
+        + body_point_size_pt * ratio;
+    cap_height / ratio
 }
 
 /// Build a per-line `column_widths` vector that carves out a
@@ -411,7 +444,12 @@ pub fn drop_cap_column_widths_with_min(
     if !spec.is_active() {
         return Vec::new();
     }
-    let indent = spec.glyph_advance.saturating_add(spec.gutter);
+    // The cap's origin sits `ink_left` LEFT of the margin, so the body
+    // clears it at `advance - ink_left` from the margin.
+    let indent = spec
+        .glyph_advance
+        .saturating_add(spec.gutter)
+        .saturating_sub(spec.ink_left);
     let narrow = (base_width - indent).max(0);
     let floor = min_width.max(0);
     let clamped = narrow.max(floor);
@@ -1336,6 +1374,7 @@ mod tests {
             lines: 3,
             glyph_advance: 100,
             gutter: 10,
+            ink_left: 0,
         };
         // base column = 150, indent = 110, so the natural carved width
         // is 40 — narrower than the widest word.
@@ -1366,6 +1405,7 @@ mod tests {
             lines: 0,
             glyph_advance: 0,
             gutter: 0,
+            ink_left: 0,
         };
         let composed = compose_paragraph_with_drop_cap("hello world", &m, &opts, &spec);
         let baseline = compose_paragraph("hello world", &m, &opts);
@@ -1389,6 +1429,7 @@ mod tests {
             lines: 3,
             glyph_advance: 90,
             gutter: 10,
+            ink_left: 0,
         };
         let widths = drop_cap_column_widths(&spec, opts.column_width);
         assert_eq!(widths, vec![300, 300, 300]);
@@ -1450,6 +1491,7 @@ mod tests {
             lines: 2,
             glyph_advance: 200,
             gutter: 20,
+            ink_left: 0,
         };
         let text = "Once upon a time";
         let composed = compose_paragraph_with_drop_cap(text, &m, &opts, &spec);
@@ -1479,6 +1521,7 @@ mod tests {
             lines: 3,
             glyph_advance: 100,
             gutter: 10,
+            ink_left: 0,
         };
         let composed = compose_paragraph_with_drop_cap("ok", &m, &opts, &spec);
         assert_eq!(composed.dropped_byte_range, 0..2);
@@ -1486,11 +1529,51 @@ mod tests {
     }
 
     #[test]
-    fn drop_cap_point_size_scales_with_lines() {
-        // 12pt body × 3 drop-cap lines = 36pt drop cap.
-        assert_eq!(drop_cap_point_size(12.0, 3), 36.0);
+    fn drop_cap_point_size_is_indesigns_cap_height_rule() {
+        // Measured in InDesign 20.0.1 on 2026-09-06: the dropped
+        // glyph's CAP HEIGHT spans `(M - 1) * leading + body cap
+        // height`, so at 12/14.4 in Open Sans (cap ratio 0.71387) a
+        // three-line cap is set at 52.34 pt, not the 43.2 pt the old
+        // `line_height * lines` rule gave. Every prediction below
+        // matched the DOM's reported glyph origin to within 0.001 pt.
+        let os = 0.713_87_f32;
+        let approx = |a: f32, b: f32| assert!((a - b).abs() < 0.01, "{a} vs {b}");
+        approx(drop_cap_point_size(14.4, 12.0, os, 2), 32.171);
+        approx(drop_cap_point_size(14.4, 12.0, os, 3), 52.343);
+        approx(drop_cap_point_size(14.4, 12.0, os, 4), 72.515);
+        approx(drop_cap_point_size(14.4, 12.0, os, 5), 92.687);
+        // Leading and body size both move it.
+        approx(drop_cap_point_size(21.0, 12.0, os, 3), 70.833);
+        approx(drop_cap_point_size(12.0, 9.0, os, 3), 42.622);
+        // A one-line cap is just the body size.
+        approx(drop_cap_point_size(14.4, 12.0, os, 1), 12.0);
         // No drop cap = zero point size.
-        assert_eq!(drop_cap_point_size(12.0, 0), 0.0);
+        assert_eq!(drop_cap_point_size(14.4, 12.0, os, 0), 0.0);
+        // A face with no cap-height metric falls back to 0.7.
+        approx(
+            drop_cap_point_size(14.4, 12.0, 0.0, 3),
+            (2.0 * 14.4 + 12.0 * 0.7) / 0.7,
+        );
+    }
+
+    #[test]
+    fn the_carve_clears_the_cap_ink_not_its_pen_origin() {
+        // InDesign flushes the cap's INK to the margin, so the glyph
+        // is drawn `ink_left` to the LEFT of it and the body clears
+        // the cap at `advance - ink_left` from the margin — measured
+        // 2026-09-06, with NO gutter between the two.
+        let spec = DropCapSpec {
+            characters: 1,
+            lines: 3,
+            glyph_advance: 64 * 15,
+            gutter: 0,
+            ink_left: 64 * 5,
+        };
+        assert_eq!(
+            drop_cap_column_widths(&spec, 64 * 100),
+            vec![64 * 90; 3],
+            "the carve is advance minus the ink that hangs left of the margin"
+        );
     }
 
     #[test]
@@ -1510,6 +1593,7 @@ mod tests {
             lines: 3,
             glyph_advance: 600,
             gutter: 50,
+            ink_left: 0,
         };
         // Drop cap would carve to 850 on each of the first 3, but
         // the wrap on line 1 is even narrower (400) — keep 400.
@@ -1550,6 +1634,7 @@ mod tests {
             lines: 0,
             glyph_advance: 9999,
             gutter: 9999,
+            ink_left: 0,
         };
         let with_cap = compose_paragraph_with_drop_cap(text, &m, &opts, &inactive);
         assert_eq!(with_cap.lines, baseline);
