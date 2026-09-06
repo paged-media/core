@@ -87,6 +87,12 @@ struct Args {
     /// reporting flags are ignored in this mode.
     #[arg(long)]
     roundtrip: bool,
+
+    /// Print the composed lines of one story (baseline, ascent, descent,
+    /// byte range, frame) after the build — the fast way to put the
+    /// engine's composition beside InDesign's `story.lines` probe.
+    #[arg(long, value_name = "STORY_ID")]
+    story_lines: Option<String>,
     /// W4.14 — mutation save-back round-trip check. Open the input, apply
     /// ONE typed `paged_mutate` Operation against a target picked from the
     /// document (first TextFrame else first Rectangle / first non-empty
@@ -500,6 +506,22 @@ fn main() -> Result<()> {
         paged_compose::Paint::Solid(paged_compose::Color::rgba(0.92, 0.92, 0.92, 1.0));
 
     let built = pipeline::build_document(&document, &opts)?;
+    if let Some(story_id) = args.story_lines.as_deref() {
+        let lines = built.story_layout(story_id);
+        println!("{story_id}: {} lines", lines.len());
+        for l in lines {
+            println!(
+                "  base {:.2} asc {:.2} desc {:.2} bytes {}..{} page {:?} frame {:?}",
+                l.baseline_y_pt,
+                l.ascent_pt,
+                l.descent_pt,
+                l.byte_range.start,
+                l.byte_range.end,
+                l.page_id,
+                l.frame_id
+            );
+        }
+    }
     let total_cmds: usize = built.pages.iter().map(|p| p.list.commands.len()).sum();
     let total_paths: usize = built.pages.iter().map(|p| p.list.paths.len()).sum();
 
@@ -831,6 +853,11 @@ fn run_roundtrip(original: &[u8], dpi: f32) -> Result<RoundtripReport> {
 
     let (doc, doc_source) = idml_import::import_idml(original).context("open input IDML")?;
     let written = idml_export::write_idml(&doc, original).context("write_idml")?;
+    // A place to look at the re-serialised package when the hashes
+    // disagree: `PAGED_ROUNDTRIP_OUT=/path/out.idml`.
+    if let Ok(path) = std::env::var("PAGED_ROUNDTRIP_OUT") {
+        std::fs::write(&path, &written).with_context(|| format!("write {path}"))?;
+    }
 
     // (a) Per-entry byte-identity tally.
     let src = package_entries(original)?;
