@@ -90,15 +90,55 @@ impl Hyphenator {
     }
 
     /// Return a list of byte indices inside `word` where a hyphen
-    /// could be inserted. Indices are relative to the slice — so for
-    /// "computer" the result is [3, 6] (com-put-er). The list never
-    /// contains 0 or `word.len()` (those aren't hyphenation breaks).
+    /// could be inserted, under InDesign's default hyphenation limits
+    /// (see [`Self::opportunities_with`]). Indices are relative to the
+    /// slice — so for "computer" the result is [3, 6] (com-put-er). The
+    /// list never contains 0 or `word.len()` (those aren't hyphenation
+    /// breaks).
     pub fn opportunities(&self, word: &str) -> Vec<usize> {
+        self.opportunities_with(word, AFTER_FIRST, BEFORE_LAST, WORDS_LONGER_THAN)
+    }
+
+    /// Break opportunities inside `word` limited the way InDesign's
+    /// paragraph hyphenation settings limit them: only the alphabetic
+    /// core of the token is hyphenated (a leading "(" or a trailing ","
+    /// is not a letter — measured 2026-09-06: InDesign set "(overset)"
+    /// whole where the unlimited patterns broke it "(o-verset)"), the
+    /// core must have more than `words_longer_than` letters, and a break
+    /// must leave at least `after_first` letters before the hyphen and
+    /// `before_last` letters after it. Indices are byte offsets into the
+    /// full token.
+    pub fn opportunities_with(
+        &self,
+        word: &str,
+        after_first: usize,
+        before_last: usize,
+        words_longer_than: usize,
+    ) -> Vec<usize> {
+        // The alphabetic core: skip leading / trailing non-letters.
+        let head = word
+            .char_indices()
+            .find(|(_, c)| c.is_alphabetic())
+            .map(|(i, _)| i);
+        let Some(head) = head else {
+            return Vec::new();
+        };
+        let tail = word
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_alphabetic())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(word.len());
+        let core = &word[head..tail];
+        let letters = core.chars().count();
+        if letters < words_longer_than {
+            return Vec::new();
+        }
         // hypher::hyphenate yields syllable slices in order. Their
         // cumulative byte lengths give the break offsets we want.
         let mut breaks = Vec::new();
         let mut offset = 0usize;
-        let mut iter = hypher::hyphenate(word, self.lang);
+        let mut iter = hypher::hyphenate(core, self.lang);
         // The first syllable doesn't produce a break — skip it.
         if let Some(first) = iter.next() {
             offset += first.len();
@@ -106,14 +146,25 @@ impl Hyphenator {
         for syllable in iter {
             // Successive iterations: the break sits at the boundary
             // between the previous syllable and this one.
-            if offset > 0 && offset < word.len() {
-                breaks.push(offset);
+            if offset > 0 && offset < core.len() {
+                let before = core[..offset].chars().count();
+                let after = letters - before;
+                if before >= after_first && after >= before_last {
+                    breaks.push(head + offset);
+                }
             }
             offset += syllable.len();
         }
         breaks
     }
 }
+
+/// InDesign's default "Hyphenate: After First _ letters".
+const AFTER_FIRST: usize = 2;
+/// InDesign's default "Hyphenate: Before Last _ letters".
+const BEFORE_LAST: usize = 2;
+/// InDesign's default "Words with at Least _ letters" (5).
+const WORDS_LONGER_THAN: usize = 5;
 
 #[cfg(test)]
 mod tests {
@@ -135,5 +186,23 @@ mod tests {
         let h = Hyphenator::for_language(Language::EnglishUS);
         assert!(h.opportunities("a").is_empty());
         assert!(h.opportunities("the").is_empty());
+        // Four letters: under InDesign's "words with at least 5 letters".
+        assert!(h.opportunities("open").is_empty());
+    }
+
+    #[test]
+    fn punctuation_is_not_a_letter_and_the_edge_limits_hold() {
+        let h = Hyphenator::for_language(Language::EnglishUS);
+        // "(o-ver-set)": the "o" alone before a hyphen is under the
+        // after-first-2 limit, so only "(over|set)" survives — and the
+        // offset counts the "(" the patterns never saw.
+        assert_eq!(h.opportunities("(overset)"), vec![5]);
+        assert_eq!(h.opportunities("overset"), vec![4]);
+        // A trailing comma is not a letter either: the patterns see
+        // "computer" (com-puter), not "computer," (com-put-er,).
+        assert_eq!(h.opportunities("computer,"), h.opportunities("computer"));
+        // The limits are what gate the edges: "over-set" needs at least
+        // four letters before the hyphen when the paragraph asks for it.
+        assert!(h.opportunities_with("(overset)", 5, 2, 5).is_empty());
     }
 }
