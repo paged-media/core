@@ -45,7 +45,24 @@
     logln("# log start " + new Date());
     try {
 
-    var INPUT_DIR = "~/idml/corpus/generated";
+    // Where the generated fixtures live. Derived from the script's own
+    // location so the tool follows the repo (it pointed at the
+    // pre-split `~/idml` checkout for months, which made every run a
+    // silent no-op); `PAGED_CORPUS_DIR` overrides for an out-of-tree
+    // corpus.
+    // Where the generated fixtures live. Derived from the script's own
+    // location so the tool follows the repo — it pointed at the
+    // pre-split `~/idml` checkout for months, which made every run a
+    // silent no-op. `run-export.sh` overrides it by setting the global
+    // before it evaluates this file; InDesign is a separate, already
+    // running process, so a shell variable never reaches `$.getenv`.
+    var INPUT_DIR = $.global.PAGED_CORPUS_DIR
+        ? String($.global.PAGED_CORPUS_DIR)
+        : File($.fileName).parent.parent.parent.fsName + "/corpus/generated";
+    // Re-export ONE fixture rather than the whole corpus. Reference
+    // PDFs are baked evidence: rewriting all of them at once
+    // rebaselines every threshold in a single unreviewable step.
+    var ONLY = $.global.PAGED_EXPORT_ONLY ? String($.global.PAGED_EXPORT_ONLY) : null;
     // Preset name varies by locale: "[High Quality Print]" on en_US,
     // "[Qualitativ hochwertiger Druck]" on de_DE, etc. The first
     // entry that resolves wins. Localized lists captured from
@@ -67,8 +84,8 @@
         return;
     }
 
-    var idmlFiles = inputFolder.getFiles("*.idml");
-    logln("found " + idmlFiles.length + " idml files");
+    var idmlFiles = inputFolder.getFiles(ONLY ? ONLY + ".idml" : "*.idml");
+    logln("found " + idmlFiles.length + " idml files" + (ONLY ? " (filter: " + ONLY + ")" : ""));
     var preset = null;
     var presetName = null;
     for (var pi = 0; pi < PRESET_CANDIDATES.length; pi++) {

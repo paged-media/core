@@ -1,26 +1,18 @@
 # Per-sample font registrations for text-advanced.idml.
 #
-# The IDML's [No paragraph style] declares AppliedFont="Open Sans" but
-# the InDesign-exported reference PDF was rendered with a serif
-# substitute — the export host did not have Open Sans installed and
-# InDesign baked its bundled serif (Minion Pro) into the PDF. CLAUDE.md
-# offers two reconciliations for this class of mismatch: re-export the
-# PDF on a host that has the font, or substitute in the renderer to
-# match the PDF. Until the PDF is re-exported, we pick the substitute
-# path: route Open Sans through CormorantGaramond (the same family the
-# corpus already uses for the "Minion Pro" mapping) so the fidelity
-# gate compares apples to apples. The Italic style still points at the
-# real Open Sans Italic — page 1 (the drop-cap variant) and most other
-# pages render upright body text, so the Italic mapping currently
-# affects no rendered glyphs; it is kept here so a future variant that
-# *does* use italic does not silently fall back to the regular face.
+# The IDML's [No paragraph style] declares AppliedFont="Open Sans" and
+# the reference PDF now renders it: re-exported 2026-09-06 on a host
+# that HAS Open Sans installed (`PAGED_EXPORT_ONLY=text-advanced bash
+# tools/indesign-export/run-export.sh`), so both sides set the face the
+# fixture asks for.
 #
-# When the reference PDF gets re-exported on a host that has Open Sans
-# installed, swap the "Open Sans=..." line back to OpenSans.ttf, drop
-# this multi-paragraph comment, and recalibrate thresholds.
-DEFAULT_FONT="$FONTS/CormorantGaramond.ttf"
+# The file it replaces was exported on a host WITHOUT Open Sans, so
+# InDesign baked its bundled Minion Pro into the reference and this
+# script routed our renderer through CormorantGaramond to match — a
+# fixture that measured a substitution against a substitution. The
+# thresholds sized to that mismatch have been recalibrated.
 FONT_FLAGS=(
-    --font-family "Open Sans=$FONTS/CormorantGaramond.ttf"
+    --font-family "Open Sans=$FONTS/OpenSans.ttf"
     --font-family "Open Sans/Italic=$FONTS/OpenSans-Italic.ttf"
     --font-family "Minion Pro=$FONTS/CormorantGaramond.ttf"
 )

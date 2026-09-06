@@ -32,7 +32,7 @@
       "idml": "geometry-groups.idml",
       "pdf": "geometry-groups.pdf",
       "pages": 6,
-      "passing": 5,
+      "passing": 4,
       "diff_dir": "/tmp/idml-generated-diff/geometry-groups",
       "report": "/tmp/idml-generated-diff/geometry-groups/report.json"
     },
@@ -76,8 +76,8 @@
       "name": "text",
       "idml": "text.idml",
       "pdf": "text.pdf",
-      "pages": 13,
-      "passing": 8,
+      "pages": 19,
+      "passing": 16,
       "diff_dir": "/tmp/idml-generated-diff/text",
       "report": "/tmp/idml-generated-diff/text/report.json"
     },
@@ -85,8 +85,8 @@
       "name": "text-advanced",
       "idml": "text-advanced.idml",
       "pdf": "text-advanced.pdf",
-      "pages": 9,
-      "passing": 3,
+      "pages": 17,
+      "passing": 9,
       "diff_dir": "/tmp/idml-generated-diff/text-advanced",
       "report": "/tmp/idml-generated-diff/text-advanced/report.json"
     },

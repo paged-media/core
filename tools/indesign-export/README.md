@@ -7,8 +7,8 @@ PDF using the `[High Quality Print]` preset.
 
 ## Prerequisites
 
-- macOS with Adobe InDesign 2024 installed (override the default name
-  via `INDESIGN_APP="Adobe InDesign 2025"` etc.).
+- macOS with Adobe InDesign 2025 installed (override the default name
+  via `INDESIGN_APP="Adobe InDesign 2024"` etc.).
 - The fonts the generated samples reference must be installed in the
   system. Phase 0 only uses **Open Sans**; later phases will pin a
   larger fixture font set.
@@ -22,6 +22,10 @@ cargo run -p paged-gen -- emit --sample geometry --out corpus/generated
 # 2. Run the InDesign export pass. The script activates InDesign,
 #    iterates corpus/generated/*.idml, and writes corpus/generated/*.pdf.
 bash tools/indesign-export/run-export.sh
+
+#    Or re-export ONE fixture, which is what you want when a single
+#    reference turns out to be wrong:
+PAGED_EXPORT_ONLY=text bash tools/indesign-export/run-export.sh
 
 # 3. Run the diff harness. corpus/generated/render-diff.sh resolves either
 #    corpus/samples/<name>.{idml,pdf} or corpus/generated/<name>.{idml,pdf}.
@@ -48,6 +52,15 @@ The `meta.json` records:
   "exported_at": "2026-04-29T..."
 }
 ```
+
+**Re-export one fixture at a time.** A reference PDF is baked
+evidence; rewriting all of them in one pass rebaselines every threshold
+in `fidelity-thresholds.json` at once, and nobody can then tell a fixed
+reference from a hidden regression. `PAGED_EXPORT_ONLY=<stem>` exists
+for that reason. After a re-export, check what the new PDF actually
+embeds (`pdffonts <stem>.pdf`) — the usual reason a reference is wrong
+is that the export host lacked the font the IDML declares and InDesign
+substituted its own.
 
 Pin the InDesign version when the corpus is committed and re-export
 only on conscious upgrades — InDesign's PDF output is not

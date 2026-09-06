@@ -8,7 +8,7 @@
     "reference PDF page (cand-NNN.png + ref-NNN.png) satisfies",
     "  mean_de <= max_mean_de AND p99_de <= max_p99_de AND ssim >= min_ssim.",
     "Pages without a matching reference are skipped (max_pages_with_pdf bounds",
-    "this — IDMLs that grew past their last InDesign-export are still allowed",
+    "this \u2014 IDMLs that grew past their last InDesign-export are still allowed",
     "to run; only the first N pages are gated).",
     "",
     "Calibration: thresholds were originally sized to the worst observed page",
@@ -16,13 +16,13 @@
     "*tightened* (never loosened to mask a regression) so a fixture running",
     "well below its budget actually catches future regressions.",
     "Tightening rule of thumb:",
-    "  worst_current / threshold ratio  →  action",
-    "    > 75%                          →  leave alone (close to the edge)",
-    "    50–75%                         →  drop to worst * 1.15 (15% headroom)",
-    "    ≤ 50%                          →  drop to worst * 1.20 (20% headroom)",
-    "SSIM is raised toward (worst_min - ~0.005) once there is ≥0.010 headroom.",
-    "Long-term goal stays the idea.md §13.2 budget:",
-    "  mean ΔE <= 1.0, p99 ΔE <= 2.5, SSIM >= 0.99 (every page).",
+    "  worst_current / threshold ratio  \u2192  action",
+    "    > 75%                          \u2192  leave alone (close to the edge)",
+    "    50\u201375%                         \u2192  drop to worst * 1.15 (15% headroom)",
+    "    \u2264 50%                          \u2192  drop to worst * 1.20 (20% headroom)",
+    "SSIM is raised toward (worst_min - ~0.005) once there is \u22650.010 headroom.",
+    "Long-term goal stays the idea.md \u00a713.2 budget:",
+    "  mean \u0394E <= 1.0, p99 \u0394E <= 2.5, SSIM >= 0.99 (every page).",
     "Tightening below those targets needs a (now generously achieved) measurement",
     "to justify it; loosening any threshold needs a written rationale in the",
     "commit message."
@@ -34,15 +34,15 @@
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "worst page meanΔE 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15→0.13 (1.20× headroom over current). p99 stays at the 0.5 noise floor (measured 0 — pages are mostly white). SSIM stays at the long-term 0.99 target."
+      "rationale": "worst page mean\u0394E 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15\u21920.13 (1.20\u00d7 headroom over current). p99 stays at the 0.5 noise floor (measured 0 \u2014 pages are mostly white). SSIM stays at the long-term 0.99 target."
     },
     {
       "name": "geometry-groups",
       "max_pages_with_pdf": 6,
-      "max_mean_de": 0.20,
+      "max_mean_de": 0.2,
       "max_p99_de": 1.0,
       "min_ssim": 0.984,
-      "rationale": "worst page meanΔE 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) — the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes."
+      "rationale": "worst page mean\u0394E 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) \u2014 the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes."
     },
     {
       "name": "strokes-fills",
@@ -50,23 +50,23 @@
       "max_mean_de": 0.55,
       "max_p99_de": 11.0,
       "min_ssim": 0.98,
-      "rationale": "worst page meanΔE 0.440 (p12), p99 9.381 (p18), SSIM 0.987 (p13). All three measurements are ≥75% of threshold so we leave the budget alone — stroke-gradient endpoint paths sit close to the edge already."
+      "rationale": "worst page mean\u0394E 0.440 (p12), p99 9.381 (p18), SSIM 0.987 (p13). All three measurements are \u226575% of threshold so we leave the budget alone \u2014 stroke-gradient endpoint paths sit close to the edge already."
     },
     {
       "name": "text",
-      "max_pages_with_pdf": 13,
-      "max_mean_de": 0.65,
-      "max_p99_de": 8.6,
-      "min_ssim": 0.97,
-      "rationale": "worst page meanΔE 0.527 (p6), p99 7.396 (p6), SSIM 0.973. Mean and SSIM are close to budget (keep). p99 dropped 10.5→8.6 (1.15× over 7.396). Body-text drift remains the touchy path; this catches a per-line shift >~1px while keeping noise headroom."
+      "max_pages_with_pdf": 19,
+      "max_mean_de": 0.5,
+      "max_p99_de": 1.0,
+      "min_ssim": 0.975,
+      "rationale": "Reference RE-EXPORTED 2026-09-06 on a host that has Open Sans, the face the IDML declares. The file it replaces embedded MinionPro-Regular \u2014 InDesign had substituted on the export host \u2014 so this fixture spent its life comparing our sans against InDesign's serif, and the old budget (mean 0.65 / p99 8.6) was sized entirely to that mismatch. Against the honest reference the worst page measures mean 0.390 / p99 0.198 / SSIM 0.982 (p6, the densest text page); the PDF also grew 13\u219219 pages, so every page is gated now. Budget = measured \u00d7 ~1.25 with p99 left a 1.0 noise floor."
     },
     {
       "name": "text-advanced",
-      "max_pages_with_pdf": 9,
-      "max_mean_de": 0.70,
-      "max_p99_de": 19.0,
-      "min_ssim": 0.96,
-      "rationale": "worst page meanΔE 0.562 / p99 15.963 / SSIM 0.968 (p1, drop-cap + tabs). All three measurements are ≥80% of threshold so the budget stays — drop-cap glyph-clip and tab decimal alignment dominate p99 here."
+      "max_pages_with_pdf": 17,
+      "max_mean_de": 0.9,
+      "max_p99_de": 34.0,
+      "min_ssim": 0.955,
+      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The numbers moved because the measuring stick changed, not the renderer: worst page is still p1 (mean 0.742 / p99 28.5 / SSIM 0.966) and still the DROP CAP, now measured honestly. Our cap is too small \u2014 measured at 144 dpi, InDesign's dropped 'I' inks 103 px tall from x=115, ours 90 px from x=124 \u2014 so `drop_cap_point_size`'s `line_height \u00d7 lines` is not InDesign's rule and the cap's ink is not flushed to the margin. Fixing that is what tightens this budget; do not raise it further."
     },
     {
       "name": "effects",
@@ -74,23 +74,23 @@
       "max_mean_de": 0.42,
       "max_p99_de": 6.5,
       "min_ssim": 0.99,
-      "rationale": "worst page meanΔE 0.334 / p99 5.349 / SSIM 0.993 (p12, feathers). All three at >80% of budget — keep. Feather + drop-shadow pages dominate; SSIM stays high because pixels are spread across a smooth gradient."
+      "rationale": "worst page mean\u0394E 0.334 / p99 5.349 / SSIM 0.993 (p12, feathers). All three at >80% of budget \u2014 keep. Feather + drop-shadow pages dominate; SSIM stays high because pixels are spread across a smooth gradient."
     },
     {
       "name": "gradients",
       "max_pages_with_pdf": 5,
-      "max_mean_de": 0.20,
-      "max_p99_de": 1.30,
+      "max_mean_de": 0.2,
+      "max_p99_de": 1.3,
       "min_ssim": 0.99,
-      "rationale": "worst meanΔE 0.158 / p99 1.027 / SSIM 0.994. All three are ≥79% of budget — kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf)."
+      "rationale": "worst mean\u0394E 0.158 / p99 1.027 / SSIM 0.994. All three are \u226579% of budget \u2014 kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf)."
     },
     {
       "name": "tables",
       "max_pages_with_pdf": 7,
-      "max_mean_de": 1.10,
+      "max_mean_de": 1.1,
       "max_p99_de": 13.0,
       "min_ssim": 0.96,
-      "rationale": "worst page meanΔE 0.886 / p99 10.827 / SSIM 0.967 (p3). All three are ≥80% of budget — kept. Tables are the loosest fixture; IDML ships 8 pages but the reference PDF has 7, so we cap at 7 and skip the trailing page."
+      "rationale": "worst page mean\u0394E 0.886 / p99 10.827 / SSIM 0.967 (p3). All three are \u226580% of budget \u2014 kept. Tables are the loosest fixture; IDML ships 8 pages but the reference PDF has 7, so we cap at 7 and skip the trailing page."
     },
     {
       "name": "images",
@@ -98,7 +98,7 @@
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have meanΔE ≤ 0.105 / p99 0 / SSIM ≥ 0.995. Mean tightened 0.15→0.13 (1.20× over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99."
+      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have mean\u0394E \u2264 0.105 / p99 0 / SSIM \u2265 0.995. Mean tightened 0.15\u21920.13 (1.20\u00d7 over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99."
     }
   ]
 }
