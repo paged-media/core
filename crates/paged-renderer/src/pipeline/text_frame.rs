@@ -30,6 +30,13 @@ pub(super) struct WrapPlan {
     /// pass to implement BothSides wrap (text on both sides of an
     /// obstacle in the same row).
     pub(super) twin_after: Vec<bool>,
+    /// Per composer line: the band lies outside the frame's shape (an
+    /// oval's last line past the far edge, a polygon narrower than the
+    /// frame at that height). The composer still gets a width for the
+    /// index, but the emitter treats the line as not fitting — it
+    /// flows on or oversets, as InDesign does with a line that has no
+    /// room inside the outline.
+    pub(super) no_room: Vec<bool>,
 }
 
 /// Polygon vertices for a chain frame, expressed in *spread coords*.
@@ -199,6 +206,7 @@ pub(super) fn build_perline_wrap_widths(
     let empty = WrapPlan {
         line_x_shifts_64: Vec::new(),
         twin_after: Vec::new(),
+        no_room: Vec::new(),
     };
     // Polygon clip per chain frame — enabled when the frame's
     // <PathGeometry> is non-rectangular (e.g. triangle, pentagon).
@@ -247,6 +255,7 @@ pub(super) fn build_perline_wrap_widths(
     let mut widths_64: Vec<i32> = Vec::new();
     let mut shifts_64: Vec<i32> = Vec::new();
     let mut twin_after: Vec<bool> = Vec::new();
+    let mut no_room: Vec<bool> = Vec::new();
 
     // Walk every frame in the chain. Head frame starts at y_cursor
     // (already accounts for FirstBaselineOffset + SpaceBefore);
@@ -297,11 +306,13 @@ pub(super) fn build_perline_wrap_widths(
                 && w.left < frame_bounds.right
         });
         let frame_legacy = shape.is_none() && !frame_has_wraps;
+        let frame_first_line = widths_64.len();
         for i in 0..n_lines {
             if frame_legacy {
                 widths_64.push(scalar_width_64);
                 shifts_64.push(0);
                 twin_after.push(false);
+                no_room.push(false);
                 continue;
             }
             let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
@@ -428,11 +439,17 @@ pub(super) fn build_perline_wrap_widths(
                         shifts_64
                             .push((shift_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
                         twin_after.push(false);
+                        no_room.push(false);
                     }
                     _ => {
                         widths_64.push(scalar_width_64);
                         shifts_64.push(0);
                         twin_after.push(false);
+                        // A shaped frame with no chord at this height
+                        // has no room for the line; a wrapped
+                        // rectangle fully covered by its wraps keeps
+                        // the full-width fallback it always had.
+                        no_room.push(shape.is_some());
                     }
                 }
                 continue;
@@ -454,6 +471,25 @@ pub(super) fn build_perline_wrap_widths(
                 // the emit pass collapses it onto the first
                 // segment's row at the same baseline.
                 twin_after.push(idx > 0);
+                no_room.push(false);
+            }
+        }
+        // Only the bands past the LAST one with room count as no room:
+        // the tip of a shape (bands before the first usable one) keeps
+        // the full-width fallback it always had, because the composer
+        // cannot yet skip a slot and start lower. A frame with no usable
+        // band at all keeps every fallback too.
+        let tail = &mut no_room[frame_first_line..];
+        match tail.iter().rposition(|n| !*n) {
+            Some(last_usable) => {
+                for n in &mut tail[..last_usable] {
+                    *n = false;
+                }
+            }
+            None => {
+                for n in tail.iter_mut() {
+                    *n = false;
+                }
             }
         }
     }
@@ -461,12 +497,14 @@ pub(super) fn build_perline_wrap_widths(
         return WrapPlan {
             line_x_shifts_64: Vec::new(),
             twin_after: Vec::new(),
+            no_room: Vec::new(),
         };
     }
     lopts.compose.column_widths = Some(widths_64);
     WrapPlan {
         line_x_shifts_64: shifts_64,
         twin_after,
+        no_room,
     }
 }
 

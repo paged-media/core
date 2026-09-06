@@ -372,10 +372,30 @@ pub(super) fn emit_table_into_chain(
     // (plus the footer-reserve, if any) would overflow the current
     // frame. If so, close out this frame with replayed footers,
     // advance, then prepend replayed headers in the new frame.
+    // Rows the last frame cannot hold are overset, as InDesign oversets
+    // them (measured 2026-09-06: two chart tables and a preflight table
+    // taller than their frames, which the canvas drew past the frame's
+    // bottom edge with no word of it). A frame that grows to its
+    // content keeps placing, as the text lane does.
+    let last_frame_grows_height = em
+        .chain
+        .last()
+        .and_then(|f| f.auto_sizing)
+        .map(|a| a.grows_height())
+        .unwrap_or(false);
+    let mut overset_at: Option<usize> = None;
     for r in body_range.clone() {
         let h = row_heights[r];
         let need_extra_for_split = footer_reserved_h;
         let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
+        if would_overflow
+            && chain_idx + 1 >= em.chain.len()
+            && placed_in_frame > 0
+            && !last_frame_grows_height
+        {
+            overset_at = Some(r);
+            break;
+        }
         if would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0 {
             // Append replayed footers at the bottom of this frame.
             if repeating_footer {
@@ -451,8 +471,25 @@ pub(super) fn emit_table_into_chain(
 
     // Original footer rows — emitted on whatever frame the body
     // left off in (= the last frame), in their natural sequence.
+    if let Some(r) = overset_at {
+        // Report once per story, like the text lane: the count of
+        // dropped rows is not the actionable bit, the overset is.
+        if !em.overset_reported {
+            em.overset_reported = true;
+            let mut d = crate::diagnostics::Diagnostic::new(
+                crate::diagnostics::DiagnosticCode::OversetTextDropped,
+                "table rows overflow the last frame in the chain; trailing rows clipped (overset)",
+            )
+            .with_page(target_page)
+            .with_overset(em.paragraph_idx, r as u32);
+            if !em.current_story_id.is_empty() {
+                d = d.with_story(em.current_story_id.clone());
+            }
+            em.diagnostics.push(d);
+        }
+    }
     for r in (total_rows - footer_count)..total_rows {
-        if footer_count == 0 {
+        if footer_count == 0 || overset_at.is_some() {
             break;
         }
         let h = row_heights[r];

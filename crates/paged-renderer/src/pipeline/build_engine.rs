@@ -4474,6 +4474,7 @@ pub(super) fn emit_paragraph_into_chain(
     let WrapPlan {
         line_x_shifts_64,
         twin_after,
+        no_room: plan_no_room,
     } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts);
 
     // Twin segments (text wrap on both sides of an obstacle) emit
@@ -4902,7 +4903,10 @@ pub(super) fn emit_paragraph_into_chain(
                 .copied()
                 .unwrap_or(0))
         .max(0);
-        if paged_flow::region_overflows(line.baseline_y, text_bottom_64)
+        // A line whose band lies outside the frame's outline has no
+        // room even when its baseline is inside the bounding box.
+        let no_room_here = plan_no_room.get(current_line_idx).copied().unwrap_or(false);
+        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64) || no_room_here)
             && em.frame_idx + 1 < em.chain.len()
         {
             let prev_baseline = line.baseline_y;
@@ -4939,7 +4943,7 @@ pub(super) fn emit_paragraph_into_chain(
         // them spill across following frames/pages with no clip. The
         // reference PDFs hide the overflow via the same out-of-frame
         // clip; matching this prevents large ΔE regions.
-        if paged_flow::region_overflows(line.baseline_y, text_bottom_64)
+        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64) || no_room_here)
             && em.frame_idx + 1 >= em.chain.len()
             && !last_frame_grows_height
         {
