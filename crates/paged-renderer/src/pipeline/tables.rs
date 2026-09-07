@@ -824,22 +824,21 @@ pub(super) fn emit_table_into_chain(
                 ),
             ];
             for (color, weight, tint, x, y, w) in edges {
-                if let (Some(color_id), Some(weight)) = (color, weight) {
-                    if weight > 0.0 {
-                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
-                            .map(|p| apply_fill_tint(p, tint))
-                        {
-                            emit_rect(
-                                Rect {
-                                    x,
-                                    y: y - weight * 0.5,
-                                    w,
-                                    h: weight,
-                                },
-                                paint,
-                                &mut pages[target_page].list,
-                            );
-                        }
+                let (color_id, weight) = cell_edge_stroke(color, weight);
+                if weight > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
+                        .map(|p| apply_fill_tint(p, tint))
+                    {
+                        emit_rect(
+                            Rect {
+                                x,
+                                y: y - weight * 0.5,
+                                w,
+                                h: weight,
+                            },
+                            paint,
+                            &mut pages[target_page].list,
+                        );
                     }
                 }
             }
@@ -878,22 +877,21 @@ pub(super) fn emit_table_into_chain(
                 ),
             ];
             for (color, weight, tint, x, y, h) in v_edges {
-                if let (Some(color_id), Some(weight)) = (color, weight) {
-                    if weight > 0.0 {
-                        if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
-                            .map(|p| apply_fill_tint(p, tint))
-                        {
-                            emit_rect(
-                                Rect {
-                                    x: x - weight * 0.5,
-                                    y,
-                                    w: weight,
-                                    h,
-                                },
-                                paint,
-                                &mut pages[target_page].list,
-                            );
-                        }
+                let (color_id, weight) = cell_edge_stroke(color, weight);
+                if weight > 0.0 {
+                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
+                        .map(|p| apply_fill_tint(p, tint))
+                    {
+                        emit_rect(
+                            Rect {
+                                x: x - weight * 0.5,
+                                y,
+                                w: weight,
+                                h,
+                            },
+                            paint,
+                            &mut pages[target_page].list,
+                        );
                     }
                 }
             }
@@ -1408,6 +1406,32 @@ pub(super) fn emit_table_into_chain(
 /// text at its own origin and a merge renders as no merge at all.
 /// Deriving the mask from the spans rather than trusting the cell list
 /// makes both shapes render the same, whoever produced them.
+/// InDesign's built-in cell-edge stroke: **1 pt black**, applied when
+/// neither the cell nor its table style says otherwise.
+///
+/// A `<Cell>` with no `*EdgeStroke*` attributes is not a cell without
+/// borders — it is a cell that inherits the default, and InDesign draws
+/// it. Requiring both a colour AND a weight to be present before
+/// drawing anything meant every table whose IDML omitted them rendered
+/// borderless: measured 2026-09-07, InDesign's own export of the
+/// `tables` fixture carries 4647 ink on page 1 against our 1800, and
+/// the fixture passed only because it holds the corpus's loosest
+/// thresholds. Adobe's own files spell the attributes 71-85% of the
+/// time, which is why this stayed hidden — the corpus packs mostly say
+/// it out loud, and our two writers did not.
+///
+/// An explicit `0` weight still draws nothing: the caller's `> 0.0`
+/// test is what turns a stroke off, and that is InDesign's spelling for
+/// "no border" too.
+const DEFAULT_CELL_EDGE_WEIGHT: f32 = 1.0;
+
+fn cell_edge_stroke(color: Option<&str>, weight: Option<f32>) -> (&str, f32) {
+    (
+        color.unwrap_or("Color/Black"),
+        weight.unwrap_or(DEFAULT_CELL_EDGE_WEIGHT),
+    )
+}
+
 fn covered_grid_positions(table: &paged_model::Table) -> std::collections::HashSet<(u32, u32)> {
     // Spans are clamped to the grid before they are walked: nothing in
     // the format stops a `<Cell ColumnSpan="4000000000">`, and a span
