@@ -114,6 +114,49 @@ instead:
 paged script doc.paged build.js -o out.pdf --render p1.png
 ```
 
+## `paged session`
+
+The `paged-run` NDJSON protocol, byte for byte — same greeting, same
+commands, same one-reply-per-request discipline. `paged-run` remains its
+own binary delegating to the same module, so its two live consumers
+(editor-server's automation lane and the docs scripting gate) are
+untouched.
+
+The additions are **additive**: a host that sends none of them sees the
+protocol it always saw.
+
+```jsonc
+{"cmd":"load","path":"doc.paged",
+ "fonts":["corpus/fonts"],                  // directories or files
+ "fontFamily":["Inter/Bold=/path/Bold.ttf"],
+ "defaultFont":"corpus/fonts/Inter.ttf",    // the fallback face
+ "cmykProfile":"Coated FOGRA39 (ISO 12647-2:2004)"}
+
+{"cmd":"new-blank","width":612,"height":792, /* …same four fields… */ }
+{"cmd":"register-font","family":"Inter","style":null,"path":"…"}
+{"cmd":"register-color-profile","name":"Coated FOGRA39","path":"…"}
+{"cmd":"export","format":"pdf","out":"out.pdf","options":{"standard":"pdfx4"}}
+{"cmd":"render","page":0,"dpi":96,"out":"p.png","backend":"cpu"}
+```
+
+They exist because a session built on `CanvasOptions::default()` has no
+fonts and no colour management — so it shapes no glyphs and converts
+CMYK naively, which is exactly how the headless lane and the editor came
+to disagree.
+
+Two behaviours worth knowing:
+
+- **`register-*` applies to the NEXT load.** The registries seed shaping
+  when the document is built, so registering after a load cannot
+  retroactively shape text already laid out. The reply says so rather
+  than looking like it worked.
+- **`backend` is refused, not downgraded.** Core's native vello-backend
+  is a stub, so anything but `"cpu"` errors. Answering a `"vello"`
+  request with tiny-skia pixels would report a GPU parity nobody
+  measured.
+
+`run-script` keeps the shipped 2 s budget — see above.
+
 ## What it is not
 
 `paged-inspect` still exists and still should. It drives the raw
