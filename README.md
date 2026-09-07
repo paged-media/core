@@ -65,6 +65,7 @@ named; the published artifact is the SDK.
 | `paged-script` | embedded scripting (Boa); the `paged.*` global API |
 | `paged-canvas-wasm`, `paged-introspect-wasm` | wasm-bindgen surfaces for the editor |
 | `paged-gen` | IDML fixture generator (the `paged-gen` bin) |
+| `paged-cli` | the `paged` binary — the whole engine on the command line |
 | `paged-sdk` | the published SDK wasm surface — a WebGPU `ViewerSession` (load → present to canvas → headless RGBA readback); npm `@paged-media/sdk` |
 
 `spikes/` — Vello eval, composer calibration, WASM size.
@@ -139,10 +140,40 @@ engineering roadmap for the remaining gaps is tracked internally.
 
 ## CLI
 
+**`paged`** is the one to reach for (`cargo build --release -p paged-cli`).
+It drives `WorkerCore::dispatch` — the same typed door the editor's worker
+uses — so it opens `.paged` containers as well as IDML, and inherits fonts,
+colour management, PDF export, scripting and undo from the editor's own
+code path. Full documentation: [`crates/paged-cli/README.md`](crates/paged-cli/README.md).
+
+```bash
+paged render  <doc> [--page N|ID] [--all] [--dpi N] -o <file|dir>
+paged inspect <doc> [--json]
+paged script  <doc> <script.js> [-o out.paged|.idml|.pdf] [--render p.png]
+paged export  <doc> --format idml|paged|pdf -o <file>
+paged new     [--size letter|a4|WxH] -o <file>
+paged diff    <reference.png> <candidate.png> [--json] [--heatmap f.png]
+paged gen     emit --sample NAME | emit-all [--out DIR]
+paged session                       # the paged-run NDJSON protocol
+```
+
+Document commands share `--fonts`, `--font-family`, `--font` and
+`--cmyk-profile`. Core ships **no fallback face**, so text whose family no
+registered font answers for is not shaped and the page renders white; `paged`
+warns on stderr when that happens rather than emitting a silent blank.
+
+The single-purpose binaries remain:
+
 - **`paged-inspect <file.idml>`** — parse + summarise a package; render with
-  `--render <out.png>` (flags: `--font`, `--display-list`, `--dpi`, …).
+  `--render <out.png>` (flags: `--font`, `--display-list`, `--dpi`, …). Unlike
+  `paged` it drives the raw pipeline and can resolve external `Links/` off the
+  filesystem — which the canvas model, and therefore the editor, cannot.
 - **`paged-diff <reference.png> <candidate.png>`** — ΔE2000 + SSIM report;
   exits non-zero on fail.
+- **`paged-run`** — the headless NDJSON session (ADR-019's capability-catalog
+  emitter); now a thin shim over the same module `paged session` runs.
+- **`paged-gen emit|emit-all`** — the corpus fixture generator.
+- **`paged-export`** — IDML → PDF.
 
 ## Build & test
 
