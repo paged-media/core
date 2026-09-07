@@ -94,11 +94,12 @@ pub fn find_cmyk_profile(crate_dir: &str) -> Option<ProfileSource> {
         }
     }
 
-    let adobe = Path::new(
-        "/Library/Application Support/Adobe/Color/Profiles/Recommended/CoatedFOGRA39.icc",
-    );
-    if adobe.is_file() {
-        return Some(ProfileSource::Adobe(adobe.to_path_buf()));
+    // The platform search lives in `super::profiles` so the production
+    // resolver and this one cannot disagree about where a host keeps
+    // its profiles — this branch used to name the macOS path only, so
+    // it never fired on Linux or Windows.
+    if let Some(adobe) = crate::profiles::find_installed("CoatedFOGRA39.icc") {
+        return Some(ProfileSource::Adobe(adobe));
     }
     None
 }

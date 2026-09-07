@@ -9057,6 +9057,93 @@ pub fn sniff_font_format(bytes: &[u8]) -> &'static str {
     }
 }
 
+/// Build a font registry by READING the faces, from files and
+/// directories.
+///
+/// Every host that wants to render styled text has to answer the same
+/// question — which `AppliedFont` family do these bytes serve? — and
+/// until now each answered it by hand: `paged-inspect` makes the caller
+/// spell it (`--font-family "Fraunces=…"`), and the editor's own
+/// showcase harness carries a thirteen-entry family-to-filename table
+/// that has to be edited whenever the corpus gains a face. The face
+/// already says: `TYPOGRAPHIC_FAMILY` when it has one, else `FAMILY`.
+///
+/// `style` is left `None` for an upright file — which registers the
+/// family bare and matches every style through
+/// [`font_face_lookup`]'s fall-through, letting the variable font's own
+/// `fvar` instances supply the weights — and `Some("Italic")` for a
+/// file whose subfamily says so, because an italic face is a separate
+/// file that must not answer for the upright one. That is exactly the
+/// shape the hand-written tables spell.
+///
+/// Directories are read one level deep and visited in sorted order, so
+/// the first file to claim a `(family, style)` wins the same way on
+/// every machine. Anything [`sniff_font_format`] does not recognise, or
+/// that carries no family name, is skipped rather than failing the
+/// batch: a fonts directory routinely holds licences and READMEs.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn font_registry_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontEntry> {
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            let Ok(dir) = std::fs::read_dir(path) else {
+                continue;
+            };
+            let mut here: Vec<std::path::PathBuf> =
+                dir.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            here.sort();
+            files.extend(here.into_iter().filter(|p| p.is_file()));
+        } else if path.is_file() {
+            files.push(path.clone());
+        }
+    }
+
+    let mut out: Vec<FontEntry> = Vec::new();
+    for file in files {
+        let Ok(bytes) = std::fs::read(&file) else {
+            continue;
+        };
+        if sniff_font_format(&bytes).is_empty() {
+            continue;
+        }
+        let Some((family, style)) = font_identity(&bytes) else {
+            continue;
+        };
+        if out.iter().any(|e| e.family == family && e.style == style) {
+            continue;
+        }
+        out.push(FontEntry {
+            family,
+            style,
+            bytes,
+        });
+    }
+    out
+}
+
+/// The `(family, style)` a face claims for itself: the typographic
+/// family when present (so `Fraunces` rather than `Fraunces SemiBold`),
+/// and `Some("Italic")` only when the file's subfamily says it is one.
+/// `None` when the payload does not parse or names no family.
+fn font_identity(bytes: &[u8]) -> Option<(String, Option<String>)> {
+    let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    let name = |id: u16| -> Option<String> {
+        face.names()
+            .into_iter()
+            .filter(|n| n.name_id == id)
+            .find_map(|n| n.to_string())
+            .filter(|s| !s.trim().is_empty())
+    };
+    let family = name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+        .or_else(|| name(ttf_parser::name_id::FAMILY))?
+        .trim()
+        .to_string();
+    let italic = name(ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY)
+        .or_else(|| name(ttf_parser::name_id::SUBFAMILY))
+        .is_some_and(|s| s.to_ascii_lowercase().contains("italic"));
+    Some((family, italic.then(|| "Italic".to_string())))
+}
+
 /// v43 (W-06) — the face's PostScript name (`name` table ID 6). `None`
 /// when the payload doesn't parse as sfnt (woff/woff2 containers) or
 /// carries no Unicode-decodable entry.

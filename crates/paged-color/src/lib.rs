@@ -38,6 +38,9 @@ pub mod lab;
 /// the library (not a dev-dependency) so `paged-canvas`'s tests can use
 /// the same resolver `paged-color`'s do — three divergent copies is how
 /// ~8 colour tests ended up silently skipping (see the module docs).
+/// One CMYK-profile precedence for every caller — the production half
+/// of what [`test_profiles`] does for tests.
+pub mod profiles;
 pub mod test_profiles;
 
 pub use cmm::{Cmm, DisplaySetup, ExportPolicy, GamutStatus, IccCmm, Intent, WorkingColor};
