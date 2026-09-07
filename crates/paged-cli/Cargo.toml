@@ -24,6 +24,8 @@ paged-canvas = { path = "../paged-canvas" }
 paged-canvas-wasm = { path = "../paged-canvas-wasm" }
 paged-script = { path = "../paged-script" }
 paged-color = { path = "../paged-color" }
+paged-fidelity = { path = "../paged-fidelity" }
+paged-gen = { path = "../paged-gen" }
 # Reads the declared `CMYKProfile` off a package's designmap BEFORE the
 # load that has to be told about it. Same rev as paged-canvas pins.
 idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "4ae33cbf9ddf8a7bfbc67a5c3784ec36a017cf88" }

@@ -49,7 +49,20 @@ pub fn run(
 ) -> Result<()> {
     let mut session = Session::new();
     let handle = opts.open(&mut session, doc)?;
+    render_pages(&mut session, &handle, page, all, dpi, out)
+}
 
+/// Rasterise from an already-open session, so `paged script` can render
+/// what it just authored without reloading (and without the reload
+/// silently discarding the script's work).
+pub fn render_pages(
+    session: &mut Session,
+    handle: &paged_canvas::DocumentHandle,
+    page: Option<String>,
+    all: bool,
+    dpi: f32,
+    out: &Path,
+) -> Result<()> {
     let targets: Vec<paged_canvas::PageId> = if all {
         handle.page_ids.clone()
     } else {

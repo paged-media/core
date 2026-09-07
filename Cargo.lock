@@ -2445,6 +2445,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-cli"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "idml-import",
+ "paged-canvas",
+ "paged-canvas-wasm",
+ "paged-color",
+ "paged-fidelity",
+ "paged-gen",
+ "paged-script",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-color"
 version = "0.0.0"
 dependencies = [
@@ -2673,9 +2690,8 @@ name = "paged-run"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "paged-canvas",
+ "paged-cli",
  "paged-script",
- "serde",
  "serde_json",
 ]
 

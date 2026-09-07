@@ -91,6 +91,30 @@ impl Session {
             .ok_or_else(|| anyhow!("no document loaded"))
     }
 
+    /// Run a script against the loaded model with a CALLER-SUPPLIED
+    /// budget — the one mutation this crate makes outside
+    /// [`Session::send`], because the `ExecuteScript` wire kind
+    /// hardcodes the editor's 2 s REPL guard and raising it on the wire
+    /// would be protocol drift. See `crate::script` for the full
+    /// argument; the dispatcher's own comment sanctions this door for
+    /// hosts. Everything else still goes through `send`.
+    pub fn execute_script(
+        &mut self,
+        source: &str,
+        budget: paged_script::ScriptBudget,
+    ) -> paged_script::ScriptResult {
+        let started = self.started;
+        let clock = move || started.elapsed().as_secs_f64() * 1000.0;
+        match self.core.model.as_mut() {
+            Some(model) => paged_script::execute_script_with(model, source, budget, &clock),
+            None => paged_script::ScriptResult {
+                output: Vec::new(),
+                error: Some("no document loaded".to_string()),
+                budget_kind: None,
+            },
+        }
+    }
+
     pub fn protocol(&self) -> ProtocolVersion {
         PROTOCOL_VERSION
     }
