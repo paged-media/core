@@ -1,0 +1,36 @@
+[package]
+name = "paged-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "`paged` — the engine on the command line: open, author, render, export, verify."
+
+[[bin]]
+name = "paged"
+path = "src/main.rs"
+
+[dependencies]
+# The document lane. `paged-canvas` brings the CPU rasterizer (its
+# default `cpu` feature) and, through it, the renderer, the PDF
+# exporter, mutate, store and colour — so this leaf crate can hold every
+# subcommand without the dependency cycle that keeps `paged-inspect` and
+# `paged-export` in separate binaries.
+paged-canvas = { path = "../paged-canvas" }
+# The typed wire door: `WorkerCore::dispatch` is the same code path the
+# editor drives, so a CLI built on it cannot express a mutation the
+# product cannot.
+paged-canvas-wasm = { path = "../paged-canvas-wasm" }
+paged-script = { path = "../paged-script" }
+paged-color = { path = "../paged-color" }
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_json = "1"
+anyhow = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
