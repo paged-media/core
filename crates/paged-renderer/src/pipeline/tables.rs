@@ -309,14 +309,16 @@ pub(super) fn emit_table_into_chain(
             target_page,
         )
     };
+    let (border_off_top, border_off_left) = outer_border_offsets(table);
     let mut chain_idx = em.frame_idx;
     let (mut tab_left, mut frame_top_in_page, mut frame_height, mut top_inset, mut target_page) =
         frame_basis_for(chain_idx, em.column_x_shift_pt);
+    tab_left += border_off_left;
     let mut row_top_y_in_frame = if em.y_cursor >= 0 {
         em.y_cursor as f32 / paged_text::shape::ADVANCE_PRECISION
             - em.options.default_point_size * 0.8
     } else {
-        top_inset
+        top_inset + border_off_top
     };
     // Total replayed-footer height we should leave reserved below
     // body rows in any non-last frame. Equals the sum of footer
@@ -449,12 +451,12 @@ pub(super) fn emit_table_into_chain(
             ));
             chain_idx += 1;
             let (l, ftop, h_next, ti, tp) = frame_basis_for(chain_idx, 0.0);
-            tab_left = l;
+            tab_left = l + border_off_left;
             frame_top_in_page = ftop;
             frame_height = h_next;
             top_inset = ti;
             target_page = tp;
-            row_top_y_in_frame = top_inset;
+            row_top_y_in_frame = top_inset + border_off_top;
             current_frame_first_top = frame_top_in_page + row_top_y_in_frame;
             placed_in_frame = 0;
             // Prepend replayed headers at the top of the new frame.
@@ -1430,6 +1432,51 @@ fn cell_edge_stroke(color: Option<&str>, weight: Option<f32>) -> (&str, f32) {
         color.unwrap_or("Color/Black"),
         weight.unwrap_or(DEFAULT_CELL_EDGE_WEIGHT),
     )
+}
+
+/// How far InDesign insets a table's content from its frame's top-left:
+/// half the outer border weight on each side.
+///
+/// InDesign keeps the outer border INSIDE the frame — the stroke is
+/// centred on the table's boundary, and the boundary is moved in by
+/// half a stroke so the outer half lands exactly on the frame edge.
+/// Everything inherits the shift, rules and text alike.
+///
+/// Measured at two weights so the rule is not a coincidence
+/// (2026-09-07, `tables-overset` pages 1 and 6, InDesign 20.0.1 at
+/// 600 dpi): with a 1 pt border InDesign puts the first row's text at
+/// 128.640 pt where we put it at 128.160; with a 4 pt border, at
+/// 130.080 against the same 128.160. Offsets of 0.48 and 1.92 pt —
+/// half the weight both times.
+///
+/// An edge that draws nothing contributes nothing: an explicit `0`
+/// weight, or a `Swatch/None` colour, leaves the table flush.
+fn outer_border_offsets(table: &paged_model::Table) -> (f32, f32) {
+    let drawn = |color: Option<&str>, weight: Option<f32>| -> f32 {
+        if color.is_some_and(is_none_swatch_id) {
+            return 0.0;
+        }
+        weight.unwrap_or(DEFAULT_CELL_EDGE_WEIGHT).max(0.0)
+    };
+    let (mut top, mut left) = (0.0f32, 0.0f32);
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
+        if r == 0 {
+            top = top.max(drawn(
+                cell.top_edge_stroke_color.as_deref(),
+                cell.top_edge_stroke_weight,
+            ));
+        }
+        if c == 0 {
+            left = left.max(drawn(
+                cell.left_edge_stroke_color.as_deref(),
+                cell.left_edge_stroke_weight,
+            ));
+        }
+    }
+    (top * 0.5, left * 0.5)
 }
 
 fn covered_grid_positions(table: &paged_model::Table) -> std::collections::HashSet<(u32, u32)> {

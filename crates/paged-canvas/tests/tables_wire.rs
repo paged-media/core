@@ -290,10 +290,18 @@ fn table_dimension_write_is_rejected() {
 fn cell_geometry_returns_the_hit_test_rect() {
     // Aftercare-A — `element_geometry` on a `TableCell` resolves the
     // BuiltPage `cell_rects` entry the hit-test path uses. Cell (0,0)
-    // sits at page-local (40, 40), 100pt wide × 30pt tall, so the
+    // sits at page-local (40.5, 40.5), 100pt wide × 30pt tall, so the
     // ElementGeometryItem bounds `[top, left, bottom, right]` are
-    // `[40, 40, 70, 140]` and carry no item_transform (already
+    // `[40.5, 40.5, 70.5, 140.5]` and carry no item_transform (already
     // page-local).
+    //
+    // The half-point is the table's outer border: InDesign keeps that
+    // border INSIDE the frame, so a table's content sits half its outer
+    // stroke in from the frame's top-left, and this table's cells take
+    // the default 1 pt. Measured against InDesign 20.0.1 at two stroke
+    // weights (`tables-overset` pages 1 and 6). The hit-test rect
+    // follows the ink, which is the point of resolving it from the
+    // built page rather than from the model's declared geometry.
     let model = load_model();
     let id = ElementId::TableCell {
         story_id: "u10".into(),
@@ -316,12 +324,12 @@ fn cell_geometry_returns_the_hit_test_rect() {
     );
     assert!(item.item_transform.is_none(), "cell rect is page-local");
     let [top, left, bottom, right] = item.bounds;
-    assert!((top - 40.0).abs() < 0.5, "top {top}");
-    assert!((left - 40.0).abs() < 0.5, "left {left}");
-    assert!((bottom - 70.0).abs() < 0.5, "bottom {bottom}");
-    assert!((right - 140.0).abs() < 0.5, "right {right}");
+    assert!((top - 40.5).abs() < 0.05, "top {top}");
+    assert!((left - 40.5).abs() < 0.05, "left {left}");
+    assert!((bottom - 70.5).abs() < 0.05, "bottom {bottom}");
+    assert!((right - 140.5).abs() < 0.05, "right {right}");
 
-    // Cell (1, 1): x in [140, 200), y in [70, 110).
+    // Cell (1, 1): x in [140.5, 200.5), y in [70.5, 110.5).
     let id11 = ElementId::TableCell {
         story_id: "u10".into(),
         table_id: "t1".into(),
@@ -331,10 +339,10 @@ fn cell_geometry_returns_the_hit_test_rect() {
     let items = model.element_geometry(std::slice::from_ref(&id11));
     assert_eq!(items.len(), 1);
     let [top, left, bottom, right] = items[0].bounds;
-    assert!((top - 70.0).abs() < 0.5, "top {top}");
-    assert!((left - 140.0).abs() < 0.5, "left {left}");
-    assert!((bottom - 110.0).abs() < 0.5, "bottom {bottom}");
-    assert!((right - 200.0).abs() < 0.5, "right {right}");
+    assert!((top - 70.5).abs() < 0.05, "top {top}");
+    assert!((left - 140.5).abs() < 0.05, "left {left}");
+    assert!((bottom - 110.5).abs() < 0.05, "bottom {bottom}");
+    assert!((right - 200.5).abs() < 0.05, "right {right}");
 }
 
 #[test]
