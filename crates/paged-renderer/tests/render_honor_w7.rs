@@ -494,3 +494,45 @@ fn frame_outer_glow_default_color_is_white_not_black() {
         "disabled glow must emit no OuterGlow command"
     );
 }
+
+#[test]
+fn a_first_line_indent_narrows_the_line_it_indents() {
+    // Measured on the annual's page 94: InDesign's justified lines end
+    // at the frame's right edge and ours ended one FirstLineIndent
+    // past it, because we shifted the laid-out glyphs right after
+    // breaking and left the measure alone. Every indented first line
+    // in every document overran its frame by the indent — and fitted
+    // a word more than InDesign's because of it.
+    let r = resolver();
+    let text = "one two three four five six seven eight nine ten eleven twelve thirteen";
+    let first_line_right = |bytes: &[u8]| -> f32 {
+        let affines = glyph_affines(&build_page_commands(&r, bytes));
+        let top = affines
+            .iter()
+            .map(|m| (m[5] * 16.0).round() as i64)
+            .min()
+            .expect("at least one glyph");
+        affines
+            .iter()
+            .filter(|m| (m[5] * 16.0).round() as i64 == top)
+            .map(|m| m[4])
+            .fold(f32::MIN, f32::max)
+    };
+    let plain = first_line_right(&build(r#" Justification="LeftJustified""#, "", text));
+    let indented = first_line_right(&build(
+        r#" Justification="LeftJustified" FirstLineIndent="60""#,
+        "",
+        text,
+    ));
+    // The frame is `GeometricBounds="20 20 380 380"` — 360 pt wide,
+    // right edge at x = 380.
+    assert!(
+        plain <= 380.0,
+        "an un-indented justified line ends at the margin, got {plain}"
+    );
+    assert!(
+        indented <= plain + 1.0,
+        "the indented first line must not reach past the same margin: \
+         plain {plain}, indented {indented}"
+    );
+}

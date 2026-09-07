@@ -4798,6 +4798,35 @@ pub(super) fn emit_paragraph_into_chain(
         lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.5);
     }
 
+    // FirstLineIndent NARROWS the first line's measure; it does not
+    // only move it. We shifted the laid-out glyphs right by the indent
+    // after breaking and left the measure alone, so every indented
+    // first line in the document ran past its frame by exactly the
+    // indent — measured on the annual's page 94, where InDesign's
+    // justified lines end at the frame's 492 pt right edge and ours
+    // ended at 504.6 pt, one indent beyond, and fitted a word more
+    // because of it. A negative (hanging) indent widens line 0 the
+    // same way, which is what puts a hanging number outside the
+    // margin.
+    if let Some(indent_pt) = resolved_paragraph.first_line_indent {
+        let indent_64 = (indent_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        if indent_64 != 0 {
+            let mut widths = lopts
+                .compose
+                .column_widths
+                .clone()
+                .unwrap_or_else(|| vec![lopts.compose.column_width]);
+            // The last entry repeats for every line past the slice, so
+            // a one-entry slice would narrow the whole paragraph.
+            if widths.len() == 1 {
+                widths.push(widths[0]);
+            }
+            let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+            widths[0] = (widths[0] - indent_64).max(floor_64);
+            lopts.compose.column_widths = Some(widths);
+        }
+    }
+
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
     // Optical margin alignment: when the story carries
