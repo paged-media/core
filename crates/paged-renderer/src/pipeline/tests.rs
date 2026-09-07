@@ -2089,6 +2089,136 @@ fn table_column_dividers_emit_extra_edges() {
     );
 }
 
+/// A table in a frame too short for it draws only the rows that fit —
+/// and if no BODY row fits, nothing at all.
+///
+/// Measured against InDesign 20.0.1's own export of `tables-overset`
+/// (2026-09-07): four 28 pt rows in a 20 pt frame, and a header plus
+/// three 28 pt rows in a 20 pt or 30 pt frame, are all ZERO ink there.
+/// This renderer drew one row in each case — the last-frame overset
+/// test carried a `placed_in_frame > 0` guard that belongs only to the
+/// frame-advance path, and header rows were emitted unconditionally.
+/// A header is a label for rows; with no rows to label InDesign does
+/// not place it.
+fn build_short_frame_table_idml(frame_h_pt: f32, header_rows: usize, body_rows: usize) -> Vec<u8> {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let total = header_rows + body_rows;
+    let rows: String = (0..total)
+        .map(|r| {
+            format!(
+                r#"<Row Self="r{r}" Name="{r}" SingleRowHeight="28" MinimumHeight="28" AutoGrow="true"/>"#
+            )
+        })
+        .collect();
+    let cells: String = (0..total)
+        .map(|r| {
+            format!(
+                r#"<Cell Self="0:{r}" Name="0:{r}" RowSpan="1" ColumnSpan="1"><ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10"><Content>R{r}</Content></CharacterStyleRange></ParagraphStyleRange></Cell>"#
+            )
+        })
+        .collect();
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1"><ParagraphStyleRange><CharacterStyleRange AppliedFont="Inter" PointSize="10">
+    <Table Self="t" HeaderRowCount="{header_rows}" FooterRowCount="0" BodyRowCount="{body_rows}" ColumnCount="1">
+      {rows}<Column Self="cc0" Name="0" SingleColumnWidth="100"/>{cells}
+    </Table>
+  </CharacterStyleRange></ParagraphStyleRange></Story>
+</idPkg:Story>"#
+    );
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="10 10 {bottom} 300"/>
+  </Spread>
+</idPkg:Spread>"#,
+        bottom = 10.0 + frame_h_pt
+    );
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Color Self="Color/Black" Space="CMYK" ColorValue="0 0 0 100"/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+    zip.write_all(story.as_bytes()).unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn a_table_draws_only_the_rows_its_frame_can_hold() {
+    let font = inter_font_bytes();
+    let commands = |frame_h_pt: f32, header: usize, body: usize| -> usize {
+        let bytes = build_short_frame_table_idml(frame_h_pt, header, body);
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+        let options = PipelineOptions {
+            font: Some(&font),
+            ..PipelineOptions::default()
+        };
+        let built = build_document(&doc, &options).expect("build");
+        built.pages[0].list.commands.len()
+    };
+
+    // The control: a frame that holds everything draws everything.
+    let roomy = commands(200.0, 0, 4);
+    assert!(roomy > 0, "a table that fits must draw something");
+
+    // Not even the first body row fits.
+    assert_eq!(
+        commands(20.0, 0, 4),
+        0,
+        "a table whose first row overflows its only frame is overset entirely"
+    );
+
+    // The header alone is taller than the frame.
+    assert_eq!(
+        commands(20.0, 1, 3),
+        0,
+        "a header row taller than the frame is overset with the rest"
+    );
+
+    // The header fits but no body row does — InDesign still draws
+    // nothing, and this is the case the old code got most wrong,
+    // because headers never consulted the frame at all.
+    assert_eq!(
+        commands(30.0, 1, 3),
+        0,
+        "a header with no body row to label is not placed"
+    );
+
+    // A frame that holds some rows still draws those.
+    let partial = commands(62.0, 0, 4);
+    assert!(
+        partial > 0 && partial < roomy,
+        "a frame holding 2 of 4 rows draws fewer commands than one holding all \
+         four, and more than none: partial={partial} roomy={roomy}"
+    );
+}
+
 #[test]
 fn cell_rotation_rotates_content() {
     // A cell with RotationAngle="90" rotates its content: at least

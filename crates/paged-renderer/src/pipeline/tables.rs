@@ -399,19 +399,29 @@ pub(super) fn emit_table_into_chain(
         .map(|a| a.grows_height())
         .unwrap_or(false);
     let mut overset_at: Option<usize> = None;
+    // How many BODY rows this frame took. A frame that holds none draws
+    // nothing at all, headers included — see `body_placed_in_frame`
+    // below.
+    let mut body_placed_in_frame = 0usize;
     for r in body_range.clone() {
         let h = row_heights[r];
         let need_extra_for_split = footer_reserved_h;
         let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
-        if would_overflow
-            && chain_idx + 1 >= em.chain.len()
-            && placed_in_frame > 0
-            && !last_frame_grows_height
-        {
+        // In the LAST frame there is nowhere to advance to, so a row
+        // that does not fit is overset — even the first one. The
+        // `placed_in_frame > 0` guard that used to sit here belongs to
+        // the frame-ADVANCE branch below, where it stops an empty frame
+        // from looping forever; carrying it here made a frame too short
+        // for even its first row draw that row anyway. InDesign draws
+        // nothing (measured 2026-09-07 on `tables-overset`: 4 rows of
+        // 28 pt in a 20 pt frame is zero ink in InDesign's own export,
+        // and was one row here).
+        if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
             overset_at = Some(r);
             break;
         }
         if would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0 {
+            body_placed_in_frame = 0;
             // Append replayed footers at the bottom of this frame.
             if repeating_footer {
                 for fr in (total_rows - footer_count)..total_rows {
@@ -482,6 +492,18 @@ pub(super) fn emit_table_into_chain(
         row_top_y_in_frame += h;
         current_frame_last_bottom = frame_top_in_page + row_top_y_in_frame;
         placed_in_frame += 1;
+        body_placed_in_frame += 1;
+    }
+
+    // A frame that holds header rows but not one body row draws
+    // NOTHING — InDesign suppresses the headers too (measured
+    // 2026-09-07: a header plus three 28 pt rows in a 30 pt frame, so
+    // the header alone fits, is zero ink in InDesign's export and was
+    // one row here). A header is a label for rows; with no rows to
+    // label InDesign does not place it, and the same holds for a
+    // replayed header at the top of a continuation frame.
+    if body_placed_in_frame == 0 && header_count > 0 {
+        physical_rows.retain(|row| row.chain_idx != chain_idx);
     }
 
     // Original footer rows — emitted on whatever frame the body
