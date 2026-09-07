@@ -87,10 +87,10 @@
     {
       "name": "tables",
       "max_pages_with_pdf": 13,
-      "max_mean_de": 0.65,
-      "max_p99_de": 10.7,
-      "min_ssim": 0.973,
-      "rationale": "Re-baselined 2026-09-07 after two table fixes: paged-gen now writes MinimumHeight/AutoGrow beside SingleRowHeight (InDesign ignored the height alone and re-fitted the rows, so the reference measured a different table than the fixture declared), and a cell edge with no declared stroke now draws InDesign's default 1pt black instead of nothing. Reference re-exported from the changed IDML; all 13 pages now have a reference page, so the 7-page cap is gone. Worst page mean 0.563 / p99 9.237 / SSIM 0.9786 (p12) - tightened from 1.1/13.0/0.96 per the calibration rule."
+      "max_mean_de": 0.27,
+      "max_p99_de": 3.0,
+      "min_ssim": 0.982,
+      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus."
     },
     {
       "name": "images",
@@ -102,11 +102,11 @@
     },
     {
       "name": "tables-overset",
-      "max_pages_with_pdf": 5,
-      "max_mean_de": 0.56,
-      "max_p99_de": 1.0,
-      "min_ssim": 0.969,
-      "rationale": "New 2026-09-07. Isolates what InDesign draws when a table does not fit its frame: pages 3-5 are a table whose first row, header row, or every body row overflows, and InDesign's export has ZERO ink on all three where the renderer drew one row. Worst page mean 0.465 / p99 0.000 / SSIM 0.9745 (p1); the three overset pages sit at mean 0.034-0.041 / SSIM 0.998, so a regression that redraws an overset row moves them by an order of magnitude and trips this immediately."
+      "max_pages_with_pdf": 6,
+      "max_mean_de": 0.12,
+      "max_p99_de": 0.5,
+      "min_ssim": 0.991,
+      "rationale": "New 2026-09-07. Six pages isolating what InDesign draws when a table does not fit its frame - all rows fit, two of four fit, none fit, the header alone is taller than the frame, the header fits but no body row does - plus a 4pt-border page so the outer-border inset is measured at two weights rather than one. InDesign's export has ZERO ink on the three overset pages where the renderer drew one row. Worst page mean 0.100 / p99 0.000 / SSIM 0.9966 (p6)."
     }
   ]
 }

@@ -64,6 +64,12 @@ struct Variant {
     frame_h_pt: f32,
     header_rows: usize,
     body_rows: usize,
+    /// Explicit stroke weight on every cell edge. `None` leaves the
+    /// attributes off entirely, which is InDesign's default (1 pt
+    /// black) and the case our two writers actually take. A declared
+    /// weight is here to measure how the table's placement moves with
+    /// it — see the last variant.
+    edge_weight: Option<f32>,
 }
 
 /// Row heights are uniform, so each case is stated as "N rows of 28 pt
@@ -75,30 +81,48 @@ fn variants() -> Vec<Variant> {
             frame_h_pt: 200.0,
             header_rows: 0,
             body_rows: 4,
+            edge_weight: None,
         },
         Variant {
             name: "overset · 4 rows of 28pt in a 62pt frame · 2 fit",
             frame_h_pt: 62.0,
             header_rows: 0,
             body_rows: 4,
+            edge_weight: None,
         },
         Variant {
             name: "overset · 4 rows of 28pt in a 20pt frame · none fit",
             frame_h_pt: 20.0,
             header_rows: 0,
             body_rows: 4,
+            edge_weight: None,
         },
         Variant {
             name: "overset · header + 3 rows in a 20pt frame · header too tall",
             frame_h_pt: 20.0,
             header_rows: 1,
             body_rows: 3,
+            edge_weight: None,
         },
         Variant {
             name: "overset · header + 3 rows in a 30pt frame · only the header fits",
             frame_h_pt: 30.0,
             header_rows: 1,
             body_rows: 3,
+            edge_weight: None,
+        },
+        // A heavy declared border, so the fixture carries two stroke
+        // weights rather than one. InDesign places the table half its
+        // OUTER border below the frame top (measured: a 1 pt default
+        // border puts the first row's text at 128.64 pt where we put it
+        // at 128.16); with 4 pt here the same rule predicts 2 pt, and a
+        // rule tested at one weight is a coincidence.
+        Variant {
+            name: "overset · 4 rows in a 200pt frame · 4pt cell borders",
+            frame_h_pt: 200.0,
+            header_rows: 0,
+            body_rows: 4,
+            edge_weight: Some(4.0),
         },
     ]
 }
@@ -114,7 +138,18 @@ fn table_for(variant: &Variant, id: &str) -> Table {
             } else {
                 format!("R{}C{}", r + 1 - variant.header_rows, c + 1)
             };
-            cells.push(Cell::plain(label));
+            let mut cell = Cell::plain(label);
+            if let Some(w) = variant.edge_weight {
+                cell.top_edge_stroke_color = Some("Color/Black");
+                cell.bottom_edge_stroke_color = Some("Color/Black");
+                cell.left_edge_stroke_color = Some("Color/Black");
+                cell.right_edge_stroke_color = Some("Color/Black");
+                cell.top_edge_stroke_weight = Some(w);
+                cell.bottom_edge_stroke_weight = Some(w);
+                cell.left_edge_stroke_weight = Some(w);
+                cell.right_edge_stroke_weight = Some(w);
+            }
+            cells.push(cell);
         }
     }
     Table {
