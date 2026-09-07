@@ -14,8 +14,11 @@
 
 //! `paged` — the engine on the command line.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use paged_cli::options::DocumentOptions;
 
 #[derive(Parser)]
 #[command(
@@ -31,6 +34,35 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Rasterise a page to PNG.
+    Render {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// Page to render: a 1-based number or a page id. Default: 1.
+        #[arg(long)]
+        page: Option<String>,
+        /// Render every page; `-o` must then be a directory.
+        #[arg(long)]
+        all: bool,
+        /// Resolution. 72 makes one pixel one point.
+        #[arg(long, default_value_t = 144.0)]
+        dpi: f32,
+        /// Output PNG (or directory, with `--all`).
+        #[arg(short, long)]
+        out: PathBuf,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
+    /// Report what the engine made of a document.
+    Inspect {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// Speak the headless NDJSON engine protocol on stdin/stdout.
     ///
     /// Byte-for-byte the `paged-run` protocol, from the same code: a
@@ -41,6 +73,15 @@ enum Command {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Render {
+            doc,
+            page,
+            all,
+            dpi,
+            out,
+            assets,
+        } => paged_cli::render::run(&doc, &assets, page, all, dpi, &out),
+        Command::Inspect { doc, json, assets } => paged_cli::inspect::run(&doc, &assets, json),
         Command::Session => paged_cli::session::run(),
     }
 }

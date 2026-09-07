@@ -38,7 +38,7 @@ fn the_session_subcommand_greets_and_answers_in_order() {
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
 
-    let mut read_line = |stdout: &mut BufReader<_>| -> serde_json::Value {
+    let read_line = |stdout: &mut BufReader<_>| -> serde_json::Value {
         let mut line = String::new();
         let n = stdout.read_line(&mut line).unwrap();
         assert!(n > 0, "session closed without answering");

@@ -22,4 +22,8 @@
 //! existing exactly as it is while `paged session` speaks the same
 //! protocol from the same code.
 
+pub mod engine;
+pub mod inspect;
+pub mod options;
+pub mod render;
 pub mod session;
