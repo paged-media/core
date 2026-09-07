@@ -67,10 +67,19 @@
       "name": "tables",
       "idml": "tables.idml",
       "pdf": "tables.pdf",
-      "pages": 7,
-      "passing": 0,
+      "pages": 13,
+      "passing": 2,
       "diff_dir": "/tmp/idml-generated-diff/tables",
       "report": "/tmp/idml-generated-diff/tables/report.json"
+    },
+    {
+      "name": "tables-overset",
+      "idml": "tables-overset.idml",
+      "pdf": "tables-overset.pdf",
+      "pages": 5,
+      "passing": 3,
+      "diff_dir": "/tmp/idml-generated-diff/tables-overset",
+      "report": "/tmp/idml-generated-diff/tables-overset/report.json"
     },
     {
       "name": "text",

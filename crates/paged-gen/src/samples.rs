@@ -42,6 +42,7 @@ pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
 pub mod tables;
+pub mod tables_overset;
 pub mod text;
 pub mod text_advanced;
 pub mod text_autosize;
@@ -80,6 +81,7 @@ pub const SAMPLES: &[&str] = &[
     "footnotes",
     "gradients",
     "tables",
+    "tables-overset",
     "images",
     "image-clipping",
     "anchored",
@@ -122,6 +124,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "footnotes" => footnotes::build(),
         "gradients" => gradients::build(),
         "tables" => tables::build(),
+        "tables-overset" => tables_overset::build(),
         "images" => images::build(),
         "image-clipping" => image_clipping::build(),
         "anchored" => anchored::build(),
@@ -172,7 +175,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            37,
+            38,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
