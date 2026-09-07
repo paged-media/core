@@ -681,12 +681,28 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             .map(crate::xml::format_f32)
             .unwrap_or_else(|| "20".to_string());
         let row_self = format!("{}_R{r}", t.self_id);
+        // `SingleRowHeight` alone does not hold a row's height open in
+        // InDesign — it is only the row's CURRENT height. The floor is
+        // `MinimumHeight`, and `AutoGrow` lets content raise it; Adobe's
+        // own exports always spell all three (753 of 753 `<Row>`s across
+        // the InDesign-authored corpus carry `SingleRowHeight`, 503 also
+        // carry `MinimumHeight`). Emitting only the first is a private
+        // spelling our reader honours and InDesign ignores: it re-fits
+        // the rows to their content, so a fixture declaring 28 pt rows
+        // came back from InDesign at 20.8 pt and every measurement taken
+        // against that reference was of a different table than the one
+        // generated (measured 2026-09-07 on `tables-overset`).
+        //
+        // `idml-export` already writes all three — this is the second
+        // writer, and fixing one was never fixing both.
         b.empty(
             "Row",
             &[
                 ("Self", row_self.as_str()),
                 ("Name", r_str.as_str()),
                 ("SingleRowHeight", h_str.as_str()),
+                ("MinimumHeight", h_str.as_str()),
+                ("AutoGrow", "true"),
             ],
         );
     }
