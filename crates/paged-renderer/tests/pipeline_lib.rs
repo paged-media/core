@@ -1002,6 +1002,51 @@ fn cross_shape_item_layer_z_order_back_emits_before_front() {
     );
 }
 
+#[test]
+fn a_spread_with_no_z_table_still_paints_layers_in_order() {
+    // A spread's z table is materialised lazily, and one BORN empty —
+    // every page an editor session authors from nothing — never got
+    // one, because `register_frame_ref` returns early on an empty
+    // table. The renderer then took its synthetic kind-by-kind walk,
+    // which skipped the ItemLayer sort entirely: all text frames, then
+    // all rectangles, in vec order. So a Background rectangle painted
+    // over Content text, and the annual's cover lost its title while
+    // the same document exported to IDML and re-imported showed it.
+    //
+    // Same fixture as the test above, with the table cleared to stand
+    // in for a document built by mutation.
+    let bytes = build_layered_rects_idml();
+    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
+    for parsed in document.spreads.iter_mut() {
+        parsed.spread.frames_in_order.clear();
+    }
+    let opts = PipelineOptions::default();
+    let built = pipeline::build_document(&document, &opts).unwrap();
+
+    let fills: Vec<&Paint> = built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            paged_compose::DisplayCommand::FillPath { paint, .. } => Some(paint),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 2, "two rectangles → two FillPaths");
+    fn is_red(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.r > c.b && c.r > c.g)
+    }
+    fn is_blue(p: &Paint) -> bool {
+        matches!(p, Paint::Solid(c) if c.b > c.r && c.b > c.g)
+    }
+    assert!(
+        is_red(fills[0]),
+        "the back layer paints first even with no z table, got {:?}",
+        fills[0]
+    );
+    assert!(is_blue(fills[1]), "and the front layer second");
+}
+
 /// Build an IDML with a single red-filled `<TextFrame>` whose
 /// `<PathGeometry>` carries the given anchor points (each anchor's
 /// Bezier handles collapse onto the anchor → straight sides). With 3

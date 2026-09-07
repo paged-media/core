@@ -1045,13 +1045,17 @@ pub(super) fn build_document_inner(
             id.and_then(|s| layer_z_index.get(s).copied())
                 .unwrap_or(usize::MAX)
         };
-        let frames_ordered: Vec<paged_model::FrameRef> = if spread.frames_in_order.is_empty() {
-            // Legacy path: a parser revision predating
-            // `frames_in_order` (or a spread carrying only frames the
-            // parser couldn't classify) → fall through to the same
-            // XML-vec walk as before. Builds a synthetic flat list by
-            // concatenating the per-shape vecs in their historical
-            // order.
+        // The z table when the spread has one; otherwise the legacy
+        // synthetic walk — a parser revision predating
+        // `frames_in_order`, a spread carrying only frames the parser
+        // could not classify, or (until the mutation lane learned to
+        // materialise it) every spread an editor session authored from
+        // nothing. Either way the LAYER sort below runs: it used to be
+        // skipped on the synthetic path, so a document built by
+        // mutation painted its Background rectangles over its Content
+        // text — which is how the annual's cover lost its title while
+        // the same document exported to IDML and re-imported showed it.
+        let base_order: Vec<paged_model::FrameRef> = if spread.frames_in_order.is_empty() {
             let mut v: Vec<paged_model::FrameRef> = Vec::new();
             v.extend((0..spread.text_frames.len()).map(paged_model::FrameRef::TextFrame));
             v.extend((0..spread.rectangles.len()).map(paged_model::FrameRef::Rectangle));
@@ -1060,8 +1064,10 @@ pub(super) fn build_document_inner(
             v.extend((0..spread.polygons.len()).map(paged_model::FrameRef::Polygon));
             v
         } else {
-            let mut keyed: Vec<(usize, usize, paged_model::FrameRef)> = spread
-                .frames_in_order
+            spread.frames_in_order.clone()
+        };
+        let frames_ordered: Vec<paged_model::FrameRef> = {
+            let mut keyed: Vec<(usize, usize, paged_model::FrameRef)> = base_order
                 .iter()
                 .enumerate()
                 .map(|(xi, &fr)| (layer_z_of(fr), xi, fr))
