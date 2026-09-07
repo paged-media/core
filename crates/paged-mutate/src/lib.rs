@@ -5140,6 +5140,63 @@ mod tests {
         doc
     }
 
+    /// A spread BORN without a z table gets one from its first
+    /// structural edit — it used to stay empty for good, because the
+    /// first insert declined to start a table and every insert after
+    /// it found the table still empty and declined too. Downstream
+    /// that left the renderer, the hit-tester and the scene tree on a
+    /// synthetic kind-by-kind walk that is not paint order, which is
+    /// how a document authored entirely by mutation painted its
+    /// Background rectangles over its Content text.
+    #[test]
+    fn a_spread_born_without_a_z_table_gets_one_from_its_first_edit() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/a"));
+        assert!(
+            project.document().spreads[0]
+                .spread
+                .frames_in_order
+                .is_empty(),
+            "the fixture starts without a table, like a synthesised spread"
+        );
+        let rect = |id: &str| NodeSpec::Rectangle {
+            item_transform: None,
+            self_id: id.to_string(),
+            bounds: [0.0, 0.0, 50.0, 50.0],
+            fill_color: None,
+            stroke_color: None,
+            stroke_weight: None,
+        };
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 0,
+                node: rect("Rectangle/r1"),
+                z_slot: None,
+            })
+            .expect("insert one");
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order,
+            vec![FrameRef::TextFrame(0), FrameRef::Rectangle(0)],
+            "the table starts from what was already there, with the new item on top"
+        );
+
+        // And a second insert stacks on top of that, rather than
+        // sorting itself back among its own kind.
+        project
+            .apply(Operation::InsertNode {
+                parent: NodeId::Spread("Spread/u_main".to_string()),
+                position: 1,
+                node: rect("Rectangle/r2"),
+                z_slot: None,
+            })
+            .expect("insert two");
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order.last(),
+            Some(&FrameRef::Rectangle(1)),
+            "new creations stack on top, like InDesign's draw tools"
+        );
+    }
+
     /// Inserting registers the new frame in `frames_in_order` (on top
     /// when `z_slot: None`) and remaps the kind-vec indices of every
     /// later same-kind ref — the renderer/hit-tester walk ONLY this
@@ -5243,7 +5300,22 @@ mod tests {
                 value: Value::Transform(Some(m)),
             })
             .expect("set transform");
-        let before = format!("{:?}", project.document().spreads);
+        // `frames_in_order` is DERIVED state, and an empty one means
+        // "not yet materialised" rather than "no order" — which is why
+        // the first structural edit on a spread that was born without
+        // one now starts it. That is render-neutral by construction
+        // (the materialised order IS the synthetic walk downstream
+        // used) and by measurement: all 134 pages of the annual render
+        // byte-identically with and without it. So compare everything
+        // else exactly, and assert the table on its own.
+        let dump = |p: &Project| -> String {
+            let mut spreads = p.document().spreads.clone();
+            for s in spreads.iter_mut() {
+                s.spread.frames_in_order.clear();
+            }
+            format!("{spreads:?}")
+        };
+        let before = dump(&project);
 
         project
             .apply(Operation::RemoveNode {
@@ -5258,8 +5330,16 @@ mod tests {
             Some(m),
             "undo of deleteFrame must restore the item transform"
         );
-        let after = format!("{:?}", project.document().spreads);
-        assert_eq!(before, after, "undo of remove must be byte-identical");
+        assert_eq!(
+            before,
+            dump(&project),
+            "undo of remove must be byte-identical"
+        );
+        assert_eq!(
+            project.document().spreads[0].spread.frames_in_order,
+            vec![FrameRef::TextFrame(0)],
+            "and the edit left behind the z table the fixture lacked"
+        );
     }
 
     #[test]

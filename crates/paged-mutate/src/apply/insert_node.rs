@@ -96,6 +96,34 @@ pub(super) fn ensure_frames_in_order(spread: &mut Spread) {
     spread.frames_in_order = v;
 }
 
+/// The z table a spread would have had just before `template` was
+/// pushed into its kind vec — every existing item, in the same order
+/// [`ensure_frames_in_order`] synthesises, minus the one being
+/// registered.
+///
+/// The caller has already grown the kind vec, so the template's own
+/// kind is one shorter here; the shift-and-insert that follows then
+/// operates on pre-insert indices, which is what it expects.
+fn z_table_before_insert(spread: &Spread, template: &FrameRef) -> Vec<FrameRef> {
+    let mut v: Vec<FrameRef> = Vec::new();
+    let mut push = |count: usize, make: fn(usize) -> FrameRef| {
+        let sample = make(0);
+        let before = if fr_same_kind(&sample, template) {
+            count.saturating_sub(1)
+        } else {
+            count
+        };
+        v.extend((0..before).map(make));
+    };
+    push(spread.text_frames.len(), FrameRef::TextFrame);
+    push(spread.rectangles.len(), FrameRef::Rectangle);
+    push(spread.ovals.len(), FrameRef::Oval);
+    push(spread.graphic_lines.len(), FrameRef::GraphicLine);
+    push(spread.polygons.len(), FrameRef::Polygon);
+    push(spread.groups.len(), FrameRef::Group);
+    v
+}
+
 /// Register a page item inserted at `vec_pos` of its kind vec:
 /// same-kind refs at `>= vec_pos` shift up by one, then the new ref
 /// lands at `z_slot` (or on top when `None` — new creations stack
@@ -120,7 +148,20 @@ pub(super) fn register_frame_ref(
         }
     }
     if spread.frames_in_order.is_empty() {
-        return; // legacy vec-walk fallback covers this spread
+        // A spread BORN empty — every page an editor session authors
+        // from nothing — used to return here, and so never acquired a
+        // z table at all: the first insert declined to start one, and
+        // every insert after it found the table still empty and
+        // declined too. Downstream that left the renderer, the
+        // hit-tester and the scene tree on their synthetic
+        // kind-by-kind walk (all text frames, then all rectangles, …),
+        // which is not paint order and, until it learned to sort,
+        // painted a Background rectangle over Content text.
+        //
+        // Start the table from the items that were here BEFORE this
+        // insert; the shift and the insert below then place the new
+        // one exactly as they would have on a parsed spread.
+        spread.frames_in_order = z_table_before_insert(spread, &template);
     }
     for fr in spread.frames_in_order.iter_mut() {
         if fr_same_kind(fr, &template) {
