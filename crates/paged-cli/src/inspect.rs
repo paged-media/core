@@ -57,6 +57,15 @@ pub fn run(doc: &Path, opts: &DocumentOptions, as_json: bool) -> Result<()> {
                 "pageSizesPt": handle.page_sizes_pt,
                 "cmykProfile": colour.cmyk_profile_name,
                 "pageDigests": digests,
+                "stats": {
+                    "frames": handle.stats.frames,
+                    "stories": handle.stats.stories,
+                    "paragraphs": handle.stats.paragraphs,
+                    "runs": handle.stats.runs,
+                    "glyphs": handle.stats.glyphs,
+                    "lines": handle.stats.lines,
+                    "oversetStories": handle.stats.overset_stories,
+                },
             }))?
         );
         return Ok(());
@@ -70,6 +79,17 @@ pub fn run(doc: &Path, opts: &DocumentOptions, as_json: bool) -> Result<()> {
         // Worth saying out loud: it is the difference between the
         // engine's colours and a print reference's.
         None => println!("cmyk        (none — naive conversion)"),
+    }
+    let st = &handle.stats;
+    println!(
+        "content     {} frame(s), {} story(ies), {} paragraph(s), {} run(s), {} glyph(s), {} line(s)",
+        st.frames, st.stories, st.paragraphs, st.runs, st.glyphs, st.lines
+    );
+    if st.overset_stories > 0 {
+        println!(
+            "overset     {} story(ies) overflow their last frame",
+            st.overset_stories
+        );
     }
     for (i, (id, digest)) in handle.page_ids.iter().zip(&digests).enumerate() {
         let size = handle

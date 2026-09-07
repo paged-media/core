@@ -75,6 +75,26 @@ pub struct DocumentOptions {
     pub cmyk_profile: Option<String>,
 }
 
+/// A page with text but no glyphs renders white, and nothing else in
+/// the pipeline says why: core ships no fallback face, so text whose
+/// family no registered font answers for is simply not shaped. Silence
+/// here is how a blank render gets mistaken for a renderer bug — say it
+/// out loud.
+///
+/// Checked after loading AND after a script authors text, because a
+/// document born blank has no runs to complain about until the script
+/// has added some.
+pub fn warn_if_nothing_shaped(stats: &paged_canvas::DocumentStats) {
+    if stats.runs > 0 && stats.glyphs == 0 {
+        eprintln!(
+            "warning: {} text run(s) shaped 0 glyphs — no registered font answered for \
+             them, so the text will not appear. Pass --fonts <dir> to register \
+             families, or --font <file> as a fallback face for text that names none.",
+            stats.runs
+        );
+    }
+}
+
 impl DocumentOptions {
     /// Register the assets, load `path`, and settle the working colour
     /// space — in that order, which is the whole point of this type.
@@ -145,6 +165,8 @@ impl DocumentOptions {
                     format!("make {name:?} the working space"))?;
             }
         }
+
+        warn_if_nothing_shaped(&handle.stats);
         Ok(handle)
     }
 
