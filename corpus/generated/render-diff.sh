@@ -240,8 +240,13 @@ if [ "$HAVE_PDF" -eq 1 ]; then
     # and reference names did not line up, and reporting that as a
     # clean run is how a fixture measures nothing for months.
     if [ "$total_pages" -eq 0 ]; then
+        # NOT 3: `diff.sh` reserves exit 3 for "inconclusive" (no FOGRA39
+        # profile on the host), which CI deliberately treats as a pass.
+        # This is the opposite — a hard failure — so it must not borrow
+        # that code even though `diff.sh` currently swallows the engine's
+        # status with `|| true`.
         echo "error: 0 pages compared against $PDF — candidate/reference pairing failed" >&2
-        exit 3
+        exit 4
     fi
 else
     # No reference PDF — emit an empty report and just count
