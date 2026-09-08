@@ -176,6 +176,32 @@ impl Hyphenator {
         }
         // hypher::hyphenate yields syllable slices in order. Their
         // cumulative byte lengths give the break offsets we want.
+        //
+        // The language's own bounds stay in force, and the paragraph's
+        // limits below can only TIGHTEN them. `hypher::hyphenate`
+        // applies `Lang::bounds()` — (2, 3) for English — which is
+        // TeX's `\lefthyphenmin` / `\righthyphenmin` for that pattern
+        // set, not an arbitrary floor: the patterns were authored and
+        // validated at those minima, and asking for breaks below them
+        // produces splits their authors never checked.
+        //
+        // InDesign's factory `HyphenateBeforeLast` is 2, and it really
+        // does take those breaks — measured on InDesign 20.0.1
+        // (English: USA, words swept by frame width to enumerate every
+        // break it will take): `com-put-er`, `de-sign-er`,
+        // `pub-lish-er`, `print-er`, `print-ed`, `start-ed`. Handing
+        // the paragraph's 2 straight to hypher wins those six and takes
+        // 25 measured English words from 16 exact to 22.
+        //
+        // It was still the wrong trade, and the corpus said so: it also
+        // unlocks breaks Adobe's dictionary refuses (`bullet-ed`), and
+        // on the fixtures' pseudo-Latin — where both engines are
+        // applying English patterns to Latin — it swaps 7 missing
+        // breaks for 5 unwanted ones and moves nothing net. Rendered,
+        // `text-wrap` went 0.639 → 0.823 mean ΔE on all six pages and
+        // `text-in-shape`'s donut 2.000 → 2.239. The bound is doing
+        // real work as part of the dictionary; loosening it is worth
+        // revisiting only alongside a dictionary that can pay for it.
         let mut breaks = Vec::new();
         let mut offset = 0usize;
         let mut iter = hypher::hyphenate(core, self.lang);
@@ -259,6 +285,86 @@ impl Default for HyphenationLimits {
 
 #[cfg(test)]
 mod tests {
+    /// The English patterns' own `righthyphenmin` of 3 holds, so a
+    /// break leaving exactly two letters is not offered even though
+    /// InDesign's factory `HyphenateBeforeLast` is 2 and InDesign takes
+    /// those breaks (measured 20.0.1, English: USA, by sweeping each
+    /// word's frame width): `com-put-er`, `de-sign-er`, `pub-lish-er`,
+    /// `print-er`, `print-ed`, `start-ed`. Passing the paragraph's 2
+    /// through to hypher wins all six and costs more elsewhere — see
+    /// the note in `opportunities_with`. Recorded here so the trade is
+    /// visible rather than looking like an oversight.
+    #[test]
+    fn the_patterns_own_right_minimum_holds_against_the_paragraphs() {
+        let h = Hyphenator::for_language(Language::EnglishUS);
+        for (word, ours, indesign) in [
+            ("computer", vec![3usize], vec![3usize, 6]),
+            ("designer", vec![2], vec![2, 6]),
+            ("publisher", vec![3], vec![3, 7]),
+            ("printer", vec![], vec![5]),
+            ("started", vec![], vec![5]),
+        ] {
+            assert_eq!(h.opportunities(word), ours, "{word}");
+            assert!(
+                indesign
+                    .iter()
+                    .all(|i| ours.contains(i) || word.len() - i < 3),
+                "{word}: every break we drop leaves fewer than three letters"
+            );
+        }
+    }
+
+    /// A paragraph may ask for MORE than the patterns' minimum, and
+    /// that is honoured — the limits tighten, they never loosen.
+    #[test]
+    fn a_paragraph_can_tighten_the_patterns_minimum() {
+        let h = Hyphenator::for_language(Language::EnglishUS);
+        assert_eq!(h.opportunities("typography"), vec![2, 5, 7]);
+        // "Before last 4" drops typogra-phy: only three letters follow.
+        assert_eq!(h.opportunities_with("typography", 2, 4, 5), vec![2, 5]);
+        // "After first 3" drops ty-pography: only two letters precede.
+        assert_eq!(h.opportunities_with("typography", 3, 3, 5), vec![5, 7]);
+    }
+
+    /// The same sweep's words where we already agreed — pinned so the
+    /// looser bound does not start inventing breaks InDesign refuses.
+    #[test]
+    fn the_measured_breaks_indesign_takes_are_the_ones_we_offer() {
+        let h = Hyphenator::for_language(Language::EnglishUS);
+        for (word, want) in [
+            ("walked", vec![]),
+            ("sentence", vec![3usize]),
+            ("yesterday", vec![3, 6]),
+            ("paragraph", vec![4]),
+            ("hyphenation", vec![2, 6]),
+            ("typography", vec![2, 5, 7]),
+            ("background", vec![4]),
+            ("something", vec![4]),
+            ("understand", vec![2, 5]),
+            ("information", vec![2, 5, 7]),
+            ("development", vec![2, 5, 7]),
+            ("rendered", vec![3]),
+            ("modern", vec![3]),
+            ("capital", vec![3, 4]),
+            ("layouts", vec![3]),
+            ("broken", vec![3]),
+        ] {
+            assert_eq!(h.opportunities(word), want, "{word}");
+        }
+    }
+
+    /// Where TeX's patterns and Adobe's dictionary genuinely differ.
+    /// Recorded, not asserted away: InDesign takes a break in each of
+    /// these that no bound of ours will produce.
+    #[test]
+    fn the_dictionary_difference_that_is_left() {
+        let h = Hyphenator::for_language(Language::EnglishUS);
+        // InDesign: win-dow-sill, spell-ing, ev-ery-thing.
+        assert_eq!(h.opportunities("windowsill"), vec![3]);
+        assert_eq!(h.opportunities("spelling"), Vec::<usize>::new());
+        assert_eq!(h.opportunities("everything"), vec![5]);
+    }
+
     use super::*;
 
     #[test]
