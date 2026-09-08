@@ -257,16 +257,20 @@ fn first_word_advance_pt(runs: &[paged_text::StyledRun]) -> f32 {
 fn shaped_first_baseline_push_pt(
     shape: &paged_text::FrameShape,
     frame_top_pt: f32,
+    frame_height_pt: f32,
     baseline_pt: f32,
     ascent_pt: f32,
     inset_pt: f32,
     word_pt: f32,
 ) -> f32 {
-    /// One point per step; a frame taller than this has no shape worth
-    /// searching and keeps the rectangular baseline.
-    const MAX_STEPS: usize = 4096;
+    // One point per step, and never past the frame's own bottom: a
+    // shape that never opens wide enough has no first line to place,
+    // and the caller's `no_room` handling takes it from there. The
+    // bound matters — each step is an erosion query, and an unbounded
+    // walk on a tall narrow shape would be thousands of them.
+    let max_steps = frame_height_pt.max(0.0).ceil() as usize + 1;
     let needed = word_pt;
-    for k in 0..MAX_STEPS {
+    for k in 0..max_steps {
         let step = k as f32;
         let baseline = baseline_pt + step;
         let widest = shape
@@ -379,6 +383,7 @@ pub(super) fn build_perline_wrap_widths(
             (Some(shape), Some(bounds), Some(frame)) => shaped_first_baseline_push_pt(
                 shape,
                 bounds.top,
+                bounds.height(),
                 em.y_cursor.max(0) as f32 / paged_text::shape::ADVANCE_PRECISION,
                 first_ascent_pt,
                 frame
