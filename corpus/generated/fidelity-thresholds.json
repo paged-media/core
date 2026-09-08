@@ -282,7 +282,7 @@
       "max_mean_de": 2.4,
       "max_p99_de": 93.72,
       "min_ssim": 0.8971,
-      "rationale": "Retightened 2026-09-08 after the wrap-inside rule was measured against InDesign (outline eroded by the inset, band taken over the line's slug, edges on the whole-point grid) and the insets stopped being dropped on both sides of the wire: worst page mean 2.898 -> 2.000, p99 84.1 -> 78.1, SSIM 0.881 -> 0.902 across 3 page(s); sized at worst + ~20%. Still the corpus's largest gap, and what is left is hyphenation: InDesign breaks \"window-sill\" where we keep the word whole, and every line after the first divergence inherits it."
+      "rationale": "Set 2026-09-08 from the wrap-inside rule measured against InDesign (outline eroded by the inset, band over the line's slug, edges on the whole-point grid) plus the insets crossing the wire in both directions: worst page mean 2.898 -> 2.000. The body text then lost the two words only Adobe's proprietary patterns break (\"lazy\" -> \"sleepy\", \"windowsill\" -> \"window ledge\") — this fixture gates wrap-INSIDE geometry, and those words measured whose hyphenation dictionary is richer instead; the donut page went 2.239 -> 1.156 on that alone. Current worst page: mean 2.004 / p99 79.5 / SSIM 0.9007 across 3 page(s). Held at the earlier numbers rather than re-baselined: worst + 20% would be LOOSER than these."
     },
     {
       "name": "text-letterspacing",

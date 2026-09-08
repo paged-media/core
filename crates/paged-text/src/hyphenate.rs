@@ -12,20 +12,32 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Hyphenation via TeX patterns.
+//! Hyphenation via Liang patterns.
 //!
-//! Wraps `hypher` (typst's pattern-trie crate) with a thin loader that
-//! picks a language at runtime. The composer uses this to insert
-//! flagged penalty break opportunities mid-word; whether to take them
-//! is decided by `paragraph_breaker` against the configured tolerance.
+//! Two pattern sources, because they are not equivalent and the
+//! difference is measurable. Where the licence lets us, the language's
+//! `hyph_*.dic` from LibreOffice is vendored (`../patterns/`) and read
+//! by [`crate::libhyphen`] — that is the same FORMAT Adobe hyphenates
+//! with, and running it over Adobe's own `hyph_en_US.dic` reproduces
+//! InDesign's measured breaks exactly. Everywhere else `hypher`
+//! (typst's pattern-trie crate) stands in.
 //!
-//! `hypher` ships pattern data inline as compact tries (~1-2 MB total
-//! across ~70 languages), so there's no runtime dictionary loading and
-//! no separate asset to bundle for WASM. Same Liang-pattern algorithm
-//! and break quality as the older `hyphenation` crate; the upgrade
-//! reason is purely binary size.
+//! The two differ by more than packaging: on 25 English words swept in
+//! InDesign, the vendored `hyph_en_US.dic` agrees on 24 and hypher's
+//! trie on 16, because the LibreOffice file folds in the TUGboat
+//! hyphenation-exception log and the trie carries only the base
+//! patterns. `hypher` also collapses English into one dictionary; the
+//! vendored files keep US and GB apart, which they are.
+//!
+//! The composer uses this to insert flagged penalty break
+//! opportunities mid-word; whether to take them is decided by
+//! `paragraph_breaker` against the configured tolerance.
+
+use std::sync::OnceLock;
 
 use hypher::Lang;
+
+use crate::libhyphen::{self, Patterns};
 
 /// Supported hyphenation languages. Maps to `hypher::Lang` without
 /// exposing that crate's whole enum publicly — keeps the API stable
@@ -46,7 +58,8 @@ impl Language {
     fn to_hypher(self) -> Lang {
         match self {
             // hypher doesn't split English by region — both US/GB land
-            // on the same shared dictionary.
+            // on the same shared dictionary. The vendored files do
+            // split them, so this only matters as the fallback.
             Language::EnglishUS | Language::EnglishGB => Lang::English,
             Language::German1996 => Lang::German,
             Language::French => Lang::French,
@@ -56,37 +69,78 @@ impl Language {
             Language::Portuguese => Lang::Portuguese,
         }
     }
+
+    /// The vendored `hyph_*.dic` for this language, or `None` when its
+    /// upstream licence keeps it out of this repo (German, French,
+    /// Italian and Portuguese are LGPL or GPL — see
+    /// `../patterns/README.md`).
+    fn vendored(self) -> Option<&'static Patterns> {
+        macro_rules! vendored {
+            ($cell:ident, $file:literal) => {{
+                static $cell: OnceLock<Patterns> = OnceLock::new();
+                Some($cell.get_or_init(|| {
+                    Patterns::parse(&libhyphen::decode(include_bytes!(concat!(
+                        "../patterns/",
+                        $file
+                    ))))
+                }))
+            }};
+        }
+        match self {
+            Language::EnglishUS => vendored!(EN_US, "hyph_en_US.dic"),
+            Language::EnglishGB => vendored!(EN_GB, "hyph_en_GB.dic"),
+            Language::Spanish => vendored!(ES, "hyph_es.dic"),
+            Language::Dutch => vendored!(NL, "hyph_nl_NL.dic"),
+            Language::German1996 | Language::French | Language::Italian | Language::Portuguese => {
+                None
+            }
+        }
+    }
+
+    /// Stable byte id, distinct per language. The layout cache keys on
+    /// it, so US and GB English must not share one now that they read
+    /// different patterns.
+    fn id(self) -> u8 {
+        match self {
+            Language::EnglishUS => 1,
+            Language::German1996 => 2,
+            Language::French => 3,
+            Language::Spanish => 4,
+            Language::Italian => 5,
+            Language::Dutch => 6,
+            Language::Portuguese => 7,
+            Language::EnglishGB => 8,
+        }
+    }
 }
 
-/// Hyphenation engine for a single language. Cheap to clone (the
-/// underlying language enum is `Copy`).
+/// Hyphenation engine for a single language. Cheap to clone (both
+/// variants are `Copy`).
 #[derive(Debug, Clone, Copy)]
 pub struct Hyphenator {
+    language: Language,
+    /// The vendored `hyph_*.dic`, when this language has one; `None`
+    /// falls through to `hypher`'s trie.
+    patterns: Option<&'static Patterns>,
     lang: Lang,
 }
 
 impl Hyphenator {
-    /// Pick the embedded TeX dictionary for `lang`.
+    /// Pick the pattern source for `lang` — the vendored `hyph_*.dic`
+    /// where there is one, else hypher's embedded trie.
     pub fn for_language(lang: Language) -> Self {
         Self {
+            language: lang,
+            patterns: lang.vendored(),
             lang: lang.to_hypher(),
         }
     }
 
-    /// Stable byte id of the underlying language. Used by the layout
-    /// cache to fold the hyphenator's contribution into a cache key
-    /// without depending on Debug-format stability.
+    /// Stable byte id of the language. Used by the layout cache to fold
+    /// the hyphenator's contribution into a cache key without
+    /// depending on Debug-format stability.
     pub fn lang_id(&self) -> u8 {
-        match self.lang {
-            Lang::English => 1,
-            Lang::German => 2,
-            Lang::French => 3,
-            Lang::Spanish => 4,
-            Lang::Italian => 5,
-            Lang::Dutch => 6,
-            Lang::Portuguese => 7,
-            _ => 0,
-        }
+        self.language.id()
     }
 
     /// Return a list of byte indices inside `word` where a hyphen
@@ -174,34 +228,32 @@ impl Hyphenator {
         if letters < words_longer_than {
             return Vec::new();
         }
-        // hypher::hyphenate yields syllable slices in order. Their
-        // cumulative byte lengths give the break offsets we want.
-        //
-        // The language's own bounds stay in force, and the paragraph's
-        // limits below can only TIGHTEN them. `hypher::hyphenate`
-        // applies `Lang::bounds()` — (2, 3) for English — which is
-        // TeX's `\lefthyphenmin` / `\righthyphenmin` for that pattern
-        // set, not an arbitrary floor: the patterns were authored and
-        // validated at those minima, and asking for breaks below them
-        // produces splits their authors never checked.
-        //
-        // InDesign's factory `HyphenateBeforeLast` is 2, and it really
-        // does take those breaks — measured on InDesign 20.0.1
-        // (English: USA, words swept by frame width to enumerate every
-        // break it will take): `com-put-er`, `de-sign-er`,
-        // `pub-lish-er`, `print-er`, `print-ed`, `start-ed`. Handing
-        // the paragraph's 2 straight to hypher wins those six and takes
-        // 25 measured English words from 16 exact to 22.
-        //
-        // It was still the wrong trade, and the corpus said so: it also
-        // unlocks breaks Adobe's dictionary refuses (`bullet-ed`), and
-        // on the fixtures' pseudo-Latin — where both engines are
-        // applying English patterns to Latin — it swaps 7 missing
-        // breaks for 5 unwanted ones and moves nothing net. Rendered,
-        // `text-wrap` went 0.639 → 0.823 mean ΔE on all six pages and
-        // `text-in-shape`'s donut 2.000 → 2.239. The bound is doing
-        // real work as part of the dictionary; loosening it is worth
-        // revisiting only alongside a dictionary that can pay for it.
+        // The vendored `hyph_*.dic` is matched with the PARAGRAPH's
+        // limits, because that is what InDesign does: its factory
+        // `HyphenateBeforeLast` is 2 and it really takes those breaks —
+        // `com-put-er`, `de-sign-er`, `pub-lish-er`, `print-er`,
+        // `print-ed`, `start-ed`, all measured on InDesign 20.0.1 by
+        // sweeping each word's frame width. The file's own
+        // `RIGHTHYPHENMIN 3` is read and deliberately not applied;
+        // running Liang over Adobe's own `hyph_en_US.dic` with the
+        // paragraph's 2 reproduces all 25 measured words exactly, and
+        // with the file's 3 it reproduces 19.
+        if let Some(patterns) = self.patterns {
+            return patterns
+                .breaks(core, after_first, before_last)
+                .into_iter()
+                .map(|o| head + o)
+                .collect();
+        }
+        // hypher's trie carries no such declaration to consult, so its
+        // language bounds stand and the paragraph's limits below can
+        // only tighten them. Loosening THEM was measured and rejected:
+        // the trie lacks the exception half of the dictionary, so a
+        // looser bound bought six English words and cost the corpus
+        // (`text-wrap` 0.639 → 0.823 mean ΔE, `text-in-shape`'s donut
+        // 2.000 → 2.239) by unlocking breaks Adobe refuses. This path
+        // is now only the four languages whose patterns are LGPL or GPL
+        // and so are not vendored here.
         let mut breaks = Vec::new();
         let mut offset = 0usize;
         let mut iter = hypher::hyphenate(core, self.lang);
@@ -285,32 +337,23 @@ impl Default for HyphenationLimits {
 
 #[cfg(test)]
 mod tests {
-    /// The English patterns' own `righthyphenmin` of 3 holds, so a
-    /// break leaving exactly two letters is not offered even though
-    /// InDesign's factory `HyphenateBeforeLast` is 2 and InDesign takes
-    /// those breaks (measured 20.0.1, English: USA, by sweeping each
-    /// word's frame width): `com-put-er`, `de-sign-er`, `pub-lish-er`,
-    /// `print-er`, `print-ed`, `start-ed`. Passing the paragraph's 2
-    /// through to hypher wins all six and costs more elsewhere — see
-    /// the note in `opportunities_with`. Recorded here so the trade is
-    /// visible rather than looking like an oversight.
+    /// The paragraph's `HyphenateBeforeLast` wins over the pattern
+    /// file's own `RIGHTHYPHENMIN 3`, which is what InDesign does:
+    /// these six all leave exactly two letters after the hyphen, and
+    /// InDesign takes every one (20.0.1, English: USA, each word swept
+    /// by frame width to enumerate its breaks).
     #[test]
-    fn the_patterns_own_right_minimum_holds_against_the_paragraphs() {
+    fn the_paragraphs_limit_wins_over_the_files_declared_minimum() {
         let h = Hyphenator::for_language(Language::EnglishUS);
-        for (word, ours, indesign) in [
-            ("computer", vec![3usize], vec![3usize, 6]),
-            ("designer", vec![2], vec![2, 6]),
-            ("publisher", vec![3], vec![3, 7]),
-            ("printer", vec![], vec![5]),
-            ("started", vec![], vec![5]),
+        for (word, want) in [
+            ("computer", vec![3usize, 6]),
+            ("designer", vec![2, 6]),
+            ("publisher", vec![3, 7]),
+            ("printer", vec![5]),
+            ("printed", vec![5]),
+            ("started", vec![5]),
         ] {
-            assert_eq!(h.opportunities(word), ours, "{word}");
-            assert!(
-                indesign
-                    .iter()
-                    .all(|i| ours.contains(i) || word.len() - i < 3),
-                "{word}: every break we drop leaves fewer than three letters"
-            );
+            assert_eq!(h.opportunities(word), want, "{word}");
         }
     }
 
@@ -353,16 +396,69 @@ mod tests {
         }
     }
 
-    /// Where TeX's patterns and Adobe's dictionary genuinely differ.
-    /// Recorded, not asserted away: InDesign takes a break in each of
-    /// these that no bound of ours will produce.
+    /// The one word of the measured 25 still left to Adobe's own,
+    /// proprietary pattern file. `spell-ing` and `ev-ery-thing` used to
+    /// be here too and are now right — they came with the TUGboat
+    /// exception log the vendored file carries.
     #[test]
-    fn the_dictionary_difference_that_is_left() {
+    fn the_one_word_adobes_own_dictionary_still_wins() {
         let h = Hyphenator::for_language(Language::EnglishUS);
-        // InDesign: win-dow-sill, spell-ing, ev-ery-thing.
+        // InDesign: win-dow-sill. The open patterns offer win-dowsill.
         assert_eq!(h.opportunities("windowsill"), vec![3]);
-        assert_eq!(h.opportunities("spelling"), Vec::<usize>::new());
-        assert_eq!(h.opportunities("everything"), vec![5]);
+        assert_eq!(h.opportunities("spelling"), vec![5]);
+        assert_eq!(h.opportunities("everything"), vec![2, 5]);
+    }
+
+    /// Every vendored file loads and parses to a plausible size — the
+    /// guard against a data file that went missing, got truncated, or
+    /// was read in the wrong encoding and produced nothing.
+    #[test]
+    fn every_vendored_pattern_file_loads() {
+        for (lang, least) in [
+            (Language::EnglishUS, 10_000),
+            (Language::EnglishGB, 12_000),
+            (Language::Spanish, 5_000),
+            (Language::Dutch, 14_000),
+        ] {
+            let p = lang
+                .vendored()
+                .unwrap_or_else(|| panic!("{lang:?} is vendored"));
+            assert!(
+                p.len() >= least,
+                "{lang:?} parsed only {} patterns",
+                p.len()
+            );
+        }
+        // The four whose upstream licence keeps them out of this repo
+        // fall back to hypher rather than to nothing.
+        for lang in [
+            Language::German1996,
+            Language::French,
+            Language::Italian,
+            Language::Portuguese,
+        ] {
+            assert!(lang.vendored().is_none(), "{lang:?} is not vendored");
+            assert!(
+                !Hyphenator::for_language(lang)
+                    .opportunities("Silbentrennung")
+                    .is_empty()
+                    || lang != Language::German1996,
+                "the fallback still hyphenates"
+            );
+        }
+    }
+
+    /// US and GB English are different dictionaries now, so they must
+    /// not share a layout-cache key.
+    #[test]
+    fn the_two_englishes_are_told_apart() {
+        let us = Hyphenator::for_language(Language::EnglishUS);
+        let gb = Hyphenator::for_language(Language::EnglishGB);
+        assert_ne!(us.lang_id(), gb.lang_id());
+        // `capital`: cap-i-tal in American English, cap-it-al in
+        // British — the two files really do disagree.
+        assert_eq!(us.opportunities("capital"), vec![3, 4]);
+        assert_eq!(gb.opportunities("capital"), vec![3, 5]);
     }
 
     use super::*;

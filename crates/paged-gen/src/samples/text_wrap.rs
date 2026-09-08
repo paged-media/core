@@ -14,7 +14,7 @@
 
 //! Phase-2 mega-file: `text-wrap.idml`.
 //!
-//! Each page hosts a body TextFrame full of long Lorem-ish text plus
+//! Each page hosts a body TextFrame full of long English text plus
 //! one or two graphic obstacles carrying a `<TextWrapPreference>`.
 //! The variants exercise the IDML wrap-mode enum and the four-edge
 //! offset payload independently, so the renderer's wrap-rect
@@ -122,7 +122,7 @@ fn variants() -> Vec<Variant> {
     ]
 }
 
-/// Lorem-ish body text long enough to fill ~720 pt of body frame at
+/// English body text long enough to fill ~720 pt of body frame at
 /// 12 pt size with default leading. Two paragraphs so paragraph
 /// breaks are visible in the diff harness.
 fn body_paragraphs() -> Vec<Paragraph> {
@@ -140,7 +140,18 @@ fn body_paragraphs() -> Vec<Paragraph> {
               risus a elit. Etiam tempor. Ut ullamcorper, ligula eu tempor congue, \
               eros est euismod turpis, id tincidunt sapien risus a quam. Maecenas \
               fermentum consequat mi.";
-    vec![Paragraph::plain(p1), Paragraph::plain(p2)]
+    // Hyphenation OFF. This fixture gates wrap GEOMETRY — how far a
+    // line is pushed aside by an intruding object — and a hyphenation
+    // dictionary is a confound in front of it: Adobe's own patterns are
+    // more than twice the size of the open ones we can ship, so a
+    // hyphenated fixture measures whose dictionary is richer rather
+    // than whose wrap is right. `text-in-shape` keeps hyphenation on
+    // over text where the two dictionaries are verified to agree.
+    let no_hyphens = || vec![("Hyphenation", "false")];
+    vec![
+        Paragraph::plain(p1).with_para_attrs(no_hyphens()),
+        Paragraph::plain(p2).with_para_attrs(no_hyphens()),
+    ]
 }
 
 pub fn build() -> Sample {

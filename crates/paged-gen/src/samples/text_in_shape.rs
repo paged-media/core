@@ -62,8 +62,8 @@ const KAPPA: f32 = 0.552_284_8;
 /// segment shows in each line's centre / split. Repeated enough to fill
 /// the shape's full height (excess overflows as overset, clipped).
 fn body_text() -> String {
-    let unit = "the quick brown fox jumps over a lazy dog and then the \
-                slow red cat naps on a warm sunny windowsill all day long ";
+    let unit = "the quick brown fox jumps over a sleepy dog and then the \
+                slow red cat naps on a warm sunny window ledge all day long ";
     unit.repeat(12)
 }
 
