@@ -107,6 +107,14 @@
       "max_p99_de": 0.5,
       "min_ssim": 0.991,
       "rationale": "New 2026-09-07. Six pages isolating what InDesign draws when a table does not fit its frame - all rows fit, two of four fit, none fit, the header alone is taller than the frame, the header fits but no body row does - plus a 4pt-border page so the outer-border inset is measured at two weights rather than one. InDesign's export has ZERO ink on the three overset pages where the renderer drew one row. Worst page mean 0.100 / p99 0.000 / SSIM 0.9966 (p6)."
+    },
+    {
+      "name": "swatches",
+      "max_pages_with_pdf": 3,
+      "max_mean_de": 0.18,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.995,
+      "rationale": "New 2026-09-08. Spot ink at full strength, the same ink at 50% through the object's FillTint, and a frame whose paint comes from its applied ObjectStyle with no inline FillColor. Was measuring worst mean 31.8 / SSIM 0.70 because the generator wrote four things InDesign does not: a spot whose CMYK alternate differs from its Lab primary (all 15 corpus spots are LAB/LAB and identical), TintValue on a <Color> (0 of 7,545), a <Swatch Color=...> alias (<Swatch> is Swatch/None 271 of 271 times), and BasedOn on an ObjectStyle (0 of 1,101 \u2014 InDesign flattens the inheritance at export). Now worst page mean 0.142 / p99 0.212 / SSIM 0.9997."
     }
   ]
 }

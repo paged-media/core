@@ -1069,8 +1069,11 @@ fn swatches_round_trips_colors_groups_tint_and_swatch() {
     let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let g = &doc.palette;
 
-    // Both spot inks resolve to a CMYK alternate (the renderer previews
-    // spot inks through it). The full ink is at 100%, the half at 50%.
+    // Both spot inks are Lab-primary with an alternate that MIRRORS the
+    // primary — the only shape InDesign writes (all 15 spot swatches in
+    // the corpus packs are `Space="LAB"` + `AlternateSpace="LAB"` with
+    // identical values). The fixture used to declare a CMYK alternate
+    // that DIFFERED, which InDesign ignores in favour of the primary.
     let full = g.colors.get(swatches::INK_FULL).expect("full ink swatch");
     let half = g.colors.get(swatches::INK_HALF).expect("half-tint swatch");
     assert_eq!(full.model, ColorModel::Spot);
@@ -1081,15 +1084,20 @@ fn swatches_round_trips_colors_groups_tint_and_swatch() {
         Some(50.0),
         "half swatch round-trips TintValue=50"
     );
-    // The half-tint's effective CMYK is the full ink's, scaled by 0.5.
-    let full_cmyk = full.effective_cmyk().expect("full ink resolves to CMYK");
-    let half_cmyk = half.effective_cmyk().expect("half ink resolves to CMYK");
-    for ch in 0..4 {
-        assert!(
-            (half_cmyk[ch] - full_cmyk[ch] * 0.5).abs() < 0.01,
-            "channel {ch}: half should be 50% of full: full={full_cmyk:?}, half={half_cmyk:?}",
-        );
-    }
+    // A Lab-primary spot with a Lab alternate has no CMYK to resolve —
+    // the ink is described by measurement, not by process channels.
+    // The renderer converts the Lab analytically (no profile needed).
+    assert_eq!(
+        full.effective_cmyk(),
+        None,
+        "a LAB/LAB spot carries no CMYK alternate to preview through"
+    );
+    let [l, a, b] = full.effective_lab().expect("full ink resolves to Lab");
+    assert!(
+        (l - 30.0).abs() < 0.01 && (a - 40.0).abs() < 0.01 && (b + 55.0).abs() < 0.01,
+        "the ink's measured Lab round-trips: got {:?}",
+        [l, a, b]
+    );
 
     // The mixed-ink swatch is recognised as MixedInk but resolves
     // through its CMYK alternate fallback (the renderer ships no

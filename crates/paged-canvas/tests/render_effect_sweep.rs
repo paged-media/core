@@ -815,6 +815,25 @@ struct Known {
 
 const KNOWN: &[Known] = &[
     Known {
+        op: "SetUseStandardLabForSpots",
+        kind: Kind::HarnessLimit,
+        diagnosis: "\
+Not a defect: the op is a genuine no-op on any InDesign-FAITHFUL document, \
+and the `swatches` fixture became one on 2026-09-08. The Ink Manager's \"Use \
+Standard Lab Values for Spots\" chooses between a spot's measured Lab primary \
+and its process alternate — so it can only change a pixel when those two \
+DISAGREE. InDesign never writes a spot where they do: all 15 spot swatches \
+across the 271 corpus packs are `Space=\"LAB\"` with `AlternateSpace=\"LAB\"` \
+and byte-identical values, and asking InDesign to author one confirms it. \
+The fixture used to declare a CMYK alternate of `100 60 0 10` against a Lab \
+primary of `30 40 -55`, which is what gave this op something to switch \
+between — and it was also why the page measured mean deltaE 11.9 against \
+InDesign's own export, which paints the Lab primary and ignores the \
+alternate. Making the fixture spell the swatch the way Adobe spells it fixed \
+the fidelity gap and left this op with nothing to toggle. Re-reddening it \
+would mean re-introducing a swatch InDesign does not produce.",
+    },
+    Known {
         op: "InsertAnchoredFrame",
         kind: Kind::Defect,
         diagnosis: "\

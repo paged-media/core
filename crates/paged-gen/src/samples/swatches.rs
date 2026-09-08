@@ -75,10 +75,18 @@ pub const SWATCH_ALIAS: &str = "Swatch/BrandAlias";
 pub const STYLE_BASE: &str = "ObjectStyle/Base";
 pub const STYLE_DERIVED: &str = "ObjectStyle/Derived";
 
-/// The full-strength spot ink's CMYK alternate. The half-tint swatch
-/// reuses the same alternate and adds `TintValue="50"`, so the renderer
-/// scales every channel by 0.5 before the ICC transform.
-const INK_ALTERNATE_CMYK: &str = "100 60 0 10";
+/// The brand ink's measured Lab value.
+///
+/// Its `AlternateColorValue` MIRRORS it, because that is the only shape
+/// InDesign writes: all 15 spot swatches in the corpus packs are
+/// `Space="LAB"` + `AlternateSpace="LAB"` with identical values, and
+/// none has a primary and alternate that differ. This fixture used to
+/// declare a CMYK alternate of `100 60 0 10` instead — a combination
+/// InDesign never produces and, when it reads one, does not honour: it
+/// painted the Lab primary, so the reference was `(91, 44, 159)` against
+/// our `(0, 86, 157)` and the page measured ΔE 11.9 for a disagreement
+/// the format does not actually contain.
+const INK_LAB: &str = "30 40 -55";
 
 /// Build the rich `Resources/Graphic.xml`: the spot full/half-tint inks,
 /// the mixed-ink swatch (with its own alternate), the colour group, and
@@ -90,9 +98,9 @@ fn graphic() -> Vec<u8> {
             name: "Brand Ink".to_string(),
             model: "Spot",
             space: "LAB",
-            value: "30 40 -55".to_string(),
-            alternate_space: Some("CMYK"),
-            alternate_value: Some(INK_ALTERNATE_CMYK.to_string()),
+            value: INK_LAB.to_string(),
+            alternate_space: Some("LAB"),
+            alternate_value: Some(INK_LAB.to_string()),
             tint: None,
             base_color: None,
         },
@@ -101,10 +109,16 @@ fn graphic() -> Vec<u8> {
             name: "Brand Ink 50%".to_string(),
             model: "Spot",
             space: "LAB",
-            value: "30 40 -55".to_string(),
-            alternate_space: Some("CMYK"),
-            alternate_value: Some(INK_ALTERNATE_CMYK.to_string()),
-            // The standalone tint swatch — same ink, carried at 50%.
+            value: INK_LAB.to_string(),
+            alternate_space: Some("LAB"),
+            alternate_value: Some(INK_LAB.to_string()),
+            // A swatch-level `TintValue`. InDesign writes this on ZERO
+            // of the 7,545 `<Color>` elements in the corpus packs and
+            // ignores it on read — it carries a tint on the OBJECT
+            // (`FillTint`, which it writes 2,949 times). Kept in the
+            // palette so the reader's tolerance for it stays covered,
+            // but nothing paints with it any more: page 2 tints at the
+            // object level, the way the format actually spells it.
             tint: Some(50.0),
             base_color: None,
         },
@@ -144,23 +158,49 @@ fn graphic() -> Vec<u8> {
 /// inherits it via `BasedOn` and adds nothing else. The BasedOn-styled
 /// frame on page 3 declares no inline `FillColor`, so its paint comes
 /// entirely from the resolved cascade.
+///
+/// Two things make InDesign honour a style's fill, and this fixture had
+/// neither:
+///
+/// * `EnableFill="true"`. An object style is a set of CATEGORIES, each
+///   with its own enable flag, and a category that is off contributes
+///   nothing however the attributes read. All 834 styles in the corpus
+///   packs that carry `EnableFill` set it `true`.
+/// * the fill on the style the frame actually APPLIES. `BasedOn` on an
+///   `<ObjectStyle>` is not an IDML thing: 0 of those 1,101 styles carry
+///   it, and asking InDesign to author a based-on style (2026-09-08,
+///   `ExportFormat.INDESIGN_MARKUP`) produces a child with no `BasedOn`
+///   and its OWN resolved `FillColor="Swatch/None"` — the inheritance is
+///   flattened at export and never re-derived on import.
+///
+/// So `STYLE_DERIVED` stays defined, with its `BasedOn`, as a case the
+/// READER must tolerate; the page that has to paint applies
+/// `STYLE_BASE` directly, which is the shape InDesign's own export
+/// writes: `AppliedObjectStyle` on the frame, no `FillColor` anywhere on
+/// it, and the colour on the style.
 fn styles() -> Vec<u8> {
     let fragment = format!(
         "<RootObjectStyleGroup>\
-<ObjectStyle Self=\"{STYLE_BASE}\" Name=\"Base\" FillColor=\"{INK_FULL}\" \
+<ObjectStyle Self=\"{STYLE_BASE}\" Name=\"Base\" EnableFill=\"true\" \
+FillColor=\"{INK_FULL}\" EnableStroke=\"true\" \
 StrokeColor=\"Swatch/None\" StrokeWeight=\"0\"/>\
 <ObjectStyle Self=\"{STYLE_DERIVED}\" Name=\"Derived\" BasedOn=\"{STYLE_BASE}\" \
+EnableFill=\"true\" EnableStroke=\"true\" \
 StrokeColor=\"Swatch/None\" StrokeWeight=\"0\"/>\
 </RootObjectStyleGroup>"
     );
     styles_xml_with_raw(&fragment)
 }
 
-/// One swatch-filled rectangle filling most of its page. The
-/// `AppliedObjectStyle` is pinned to `STYLE_DERIVED` so every frame
-/// exercises the BasedOn cascade resolution; the inline `fill` is the
-/// authoritative paint (a swatch the renderer resolves directly).
-fn swatch_rect(seq: u32, fill: &str) -> Rect {
+/// One swatch-filled rectangle filling most of its page.
+///
+/// `AppliedObjectStyle` is pinned to `STYLE_DERIVED` on every frame, but
+/// only the page that passes [`page_item::INHERIT`] as its fill actually
+/// exercises the cascade — the others name a colour inline, and an
+/// inline `FillColor` wins. That was the fixture's original mistake: it
+/// documented a frame "that declares no inline fill" while writing one
+/// on all three pages.
+fn swatch_rect(seq: u32, fill: &str, extra: Vec<(String, String)>) -> Rect {
     let w = 480.0;
     let h = 600.0;
     Rect {
@@ -176,7 +216,18 @@ fn swatch_rect(seq: u32, fill: &str) -> Rect {
         previous_text_frame: None,
         // Reference the derived ObjectStyle (which is BasedOn the base
         // style) so the cascade is present on every frame.
-        extra_attrs: vec![("AppliedObjectStyle".to_string(), STYLE_DERIVED.to_string())],
+        extra_attrs: {
+            // The frame that inherits its paint must apply the style
+            // that HAS the paint; InDesign does not walk `BasedOn`.
+            let style = if fill == crate::builders::page_item::INHERIT {
+                STYLE_BASE
+            } else {
+                STYLE_DERIVED
+            };
+            let mut a = vec![("AppliedObjectStyle".to_string(), style.to_string())];
+            a.extend(extra);
+            a
+        },
         blending: None,
         drop_shadow: None,
         placed_image: None,
@@ -189,16 +240,31 @@ fn swatch_rect(seq: u32, fill: &str) -> Rect {
 }
 
 pub fn build() -> Sample {
-    // Three pages: full ink, half-tint ink, swatch-alias (resolves one
-    // level of `<Swatch>` indirection → Color/InkFull).
-    let page_fills: [&str; 3] = [INK_FULL, INK_HALF, SWATCH_ALIAS];
+    // Three pages, each spelled the way InDesign spells it:
+    //   1. the spot ink at full strength;
+    //   2. the same ink at 50% through the OBJECT's `FillTint` — the
+    //      only tint mechanism InDesign writes;
+    //   3. no inline `FillColor` at all, so the paint comes down the
+    //      ObjectStyle BasedOn cascade (Derived → Base → the ink).
+    //
+    // Page 3 used to fill from `Swatch/BrandAlias`, a `<Swatch Color=…>`
+    // aliasing element this generator invented: `<Swatch>` appears 271
+    // times across the corpus packs and is `Swatch/None` every single
+    // time, never with a `Color` attribute. InDesign read it as an
+    // unknown swatch and painted NOTHING, so the page measured mean ΔE
+    // 31.8 against a blank reference.
+    let pages: [(&str, Vec<(String, String)>); 3] = [
+        (INK_FULL, Vec::new()),
+        (INK_FULL, vec![("FillTint".to_string(), "50".to_string())]),
+        (crate::builders::page_item::INHERIT, Vec::new()),
+    ];
 
     let mut master_spreads = Vec::with_capacity(3);
     let mut spreads = Vec::with_capacity(3);
     let mut master_refs = Vec::with_capacity(3);
     let mut spread_refs = Vec::with_capacity(3);
 
-    for (i, fill) in page_fills.iter().enumerate() {
+    for (i, (fill, extra)) in pages.iter().enumerate() {
         let seq = i as u32;
         let master_id = self_id(SAMPLE, "MasterSpread", seq);
         let master_page_id = self_id(SAMPLE, "MasterPage", seq);
@@ -217,12 +283,12 @@ pub fn build() -> Sample {
         ));
         master_refs.push(master_id.clone());
 
-        let name = match *fill {
-            INK_FULL => "swatches · full-ink",
-            INK_HALF => "swatches · half-tint",
-            _ => "swatches · swatch-alias",
+        let name = match i {
+            0 => "swatches · full-ink",
+            1 => "swatches · 50% FillTint",
+            _ => "swatches · ObjectStyle cascade",
         };
-        let rect = swatch_rect(seq, fill);
+        let rect = swatch_rect(seq, fill, extra.clone());
         spreads.push((
             spread_id.clone(),
             write_spread(&Spread {
