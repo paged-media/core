@@ -128,12 +128,7 @@ impl Oval {
             attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
         }
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
-        attrs.push((
-            "FillColor",
-            self.fill_color
-                .clone()
-                .unwrap_or_else(|| "Swatch/None".to_string()),
-        ));
+        push_color_attr(&mut attrs, "FillColor", &self.fill_color);
         attrs.push((
             "StrokeColor",
             self.stroke_color
@@ -372,22 +367,10 @@ pub struct Polygon {
 impl Polygon {
     pub fn write(&self, b: &mut XmlBuilder) {
         let xform = format_matrix(&self.item_transform);
-        let mut attrs: Vec<(&str, String)> = vec![
-            ("Self", self.self_id.clone()),
-            ("ItemTransform", xform),
-            (
-                "FillColor",
-                self.fill_color
-                    .clone()
-                    .unwrap_or_else(|| "Swatch/None".to_string()),
-            ),
-            (
-                "StrokeColor",
-                self.stroke_color
-                    .clone()
-                    .unwrap_or_else(|| "Swatch/None".to_string()),
-            ),
-        ];
+        let mut attrs: Vec<(&str, String)> =
+            vec![("Self", self.self_id.clone()), ("ItemTransform", xform)];
+        push_color_attr(&mut attrs, "FillColor", &self.fill_color);
+        push_color_attr(&mut attrs, "StrokeColor", &self.stroke_color);
         if let Some(w) = self.stroke_weight_pt {
             attrs.push(("StrokeWeight", format_f32(w)));
         }
@@ -426,6 +409,28 @@ impl Polygon {
             tp.write(b);
         }
         b.end("Polygon");
+    }
+}
+
+/// `fill_color` / `stroke_color` value meaning **omit the attribute
+/// entirely**, as distinct from `None`, which writes
+/// `FillColor="Swatch/None"` — an explicit "no fill".
+///
+/// IDML draws that distinction and InDesign uses both: 17,143 of the
+/// 66,052 page items in the corpus packs carry no `FillColor` at all
+/// and take their paint from the applied object style, while the rest
+/// name one. A generator that can only write the attribute cannot
+/// produce the inheriting case, so the object-style cascade was
+/// untestable — the `swatches` fixture claimed to exercise it and
+/// silently wrote an inline fill on every frame.
+pub const INHERIT: &str = "$INHERIT";
+
+/// Push a colour attribute unless the caller asked to omit it.
+fn push_color_attr<'a>(attrs: &mut Vec<(&'a str, String)>, name: &'a str, value: &Option<String>) {
+    match value.as_deref() {
+        Some(INHERIT) => {}
+        Some(v) => attrs.push((name, v.to_string())),
+        None => attrs.push((name, "Swatch/None".to_string())),
     }
 }
 
@@ -871,12 +876,7 @@ impl Rect {
         attrs.push(("Visible", "true".to_string()));
         attrs.push(("Name", "$ID/".to_string()));
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
-        attrs.push((
-            "FillColor",
-            self.fill_color
-                .clone()
-                .unwrap_or_else(|| "Swatch/None".to_string()),
-        ));
+        push_color_attr(&mut attrs, "FillColor", &self.fill_color);
         attrs.push((
             "StrokeColor",
             self.stroke_color
