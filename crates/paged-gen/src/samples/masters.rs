@@ -31,7 +31,9 @@
 //!   * page 1 — both master items inherited, ShowMasterItems default.
 //!   * page 2 — overridable master item suppressed via OverrideList; a
 //!     red replacement frame on the body page takes its place.
-//!   * page 3 — ShowMasterItems="false": every master item hidden.
+//!   * page 3 — `ShowMasterItems="false"` ON THE SPREAD: every master
+//!     item hidden. The attribute is a SPREAD attribute; InDesign
+//!     ignores it on a `<Page>`.
 
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
@@ -68,7 +70,8 @@ enum Variant {
     /// Overridable master item suppressed via OverrideList; a body
     /// replacement frame stands in for it.
     OverrideOne,
-    /// `ShowMasterItems="false"` — every master item hidden.
+    /// `ShowMasterItems="false"` on the spread — every master item
+    /// hidden. On a `<Page>` InDesign ignores it entirely.
     HideAll,
 }
 
@@ -216,8 +219,8 @@ pub fn build() -> Sample {
             margins: None,
             item_transform: None,
         };
-        // `ShowMasterItems="false"` is a per-page attribute; the spread
-        // builder doesn't model it, so stamp it into the page via the
+        // `ShowMasterItems` is a SPREAD attribute; the builder always
+        // writes it `true`, so the hide variant flips it via the
         // post-hoc rewrite below (the only variant that needs it).
         let bytes = if show_master_items_false {
             write_spread_with_hidden_masters(&spread)
@@ -259,7 +262,7 @@ fn write_spread_with_hidden_masters(s: &Spread) -> Vec<u8> {
     let xml = String::from_utf8(bytes).expect("spread xml is utf-8");
     // Insert the attribute right after the page's `Self="…"` so it lands
     // on the `<Page>` element (the only element carrying that Self id).
-    let needle = format!("<Page Self=\"{}\"", s.page_self_id);
-    let patched = xml.replacen(&needle, &format!("{needle} ShowMasterItems=\"false\""), 1);
+    let _ = &s.page_self_id;
+    let patched = xml.replacen("ShowMasterItems=\"true\"", "ShowMasterItems=\"false\"", 1);
     patched.into_bytes()
 }
