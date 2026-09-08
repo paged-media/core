@@ -975,12 +975,29 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
         return paint;
     }
     match paint {
-        Paint::Solid(c) => Paint::Solid(Color::rgba(
-            1.0 + (c.r - 1.0) * t,
-            1.0 + (c.g - 1.0) * t,
-            1.0 + (c.b - 1.0) * t,
-            c.a,
-        )),
+        // A tint is a percentage of INK on paper, and InDesign ramps it
+        // in a perceptual space: measured on a Lab spot at
+        // `FillTint="50"`, its export gives exactly the Lab midpoint
+        // between the ink and paper (L=100, a=0, b=0).
+        //
+        //   ink Lab(30, 40, -55) -> sRGB (91, 44, 159)
+        //   InDesign at 50%                 (175, 146, 207)
+        //   Lab midpoint                    (175, 146, 207)   exact
+        //   sRGB-device midpoint            (173, 150, 207)
+        //   LINEAR-RGB midpoint             (196, 190, 214)   what we did
+        //
+        // Blending toward white in the pipeline's linear working space
+        // is a full ΔE 8.6 out because linear RGB is the one space the
+        // ramp is definitely not in. CMYK paints keep scaling their
+        // channels (the arm below) — that IS ink coverage, and it is
+        // what InDesign does for a process colour.
+        Paint::Solid(c) => {
+            let [l, a, b] = paged_color::lab::linear_srgb_to_lab_d50([c.r, c.g, c.b]);
+            // Paper is L=100, a=b=0; 0% tint is paper, 100% is the ink.
+            let paged_color::LinearRgb([r, g, bl]) =
+                paged_color::lab::lab_d50_to_linear_srgb(100.0 + (l - 100.0) * t, a * t, b * t);
+            Paint::Solid(Color::rgba(r, g, bl, c.a))
+        }
         Paint::Cmyk {
             c,
             m,

@@ -103,6 +103,15 @@ pub fn lab_d50_to_srgb_encoded(l: f32, a: f32, b: f32) -> [f32; 3] {
     ]
 }
 
+/// LINEAR sRGB (0..=1) → Lab(D50) — the exact inverse of
+/// [`lab_d50_to_linear_srgb`], for callers already working in the
+/// renderer's linear space (tinting, which InDesign ramps in Lab).
+/// Going through the encoded form and back would only add two gamma
+/// round-trips.
+pub fn linear_srgb_to_lab_d50(lin: [f32; 3]) -> [f32; 3] {
+    lab_from_linear(lin)
+}
+
 /// sRGB-encoded (0..=1) → Lab(D50) — the reverse path the gamut
 /// probe uses to compare round-trip endpoints in a perceptual
 /// space.
@@ -112,6 +121,10 @@ pub fn srgb_to_lab_d50(srgb: [f32; 3]) -> [f32; 3] {
         crate::cmm::srgb_to_linear(srgb[1]),
         crate::cmm::srgb_to_linear(srgb[2]),
     ];
+    lab_from_linear(lin)
+}
+
+fn lab_from_linear(lin: [f32; 3]) -> [f32; 3] {
     // linear sRGB → XYZ(D65) (inverse of the published matrix).
     const LINEAR_SRGB_TO_XYZ_D65: [[f32; 3]; 3] = [
         [0.412_456_4, 0.357_576_1, 0.180_437_5],
