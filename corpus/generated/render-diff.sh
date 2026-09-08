@@ -116,6 +116,16 @@ fi
     $PLACEHOLDER_FLAG \
     --dpi "$DPI" >/dev/null)
 
+# `paged-inspect --render out.png` indexes its output ONLY when the
+# document has more than one page, so a single-page fixture lands as
+# `cand.png` while the loop below globs `cand-*.png`. That mismatch
+# made nine single-page fixtures compare ZERO pages and still report
+# success. Normalise the name rather than change a CLI two CI
+# workflows and four corpus scripts already call.
+if [ -f "$OUT/cand.png" ]; then
+    mv "$OUT/cand.png" "$OUT/cand-001.png"
+fi
+
 if [ "$HAVE_PDF" -eq 1 ]; then
     # Match pdftoppm's CMYK profile to whatever our renderer uses
     # (FOGRA39 by default — see crates/paged-renderer/src/bin/inspect.rs's
@@ -225,6 +235,14 @@ if [ "$HAVE_PDF" -eq 1 ]; then
     echo
     echo "summary: $pass_pages/$total_pages pages pass §13.2 thresholds"
     echo "report: $REPORT"
+    # Comparing nothing is not passing. A reference PDF exists, so at
+    # least one page MUST have been paired; zero means the candidate
+    # and reference names did not line up, and reporting that as a
+    # clean run is how a fixture measures nothing for months.
+    if [ "$total_pages" -eq 0 ]; then
+        echo "error: 0 pages compared against $PDF — candidate/reference pairing failed" >&2
+        exit 3
+    fi
 else
     # No reference PDF — emit an empty report and just count
     # candidate renders so the harness output stays uniform.

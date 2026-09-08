@@ -140,6 +140,19 @@ if spec is None:
 
 pages = json.load(open(report_path))
 gated = [p for p in pages if p["page"] <= spec["max_pages_with_pdf"]]
+# A fixture listed in the thresholds must gate at least one page.
+# Without this an empty report — the candidate and reference PNGs
+# failing to pair, say — walks through as "PASS: 0/0 pages", which is
+# the same shape as a green run and the reason the engine's own
+# single-page mismatch went unnoticed.
+if not gated:
+    print(f"[{fixture}] FAIL: gated 0 pages (report has {len(pages)}) — "
+          f"nothing was measured")
+    Path(gate_path).write_text(json.dumps({
+        "fixture": fixture, "pages_checked": 0, "pages_total": len(pages),
+        "passed": False, "failures": [{"reason": "no pages compared"}],
+    }))
+    sys.exit(1)
 failures = []
 for p in gated:
     page_failures = []
