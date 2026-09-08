@@ -2197,7 +2197,11 @@ fn measure_cell_paragraph(
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
-    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
+    apply_paragraph_compose_options(
+        &mut lopts,
+        em.hyphenator_for(&resolved_paragraph, &resolved_runs),
+        &resolved_paragraph,
+    );
     // W4 — a cell's first baseline follows the SAME rule as a frame's:
     // the real face's ascender under the default "Ascent" policy
     // (measured 2026-09-06 — a top-aligned cell's first line sits at
@@ -2457,7 +2461,11 @@ pub(super) fn emit_cell_paragraph(
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
-    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
+    apply_paragraph_compose_options(
+        &mut lopts,
+        em.hyphenator_for(&resolved_paragraph, &resolved_runs),
+        &resolved_paragraph,
+    );
     // W4 — a cell's first baseline follows the SAME rule as a frame's:
     // the real face's ascender under the default "Ascent" policy
     // (measured 2026-09-06 — a top-aligned cell's first line sits at

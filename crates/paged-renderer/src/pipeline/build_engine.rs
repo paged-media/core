@@ -441,12 +441,14 @@ pub(super) fn build_document_inner(
             format!("font \"{label}\" is not available; a substitute face was used"),
         ));
     }
-    // One hyphenator per render. We currently only build English-US;
-    // the document's `AppliedLanguage` is honoured via the cascade,
-    // but unrecognised values fall back to this dictionary so we
-    // always have *some* hyphenation when a paragraph requests it.
-    // Multi-language docs will grow this into a HashMap keyed by
-    // resolved language string.
+    // Every hyphenator the document might ask for. The comment that
+    // stood here claimed the document's `AppliedLanguage` was "honoured
+    // via the cascade" — it was cascaded, all the way onto
+    // `ResolvedParagraphAttrs`, and then nothing read it: one American
+    // English hyphenator did every paragraph of every document. Holding
+    // the whole set costs nothing, because a hyphenator parses its
+    // pattern file on first use.
+    let hyphenators = paged_text::Hyphenators::new();
     let hyphenator = paged_text::Hyphenator::for_language(paged_text::Language::EnglishUS);
 
     // Auto-sizing text frames are FITTED to their text up front (see
@@ -1977,6 +1979,7 @@ pub(super) fn build_document_inner(
             head_wrap_rects,
             chain_wrap_rects,
         )
+        .with_languages(&hyphenators)
         .with_optical_margin(
             parsed.story.optical_margin_alignment,
             parsed.story.optical_margin_size,
@@ -2436,6 +2439,7 @@ pub(super) fn build_document_inner(
                 head_wrap_rects,
                 chain_wrap_rects.clone(),
             )
+            .with_languages(&hyphenators)
             .with_optical_margin(
                 parsed.story.optical_margin_alignment,
                 parsed.story.optical_margin_size,
@@ -2769,6 +2773,49 @@ pub(super) fn build_document_inner(
 ///  - frame_cmd_ranges + frame_max_baseline_64: tracked during
 ///    emission so the post-story vertical-justification shift can
 ///    target this story's commands without touching frame outlines.
+impl<'a> StoryEmitter<'a> {
+    /// Wire the per-language hyphenator set, so each paragraph gets the
+    /// dictionary its own `AppliedLanguage` names.
+    pub(super) fn with_languages(mut self, set: &'a paged_text::Hyphenators) -> Self {
+        self.hyphenators = Some(set);
+        self
+    }
+
+    /// The hyphenator this paragraph should be composed with — the one
+    /// its own `AppliedLanguage` names.
+    ///
+    /// `None` means leave its words whole. That is the answer for a
+    /// paragraph marked `[No Language]` AND for one naming a language
+    /// we hold no patterns for: before this every paragraph was
+    /// hyphenated as American English, so a Russian or Polish one was
+    /// broken by English patterns. When no language set is wired (the
+    /// measuring passes), the document-wide hyphenator stands.
+    pub(super) fn hyphenator_for(
+        &self,
+        resolved: &paged_scene::ResolvedParagraphAttrs,
+        runs: &[paged_scene::ResolvedRunAttrs],
+    ) -> Option<&'a paged_text::Hyphenator> {
+        // The RUN's language, because that is where InDesign writes it
+        // — 1,003 times across the corpus's real packages, against 314
+        // on a `<ParagraphStyle>` and 271 on `<TextDefault>`. A run
+        // naming none has already inherited the paragraph's (and
+        // through it the document default) in `merge_below_paragraph`,
+        // so the first run's resolved value IS the whole cascade.
+        //
+        // Hyphenation is character-level in InDesign and a paragraph
+        // may mix languages; composing the whole paragraph with its
+        // first run's dictionary is an approximation, and a stated one.
+        let named = runs
+            .iter()
+            .find_map(|r| r.applied_language.as_deref())
+            .or(resolved.applied_language.as_deref());
+        match self.hyphenators {
+            Some(set) => set.resolve(named),
+            None => self.hyphenator,
+        }
+    }
+}
+
 pub(super) struct StoryEmitter<'a> {
     pub(super) document: &'a Document,
     pub(super) options: &'a PipelineOptions<'a>,
@@ -2789,6 +2836,11 @@ pub(super) struct StoryEmitter<'a> {
     /// `None` ⇒ the document opts out of hyphenation entirely (the
     /// composer skips the language-specific pattern lookup).
     pub(super) hyphenator: Option<&'a paged_text::Hyphenator>,
+    /// One hyphenator per language we hold patterns for, so a
+    /// paragraph gets the dictionary its own `AppliedLanguage` names.
+    /// `None` keeps `hyphenator` as the answer for every paragraph —
+    /// the measuring passes that predate the per-paragraph lookup.
+    pub(super) hyphenators: Option<&'a paged_text::Hyphenators>,
     pub(super) column_width_pt: Option<f32>,
     /// Inner-coord x-shift to apply to the head frame's text
     /// origin when an obstacle on the page intrudes from the left
@@ -3059,6 +3111,7 @@ impl<'a> StoryEmitter<'a> {
             chain_pages,
             page_labels,
             hyphenator,
+            hyphenators: None,
             column_width_pt,
             column_x_shift_pt: shrink_left,
             head_wrap_rects: head_wrap_rects.to_vec(),
@@ -4478,7 +4531,11 @@ pub(super) fn emit_paragraph_into_chain(
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
-    apply_paragraph_compose_options(&mut lopts, em.hyphenator, &resolved_paragraph);
+    apply_paragraph_compose_options(
+        &mut lopts,
+        em.hyphenator_for(&resolved_paragraph, &resolved_runs),
+        &resolved_paragraph,
+    );
     // Explicit `Leading` on the leading run mirrors IDML semantics:
     // every line uses the override regardless of the largest glyph
     // size on the line. Auto leading (no override) keeps existing

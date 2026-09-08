@@ -922,7 +922,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
     let chain_pages: Vec<usize> = vec![target_page];
     let head_wrap_rects: &[WrapShape] = &[];
     let chain_wrap_rects: Vec<&[WrapShape]> = vec![&[]];
-    let mut sub = StoryEmitter::new(
+    let sub = StoryEmitter::new(
         em.document,
         em.options,
         em.palette,
@@ -934,12 +934,20 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         em.hyphenator,
         head_wrap_rects,
         chain_wrap_rects,
-    )
-    .with_optical_margin(
-        parsed.story.optical_margin_alignment,
-        parsed.story.optical_margin_size,
-    )
-    .with_anchored_recursion_depth(em.anchored_recursion_depth + 1);
+    );
+    // An anchored frame's story is a story like any other: it keeps its
+    // parent's language set, so its own paragraphs get their own
+    // dictionaries.
+    let sub = match em.hyphenators {
+        Some(set) => sub.with_languages(set),
+        None => sub,
+    };
+    let mut sub = sub
+        .with_optical_margin(
+            parsed.story.optical_margin_alignment,
+            parsed.story.optical_margin_size,
+        )
+        .with_anchored_recursion_depth(em.anchored_recursion_depth + 1);
     // The story-pass entry point uses a fresh PipelineStats per call
     // for stat aggregation; we accumulate into a discard local rather
     // than the document-wide `total_stats` because anchored stories

@@ -55,6 +55,19 @@ pub enum Language {
 }
 
 impl Language {
+    /// Every language, ordered so that `ALL[id() - 1] == self`.
+    pub const ALL: [Language; Self::COUNT] = [
+        Language::EnglishUS,
+        Language::German1996,
+        Language::French,
+        Language::Spanish,
+        Language::Italian,
+        Language::Dutch,
+        Language::Portuguese,
+        Language::EnglishGB,
+    ];
+    pub const COUNT: usize = 8;
+
     fn to_hypher(self) -> Lang {
         match self {
             // hypher doesn't split English by region — both US/GB land
@@ -97,6 +110,83 @@ impl Language {
         }
     }
 
+    /// The language an IDML `AppliedLanguage` names, or `None` when it
+    /// is one we hold no patterns for.
+    ///
+    /// InDesign spells these `$ID/English: USA`, and a document may
+    /// point at a `<Language>` resource instead
+    /// (`Language/$ID/English%3a USA`); both forms arrive here, along
+    /// with the locale-code names some documents carry (`de_DE_2006`,
+    /// `nl_NL_2005`). Every spelling below was counted in the corpus's
+    /// 305 real-world packages — `English: UK` leads with 1,014
+    /// occurrences, ahead of `English: USA`'s 745.
+    ///
+    /// `None` means DO NOT HYPHENATE, and that is the point: before
+    /// this, every document hyphenated as American English, so a Polish
+    /// or Czech paragraph was broken by English patterns. Returning
+    /// nothing for a language we cannot spell is the honest answer.
+    pub fn from_idml(name: &str) -> Option<Self> {
+        // `Language/$ID/English%3a USA` → `English: USA`.
+        let name = name.rsplit('/').next().unwrap_or(name);
+        let name = name.replace("%3a", ":");
+        let name = name.trim();
+        if name.is_empty() || name.eq_ignore_ascii_case("[No Language]") {
+            return None;
+        }
+        let lower = name.to_ascii_lowercase();
+        // Locale codes, as some documents spell them.
+        if let Some(code) = lower.split('_').next() {
+            if lower.contains('_') {
+                return match code {
+                    "en" => Some(if lower.contains("gb") || lower.contains("uk") {
+                        Language::EnglishGB
+                    } else {
+                        Language::EnglishUS
+                    }),
+                    "de" => Some(Language::German1996),
+                    "fr" => Some(Language::French),
+                    "es" => Some(Language::Spanish),
+                    "it" => Some(Language::Italian),
+                    "nl" => Some(Language::Dutch),
+                    "pt" => Some(Language::Portuguese),
+                    _ => None,
+                };
+            }
+        }
+        if lower.starts_with("english") {
+            // InDesign's own default is USA; only the UK dictionary is
+            // a different book. Canadian is closer to British in
+            // spelling, but its hyphenation is its own dictionary and
+            // we ship neither — it takes the app default.
+            return Some(if lower.contains("uk") {
+                Language::EnglishGB
+            } else {
+                Language::EnglishUS
+            });
+        }
+        // German: Reformed / Swiss / Austrian / Traditional all resolve
+        // to the one German dictionary we have.
+        if lower.starts_with("german") {
+            return Some(Language::German1996);
+        }
+        if lower.starts_with("french") {
+            return Some(Language::French);
+        }
+        if lower.starts_with("spanish") {
+            return Some(Language::Spanish);
+        }
+        if lower.starts_with("italian") {
+            return Some(Language::Italian);
+        }
+        if lower.starts_with("dutch") {
+            return Some(Language::Dutch);
+        }
+        if lower.starts_with("portuguese") {
+            return Some(Language::Portuguese);
+        }
+        None
+    }
+
     /// Stable byte id, distinct per language. The layout cache keys on
     /// it, so US and GB English must not share one now that they read
     /// different patterns.
@@ -119,21 +209,26 @@ impl Language {
 #[derive(Debug, Clone, Copy)]
 pub struct Hyphenator {
     language: Language,
-    /// The vendored `hyph_*.dic`, when this language has one; `None`
-    /// falls through to `hypher`'s trie.
-    patterns: Option<&'static Patterns>,
     lang: Lang,
 }
 
 impl Hyphenator {
     /// Pick the pattern source for `lang` — the vendored `hyph_*.dic`
     /// where there is one, else hypher's embedded trie.
+    ///
+    /// Constructing one is free: the vendored file is parsed on first
+    /// USE, so a renderer can hold a hyphenator for every language it
+    /// knows and pay only for the ones a document actually asks for.
     pub fn for_language(lang: Language) -> Self {
         Self {
             language: lang,
-            patterns: lang.vendored(),
             lang: lang.to_hypher(),
         }
+    }
+
+    /// The language this hyphenator was built for.
+    pub fn language(&self) -> Language {
+        self.language
     }
 
     /// Stable byte id of the language. Used by the layout cache to fold
@@ -238,7 +333,7 @@ impl Hyphenator {
         // running Liang over Adobe's own `hyph_en_US.dic` with the
         // paragraph's 2 reproduces all 25 measured words exactly, and
         // with the file's 3 it reproduces 19.
-        if let Some(patterns) = self.patterns {
+        if let Some(patterns) = self.language.vendored() {
             return patterns
                 .breaks(core, after_first, before_last)
                 .into_iter()
@@ -274,6 +369,57 @@ impl Hyphenator {
             offset += syllable.len();
         }
         breaks
+    }
+}
+
+/// Every hyphenator a render might need, so a paragraph can be given
+/// the dictionary its own `AppliedLanguage` asks for.
+///
+/// Before this the renderer built ONE hyphenator, American English, and
+/// used it for every paragraph in every document — while the parser
+/// read, cascaded and stored `AppliedLanguage` all the way to
+/// `ResolvedParagraphAttrs`, where nothing looked at it. Now that the
+/// dictionaries genuinely differ (`cap-i-tal` in the US book,
+/// `cap-it-al` in the British one, and the British is the commoner
+/// declaration in the corpus by a third), that had to stop.
+///
+/// Holding all of them costs nothing — a [`Hyphenator`] is two enum
+/// values and its pattern file is parsed on first use.
+#[derive(Debug, Clone, Copy)]
+pub struct Hyphenators {
+    /// One per [`Language`], indexed by [`Language::id`] minus one.
+    all: [Hyphenator; Language::COUNT],
+}
+
+impl Default for Hyphenators {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Hyphenators {
+    pub fn new() -> Self {
+        Self {
+            all: Language::ALL.map(Hyphenator::for_language),
+        }
+    }
+
+    /// The hyphenator for a paragraph whose resolved `AppliedLanguage`
+    /// is `applied`. `None` means the paragraph must not be
+    /// hyphenated: either it says `[No Language]`, or it names one we
+    /// hold no patterns for and guessing with English ones would be
+    /// worse than leaving its words whole.
+    ///
+    /// A paragraph naming NO language keeps American English — the
+    /// application default, and what every document got before. A
+    /// document whose `<TextDefault>` names one has already had it
+    /// cascaded onto the paragraph by the time we are asked.
+    pub fn resolve(&self, applied: Option<&str>) -> Option<&Hyphenator> {
+        let lang = match applied {
+            None => Language::EnglishUS,
+            Some(name) => Language::from_idml(name)?,
+        };
+        self.all.get(lang.id() as usize - 1)
     }
 }
 
@@ -446,6 +592,66 @@ mod tests {
                 "the fallback still hyphenates"
             );
         }
+    }
+
+    /// Every spelling counted in the corpus's 305 real-world packages.
+    #[test]
+    fn the_language_names_indesign_actually_writes() {
+        use Language::*;
+        for (name, want) in [
+            ("$ID/English: USA", Some(EnglishUS)),
+            ("$ID/English: UK", Some(EnglishGB)),
+            ("$ID/English: Canadian", Some(EnglishUS)),
+            ("$ID/English: USA Legal", Some(EnglishUS)),
+            ("Language/$ID/English%3a USA", Some(EnglishUS)),
+            ("$ID/German: Reformed", Some(German1996)),
+            ("$ID/German: Swiss", Some(German1996)),
+            ("$ID/de_DE_2006", Some(German1996)),
+            ("$ID/de_CH_2006", Some(German1996)),
+            ("$ID/French", Some(French)),
+            ("$ID/French: Canadian", Some(French)),
+            ("$ID/Spanish: Castilian", Some(Spanish)),
+            ("$ID/Italian", Some(Italian)),
+            ("$ID/Dutch", Some(Dutch)),
+            ("$ID/nl_NL_2005", Some(Dutch)),
+            ("$ID/Portuguese: Brazilian", Some(Portuguese)),
+            // No patterns of ours — hyphenating these with English
+            // ones is what we are stopping.
+            ("$ID/Russian", None),
+            ("$ID/Polish", None),
+            ("$ID/Arabic", None),
+            ("$ID/Thai", None),
+            ("$ID/hi_IN", None),
+            ("$ID/[No Language]", None),
+            ("", None),
+        ] {
+            assert_eq!(Language::from_idml(name), want, "{name}");
+        }
+    }
+
+    /// A paragraph that names no language keeps American English — the
+    /// application default, and what every document got before.
+    #[test]
+    fn an_unnamed_language_falls_back_and_an_unknown_one_does_not() {
+        let hs = Hyphenators::new();
+        assert_eq!(
+            hs.resolve(None).map(Hyphenator::language),
+            Some(Language::EnglishUS)
+        );
+        assert_eq!(
+            hs.resolve(Some("$ID/English: UK"))
+                .map(Hyphenator::language),
+            Some(Language::EnglishGB)
+        );
+        // Every language resolves to its own entry, so the array index
+        // and `id()` cannot drift apart.
+        for lang in Language::ALL {
+            assert_eq!(hs.all[lang.id() as usize - 1].language(), lang);
+        }
+        assert!(
+            hs.resolve(Some("$ID/Russian")).is_none(),
+            "no patterns is not a licence to use English ones"
+        );
     }
 
     /// US and GB English are different dictionaries now, so they must

@@ -902,6 +902,7 @@ impl ResolvedRunAttrs {
     /// `merge_below_character` / `merge_below_paragraph`.
     pub fn from_run(run: &CharacterRun) -> Self {
         Self {
+            applied_language: run.applied_language.clone(),
             font: run.font.clone(),
             font_style: run.font_style.clone(),
             point_size: run.point_size,
@@ -993,6 +994,13 @@ impl ResolvedRunAttrs {
     /// Run-level can pull font / size / fill out of paragraph
     /// styles but not the paragraph-only knobs.
     pub fn merge_below_paragraph(&mut self, p: &paged_model::ResolvedParagraph) {
+        // The paragraph style's language (and, through it, the
+        // document's `<TextDefault>`) stands in for a run that names
+        // none, so the run's resolved language is the whole cascade in
+        // one place.
+        if self.applied_language.is_none() {
+            self.applied_language = p.applied_language.clone();
+        }
         if self.font.is_none() {
             self.font = p.font.clone();
         }
@@ -1311,6 +1319,13 @@ pub fn derive_master_id(src: &str) -> String {
 /// (direct > applied character style > applied paragraph style).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedRunAttrs {
+    /// `AppliedLanguage` — the dictionary this run's words hyphenate
+    /// with. InDesign writes it on `<CharacterStyleRange>` (1,003
+    /// times across the corpus's real packages, against 314 on a
+    /// `<ParagraphStyle>` and 271 on `<TextDefault>`), so the run is
+    /// where the commonest spelling has to be read. Filled from the
+    /// paragraph's own language when the run itself names none.
+    pub applied_language: Option<String>,
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,
