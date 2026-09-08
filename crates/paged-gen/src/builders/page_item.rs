@@ -1050,19 +1050,6 @@ impl Rect {
             if let Some(rp) = tfp.auto_sizing_reference_point {
                 tfa.push(("AutoSizingReferencePoint", rp));
             }
-            // InsetSpacing is a space-separated list of four numbers in
-            // IDML order `top left bottom right`.
-            let inset_str: String;
-            if let Some(ins) = tfp.inset_spacing {
-                inset_str = format!(
-                    "{} {} {} {}",
-                    format_f32(ins[0]),
-                    format_f32(ins[1]),
-                    format_f32(ins[2]),
-                    format_f32(ins[3])
-                );
-                tfa.push(("InsetSpacing", inset_str.as_str()));
-            }
             if let Some(vj) = tfp.vertical_justification {
                 tfa.push(("VerticalJustification", vj));
             }
@@ -1079,7 +1066,38 @@ impl Rect {
                 col_gutter = format_f32(tg);
                 tfa.push(("TextColumnGutter", col_gutter.as_str()));
             }
-            b.empty("TextFramePreference", &tfa);
+            // The insets are a typed `<InsetSpacing>` child of
+            // `<Properties>`, never an attribute. Measured on InDesign
+            // 20.0.1: opening an IDML that spells them as
+            // `InsetSpacing="4 4 4 4"` reports
+            // `textFramePreferences.insetSpacing = [0]` — the attribute
+            // is ignored outright — and across 271 real-world packages
+            // InDesign writes the attribute form zero times against
+            // 13,938 typed children. One scalar when all four sides
+            // agree, a four-item list otherwise, in IDML's
+            // `[top, left, bottom, right]` order.
+            match tfp.inset_spacing {
+                None => b.empty("TextFramePreference", &tfa),
+                Some(ins) => {
+                    b.start("TextFramePreference", &tfa);
+                    b.start("Properties", &[]);
+                    if ins.iter().all(|v| *v == ins[0]) {
+                        b.start("InsetSpacing", &[("type", "unit")]);
+                        b.text(&format_f32(ins[0]));
+                        b.end("InsetSpacing");
+                    } else {
+                        b.start("InsetSpacing", &[("type", "list")]);
+                        for v in ins {
+                            b.start("ListItem", &[("type", "unit")]);
+                            b.text(&format_f32(v));
+                            b.end("ListItem");
+                        }
+                        b.end("InsetSpacing");
+                    }
+                    b.end("Properties");
+                    b.end("TextFramePreference");
+                }
+            }
         }
         // `<TextWrapPreference>` — sibling of Properties / Image. The
         // parser inspects this on every shape kind (text frame,
