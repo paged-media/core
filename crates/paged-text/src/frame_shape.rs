@@ -35,6 +35,11 @@
 //! carves the segment it overlaps — no special "this contour is a
 //! hole" flag is needed. Compound paths fall out of the same code.
 
+/// How far the sampled erosion in
+/// [`segments_in_band_eroded`](FrameShape::segments_in_band_eroded) may
+/// fall short of a true disk erosion, in pt.
+const ERODE_TOL_PT: f32 = 0.004;
+
 /// One closed contour as a flattened polyline. Curves (ovals, rounded
 /// corners) are flattened to line segments before construction so the
 /// scanline test is a pure polygon intersection.
@@ -122,6 +127,69 @@ impl FrameShape {
         let bottom = self.intervals_at_y(hi - eps);
         let inter = intersect_intervals(&top, &middle);
         intersect_intervals(&inter, &bottom)
+    }
+
+    /// [`segments_in_band`](Self::segments_in_band) against the outline
+    /// eroded by `inset` — the frame's text inset on a non-rectangular
+    /// frame.
+    ///
+    /// InDesign's inset on a shaped frame is a uniform inward offset of
+    /// the *outline*, not a narrowing of each line's chord: measured on
+    /// InDesign 20.0.1, a 400×200 oval inset by 10 lays its lines out
+    /// against a curve one point per line wider than the 380×180 oval a
+    /// naive axis shrink gives, and matches a true erosion on all five.
+    ///
+    /// The erosion is computed by the identity
+    /// `S ⊖ disk(r) = ⋂_θ (S − r·(cos θ, sin θ))`: translating the shape
+    /// costs nothing here because a translated shape's chord at `y` is
+    /// the original's chord at `y + r·sin θ`, shifted.
+    ///
+    /// Sampling the circle makes the eroding element a regular polygon
+    /// rather than a disk, so the result is wider than a true erosion by
+    /// `inset · (1 − cos(π/n))`. The direction count is chosen to hold
+    /// that under [`ERODE_TOL_PT`] whatever the inset, because the error
+    /// is VERTICAL as much as horizontal and near the top of an oval a
+    /// hundredth of a point in y is a whole point in x — at 32
+    /// directions a 400×200 oval inset by 10 measured its first two
+    /// lines one point wide.
+    ///
+    /// A non-positive `inset` is the plain query.
+    pub fn segments_in_band_eroded(
+        &self,
+        band_top: f32,
+        band_bottom: f32,
+        inset: f32,
+    ) -> Vec<(f32, f32)> {
+        if !inset.is_finite() || inset <= 0.0 || self.contours.is_empty() {
+            return self.segments_in_band(band_top, band_bottom);
+        }
+        // `1 − cos(π/n) ≈ (π/n)² / 2`, so `n ≈ π·√(inset / 2·tol)`.
+        let directions = (std::f32::consts::PI * (inset / (2.0 * ERODE_TOL_PT)).sqrt()).ceil();
+        let directions = (directions as usize).clamp(32, 512);
+        let mut acc: Option<Vec<(f32, f32)>> = None;
+        for k in 0..directions {
+            let theta = std::f32::consts::TAU * (k as f32) / (directions as f32);
+            let (dy, dx) = (inset * theta.sin(), inset * theta.cos());
+            let shifted: Vec<(f32, f32)> = self
+                .segments_in_band(band_top + dy, band_bottom + dy)
+                .into_iter()
+                .map(|(a, b)| (a - dx, b - dx))
+                .collect();
+            if shifted.is_empty() {
+                return Vec::new();
+            }
+            acc = Some(match acc {
+                None => shifted,
+                Some(prev) => {
+                    let next = intersect_intervals(&prev, &shifted);
+                    if next.is_empty() {
+                        return Vec::new();
+                    }
+                    next
+                }
+            });
+        }
+        acc.unwrap_or_default()
     }
 }
 
@@ -439,6 +507,114 @@ mod tests {
         let n =
             cubic_steps_for_tolerance((0.0, 0.0), (0.0, 100.0), (100.0, 100.0), (100.0, 0.0), 0.25);
         assert!(n > 4, "bowed cubic should subdivide, got {n}");
+    }
+
+    /// Eroding a circle by `d` is a circle of radius `r - d`: the one
+    /// shape where the answer is closed-form, so it pins the sampled
+    /// erosion against arithmetic rather than against itself.
+    #[test]
+    fn eroding_a_circle_shrinks_its_radius() {
+        let (cx, cy, r) = (200.0_f32, 200.0_f32, 160.0_f32);
+        let n = 4096;
+        let pts: Vec<(f32, f32)> = (0..n)
+            .map(|i| {
+                let t = std::f32::consts::TAU * (i as f32) / (n as f32);
+                (cx + r * t.cos(), cy + r * t.sin())
+            })
+            .collect();
+        let shape = FrameShape::from_contours(vec![pts]);
+        for inset in [1.0_f32, 4.0, 12.0] {
+            for y in [60.0_f32, 120.0, 200.0, 280.0] {
+                let segs = shape.segments_in_band_eroded(y, y, inset);
+                assert_eq!(segs.len(), 1, "one chord at y={y}");
+                let (a, b) = segs[0];
+                let rr = r - inset;
+                let want = 2.0 * (rr * rr - (y - cy) * (y - cy)).sqrt();
+                assert!(
+                    (b - a - want).abs() < 0.05,
+                    "inset {inset} at y {y}: chord {} vs {want}",
+                    b - a
+                );
+                assert!(
+                    ((a + b) * 0.5 - cx).abs() < 0.01,
+                    "chord stays centred on the circle"
+                );
+            }
+        }
+    }
+
+    /// A convex corner's erosion is the incircle touch point: a wedge
+    /// whose sides run at dx/dy = ±0.6 has its apex pushed down by
+    /// `inset / sin θ`, not by `inset`. This is the term a naive
+    /// bounding-box or per-axis shrink gets wrong.
+    #[test]
+    fn eroding_a_wedge_moves_its_apex_down_the_bisector() {
+        let apex = (650.0_f32, 650.0_f32);
+        let verts = vec![(500.0, 900.0), (800.0, 900.0), apex];
+        let shape = FrameShape::from_contours(vec![verts]);
+        let inset = 10.0_f32;
+        // tan θ = 0.6 between each side and the vertical bisector.
+        let sin_theta = 0.6_f32 / (1.0_f32 + 0.36).sqrt();
+        let new_apex_y = apex.1 + inset / sin_theta;
+        // Just above the eroded apex there is nothing…
+        assert!(shape
+            .segments_in_band_eroded(new_apex_y - 1.0, new_apex_y - 1.0, inset)
+            .is_empty());
+        // …and just below, a chord that grows at the same 2 × 0.6 rate.
+        for below in [2.0_f32, 20.0, 100.0] {
+            let y = new_apex_y + below;
+            let segs = shape.segments_in_band_eroded(y, y, inset);
+            assert_eq!(segs.len(), 1);
+            let (a, b) = segs[0];
+            assert!(
+                (b - a - 1.2 * below).abs() < 0.05,
+                "at {below} below the eroded apex: chord {} vs {}",
+                b - a,
+                1.2 * below
+            );
+        }
+    }
+
+    /// The erosion grows a hole as it shrinks the outer ring — it is a
+    /// distance rule about the whole boundary, not about the outside.
+    #[test]
+    fn eroding_a_donut_grows_the_hole() {
+        let outer = vec![(0.0, 0.0), (200.0, 0.0), (200.0, 200.0), (0.0, 200.0)];
+        let hole = vec![(80.0, 80.0), (80.0, 120.0), (120.0, 120.0), (120.0, 80.0)];
+        let shape = FrameShape::from_contours(vec![outer, hole]);
+        let plain = shape.segments_in_band(100.0, 100.0);
+        assert_eq!(plain, vec![(0.0, 80.0), (120.0, 200.0)]);
+        let eroded = shape.segments_in_band_eroded(100.0, 100.0, 10.0);
+        assert_eq!(eroded.len(), 2, "still two segments");
+        assert!(
+            (eroded[0].0 - 10.0).abs() < 0.05 && (eroded[0].1 - 70.0).abs() < 0.05,
+            "left segment {:?} pulled in from both the rim and the hole",
+            eroded[0]
+        );
+        assert!(
+            (eroded[1].0 - 130.0).abs() < 0.05 && (eroded[1].1 - 190.0).abs() < 0.05,
+            "right segment {:?}",
+            eroded[1]
+        );
+    }
+
+    #[test]
+    fn a_zero_inset_erosion_is_the_plain_query() {
+        let verts = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+        let shape = FrameShape::from_contours(vec![verts]);
+        assert_eq!(
+            shape.segments_in_band_eroded(40.0, 60.0, 0.0),
+            shape.segments_in_band(40.0, 60.0)
+        );
+    }
+
+    /// An inset wider than the shape leaves nothing, rather than an
+    /// inverted interval.
+    #[test]
+    fn an_inset_bigger_than_the_shape_erodes_to_nothing() {
+        let verts = vec![(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)];
+        let shape = FrameShape::from_contours(vec![verts]);
+        assert!(shape.segments_in_band_eroded(20.0, 20.0, 30.0).is_empty());
     }
 
     #[test]

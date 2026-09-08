@@ -4515,6 +4515,10 @@ pub(super) fn emit_paragraph_into_chain(
                     .metrics_for_real_face(r.font.as_deref(), r.font_style.as_deref())
             })
         });
+    // True when this paragraph OPENS the frame — the only moment a
+    // shaped outline may walk the first baseline down (see
+    // `shaped_first_baseline_push_pt`).
+    let frame_first_paragraph = em.y_cursor < 0;
     if em.y_cursor < 0 {
         em.y_cursor = first_baseline_for_frame(
             em.chain[0],
@@ -4781,7 +4785,18 @@ pub(super) fn emit_paragraph_into_chain(
         line_x_shifts_64,
         twin_after,
         no_room: plan_no_room,
-    } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts);
+        first_baseline_push_pt,
+    } = build_perline_wrap_widths(em, styled_runs_ref, &mut lopts, frame_first_paragraph);
+
+    // A shaped frame whose top is too narrow to start on moves its
+    // first baseline down; the widths above were already built from
+    // the moved baseline, so the cursor has to follow or the glyphs
+    // land on a line whose measure belongs to a different height.
+    if first_baseline_push_pt > 0.0 {
+        em.y_cursor +=
+            (first_baseline_push_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        lopts.first_baseline = em.y_cursor;
+    }
 
     // Twin segments (text wrap on both sides of an obstacle) emit
     // alternating narrow/wide widths to the breaker. For long

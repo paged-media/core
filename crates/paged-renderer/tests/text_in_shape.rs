@@ -342,3 +342,176 @@ fn donut_hole_splits_lines_into_left_and_right_groups() {
         "lines above the hole should centre on the frame axis (full-width band)"
     );
 }
+
+// ---------------------------------------------------------------------
+// The wrap-inside rule, as InDesign 20.0.1 measured it
+// ---------------------------------------------------------------------
+//
+// Six shaped frames were authored in InDesign — a 320 pt circle at 4 pt
+// and 0 pt inset, a 400×200 oval at 10 and 0, and a 300×250 wedge at 10
+// and 0 — filled with left-aligned, un-hyphenated 11 pt Open Sans, and
+// every line's `horizontalOffset` read back. That offset IS the band's
+// left edge for a left-aligned line, so the 45 numbers below pin the
+// whole rule at once: the inset erodes the outline, the band is the
+// narrowest chord over the line's slug, and the edges land on whole
+// points.
+//
+// The arithmetic here mirrors `build_perline_wrap_widths`; the pipeline
+// plumbing around it is what the corpus gate exercises.
+
+/// Open Sans `hhea.ascender` (2189/2048) at 11 pt — the height the
+/// first line's slug reaches above its baseline.
+const OPEN_SANS_ASCENT_11PT: f32 = 11.757_324;
+const LEADING_11PT: f32 = 13.2;
+
+/// One IDML path point: `(anchor, left direction, right direction)`.
+type PathPoint = ((f32, f32), (f32, f32), (f32, f32));
+
+/// Flatten one closed contour the way `frame_shape_spread` does.
+fn flatten_closed(anchors: &[PathPoint]) -> Vec<(f32, f32)> {
+    const TOL: f32 = 0.02;
+    let mut pts = vec![anchors[0].0];
+    for k in 0..anchors.len() {
+        let (a, _, right) = anchors[k];
+        let (b, left, _) = anchors[(k + 1) % anchors.len()];
+        let steps = paged_text::cubic_steps_for_tolerance(a, right, left, b, TOL);
+        paged_text::flatten_cubic(a, right, left, b, steps, &mut pts);
+    }
+    if pts.first() == pts.last() {
+        pts.pop();
+    }
+    pts
+}
+
+/// An InDesign oval: four cardinal anchors with κ handles.
+fn kappa_oval(cx: f32, cy: f32, rx: f32, ry: f32) -> FrameShape {
+    let (kx, ky) = (KAPPA * rx, KAPPA * ry);
+    let anchors: [PathPoint; 4] = [
+        ((cx, cy - ry), (cx - kx, cy - ry), (cx + kx, cy - ry)),
+        ((cx + rx, cy), (cx + rx, cy - ky), (cx + rx, cy + ky)),
+        ((cx, cy + ry), (cx + kx, cy + ry), (cx - kx, cy + ry)),
+        ((cx - rx, cy), (cx - rx, cy + ky), (cx - rx, cy - ky)),
+    ];
+    FrameShape::from_contours(vec![flatten_closed(&anchors)])
+}
+
+/// The left edge a line gets: the narrowest chord over its slug,
+/// floored onto the whole-point grid.
+fn measured_left(shape: &FrameShape, baseline: f32, i: usize, inset: f32) -> f32 {
+    let slug_top = baseline
+        - if i == 0 {
+            OPEN_SANS_ASCENT_11PT
+        } else {
+            LEADING_11PT
+        };
+    shape
+        .segments_in_band_eroded(slug_top, baseline, inset)
+        .first()
+        .map(|(a, _)| a.floor())
+        .expect("a band")
+}
+
+fn assert_left_edges(
+    shape: &FrameShape,
+    first_baseline: f32,
+    inset: f32,
+    want: &[f32],
+    what: &str,
+) {
+    for (i, expected) in want.iter().enumerate() {
+        let baseline = first_baseline + (i as f32) * LEADING_11PT;
+        let got = measured_left(shape, baseline, i, inset);
+        assert_eq!(
+            got, *expected,
+            "{what} line {i} (baseline {baseline}): InDesign put the band's left edge at {expected}, we say {got}"
+        );
+    }
+}
+
+#[test]
+fn a_circles_band_matches_what_indesign_measured() {
+    // Frame [40,40]–[360,360], 4 pt inset, first baseline 56.757.
+    assert_left_edges(
+        &kappa_oval(200.0, 200.0, 160.0, 160.0),
+        56.757_324,
+        4.0,
+        &[182.0, 138.0, 113.0, 96.0, 83.0, 72.0, 64.0],
+        "circle 320 inset 4",
+    );
+    // Same circle at [40,400]–[360,720] with no inset, first baseline
+    // 52.757 — one point lower than a rectangle's, the shape's own
+    // first-line push.
+    assert_left_edges(
+        &kappa_oval(560.0, 200.0, 160.0, 160.0),
+        52.757_324,
+        0.0,
+        &[542.0, 497.0, 472.0, 455.0, 441.0, 430.0],
+        "circle 320 inset 0",
+    );
+}
+
+#[test]
+fn an_ovals_band_matches_what_indesign_measured() {
+    // 400×200 at [420,40]–[620,440]. The inset case is the one a naive
+    // "shrink both semi-axes by the inset" gets wrong on every line.
+    assert_left_edges(
+        &kappa_oval(240.0, 520.0, 200.0, 100.0),
+        442.757_32,
+        10.0,
+        &[212.0, 143.0, 107.0, 84.0, 68.0],
+        "oval 400x200 inset 10",
+    );
+    assert_left_edges(
+        &kappa_oval(240.0, 760.0, 200.0, 100.0),
+        672.757_3,
+        0.0,
+        &[211.0, 142.0, 105.0, 81.0, 64.0],
+        "oval 400x200 inset 0",
+    );
+}
+
+#[test]
+fn a_wedges_band_matches_what_indesign_measured() {
+    let wedge = |apex_y: f32| {
+        FrameShape::from_contours(vec![vec![
+            (500.0, apex_y + 250.0),
+            (800.0, apex_y + 250.0),
+            (650.0, apex_y),
+        ]])
+    };
+    assert_left_edges(
+        &wedge(650.0),
+        694.757_3,
+        10.0,
+        &[
+            641.0, 634.0, 626.0, 618.0, 611.0, 603.0, 595.0, 587.0, 579.0, 571.0, 563.0,
+        ],
+        "wedge inset 10",
+    );
+    assert_left_edges(
+        &wedge(950.0),
+        975.757_3,
+        0.0,
+        &[
+            641.0, 634.0, 626.0, 618.0, 610.0, 602.0, 594.0, 587.0, 579.0, 571.0, 563.0,
+        ],
+        "wedge inset 0",
+    );
+}
+
+/// A shape that NARROWS downward is governed by the slug's BOTTOM, not
+/// its top: an apex-down wedge measured [43, 47, 51] against a top edge
+/// at x = 40, which is the chord at each baseline, and a descender's
+/// worth lower would have read [44, 48, 52].
+#[test]
+fn a_downward_wedges_band_is_taken_at_the_baseline() {
+    let shape =
+        FrameShape::from_contours(vec![vec![(40.0, 100.0), (460.0, 100.0), (250.0, 800.0)]]);
+    assert_left_edges(
+        &shape,
+        111.757_324,
+        0.0,
+        &[43.0, 47.0, 51.0],
+        "apex-down wedge",
+    );
+}

@@ -37,6 +37,12 @@ pub(super) struct WrapPlan {
     /// flows on or oversets, as InDesign does with a line that has no
     /// room inside the outline.
     pub(super) no_room: Vec<bool>,
+    /// Points the first baseline must move DOWN, past where a
+    /// rectangular frame would have put it, before the shape admits
+    /// the paragraph's first word. Zero for every frame that is not
+    /// shaped, and for a shape wide enough at its top. See
+    /// `shaped_first_baseline_push_pt`.
+    pub(super) first_baseline_push_pt: f32,
 }
 
 /// Polygon vertices for a chain frame, expressed in *spread coords*.
@@ -146,10 +152,14 @@ pub(super) fn frame_shape_spread(frame: &TextFrame) -> Option<paged_text::FrameS
             }
         }
     }
-    // Flattening tolerance: 0.5pt deviation from the true curve keeps
-    // an oval's chord widths accurate to well under one glyph advance
-    // while collapsing straight corner segments to a single edge.
-    const FLATTEN_TOL_PT: f32 = 0.5;
+    // Flattening tolerance. 0.5 pt was fine while a chord fed the
+    // composer directly, but the band is now snapped to whole points,
+    // and near the top of an oval the chord's x moves arbitrarily fast
+    // in y: half a point of sagitta cost the first line of a 320 pt
+    // circle EIGHT points of measure. 0.02 pt puts the flattening two
+    // orders of magnitude under the grid it feeds — ~50 segments per
+    // quarter of a 160 pt arc, which the scanline walks per line.
+    const FLATTEN_TOL_PT: f32 = 0.02;
     let mut contours: Vec<paged_text::Contour> = Vec::with_capacity(ranges.len());
     for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
         // Open contours describe lassoed strokes / text-on-path hosts,
@@ -198,15 +208,94 @@ pub(super) fn frame_shape_spread(frame: &TextFrame) -> Option<paged_text::FrameS
 // out correctly. `build_perline_wrap_widths` calls
 // `FrameShape::segments_in_band` directly.
 
+/// The top of line `i`'s slug, relative to the frame's top — the y a
+/// shaped outline is measured from.
+///
+/// Measured on InDesign 20.0.1 across circles, ellipses, upward- and
+/// downward-pointing wedges: every line after the first is measured
+/// from the PREVIOUS baseline (one leading up), and the first from its
+/// own ascent. Taking the outline's narrowest chord between there and
+/// the baseline then reproduces both directions — a widening shape is
+/// governed by the slug's top, a narrowing one by its bottom.
+fn shaped_slug_top_pt(baseline_pt: f32, i: usize, first_ascent_pt: f32, leading_pt: f32) -> f32 {
+    baseline_pt - if i == 0 { first_ascent_pt } else { leading_pt }
+}
+
+/// The advance of the paragraph's first word, in pt — what a shaped
+/// frame's first line has to find room for.
+fn first_word_advance_pt(runs: &[paged_text::StyledRun]) -> f32 {
+    let Some(r) = runs.first() else {
+        return 0.0;
+    };
+    let rest = r.text.trim_start();
+    let word = match rest.find(char::is_whitespace) {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    if word.is_empty() {
+        return 0.0;
+    }
+    paged_text::shape_run(r.face, word, r.point_size).total_advance as f32
+        / paged_text::shape::ADVANCE_PRECISION
+}
+
+/// How far DOWN a shaped frame's first baseline moves before the
+/// outline is wide enough to start on.
+///
+/// A rectangular frame puts the first baseline at
+/// `top + inset + ascent`; inside a shape that is narrow up there —
+/// the top of an oval, a triangle's apex — no line fits at that
+/// height, and InDesign walks the baseline down **one whole point at a
+/// time** until the band admits the first word. Measured on InDesign
+/// 20.0.1 with a wedge whose band widens 0.1 pt per point of descent,
+/// so the stop is bracketed to a tenth of a point: with the first word
+/// at 16.84 pt the search stopped where the snapped band reached 17 and
+/// not at 16, at 20.37 pt where it reached 21 and not 20, at 2.78 pt
+/// where it reached 3 and not 2, and a 33.69 pt word at 22 pt type
+/// where it reached 35 and not 34. The band is snapped exactly as a
+/// laid-out line's is, so the two agree by construction.
+fn shaped_first_baseline_push_pt(
+    shape: &paged_text::FrameShape,
+    frame_top_pt: f32,
+    baseline_pt: f32,
+    ascent_pt: f32,
+    inset_pt: f32,
+    word_pt: f32,
+) -> f32 {
+    /// One point per step; a frame taller than this has no shape worth
+    /// searching and keeps the rectangular baseline.
+    const MAX_STEPS: usize = 4096;
+    let needed = word_pt;
+    for k in 0..MAX_STEPS {
+        let step = k as f32;
+        let baseline = baseline_pt + step;
+        let widest = shape
+            .segments_in_band_eroded(
+                frame_top_pt + baseline - ascent_pt,
+                frame_top_pt + baseline,
+                inset_pt,
+            )
+            .into_iter()
+            .map(|(a, b)| (b.ceil() - 1.0) - a.floor())
+            .fold(0.0_f32, f32::max);
+        if widest >= needed {
+            return step;
+        }
+    }
+    0.0
+}
+
 pub(super) fn build_perline_wrap_widths(
     em: &StoryEmitter,
     styled_runs: &[paged_text::StyledRun],
     lopts: &mut paged_text::LayoutOptions,
+    frame_first_paragraph: bool,
 ) -> WrapPlan {
     let empty = WrapPlan {
         line_x_shifts_64: Vec::new(),
         twin_after: Vec::new(),
         no_room: Vec::new(),
+        first_baseline_push_pt: 0.0,
     };
     // Polygon clip per chain frame — enabled when the frame's
     // <PathGeometry> is non-rectangular (e.g. triangle, pentagon).
@@ -248,6 +337,18 @@ pub(super) fn build_perline_wrap_widths(
     // Matches paged-text's auto-leading default.
     let head_size_pt = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let leading_pt = head_size_pt * 1.2;
+    // The first line's slug reaches its own ascent above the baseline —
+    // the real face's `hhea` ascender, the same figure the first
+    // baseline itself is placed from. A substituted face has no
+    // trustworthy ascender here, so the leading's 0.8 split stands in.
+    let first_ascent_pt = styled_runs
+        .first()
+        .filter(|r| !r.substituted)
+        .and_then(|r| {
+            let upem = r.face.units_per_em() as f32;
+            (upem > 0.0).then(|| r.face.ascender() as f32 / upem * r.point_size)
+        })
+        .unwrap_or(leading_pt * 0.8);
     let leading_64 = ((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32).max(1);
     let scalar_width_64 =
         (em.column_width_pt.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
@@ -267,6 +368,33 @@ pub(super) fn build_perline_wrap_widths(
     // Paragraphs that start mid-chain skip the preceding frames so
     // the widths slice starts at the *current* frame.
     let start_frame = em.frame_idx;
+    // The first baseline of a paragraph that OPENS a shaped frame is
+    // walked down until the outline has room for its first word.
+    let first_baseline_push_pt = if frame_first_paragraph {
+        match (
+            chain_shapes.get(start_frame).and_then(|s| s.as_ref()),
+            em.chain_spread_bounds.get(start_frame),
+            em.chain.get(start_frame),
+        ) {
+            (Some(shape), Some(bounds), Some(frame)) => shaped_first_baseline_push_pt(
+                shape,
+                bounds.top,
+                em.y_cursor.max(0) as f32 / paged_text::shape::ADVANCE_PRECISION,
+                first_ascent_pt,
+                frame
+                    .inset_spacing
+                    .unwrap_or([0.0; 4])
+                    .iter()
+                    .copied()
+                    .fold(0.0_f32, f32::max),
+                first_word_advance_pt(styled_runs),
+            ),
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
+    let push_64 = (first_baseline_push_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
     for (frame_idx, frame_bounds) in em.chain_spread_bounds.iter().enumerate() {
         if frame_idx < start_frame {
             continue;
@@ -277,7 +405,7 @@ pub(super) fn build_perline_wrap_widths(
         let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
         let frame_height_pt = frame_bounds.height();
         let frame_first_baseline_64 = if frame_idx == start_frame {
-            em.y_cursor.max(0)
+            em.y_cursor.max(0) + push_64
         } else {
             (head_size_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32
         };
@@ -317,12 +445,19 @@ pub(super) fn build_perline_wrap_widths(
             }
             let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
                 / paged_text::shape::ADVANCE_PRECISION;
-            // Line's vertical band in spread coords. The band spans the
-            // ascent above and descent below the baseline so a glyph's
-            // full box — not just its baseline — must fit inside the
-            // shape.
-            let line_top = frame_bounds.top + baseline_pt - leading_pt * 0.8;
-            let line_bottom = frame_bounds.top + baseline_pt + leading_pt * 0.2;
+            // The line's SLUG in spread coords — the band a shaped
+            // outline is measured across. Measured on InDesign 20.0.1
+            // (see `shaped_slug_top_pt`): the slug runs from the
+            // previous baseline (the first line: from its own ascent)
+            // down to *this* baseline, and the band is the narrowest
+            // the outline gets anywhere in it. Nothing below the
+            // baseline counts: an apex-down wedge places its lines
+            // exactly where the chord at the baseline says, and a
+            // descender's worth lower would put them 1.5 pt right of
+            // where InDesign puts them.
+            let line_top =
+                frame_bounds.top + shaped_slug_top_pt(baseline_pt, i, first_ascent_pt, leading_pt);
+            let line_bottom = frame_bounds.top + baseline_pt;
 
             let frame_inner_left = frame_left_pt + insets[1];
             let frame_inner_right = frame_right_pt - insets[3];
@@ -337,15 +472,29 @@ pub(super) fn build_perline_wrap_widths(
             // sample) and the bezier flattening behind `FrameShape` are
             // the W1.10 upgrade over the prior anchors-only diamond.
             let mut segments: Vec<(f32, f32)> = if let Some(shape) = shape {
+                // A shaped frame's inset erodes the OUTLINE by that
+                // distance; it does not slide each chord's ends inward
+                // (measured — see `segments_in_band_eroded`). InDesign
+                // carries a single inset for a non-rectangular frame,
+                // writing it as one scalar; the largest of the four is
+                // the reading that never lets text touch the outline.
+                let inset = insets.iter().copied().fold(0.0_f32, f32::max);
                 shape
-                    .segments_in_band(line_top, line_bottom)
+                    .segments_in_band_eroded(line_top, line_bottom, inset)
                     .into_iter()
-                    .map(|(a, b)| {
-                        (
-                            (a + insets[1]).max(frame_inner_left),
-                            (b - insets[3]).min(frame_inner_right),
-                        )
-                    })
+                    // Whole-point grid: InDesign resolves a shaped
+                    // frame's interior to whole points. Across 23
+                    // measured lines on circles, ellipses and triangles
+                    // every left-aligned line began at the FLOOR of the
+                    // true chord's left edge, and five centred lines in
+                    // a 320 pt circle sat at 259.50 against a frame
+                    // centre of 260.0 — which is where flooring BOTH
+                    // ends puts the middle, and half a point from where
+                    // rounding outward would. An edge landing exactly
+                    // on a point is outside on the right (`ceil - 1`,
+                    // the same as `floor` off the grid): without that a
+                    // 22 pt first line starts one point above InDesign.
+                    .map(|(a, b)| (a.floor(), b.ceil() - 1.0))
                     .filter(|(a, b)| b > a)
                     .collect()
             } else {
@@ -498,6 +647,7 @@ pub(super) fn build_perline_wrap_widths(
             line_x_shifts_64: Vec::new(),
             twin_after: Vec::new(),
             no_room: Vec::new(),
+            first_baseline_push_pt: 0.0,
         };
     }
     lopts.compose.column_widths = Some(widths_64);
@@ -505,6 +655,7 @@ pub(super) fn build_perline_wrap_widths(
         line_x_shifts_64: shifts_64,
         twin_after,
         no_room,
+        first_baseline_push_pt,
     }
 }
 

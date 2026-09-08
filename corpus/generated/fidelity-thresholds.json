@@ -8,7 +8,7 @@
     "reference PDF page (cand-NNN.png + ref-NNN.png) satisfies",
     "  mean_de <= max_mean_de AND p99_de <= max_p99_de AND ssim >= min_ssim.",
     "Pages without a matching reference are skipped (max_pages_with_pdf bounds",
-    "this \u2014 IDMLs that grew past their last InDesign-export are still allowed",
+    "this — IDMLs that grew past their last InDesign-export are still allowed",
     "to run; only the first N pages are gated).",
     "",
     "Calibration: thresholds were originally sized to the worst observed page",
@@ -16,13 +16,13 @@
     "*tightened* (never loosened to mask a regression) so a fixture running",
     "well below its budget actually catches future regressions.",
     "Tightening rule of thumb:",
-    "  worst_current / threshold ratio  \u2192  action",
-    "    > 75%                          \u2192  leave alone (close to the edge)",
-    "    50\u201375%                         \u2192  drop to worst * 1.15 (15% headroom)",
-    "    \u2264 50%                          \u2192  drop to worst * 1.20 (20% headroom)",
-    "SSIM is raised toward (worst_min - ~0.005) once there is \u22650.010 headroom.",
-    "Long-term goal stays the idea.md \u00a713.2 budget:",
-    "  mean \u0394E <= 1.0, p99 \u0394E <= 2.5, SSIM >= 0.99 (every page).",
+    "  worst_current / threshold ratio  →  action",
+    "    > 75%                          →  leave alone (close to the edge)",
+    "    50–75%                         →  drop to worst * 1.15 (15% headroom)",
+    "    ≤ 50%                          →  drop to worst * 1.20 (20% headroom)",
+    "SSIM is raised toward (worst_min - ~0.005) once there is ≥0.010 headroom.",
+    "Long-term goal stays the idea.md §13.2 budget:",
+    "  mean ΔE <= 1.0, p99 ΔE <= 2.5, SSIM >= 0.99 (every page).",
     "Tightening below those targets needs a (now generously achieved) measurement",
     "to justify it; loosening any threshold needs a written rationale in the",
     "commit message."
@@ -34,7 +34,7 @@
       "max_mean_de": 1.12,
       "max_p99_de": 48.48,
       "min_ssim": 0.9377,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%."
     },
     {
       "name": "annual-base",
@@ -50,7 +50,7 @@
       "max_mean_de": 0.105,
       "max_p99_de": 0.3,
       "min_ssim": 0.9869,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.087 / p99 0.000 / SSIM 0.9949 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.087 / p99 0.000 / SSIM 0.9949 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "corners",
@@ -58,7 +58,7 @@
       "max_mean_de": 0.993,
       "max_p99_de": 22.83,
       "min_ssim": 0.9751,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%."
     },
     {
       "name": "effects",
@@ -66,7 +66,7 @@
       "max_mean_de": 0.15,
       "max_p99_de": 1.0,
       "min_ssim": 0.992,
-      "rationale": "worst page mean\u0394E 0.113 / p99 0.737 / SSIM 0.994 (p12). Tightened 2026-09-06 from 0.42 / 6.5 / 0.99 after the soft effects were calibrated against InDesign 20.0.1: `Size` is the WIDTH of an effect's band, not a Gaussian \u03c3 (\u03c3 = Size/2 outside the outline, 0.4\u00d7Size inside), and Choke/Spread are fractions of it. p10\u2013p12 went mean 0.170/0.195/0.345 \u2192 0.100/0.112/0.113 and p99 3.9/4.7/5.3 \u2192 0.63/0.71/0.74. ~1.3\u00d7 headroom over the new worst page."
+      "rationale": "worst page meanΔE 0.113 / p99 0.737 / SSIM 0.994 (p12). Tightened 2026-09-06 from 0.42 / 6.5 / 0.99 after the soft effects were calibrated against InDesign 20.0.1: `Size` is the WIDTH of an effect's band, not a Gaussian σ (σ = Size/2 outside the outline, 0.4×Size inside), and Choke/Spread are fractions of it. p10–p12 went mean 0.170/0.195/0.345 → 0.100/0.112/0.113 and p99 3.9/4.7/5.3 → 0.63/0.71/0.74. ~1.3× headroom over the new worst page."
     },
     {
       "name": "footnotes",
@@ -74,7 +74,7 @@
       "max_mean_de": 0.699,
       "max_p99_de": 20.56,
       "min_ssim": 0.9568,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "geometry",
@@ -82,7 +82,7 @@
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "worst page mean\u0394E 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15\u21920.13 (1.20\u00d7 headroom over current). p99 stays at the 0.5 noise floor (measured 0 \u2014 pages are mostly white). SSIM stays at the long-term 0.99 target."
+      "rationale": "worst page meanΔE 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15→0.13 (1.20× headroom over current). p99 stays at the 0.5 noise floor (measured 0 — pages are mostly white). SSIM stays at the long-term 0.99 target."
     },
     {
       "name": "geometry-groups",
@@ -90,7 +90,7 @@
       "max_mean_de": 0.2,
       "max_p99_de": 1.0,
       "min_ssim": 0.984,
-      "rationale": "worst page mean\u0394E 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) \u2014 the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes."
+      "rationale": "worst page meanΔE 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) — the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes."
     },
     {
       "name": "gradients",
@@ -98,7 +98,7 @@
       "max_mean_de": 0.2,
       "max_p99_de": 1.3,
       "min_ssim": 0.99,
-      "rationale": "worst mean\u0394E 0.158 / p99 1.027 / SSIM 0.994. All three are \u226579% of budget \u2014 kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf)."
+      "rationale": "worst meanΔE 0.158 / p99 1.027 / SSIM 0.994. All three are ≥79% of budget — kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf)."
     },
     {
       "name": "image-clipping",
@@ -106,7 +106,7 @@
       "max_mean_de": 0.683,
       "max_p99_de": 42.72,
       "min_ssim": 0.9843,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.569 / p99 34.178 / SSIM 0.9923 across 4 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.569 / p99 34.178 / SSIM 0.9923 across 4 page(s); sized at worst + ~20%."
     },
     {
       "name": "images",
@@ -114,7 +114,7 @@
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have mean\u0394E \u2264 0.105 / p99 0 / SSIM \u2265 0.995. Mean tightened 0.15\u21920.13 (1.20\u00d7 over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99."
+      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have meanΔE ≤ 0.105 / p99 0 / SSIM ≥ 0.995. Mean tightened 0.15→0.13 (1.20× over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99."
     },
     {
       "name": "layers-z",
@@ -122,7 +122,7 @@
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
       "min_ssim": 0.992,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "layout",
@@ -130,7 +130,7 @@
       "max_mean_de": 1.083,
       "max_p99_de": 59.11,
       "min_ssim": 0.9502,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.902 / p99 47.289 / SSIM 0.9582 across 6 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.902 / p99 47.289 / SSIM 0.9582 across 6 page(s); sized at worst + ~20%."
     },
     {
       "name": "links-broken",
@@ -138,7 +138,7 @@
       "max_mean_de": 0.52,
       "max_p99_de": 22.83,
       "min_ssim": 0.9541,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "links-ok",
@@ -146,7 +146,7 @@
       "max_mean_de": 0.262,
       "max_p99_de": 0.3,
       "min_ssim": 0.9752,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "markers",
@@ -154,7 +154,7 @@
       "max_mean_de": 0.448,
       "max_p99_de": 0.3,
       "min_ssim": 0.9761,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.373 / p99 0.000 / SSIM 0.9841 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.373 / p99 0.000 / SSIM 0.9841 across 2 page(s); sized at worst + ~20%."
     },
     {
       "name": "masters",
@@ -162,7 +162,7 @@
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
       "min_ssim": 0.992,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 3 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 3 page(s); sized at worst + ~20%."
     },
     {
       "name": "navigation",
@@ -170,7 +170,7 @@
       "max_mean_de": 0.66,
       "max_p99_de": 4.72,
       "min_ssim": 0.9649,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.550 / p99 3.779 / SSIM 0.9729 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.550 / p99 3.779 / SSIM 0.9729 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "nested-groups",
@@ -178,7 +178,7 @@
       "max_mean_de": 0.106,
       "max_p99_de": 0.3,
       "min_ssim": 0.9894,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.088 / p99 0.000 / SSIM 0.9974 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.088 / p99 0.000 / SSIM 0.9974 across 2 page(s); sized at worst + ~20%."
     },
     {
       "name": "numbering",
@@ -186,7 +186,7 @@
       "max_mean_de": 0.565,
       "max_p99_de": 0.3,
       "min_ssim": 0.9731,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%."
     },
     {
       "name": "paste-into",
@@ -194,7 +194,7 @@
       "max_mean_de": 0.932,
       "max_p99_de": 35.67,
       "min_ssim": 0.961,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "preflight",
@@ -202,7 +202,7 @@
       "max_mean_de": 0.942,
       "max_p99_de": 41.26,
       "min_ssim": 0.9536,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "showcase-base",
@@ -210,7 +210,7 @@
       "max_mean_de": 0.146,
       "max_p99_de": 0.3,
       "min_ssim": 0.9836,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.121 / p99 0.000 / SSIM 0.9916 across 16 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.121 / p99 0.000 / SSIM 0.9916 across 16 page(s); sized at worst + ~20%."
     },
     {
       "name": "strokes-fills",
@@ -218,7 +218,7 @@
       "max_mean_de": 0.55,
       "max_p99_de": 11.0,
       "min_ssim": 0.98,
-      "rationale": "worst page mean\u0394E 0.440 (p12), p99 9.381 (p18), SSIM 0.987 (p13). All three measurements are \u226575% of threshold so we leave the budget alone \u2014 stroke-gradient endpoint paths sit close to the edge already."
+      "rationale": "worst page meanΔE 0.440 (p12), p99 9.381 (p18), SSIM 0.987 (p13). All three measurements are ≥75% of threshold so we leave the budget alone — stroke-gradient endpoint paths sit close to the edge already."
     },
     {
       "name": "styles-cascade",
@@ -226,7 +226,7 @@
       "max_mean_de": 0.89,
       "max_p99_de": 22.83,
       "min_ssim": 0.967,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.742 / p99 18.262 / SSIM 0.9750 across 5 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.742 / p99 18.262 / SSIM 0.9750 across 5 page(s); sized at worst + ~20%."
     },
     {
       "name": "swatches",
@@ -234,7 +234,7 @@
       "max_mean_de": 0.18,
       "max_p99_de": 0.3,
       "min_ssim": 0.995,
-      "rationale": "New 2026-09-08. Spot ink at full strength, the same ink at 50% through the object's FillTint, and a frame whose paint comes from its applied ObjectStyle with no inline FillColor. Was measuring worst mean 31.8 / SSIM 0.70 because the generator wrote four things InDesign does not: a spot whose CMYK alternate differs from its Lab primary (all 15 corpus spots are LAB/LAB and identical), TintValue on a <Color> (0 of 7,545), a <Swatch Color=...> alias (<Swatch> is Swatch/None 271 of 271 times), and BasedOn on an ObjectStyle (0 of 1,101 \u2014 InDesign flattens the inheritance at export). Now worst page mean 0.142 / p99 0.212 / SSIM 0.9997."
+      "rationale": "New 2026-09-08. Spot ink at full strength, the same ink at 50% through the object's FillTint, and a frame whose paint comes from its applied ObjectStyle with no inline FillColor. Was measuring worst mean 31.8 / SSIM 0.70 because the generator wrote four things InDesign does not: a spot whose CMYK alternate differs from its Lab primary (all 15 corpus spots are LAB/LAB and identical), TintValue on a <Color> (0 of 7,545), a <Swatch Color=...> alias (<Swatch> is Swatch/None 271 of 271 times), and BasedOn on an ObjectStyle (0 of 1,101 — InDesign flattens the inheritance at export). Now worst page mean 0.142 / p99 0.212 / SSIM 0.9997."
     },
     {
       "name": "tables",
@@ -258,7 +258,7 @@
       "max_mean_de": 0.5,
       "max_p99_de": 1.0,
       "min_ssim": 0.975,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 on a host that has Open Sans, the face the IDML declares. The file it replaces embedded MinionPro-Regular \u2014 InDesign had substituted on the export host \u2014 so this fixture spent its life comparing our sans against InDesign's serif, and the old budget (mean 0.65 / p99 8.6) was sized entirely to that mismatch. Against the honest reference the worst page measures mean 0.390 / p99 0.198 / SSIM 0.982 (p6, the densest text page); the PDF also grew 13\u219219 pages, so every page is gated now. Budget = measured \u00d7 ~1.25 with p99 left a 1.0 noise floor."
+      "rationale": "Reference RE-EXPORTED 2026-09-06 on a host that has Open Sans, the face the IDML declares. The file it replaces embedded MinionPro-Regular — InDesign had substituted on the export host — so this fixture spent its life comparing our sans against InDesign's serif, and the old budget (mean 0.65 / p99 8.6) was sized entirely to that mismatch. Against the honest reference the worst page measures mean 0.390 / p99 0.198 / SSIM 0.982 (p6, the densest text page); the PDF also grew 13→19 pages, so every page is gated now. Budget = measured × ~1.25 with p99 left a 1.0 noise floor."
     },
     {
       "name": "text-advanced",
@@ -266,7 +266,7 @@
       "max_mean_de": 0.76,
       "max_p99_de": 26.0,
       "min_ssim": 0.965,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed \u2014 size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2."
+      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed — size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2."
     },
     {
       "name": "text-autosize",
@@ -274,15 +274,15 @@
       "max_mean_de": 0.568,
       "max_p99_de": 0.3,
       "min_ssim": 0.9713,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%."
     },
     {
       "name": "text-in-shape",
       "max_pages_with_pdf": 3,
-      "max_mean_de": 3.478,
-      "max_p99_de": 105.17,
-      "min_ssim": 0.8348,
-      "rationale": "Gated 2026-09-08 at its MEASURED value, not a comfortable one: this is the corpus's largest remaining gap and the number is here so it cannot grow. InDesign's per-line measure inside a non-rectangular frame is narrower than ours at the same y, so it fits more lines and overflows the oval where we do not, and it hyphenates ('window-sill') where we keep the word whole. Wrap-inside geometry plus hyphenation, not a spelling difference."
+      "max_mean_de": 2.4,
+      "max_p99_de": 93.72,
+      "min_ssim": 0.8971,
+      "rationale": "Retightened 2026-09-08 after the wrap-inside rule was measured against InDesign (outline eroded by the inset, band taken over the line's slug, edges on the whole-point grid) and the insets stopped being dropped on both sides of the wire: worst page mean 2.898 -> 2.000, p99 84.1 -> 78.1, SSIM 0.881 -> 0.902 across 3 page(s); sized at worst + ~20%. Still the corpus's largest gap, and what is left is hyphenation: InDesign breaks \"window-sill\" where we keep the word whole, and every line after the first divergence inherits it."
     },
     {
       "name": "text-letterspacing",
@@ -290,7 +290,7 @@
       "max_mean_de": 0.851,
       "max_p99_de": 35.67,
       "min_ssim": 0.9556,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.709 / p99 28.534 / SSIM 0.9636 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.709 / p99 28.534 / SSIM 0.9636 across 2 page(s); sized at worst + ~20%."
     },
     {
       "name": "text-on-path",
@@ -298,7 +298,7 @@
       "max_mean_de": 0.306,
       "max_p99_de": 0.3,
       "min_ssim": 0.9809,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%."
     },
     {
       "name": "text-overset",
@@ -306,7 +306,7 @@
       "max_mean_de": 0.941,
       "max_p99_de": 42.03,
       "min_ssim": 0.9485,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%."
     },
     {
       "name": "text-wrap",
@@ -314,7 +314,7 @@
       "max_mean_de": 0.767,
       "max_p99_de": 30.55,
       "min_ssim": 0.9655,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.639 / p99 24.438 / SSIM 0.9735 across 6 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.639 / p99 24.438 / SSIM 0.9735 across 6 page(s); sized at worst + ~20%."
     },
     {
       "name": "transparency",
@@ -322,7 +322,7 @@
       "max_mean_de": 0.053,
       "max_p99_de": 1.08,
       "min_ssim": 0.9905,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.044 / p99 0.861 / SSIM 0.9985 across 12 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.044 / p99 0.861 / SSIM 0.9985 across 12 page(s); sized at worst + ~20%."
     },
     {
       "name": "variables",
@@ -330,7 +330,7 @@
       "max_mean_de": 0.45,
       "max_p99_de": 0.3,
       "min_ssim": 0.9739,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement \u2014 it had a reference but no threshold, so nothing held it. Worst page mean 0.375 / p99 0.000 / SSIM 0.9819 across 2 page(s); sized at worst + ~20%."
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.375 / p99 0.000 / SSIM 0.9819 across 2 page(s); sized at worst + ~20%."
     }
   ]
 }
