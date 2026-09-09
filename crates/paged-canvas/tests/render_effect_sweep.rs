@@ -1021,30 +1021,20 @@ fn every_known_finding_names_a_swept_op_and_carries_a_diagnosis() {
 /// `regen-fixtures.sh` kept its own copy of the sample names and quietly
 /// dropped two, and nothing noticed because the guard only ever fired on
 /// names that did not exist, never on names left OUT. So the guard here
-/// walks the vocabulary itself: `Mutation::discriminant`'s match arms are
-/// the one list, read from source, and every arm must appear in the
-/// sweep.
+/// walks the vocabulary itself. It used to read `Mutation::discriminant`'s
+/// match arms out of `channel.rs` as TEXT, because the 117 ops were named
+/// there one at a time and could not be enumerated; the roster is now
+/// `MUTATION_NAMES`, generated from the same tokens as `discriminant`, so
+/// this guard reads the list rather than parsing the file that holds it.
 #[test]
 fn the_sweep_covers_the_whole_mutation_vocabulary() {
-    let src =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/channel.rs"))
-            .expect("read channel.rs");
-    let start = src
-        .find("pub fn discriminant(&self)")
-        .expect("Mutation::discriminant still exists");
-    let body = &src[start..];
-    let end = body.find("\n    }\n").expect("discriminant body ends");
-    let mut declared = BTreeSet::new();
-    for line in body[..end].lines() {
-        if let Some(rest) = line.trim().strip_prefix("Self::") {
-            if let Some(name) = rest.split([' ', '{', '(']).next() {
-                declared.insert(name.to_string());
-            }
-        }
-    }
+    let declared: BTreeSet<String> = paged_canvas::channel::MUTATION_NAMES
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
     assert!(
         declared.len() > 100,
-        "parsed only {} discriminants — the scraper lost its footing",
+        "only {} ops in the roster — it may only grow",
         declared.len()
     );
 
