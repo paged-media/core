@@ -25,6 +25,7 @@ paged-scene = { path = "../paged-scene" }
 paged-compose = { path = "../paged-compose" }
 paged-text = { path = "../paged-text" }
 paged-mutate = { path = "../paged-mutate" }
+paged-wire = { path = "../paged-wire" }
 paged-color = { path = "../paged-color" }
 paged-export-pdf = { path = "../paged-export-pdf" }
 # W3.B2 — IDML save-back. idml-export deps only idml-import +

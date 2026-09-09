@@ -18,6 +18,7 @@ members = [
     "crates/paged-introspect-wasm",
     "crates/paged-gen",
     "crates/paged-store",
+    "crates/paged-wire",
     "crates/paged-canvas",
     "crates/paged-canvas-wasm",
     "crates/paged-export-pdf",

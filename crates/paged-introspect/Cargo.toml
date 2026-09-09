@@ -18,6 +18,7 @@ render = ["dep:paged-renderer", "dep:image", "dep:paged-compose", "dep:anyhow"]
 paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-mutate = { path = "../paged-mutate" }
+paged-wire = { path = "../paged-wire" }
 paged-renderer = { path = "../paged-renderer", optional = true }
 paged-compose = { path = "../paged-compose", optional = true }
 anyhow = { workspace = true, optional = true }

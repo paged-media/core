@@ -51,54 +51,8 @@
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
-/// W1.13 — cell qualifier for a content address that points INTO a
-/// table cell rather than the story's main paragraph flow.
-///
-/// ## The two-stream addressing model
-///
-/// Table-cell text is stored out of band on `Table.cells[].paragraphs`
-/// (see `idml_import`), disjoint from `Story.paragraphs`. So a content
-/// address needs to say *which* paragraph stream its byte offsets index:
-///
-/// - `ContentSelection.cell == None` — offsets are story-local bytes
-///   over `story.paragraphs` (the body flow). Unchanged from before.
-/// - `ContentSelection.cell == Some(addr)` — offsets are CELL-LOCAL
-///   bytes over `cell.paragraphs`, under the same story-offset contract
-///   (run bytes + one synthetic `\n` per inter-paragraph boundary,
-///   counted within the cell). The owning story is still `story_id`;
-///   `addr` picks the cell within that story's table.
-///
-/// `table_id` / `row` / `col` are the SAME identifiers the hit-test
-/// surface emits (`HitResult.table_context` / `TableHitContext`) and
-/// that the renderer stamps onto cell `LineLayout`s
-/// (`paged_renderer::CellAddr`), so a hit that lands in a cell hands
-/// back exactly the qualifier the caret/edit address needs — no second
-/// query.
-///
-/// ## Why a qualifier and not a re-numbered flat offset
-///
-/// The alternative — fold cells into one flat story-offset space via a
-/// reserved high-bit/region scheme — was rejected: it makes
-/// `shift_for_insert`/`shift_for_delete`, undo inverse offsets, and the
-/// existing body-only consumers (BreakRecord, the A/B harness, every
-/// `RequestWordBounds`/`RequestLineBounds` caller) all have to learn the
-/// encoding, and a single arithmetic slip silently routes an edit into
-/// the wrong cell. The qualifier keeps body addressing byte-identical
-/// (the field defaults to `None` and is `#[serde(default)]`, so it
-/// rides v35 additively — old senders omit it) and makes "which stream"
-/// an explicit, type-checked decision. Undo is trivially correct
-/// because the inverse op carries the same `cell` qualifier.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
-#[serde(rename_all = "camelCase")]
-pub struct TextCellAddr {
-    /// `<Table Self="...">` id within `story_id`.
-    pub table_id: String,
-    /// Template row (0-based); span-origin row for spanned cells.
-    pub row: u32,
-    /// Column (0-based); span-origin column for spanned cells.
-    pub col: u32,
-}
+/// Re-export: a wire address, so it lives in `paged-wire`.
+pub use paged_wire::TextCellAddr;
 
 /// Canonical selection / caret. `start == end` is a caret;
 /// `start < end` is a range. Endpoints are normalised so `start ≤

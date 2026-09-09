@@ -38,6 +38,7 @@ required-features = ["mutate-roundtrip"]
 
 [dependencies]
 paged-model = { path = "../paged-model" }
+paged-wire = { path = "../paged-wire" }
 idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "92e016cb9d78352863dfef97399ffaa8b17437d0" }
 paged-scene = { path = "../paged-scene" }
 paged-flow = { path = "../paged-flow" }

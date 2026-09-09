@@ -537,37 +537,11 @@ impl Default for PipelineOptions<'_> {
 /// display-list caches and LOD tiles by `PageId`, so the value must
 /// stay stable across re-layouts — only document-structural edits
 /// (insert/delete page) should ever change the set of `PageId`s.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Hash,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
-    tsify_next::Tsify,
-)]
-#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
-pub struct PageId(pub String);
-
-impl PageId {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn synthetic(spread_idx: usize, local_idx: usize) -> Self {
-        Self(format!("page-{spread_idx}-{local_idx}"))
-    }
-}
-
-impl std::fmt::Display for PageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+/// Re-export: `PageId` moved to `paged-wire`, the leaf crate carrying
+/// the wire vocabulary, so the light `paged-introspect` can name a page
+/// without depending on the renderer. Every `paged_renderer::PageId`
+/// call site is unchanged.
+pub use paged_wire::PageId;
 
 /// Page bounding box and display-list built from a `Document`.
 #[derive(Debug)]

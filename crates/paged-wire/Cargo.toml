@@ -1,0 +1,16 @@
+[package]
+name = "paged-wire"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The wire vocabulary: the identities and the mutation ops every surface addresses the engine by."
+
+[dependencies]
+paged-mutate = { path = "../paged-mutate" }
+serde = { workspace = true }
+tsify-next = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"

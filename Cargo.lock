@@ -2411,6 +2411,7 @@ dependencies = [
  "paged-scene",
  "paged-store",
  "paged-text",
+ "paged-wire",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2602,6 +2603,7 @@ dependencies = [
  "paged-mutate",
  "paged-renderer",
  "paged-scene",
+ "paged-wire",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2672,6 +2674,7 @@ dependencies = [
  "paged-mutate",
  "paged-scene",
  "paged-text",
+ "paged-wire",
  "resvg",
  "serde",
  "serde_json",
@@ -2768,6 +2771,17 @@ dependencies = [
  "ttf-parser",
  "unicode-bidi",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "paged-wire"
+version = "0.0.0"
+dependencies = [
+ "paged-mutate",
+ "serde",
+ "serde_json",
+ "tsify-next",
+ "wasm-bindgen",
 ]
 
 [[package]]

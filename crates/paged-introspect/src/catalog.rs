@@ -89,6 +89,17 @@ pub struct ApiCatalog {
     /// sync with the parser.
     pub settable_paths: Vec<&'static str>,
     pub constraints: Vec<&'static str>,
+    /// The wire op vocabulary — every `Mutation` tag a surface can send,
+    /// spelled the way it travels (`"insertText"`, not `"InsertText"`).
+    ///
+    /// This is the population the whole system measures parity in — the
+    /// editor's probed capability table, `state`'s op map, the plugin
+    /// host — and the catalog could not carry it, because the ops lived
+    /// inside the canvas model and this crate is the light, published
+    /// one. They live in `paged-wire` now, so the catalog finally
+    /// describes both halves of the vocabulary instead of only the
+    /// properties.
+    pub operations: Vec<String>,
     /// IDML elements + their attributes (with the scripting path that mutates
     /// each, where settable). Drives the docs' generated attribute tables.
     pub elements: Vec<ElementType>,
@@ -102,6 +113,7 @@ pub fn api_catalog() -> ApiCatalog {
         id_grammar: id_grammar(),
         settable_paths: settable_path_names(),
         constraints: constraints(),
+        operations: operations(),
         elements: elements(),
     }
 }
@@ -114,6 +126,15 @@ pub fn lookup_path(name: &str) -> Option<P> {
         .iter()
         .find(|(candidate, _)| *candidate == name)
         .map(|(_, path)| *path)
+}
+
+/// Every wire op tag, from the one roster `Mutation::discriminant` is
+/// generated with.
+fn operations() -> Vec<String> {
+    paged_wire::MUTATION_NAMES
+        .iter()
+        .map(|n| paged_wire::wire_tag_of(n))
+        .collect()
 }
 
 /// The settable path names (catalog projection of [`PROPERTY_PATHS`]).
