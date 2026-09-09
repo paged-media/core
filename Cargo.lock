@@ -2723,6 +2723,7 @@ dependencies = [
  "paged-introspect",
  "paged-model",
  "paged-mutate",
+ "paged-wire",
  "serde",
  "serde_json",
  "zip",
