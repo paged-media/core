@@ -1169,6 +1169,7 @@
     "frameDirectionalFeatherNoise",
     "frameDirectionalFeatherChoke",
     "frameBlendMode",
+    "frameGradientFeather",
     "cellFillColor",
     "cellFillTint",
     "cellInsetTop",
@@ -1188,8 +1189,6 @@
     "cellRightEdgeStrokeColor",
     "cellRightEdgeStrokeWeight",
     "cellRightEdgeStrokeTint",
-    "tableRowCount",
-    "tableColumnCount",
     "pluginMetadata",
     "anchoredPosition",
     "anchorPoint",
@@ -1202,7 +1201,34 @@
     "anchoredSpineRelative",
     "anchoredLockPosition",
     "elementVisible",
-    "elementLocked"
+    "elementLocked",
+    "characterFontFamily",
+    "characterFontStyle",
+    "characterKerningMethod",
+    "characterCase",
+    "characterPosition",
+    "characterLanguage",
+    "characterBaselineShift",
+    "characterHorizontalScale",
+    "characterVerticalScale",
+    "characterSkew",
+    "characterUnderline",
+    "characterStrikethru",
+    "characterLigatures",
+    "characterOtfFeatures",
+    "paragraphLeftIndent",
+    "paragraphRightIndent",
+    "paragraphDropCapCharacters",
+    "paragraphDropCapLines",
+    "paragraphHyphenation",
+    "paragraphKeepLinesTogether",
+    "paragraphKeepWithNext",
+    "paragraphRuleAbove",
+    "paragraphRuleBelow",
+    "paragraphTabStops",
+    "paragraphListType",
+    "paragraphBulletCharacter",
+    "paragraphNumberingFormat"
   ],
   "constraints": [
     "Scripts run in Boa (pure ECMAScript), NOT Node: no require/import, fetch, fs, setTimeout, or network. Use only paged.* and console.*.",
@@ -1692,6 +1718,40 @@
           "summary": "Text fill swatch."
         }
       ]
+    }
+  ],
+  "pathAliases": [
+    {
+      "name": "frameTextWrapInvert",
+      "wire": "textWrapInvert"
+    },
+    {
+      "name": "frameInnerShadow",
+      "wire": "frameInnerShadowEnabled"
+    },
+    {
+      "name": "frameOuterGlow",
+      "wire": "frameOuterGlowEnabled"
+    },
+    {
+      "name": "frameInnerGlow",
+      "wire": "frameInnerGlowEnabled"
+    },
+    {
+      "name": "frameBevel",
+      "wire": "frameBevelEnabled"
+    },
+    {
+      "name": "frameSatin",
+      "wire": "frameSatinEnabled"
+    },
+    {
+      "name": "frameFeather",
+      "wire": "frameFeatherEnabled"
+    },
+    {
+      "name": "frameDirectionalFeather",
+      "wire": "frameDirectionalFeatherEnabled"
     }
   ]
 }

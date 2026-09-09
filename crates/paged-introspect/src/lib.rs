@@ -36,7 +36,9 @@ pub mod render;
 #[cfg(test)]
 mod testutil;
 
-pub use catalog::{api_catalog, lookup_path, unadvertised_reason, wire_name, ApiCatalog};
+pub use catalog::{
+    api_catalog, lookup_path, unadvertised_reason, wire_alias, wire_name, ApiCatalog, PathAlias,
+};
 pub use descriptor::{
     describe, AuthoredValue, ComputedValue, PropertyDescriptor, PropertyKind, PropertySource,
 };

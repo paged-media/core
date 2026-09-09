@@ -103,6 +103,23 @@ pub struct ApiCatalog {
     /// IDML elements + their attributes (with the scripting path that mutates
     /// each, where settable). Drives the docs' generated attribute tables.
     pub elements: Vec<ElementType>,
+    /// The eight settable paths whose RAW WIRE spelling differs from the
+    /// advertised one, so a consumer can see both instead of meeting the
+    /// second by being rejected. See [`wire_alias`]. Empty when the two
+    /// vocabularies agree everywhere, which is the state to aim for.
+    pub path_aliases: Vec<PathAlias>,
+}
+
+/// One settable path that answers to two names.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathAlias {
+    /// The advertised name — what `settablePaths` lists and the docs print.
+    pub name: &'static str,
+    /// The raw-wire spelling: serde's camelCase of the variant, which is
+    /// what `Mutation::SetElementProperty` carries and what
+    /// `paged.inspect`'s descriptor emits.
+    pub wire: String,
 }
 
 /// Assemble the catalog. Cheap; called per `describe`.
@@ -115,17 +132,63 @@ pub fn api_catalog() -> ApiCatalog {
         constraints: constraints(),
         operations: operations(),
         elements: elements(),
+        path_aliases: path_aliases(),
     }
+}
+
+/// The advertised paths that answer to a second, raw-wire name.
+fn path_aliases() -> Vec<PathAlias> {
+    PROPERTY_PATHS
+        .iter()
+        .filter_map(|(name, path)| wire_alias(*path).map(|wire| PathAlias { name, wire }))
+        .collect()
 }
 
 /// Resolve a JS property-path name to its `PropertyPath`. The single lookup
 /// behind `parse_property_path`; the linear scan is fine for a 179-entry table
 /// called at human cadence (one per `paged.set`/`get`).
 pub fn lookup_path(name: &str) -> Option<P> {
-    PROPERTY_PATHS
+    if let Some(path) = PROPERTY_PATHS
         .iter()
         .find(|(candidate, _)| *candidate == name)
         .map(|(_, path)| *path)
+    {
+        return Some(path);
+    }
+    // …and the RAW WIRE spelling, for the eight paths where the two
+    // differ. See [`wire_alias`]: a caller who read a name off
+    // `paged.inspect` or wrote one into `paged.batch` was holding a
+    // string `paged.set` rejected, which is one capability with two
+    // names and no door that takes both.
+    PROPERTY_PATHS
+        .iter()
+        .find(|(_, path)| wire_alias(*path).is_some_and(|alias| alias == name))
+        .map(|(_, path)| *path)
+}
+
+/// The RAW WIRE spelling of a path when it differs from the advertised
+/// one, else `None`.
+///
+/// `PropertyPath` derives `Serialize` with `rename_all = "camelCase"`,
+/// so the string `Mutation::SetElementProperty` carries — and the one
+/// `paged.inspect`'s descriptor emits — is the camelCase of the VARIANT.
+/// The catalog's name is chosen by hand. For 209 of the 217 they are the
+/// same string and nobody notices; for eight they are not:
+/// `TextWrapInvert` travels as `textWrapInvert` and is advertised as
+/// `frameTextWrapInvert`, and the seven effect toggles travel as
+/// `frameInnerShadowEnabled` and friends while being advertised without
+/// the `Enabled`.
+///
+/// Both now resolve, and this publishes the second spelling rather than
+/// leaving a consumer to discover it by being rejected.
+pub fn wire_alias(path: P) -> Option<String> {
+    let variant = variant_name(path);
+    let mut chars = variant.chars();
+    let serde_name = match chars.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    (serde_name != wire_name(path)).then_some(serde_name)
 }
 
 /// Every wire op tag, from the one roster `Mutation::discriminant` is
@@ -469,6 +532,16 @@ macro_rules! property_paths {
                 $(P::$h_variant => Some($h_reason),)*
             }
         }
+
+        /// The Rust variant's own name. Generated from the same tokens,
+        /// so it cannot drift; it exists because serde derives the RAW
+        /// WIRE spelling from it (see [`wire_alias`]).
+        pub fn variant_name(path: P) -> &'static str {
+            match path {
+                $(P::$a_variant => stringify!($a_variant),)*
+                $(P::$h_variant => stringify!($h_variant),)*
+            }
+        }
     };
 }
 
@@ -636,6 +709,11 @@ property_paths! {
         FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise",
         FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke",
         FrameBlendMode => "frameBlendMode",
+        // W0.4 — the seventh frame effect. Its six siblings were
+        // advertised and it was not, under "no recorded reason"; the
+        // apply arm takes the same node kinds as the others and the
+        // bridge already encodes its spec. PROMOTED 2026-09-09.
+        FrameGradientFeather => "frameGradientFeather",
         CellFillColor => "cellFillColor",
         CellFillTint => "cellFillTint",
         CellInsetTop => "cellInsetTop",
@@ -655,8 +733,6 @@ property_paths! {
         CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor",
         CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight",
         CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint",
-        TableRowCount => "tableRowCount",
-        TableColumnCount => "tableColumnCount",
         PluginMetadata => "pluginMetadata",
         AnchoredPosition => "anchoredPosition",
         AnchorPoint => "anchorPoint",
@@ -670,6 +746,49 @@ property_paths! {
         AnchoredLockPosition => "anchoredLockPosition",
         ElementVisible => "elementVisible",
         ElementLocked => "elementLocked",
+
+        // W0.1 / W0.2 — the character and paragraph attributes a
+        // `storyRange:` address has always been able to set. PROMOTED
+        // 2026-09-09: the apply layer routes them through the SAME arm
+        // as `characterFontSize` and `paragraphSpaceBefore`, which were
+        // advertised all along, and the Boa bridge's `js_value_to_wire`
+        // already named every one of them. The only thing stopping a
+        // script was that `lookup_path` did not know the name — so
+        // `paged.set` answered `false` for the twenty-seven properties a
+        // typesetter reaches for first: the font family, the case, the
+        // underline, the indents, the drop cap, the tab stops, the
+        // hyphenation, the bullets.
+        //
+        // `paged-script/tests/story_range_text_paths.rs` is the probe the
+        // old reason asked for: it sets every one of them through
+        // `paged.set` and reads it back.
+        CharacterFontFamily => "characterFontFamily",
+        CharacterFontStyle => "characterFontStyle",
+        CharacterKerningMethod => "characterKerningMethod",
+        CharacterCase => "characterCase",
+        CharacterPosition => "characterPosition",
+        CharacterLanguage => "characterLanguage",
+        CharacterBaselineShift => "characterBaselineShift",
+        CharacterHorizontalScale => "characterHorizontalScale",
+        CharacterVerticalScale => "characterVerticalScale",
+        CharacterSkew => "characterSkew",
+        CharacterUnderline => "characterUnderline",
+        CharacterStrikethru => "characterStrikethru",
+        CharacterLigatures => "characterLigatures",
+        CharacterOtfFeatures => "characterOtfFeatures",
+        ParagraphLeftIndent => "paragraphLeftIndent",
+        ParagraphRightIndent => "paragraphRightIndent",
+        ParagraphDropCapCharacters => "paragraphDropCapCharacters",
+        ParagraphDropCapLines => "paragraphDropCapLines",
+        ParagraphHyphenation => "paragraphHyphenation",
+        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
+        ParagraphKeepWithNext => "paragraphKeepWithNext",
+        ParagraphRuleAbove => "paragraphRuleAbove",
+        ParagraphRuleBelow => "paragraphRuleBelow",
+        ParagraphTabStops => "paragraphTabStops",
+        ParagraphListType => "paragraphListType",
+        ParagraphBulletCharacter => "paragraphBulletCharacter",
+        ParagraphNumberingFormat => "paragraphNumberingFormat",
     }
 
     hidden {
@@ -693,68 +812,16 @@ property_paths! {
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
         ClosePath => "closePath",
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        FrameGradientFeather => "frameGradientFeather",
-            "no recorded reason: the only frame effect with no advertised path, while its six siblings all have one",
         PageBounds => "pageBounds",
             "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        CharacterFontFamily => "characterFontFamily",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterFontStyle => "characterFontStyle",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterKerningMethod => "characterKerningMethod",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterCase => "characterCase",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterPosition => "characterPosition",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterLanguage => "characterLanguage",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterBaselineShift => "characterBaselineShift",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterHorizontalScale => "characterHorizontalScale",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterVerticalScale => "characterVerticalScale",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterSkew => "characterSkew",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterUnderline => "characterUnderline",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterStrikethru => "characterStrikethru",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterLigatures => "characterLigatures",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        CharacterOtfFeatures => "characterOtfFeatures",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphLeftIndent => "paragraphLeftIndent",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphRightIndent => "paragraphRightIndent",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphDropCapCharacters => "paragraphDropCapCharacters",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphDropCapLines => "paragraphDropCapLines",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphHyphenation => "paragraphHyphenation",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphKeepWithNext => "paragraphKeepWithNext",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphRuleAbove => "paragraphRuleAbove",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphRuleBelow => "paragraphRuleBelow",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphTabStops => "paragraphTabStops",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphListType => "paragraphListType",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphBulletCharacter => "paragraphBulletCharacter",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
-        ParagraphNumberingFormat => "paragraphNumberingFormat",
-            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        TableRowCount => "tableRowCount",
+            "READ-ONLY by contract: `SetProperty` carrying either table count is rejected, and structure edits go through Insert/DeleteTableRow and Insert/DeleteTableColumn. `settablePaths` means settable, so advertising them published a promise the apply layer refuses. `paged.get` still reads them — it matches on `wire_name`, not on this list",
+        TableColumnCount => "tableColumnCount",
+            "READ-ONLY by contract: `SetProperty` carrying either table count is rejected, and structure edits go through Insert/DeleteTableRow and Insert/DeleteTableColumn. `settablePaths` means settable, so advertising them published a promise the apply layer refuses. `paged.get` still reads them — it matches on `wire_name`, not on this list",
         NextTextFrame => "nextTextFrame",
-            "no recorded reason: the frame-threading pair is settable on a TextFrame and was never advertised; `linkFrames` is the lane every surface uses",
+            "NOT settable at all: the apply layer has no arm for it, so the old reason here — `settable on a TextFrame` — was untrue about the engine. And it could not usefully gain one: a forward pointer on its own does nothing, because the chain walk starts from the STORY, and `linkFrames` is what also rewrites the target's ParentStory. A raw property write would apply cleanly, change the model and move no pixels — the defect that lane already shipped once",
         PreviousTextFrame => "previousTextFrame",
-            "no recorded reason: the frame-threading pair is settable on a TextFrame and was never advertised; `linkFrames` is the lane every surface uses",
+            "NOT settable at all, and nothing to set: `paged_model::TextFrame` carries no back-pointer. IDML has the attribute and the parser drops it, because a singly-linked chain plus the story is all the composer reads",
     }
 }
 
@@ -930,7 +997,12 @@ mod tests {
     /// `characterUnderline`, `paragraphLeftIndent`, `paragraphTabStops`
     /// and 37 more — was not written down anywhere as either deliberate
     /// or accidental.
-    const UNADVERTISED: usize = 41;
+    // 41 → 14 on 2026-09-09: the twenty-seven `NodeId::StoryRange`
+    // text paths were promoted (see the note in `advertised`). What is
+    // left is the honest residue — eleven that are structurally not
+    // property writes or have no address form, plus three still
+    // carrying "no recorded reason".
+    const UNADVERTISED: usize = 15;
 
     /// Every variant has exactly one name, and no two variants share one.
     ///
@@ -987,6 +1059,18 @@ mod tests {
                         reason.len() >= 60,
                         "{path:?}: an exemption costs a real sentence, got {reason:?}"
                     );
+                    // "no recorded reason" was the honest state of 30 of
+                    // these and the worklist for promoting them; the last
+                    // was cleared on 2026-09-09. It may not come back: a
+                    // path hidden without a decision is a capability the
+                    // catalog withholds and cannot say why, which is the
+                    // shape the whole 176-vs-217 split had.
+                    assert!(
+                        !reason.contains("no recorded reason"),
+                        "{path:?} is hidden with no decision behind it. Either promote it \
+                         (a probe through `paged.set` is the proof) or write what makes it \
+                         unadvertisable: {reason:?}"
+                    );
                     unadvertised += 1;
                 }
             }
@@ -1020,7 +1104,7 @@ mod tests {
         // the PAGE ITEM and carries a layer id as its value, so it is
         // reachable — `every_settable_path_is_addressable` is what
         // tells the two cases apart, and it passes.
-        assert_eq!(cat.settable_paths.len(), 176, "settable path count drifted");
+        assert_eq!(cat.settable_paths.len(), 202, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings
@@ -1133,16 +1217,87 @@ mod tests {
         }
     }
 
-    /// Consistency with the wire enum: every catalog path is a real `PropertyPath`
-    /// that has a `PropertyPathJson` mirror (the catalog can't list a phantom).
-    /// The catalog uses ergonomic JS aliases (`frameBevel`) while `PropertyPathJson`
-    /// uses the wire variant name (`frameBevelEnabled`) — distinct by design — but
-    /// they project the *same* underlying variant set.
+    /// One capability, one name — or, where there are two, both doors
+    /// take both.
+    ///
+    /// `PropertyPath` derives its wire spelling from the variant and the
+    /// catalog chooses its advertised name by hand, and for eight paths
+    /// those disagree. Before this, a script that read `paged.inspect`'s
+    /// `frameInnerShadowEnabled` and handed it back to `paged.set` was
+    /// told the path did not exist, and a `paged.batch` written with the
+    /// advertised `frameInnerShadow` failed to deserialise. Neither door
+    /// took the other's word.
     #[test]
-    fn every_catalog_path_has_a_wire_mirror() {
-        for (_, path) in PROPERTY_PATHS {
-            let _mirror: crate::descriptor::PropertyPathJson = (*path).into();
+    fn every_advertised_path_resolves_under_both_of_its_names() {
+        for (name, path) in PROPERTY_PATHS {
+            assert_eq!(
+                lookup_path(name),
+                Some(*path),
+                "{name} is advertised and does not resolve"
+            );
+            if let Some(alias) = wire_alias(*path) {
+                assert_eq!(
+                    lookup_path(&alias),
+                    Some(*path),
+                    "{name} travels the wire as {alias} and that spelling is rejected"
+                );
+            }
         }
+    }
+
+    /// The name a caller READS BACK is a name they can WRITE.
+    ///
+    /// `wire_alias` computes the raw spelling by lowercasing the first
+    /// character, which is what `rename_all = "camelCase"` does to a
+    /// PascalCase variant — but "is what it does" is an assumption, and
+    /// this asks serde itself. `PropertyDescriptor.path` serialises with
+    /// that derive, so this is precisely the round trip a script makes
+    /// when it inspects an element and then sets one of the properties
+    /// it just read.
+    #[test]
+    fn the_name_serde_emits_is_a_name_lookup_accepts() {
+        for (advertised, path) in PROPERTY_PATHS {
+            let emitted = serde_json::to_value(path).expect("a path serialises");
+            let emitted = emitted.as_str().expect("as a string");
+            assert_eq!(
+                lookup_path(emitted),
+                Some(*path),
+                "{advertised} serialises as {emitted}, which `paged.set` rejects"
+            );
+        }
+    }
+
+    /// An alias may not shadow another path's advertised name — that
+    /// would silently retarget a write.
+    #[test]
+    fn no_alias_collides_with_an_advertised_name() {
+        for (name, path) in PROPERTY_PATHS {
+            let Some(alias) = wire_alias(*path) else {
+                continue;
+            };
+            let clash = PROPERTY_PATHS
+                .iter()
+                .find(|(other, other_path)| *other == alias && other_path != path);
+            assert!(
+                clash.is_none(),
+                "{name}'s wire alias {alias} is another path's advertised name"
+            );
+        }
+    }
+
+    /// The alias list may only SHRINK: two names for one capability is a
+    /// wart, and the cure is to make the catalog name match the wire
+    /// spelling (or the reverse) rather than to add a ninth.
+    #[test]
+    fn the_two_vocabularies_disagree_about_exactly_eight_paths() {
+        let aliases = path_aliases();
+        let names: Vec<&str> = aliases.iter().map(|a| a.name).collect();
+        assert_eq!(
+            aliases.len(),
+            8,
+            "the advertised and wire vocabularies now disagree about {} paths, not 8: {names:?}",
+            aliases.len()
+        );
     }
 
     /// The committed `catalog.json` build-time artifact (read by the plugin SDK
