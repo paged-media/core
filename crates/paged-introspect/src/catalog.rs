@@ -320,256 +320,354 @@ fn constraints() -> Vec<&'static str> {
     ]
 }
 
-/// THE single source for `paged.set`/`get` property paths: JS name →
-/// `PropertyPath`. `parse_property_path` (via [`lookup_path`]) and the catalog
-/// both read this — there is no second list. Order is the engine's own
-/// grouping (frame geometry/effects, then text/cell/anchored); the catalog
-/// preserves it.
-pub const PROPERTY_PATHS: &[(&str, P)] = &[
-    ("frameBounds", P::FrameBounds),
-    ("frameFillColor", P::FrameFillColor),
-    ("frameStrokeColor", P::FrameStrokeColor),
-    ("frameStrokeWeight", P::FrameStrokeWeight),
-    ("frameOpacity", P::FrameOpacity),
-    ("frameTransform", P::FrameTransform),
-    ("imageContentTransform", P::ImageContentTransform),
-    ("framePathPoint", P::FramePathPoint),
-    ("pathPointInsert", P::PathPointInsert),
-    ("pathPointRemove", P::PathPointRemove),
-    ("pathPointCurveType", P::PathPointCurveType),
-    // NO layer* PATHS HERE, deliberately (C-33, 2026-08-07). They were
-    // listed and projected into `settable_paths`, and NOTHING COULD USE
-    // THEM: `ElementId` has no Layer variant, `id_grammar()` publishes
-    // no layer address form, and `parse_element_id` cannot produce one —
-    // so `paged.set("layer:ua", "layerVisible", false)` never parsed. A
-    // layer's flags ARE mutable, through the seven dedicated `Layer*`
-    // mutations, which is a different lane and is where they belong.
-    //
-    // This mattered beyond tidiness: docs.paged.media and the plugin SDK
-    // both GENERATE from this catalog, so the false claim propagated to
-    // every consumer that trusted it. `every_settable_path_is_addressable`
-    // below now fails if this comes back.
-    ("characterFontSize", P::CharacterFontSize),
-    ("characterLeading", P::CharacterLeading),
-    ("characterTracking", P::CharacterTracking),
-    ("characterFillColor", P::CharacterFillColor),
-    ("paragraphSpaceBefore", P::ParagraphSpaceBefore),
-    ("paragraphSpaceAfter", P::ParagraphSpaceAfter),
-    ("paragraphFirstLineIndent", P::ParagraphFirstLineIndent),
-    ("appliedParagraphStyle", P::AppliedParagraphStyle),
-    ("appliedCharacterStyle", P::AppliedCharacterStyle),
-    ("appliedObjectStyle", P::AppliedObjectStyle),
-    // C-35 (v62) — WHICH LAYER an item is on. Note the contrast with
-    // the `layer*` paths refused just above: those addressed a LAYER,
-    // which has no `ElementId` form, so nothing could name the target.
-    // This one addresses the PAGE ITEM (`rectangle:u12`, `textFrame:u7`
-    // — forms `id_grammar()` already publishes) and merely carries a
-    // layer self_id as its value, so it is addressable and passes
-    // `every_settable_path_is_addressable`.
-    ("itemLayer", P::ItemLayer),
-    ("appliedCellStyle", P::AppliedCellStyle),
-    ("appliedTableStyle", P::AppliedTableStyle),
-    ("appliedConditions", P::AppliedConditions),
-    ("frameInsetSpacing", P::FrameInsetSpacing),
-    ("paragraphJustification", P::ParagraphJustification),
-    ("paragraphStyleNextStyle", P::ParagraphStyleNextStyle),
+/// THE single source for property-path names: variant → JS name, for ALL
+/// of them.
+///
+/// There used to be two lists. This one carried 176 names for
+/// `paged.set` and the catalog; `paged-script`'s `property_path_label`
+/// carried 217 for `paged.get` and every human label. They agreed on
+/// the 176 they shared — by hand, with nothing checking it — and the 41
+/// only the longer list knew about were invisible to `paged.set`, to
+/// `catalog.json`, and so to docs.paged.media and the plugin SDK, which
+/// generate from it. Every one of those 41 has a working `apply` arm.
+///
+/// Now the macro below generates both, so a `PropertyPath` variant
+/// cannot be named twice, and the `wire_name` match is exhaustive with
+/// no `_` arm — a new variant does not compile until it is placed in
+/// one group or the other, which is the difference between "routed
+/// elsewhere on purpose" and "forgotten".
+///
+/// `advertised` is what `settable_paths()` publishes and `lookup_path`
+/// resolves — unchanged, so `catalog.json` is byte-identical.
+/// `hidden` carries the name plus WHY it is not published. Several of
+/// those reasons read "no recorded reason", which is the honest state
+/// of them and the worklist for promoting them.
+macro_rules! property_paths {
     (
-        "paragraphAppliedNumberingList",
-        P::ParagraphAppliedNumberingList,
-    ),
-    ("frameStrokeEndCap", P::FrameStrokeEndCap),
-    ("frameStrokeStartArrowhead", P::FrameStrokeStartArrowhead),
-    ("frameStrokeEndArrowhead", P::FrameStrokeEndArrowhead),
-    ("frameTextWrapMode", P::FrameTextWrapMode),
-    ("frameTextWrapOffsets", P::FrameTextWrapOffsets),
-    ("frameTextWrapContourType", P::FrameTextWrapContourType),
-    (
-        "frameTextWrapContourIncludeInside",
-        P::FrameTextWrapContourIncludeInside,
-    ),
-    ("frameFittingCrops", P::FrameFittingCrops),
-    ("frameFittingType", P::FrameFittingType),
-    ("frameDropShadow", P::FrameDropShadow),
-    ("frameDropShadowMode", P::FrameDropShadowMode),
-    ("frameDropShadowXOffset", P::FrameDropShadowXOffset),
-    ("frameDropShadowYOffset", P::FrameDropShadowYOffset),
-    ("frameDropShadowSize", P::FrameDropShadowSize),
-    ("frameDropShadowOpacity", P::FrameDropShadowOpacity),
-    ("frameDropShadowColor", P::FrameDropShadowColor),
-    ("framePath", P::FramePath),
-    ("frameFillTint", P::FrameFillTint),
-    ("frameNonprinting", P::FrameNonprinting),
-    ("frameGradientFillAngle", P::FrameGradientFillAngle),
-    ("frameGradientFillLength", P::FrameGradientFillLength),
-    ("frameGradientStrokeAngle", P::FrameGradientStrokeAngle),
-    ("frameGradientStrokeLength", P::FrameGradientStrokeLength),
-    ("textFrameColumnCount", P::TextFrameColumnCount),
-    ("textFrameColumnGutter", P::TextFrameColumnGutter),
-    ("textFrameColumnBalance", P::TextFrameColumnBalance),
-    (
-        "textFrameVerticalJustification",
-        P::TextFrameVerticalJustification,
-    ),
-    ("textFrameAutoSizing", P::TextFrameAutoSizing),
-    ("textFrameFirstBaseline", P::TextFrameFirstBaseline),
-    ("frameTextWrapInvert", P::TextWrapInvert),
-    ("frameFittingReferencePoint", P::FrameFittingReferencePoint),
-    ("frameAutoFit", P::FrameAutoFit),
-    ("frameStrokeType", P::FrameStrokeType),
-    ("frameStrokeJoin", P::FrameStrokeJoin),
-    ("frameStrokeMiterLimit", P::FrameStrokeMiterLimit),
-    ("frameStrokeAlignment", P::FrameStrokeAlignment),
-    ("frameStrokeGapColor", P::FrameStrokeGapColor),
-    ("frameStrokeGapTint", P::FrameStrokeGapTint),
-    ("frameStrokeDashArray", P::FrameStrokeDashArray),
-    ("frameCornerOptionTopLeft", P::FrameCornerOptionTopLeft),
-    ("frameCornerOptionTopRight", P::FrameCornerOptionTopRight),
-    (
-        "frameCornerOptionBottomLeft",
-        P::FrameCornerOptionBottomLeft,
-    ),
-    (
-        "frameCornerOptionBottomRight",
-        P::FrameCornerOptionBottomRight,
-    ),
-    ("frameCornerRadiusTopLeft", P::FrameCornerRadiusTopLeft),
-    ("frameCornerRadiusTopRight", P::FrameCornerRadiusTopRight),
-    (
-        "frameCornerRadiusBottomLeft",
-        P::FrameCornerRadiusBottomLeft,
-    ),
-    (
-        "frameCornerRadiusBottomRight",
-        P::FrameCornerRadiusBottomRight,
-    ),
-    ("frameRotationAngle", P::FrameRotationAngle),
-    ("frameScaleX", P::FrameScaleX),
-    ("frameScaleY", P::FrameScaleY),
-    ("frameFlipH", P::FrameFlipH),
-    ("frameFlipV", P::FrameFlipV),
-    ("frameOverprintFill", P::FrameOverprintFill),
-    ("frameOverprintStroke", P::FrameOverprintStroke),
-    ("frameInnerShadow", P::FrameInnerShadowEnabled),
-    ("frameInnerShadowBlendMode", P::FrameInnerShadowBlendMode),
-    ("frameInnerShadowColor", P::FrameInnerShadowColor),
-    ("frameInnerShadowOpacity", P::FrameInnerShadowOpacity),
-    ("frameInnerShadowAngle", P::FrameInnerShadowAngle),
-    ("frameInnerShadowDistance", P::FrameInnerShadowDistance),
-    ("frameInnerShadowSize", P::FrameInnerShadowSize),
-    ("frameInnerShadowChoke", P::FrameInnerShadowChoke),
-    ("frameInnerShadowNoise", P::FrameInnerShadowNoise),
-    ("frameOuterGlow", P::FrameOuterGlowEnabled),
-    ("frameOuterGlowBlendMode", P::FrameOuterGlowBlendMode),
-    ("frameOuterGlowColor", P::FrameOuterGlowColor),
-    ("frameOuterGlowOpacity", P::FrameOuterGlowOpacity),
-    ("frameOuterGlowSpread", P::FrameOuterGlowSpread),
-    ("frameOuterGlowSize", P::FrameOuterGlowSize),
-    ("frameOuterGlowNoise", P::FrameOuterGlowNoise),
-    ("frameInnerGlow", P::FrameInnerGlowEnabled),
-    ("frameInnerGlowBlendMode", P::FrameInnerGlowBlendMode),
-    ("frameInnerGlowColor", P::FrameInnerGlowColor),
-    ("frameInnerGlowOpacity", P::FrameInnerGlowOpacity),
-    ("frameInnerGlowChoke", P::FrameInnerGlowChoke),
-    ("frameInnerGlowSize", P::FrameInnerGlowSize),
-    ("frameInnerGlowSource", P::FrameInnerGlowSource),
-    ("frameInnerGlowNoise", P::FrameInnerGlowNoise),
-    ("frameBevel", P::FrameBevelEnabled),
-    ("frameBevelStyle", P::FrameBevelStyle),
-    ("frameBevelTechnique", P::FrameBevelTechnique),
-    ("frameBevelDepth", P::FrameBevelDepth),
-    ("frameBevelDirection", P::FrameBevelDirection),
-    ("frameBevelSize", P::FrameBevelSize),
-    ("frameBevelSoften", P::FrameBevelSoften),
-    ("frameBevelAngle", P::FrameBevelAngle),
-    ("frameBevelAltitude", P::FrameBevelAltitude),
-    ("frameBevelHighlightColor", P::FrameBevelHighlightColor),
-    ("frameBevelShadowColor", P::FrameBevelShadowColor),
-    ("frameBevelHighlightOpacity", P::FrameBevelHighlightOpacity),
-    ("frameBevelShadowOpacity", P::FrameBevelShadowOpacity),
-    ("frameSatin", P::FrameSatinEnabled),
-    ("frameSatinBlendMode", P::FrameSatinBlendMode),
-    ("frameSatinColor", P::FrameSatinColor),
-    ("frameSatinOpacity", P::FrameSatinOpacity),
-    ("frameSatinAngle", P::FrameSatinAngle),
-    ("frameSatinDistance", P::FrameSatinDistance),
-    ("frameSatinSize", P::FrameSatinSize),
-    ("frameSatinInvert", P::FrameSatinInvert),
-    ("frameFeather", P::FrameFeatherEnabled),
-    ("frameFeatherWidth", P::FrameFeatherWidth),
-    ("frameFeatherCornerType", P::FrameFeatherCornerType),
-    ("frameFeatherNoise", P::FrameFeatherNoise),
-    ("frameFeatherChoke", P::FrameFeatherChoke),
-    ("frameDirectionalFeather", P::FrameDirectionalFeatherEnabled),
-    (
-        "frameDirectionalFeatherLeftWidth",
-        P::FrameDirectionalFeatherLeftWidth,
-    ),
-    (
-        "frameDirectionalFeatherRightWidth",
-        P::FrameDirectionalFeatherRightWidth,
-    ),
-    (
-        "frameDirectionalFeatherTopWidth",
-        P::FrameDirectionalFeatherTopWidth,
-    ),
-    (
-        "frameDirectionalFeatherBottomWidth",
-        P::FrameDirectionalFeatherBottomWidth,
-    ),
-    (
-        "frameDirectionalFeatherAngle",
-        P::FrameDirectionalFeatherAngle,
-    ),
-    (
-        "frameDirectionalFeatherNoise",
-        P::FrameDirectionalFeatherNoise,
-    ),
-    (
-        "frameDirectionalFeatherChoke",
-        P::FrameDirectionalFeatherChoke,
-    ),
-    ("frameBlendMode", P::FrameBlendMode),
-    ("cellFillColor", P::CellFillColor),
-    ("cellFillTint", P::CellFillTint),
-    ("cellInsetTop", P::CellInsetTop),
-    ("cellInsetLeft", P::CellInsetLeft),
-    ("cellInsetBottom", P::CellInsetBottom),
-    ("cellInsetRight", P::CellInsetRight),
-    ("cellVerticalJustification", P::CellVerticalJustification),
-    ("cellTopEdgeStrokeColor", P::CellTopEdgeStrokeColor),
-    ("cellTopEdgeStrokeWeight", P::CellTopEdgeStrokeWeight),
-    ("cellTopEdgeStrokeTint", P::CellTopEdgeStrokeTint),
-    ("cellBottomEdgeStrokeColor", P::CellBottomEdgeStrokeColor),
-    ("cellBottomEdgeStrokeWeight", P::CellBottomEdgeStrokeWeight),
-    ("cellBottomEdgeStrokeTint", P::CellBottomEdgeStrokeTint),
-    ("cellLeftEdgeStrokeColor", P::CellLeftEdgeStrokeColor),
-    ("cellLeftEdgeStrokeWeight", P::CellLeftEdgeStrokeWeight),
-    ("cellLeftEdgeStrokeTint", P::CellLeftEdgeStrokeTint),
-    ("cellRightEdgeStrokeColor", P::CellRightEdgeStrokeColor),
-    ("cellRightEdgeStrokeWeight", P::CellRightEdgeStrokeWeight),
-    ("cellRightEdgeStrokeTint", P::CellRightEdgeStrokeTint),
-    ("tableRowCount", P::TableRowCount),
-    ("tableColumnCount", P::TableColumnCount),
-    ("pluginMetadata", P::PluginMetadata),
-    ("anchoredPosition", P::AnchoredPosition),
-    ("anchorPoint", P::AnchorPoint),
-    ("anchoredXOffset", P::AnchoredXOffset),
-    ("anchoredYOffset", P::AnchoredYOffset),
-    (
-        "anchoredHorizontalReference",
-        P::AnchoredHorizontalReference,
-    ),
-    ("anchoredVerticalReference", P::AnchoredVerticalReference),
-    (
-        "anchoredHorizontalAlignment",
-        P::AnchoredHorizontalAlignment,
-    ),
-    ("anchoredVerticalAlignment", P::AnchoredVerticalAlignment),
-    ("anchoredSpineRelative", P::AnchoredSpineRelative),
-    ("anchoredLockPosition", P::AnchoredLockPosition),
-    ("elementVisible", P::ElementVisible),
-    ("elementLocked", P::ElementLocked),
-];
+        advertised { $($a_variant:ident => $a_name:literal,)* }
+        hidden { $($h_variant:ident => $h_name:literal, $h_reason:literal,)* }
+    ) => {
+        /// The advertised name → `PropertyPath` pairs, in the engine's
+        /// own grouping. `parse_property_path` (via [`lookup_path`]) and
+        /// `settable_paths()` both read this; there is no second list.
+        pub const PROPERTY_PATHS: &[(&str, P)] = &[
+            $(($a_name, P::$a_variant),)*
+        ];
+
+        /// Every property path, advertised or not, generated from the
+        /// same tokens as the names — so iteration and naming cannot
+        /// come apart the way the two hand tables did.
+        pub const ALL_PATHS: &[P] = &[
+            $(P::$a_variant,)*
+            $(P::$h_variant,)*
+        ];
+
+        /// The JS name of ANY property path, advertised or not. Backs
+        /// `paged.get`, every human-facing label, and the reverse of
+        /// [`lookup_path`]. Exhaustive by construction.
+        pub fn wire_name(path: P) -> &'static str {
+            match path {
+                $(P::$a_variant => $a_name,)*
+                $(P::$h_variant => $h_name,)*
+            }
+        }
+
+        /// `Some(reason)` when a path has a name but is deliberately not
+        /// advertised as settable; `None` when it is published.
+        pub fn unadvertised_reason(path: P) -> Option<&'static str> {
+            match path {
+                $(P::$a_variant => None,)*
+                $(P::$h_variant => Some($h_reason),)*
+            }
+        }
+    };
+}
+
+property_paths! {
+    advertised {
+
+        FrameBounds => "frameBounds",
+        FrameFillColor => "frameFillColor",
+        FrameStrokeColor => "frameStrokeColor",
+        FrameStrokeWeight => "frameStrokeWeight",
+        FrameOpacity => "frameOpacity",
+        FrameTransform => "frameTransform",
+        ImageContentTransform => "imageContentTransform",
+        FramePathPoint => "framePathPoint",
+        PathPointInsert => "pathPointInsert",
+        PathPointRemove => "pathPointRemove",
+        PathPointCurveType => "pathPointCurveType",
+        // NO layer* PATHS HERE, deliberately (C-33, 2026-08-07). They were
+        // listed and projected into `settable_paths`, and NOTHING COULD USE
+        // THEM: `ElementId` has no Layer variant, `id_grammar()` publishes
+        // no layer address form, and `parse_element_id` cannot produce one —
+        // so `paged.set("layer:ua", "layerVisible", false)` never parsed. A
+        // layer's flags ARE mutable, through the seven dedicated `Layer*`
+        // mutations, which is a different lane and is where they belong.
+        //
+        // This mattered beyond tidiness: docs.paged.media and the plugin SDK
+        // both GENERATE from this catalog, so the false claim propagated to
+        // every consumer that trusted it. `every_settable_path_is_addressable`
+        // below now fails if this comes back.
+        CharacterFontSize => "characterFontSize",
+        CharacterLeading => "characterLeading",
+        CharacterTracking => "characterTracking",
+        CharacterFillColor => "characterFillColor",
+        ParagraphSpaceBefore => "paragraphSpaceBefore",
+        ParagraphSpaceAfter => "paragraphSpaceAfter",
+        ParagraphFirstLineIndent => "paragraphFirstLineIndent",
+        AppliedParagraphStyle => "appliedParagraphStyle",
+        AppliedCharacterStyle => "appliedCharacterStyle",
+        AppliedObjectStyle => "appliedObjectStyle",
+        // C-35 (v62) — WHICH LAYER an item is on. Note the contrast with
+        // the `layer*` paths refused just above: those addressed a LAYER,
+        // which has no `ElementId` form, so nothing could name the target.
+        // This one addresses the PAGE ITEM (`rectangle:u12`, `textFrame:u7`
+        // — forms `id_grammar()` already publishes) and merely carries a
+        // layer self_id as its value, so it is addressable and passes
+        // `every_settable_path_is_addressable`.
+        ItemLayer => "itemLayer",
+        AppliedCellStyle => "appliedCellStyle",
+        AppliedTableStyle => "appliedTableStyle",
+        AppliedConditions => "appliedConditions",
+        FrameInsetSpacing => "frameInsetSpacing",
+        ParagraphJustification => "paragraphJustification",
+        ParagraphStyleNextStyle => "paragraphStyleNextStyle",
+        ParagraphAppliedNumberingList => "paragraphAppliedNumberingList",
+        FrameStrokeEndCap => "frameStrokeEndCap",
+        FrameStrokeStartArrowhead => "frameStrokeStartArrowhead",
+        FrameStrokeEndArrowhead => "frameStrokeEndArrowhead",
+        FrameTextWrapMode => "frameTextWrapMode",
+        FrameTextWrapOffsets => "frameTextWrapOffsets",
+        FrameTextWrapContourType => "frameTextWrapContourType",
+        FrameTextWrapContourIncludeInside => "frameTextWrapContourIncludeInside",
+        FrameFittingCrops => "frameFittingCrops",
+        FrameFittingType => "frameFittingType",
+        FrameDropShadow => "frameDropShadow",
+        FrameDropShadowMode => "frameDropShadowMode",
+        FrameDropShadowXOffset => "frameDropShadowXOffset",
+        FrameDropShadowYOffset => "frameDropShadowYOffset",
+        FrameDropShadowSize => "frameDropShadowSize",
+        FrameDropShadowOpacity => "frameDropShadowOpacity",
+        FrameDropShadowColor => "frameDropShadowColor",
+        FramePath => "framePath",
+        FrameFillTint => "frameFillTint",
+        FrameNonprinting => "frameNonprinting",
+        FrameGradientFillAngle => "frameGradientFillAngle",
+        FrameGradientFillLength => "frameGradientFillLength",
+        FrameGradientStrokeAngle => "frameGradientStrokeAngle",
+        FrameGradientStrokeLength => "frameGradientStrokeLength",
+        TextFrameColumnCount => "textFrameColumnCount",
+        TextFrameColumnGutter => "textFrameColumnGutter",
+        TextFrameColumnBalance => "textFrameColumnBalance",
+        TextFrameVerticalJustification => "textFrameVerticalJustification",
+        TextFrameAutoSizing => "textFrameAutoSizing",
+        TextFrameFirstBaseline => "textFrameFirstBaseline",
+        TextWrapInvert => "frameTextWrapInvert",
+        FrameFittingReferencePoint => "frameFittingReferencePoint",
+        FrameAutoFit => "frameAutoFit",
+        FrameStrokeType => "frameStrokeType",
+        FrameStrokeJoin => "frameStrokeJoin",
+        FrameStrokeMiterLimit => "frameStrokeMiterLimit",
+        FrameStrokeAlignment => "frameStrokeAlignment",
+        FrameStrokeGapColor => "frameStrokeGapColor",
+        FrameStrokeGapTint => "frameStrokeGapTint",
+        FrameStrokeDashArray => "frameStrokeDashArray",
+        FrameCornerOptionTopLeft => "frameCornerOptionTopLeft",
+        FrameCornerOptionTopRight => "frameCornerOptionTopRight",
+        FrameCornerOptionBottomLeft => "frameCornerOptionBottomLeft",
+        FrameCornerOptionBottomRight => "frameCornerOptionBottomRight",
+        FrameCornerRadiusTopLeft => "frameCornerRadiusTopLeft",
+        FrameCornerRadiusTopRight => "frameCornerRadiusTopRight",
+        FrameCornerRadiusBottomLeft => "frameCornerRadiusBottomLeft",
+        FrameCornerRadiusBottomRight => "frameCornerRadiusBottomRight",
+        FrameRotationAngle => "frameRotationAngle",
+        FrameScaleX => "frameScaleX",
+        FrameScaleY => "frameScaleY",
+        FrameFlipH => "frameFlipH",
+        FrameFlipV => "frameFlipV",
+        FrameOverprintFill => "frameOverprintFill",
+        FrameOverprintStroke => "frameOverprintStroke",
+        FrameInnerShadowEnabled => "frameInnerShadow",
+        FrameInnerShadowBlendMode => "frameInnerShadowBlendMode",
+        FrameInnerShadowColor => "frameInnerShadowColor",
+        FrameInnerShadowOpacity => "frameInnerShadowOpacity",
+        FrameInnerShadowAngle => "frameInnerShadowAngle",
+        FrameInnerShadowDistance => "frameInnerShadowDistance",
+        FrameInnerShadowSize => "frameInnerShadowSize",
+        FrameInnerShadowChoke => "frameInnerShadowChoke",
+        FrameInnerShadowNoise => "frameInnerShadowNoise",
+        FrameOuterGlowEnabled => "frameOuterGlow",
+        FrameOuterGlowBlendMode => "frameOuterGlowBlendMode",
+        FrameOuterGlowColor => "frameOuterGlowColor",
+        FrameOuterGlowOpacity => "frameOuterGlowOpacity",
+        FrameOuterGlowSpread => "frameOuterGlowSpread",
+        FrameOuterGlowSize => "frameOuterGlowSize",
+        FrameOuterGlowNoise => "frameOuterGlowNoise",
+        FrameInnerGlowEnabled => "frameInnerGlow",
+        FrameInnerGlowBlendMode => "frameInnerGlowBlendMode",
+        FrameInnerGlowColor => "frameInnerGlowColor",
+        FrameInnerGlowOpacity => "frameInnerGlowOpacity",
+        FrameInnerGlowChoke => "frameInnerGlowChoke",
+        FrameInnerGlowSize => "frameInnerGlowSize",
+        FrameInnerGlowSource => "frameInnerGlowSource",
+        FrameInnerGlowNoise => "frameInnerGlowNoise",
+        FrameBevelEnabled => "frameBevel",
+        FrameBevelStyle => "frameBevelStyle",
+        FrameBevelTechnique => "frameBevelTechnique",
+        FrameBevelDepth => "frameBevelDepth",
+        FrameBevelDirection => "frameBevelDirection",
+        FrameBevelSize => "frameBevelSize",
+        FrameBevelSoften => "frameBevelSoften",
+        FrameBevelAngle => "frameBevelAngle",
+        FrameBevelAltitude => "frameBevelAltitude",
+        FrameBevelHighlightColor => "frameBevelHighlightColor",
+        FrameBevelShadowColor => "frameBevelShadowColor",
+        FrameBevelHighlightOpacity => "frameBevelHighlightOpacity",
+        FrameBevelShadowOpacity => "frameBevelShadowOpacity",
+        FrameSatinEnabled => "frameSatin",
+        FrameSatinBlendMode => "frameSatinBlendMode",
+        FrameSatinColor => "frameSatinColor",
+        FrameSatinOpacity => "frameSatinOpacity",
+        FrameSatinAngle => "frameSatinAngle",
+        FrameSatinDistance => "frameSatinDistance",
+        FrameSatinSize => "frameSatinSize",
+        FrameSatinInvert => "frameSatinInvert",
+        FrameFeatherEnabled => "frameFeather",
+        FrameFeatherWidth => "frameFeatherWidth",
+        FrameFeatherCornerType => "frameFeatherCornerType",
+        FrameFeatherNoise => "frameFeatherNoise",
+        FrameFeatherChoke => "frameFeatherChoke",
+        FrameDirectionalFeatherEnabled => "frameDirectionalFeather",
+        FrameDirectionalFeatherLeftWidth => "frameDirectionalFeatherLeftWidth",
+        FrameDirectionalFeatherRightWidth => "frameDirectionalFeatherRightWidth",
+        FrameDirectionalFeatherTopWidth => "frameDirectionalFeatherTopWidth",
+        FrameDirectionalFeatherBottomWidth => "frameDirectionalFeatherBottomWidth",
+        FrameDirectionalFeatherAngle => "frameDirectionalFeatherAngle",
+        FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise",
+        FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke",
+        FrameBlendMode => "frameBlendMode",
+        CellFillColor => "cellFillColor",
+        CellFillTint => "cellFillTint",
+        CellInsetTop => "cellInsetTop",
+        CellInsetLeft => "cellInsetLeft",
+        CellInsetBottom => "cellInsetBottom",
+        CellInsetRight => "cellInsetRight",
+        CellVerticalJustification => "cellVerticalJustification",
+        CellTopEdgeStrokeColor => "cellTopEdgeStrokeColor",
+        CellTopEdgeStrokeWeight => "cellTopEdgeStrokeWeight",
+        CellTopEdgeStrokeTint => "cellTopEdgeStrokeTint",
+        CellBottomEdgeStrokeColor => "cellBottomEdgeStrokeColor",
+        CellBottomEdgeStrokeWeight => "cellBottomEdgeStrokeWeight",
+        CellBottomEdgeStrokeTint => "cellBottomEdgeStrokeTint",
+        CellLeftEdgeStrokeColor => "cellLeftEdgeStrokeColor",
+        CellLeftEdgeStrokeWeight => "cellLeftEdgeStrokeWeight",
+        CellLeftEdgeStrokeTint => "cellLeftEdgeStrokeTint",
+        CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor",
+        CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight",
+        CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint",
+        TableRowCount => "tableRowCount",
+        TableColumnCount => "tableColumnCount",
+        PluginMetadata => "pluginMetadata",
+        AnchoredPosition => "anchoredPosition",
+        AnchorPoint => "anchorPoint",
+        AnchoredXOffset => "anchoredXOffset",
+        AnchoredYOffset => "anchoredYOffset",
+        AnchoredHorizontalReference => "anchoredHorizontalReference",
+        AnchoredVerticalReference => "anchoredVerticalReference",
+        AnchoredHorizontalAlignment => "anchoredHorizontalAlignment",
+        AnchoredVerticalAlignment => "anchoredVerticalAlignment",
+        AnchoredSpineRelative => "anchoredSpineRelative",
+        AnchoredLockPosition => "anchoredLockPosition",
+        ElementVisible => "elementVisible",
+        ElementLocked => "elementLocked",
+    }
+
+    hidden {
+        LayerVisible => "layerVisible",
+            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
+        LayerLocked => "layerLocked",
+            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
+        LayerPrintable => "layerPrintable",
+            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
+        LayerName => "layerName",
+            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
+        PathOpenAt => "pathOpenAt",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        OutlineStroke => "outlineStroke",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        OutlineStrokeVariable => "outlineStrokeVariable",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        OffsetPath => "offsetPath",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        SimplifyPath => "simplifyPath",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        ClosePath => "closePath",
+            "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
+        FrameGradientFeather => "frameGradientFeather",
+            "no recorded reason: the only frame effect with no advertised path, while its six siblings all have one",
+        PageBounds => "pageBounds",
+            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
+        CharacterFontFamily => "characterFontFamily",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterFontStyle => "characterFontStyle",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterKerningMethod => "characterKerningMethod",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterCase => "characterCase",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterPosition => "characterPosition",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterLanguage => "characterLanguage",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterBaselineShift => "characterBaselineShift",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterHorizontalScale => "characterHorizontalScale",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterVerticalScale => "characterVerticalScale",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterSkew => "characterSkew",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterUnderline => "characterUnderline",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterStrikethru => "characterStrikethru",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterLigatures => "characterLigatures",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        CharacterOtfFeatures => "characterOtfFeatures",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphLeftIndent => "paragraphLeftIndent",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphRightIndent => "paragraphRightIndent",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphDropCapCharacters => "paragraphDropCapCharacters",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphDropCapLines => "paragraphDropCapLines",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphHyphenation => "paragraphHyphenation",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphKeepWithNext => "paragraphKeepWithNext",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphRuleAbove => "paragraphRuleAbove",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphRuleBelow => "paragraphRuleBelow",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphTabStops => "paragraphTabStops",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphListType => "paragraphListType",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphBulletCharacter => "paragraphBulletCharacter",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        ParagraphNumberingFormat => "paragraphNumberingFormat",
+            "no recorded reason: it has a working apply arm on `NodeId::StoryRange` and was never advertised — promote it once a probe proves the wire address",
+        NextTextFrame => "nextTextFrame",
+            "no recorded reason: the frame-threading pair is settable on a TextFrame and was never advertised; `linkFrames` is the lane every surface uses",
+        PreviousTextFrame => "previousTextFrame",
+            "no recorded reason: the frame-threading pair is settable on a TextFrame and was never advertised; `linkFrames` is the lane every surface uses",
+    }
+}
 
 /// The IDML elements the parser recognises, with their notable attributes. Hand
 /// curated against `paged-parse` (spread.rs page items, plus structural Page /
@@ -731,6 +829,92 @@ fn elements() -> Vec<ElementType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 41 paths that have a name and are not advertised. Every one
+    /// is settable — each has a working `apply` arm — so this list is a
+    /// WORKLIST, and the ratchet below makes it shrink-only: promoting
+    /// one is a deliberate edit, and nobody can quietly add a 42nd.
+    ///
+    /// It exists at all because the two name tables that preceded it
+    /// disagreed silently. `paged.get` knew 217 names, `paged.set` and
+    /// `catalog.json` knew 176, and the difference — `characterLanguage`,
+    /// `characterUnderline`, `paragraphLeftIndent`, `paragraphTabStops`
+    /// and 37 more — was not written down anywhere as either deliberate
+    /// or accidental.
+    const UNADVERTISED: usize = 41;
+
+    /// Every variant has exactly one name, and no two variants share one.
+    ///
+    /// `wire_name` is exhaustive by construction (the macro writes a
+    /// `match` with no `_` arm), so totality is the compiler's job; what
+    /// this adds is uniqueness, which a `match` cannot express — two
+    /// arms may return the same string and nothing complains.
+    #[test]
+    fn every_path_has_one_name_and_no_name_has_two_paths() {
+        let mut seen: std::collections::HashMap<&str, P> = std::collections::HashMap::new();
+        for (name, path) in PROPERTY_PATHS {
+            assert_eq!(
+                wire_name(*path),
+                *name,
+                "advertised table and wire_name disagree for {path:?}"
+            );
+            if let Some(other) = seen.insert(name, *path) {
+                panic!("{name:?} names two paths: {other:?} and {path:?}");
+            }
+        }
+    }
+
+    /// An unadvertised path carries a name AND a reason; an advertised
+    /// one carries no reason. Both directions, so a path cannot be
+    /// dropped from the published set without saying why, and cannot
+    /// keep a stale excuse after it is published.
+    #[test]
+    fn the_unadvertised_are_named_and_explained_and_only_shrink() {
+        let advertised: std::collections::HashSet<P> =
+            PROPERTY_PATHS.iter().map(|(_, p)| *p).collect();
+        let mut unadvertised = 0usize;
+        for (_, path) in PROPERTY_PATHS {
+            assert!(
+                unadvertised_reason(*path).is_none(),
+                "{path:?} is advertised and still carries a reason not to be"
+            );
+        }
+        // Walk the names the macro generated: every path reachable by
+        // name is either in the advertised table or has a reason.
+        for path in ALL_PATHS {
+            let name = wire_name(*path);
+            assert!(!name.is_empty(), "{path:?} has an empty name");
+            match unadvertised_reason(*path) {
+                None => assert!(
+                    advertised.contains(path),
+                    "{path:?} has no reason to be unadvertised but is not in the table"
+                ),
+                Some(reason) => {
+                    assert!(
+                        !advertised.contains(path),
+                        "{path:?} is advertised AND carries a reason"
+                    );
+                    assert!(
+                        reason.len() >= 60,
+                        "{path:?}: an exemption costs a real sentence, got {reason:?}"
+                    );
+                    unadvertised += 1;
+                }
+            }
+        }
+        assert_eq!(
+            unadvertised, UNADVERTISED,
+            "the unadvertised list may only SHRINK. Promoting a path means \
+             moving it into `advertised` and lowering UNADVERTISED in the same \
+             commit; a new entry here means a capability was hidden without a \
+             decision."
+        );
+        assert_eq!(
+            ALL_PATHS.len(),
+            PROPERTY_PATHS.len() + UNADVERTISED,
+            "every named path is advertised or explained, never both, never neither"
+        );
+    }
 
     #[test]
     fn catalog_resolves_and_is_complete() {
