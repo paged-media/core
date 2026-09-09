@@ -502,6 +502,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
         .function(guarded(paged_layers), js_string!("layers"), 0)
         .function(guarded(paged_tree), js_string!("tree"), 0)
+        .function(
+            guarded(paged_planar_regions),
+            js_string!("planarRegions"),
+            2,
+        )
         .function(guarded(paged_pages), js_string!("pages"), 0)
         .function(guarded(paged_stories), js_string!("stories"), 0)
         .function(guarded(paged_swatches), js_string!("swatches"), 0)
@@ -837,6 +842,136 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(
             guarded(paged_set_content_selection),
             js_string!("setContentSelection"),
+            1,
+        )
+        // --- the thirty-one that only `paged.batch` could reach ---
+        // Every name below is the camelCase of its wire op, which is the
+        // convention the rest of this table already follows: one spelling
+        // for a capability, not a fn name and a serde name that differ.
+        // z-order & nesting
+        .function(
+            guarded(paged_reorder_element),
+            js_string!("reorderElement"),
+            2,
+        )
+        .function(guarded(paged_paste_into), js_string!("pasteInto"), 2)
+        .function(guarded(paged_release_from), js_string!("releaseFrom"), 1)
+        // path topology
+        .function(guarded(paged_close_path), js_string!("closePath"), 2)
+        .function(guarded(paged_join_paths), js_string!("joinPaths"), 2)
+        // the six region verbs + faces
+        .function(
+            guarded(paged_pathfinder_divide),
+            js_string!("pathfinderDivide"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_trim),
+            js_string!("pathfinderTrim"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_merge),
+            js_string!("pathfinderMerge"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_crop),
+            js_string!("pathfinderCrop"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_outline),
+            js_string!("pathfinderOutline"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_minus_back),
+            js_string!("pathfinderMinusBack"),
+            1,
+        )
+        .function(
+            guarded(paged_pathfinder_faces),
+            js_string!("pathfinderFaces"),
+            3,
+        )
+        // opacity masks & text on a path
+        .function(
+            guarded(paged_apply_opacity_mask),
+            js_string!("applyOpacityMask"),
+            3,
+        )
+        .function(
+            guarded(paged_release_opacity_mask),
+            js_string!("releaseOpacityMask"),
+            1,
+        )
+        .function(
+            guarded(paged_attach_text_to_path),
+            js_string!("attachTextToPath"),
+            3,
+        )
+        .function(
+            guarded(paged_detach_text_from_path),
+            js_string!("detachTextFromPath"),
+            1,
+        )
+        // anchored frames & hyperlinks
+        .function(
+            guarded(paged_insert_anchored_frame),
+            js_string!("insertAnchoredFrame"),
+            5,
+        )
+        .function(
+            guarded(paged_insert_hyperlink),
+            js_string!("insertHyperlink"),
+            4,
+        )
+        // layer attributes
+        .function(
+            guarded(paged_layer_set_visible),
+            js_string!("layerSetVisible"),
+            2,
+        )
+        .function(
+            guarded(paged_layer_set_locked),
+            js_string!("layerSetLocked"),
+            2,
+        )
+        .function(
+            guarded(paged_layer_set_printable),
+            js_string!("layerSetPrintable"),
+            2,
+        )
+        .function(guarded(paged_layer_set_name), js_string!("layerSetName"), 2)
+        // colour-resource CRUD
+        .function(guarded(paged_create_swatch), js_string!("createSwatch"), 1)
+        .function(guarded(paged_edit_swatch), js_string!("editSwatch"), 2)
+        .function(guarded(paged_delete_swatch), js_string!("deleteSwatch"), 1)
+        .function(
+            guarded(paged_create_gradient),
+            js_string!("createGradient"),
+            1,
+        )
+        .function(guarded(paged_edit_gradient), js_string!("editGradient"), 2)
+        .function(
+            guarded(paged_delete_gradient),
+            js_string!("deleteGradient"),
+            1,
+        )
+        .function(
+            guarded(paged_create_color_group),
+            js_string!("createColorGroup"),
+            1,
+        )
+        .function(
+            guarded(paged_edit_color_group),
+            js_string!("editColorGroup"),
+            2,
+        )
+        .function(
+            guarded(paged_delete_color_group),
+            js_string!("deleteColorGroup"),
             1,
         )
         .build();
@@ -1336,6 +1471,35 @@ fn prop_u32(obj: &boa_engine::object::JsObject, key: &str, ctx: &mut Context) ->
         .map(|n| n as u32)
 }
 
+/// Optional `bool` property of a JS object (absent and `null` both read
+/// as "not given", so an options bag can omit a flag rather than say
+/// `false`).
+fn prop_bool(obj: &boa_engine::object::JsObject, key: &str, ctx: &mut Context) -> Option<bool> {
+    let v = obj.get(js_string!(key), ctx).ok()?;
+    (!v.is_undefined() && !v.is_null()).then(|| v.to_boolean())
+}
+
+/// Read a JS array of strings (the face ids `pathfinderFaces` selects).
+fn read_string_array(value: &JsValue, ctx: &mut Context) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(obj) = value.as_object() else {
+        return out;
+    };
+    let len = obj
+        .get(js_string!("length"), ctx)
+        .ok()
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as usize;
+    for i in 0..len {
+        if let Ok(item) = obj.get(i as u32, ctx) {
+            if let Ok(sv) = item.to_string(ctx) {
+                out.push(sv.to_std_string_escaped());
+            }
+        }
+    }
+    out
+}
+
 /// Parse a JS array of element-id address strings into `ElementId`s,
 /// dropping unparseable entries (shared by `setElementSelection` +
 /// `pathfinderBoolean`).
@@ -1519,6 +1683,63 @@ fn paged_unlink_frames(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> 
     Ok(apply_bool(&Mutation::UnlinkFrames {
         frame: bare_id(&frame),
     }))
+}
+
+/// `paged.reorderElement(elementId, target)` — raise or lower an element
+/// in its parent's z-order (`Mutation::ReorderElement`). `target` is the
+/// wire `ZOrderTarget` verbatim: `"front"` | `"back"` | `"forward"` |
+/// `"backward"` | `{ index: n }` (n = the FINAL slot, 0 = backmost).
+fn paged_reorder_element(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let Some(to) = from_js::<paged_mutate::ZOrderTarget>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::ReorderElement { element_id, to }))
+}
+
+/// `paged.pasteInto(containerId, childId)` — nest an existing item inside
+/// a container frame (`Mutation::PasteInto`).
+fn paged_paste_into(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let container = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let child = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (Some(container_id), Some(child_id)) =
+        (parse_element_id(&container), parse_element_id(&child))
+    else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::PasteInto {
+        container_id,
+        child_id,
+    }))
+}
+
+/// `paged.releaseFrom(childId)` — lift a nested item back out of its
+/// container (`Mutation::ReleaseFrom`), the inverse of `pasteInto`.
+fn paged_release_from(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let child = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(child_id) = parse_element_id(&child) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::ReleaseFrom { child_id }))
 }
 
 // ---------------------------------------------------- shape inserts
@@ -1795,6 +2016,261 @@ fn paged_pathfinder_boolean(
     }))
 }
 
+/// `paged.closePath(elementId, subpath?)` — close an open contour
+/// (`Mutation::ClosePath`). `subpath` defaults to the whole path.
+fn paged_close_path(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let v = args.get_or_undefined(1);
+    let subpath = (!v.is_undefined() && !v.is_null()).then(|| v.to_number(ctx).map(|n| n as u32));
+    let subpath = match subpath {
+        Some(Ok(n)) => Some(n),
+        Some(Err(e)) => return Err(e),
+        None => None,
+    };
+    Ok(apply_bool(&Mutation::ClosePath {
+        element_id,
+        subpath,
+    }))
+}
+
+/// `paged.joinPaths(elementId, otherId)` — weld two open paths into one
+/// (`Mutation::JoinPaths`).
+fn paged_join_paths(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let a = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let b = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (Some(element_id), Some(other_id)) = (parse_element_id(&a), parse_element_id(&b)) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::JoinPaths {
+        element_id,
+        other_id,
+    }))
+}
+
+/// The six REGION verbs take one shape — a selection in, the artwork
+/// rewritten in place — so they share one body and differ only in the
+/// variant they mint. Empty selection is `false`, never a throw.
+fn pathfinder_region(
+    args: &[JsValue],
+    ctx: &mut Context,
+    make: fn(Vec<paged_canvas::element_selection::ElementId>) -> Mutation,
+) -> JsValue {
+    let element_ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    if element_ids.is_empty() {
+        return JsValue::from(false);
+    }
+    apply_bool(&make(element_ids))
+}
+
+/// `paged.pathfinderDivide(elementIds)` (`Mutation::PathfinderDivide`).
+fn paged_pathfinder_divide(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderDivide { element_ids }
+    }))
+}
+
+/// `paged.pathfinderTrim(elementIds)` (`Mutation::PathfinderTrim`).
+fn paged_pathfinder_trim(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderTrim { element_ids }
+    }))
+}
+
+/// `paged.pathfinderMerge(elementIds)` (`Mutation::PathfinderMerge`).
+fn paged_pathfinder_merge(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderMerge { element_ids }
+    }))
+}
+
+/// `paged.pathfinderCrop(elementIds)` (`Mutation::PathfinderCrop`).
+fn paged_pathfinder_crop(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderCrop { element_ids }
+    }))
+}
+
+/// `paged.pathfinderOutline(elementIds)` (`Mutation::PathfinderOutline`).
+fn paged_pathfinder_outline(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderOutline { element_ids }
+    }))
+}
+
+/// `paged.pathfinderMinusBack(elementIds)` (`Mutation::PathfinderMinusBack`).
+fn paged_pathfinder_minus_back(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    Ok(pathfinder_region(args, ctx, |element_ids| {
+        Mutation::PathfinderMinusBack { element_ids }
+    }))
+}
+
+/// `paged.pathfinderFaces(elementIds, faceIds, mode)` — keep or drop the
+/// named faces of the planar arrangement (`Mutation::PathfinderFaces`).
+/// `mode` is the wire `FaceSelectMode`.
+fn paged_pathfinder_faces(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let element_ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    if element_ids.is_empty() {
+        return Ok(JsValue::from(false));
+    }
+    let faces = read_string_array(args.get_or_undefined(1), ctx);
+    let Some(mode) = from_js::<paged_mutate::FaceSelectMode>(args.get_or_undefined(2), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::PathfinderFaces {
+        element_ids,
+        faces,
+        mode,
+    }))
+}
+
+// ------------------------------------- opacity masks & text on a path
+
+/// `paged.applyOpacityMask(targetId, maskId, options?)` — mask one
+/// element with another (`Mutation::ApplyOpacityMask`). `options` =
+/// `{ maskType?, invert? }`.
+fn paged_apply_opacity_mask(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let target = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let mask = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (Some(target_id), Some(mask_id)) = (parse_element_id(&target), parse_element_id(&mask))
+    else {
+        return Ok(JsValue::from(false));
+    };
+    let (mask_type, invert) = match args.get_or_undefined(2).as_object() {
+        Some(o) => (
+            prop_string(&o, "maskType", ctx),
+            prop_bool(&o, "invert", ctx),
+        ),
+        None => (None, None),
+    };
+    Ok(apply_bool(&Mutation::ApplyOpacityMask {
+        target_id,
+        mask_id,
+        mask_type,
+        invert,
+    }))
+}
+
+/// `paged.releaseOpacityMask(targetId)` (`Mutation::ReleaseOpacityMask`).
+fn paged_release_opacity_mask(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let target = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(target_id) = parse_element_id(&target) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::ReleaseOpacityMask { target_id }))
+}
+
+/// `paged.attachTextToPath(elementId, storyId, options?)` — run a story
+/// along a path (`Mutation::AttachTextToPath`). `options` =
+/// `{ pathTypeAlignment?, flipPathEffect?, startBracket?, endBracket? }`.
+fn paged_attach_text_to_path(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    let story_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let (path_type_alignment, flip_path_effect, start_bracket, end_bracket) =
+        match args.get_or_undefined(2).as_object() {
+            Some(o) => (
+                prop_string(&o, "pathTypeAlignment", ctx),
+                prop_string(&o, "flipPathEffect", ctx),
+                prop_f32(&o, "startBracket", ctx),
+                prop_f32(&o, "endBracket", ctx),
+            ),
+            None => (None, None, None, None),
+        };
+    Ok(apply_bool(&Mutation::AttachTextToPath {
+        element_id,
+        story_id,
+        path_type_alignment,
+        flip_path_effect,
+        start_bracket,
+        end_bracket,
+    }))
+}
+
+/// `paged.detachTextFromPath(elementId)` (`Mutation::DetachTextFromPath`).
+fn paged_detach_text_from_path(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(element_id) = parse_element_id(&id) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::DetachTextFromPath { element_id }))
+}
+
 // ---------------------------------------------------- fields & images
 
 /// `paged.insertField(storyId, offset, fieldKind)` — insert a field marker
@@ -1869,6 +2345,59 @@ fn paged_replace_image_bytes(
         Ok(mutation) => Ok(apply_bool(&mutation)),
         Err(_) => Ok(JsValue::from(false)),
     }
+}
+
+/// `paged.insertAnchoredFrame(storyId, offset, width, height, imageUri?)`
+/// — anchor a frame in the text at a story offset
+/// (`Mutation::InsertAnchoredFrame`); with `imageUri` the frame is
+/// created holding that image.
+fn paged_insert_anchored_frame(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let offset = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let width = args.get_or_undefined(2).to_number(ctx)? as f32;
+    let height = args.get_or_undefined(3).to_number(ctx)? as f32;
+    let image_uri = opt_string(args.get_or_undefined(4), ctx);
+    Ok(apply_bool(&Mutation::InsertAnchoredFrame {
+        story_id,
+        offset,
+        width,
+        height,
+        image_uri,
+    }))
+}
+
+/// `paged.insertHyperlink(storyId, start, end, url)` — make a character
+/// range a clickable link (`Mutation::InsertHyperlink`). The read side is
+/// `paged.collection("hyperlinks")` — NOT `paged.links()`, which is the
+/// placed-asset link list and stays empty here.
+fn paged_insert_hyperlink(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let start = args.get_or_undefined(1).to_number(ctx)? as u32;
+    let end = args.get_or_undefined(2).to_number(ctx)? as u32;
+    let url = args
+        .get_or_undefined(3)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::InsertHyperlink {
+        story_id,
+        start,
+        end,
+        url,
+    }))
 }
 
 // ---------------------------------------------------- tables
@@ -2641,6 +3170,65 @@ fn paged_layer_move(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     }))
 }
 
+/// `paged.layerSetVisible(layerId, visible)` (`Mutation::LayerSetVisible`).
+fn paged_layer_set_visible(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let visible = args.get_or_undefined(1).to_boolean();
+    Ok(apply_bool(&Mutation::LayerSetVisible { layer_id, visible }))
+}
+
+/// `paged.layerSetLocked(layerId, locked)` (`Mutation::LayerSetLocked`).
+fn paged_layer_set_locked(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let locked = args.get_or_undefined(1).to_boolean();
+    Ok(apply_bool(&Mutation::LayerSetLocked { layer_id, locked }))
+}
+
+/// `paged.layerSetPrintable(layerId, printable)`
+/// (`Mutation::LayerSetPrintable`).
+fn paged_layer_set_printable(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let printable = args.get_or_undefined(1).to_boolean();
+    Ok(apply_bool(&Mutation::LayerSetPrintable {
+        layer_id,
+        printable,
+    }))
+}
+
+/// `paged.layerSetName(layerId, name)` (`Mutation::LayerSetName`).
+fn paged_layer_set_name(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let layer_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::LayerSetName { layer_id, name }))
+}
+
 // ---------------------------------------------------- guides
 
 /// `paged.insertGuide(spreadId, orientation, position, pageIndex?)` —
@@ -2820,6 +3408,130 @@ fn paged_set_use_standard_lab_for_spots(
     Ok(apply_bool(&Mutation::SetUseStandardLabForSpots { enabled }))
 }
 
+// The nine colour-resource CRUD ops. Each `spec` argument is the wire
+// spec type verbatim (`SwatchSpec` / `GradientSpec` / `ColorGroupSpec`),
+// so a script names the same fields the editor's panels send and there
+// is no second spelling to learn.
+
+/// `paged.createSwatch(spec)` — returns the new swatch `Self` id, or
+/// `null` (`Mutation::CreateSwatch`).
+fn paged_create_swatch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let Some(spec) = from_js::<paged_mutate::SwatchSpec>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_new_self_id(
+        CollectionName::Swatches,
+        &Mutation::CreateSwatch { spec },
+    ))
+}
+
+/// `paged.editSwatch(swatchId, spec)` (`Mutation::EditSwatch`).
+fn paged_edit_swatch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let swatch_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(spec) = from_js::<paged_mutate::SwatchSpec>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::EditSwatch { swatch_id, spec }))
+}
+
+/// `paged.deleteSwatch(swatchId)` (`Mutation::DeleteSwatch`).
+fn paged_delete_swatch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let swatch_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteSwatch { swatch_id }))
+}
+
+/// `paged.createGradient(spec)` — returns the new gradient `Self` id, or
+/// `null` (`Mutation::CreateGradient`).
+fn paged_create_gradient(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let Some(spec) = from_js::<paged_mutate::GradientSpec>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_new_self_id(
+        CollectionName::Gradients,
+        &Mutation::CreateGradient { spec },
+    ))
+}
+
+/// `paged.editGradient(gradientId, spec)` (`Mutation::EditGradient`).
+fn paged_edit_gradient(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let gradient_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(spec) = from_js::<paged_mutate::GradientSpec>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::EditGradient { gradient_id, spec }))
+}
+
+/// `paged.deleteGradient(gradientId)` (`Mutation::DeleteGradient`).
+fn paged_delete_gradient(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let gradient_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteGradient { gradient_id }))
+}
+
+/// `paged.createColorGroup(spec)` — returns the new group `Self` id, or
+/// `null` (`Mutation::CreateColorGroup`).
+fn paged_create_color_group(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let Some(spec) = from_js::<paged_mutate::ColorGroupSpec>(args.get_or_undefined(0), ctx) else {
+        return Ok(JsValue::null());
+    };
+    Ok(apply_new_self_id(
+        CollectionName::ColorGroups,
+        &Mutation::CreateColorGroup { spec },
+    ))
+}
+
+/// `paged.editColorGroup(groupId, spec)` (`Mutation::EditColorGroup`).
+fn paged_edit_color_group(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let group_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(spec) = from_js::<paged_mutate::ColorGroupSpec>(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::EditColorGroup { group_id, spec }))
+}
+
+/// `paged.deleteColorGroup(groupId)` (`Mutation::DeleteColorGroup`).
+fn paged_delete_color_group(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let group_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteColorGroup { group_id }))
+}
+
 // ---------------------------------------------------- plugin metadata & batch
 
 /// `paged.setPluginMetadata(elemId, key, value?, caller?)` — write one
@@ -2965,6 +3677,22 @@ fn paged_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
 
 fn paged_layers(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.layers()).unwrap_or_default());
+    Ok(JsValue::from(js_string!(s)))
+}
+
+/// `paged.planarRegions([id, ...], point?)` — the planar arrangement of
+/// the named paths as a JSON `PlanarRegionsResult` (`found`, `faces`,
+/// `inputCount`, `complete`, `reason`). With `point` it answers only the
+/// face under it.
+///
+/// This is the READ half of `pathfinderFaces`: a face is addressed by
+/// the `id` this returns, so without it the verb ships with no way to
+/// name its argument.
+fn paged_planar_regions(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    let point = read_pair(args.get_or_undefined(1), ctx).map(|(x, y)| [x, y]);
+    let s =
+        with_model(|m| serde_json::to_string(&m.planar_regions(&ids, point)).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
 }
 

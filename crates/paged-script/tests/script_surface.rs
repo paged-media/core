@@ -21,19 +21,25 @@
 //! spec proves the wasm wire accepts it; nothing said whether a script
 //! could ask for it by name.
 //!
-//! It cannot, for 32 of the 117. That is not a small edge: it is the
+//! It could not, for 32 of the 117 when this file was written — the
 //! whole of swatch, gradient and colour-group CRUD, six of the seven
 //! pathfinder region verbs, both opacity-mask ops, text-on-a-path,
-//! hyperlinks, anchored frames, z-order and every layer attribute. It
-//! is also not hypothetical — the editor's own automation layer carries
-//! an `editor.mutate({op, args})` escape hatch whose comment says it
-//! exists "for content authoring on engines whose `paged.*` Boa lacks
-//! the authoring fns". This is that list, with a reason on every line
-//! and a ratchet that only lets it shrink.
+//! hyperlinks, anchored frames, z-order and every layer attribute. That
+//! was not hypothetical: the editor's own automation layer carries an
+//! `editor.mutate({op, args})` escape hatch whose comment says it exists
+//! "for content authoring on engines whose `paged.*` Boa lacks the
+//! authoring fns".
 //!
-//! A script is not BLOCKED on any of them: `paged.batch` deserialises
+//! Thirty-one of those are now named. What remains is ONE, and it is
+//! the only entry that was ever unlikely to want a fn: `BindCreated` is
+//! legal only as a batch child, so a standalone call could not mean
+//! anything. The distinction this file exists to keep is between a gap
+//! someone can close and a property of the surface — and the list is
+//! now entirely the second kind.
+//!
+//! A script was never BLOCKED on any of them: `paged.batch` deserialises
 //! raw wire ops, and `wire_vocabulary.rs` proves every one of the 117
-//! tags is accepted there. The gap is between naming a capability and
+//! tags is accepted there. The gap was between naming a capability and
 //! having to know the wire spelling to reach it — which is the
 //! difference between a surface and a hole in one.
 
@@ -45,73 +51,12 @@ use std::collections::BTreeSet;
 /// and lowering `BATCH_ONLY_COUNT` in the same commit. A new entry means
 /// an op shipped without a script surface and without a decision.
 const BATCH_ONLY: &[(&str, &str)] = &[
-    ("CreateSwatch",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("EditSwatch",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("DeleteSwatch",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("CreateGradient",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("EditGradient",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("DeleteGradient",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("CreateColorGroup",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("EditColorGroup",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("DeleteColorGroup",
-     "colour-resource CRUD has no `paged.*` fn at all: the editor drives swatches, gradients and colour groups from its panels, and a script must reach them through `paged.batch` knowing the wire spelling"),
-    ("PathfinderDivide",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderTrim",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderMerge",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderCrop",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderOutline",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderMinusBack",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("PathfinderFaces",
-     "only `pathfinderBoolean` is bridged; the seven REGION verbs never got a fn, so a script can boolean two paths but cannot divide, trim or take faces"),
-    ("ApplyOpacityMask",
-     "opacity masks are panel-only; no `paged.*` fn applies or releases one, though the wire op has been there since the mask lane shipped"),
-    ("ReleaseOpacityMask",
-     "opacity masks are panel-only; no `paged.*` fn applies or releases one, though the wire op has been there since the mask lane shipped"),
-    ("AttachTextToPath",
-     "text-on-a-path is panel-only; a script can create the path and the story but cannot marry them"),
-    ("DetachTextFromPath",
-     "text-on-a-path is panel-only; a script can create the path and the story but cannot marry them"),
-    ("LayerSetVisible",
-     "the layer ATTRIBUTE setters have no fn: a script can insert, remove and move a layer but cannot rename it or toggle its visible/lock/print flags — the same four the catalog cannot advertise as paths either, for a different reason"),
-    ("LayerSetLocked",
-     "the layer ATTRIBUTE setters have no fn: a script can insert, remove and move a layer but cannot rename it or toggle its visible/lock/print flags — the same four the catalog cannot advertise as paths either, for a different reason"),
-    ("LayerSetPrintable",
-     "the layer ATTRIBUTE setters have no fn: a script can insert, remove and move a layer but cannot rename it or toggle its visible/lock/print flags — the same four the catalog cannot advertise as paths either, for a different reason"),
-    ("LayerSetName",
-     "the layer ATTRIBUTE setters have no fn: a script can insert, remove and move a layer but cannot rename it or toggle its visible/lock/print flags — the same four the catalog cannot advertise as paths either, for a different reason"),
-    ("InsertAnchoredFrame",
-     "anchored frames are inserted from the editor's Anchored panel; no `paged.*` fn takes the anchor spec"),
-    ("InsertHyperlink",
-     "hyperlink insertion is panel-only; the read side (`paged.links`) exists, the write side does not"),
-    ("ReorderElement",
-     "z-order is gesture- and menu-driven in the editor; a script has no fn to raise or lower an element"),
-    ("PasteInto",
-     "paste-into and release are clipboard verbs the editor owns; a script cannot nest one item inside another"),
-    ("ReleaseFrom",
-     "paste-into and release are clipboard verbs the editor owns; a script cannot nest one item inside another"),
-    ("ClosePath",
-     "the two path-topology verbs are pen-tool gestures; the path-point fns (`insert`/`remove`/`curveType`) are bridged and these are not"),
-    ("JoinPaths",
-     "the two path-topology verbs are pen-tool gestures; the path-point fns (`insert`/`remove`/`curveType`) are bridged and these are not"),
     ("BindCreated",
-     "an internal binding op the host issues after a create; a script never needs to name it, and this is the one entry here that is unlikely ever to want a fn"),];
+     "legal only as a BATCH CHILD by construction: it names an id the NEXT op in the same batch will mint, so a standalone `paged.bindCreated()` has nothing to bind and could not be given a meaning. The other thirty-one entries this list once held were gaps; this one is the shape of the surface."),
+];
 
 /// Pinned so the list cannot grow quietly.
-const BATCH_ONLY_COUNT: usize = 32;
+const BATCH_ONLY_COUNT: usize = 1;
 
 /// The ops the Boa bridge names in its own source. Derived, not listed:
 /// the bridge emits `Mutation::X` at the site that implements the fn,
@@ -199,7 +144,86 @@ fn every_reason_is_a_reason() {
 /// The bridge's own count, so the headline number in the module doc
 /// cannot drift from the code without a failure.
 #[test]
-fn the_script_surface_reaches_85_of_117() {
-    assert_eq!(ops_the_bridge_names().len(), 85);
+fn the_script_surface_reaches_116_of_117() {
+    assert_eq!(ops_the_bridge_names().len(), 116);
     assert_eq!(paged_wire::MUTATION_NAMES.len(), 117);
+}
+
+/// The names the bridge actually installs, read out of `install_bridge`
+/// itself. Every registration is one `.function(guarded(f),
+/// js_string!("name"), n)` call, so the first string literal in each
+/// `.function(` chunk IS the name — derived, never a second list.
+fn functions_the_bridge_installs() -> BTreeSet<String> {
+    let src = include_str!("../src/lib.rs");
+    let start = src
+        .find("fn install_bridge")
+        .expect("install_bridge moved or was renamed");
+    let end = src[start..]
+        .find("\n}\n")
+        .map(|i| start + i)
+        .expect("install_bridge has no end");
+    let body = &src[start..end];
+
+    // The two objects are built in order: everything before the `paged`
+    // global registration belongs to `paged.`, everything after to
+    // `console.`.
+    let split = body
+        .find("register_global_property(js_string!(\"paged\")")
+        .expect("the paged global is registered by name");
+
+    let mut out = BTreeSet::new();
+    for (offset, chunk) in body.match_indices(".function(") {
+        let rest = &body[offset..];
+        let Some(open) = rest.find("js_string!(\"") else {
+            continue;
+        };
+        let after = &rest[open + "js_string!(\"".len()..];
+        let Some(close) = after.find('"') else {
+            continue;
+        };
+        let name = &after[..close];
+        let prefix = if offset < split { "paged" } else { "console" };
+        out.insert(format!("{prefix}.{name}"));
+        let _ = chunk;
+    }
+    out
+}
+
+/// The catalog is the CONTRACT every generated consumer reads — the docs
+/// site's scripting pages, plugin-sdk's vendored copy, the completeness
+/// gate's `paged.*` roster. It carried a hand-written list of host
+/// functions with nothing comparing it to the bridge, which is a fourth
+/// vocabulary of the kind this campaign has been collapsing: the day
+/// thirty-one fns were added it would have gone on advertising the old
+/// hundred and nine, and every one of those consumers would have been
+/// wrong together.
+#[test]
+fn the_catalog_names_exactly_the_functions_the_bridge_installs() {
+    let installed = functions_the_bridge_installs();
+    let catalogued: BTreeSet<String> = paged_introspect::api_catalog()
+        .host_functions
+        .iter()
+        .map(|f| f.name.to_string())
+        .collect();
+
+    assert!(
+        installed.len() > 100,
+        "only {} functions extracted from install_bridge — the extractor is broken, \
+         not the bridge",
+        installed.len()
+    );
+
+    let missing: Vec<&String> = installed.difference(&catalogued).collect();
+    assert!(
+        missing.is_empty(),
+        "installed but not in the catalog — a script can call these and no generated \
+         consumer knows they exist: {missing:?}"
+    );
+
+    let phantom: Vec<&String> = catalogued.difference(&installed).collect();
+    assert!(
+        phantom.is_empty(),
+        "advertised by the catalog and not installed — a documented call that throws: \
+         {phantom:?}"
+    );
 }

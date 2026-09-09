@@ -304,8 +304,76 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),
         f!("paged.clearSelection", "()", "bool", "write", "Clear the element selection."),
         f!("paged.setContentSelection", "({storyId,start,end} | null)", "bool", "write", "Set or clear the text caret/range."),
+        // --- z-order & nesting ---
+        f!("paged.reorderElement", "(id, target)", "bool", "author",
+           "Raise or lower an element in its parent's z-order. target = front | back | forward | backward | {index: n} (n = the final slot, 0 = backmost)."),
+        f!("paged.pasteInto", "(containerId, childId)", "bool", "author",
+           "Nest an existing item inside a container frame."),
+        f!("paged.releaseFrom", "(childId)", "bool", "author",
+           "Lift a nested item back out of its container (inverse of pasteInto)."),
+        // --- path topology ---
+        f!("paged.closePath", "(id, subpath?)", "bool", "author",
+           "Close an open contour; subpath defaults to the whole path."),
+        f!("paged.joinPaths", "(id, otherId)", "bool", "author",
+           "Weld two open paths into one."),
+        // --- pathfinder region verbs ---
+        f!("paged.pathfinderDivide", "([id, ...])", "bool", "author",
+           "Divide the selection into its planar regions."),
+        f!("paged.pathfinderTrim", "([id, ...])", "bool", "author",
+           "Trim hidden parts of the lower shapes away."),
+        f!("paged.pathfinderMerge", "([id, ...])", "bool", "author",
+           "Merge adjacent same-paint regions of the selection."),
+        f!("paged.pathfinderCrop", "([id, ...])", "bool", "author",
+           "Crop the selection to the topmost shape."),
+        f!("paged.pathfinderOutline", "([id, ...])", "bool", "author",
+           "Reduce the selection to its outlined edges."),
+        f!("paged.pathfinderMinusBack", "([id, ...])", "bool", "author",
+           "Subtract the shapes behind from the frontmost one."),
+        f!("paged.pathfinderFaces", "([id, ...], [faceId, ...], mode)", "bool", "author",
+           "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."),
+        f!("paged.planarRegions", "([id, ...], [x, y]?)", "PlanarRegionsResult JSON", "read",
+           "The planar arrangement of the named paths: found, faces (each with an id), inputCount, complete, reason. With a point, only the face under it. This is how a script names a face for pathfinderFaces."),
+        // --- opacity masks & text on a path ---
+        f!("paged.applyOpacityMask", "(targetId, maskId, {maskType?, invert?}?)", "bool", "author",
+           "Mask one element with another."),
+        f!("paged.releaseOpacityMask", "(targetId)", "bool", "author",
+           "Remove an element's opacity mask."),
+        f!("paged.attachTextToPath", "(id, storyId, {pathTypeAlignment?, flipPathEffect?, startBracket?, endBracket?}?)", "bool", "author",
+           "Run a story along a path."),
+        f!("paged.detachTextFromPath", "(id)", "bool", "author",
+           "Take a story back off its path."),
+        // --- anchored frames & hyperlinks ---
+        f!("paged.insertAnchoredFrame", "(storyId, offset, width, height, imageUri?)", "bool", "author",
+           "Anchor a frame in the text at a story offset; with imageUri the frame is created holding that image."),
+        f!("paged.insertHyperlink", "(storyId, start, end, url)", "bool", "author",
+           "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."),
+        // --- layer attributes ---
+        f!("paged.layerSetVisible", "(layerId, visible)", "bool", "write", "Show or hide a layer."),
+        f!("paged.layerSetLocked", "(layerId, locked)", "bool", "write", "Lock or unlock a layer."),
+        f!("paged.layerSetPrintable", "(layerId, printable)", "bool", "write",
+           "Include a layer in output, or hold it back."),
+        f!("paged.layerSetName", "(layerId, name)", "bool", "write", "Rename a layer."),
+        // --- colour-resource CRUD ---
+        f!("paged.createSwatch", "(spec)", "string (created id) | null", "author",
+           "Create a swatch from a SwatchSpec ({space, value: [...], name?, model?, tint?}); returns its selfId."),
+        f!("paged.editSwatch", "(swatchId, spec)", "bool", "author", "Replace a swatch's definition."),
+        f!("paged.deleteSwatch", "(swatchId)", "bool", "author", "Delete a swatch."),
+        f!("paged.createGradient", "(spec)", "string (created id) | null", "author",
+           "Create a gradient from a GradientSpec ({kind: \"Linear\"|\"Radial\", stops: [...], name?}); returns its selfId."),
+        f!("paged.editGradient", "(gradientId, spec)", "bool", "author", "Replace a gradient's definition."),
+        f!("paged.deleteGradient", "(gradientId)", "bool", "author", "Delete a gradient."),
+        f!("paged.createColorGroup", "(spec)", "string (created id) | null", "author",
+           "Create a colour group from a ColorGroupSpec; returns its selfId."),
+        f!("paged.editColorGroup", "(groupId, spec)", "bool", "author", "Replace a colour group's definition."),
+        f!("paged.deleteColorGroup", "(groupId)", "bool", "author", "Delete a colour group."),
         // --- console (captured into the run output) ---
-        f!("console.log", "(...)", "undefined", "console", "Append a line to the captured output log (also warn/error/info)."),
+        // All four are declared, not folded into one: a generated
+        // consumer that lists the catalog was advertising a `console`
+        // with a single member while the bridge installs four.
+        f!("console.log", "(...)", "undefined", "console", "Append a line to the captured output log."),
+        f!("console.warn", "(...)", "undefined", "console", "Append a warn-level line to the captured output log."),
+        f!("console.error", "(...)", "undefined", "console", "Append an error-level line to the captured output log."),
+        f!("console.info", "(...)", "undefined", "console", "Append an info-level line to the captured output log."),
     ]
 }
 

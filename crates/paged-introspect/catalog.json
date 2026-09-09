@@ -757,11 +757,256 @@
       "summary": "Set or clear the text caret/range."
     },
     {
+      "name": "paged.reorderElement",
+      "params": "(id, target)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Raise or lower an element in its parent's z-order. target = front | back | forward | backward | {index: n} (n = the final slot, 0 = backmost)."
+    },
+    {
+      "name": "paged.pasteInto",
+      "params": "(containerId, childId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Nest an existing item inside a container frame."
+    },
+    {
+      "name": "paged.releaseFrom",
+      "params": "(childId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Lift a nested item back out of its container (inverse of pasteInto)."
+    },
+    {
+      "name": "paged.closePath",
+      "params": "(id, subpath?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Close an open contour; subpath defaults to the whole path."
+    },
+    {
+      "name": "paged.joinPaths",
+      "params": "(id, otherId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Weld two open paths into one."
+    },
+    {
+      "name": "paged.pathfinderDivide",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Divide the selection into its planar regions."
+    },
+    {
+      "name": "paged.pathfinderTrim",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Trim hidden parts of the lower shapes away."
+    },
+    {
+      "name": "paged.pathfinderMerge",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Merge adjacent same-paint regions of the selection."
+    },
+    {
+      "name": "paged.pathfinderCrop",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Crop the selection to the topmost shape."
+    },
+    {
+      "name": "paged.pathfinderOutline",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Reduce the selection to its outlined edges."
+    },
+    {
+      "name": "paged.pathfinderMinusBack",
+      "params": "([id, ...])",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Subtract the shapes behind from the frontmost one."
+    },
+    {
+      "name": "paged.pathfinderFaces",
+      "params": "([id, ...], [faceId, ...], mode)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."
+    },
+    {
+      "name": "paged.planarRegions",
+      "params": "([id, ...], [x, y]?)",
+      "returns": "PlanarRegionsResult JSON",
+      "kind": "read",
+      "summary": "The planar arrangement of the named paths: found, faces (each with an id), inputCount, complete, reason. With a point, only the face under it. This is how a script names a face for pathfinderFaces."
+    },
+    {
+      "name": "paged.applyOpacityMask",
+      "params": "(targetId, maskId, {maskType?, invert?}?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Mask one element with another."
+    },
+    {
+      "name": "paged.releaseOpacityMask",
+      "params": "(targetId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove an element's opacity mask."
+    },
+    {
+      "name": "paged.attachTextToPath",
+      "params": "(id, storyId, {pathTypeAlignment?, flipPathEffect?, startBracket?, endBracket?}?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Run a story along a path."
+    },
+    {
+      "name": "paged.detachTextFromPath",
+      "params": "(id)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Take a story back off its path."
+    },
+    {
+      "name": "paged.insertAnchoredFrame",
+      "params": "(storyId, offset, width, height, imageUri?)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Anchor a frame in the text at a story offset; with imageUri the frame is created holding that image."
+    },
+    {
+      "name": "paged.insertHyperlink",
+      "params": "(storyId, start, end, url)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."
+    },
+    {
+      "name": "paged.layerSetVisible",
+      "params": "(layerId, visible)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Show or hide a layer."
+    },
+    {
+      "name": "paged.layerSetLocked",
+      "params": "(layerId, locked)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Lock or unlock a layer."
+    },
+    {
+      "name": "paged.layerSetPrintable",
+      "params": "(layerId, printable)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Include a layer in output, or hold it back."
+    },
+    {
+      "name": "paged.layerSetName",
+      "params": "(layerId, name)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Rename a layer."
+    },
+    {
+      "name": "paged.createSwatch",
+      "params": "(spec)",
+      "returns": "string (created id) | null",
+      "kind": "author",
+      "summary": "Create a swatch from a SwatchSpec ({space, value: [...], name?, model?, tint?}); returns its selfId."
+    },
+    {
+      "name": "paged.editSwatch",
+      "params": "(swatchId, spec)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Replace a swatch's definition."
+    },
+    {
+      "name": "paged.deleteSwatch",
+      "params": "(swatchId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a swatch."
+    },
+    {
+      "name": "paged.createGradient",
+      "params": "(spec)",
+      "returns": "string (created id) | null",
+      "kind": "author",
+      "summary": "Create a gradient from a GradientSpec ({kind: \"Linear\"|\"Radial\", stops: [...], name?}); returns its selfId."
+    },
+    {
+      "name": "paged.editGradient",
+      "params": "(gradientId, spec)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Replace a gradient's definition."
+    },
+    {
+      "name": "paged.deleteGradient",
+      "params": "(gradientId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a gradient."
+    },
+    {
+      "name": "paged.createColorGroup",
+      "params": "(spec)",
+      "returns": "string (created id) | null",
+      "kind": "author",
+      "summary": "Create a colour group from a ColorGroupSpec; returns its selfId."
+    },
+    {
+      "name": "paged.editColorGroup",
+      "params": "(groupId, spec)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Replace a colour group's definition."
+    },
+    {
+      "name": "paged.deleteColorGroup",
+      "params": "(groupId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a colour group."
+    },
+    {
       "name": "console.log",
       "params": "(...)",
       "returns": "undefined",
       "kind": "console",
-      "summary": "Append a line to the captured output log (also warn/error/info)."
+      "summary": "Append a line to the captured output log."
+    },
+    {
+      "name": "console.warn",
+      "params": "(...)",
+      "returns": "undefined",
+      "kind": "console",
+      "summary": "Append a warn-level line to the captured output log."
+    },
+    {
+      "name": "console.error",
+      "params": "(...)",
+      "returns": "undefined",
+      "kind": "console",
+      "summary": "Append an error-level line to the captured output log."
+    },
+    {
+      "name": "console.info",
+      "params": "(...)",
+      "returns": "undefined",
+      "kind": "console",
+      "summary": "Append an info-level line to the captured output log."
     }
   ],
   "idGrammar": [
