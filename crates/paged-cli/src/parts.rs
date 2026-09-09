@@ -50,6 +50,7 @@ pub enum PartsCommand {
     },
     /// Read one part's bytes.
     Read {
+        /// `.paged` container.
         doc: PathBuf,
         /// Part path inside the container.
         path: String,
@@ -66,6 +67,7 @@ pub enum PartsCommand {
     /// and changes nothing — a container write is not something to do
     /// by accident.
     Write {
+        /// `.paged` container.
         doc: PathBuf,
         /// Part path inside the container.
         path: String,

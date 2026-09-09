@@ -22,6 +22,7 @@
 //! existing exactly as it is while `paged session` speaks the same
 //! protocol from the same code.
 
+pub mod cli;
 pub mod diff;
 pub mod engine;
 pub mod export;

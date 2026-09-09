@@ -86,6 +86,7 @@ pub enum ReadCommand {
     StoryContent {
         #[command(flatten)]
         on: ReadTarget,
+        /// Story `Self` id.
         story_id: String,
     },
     /// Plugin placeholder fields the document carries.
@@ -109,6 +110,7 @@ pub enum ReadCommand {
         /// Channel values, repeatable and in `space` order.
         #[arg(long = "value", required = true)]
         value: Vec<f32>,
+        /// Tint percentage, 0..100.
         #[arg(long)]
         tint: Option<f32>,
         /// Process | Spot.
@@ -167,10 +169,14 @@ pub enum ReadCommand {
     MeasureText {
         #[command(flatten)]
         on: ReadTarget,
+        /// Registered family name (see `--fonts`).
         family: String,
+        /// The string to measure.
         text: String,
+        /// Point size to measure at.
         #[arg(long, default_value_t = 12.0)]
         size_pt: f32,
+        /// Style within the family, e.g. `Bold`.
         #[arg(long)]
         style: Option<String>,
     },
@@ -188,7 +194,9 @@ pub enum ReadCommand {
     FontFace {
         #[command(flatten)]
         on: ReadTarget,
+        /// Registered family name (see `--fonts`).
         family: String,
+        /// Style within the family, e.g. `Bold`.
         #[arg(long)]
         style: Option<String>,
         /// Write the bytes here.

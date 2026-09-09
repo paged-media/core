@@ -1,0 +1,3277 @@
+{
+  "about": "Open, author, render, export and verify paged documents.",
+  "binary": "paged",
+  "commands": [
+    {
+      "about": "Rasterise a page to PNG",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Page to render: a 1-based number or a page id. Default: 1",
+          "long": "page",
+          "name": "page",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "PAGE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Render every page; `-o` must then be a directory",
+          "long": "all",
+          "name": "all",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "ALL"
+          ]
+        },
+        {
+          "defaults": [
+            "144"
+          ],
+          "help": "Resolution. 72 makes one pixel one point",
+          "long": "dpi",
+          "name": "dpi",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DPI"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output PNG (or directory, with `--all`)",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "render",
+      "subcommands": []
+    },
+    {
+      "about": "Report what the engine made of a document",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Emit JSON instead of a table",
+          "long": "json",
+          "name": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "JSON"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "inspect",
+      "subcommands": []
+    },
+    {
+      "about": "Write the document out as IDML, `.paged`, or PDF",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [
+            "pdf"
+          ],
+          "help": "idml | paged | pdf",
+          "long": "format",
+          "name": "format",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FORMAT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output file",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [
+            "pdf17"
+          ],
+          "help": "\"pdf17\" (default) or \"pdfx4\". X-4 needs a resolvable output intent — give one here or let the document's profile serve",
+          "long": "standard",
+          "name": "standard",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "STANDARD"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output-intent profile NAME, resolved against what this run registered. Defaults to the working space",
+          "long": "output-intent",
+          "name": "output_intent",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_INTENT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Human-readable output condition for the OutputIntent dict",
+          "long": "output-condition",
+          "name": "output_condition",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_CONDITION"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Crop marks, registration marks, colour bars, page info",
+          "long": "marks",
+          "name": "marks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "MARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "0-based inclusive page range, e.g. `0-9`",
+          "long": "pages",
+          "name": "pages",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "export",
+      "subcommands": []
+    },
+    {
+      "about": "Author a document by running a `.js` file against it",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document to author into",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The script",
+          "long": null,
+          "name": "script",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "SCRIPT"
+          ]
+        },
+        {
+          "defaults": [
+            "60000"
+          ],
+          "help": "Wall-clock ceiling in milliseconds, or \"none\" to disable the deadline (the loop, recursion and stack guards still apply)",
+          "long": "timeout",
+          "name": "timeout",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "TIMEOUT"
+          ]
+        },
+        {
+          "defaults": [
+            "10000000"
+          ],
+          "help": "Loop-iteration ceiling",
+          "long": "max-loop-iterations",
+          "name": "max_loop_iterations",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "MAX_LOOP_ITERATIONS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the authored document here. The format follows the extension: .paged, .idml or .pdf",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Also rasterise a page of the result here",
+          "long": "render",
+          "name": "render",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE.png"
+          ]
+        },
+        {
+          "defaults": [
+            "1"
+          ],
+          "help": "Which page `--render` takes (1-based, or a page id)",
+          "long": "page",
+          "name": "page",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "PAGE"
+          ]
+        },
+        {
+          "defaults": [
+            "144"
+          ],
+          "help": "Render resolution",
+          "long": "dpi",
+          "name": "dpi",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DPI"
+          ]
+        },
+        {
+          "defaults": [
+            "pdf17"
+          ],
+          "help": "\"pdf17\" (default) or \"pdfx4\". X-4 needs a resolvable output intent — give one here or let the document's profile serve",
+          "long": "standard",
+          "name": "standard",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "STANDARD"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output-intent profile NAME, resolved against what this run registered. Defaults to the working space",
+          "long": "output-intent",
+          "name": "output_intent",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_INTENT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Human-readable output condition for the OutputIntent dict",
+          "long": "output-condition",
+          "name": "output_condition",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_CONDITION"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Crop marks, registration marks, colour bars, page info",
+          "long": "marks",
+          "name": "marks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "MARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "0-based inclusive page range, e.g. `0-9`",
+          "long": "pages",
+          "name": "pages",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "script",
+      "subcommands": []
+    },
+    {
+      "about": "Mint a blank document",
+      "args": [
+        {
+          "defaults": [
+            "letter"
+          ],
+          "help": "letter | legal | tabloid | a3 | a4 | a5, or WxH in points",
+          "long": "size",
+          "name": "size",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "SIZE"
+          ]
+        },
+        {
+          "defaults": [
+            "paged"
+          ],
+          "help": "idml | paged",
+          "long": "format",
+          "name": "format",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FORMAT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output file",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "new",
+      "subcommands": []
+    },
+    {
+      "about": "Emit the built-in corpus fixtures",
+      "args": [],
+      "longAbout": null,
+      "name": "gen",
+      "subcommands": [
+        {
+          "about": "Emit one built-in fixture",
+          "args": [
+            {
+              "defaults": [],
+              "help": "Fixture name; an unknown one lists them all",
+              "long": "sample",
+              "name": "sample",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "SAMPLE"
+              ]
+            },
+            {
+              "defaults": [
+                "corpus/generated"
+              ],
+              "help": "Output directory; the file lands at `<out>/<sample>.idml`",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "emit",
+          "subcommands": []
+        },
+        {
+          "about": "Emit every built-in fixture. Prefer this over a copied name list",
+          "args": [
+            {
+              "defaults": [
+                "corpus/generated"
+              ],
+              "help": "Output directory for the whole set",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "emit-all",
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "about": "Compare two PNGs — ΔE2000 and SSIM. Exits 1 when they differ beyond the budget",
+      "args": [
+        {
+          "defaults": [],
+          "help": "The reference, first — the order is load-bearing",
+          "long": null,
+          "name": "reference",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "REFERENCE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The candidate",
+          "long": null,
+          "name": "candidate",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "CANDIDATE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Emit the verdict as JSON instead of a line of prose",
+          "long": "json",
+          "name": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "JSON"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Also write a ΔE heatmap PNG here",
+          "long": "heatmap",
+          "name": "heatmap",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "HEATMAP"
+          ]
+        },
+        {
+          "defaults": [
+            "5"
+          ],
+          "help": "ΔE mapped to peak heatmap intensity",
+          "long": "heatmap-scale",
+          "name": "heatmap_scale",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "HEATMAP_SCALE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "diff",
+      "subcommands": []
+    },
+    {
+      "about": "Ask the engine one of its diagnostic questions",
+      "args": [],
+      "longAbout": "Ask the engine one of its diagnostic questions.\n\nSeventeen wire reads had no verb here; every one of them now prints the engine's own reply envelope, the same shape the NDJSON session emits and the editor receives.",
+      "name": "read",
+      "subcommands": [
+        {
+          "about": "Every `<Layer>`, with its visible / locked / printable flags",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "layers",
+          "subcommands": []
+        },
+        {
+          "about": "One typed document collection",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Collection name, in the wire spelling",
+              "long": null,
+              "name": "name",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME"
+              ]
+            }
+          ],
+          "longAbout": "One typed document collection.\n\nswatches | gradients | colorGroups | paragraphStyles | characterStyles | objectStyles | cellStyles | tableStyles | layers | spreads | pages | masterPages | links | articles | hyperlinks | bookmarks | crossReferences | conditions | conditionSets | fonts | indexTopics | inks | sections | stories",
+          "name": "collection",
+          "subcommands": []
+        },
+        {
+          "about": "The frames a story flows through, in order",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Story `Self` id (from `paged read collection <doc> stories`)",
+              "long": null,
+              "name": "story_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "STORY_ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "frame-chain",
+          "subcommands": []
+        },
+        {
+          "about": "A story's text content",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Story `Self` id",
+              "long": null,
+              "name": "story_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "STORY_ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "story-content",
+          "subcommands": []
+        },
+        {
+          "about": "Plugin placeholder fields the document carries",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "placeholders",
+          "subcommands": []
+        },
+        {
+          "about": "A swatch resolved to screen RGB through the colour settings",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Swatch `Self` id, e.g. `Color/Black`",
+              "long": null,
+              "name": "swatch_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "SWATCH_ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "color-preview",
+          "subcommands": []
+        },
+        {
+          "about": "Resolve arbitrary channel values through the document's profiles",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK | RGB | LAB | Gray",
+              "long": null,
+              "name": "space",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "SPACE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Channel values, repeatable and in `space` order",
+              "long": "value",
+              "name": "value",
+              "positional": false,
+              "repeatable": true,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "VALUE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Tint percentage, 0..100",
+              "long": "tint",
+              "name": "tint",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "TINT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Process | Spot",
+              "long": "model",
+              "name": "model",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "MODEL"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "color-compute",
+          "subcommands": []
+        },
+        {
+          "about": "A gradient's stops, resolved",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Gradient `Self` id",
+              "long": null,
+              "name": "gradient_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "GRADIENT_ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "gradient-detail",
+          "subcommands": []
+        },
+        {
+          "about": "Every property of one element — the Inspector's own read",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`kind:id` address, e.g. `textFrame:u12`",
+              "long": null,
+              "name": "id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "element-properties",
+          "subcommands": []
+        },
+        {
+          "about": "Bounds and transform of one or more elements",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`kind:id` addresses",
+              "long": null,
+              "name": "ids",
+              "positional": true,
+              "repeatable": true,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "IDS"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "element-geometry",
+          "subcommands": []
+        },
+        {
+          "about": "The leaf page items inside a group, recursively",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Group `Self` id (bare, not an address)",
+              "long": null,
+              "name": "group_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "GROUP_ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "group-leaves",
+          "subcommands": []
+        },
+        {
+          "about": "A path element's anchors, with their control handles",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`kind:id` address of a path-carrying element",
+              "long": null,
+              "name": "id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "path-anchors",
+          "subcommands": []
+        },
+        {
+          "about": "The planar arrangement of overlapping paths — the faces the pathfinder region verbs address",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`kind:id` addresses, front to back",
+              "long": null,
+              "name": "ids",
+              "positional": true,
+              "repeatable": true,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "IDS"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Answer only the face under this page point",
+              "long": "point",
+              "name": "point",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "X",
+                "Y"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "planar-regions",
+          "subcommands": []
+        },
+        {
+          "about": "Measure a string in a registered face",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Registered family name (see `--fonts`)",
+              "long": null,
+              "name": "family",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FAMILY"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "The string to measure",
+              "long": null,
+              "name": "text",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "TEXT"
+              ]
+            },
+            {
+              "defaults": [
+                "12"
+              ],
+              "help": "Point size to measure at",
+              "long": "size-pt",
+              "name": "size_pt",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "SIZE_PT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Style within the family, e.g. `Bold`",
+              "long": "style",
+              "name": "style",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "STYLE"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "measure-text",
+          "subcommands": []
+        },
+        {
+          "about": "The bytes of a placed image, as the engine holds them",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Element `Self` id of the frame holding the image",
+              "long": null,
+              "name": "element_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "ELEMENT_ID"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Write the bytes here (the reply's metadata still prints)",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": "o",
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "placed-asset",
+          "subcommands": []
+        },
+        {
+          "about": "The bytes of a registered font face",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Registered family name (see `--fonts`)",
+              "long": null,
+              "name": "family",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FAMILY"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Style within the family, e.g. `Bold`",
+              "long": "style",
+              "name": "style",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "STYLE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Write the bytes here",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": "o",
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "font-face",
+          "subcommands": []
+        },
+        {
+          "about": "Export the swatches as an Adobe `.ase` library",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Limit to one colour group",
+              "long": "group",
+              "name": "group",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "GROUP"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Write the `.ase` here",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "short": "o",
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "swatch-library",
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "about": "List, read and write a `.paged` container's content parts",
+      "args": [],
+      "longAbout": null,
+      "name": "parts",
+      "subcommands": [
+        {
+          "about": "List the parts under a path prefix",
+          "args": [
+            {
+              "defaults": [],
+              "help": "`.paged` container (an IDML package carries no parts)",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [
+                ""
+              ],
+              "help": "Prefix to list; empty lists everything",
+              "long": null,
+              "name": "prefix",
+              "positional": true,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "PREFIX"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "list",
+          "subcommands": []
+        },
+        {
+          "about": "Read one part's bytes",
+          "args": [
+            {
+              "defaults": [],
+              "help": "`.paged` container",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Part path inside the container",
+              "long": null,
+              "name": "path",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Write the bytes here instead of stdout",
+              "long": "out",
+              "name": "out",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": "o",
+              "takesValues": true,
+              "valueNames": [
+                "OUT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "read",
+          "subcommands": []
+        },
+        {
+          "about": "Write one part and save the container back",
+          "args": [
+            {
+              "defaults": [],
+              "help": "`.paged` container",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Part path inside the container",
+              "long": null,
+              "name": "path",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "File whose bytes become the part",
+              "long": null,
+              "name": "from",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FROM"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Name the writing caller, as a bundle adapter does",
+              "long": "caller",
+              "name": "caller",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "CALLER"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Save the container back to this path (or `--save` alone to overwrite the input)",
+              "long": "save",
+              "name": "save",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "SAVE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            }
+          ],
+          "longAbout": "Write one part and save the container back.\n\nThe write lands in the loaded model; `--save` is what puts it on disk. Without it the command reports what it would have written and changes nothing — a container write is not something to do by accident.",
+          "name": "write",
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "about": "Print the capability catalog — what this engine can be asked to do",
+      "args": [
+        {
+          "defaults": [],
+          "help": "One JSON line instead of an indented block",
+          "long": "compact",
+          "name": "compact",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "COMPACT"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "describe",
+      "subcommands": []
+    },
+    {
+      "about": "Print the document's verification digests",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "One JSON line instead of an indented block",
+          "long": "compact",
+          "name": "compact",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "COMPACT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "digest",
+      "subcommands": []
+    },
+    {
+      "about": "Speak the headless NDJSON engine protocol on stdin/stdout",
+      "args": [],
+      "longAbout": "Speak the headless NDJSON engine protocol on stdin/stdout.\n\nByte-for-byte the `paged-run` protocol, from the same code: a greeting line, then one JSON response per JSON request, in order. Hosts that already spawn `paged-run` need not change.",
+      "name": "session",
+      "subcommands": []
+    }
+  ],
+  "protocol": 62
+}
