@@ -295,6 +295,33 @@ fn emit(out: &mut impl Write, value: &Value) -> Result<()> {
     Ok(())
 }
 
+/// The verification oracle, in one place.
+///
+/// Per-page `DisplayList::digest()` is the GPU-faithful, backend-
+/// agnostic signal — the same display list the WebGPU backend
+/// rasterizes — so it is deterministic and free of CPU-vs-GPU drift.
+/// `combined` folds the pages order-sensitively into one document-level
+/// value; `stateHash` is the canonical pre-render scene hash, a second
+/// and independent equality signal.
+///
+/// Shared by the NDJSON `{"cmd":"digest"}` and the `paged digest`
+/// subcommand, so the two surfaces cannot answer the same question
+/// differently — which two copies of a hash fold eventually always do.
+pub fn digest_payload(m: &paged_canvas::CanvasModel) -> Value {
+    let mut page_digests = serde_json::Map::new();
+    let mut combined: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a basis
+    for page_id in m.page_ids() {
+        let digest = m.display_list_for_page(page_id).map_or(0, |dl| dl.digest());
+        combined = combined.wrapping_mul(0x0000_0100_0000_01b3) ^ digest;
+        page_digests.insert(page_id.0.clone(), json!(digest));
+    }
+    json!({
+        "pageDigests": page_digests,
+        "combined": combined,
+        "stateHash": hex(&m.current_state_hash()),
+    })
+}
+
 fn handle(live: &mut Live, req: Request) -> Result<Value> {
     match req {
         Request::Load {
@@ -426,25 +453,9 @@ fn handle(live: &mut Live, req: Request) -> Result<Value> {
             Ok(json!({ "ok": true, "pages": m.pages() }))
         }
         Request::Digest => {
-            let m = live.session.model()?;
-            // Per-page display-list digest = the GPU-faithful, backend-
-            // agnostic oracle (same display list the WebGPU backend draws).
-            // `combined` folds them order-sensitively into one document-
-            // level value; `stateHash` is the canonical pre-render scene
-            // hash for a second, independent equality signal.
-            let mut page_digests = serde_json::Map::new();
-            let mut combined: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a basis
-            for page_id in m.page_ids() {
-                let digest = m.display_list_for_page(page_id).map_or(0, |dl| dl.digest());
-                combined = combined.wrapping_mul(0x0000_0100_0000_01b3) ^ digest;
-                page_digests.insert(page_id.0.clone(), json!(digest));
-            }
-            Ok(json!({
-                "ok": true,
-                "pageDigests": page_digests,
-                "combined": combined,
-                "stateHash": hex(&m.current_state_hash()),
-            }))
+            let mut payload = digest_payload(live.session.model()?);
+            payload["ok"] = json!(true);
+            Ok(payload)
         }
         Request::Render {
             page,

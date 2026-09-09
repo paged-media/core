@@ -3899,61 +3899,25 @@ fn emit_console(level: &str, args: &[JsValue], ctx: &mut Context) {
 
 // ---------------------------------------------------------------- parsing
 
+/// The `kind:id` address grammar, which now lives in `paged-wire`
+/// beside `ElementId` — see [`paged_wire::ElementId::parse`]. It was
+/// forty lines here, private to this bridge, and the CLI became the
+/// second surface to need it.
 fn parse_element_id(s: &str) -> Option<paged_canvas::element_selection::ElementId> {
-    use paged_canvas::element_selection::ElementId;
-    let (kind, id) = s.split_once(':')?;
-    if id.is_empty() {
-        return None;
-    }
-    // SDK Phase 3 — `storyRange:Story/u1@0..6` addresses a character
-    // range. The id payload is `<story_id>@<start>..<end>` where
-    // start + end are unsigned character offsets and end > start.
-    if kind == "storyRange" || kind == "storyrange" {
-        let (story_id, range) = id.split_once('@')?;
-        if story_id.is_empty() {
-            return None;
-        }
-        let (start_s, end_s) = range.split_once("..")?;
-        let start: u32 = start_s.parse().ok()?;
-        let end: u32 = end_s.parse().ok()?;
-        if end <= start {
-            return None;
-        }
-        return Some(ElementId::StoryRange {
-            story_id: story_id.to_string(),
-            start,
-            end,
-        });
-    }
-    let id = id.to_string();
-    Some(match kind {
-        "textFrame" | "textframe" => ElementId::TextFrame(id),
-        "rectangle" | "rect" => ElementId::Rectangle(id),
-        "oval" => ElementId::Oval(id),
-        "polygon" => ElementId::Polygon(id),
-        "graphicLine" | "graphicline" => ElementId::GraphicLine(id),
-        "group" => ElementId::Group(id),
-        _ => return None,
-    })
+    paged_canvas::element_selection::ElementId::parse(s)
 }
 
-/// Inverse of `parse_element_id` for page-item variants: render an
-/// `ElementId` as the `kind:id` address a subsequent `paged.set` /
-/// `paged.inspect` accepts. The structural insert fns only ever mint a
-/// page item (TextFrame/Rectangle/Oval/Polygon/GraphicLine/Group), so the
-/// non-page-item variants fall back to the bare `raw_id` (not a round-trip
-/// address, but never produced here).
+/// Inverse of `parse_element_id`, with this bridge's own fallback for
+/// the two variants that have no address form.
+///
+/// `to_address` returns `None` for `Table` / `TableCell` deliberately —
+/// a lossy address is worse than none. Here the bare `raw_id` is the
+/// long-standing behaviour and is safe because the structural insert
+/// fns only ever mint a page item, so the fallback is unreachable in
+/// practice; keeping it means a future variant degrades rather than
+/// panicking.
 fn element_id_to_address(id: &paged_canvas::element_selection::ElementId) -> String {
-    use paged_canvas::element_selection::ElementId::*;
-    match id {
-        TextFrame(i) => format!("textFrame:{i}"),
-        Rectangle(i) => format!("rectangle:{i}"),
-        Oval(i) => format!("oval:{i}"),
-        Polygon(i) => format!("polygon:{i}"),
-        GraphicLine(i) => format!("graphicLine:{i}"),
-        Group(i) => format!("group:{i}"),
-        other => other.raw_id().to_string(),
-    }
+    id.to_address().unwrap_or_else(|| id.raw_id().to_string())
 }
 
 fn parse_property_path(s: &str) -> Option<paged_mutate::PropertyPath> {

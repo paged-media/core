@@ -132,6 +132,87 @@ impl ElementId {
         }
     }
 
+    /// Parse the `kind:id` ADDRESS form every text surface uses — the
+    /// string `paged.set` / `paged.inspect` take, the one the scripting
+    /// catalog's id grammar documents, and the one a CLI subcommand
+    /// accepts on the command line.
+    ///
+    /// It lives here, beside the variant, because it is the same
+    /// grammar for all of them. It was a private function in the Boa
+    /// bridge, which meant the second surface to need it would have
+    /// written a second copy that agreed by hand — the shape this
+    /// campaign has found four times.
+    ///
+    /// Accepted:
+    /// - `textFrame:<id>` (also `textframe`), `rectangle:<id>` (also
+    ///   `rect`), `oval:`, `polygon:`, `graphicLine:` (also
+    ///   `graphicline`), `group:`
+    /// - `storyRange:<storyId>@<start>..<end>` (also `storyrange`),
+    ///   half-open, `end > start`
+    ///
+    /// `Table` and `TableCell` have NO address form and never will
+    /// through this door: they are addressed structurally, by the
+    /// `(storyId, tableId[, row, col])` tuple the wire carries.
+    ///
+    /// `None` on anything else — this is user input, so a bad address
+    /// is an answer, never a panic.
+    pub fn parse(s: &str) -> Option<Self> {
+        let (kind, id) = s.split_once(':')?;
+        if id.is_empty() {
+            return None;
+        }
+        if kind == "storyRange" || kind == "storyrange" {
+            let (story_id, range) = id.split_once('@')?;
+            if story_id.is_empty() {
+                return None;
+            }
+            let (start_s, end_s) = range.split_once("..")?;
+            let start: u32 = start_s.parse().ok()?;
+            let end: u32 = end_s.parse().ok()?;
+            if end <= start {
+                return None;
+            }
+            return Some(ElementId::StoryRange {
+                story_id: story_id.to_string(),
+                start,
+                end,
+            });
+        }
+        let id = id.to_string();
+        Some(match kind {
+            "textFrame" | "textframe" => ElementId::TextFrame(id),
+            "rectangle" | "rect" => ElementId::Rectangle(id),
+            "oval" => ElementId::Oval(id),
+            "polygon" => ElementId::Polygon(id),
+            "graphicLine" | "graphicline" => ElementId::GraphicLine(id),
+            "group" => ElementId::Group(id),
+            _ => return None,
+        })
+    }
+
+    /// The inverse of [`ElementId::parse`], in the CANONICAL spelling
+    /// (the aliases parse but are never emitted).
+    ///
+    /// `None` for `Table` / `TableCell`, which have no address form —
+    /// deliberately not a lossy fallback, so a caller cannot hand out a
+    /// string that will not parse back.
+    pub fn to_address(&self) -> Option<String> {
+        Some(match self {
+            ElementId::TextFrame(id) => format!("textFrame:{id}"),
+            ElementId::Rectangle(id) => format!("rectangle:{id}"),
+            ElementId::Oval(id) => format!("oval:{id}"),
+            ElementId::Polygon(id) => format!("polygon:{id}"),
+            ElementId::GraphicLine(id) => format!("graphicLine:{id}"),
+            ElementId::Group(id) => format!("group:{id}"),
+            ElementId::StoryRange {
+                story_id,
+                start,
+                end,
+            } => format!("storyRange:{story_id}@{start}..{end}"),
+            ElementId::Table { .. } | ElementId::TableCell { .. } => return None,
+        })
+    }
+
     /// Short human-readable kind label used by the Inspector panel
     /// and scene tree. Matches the IDML element name conventionally
     /// shown to designers.
@@ -257,6 +338,99 @@ mod tests {
     }
     fn rect(id: &str) -> ElementId {
         ElementId::Rectangle(id.to_string())
+    }
+
+    /// Every canonical address round-trips, so a surface can hand an id
+    /// out and take it back.
+    #[test]
+    fn every_addressable_variant_round_trips() {
+        let cases = [
+            ElementId::TextFrame("u1".into()),
+            ElementId::Rectangle("u2".into()),
+            ElementId::Oval("u3".into()),
+            ElementId::Polygon("u4".into()),
+            ElementId::GraphicLine("u5".into()),
+            ElementId::Group("u6".into()),
+            ElementId::StoryRange {
+                story_id: "Story/u1".into(),
+                start: 0,
+                end: 6,
+            },
+        ];
+        for id in cases {
+            let address = id.to_address().expect("addressable");
+            assert_eq!(
+                ElementId::parse(&address),
+                Some(id.clone()),
+                "{address} did not parse back"
+            );
+        }
+    }
+
+    /// The two structural addresses have no textual form, and must not
+    /// get a lossy one — a string that will not parse back is worse
+    /// than no string.
+    #[test]
+    fn table_addresses_have_no_textual_form() {
+        assert_eq!(
+            ElementId::Table {
+                story_id: "Story/u1".into(),
+                table_id: "t1".into()
+            }
+            .to_address(),
+            None
+        );
+        assert_eq!(
+            ElementId::TableCell {
+                story_id: "Story/u1".into(),
+                table_id: "t1".into(),
+                row: 0,
+                col: 0
+            }
+            .to_address(),
+            None
+        );
+    }
+
+    /// The aliases parse and are never emitted.
+    #[test]
+    fn aliases_parse_to_the_canonical_variant() {
+        assert_eq!(
+            ElementId::parse("textframe:u1"),
+            Some(ElementId::TextFrame("u1".into()))
+        );
+        assert_eq!(
+            ElementId::parse("rect:u1"),
+            Some(ElementId::Rectangle("u1".into()))
+        );
+        assert_eq!(
+            ElementId::parse("graphicline:u1"),
+            Some(ElementId::GraphicLine("u1".into()))
+        );
+        assert_eq!(
+            ElementId::parse("storyrange:Story/u1@0..6"),
+            ElementId::parse("storyRange:Story/u1@0..6")
+        );
+    }
+
+    /// Bad input is an answer, not a panic — this grammar reads command
+    /// lines and script arguments.
+    #[test]
+    fn malformed_addresses_are_none_not_panics() {
+        for bad in [
+            "",
+            "textFrame",
+            "textFrame:",
+            ":u1",
+            "sprocket:u1",
+            "storyRange:@0..6",
+            "storyRange:Story/u1@6..0",
+            "storyRange:Story/u1@0..0",
+            "storyRange:Story/u1@x..6",
+            "storyRange:Story/u1",
+        ] {
+            assert_eq!(ElementId::parse(bad), None, "{bad:?} should not parse");
+        }
     }
 
     #[test]

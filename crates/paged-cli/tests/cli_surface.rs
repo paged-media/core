@@ -15,16 +15,26 @@
 //! Which of the engine's 62 message kinds this CLI can reach.
 //!
 //! The second column of the capability × surface matrix, after
-//! `paged-script`'s. The CLI is the surface furthest from the editor:
-//! it sends **11 of 62** kinds and issues exactly one `Mutate` of its
-//! own. That number was a survey finding; here it is a gate, with a
-//! sentence on every kind it does not send.
+//! `paged-script`'s. The CLI began at **11 of 62** kinds and one
+//! `Mutate` of its own. That number was a survey finding; here it is a
+//! gate, with a sentence on every kind it does not send.
 //!
 //! The distinction the reasons are for: "a command line has no pointer"
 //! is a property of the surface and will never change, while "a
 //! diagnostic read with no subcommand yet" is work someone can do. Both
 //! were the same silence before this file — a kind the CLI never named,
-//! for reasons nobody had written down.
+//! for reasons nobody had written down. Twenty of the second kind are
+//! now closed (`paged read`, `paged parts`), taking this to **31 of
+//! 62**, and what remains is almost entirely the first kind.
+//!
+//! **Why there is no `paged wire <json>`.** It would reach every
+//! remaining kind at a stroke, and it would be a second general door:
+//! `paged session` already speaks the whole protocol, one message per
+//! line, from the same `WorkerCore::dispatch`. A typed subcommand earns
+//! its place by being the ergonomic form of a question worth asking; a
+//! raw-JSON escape hatch beside a raw-JSON session is duplication, and
+//! it would also not move this gate, which counts the kinds the CLI's
+//! own source NAMES.
 //!
 //! The population is the deserializer's, not a list kept here: serde
 //! names every `kind` it accepts in its "unknown variant" message, so a
@@ -68,52 +78,12 @@ const UNREACHED: &[(&str, &str)] = &[
      "interaction: a command line has no pointer and no caret, and these answer a live canvas's questions about where one is"),
     ("RequestNearestPathPoint",
      "interaction: a command line has no pointer and no caret, and these answer a live canvas's questions about where one is"),
-    ("RequestLayers",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestCollection",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestFrameChain",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestStoryContent",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestDocumentPlaceholders",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestColorPreview",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestColorCompute",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestGradientDetail",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestElementProperties",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestElementGeometry",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestGroupLeaves",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestPathAnchors",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestPlanarRegions",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestMeasureText",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestPlacedAssetBytes",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("RequestFontFaceBytes",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
-    ("ExportSwatchLibrary",
-     "a diagnostic read with no subcommand yet: the engine answers it and the CLI has no verb that asks, which is a gap in this surface rather than a property of it"),
     ("RequestDocumentMeta",
      "answered through a different door: `paged inspect` and the NDJSON `inspect` read these off `Session::model`, which is the sanctioned path for a pure read with no state to consume"),
     ("RequestSceneTree",
      "answered through a different door: `paged inspect` and the NDJSON `inspect` read these off `Session::model`, which is the sanctioned path for a pure read with no state to consume"),
     ("RequestPage",
      "answered through a different door: `paged inspect` and the NDJSON `inspect` read these off `Session::model`, which is the sanctioned path for a pure read with no state to consume"),
-    ("WritePagedPart",
-     "container parts are unreachable: the README claims they come for free because they ride the model through an export, but nothing in this crate can address one, so plugin-owned document state is opaque here"),
-    ("ReadPagedPart",
-     "container parts are unreachable: the README claims they come for free because they ride the model through an export, but nothing in this crate can address one, so plugin-owned document state is opaque here"),
-    ("ListPagedParts",
-     "container parts are unreachable: the README claims they come for free because they ride the model through an export, but nothing in this crate can address one, so plugin-owned document state is opaque here"),
     ("Undo",
      "reachable inside a script through `paged.undo` / `paged.redo`; there is no CLI verb, because a subcommand is one process and has nothing to undo across invocations"),
     ("Redo",
@@ -139,10 +109,11 @@ const UNREACHED: &[(&str, &str)] = &[
     ("ExportPdfCancel",
      "only an interactive export dialog cancels a PDF mid-run; a subcommand either finishes or exits"),
     ("ClearFontRegistry",
-     "no CLI verb: every subcommand builds a fresh `Session`, so a new process IS the reset this kind performs"),];
+     "no CLI verb: every subcommand builds a fresh `Session`, so a new process IS the reset this kind performs"),
+];
 
 /// Pinned so the list cannot grow quietly.
-const UNREACHED_COUNT: usize = 51;
+const UNREACHED_COUNT: usize = 31;
 
 /// Every `kind` the wire accepts, read out of serde's own error rather
 /// than kept as a list here — the same trick `wire_vocabulary.rs` uses
@@ -276,7 +247,7 @@ fn every_reason_is_a_reason() {
 
 /// The headline in the module doc, pinned against the code.
 #[test]
-fn the_cli_reaches_11_of_62() {
-    assert_eq!(kinds_the_cli_sends().len(), 11);
+fn the_cli_reaches_31_of_62() {
+    assert_eq!(kinds_the_cli_sends().len(), 31);
     assert_eq!(every_kind().len(), 62);
 }

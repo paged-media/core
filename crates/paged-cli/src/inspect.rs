@@ -101,3 +101,53 @@ pub fn run(doc: &Path, opts: &DocumentOptions, as_json: bool) -> Result<()> {
     }
     Ok(())
 }
+
+/// `paged describe` — the capability catalog, with no document.
+///
+/// The catalog is what a consumer (or a model writing a script) reads
+/// to learn the surface: the host functions, the id grammar, the
+/// settable property paths, the wire ops, the constraints. It was
+/// reachable only by speaking NDJSON at `paged session` — so the thing
+/// that tells you what the CLI can do was the one thing the CLI could
+/// not tell you.
+///
+/// Same `api_catalog()` the session's `{"cmd":"describe"}` answers with,
+/// and the same `protocol` beside it so a consumer can spot a stale
+/// catalog.
+pub fn describe(compact: bool) -> Result<()> {
+    let payload = json!({
+        "protocol": paged_canvas::channel::PROTOCOL_VERSION.0,
+        "catalog": paged_script::api_catalog(),
+    });
+    println!(
+        "{}",
+        if compact {
+            serde_json::to_string(&payload)?
+        } else {
+            serde_json::to_string_pretty(&payload)?
+        }
+    );
+    Ok(())
+}
+
+/// `paged digest` — the verification oracle at subcommand level.
+///
+/// `paged inspect` already prints the per-page digests as a column of a
+/// human table; this is the machine form, byte-identical to the
+/// session's `{"cmd":"digest"}` because both call
+/// [`crate::session::digest_payload`]. A `make` rule comparing two
+/// builds wants this, not a table.
+pub fn digest(doc: &Path, opts: &DocumentOptions, compact: bool) -> Result<()> {
+    let mut session = Session::new();
+    opts.open(&mut session, doc)?;
+    let payload = crate::session::digest_payload(session.model()?);
+    println!(
+        "{}",
+        if compact {
+            serde_json::to_string(&payload)?
+        } else {
+            serde_json::to_string_pretty(&payload)?
+        }
+    );
+    Ok(())
+}

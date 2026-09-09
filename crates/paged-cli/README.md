@@ -34,6 +34,10 @@ paged export  <doc> --format idml|paged|pdf -o <file>
 paged new     [--size letter|a4|WxH] [--format paged|idml] -o <file>
 paged diff    <reference.png> <candidate.png> [--json] [--heatmap f.png]
 paged gen     emit --sample NAME | emit-all [--out DIR]
+paged read    <question> <doc> [args]     # the engine's diagnostic reads
+paged parts   list|read|write <doc> …     # a .paged container's content parts
+paged describe [--compact]                # the capability catalog, no document
+paged digest  <doc> [--compact]           # the verification oracle, as JSON
 paged session                       # the paged-run NDJSON protocol
 ```
 
@@ -113,6 +117,73 @@ instead:
 ```bash
 paged script doc.paged build.js -o out.pdf --render p1.png
 ```
+
+## `paged read` — the diagnostic questions
+
+Seventeen of the engine's wire reads had no verb here, so a question the
+editor's Inspector asks routinely could not be asked from a shell. Each
+is now a subcommand, and each prints **the engine's own reply
+envelope** — `{"kind": …, "payload": …}`, the same shape the NDJSON
+session emits and the editor receives, so `jq` and a plugin are reading
+one thing:
+
+```bash
+paged read layers doc.paged
+paged read collection doc.paged swatches
+paged read story-content doc.paged Story/u0
+paged read element-properties doc.paged textFrame:u12
+paged read element-geometry doc.paged textFrame:u12 oval:u3
+paged read planar-regions doc.paged oval:u2 oval:u3 [--point X Y]
+paged read color-compute doc.paged CMYK --value 0 --value 100 --value 100 --value 0
+paged read font-face doc.paged Inter -o face.ttf --fonts corpus/fonts
+paged read swatch-library doc.paged -o swatches.ase
+```
+
+`--compact` gives one JSON line for a pipe. Element arguments take the
+`kind:id` address `paged.set` takes — the grammar is `paged-wire`'s, so
+the CLI and the script bridge cannot disagree about what an address is.
+Reads that serve BYTES (`font-face`, `placed-asset`, `swatch-library`)
+write them with `-o` and print the metadata; a read that finds nothing
+writes no file and exits non-zero, because an empty file is what a
+successful read of an empty thing looks like.
+
+**There is deliberately no `paged wire <json>`.** It would reach every
+remaining message kind at a stroke and be a second general door:
+`paged session` already speaks the whole protocol, one message per line,
+from the same `WorkerCore::dispatch`.
+
+## `paged parts` — the container
+
+A `.paged` file is a ZIP that is also a valid IDML package, carrying
+native content parts beside the model. The engine has had the door since
+protocol 51; this is it on a command line.
+
+```bash
+paged parts list  doc.paged [prefix]
+paged parts read  doc.paged paged/plugins/web/page.html [-o out.html]
+paged parts write doc.paged paged/my-tool/data.json data.json \
+      --caller my-tool --save out.paged
+```
+
+Two rules travel with the door rather than being re-stated here. A write
+lands in the loaded model and **`--save` is what puts it on disk** — a
+container write is not something to do by accident. And the C-34 caller
+gate applies from the CLI exactly as from a bundle: `--caller my-tool`
+may only write `paged/my-tool/…`.
+
+## `paged describe` and `paged digest`
+
+`describe` prints the capability catalog — host functions, the id
+grammar, the settable property paths, the wire ops, the constraints —
+with no document. It is what a consumer (or a model writing a script)
+reads to learn the surface, and until now the only way to get it was to
+speak NDJSON at `paged session`: the thing that tells you what the CLI
+can do was the one thing the CLI could not tell you.
+
+`digest` is the verification oracle in machine form. `paged inspect`
+already shows the per-page digests as a column of a human table; this
+prints `{pageDigests, combined, stateHash}`, byte-identical to the
+session's `{"cmd":"digest"}` because both call the same function.
 
 ## `paged session`
 

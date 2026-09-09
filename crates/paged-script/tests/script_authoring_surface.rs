@@ -49,10 +49,13 @@ fn colour_resources_are_created_edited_and_deleted_by_name() {
     let mut m = blank();
     let out = run(
         &mut m,
-        r#"const sw = paged.createSwatch({ space: 'CMYK', value: [0, 1, 1, 0], name: 'Vermilion' });
+        r#"// CMYK channels are 0..100 on this wire, not 0..1 — [0, 1, 1, 0] is a
+// legal spec that paints 1% ink, so a test written at the wrong scale
+// still passes and still teaches the wrong thing.
+const sw = paged.createSwatch({ space: 'CMYK', value: [0, 100, 100, 0], name: 'Vermilion' });
 console.log('swatch', sw);
 console.log('named', JSON.parse(paged.swatches()).some(s => s.name === 'Vermilion'));
-console.log('edited', paged.editSwatch(sw, { space: 'CMYK', value: [0, 0.5, 1, 0], name: 'Amber' }));
+console.log('edited', paged.editSwatch(sw, { space: 'CMYK', value: [0, 50, 100, 0], name: 'Amber' }));
 console.log('renamed', JSON.parse(paged.swatches()).some(s => s.name === 'Amber'));
 
 const gr = paged.createGradient({ kind: 'Linear', name: 'Dawn', stops: [

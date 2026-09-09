@@ -126,6 +126,36 @@ enum Command {
         #[arg(long, default_value_t = 5.0)]
         heatmap_scale: f64,
     },
+    /// Ask the engine one of its diagnostic questions.
+    ///
+    /// Seventeen wire reads had no verb here; every one of them now
+    /// prints the engine's own reply envelope, the same shape the
+    /// NDJSON session emits and the editor receives.
+    Read {
+        #[command(subcommand)]
+        what: paged_cli::read::ReadCommand,
+    },
+    /// List, read and write a `.paged` container's content parts.
+    Parts {
+        #[command(subcommand)]
+        what: paged_cli::parts::PartsCommand,
+    },
+    /// Print the capability catalog — what this engine can be asked to do.
+    Describe {
+        /// One JSON line instead of an indented block.
+        #[arg(long)]
+        compact: bool,
+    },
+    /// Print the document's verification digests.
+    Digest {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// One JSON line instead of an indented block.
+        #[arg(long)]
+        compact: bool,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// Speak the headless NDJSON engine protocol on stdin/stdout.
     ///
     /// Byte-for-byte the `paged-run` protocol, from the same code: a
@@ -185,6 +215,14 @@ fn main() -> Result<()> {
                 std::process::exit(1)
             }
         }
+        Command::Read { what } => paged_cli::read::run(&what),
+        Command::Parts { what } => paged_cli::parts::run(&what),
+        Command::Describe { compact } => paged_cli::inspect::describe(compact),
+        Command::Digest {
+            doc,
+            compact,
+            assets,
+        } => paged_cli::inspect::digest(&doc, &assets, compact),
         Command::Session => paged_cli::session::run(),
     }
 }

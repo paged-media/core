@@ -29,6 +29,8 @@ pub mod gen;
 pub mod inspect;
 pub mod new;
 pub mod options;
+pub mod parts;
+pub mod read;
 pub mod render;
 pub mod script;
 pub mod session;
