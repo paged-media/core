@@ -84,120 +84,14 @@
 use std::io::{self, BufRead, Write};
 
 use anyhow::{anyhow, Context as _, Result};
-use paged_canvas::{CanvasModel, CanvasOptions, PageId};
+use paged_canvas::channel::{MainToWorkerKind, WorkerToMainKind};
+use paged_canvas::PageId;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// The default-document id; the session is single-document so the id is
-/// cosmetic (surfaces only in diagnostics).
-const DOC_ID: &str = "paged-run";
-
-/// Fonts and colour profiles registered for the session.
-///
-/// They live BESIDE the model, not in it, and are folded into
-/// `CanvasOptions` at every load — the same rule `WorkerCore` holds
-/// (`dispatch.rs`: the registries survive across loads and are cloned
-/// into the options at `LoadDocument`). That is why `register-font`
-/// takes effect on the next load rather than the current document: the
-/// registry seeds shaping when the document is built, and a later
-/// registration cannot retroactively shape text that has already been
-/// laid out.
-#[derive(Default)]
-struct Registries {
-    /// Fallback faces for text that names a family nothing answers for.
-    fallback: Vec<Vec<u8>>,
-    fonts: Vec<paged_canvas::FontEntry>,
-    profiles: Vec<paged_canvas::ColorProfileEntry>,
-    /// The profile to hand the load directly, when one was named as a
-    /// path or resolved from the host's installed set.
-    cmyk_bytes: Option<Vec<u8>>,
-}
-
-impl Registries {
-    fn options(&self) -> CanvasOptions {
-        CanvasOptions {
-            fonts: self.fallback.clone(),
-            font_registry: self.fonts.clone(),
-            cmyk_icc_profile: self.cmyk_bytes.clone(),
-            color_profiles: self.profiles.clone(),
-        }
-    }
-
-    /// Fold a `load` / `new-blank` request's inline asset fields in.
-    /// Scanned directories first, then explicit `fontFamily` bindings,
-    /// so an explicit one replaces a scanned face — `paged`'s rule.
-    fn absorb(
-        &mut self,
-        fonts: &[String],
-        font_family: &[String],
-        cmyk_profile: Option<&str>,
-        default_font: Option<&str>,
-    ) -> Result<()> {
-        if let Some(path) = default_font {
-            let bytes = std::fs::read(path).with_context(|| format!("read font {path}"))?;
-            // First entry still wins downstream, so a second call
-            // replaces rather than shadows.
-            self.fallback.clear();
-            self.fallback.push(bytes);
-        }
-        if !fonts.is_empty() {
-            let paths: Vec<std::path::PathBuf> = fonts.iter().map(Into::into).collect();
-            for entry in paged_canvas::font_registry_from_paths(&paths) {
-                self.add_font(entry);
-            }
-        }
-        for spec in font_family {
-            let (name, path) = spec
-                .split_once('=')
-                .with_context(|| format!("fontFamily wants NAME[/STYLE]=PATH, got {spec:?}"))?;
-            let (family, style) = match name.split_once('/') {
-                Some((f, st)) => (f.trim().to_string(), Some(st.trim().to_string())),
-                None => (name.trim().to_string(), None),
-            };
-            let bytes = std::fs::read(path).with_context(|| format!("read font {path}"))?;
-            self.add_font(paged_canvas::FontEntry {
-                family,
-                style,
-                bytes,
-            });
-        }
-        if let Some(spec) = cmyk_profile {
-            let (name, bytes) = resolve_profile(spec)?;
-            self.cmyk_bytes = Some(bytes.clone());
-            self.add_profile(paged_canvas::ColorProfileEntry { name, bytes });
-        }
-        Ok(())
-    }
-
-    fn add_font(&mut self, entry: paged_canvas::FontEntry) {
-        self.fonts
-            .retain(|e| !(e.family == entry.family && e.style == entry.style));
-        self.fonts.push(entry);
-    }
-
-    fn add_profile(&mut self, entry: paged_canvas::ColorProfileEntry) {
-        self.profiles.retain(|e| e.name != entry.name);
-        self.profiles.push(entry);
-    }
-}
-
-/// A profile named as a path, or as a name to resolve against the
-/// host's installed profiles — the one rule `paged_color::profiles`
-/// holds for the whole workspace.
-fn resolve_profile(spec: &str) -> Result<(String, Vec<u8>)> {
-    let path = std::path::Path::new(spec);
-    if path.is_file() {
-        let bytes = std::fs::read(path).with_context(|| format!("read profile {spec}"))?;
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| spec.to_string());
-        return Ok((name, bytes));
-    }
-    let bytes = paged_color::profiles::resolve_by_name(spec)
-        .with_context(|| format!("no installed CMYK profile named {spec:?}"))?;
-    Ok((spec.to_string(), bytes))
-}
+use crate::engine::Session;
+use crate::expect_reply;
+use crate::options::DocumentOptions;
 
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "kebab-case")]
@@ -292,8 +186,7 @@ fn default_dpi() -> f32 {
 pub fn run() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let mut model: Option<CanvasModel> = None;
-    let mut registries = Registries::default();
+    let mut live = Live::default();
 
     // Handshake: announce liveness + the engine protocol the host is
     // talking to, so a version mismatch surfaces immediately.
@@ -325,11 +218,72 @@ pub fn run() -> Result<()> {
         if matches!(req, Request::Quit) {
             break;
         }
-        let resp = handle(&mut model, &mut registries, req)
-            .unwrap_or_else(|e| json!({"ok": false, "error": e.to_string()}));
+        let resp =
+            handle(&mut live, req).unwrap_or_else(|e| json!({"ok": false, "error": e.to_string()}));
         emit(&mut stdout, &resp)?;
     }
     Ok(())
+}
+
+/// Everything the loop holds between requests.
+///
+/// A `Session`, not a `CanvasModel` — this command used to keep the
+/// model and call `CanvasModel::load`, `export_idml`,
+/// `render_snapshot_png_at_dpi` and `CanvasExportSession::begin`
+/// itself, while `engine.rs` next door declared the rule it was
+/// breaking: *"anything that mutates state, or that consumes session
+/// state, goes through `Session::send`. Nothing in the CLI calls
+/// `CanvasModel::load`."* Two implementations of load, export and
+/// render lived in one crate, and only one of them was the door the
+/// editor uses.
+struct Live {
+    session: Session,
+    /// The last load's handle — page ids and sizes, which
+    /// `RequestSnapshot` needs to size a raster.
+    handle: Option<paged_canvas::DocumentHandle>,
+    /// Asset flags that arrived as their own `register-*` commands.
+    /// Applied at the next load or blank document, which is exactly
+    /// what those replies promise.
+    pending: DocumentOptions,
+}
+
+impl Default for Live {
+    fn default() -> Self {
+        Self {
+            session: Session::new(),
+            handle: None,
+            pending: DocumentOptions {
+                fonts: Vec::new(),
+                font_family: Vec::new(),
+                font: None,
+                cmyk_profile: None,
+            },
+        }
+    }
+}
+
+impl Live {
+    /// The flags for this load: the ones that arrived as `register-*`
+    /// commands, plus the ones on the request itself.
+    fn options(
+        &self,
+        fonts: &[String],
+        font_family: &[String],
+        cmyk_profile: Option<&str>,
+        default_font: Option<&str>,
+    ) -> DocumentOptions {
+        let mut opts = self.pending.clone();
+        opts.fonts
+            .extend(fonts.iter().map(std::path::PathBuf::from));
+        opts.font_family.extend(font_family.iter().cloned());
+        if let Some(p) = default_font {
+            opts.font = Some(p.into());
+        }
+        if let Some(p) = cmyk_profile {
+            opts.cmyk_profile = Some(p.to_string());
+        }
+        opts
+    }
 }
 
 /// Serialize one response object as a single NDJSON line and flush, so
@@ -341,7 +295,7 @@ fn emit(out: &mut impl Write, value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -> Result<Value> {
+fn handle(live: &mut Live, req: Request) -> Result<Value> {
     match req {
         Request::Load {
             path,
@@ -350,23 +304,24 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             cmyk_profile,
             default_font,
         } => {
-            reg.absorb(
+            let opts = live.options(
                 &fonts,
                 &font_family,
                 cmyk_profile.as_deref(),
                 default_font.as_deref(),
-            )?;
-            let bytes = std::fs::read(&path).with_context(|| format!("read {path}"))?;
-            let m = CanvasModel::load(DOC_ID, &bytes, reg.options())
-                .map_err(|e| anyhow!("load failed: {e}"))?;
-            let page_ids: Vec<String> = m.page_ids().map(|p| p.0.clone()).collect();
+            );
+            // The one door: registry, then load, then the working
+            // colour space — the ordering rule lives in `open`, and
+            // this command used to carry its own copy of it.
+            let handle = opts.open(&mut live.session, std::path::Path::new(&path))?;
+            let page_ids: Vec<String> = handle.page_ids.iter().map(|p| p.0.clone()).collect();
             let resp = json!({
                 "ok": true,
                 "loaded": path,
                 "pageCount": page_ids.len(),
                 "pageIds": page_ids,
             });
-            *model = Some(m);
+            live.handle = Some(handle);
             Ok(resp)
         }
         Request::NewBlank {
@@ -377,21 +332,28 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             cmyk_profile,
             default_font,
         } => {
-            reg.absorb(
+            let opts = live.options(
                 &fonts,
                 &font_family,
                 cmyk_profile.as_deref(),
                 default_font.as_deref(),
-            )?;
-            let m = CanvasModel::new_blank(DOC_ID, width, height, reg.options())
-                .map_err(|e| anyhow!("new-blank failed: {e}"))?;
-            let page_ids: Vec<String> = m.page_ids().map(|p| p.0.clone()).collect();
+            );
+            opts.register_fonts(&mut live.session)?;
+            let font = opts.fallback_font()?;
+            let reply = live.session.send(MainToWorkerKind::NewBlankDocument {
+                width_pt: width,
+                height_pt: height,
+                font,
+            })?;
+            let handle = expect_reply!(reply, WorkerToMainKind::DocumentLoaded(h) => h,
+                "new blank document")?;
+            let page_ids: Vec<String> = handle.page_ids.iter().map(|p| p.0.clone()).collect();
             let resp = json!({
                 "ok": true,
                 "pageCount": page_ids.len(),
                 "pageIds": page_ids,
             });
-            *model = Some(m);
+            live.handle = Some(handle);
             Ok(resp)
         }
         Request::RegisterFont {
@@ -399,12 +361,16 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             style,
             path,
         } => {
-            let bytes = std::fs::read(&path).with_context(|| format!("read font {path}"))?;
-            reg.add_font(paged_canvas::FontEntry {
-                family: family.clone(),
-                style: style.clone(),
-                bytes,
-            });
+            // Recorded as the `--font-family` spec a load would carry,
+            // so ONE code path installs fonts. The reply already
+            // promised "the next load"; this is that promise held by
+            // construction rather than by a parallel registry.
+            let spec = match &style {
+                Some(st) => format!("{family}/{st}={path}"),
+                None => format!("{family}={path}"),
+            };
+            std::fs::metadata(&path).with_context(|| format!("read font {path}"))?;
+            live.pending.font_family.push(spec);
             Ok(json!({
                 "ok": true,
                 "family": family,
@@ -417,12 +383,8 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             }))
         }
         Request::RegisterColorProfile { name, path } => {
-            let bytes = std::fs::read(&path).with_context(|| format!("read profile {path}"))?;
-            reg.add_profile(paged_canvas::ColorProfileEntry {
-                name: name.clone(),
-                bytes: bytes.clone(),
-            });
-            reg.cmyk_bytes = Some(bytes);
+            std::fs::metadata(&path).with_context(|| format!("read profile {path}"))?;
+            live.pending.cmyk_profile = Some(path);
             Ok(json!({
                 "ok": true,
                 "name": name,
@@ -430,11 +392,13 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             }))
         }
         Request::RunScript { source } => {
-            let m = doc_mut(model)?;
             // Every write inside `source` funnels through the `paged.*`
             // bridge → `apply_mutation`; budgets (loop/recursion/stack/
-            // 2s wall-clock) are enforced by `execute_script`'s default.
-            let result = paged_script::execute_script(m, &source);
+            // 2s wall-clock) are the editor's, kept deliberately so a
+            // docs example that passes here cannot hang the REPL.
+            let result = live
+                .session
+                .execute_script(&source, paged_script::ScriptBudget::default());
             Ok(json!({ "ok": result.error.is_none(), "result": result }))
         }
         Request::Describe => {
@@ -449,7 +413,7 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             }))
         }
         Request::Inspect => {
-            let m = doc_ref(model)?;
+            let m = live.session.model()?;
             Ok(json!({
                 "ok": true,
                 "meta": m.document_meta(),
@@ -458,11 +422,11 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             }))
         }
         Request::Pages => {
-            let m = doc_ref(model)?;
+            let m = live.session.model()?;
             Ok(json!({ "ok": true, "pages": m.pages() }))
         }
         Request::Digest => {
-            let m = doc_ref(model)?;
+            let m = live.session.model()?;
             // Per-page display-list digest = the GPU-faithful, backend-
             // agnostic oracle (same display list the WebGPU backend draws).
             // `combined` folds them order-sensitively into one document-
@@ -500,14 +464,29 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
                     ));
                 }
             }
-            let m = doc_ref(model)?;
-            let page_id = resolve_page(m, &page)?;
-            // CPU/tiny-skia rasterizer — the only headless backend in core,
-            // and the fidelity-gate reference. A vision aid for the agent,
-            // not a pixel-exact match for the shipped WebGPU output (see the
-            // module-level "digest first, pixels second" note).
-            let png = paged_canvas::render_snapshot_png_at_dpi(m, &page_id, dpi)
-                .map_err(|e| anyhow!("render failed: {e}"))?;
+            let page_id = {
+                let m = live.session.model()?;
+                resolve_page(m, &page)?
+            };
+            // Sized the way `paged render` sizes it, which is the way
+            // `pdftoppm -r DPI` does — every reference rasterisation in
+            // this workspace is produced that way.
+            let width_pt = {
+                let m = live.session.model()?;
+                m.pages()
+                    .iter()
+                    .find(|p| p.self_id == page_id.0)
+                    .map(|p| p.size_pt[0])
+                    .ok_or_else(|| anyhow!("page {} has no size", page_id.0))?
+            };
+            let target_width_px = (width_pt * dpi / 72.0).round().max(1.0) as u32;
+            let reply = live.session.send(MainToWorkerKind::RequestSnapshot {
+                page_id: page_id.clone(),
+                target_width_px,
+                dpi: Some(dpi),
+            })?;
+            let png = expect_reply!(reply, WorkerToMainKind::SnapshotReady(p) => p,
+                format!("render page {}", page_id.0))?;
             std::fs::write(&out, &png.png_bytes).with_context(|| format!("write {out}"))?;
             Ok(json!({
                 "ok": true,
@@ -522,15 +501,27 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
             out,
             options,
         } => {
-            let m = doc_ref(model)?;
             let bytes = match format.as_str() {
-                "idml" => m.export_idml().map_err(|e| anyhow!("export idml: {e}"))?,
+                "idml" => {
+                    let reply = live
+                        .session
+                        .send(MainToWorkerKind::ExportIdml { link_base: None })?;
+                    let (bytes, lost) = expect_reply!(reply,
+                        WorkerToMainKind::IdmlExported { idml_bytes, lost, .. } => (idml_bytes, lost),
+                        "export idml")?;
+                    for line in &lost {
+                        eprintln!("lost in translation to IDML: {line}");
+                    }
+                    bytes.into_vec()
+                }
                 // The container scheme tracks the engine wire protocol;
-                // export at the binary's own PROTOCOL_VERSION.
-                "paged" => m
-                    .export_paged(paged_canvas::channel::PROTOCOL_VERSION.0)
-                    .map_err(|e| anyhow!("export paged: {e}"))?,
-                "pdf" => export_pdf(m, options)?,
+                // the export kind stamps the binary's own version.
+                "paged" => {
+                    let reply = live.session.send(MainToWorkerKind::ExportPaged {})?;
+                    expect_reply!(reply, WorkerToMainKind::PagedExported { bytes } => bytes.into_vec(),
+                        "export paged")?
+                }
+                "pdf" => export_pdf(&mut live.session, options)?,
                 other => {
                     return Err(anyhow!(
                         "unsupported export format '{other}' (idml|paged|pdf)"
@@ -548,34 +539,24 @@ fn handle(model: &mut Option<CanvasModel>, reg: &mut Registries, req: Request) -
 /// Export the live model to PDF through the same begin/page/finish
 /// session the editor's Export dialog drives, so a page that poisons
 /// the writer fails here exactly as it does there.
-fn export_pdf(model: &CanvasModel, options: Option<Value>) -> Result<Vec<u8>> {
+fn export_pdf(session: &mut Session, options: Option<Value>) -> Result<Vec<u8>> {
     let wire: paged_canvas::channel::ExportPdfWireOptions = match options {
         Some(v) => serde_json::from_value(v).context("`options` is not ExportPdfWireOptions")?,
         None => Default::default(),
     };
-    let (mut session, page_count) = paged_canvas::export::CanvasExportSession::begin(model, &wire)
-        .map_err(|e| anyhow!("begin pdf export: {e}"))?;
+    let reply = session.send(MainToWorkerKind::ExportPdfBegin { options: wire })?;
+    let (id, page_count) = expect_reply!(reply,
+        WorkerToMainKind::ExportPdfBegun { session, page_count } => (session, page_count),
+        "begin pdf export")?;
     for _ in 0..page_count {
-        session
-            .export_next_page()
-            .map_err(|e| anyhow!("export pdf page: {e}"))?;
+        let reply = session.send(MainToWorkerKind::ExportPdfPage { session: id })?;
+        expect_reply!(reply, WorkerToMainKind::ExportPdfProgress { .. } => (),
+            "export pdf page")?;
     }
-    let finished = session.finish().map_err(|e| anyhow!("finish pdf: {e}"))?;
-    Ok(finished.pdf_bytes)
-}
-
-/// Borrow the loaded document immutably, or error if none is loaded yet.
-fn doc_ref(model: &Option<CanvasModel>) -> Result<&CanvasModel> {
-    model
-        .as_ref()
-        .ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
-}
-
-/// Borrow the loaded document mutably, or error if none is loaded yet.
-fn doc_mut(model: &mut Option<CanvasModel>) -> Result<&mut CanvasModel> {
-    model
-        .as_mut()
-        .ok_or_else(|| anyhow!("no document loaded (issue `load` or `new-blank` first)"))
+    let reply = session.send(MainToWorkerKind::ExportPdfFinish { session: id })?;
+    let bytes = expect_reply!(reply, WorkerToMainKind::PdfExported { pdf_bytes, .. } => pdf_bytes,
+        "finish pdf")?;
+    Ok(bytes.into_vec())
 }
 
 /// Lower-case hex encoding for the canonical state hash.
@@ -590,7 +571,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Resolve a `render`/page reference that is either a zero-based page
 /// index (JSON number, or a numeric string) or a literal page id.
-fn resolve_page(model: &CanvasModel, page: &Value) -> Result<PageId> {
+fn resolve_page(model: &paged_canvas::CanvasModel, page: &Value) -> Result<PageId> {
     let ids: Vec<PageId> = model.page_ids().cloned().collect();
     let by_index = |i: usize| {
         ids.get(i)

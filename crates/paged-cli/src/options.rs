@@ -99,26 +99,10 @@ impl DocumentOptions {
     /// Register the assets, load `path`, and settle the working colour
     /// space — in that order, which is the whole point of this type.
     pub fn open(&self, session: &mut Session, path: &std::path::Path) -> Result<DocumentHandle> {
-        for entry in self.font_entries()? {
-            let family = entry.family.clone();
-            let reply = session.send(MainToWorkerKind::RegisterFont {
-                family: family.clone(),
-                style: entry.style.clone(),
-                bytes: entry.bytes.clone().into(),
-            })?;
-            expect_reply!(reply, WorkerToMainKind::FontRegistered { .. } => (),
-                format!("register font {family:?}"))?;
-        }
+        self.register_fonts(session)?;
 
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-        let font = match &self.font {
-            Some(p) => Some(
-                std::fs::read(p)
-                    .with_context(|| format!("read {}", p.display()))?
-                    .into(),
-            ),
-            None => None,
-        };
+        let font = self.fallback_font()?;
 
         // A profile given as a FILE is handed to the load directly —
         // that is the one input that outranks the registry.
@@ -168,6 +152,39 @@ impl DocumentOptions {
 
         warn_if_nothing_shaped(&handle.stats);
         Ok(handle)
+    }
+
+    /// Install the font registry, which a load or a blank document both
+    /// need and neither can do for itself. Separated from [`open`] so
+    /// the NDJSON session can seed a blank document from the same flags
+    /// a load would use — the alternative was a second copy of this
+    /// loop, and a second copy is how the CLI's own session command
+    /// ended up not using the CLI's own door.
+    pub fn register_fonts(&self, session: &mut Session) -> Result<()> {
+        for entry in self.font_entries()? {
+            let family = entry.family.clone();
+            let reply = session.send(MainToWorkerKind::RegisterFont {
+                family: family.clone(),
+                style: entry.style.clone(),
+                bytes: entry.bytes.clone().into(),
+            })?;
+            expect_reply!(reply, WorkerToMainKind::FontRegistered { .. } => (),
+                format!("register font {family:?}"))?;
+        }
+        Ok(())
+    }
+
+    /// The fallback face, read once, for the `font` field a load or a
+    /// blank document carries.
+    pub fn fallback_font(&self) -> Result<Option<paged_canvas::channel::ByteBuf>> {
+        match &self.font {
+            Some(p) => Ok(Some(
+                std::fs::read(p)
+                    .with_context(|| format!("read {}", p.display()))?
+                    .into(),
+            )),
+            None => Ok(None),
+        }
     }
 
     /// The registry to install: the scan first, then `--font-family`,
