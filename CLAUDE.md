@@ -94,6 +94,18 @@ formatted in one mechanical pass; the workaround is retired.
   interactive canvas model, and the embedded `paged.*` scripting API. These
   back the editor; `paged-canvas-wasm` / `paged-introspect-wasm` are the
   wasm-bindgen surfaces it consumes.
+- `crates/paged-wire/` — the wire VOCABULARY: the identities (`PageId`,
+  `ElementId`, `TextCellAddr`, `ByteBuf`) and the 117 `Mutation` ops, in one
+  place so the CLI, the wasm wire, the Boa bridge, the plugin host and the
+  editor speak one spelling. **Two halves, and the split is load-bearing:**
+  the operations need `paged-mutate` for their payload types, the identities
+  need nothing, and `paged-renderer` wants only `PageId`. So `mutations` is a
+  DEFAULT FEATURE with `paged-mutate` optional behind it, and `paged-renderer`
+  takes the crate `default-features = false` — otherwise the read-only
+  `paged-sdk` links the mutation engine transitively, which the publish
+  workflow's subset audit stops (it did, on v0.63.0). Check the off path with
+  `cargo check -p paged-renderer` alone; a `--workspace` build unifies features
+  and never compiles it.
 - `crates/paged-gen/` — IDML fixture generator (the `paged-gen` bin).
 - `crates/paged-sdk/` — published SDK wasm surface: a WebGPU
   `ViewerSession` (load IDML → present to OffscreenCanvas/Canvas via
