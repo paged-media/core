@@ -6,8 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 description = "The wire vocabulary: the identities and the mutation ops every surface addresses the engine by."
 
+[features]
+# The operations half. Default ON, so every existing consumer is
+# unchanged; `paged-renderer` takes the crate with it OFF so the
+# read-only viewer SDK does not link the mutation engine to get a
+# `PageId`. See the crate docs.
+default = ["mutations"]
+mutations = ["dep:paged-mutate"]
+
 [dependencies]
-paged-mutate = { path = "../paged-mutate" }
+paged-mutate = { path = "../paged-mutate", optional = true }
 serde = { workspace = true }
 tsify-next = { workspace = true }
 wasm-bindgen = { workspace = true }

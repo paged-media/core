@@ -28,6 +28,28 @@
 //! mutation vocabulary and nothing else. `paged-renderer` and
 //! `paged-canvas` re-export what they always exported, so no call site
 //! moves.
+//!
+//! ## Why `mutations` is a feature
+//!
+//! The crate has two halves. The IDENTITIES — `PageId`, `ElementId`,
+//! `SelectionMode`, `TextCellAddr`, `ByteBuf` — are plain newtypes over
+//! strings and bytes, and every surface names things with them. The
+//! OPERATIONS — `Mutation` and its roster — carry payload types from
+//! `paged-mutate`, so anything that wants them links the mutation
+//! engine.
+//!
+//! `paged-renderer` wants exactly one thing here: `PageId`. It is also
+//! the crate the READ-ONLY viewer SDK is built on, and `paged-sdk` is
+//! "sibling, not a shrunk app" by ratified design — no `paged-mutate`,
+//! no `paged-canvas`, no `paged-script` in its tree, enforced by a
+//! subset audit in the publish workflow. Merging `PageId` into this
+//! crate without a feature therefore put the whole mutation engine into
+//! the viewer's wasm, and the audit caught it while publishing v0.63.0.
+//!
+//! With `mutations` (default) the crate is what it was. Without it —
+//! `default-features = false`, which is how `paged-renderer` takes it —
+//! `paged-mutate` is not a dependency at all, and the viewer gets the
+//! identities and nothing else.
 
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
@@ -588,6 +610,11 @@ impl From<Vec<u8>> for ByteBuf {
 /// A content-space mutation. Phase 1 carries the *envelope* only —
 /// the worker rejects each variant with `WorkerError::NotImplemented`.
 /// Phase 3 lights these up incrementally.
+///
+/// Behind the default `mutations` feature: its payload types come from
+/// `paged-mutate`, and the read-only viewer SDK must not link that.
+/// See the crate docs.
+#[cfg(feature = "mutations")]
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(
@@ -1620,6 +1647,7 @@ pub enum Mutation {
 /// render sweep, the capability catalog, `state`'s op map) had to
 /// re-derive it, by scraping this function's match arms out of the
 /// source text or by hand-copying them into another repo. Both happened.
+#[cfg(feature = "mutations")]
 macro_rules! mutation_vocabulary {
     ($($variant:ident,)*) => {
         impl Mutation {
@@ -1639,6 +1667,7 @@ macro_rules! mutation_vocabulary {
     };
 }
 
+#[cfg(feature = "mutations")]
 mutation_vocabulary! {
     InsertText,
     DeleteRange,
@@ -1759,6 +1788,7 @@ mutation_vocabulary! {
     InsertTable,
 }
 
+#[cfg(feature = "mutations")]
 impl Mutation {
     /// The op's tag as it travels on the wire — what `serde` writes for
     /// `#[serde(tag = "op", rename_all = "camelCase")]`, and therefore
