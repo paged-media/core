@@ -102,9 +102,19 @@ for idml in "${fixtures[@]}"; do
 
   page=1
   for native in "$dir"/native*.png; do
-    pdfpage=$(printf "%s/pdf-%d.png" "$dir" "$page")
-    [ -f "$pdfpage" ] || pdfpage=$(printf "%s/pdf-%02d.png" "$dir" "$page")
-    [ -f "$pdfpage" ] || { echo "$name p$page: missing pdf raster"; fail=1; page=$((page+1)); continue; }
+    # pdftoppm zero-pads the page number to the WIDTH OF THE TOTAL
+    # PAGE COUNT — `pdf-1.png` for a 9-page document, `pdf-001.png` for
+    # a 134-page one. Probing only widths 1 and 2 therefore worked for
+    # every fixture until a long one arrived: `annual-base` has 134
+    # pages, so pages 1-99 were reported "missing pdf raster" while
+    # 100-134 matched by accident (no padding needed at three digits)
+    # and compared green. Probe every plausible width instead.
+    pdfpage=""
+    for w in 1 2 3 4 5; do
+      cand=$(printf "%s/pdf-%0*d.png" "$dir" "$w" "$page")
+      if [ -f "$cand" ]; then pdfpage="$cand"; break; fi
+    done
+    [ -n "$pdfpage" ] || { echo "$name p$page: missing pdf raster"; fail=1; page=$((page+1)); continue; }
     # paged-diff exits non-zero when its own default threshold trips
     # — we gate on OUR thresholds below, so tolerate the status.
     json="$("$DIFF" --json "$native" "$pdfpage" || true)"

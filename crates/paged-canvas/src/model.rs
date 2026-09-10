@@ -9125,6 +9125,13 @@ pub fn font_registry_from_paths(paths: &[std::path::PathBuf]) -> Vec<FontEntry> 
 /// family when present (so `Fraunces` rather than `Fraunces SemiBold`),
 /// and `Some("Italic")` only when the file's subfamily says it is one.
 /// `None` when the payload does not parse or names no family.
+///
+/// Gated with its only caller: [`font_registry_from_paths`] reads the
+/// filesystem and is not built for wasm, which left this dead there and
+/// `-D warnings` turned that into a failing wasm lane. Nothing about
+/// the function itself is host-specific — it parses bytes — so the cfg
+/// goes the moment a wasm caller wants it.
+#[cfg(not(target_arch = "wasm32"))]
 fn font_identity(bytes: &[u8]) -> Option<(String, Option<String>)> {
     let face = ttf_parser::Face::parse(bytes, 0).ok()?;
     let name = |id: u16| -> Option<String> {
