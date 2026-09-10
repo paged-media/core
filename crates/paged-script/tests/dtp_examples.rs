@@ -214,6 +214,21 @@ paged.applyStyle(sid, 0, 17, heading);
 console.log('two-column article laid out in', frame);"#,
     );
     let frame = first_frame_ref(&mut m);
+    // MODEL ONLY, and deliberately so — this file drives `paged.*`
+    // against a CanvasModel, which holds no line geometry, and the
+    // bridge exposes no line-bounds read. So this says the property
+    // landed and NOTHING about the page.
+    //
+    // That distinction is not pedantry here. For a year this assertion
+    // was the closest thing text columns had to a test while one column
+    // and two rendered byte-identically: `paged-model`'s own comment
+    // deferred the layout, and an assertion that reads a value back
+    // cannot tell a stored preference from an honoured one.
+    //
+    // The page half lives where it can: `paged-canvas`'s
+    // `render_effect_sweep` (property axis) rasterises the column paths
+    // and fails if they paint nothing, and `corpus/generated` pages 7-10
+    // measure the result against InDesign's own export.
     assert_eq!(
         jget(&mut m, &frame, "textFrameColumnCount")["value"].as_f64(),
         Some(2.0),

@@ -664,15 +664,24 @@ pub struct TextFrame {
     pub use_minimum_height_for_auto_sizing: Option<bool>,
     /// `<TextFramePreference TextColumnCount="...">` — number of text
     /// columns the frame splits its inset box into. `None` ⇒ inherit
-    /// the IDML default (1). W0.3 wires this as a mutable text-frame
-    /// pref; the composer's per-column layout follows in a later wave.
+    /// the IDML default (1).
+    ///
+    /// W0.3 wired this as a mutable pref and deferred the layout, and
+    /// the deferral outlived its usefulness: for a year the path was
+    /// accepted, read back, round-tripped and advertised in
+    /// `settablePaths` while one column and two rendered
+    /// byte-identically. Laid out since 2026-09-10 — the composer
+    /// expands a multi-column frame into the region chain the emitter
+    /// already walks (`paged-renderer` `expand_column_chain`), and the
+    /// column arithmetic lives in
+    /// [`paged_flow::RegionGeometry::column_boxes`].
     pub column_count: Option<u32>,
     /// `<TextFramePreference TextColumnGutter="...">` in pt — the gap
     /// between adjacent text columns. `None` ⇒ inherit (12pt default).
     pub column_gutter: Option<f32>,
     /// `<TextFramePreference TextColumnFixedWidth="...">` is the sibling
-    /// "fixed-width" knob; `TextColumnCount` + balance cover the common
-    /// authoring case. `<TextFramePreference VerticalBalanceColumns="...">`
+    /// "fixed-width" knob and is still unmodelled; `TextColumnCount` +
+    /// balance cover the common authoring case. `<TextFramePreference VerticalBalanceColumns="...">`
     /// — `Some(true)` balances the last line across columns. `None` ⇒
     /// inherit (false).
     pub column_balance: Option<bool>,
