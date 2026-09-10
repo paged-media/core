@@ -14,36 +14,41 @@
 
 //! `paged script` — author a document from a `.js` file.
 //!
-//! ## Why this one path does not go through `ExecuteScript`
+//! ## The budget is a parameter, not a second door
 //!
-//! Every other document command in this crate goes through
-//! [`Session::send`], and this one nearly does. The `ExecuteScript` wire
-//! kind hardcodes `ScriptBudget::default()` — a 2 s wall clock, justified
-//! in `paged-script` as an editor-REPL guard: "short enough that a stuck
-//! native chain in the editor REPL doesn't feel like a hang". That is the
-//! right rule for a REPL and the wrong one for a batch CLI, where
-//! authoring a 134-page document is the normal case and two seconds is
-//! not a hang, it is the job.
+//! Every document command in this crate goes through [`Session::send`],
+//! and until protocol v63 this one did not: the `ExecuteScript` wire
+//! kind hardcoded `ScriptBudget::default()` — a 2 s wall clock,
+//! justified in `paged-script` as an editor-REPL guard ("short enough
+//! that a stuck native chain in the editor REPL doesn't feel like a
+//! hang"). That is the right rule for a REPL and the wrong one for a
+//! batch CLI, where authoring a 134-page document is the normal case
+//! and two seconds is not a hang, it is the job.
 //!
-//! Raising it on the wire would be protocol drift: the editor's budget
-//! IS 2 s, and a script that overruns there must overrun here. So the
-//! budget becomes caller-supplied exactly where the dispatcher's own
-//! comment says it should — "hosts wanting to tighten/loosen call
-//! `execute_script_with` with a custom `ScriptBudget`" — and the CLI is
-//! a host. Nothing in `paged-script` changed to allow it.
+//! So the CLI called `execute_script_with` directly, which the
+//! dispatcher's own comment sanctioned for hosts. It still cost
+//! something the comment did not price in: `ExecuteScript` became the
+//! one wire kind this crate could not be said to reach, and the CLI's
+//! script path stopped being the same path the editor takes. A second
+//! implementation of "run a script" is a place for the two to drift.
 //!
-//! The bookkeeping the wire arm does around the call is a GPU
-//! scene-cache invalidation, and a headless session has no scene cache,
-//! so nothing is skipped by going direct.
+//! v63 moves the budget ONTO the wire as an optional
+//! [`ScriptBudgetWire`]: absent means the engine's own ceilings, so the
+//! editor's 2 s is untouched and unchanged, and a host that wants a
+//! different ceiling says so in the message instead of going around it.
+//! The surface is now shared and only the parameter differs — which is
+//! what the difference always was.
 //!
-//! `session`'s `run-script` keeps the 2 s default deliberately: the docs
-//! gate validates its corpus against the SHIPPED default, and quietly
+//! `session`'s `run-script` sends no budget deliberately: the docs gate
+//! validates its corpus against the SHIPPED default, and quietly
 //! raising it there would let an example that times out in the editor
 //! pass the docs gate.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+
+use paged_canvas::channel::ScriptBudgetWire;
 
 use crate::engine::Session;
 use crate::export::PdfOptions;
@@ -73,17 +78,21 @@ pub struct ScriptOptions {
     pub dpi: f32,
 }
 
-fn budget(opts: &ScriptOptions) -> Result<paged_script::ScriptBudget> {
+/// The CLI's flags as the wire's optional budget. `--timeout none`
+/// travels as `Some(0)` rather than as an absent field, because absent
+/// means "the engine's default" — which is the opposite of "no
+/// deadline". The guards the CLI has no flag for (recursion, stack) are
+/// left absent so they keep tracking the engine.
+fn budget(opts: &ScriptOptions) -> Result<ScriptBudgetWire> {
     let wall_clock_ms = match opts.timeout.trim() {
-        "none" | "off" | "0" => None,
-        n => Some(
-            n.parse::<u64>()
-                .with_context(|| format!("--timeout wants milliseconds or \"none\", got {n:?}"))?,
-        ),
+        "none" | "off" | "0" => 0,
+        n => n
+            .parse::<u64>()
+            .with_context(|| format!("--timeout wants milliseconds or \"none\", got {n:?}"))?,
     };
-    Ok(paged_script::ScriptBudget {
-        loop_iterations: opts.max_loop_iterations,
-        wall_clock_ms,
+    Ok(ScriptBudgetWire {
+        loop_iterations: Some(opts.max_loop_iterations),
+        wall_clock_ms: Some(wall_clock_ms),
         ..Default::default()
     })
 }
@@ -101,7 +110,7 @@ pub fn run(
     let mut session = Session::new();
     let handle = assets.open(&mut session, doc)?;
 
-    let result = session.execute_script(&source, budget(&opts.clone())?);
+    let result = session.run_script(&source, Some(budget(opts)?))?;
 
     // The script's own console output first: when it fails, the lines
     // it printed before failing are usually the diagnosis.
@@ -145,4 +154,55 @@ pub fn run(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// The flags, as clap hands them over with nothing typed.
+    #[derive(Parser)]
+    struct OnlyTheFlags {
+        #[command(flatten)]
+        opts: ScriptOptions,
+    }
+
+    fn parse(args: &[&str]) -> ScriptOptions {
+        let mut argv = vec!["script"];
+        argv.extend_from_slice(args);
+        OnlyTheFlags::parse_from(argv).opts
+    }
+
+    /// The whole reason this command once reached past the wire: its
+    /// ceiling is 60 s, not the engine's 2 s. Now that the ceiling
+    /// travels as a parameter, THIS is where the difference lives, and
+    /// it is one assertion rather than a paragraph of prose.
+    #[test]
+    fn the_default_ceiling_is_the_cli_s_own_minute() {
+        let b = budget(&parse(&[])).expect("defaults parse");
+        assert_eq!(b.wall_clock_ms, Some(60_000));
+        assert_eq!(b.loop_iterations, Some(10_000_000));
+        // No flag, so no opinion: these keep tracking the engine.
+        assert_eq!(b.recursion_depth, None);
+        assert_eq!(b.stack_size, None);
+    }
+
+    /// `--timeout none` must travel as an explicit zero. Absent would
+    /// mean "the engine's default", which is the opposite of what the
+    /// user asked for, and the mistake is invisible until a long script
+    /// dies at two seconds.
+    #[test]
+    fn disabling_the_deadline_is_a_zero_not_an_absence() {
+        for spelling in ["none", "off", "0"] {
+            let b = budget(&parse(&["--timeout", spelling])).expect("parses");
+            assert_eq!(b.wall_clock_ms, Some(0), "--timeout {spelling}");
+        }
+    }
+
+    #[test]
+    fn a_timeout_that_is_not_a_number_says_so() {
+        let err = budget(&parse(&["--timeout", "soon"])).expect_err("rejected");
+        assert!(err.to_string().contains("milliseconds"), "unhelpful: {err}");
+    }
 }

@@ -1323,3 +1323,157 @@ fn export_idml_with_a_link_base_replies_links() {
     assert_eq!(reply["payload"]["links"], serde_json::json!([]));
     assert_eq!(reply["payload"]["lost"], serde_json::json!([]));
 }
+
+// ---------------------------------------------------------------------
+// 7. The script budget travels on the wire (v63)
+// ---------------------------------------------------------------------
+
+/// Run one `executeScript` with an explicit budget payload, against a
+/// clock that advances a millisecond per read so wall-clock cases have
+/// a clock that actually moves.
+fn execute_script(
+    core: &mut WorkerCore,
+    source: &str,
+    budget: serde_json::Value,
+) -> serde_json::Value {
+    let ticks = std::cell::Cell::new(0.0_f64);
+    let clock = move || {
+        ticks.set(ticks.get() + 1.0);
+        ticks.get()
+    };
+    let mut payload = serde_json::json!({ "source": source });
+    if !budget.is_null() {
+        payload["budget"] = budget;
+    }
+    let input = serde_json::to_string(&serde_json::json!({
+        "seq": 900, "protocol": protocol(), "kind": "executeScript",
+        "payload": payload,
+    }))
+    .unwrap();
+    let (reply, _effect) = core.handle_message(&input, &clock);
+    serde_json::from_str(&reply).expect("reply must be valid JSON")
+}
+
+/// A loop of `n` steps — cheap, and the only guard that trips
+/// deterministically regardless of how fast the machine is.
+fn counting_script(n: u64) -> String {
+    format!("let n = 0; for (let i = 0; i < {n}; i++) {{ n = n + 1; }} console.log('n', n);")
+}
+
+/// A loop of `n` steps that CROSSES THE BRIDGE each time. The
+/// wall-clock deadline is checked at host-call boundaries by design
+/// (`ScriptBudget::wall_clock_ms`), so a pure-JS loop never samples the
+/// clock and no wall-clock case can be written with one. Paired with
+/// the millisecond-per-read stub clock, `n` is also the elapsed time.
+fn bridging_script(n: u64) -> String {
+    format!(
+        "for (let i = 0; i < {n}; i++) {{ paged.documentMeta(); }} console.log('crossed', {n});"
+    )
+}
+
+/// No budget on the message means the ENGINE's own ceilings, which is
+/// what every host had before v63 and what the editor still sends. A
+/// hundred thousand steps is far under the 10 000 000 default.
+#[test]
+fn an_absent_budget_means_the_engines_own() {
+    let mut core = loaded_core();
+    let reply = execute_script(
+        &mut core,
+        &counting_script(100_000),
+        serde_json::Value::Null,
+    );
+    assert_eq!(reply["kind"], "scriptResult", "{reply}");
+    assert_eq!(
+        reply["payload"]["error"],
+        serde_json::Value::Null,
+        "{reply}"
+    );
+    assert_eq!(reply["payload"]["output"][0], "[log] n 100000");
+    assert!(
+        reply["payload"].get("budgetKind").is_none(),
+        "an ordinary result carries no budgetKind: {reply}"
+    );
+}
+
+/// The proof the parameter is not decorative: the same script that
+/// passes under the engine's default (above) must FAIL under a ceiling
+/// the caller tightened. If the budget were dropped on the way through
+/// the dispatcher, this script would succeed and say nothing.
+#[test]
+fn a_tighter_ceiling_on_the_wire_actually_bites() {
+    let mut core = loaded_core();
+    let reply = execute_script(
+        &mut core,
+        &counting_script(100_000),
+        serde_json::json!({ "loopIterations": 1_000 }),
+    );
+    assert_eq!(reply["payload"]["budgetKind"], "iterations", "{reply}");
+    assert!(
+        reply["payload"]["error"].as_str().unwrap().contains("loop"),
+        "the error must name the guard: {reply}"
+    );
+}
+
+/// The other direction, and the reason `paged script` exists: a ceiling
+/// the caller RAISED must also travel, or the CLI's minute silently
+/// becomes the editor's two seconds.
+#[test]
+fn a_raised_ceiling_on_the_wire_also_travels() {
+    let mut core = loaded_core();
+    // One clock read per bridge crossing, 1 ms each: 3 000 crossings
+    // overrun the engine's 2 000 ms default and stay well inside the
+    // caller's 60 000.
+    let script = bridging_script(3_000);
+    let tight = execute_script(&mut core, &script, serde_json::Value::Null);
+    assert_eq!(tight["payload"]["budgetKind"], "wallClock", "{tight}");
+
+    let raised = execute_script(
+        &mut core,
+        &script,
+        serde_json::json!({ "wallClockMs": 60_000 }),
+    );
+    assert_eq!(
+        raised["payload"]["error"],
+        serde_json::Value::Null,
+        "{raised}"
+    );
+}
+
+/// `wallClockMs: 0` is "no deadline", not "a deadline of zero" — the
+/// spelling `paged script --timeout none` travels as. A zero read
+/// literally would abort every script on its first clock read.
+#[test]
+fn a_zero_wall_clock_disables_the_deadline_rather_than_failing_instantly() {
+    let mut core = loaded_core();
+    let reply = execute_script(
+        &mut core,
+        &bridging_script(3_000),
+        serde_json::json!({ "wallClockMs": 0 }),
+    );
+    assert_eq!(
+        reply["payload"]["error"],
+        serde_json::Value::Null,
+        "{reply}"
+    );
+    assert_eq!(reply["payload"]["output"][0], "[log] crossed 3000");
+}
+
+/// A budget that names one field leaves the others tracking the
+/// engine, so a host tuning its wall clock does not silently inherit
+/// whatever the loop ceiling was on the day it was written.
+#[test]
+fn a_partial_budget_only_overrides_what_it_names() {
+    let mut core = loaded_core();
+    let reply = execute_script(
+        &mut core,
+        &counting_script(100_000),
+        serde_json::json!({ "wallClockMs": 0 }),
+    );
+    // Loop ceiling untouched → the engine's 10 000 000 still applies,
+    // so 100 000 steps pass.
+    assert_eq!(
+        reply["payload"]["error"],
+        serde_json::Value::Null,
+        "{reply}"
+    );
+}

@@ -27,11 +27,15 @@
 //! export sessions, the undo stack, container parts), goes through
 //! [`Session::send`]. Nothing in the CLI calls `CanvasModel::load` or
 //! `apply_mutation` itself.** Pure reads with no wire kind — the digest
-//! oracle, page rasterisation — go through [`Session::model`].
+//! oracle, page rasterisation — go through [`Session::model`]. Since
+//! v63 that includes running a script: the per-run budget `paged
+//! script` needs is a wire parameter, not a reason to reach past the
+//! dispatcher.
 
 use anyhow::{anyhow, Result};
 use paged_canvas::channel::{
-    MainToWorker, MainToWorkerKind, ProtocolVersion, WorkerToMainKind, PROTOCOL_VERSION,
+    MainToWorker, MainToWorkerKind, ProtocolVersion, ScriptBudgetWire, WorkerToMainKind,
+    PROTOCOL_VERSION,
 };
 use paged_canvas_wasm::dispatch::WorkerCore;
 
@@ -91,28 +95,55 @@ impl Session {
             .ok_or_else(|| anyhow!("no document loaded"))
     }
 
-    /// Run a script against the loaded model with a CALLER-SUPPLIED
-    /// budget — the one mutation this crate makes outside
-    /// [`Session::send`], because the `ExecuteScript` wire kind
-    /// hardcodes the editor's 2 s REPL guard and raising it on the wire
-    /// would be protocol drift. See `crate::script` for the full
-    /// argument; the dispatcher's own comment sanctions this door for
-    /// hosts. Everything else still goes through `send`.
-    pub fn execute_script(
+    /// Run a script against the loaded model THROUGH THE WIRE.
+    ///
+    /// `budget` is `None` for the engine's own ceilings (the editor's
+    /// 2 s REPL guard) and `Some` to override them per run — a v63 wire
+    /// parameter. Until v63 there was no such parameter, so a host that
+    /// needed a different ceiling had to call `execute_script_with`
+    /// itself; `paged script` did, and was the one command in this
+    /// crate not going through `WorkerCore::dispatch`. A second door
+    /// for a parameter is still a second door, so the parameter moved
+    /// to the wire and the door closed.
+    ///
+    /// The reply's budget kind is mapped back to `paged-script`'s own
+    /// enum so the JSON this crate prints keeps the shape
+    /// `session_compat` pins.
+    pub fn run_script(
         &mut self,
         source: &str,
-        budget: paged_script::ScriptBudget,
-    ) -> paged_script::ScriptResult {
-        let started = self.started;
-        let clock = move || started.elapsed().as_secs_f64() * 1000.0;
-        match self.core.model.as_mut() {
-            Some(model) => paged_script::execute_script_with(model, source, budget, &clock),
-            None => paged_script::ScriptResult {
-                output: Vec::new(),
-                error: Some("no document loaded".to_string()),
-                budget_kind: None,
-            },
-        }
+        budget: Option<ScriptBudgetWire>,
+    ) -> Result<paged_script::ScriptResult> {
+        let reply = self.send(MainToWorkerKind::ExecuteScript {
+            source: source.to_string(),
+            budget,
+        })?;
+        // `expect_reply!` is defined below in this file, so name it
+        // through the crate root rather than textual scope.
+        let (output, error, budget_kind) = crate::expect_reply!(
+            reply,
+            WorkerToMainKind::ScriptResult {
+                output,
+                error,
+                budget_kind,
+            } => (output, error, budget_kind),
+            "run script"
+        )
+        .map_err(|e: anyhow::Error| e)?;
+        Ok(paged_script::ScriptResult {
+            output,
+            error,
+            budget_kind: budget_kind.map(|kind| {
+                use paged_canvas::channel::ScriptBudgetKind as Wire;
+                use paged_script::ScriptBudgetKind as Src;
+                match kind {
+                    Wire::Iterations => Src::Iterations,
+                    Wire::Recursion => Src::Recursion,
+                    Wire::StackSize => Src::StackSize,
+                    Wire::WallClock => Src::WallClock,
+                }
+            }),
+        })
     }
 
     pub fn protocol(&self) -> ProtocolVersion {

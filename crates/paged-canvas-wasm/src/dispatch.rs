@@ -1157,7 +1157,7 @@ impl WorkerCore {
                     .unwrap_or_default();
                 WorkerToMainKind::SceneTree { roots }
             }
-            MainToWorkerKind::ExecuteScript { source } => {
+            MainToWorkerKind::ExecuteScript { source, budget } => {
                 let Some(model) = self.model.as_mut() else {
                     reply!(WorkerToMainKind::ScriptResult {
                         output: Vec::new(),
@@ -1165,19 +1165,33 @@ impl WorkerCore {
                         budget_kind: None,
                     });
                 };
-                // B-09 / W-08 — run with the default per-execution budget
-                // and the worker's injected wall-clock (`js_sys::Date::now`
-                // on wasm). Passing the host clock is what gives the
-                // wall-clock deadline teeth without `paged-script` ever
-                // touching `std::time`; the budget defaults are preserved
-                // (hosts wanting to tighten/loosen call
-                // `execute_script_with` with a custom `ScriptBudget`).
-                let result = paged_script::execute_script_with(
-                    model,
-                    &source,
-                    paged_script::ScriptBudget::default(),
-                    clock,
-                );
+                // B-09 / W-08 — the worker's injected wall clock
+                // (`js_sys::Date::now` on wasm) is what gives the deadline
+                // teeth without `paged-script` ever touching `std::time`.
+                //
+                // v63: the budget is a WIRE PARAMETER, defaulting to the
+                // engine's own. Before it, a host needing a different
+                // ceiling had to call `execute_script_with` directly —
+                // which `paged script` did, making it the one command in
+                // that crate not going through this dispatcher. A second
+                // door for a parameter is still a second door.
+                let mut effective = paged_script::ScriptBudget::default();
+                if let Some(b) = &budget {
+                    if let Some(v) = b.loop_iterations {
+                        effective.loop_iterations = v;
+                    }
+                    if let Some(v) = b.recursion_depth {
+                        effective.recursion_depth = v;
+                    }
+                    if let Some(v) = b.stack_size {
+                        effective.stack_size = v;
+                    }
+                    // 0 means "no deadline"; the other guards stand.
+                    if let Some(v) = b.wall_clock_ms {
+                        effective.wall_clock_ms = (v > 0).then_some(v);
+                    }
+                }
+                let result = paged_script::execute_script_with(model, &source, effective, clock);
                 // A script may touch any page or story (or none); paged-script
                 // doesn't report which. Clear the GPU scene cache wholesale so
                 // `present_frame` rebuilds the visible pages — otherwise a

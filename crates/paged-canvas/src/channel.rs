@@ -488,7 +488,43 @@ export type WorkerToMain = WorkerToMainKind & {
 // within the layer it is on, `ItemLayer` chooses the layer, and the
 // renderer sorts by layer BEFORE it consults the z table (Q-10). A
 // layers panel drives both.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(62);
+// v63 — `ExecuteScript` carries an OPTIONAL per-run budget.
+//
+// The kind used to hardcode `ScriptBudget::default()` — a 2 s wall
+// clock, right for the editor's REPL and wrong for a batch CLI where
+// authoring a 134-page document is the job rather than a hang. So
+// `paged script` reached past the wire and called `execute_script_with`
+// directly, which made it the one command in that crate not going
+// through `WorkerCore::dispatch` — a second door, for a parameter.
+//
+// The surface is shared now and only the parameter differs. Additive:
+// serde defaults the field, an older worker ignores it and runs the
+// default budget, and every existing caller is unchanged.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(63);
+
+/// A per-run script budget on the wire (v63). Every field is optional
+/// and falls back to the engine's default, so a caller overrides only
+/// what it means to.
+///
+/// `wall_clock_ms: Some(0)` DISABLES the deadline — the loop, recursion
+/// and stack guards still apply. Absent keeps the default 2 s. The zero
+/// sentinel exists because a nested `Option<Option<u64>>` on the wire
+/// distinguishes "unset" from "explicitly none" only by JSON `null`
+/// nesting, which is not worth the ambiguity in a hand-written payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptBudgetWire {
+    #[serde(default)]
+    pub loop_iterations: Option<u64>,
+    #[serde(default)]
+    pub recursion_depth: Option<usize>,
+    #[serde(default)]
+    pub stack_size: Option<usize>,
+    /// Milliseconds; `0` disables the wall clock.
+    #[serde(default)]
+    pub wall_clock_ms: Option<u64>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
@@ -1121,7 +1157,13 @@ pub enum MainToWorkerKind {
     /// loaded document. The script's mutations route through
     /// `Operation::SetProperty` (same channel as gestures + REPL)
     /// so undo/redo work identically. Reply: `ScriptResult`.
-    ExecuteScript { source: String },
+    ExecuteScript {
+        source: String,
+        /// v63 — optional per-run budget. Absent = the engine default
+        /// (the editor's 2 s REPL guard). See [`ScriptBudgetWire`].
+        #[serde(default)]
+        budget: Option<ScriptBudgetWire>,
+    },
     /// Concept 3 — open a PDF export session. The worker re-runs the
     /// scene build one-shot (glyph side-channel on, splice caches
     /// off) and parks the writer state under a session id. Reply:
@@ -3704,8 +3746,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v62() {
-        assert_eq!(PROTOCOL_VERSION.0, 62);
+    fn protocol_version_is_v63() {
+        assert_eq!(PROTOCOL_VERSION.0, 63);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

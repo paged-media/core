@@ -23,9 +23,11 @@
 //! is a property of the surface and will never change, while "a
 //! diagnostic read with no subcommand yet" is work someone can do. Both
 //! were the same silence before this file — a kind the CLI never named,
-//! for reasons nobody had written down. Twenty of the second kind are
-//! now closed (`paged read`, `paged parts`), taking this to **31 of
-//! 62**, and what remains is almost entirely the first kind.
+//! for reasons nobody had written down. Twenty-one of the second kind
+//! are now closed (`paged read`, `paged parts`, and `ExecuteScript`,
+//! whose budget became a wire parameter at v63 instead of a reason to
+//! reach past the dispatcher), taking this to **32 of 62**; what
+//! remains is almost entirely the first kind.
 //!
 //! **Why there is no `paged wire <json>`.** It would reach every
 //! remaining kind at a stroke, and it would be a second general door:
@@ -102,8 +104,6 @@ const UNREACHED: &[(&str, &str)] = &[
      "plugin-host lanes: scene layers, pixel layers and image resources are submitted by a bundle, and the CLI has no bundle host to submit them"),
     ("SubmitResourceTiles",
      "plugin-host lanes: scene layers, pixel layers and image resources are submitted by a bundle, and the CLI has no bundle host to submit them"),
-    ("ExecuteScript",
-     "deliberately bypassed: this kind hardcodes the editor's 2s REPL budget, and `paged script` raises it to 60s through `Session::execute_script`, the door the dispatcher sanctions for hosts"),
     ("Hello",
      "the worker shell's handshake; the NDJSON session emits its own ready line carrying the same protocol number, so there is no second one to send"),
     ("ExportPdfCancel",
@@ -113,7 +113,7 @@ const UNREACHED: &[(&str, &str)] = &[
 ];
 
 /// Pinned so the list cannot grow quietly.
-const UNREACHED_COUNT: usize = 31;
+const UNREACHED_COUNT: usize = 30;
 
 /// Every `kind` the wire accepts, read out of serde's own error rather
 /// than kept as a list here — the same trick `wire_vocabulary.rs` uses
@@ -247,7 +247,7 @@ fn every_reason_is_a_reason() {
 
 /// The headline in the module doc, pinned against the code.
 #[test]
-fn the_cli_reaches_31_of_62() {
-    assert_eq!(kinds_the_cli_sends().len(), 31);
+fn the_cli_reaches_32_of_62() {
+    assert_eq!(kinds_the_cli_sends().len(), 32);
     assert_eq!(every_kind().len(), 62);
 }

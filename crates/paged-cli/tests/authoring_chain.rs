@@ -238,3 +238,48 @@ fn gen_emits_the_same_bytes_as_paged_gen() {
     );
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// The chain the budget travels: a `--max-loop-iterations` flag, the
+/// v63 `budget` field on `ExecuteScript`, and the engine's guard. Only
+/// an end-to-end run proves all three are connected — the flag could
+/// parse, the wire field could serialise, and `run_script` could still
+/// be passing `None`.
+///
+/// The script is sized between the two ceilings on purpose: 100 000
+/// steps pass under the engine's 10 000 000 default and fail under the
+/// 1 000 asked for here, so a dropped budget shows up as a PASS where a
+/// failure was demanded, not as a slow test.
+#[test]
+fn the_loop_ceiling_flag_reaches_the_engine() {
+    let d = dir("budget");
+    let (blank, js) = (d.join("blank.paged"), d.join("count.js"));
+    std::fs::write(
+        &js,
+        "let n = 0; for (let i = 0; i < 100000; i++) { n = n + 1; } console.log('n', n);",
+    )
+    .unwrap();
+    let (blank, js) = (blank.to_str().unwrap(), js.to_str().unwrap());
+    paged(&["new", "--size", "612x792", "-o", blank]);
+
+    // Default ceilings: the script is well inside them.
+    let ok = paged(&["script", blank, js]);
+    assert!(
+        String::from_utf8_lossy(&ok.stdout).contains("n 100000"),
+        "the script must run to completion under the defaults"
+    );
+
+    // The same script, with a ceiling below it.
+    let out = Command::new(env!("CARGO_BIN_EXE_paged"))
+        .args(["script", blank, js, "--max-loop-iterations", "1000"])
+        .output()
+        .expect("run paged script");
+    assert!(
+        !out.status.success(),
+        "a 100 000-step script must not pass a 1 000-step ceiling"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("budget: Iterations"),
+        "the failure must name the guard that tripped: {err}"
+    );
+}

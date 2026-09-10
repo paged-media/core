@@ -422,10 +422,10 @@ fn handle(live: &mut Live, req: Request) -> Result<Value> {
             // Every write inside `source` funnels through the `paged.*`
             // bridge → `apply_mutation`; budgets (loop/recursion/stack/
             // 2s wall-clock) are the editor's, kept deliberately so a
-            // docs example that passes here cannot hang the REPL.
-            let result = live
-                .session
-                .execute_script(&source, paged_script::ScriptBudget::default());
+            // docs example that passes here cannot hang the REPL. `None`
+            // asks for exactly those — `paged script` is the caller that
+            // overrides them, and it does so on the wire (v63).
+            let result = live.session.run_script(&source, None)?;
             Ok(json!({ "ok": result.error.is_none(), "result": result }))
         }
         Request::Describe => {
