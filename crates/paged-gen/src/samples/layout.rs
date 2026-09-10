@@ -25,9 +25,15 @@
 //!      asymmetric margins + guides all parse off one page.
 //!   2. `layout · text-columns · 2col-custom-gutter` — a body text frame
 //!      whose `<TextFramePreference>` declares `TextColumnCount=2` and a
-//!      custom 24pt `TextColumnGutter`. (The composer's per-column
-//!      layout is a later wave; the fixture exercises the parse + frame
-//!      wiring so the conformance corpus carries a multi-column frame.)
+//!      custom 24pt `TextColumnGutter`. Its filler never fills column
+//!      one, so it pins the line-break WIDTH and says nothing about the
+//!      flow between columns — which is what pages 7-10 are for.
+//!   7. The column wave — `2col-fill-and-flow`, `3col`,
+//!      `2col-balanced` and `2col-insets`: frames sized so the text MUST
+//!      cross a column boundary. Numbered paragraphs, so where the break
+//!      falls is readable at a glance against InDesign's export rather
+//!      than a smear of grey in a diff.
+//!
 //!   3. `layout · autosize · height-only-grow` — the W1.7 Phase A+B
 //!      downward-grow case (`AutoSizingType=HeightOnly`,
 //!      `TopLeftPoint`): an undersized headline box the renderer grows
@@ -110,6 +116,13 @@ pub fn build() -> Sample {
         "layout · autosize · center-grow",
         "layout · spread-transform · rotate-15",
         "layout · spread-transform · scale-1p25",
+        // W0.3 column wave — the cases the 2col page above cannot see.
+        // Its text never fills column one, so it pins the line-break
+        // WIDTH and nothing about the flow between columns.
+        "layout · text-columns · 2col-fill-and-flow",
+        "layout · text-columns · 3col",
+        "layout · text-columns · 2col-balanced",
+        "layout · text-columns · 2col-insets",
     ];
 
     let mut master_spreads = Vec::with_capacity(names.len());
@@ -352,6 +365,67 @@ pub fn build() -> Sample {
                     translate(PAGE_W_PT * 0.3, PAGE_H_PT * 0.3),
                 ));
                 page_items.push(filled_demo_rect(body_frame_id));
+            }
+            // 7-10. The column wave's cases. Each frame is sized so
+            // the text MUST cross a column boundary — the whole point
+            // the `2col-custom-gutter` page above cannot make, because
+            // its filler never fills column one.
+            6..=9 => {
+                let cols: u32 = if seq == 7 { 3 } else { 2 };
+                let insets = if seq == 9 {
+                    Some([18.0, 24.0, 18.0, 24.0])
+                } else {
+                    None
+                };
+                let balance = if seq == 8 { Some(true) } else { None };
+                // Short numbered paragraphs: where the break falls is
+                // then readable at a glance in the reference PDF, and a
+                // diff that puts paragraph 12 in the wrong column is
+                // obvious rather than a smear of grey.
+                let paragraphs = (0..44)
+                    .map(|n| {
+                        inter_paragraph(&format!("Paragraph {n} of the flowing column copy."), 9.0)
+                    })
+                    .collect::<Vec<_>>();
+                stories.push((
+                    body_story_id.clone(),
+                    write_story(&Story {
+                        extra_story_attrs: Vec::new(),
+                        self_id: body_story_id.clone(),
+                        paragraphs,
+                    }),
+                ));
+                story_refs.push(body_story_id.clone());
+                page_items.push(
+                    Rect {
+                        self_id: body_frame_id,
+                        width_pt: 460.0,
+                        height_pt: 380.0,
+                        item_transform: translate(67.0, 80.0),
+                        fill_color: None,
+                        stroke_color: Some("Color/RGBCyan".to_string()),
+                        stroke_weight_pt: Some(0.5),
+                        parent_story: Some(body_story_id.clone()),
+                        next_text_frame: None,
+                        previous_text_frame: None,
+                        extra_attrs: Vec::new(),
+                        blending: None,
+                        drop_shadow: None,
+                        placed_image: None,
+                        text_wrap: None,
+                        anchored_setting: None,
+                        frame_effects: Vec::new(),
+                        text_frame_pref: Some(TextFramePref {
+                            text_column_count: Some(cols),
+                            text_column_gutter: Some(18.0),
+                            vertical_balance_columns: balance,
+                            inset_spacing: insets,
+                            ..Default::default()
+                        }),
+                        custom_subpaths: None,
+                    }
+                    .into(),
+                );
             }
             _ => unreachable!(),
         }

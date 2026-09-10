@@ -101,6 +101,10 @@ struct Trial {
     /// Right edge of the widest line's ink (trailing whitespace
     /// excluded), pt right of the frame's spread left edge.
     widest_right_rel: f32,
+    /// Every line's baseline, pt below the frame's spread top, in
+    /// ascending order. `VerticalBalanceColumns` reads this to find
+    /// where the k-th line falls before anything is emitted.
+    baselines: Vec<f32>,
 }
 
 pub(super) struct Measurer<'a> {
@@ -307,6 +311,30 @@ impl<'a> Measurer<'a> {
     /// but its bounds — insets, first-baseline rule, columns, the
     /// `ItemTransform` — so the trial composes exactly as the final
     /// layout will.
+    /// Every line baseline this story produces at `width_pt`, in pt
+    /// below the frame's spread top, in composition order.
+    ///
+    /// `VerticalBalanceColumns` needs to know where the k-th line falls
+    /// before anything is emitted, and the auto-size trial already
+    /// composes a story at an arbitrary measure — this is that, asked a
+    /// different question. Composing at UNBOUNDED height is what makes
+    /// the answer the story's own line list rather than one frame's
+    /// worth of it.
+    pub(super) fn line_baselines(
+        &self,
+        frame: &TextFrame,
+        story: &paged_scene::ParsedStory,
+        width_pt: f32,
+    ) -> Vec<f32> {
+        // One measure, unbounded in height, so the answer is the
+        // STORY's line list rather than one frame's worth of it.
+        let mut probe = frame.clone();
+        probe.column_count = None;
+        probe.column_gutter = None;
+        self.trial(&probe, story, frame.bounds, width_pt, UNBOUNDED_PT)
+            .baselines
+    }
+
     fn trial(
         &self,
         frame: &TextFrame,
@@ -385,13 +413,16 @@ impl<'a> Measurer<'a> {
         let mut lines = 0usize;
         let mut last_baseline_rel = 0.0f32;
         let mut widest_right_rel = 0.0f32;
+        let mut baselines: Vec<f32> = Vec::new();
         for line in pages[0]
             .story_layout
             .iter()
             .filter(|l| l.cell.is_none() && l.story_id == story.self_id)
         {
             lines += 1;
-            last_baseline_rel = last_baseline_rel.max(line.baseline_y_pt - probe_spread.top);
+            let rel = line.baseline_y_pt - probe_spread.top;
+            baselines.push(rel);
+            last_baseline_rel = last_baseline_rel.max(rel);
             let text = texts.get(line.paragraph_idx as usize).map(|s| s.as_bytes());
             for cluster in &line.clusters {
                 let blank = text
@@ -404,11 +435,13 @@ impl<'a> Measurer<'a> {
                     widest_right_rel.max(cluster.x_pt + cluster.advance_pt - probe_spread.left);
             }
         }
+        baselines.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         Trial {
             overset,
             lines,
             last_baseline_rel,
             widest_right_rel,
+            baselines,
         }
     }
 }

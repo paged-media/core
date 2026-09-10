@@ -333,6 +333,19 @@ fn page_at(m: &CanvasModel, index: usize) -> PageId {
     )
 }
 
+/// The id of the first text frame that actually holds a story — the
+/// column cases need a frame with text in it, not the label boxes.
+fn first_body_text_frame(m: &CanvasModel) -> String {
+    m.scene()
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.text_frames.iter())
+        .find(|f| f.parent_story.is_some() && f.self_id.is_some())
+        .and_then(|f| f.self_id.clone())
+        .map(|id| format!("textFrame:{id}"))
+        .expect("the layout fixture carries a body text frame")
+}
+
 fn rect_ids(m: &CanvasModel) -> Vec<String> {
     m.scene()
         .spreads
@@ -1213,6 +1226,48 @@ fn cases() -> Vec<Case> {
 /// field-only case would hide that behind the default geometry.
 fn property_cases() -> Vec<Case> {
     let mut c = Vec::new();
+    // ---------------------------------------------------------------
+    // Text-frame columns (W0.3 column wave)
+    //
+    // These three paths were advertised in `settablePaths`, accepted by
+    // the wire, read back correctly — and rendered nothing at all, for
+    // as long as the deferral in `paged-model` said the composer's
+    // per-column layout was "a later wave". Nothing here caught it,
+    // because this axis is a hand list and no one had added them.
+    // Their absence is the reason a live editor control, a document-map
+    // label, a playground seed and a showcase page could all advertise
+    // columns while the page ignored them.
+    // ---------------------------------------------------------------
+    c.push(paints("SetProperty textFrameColumnCount", "layout", |m| {
+        Mutation::SetElementProperty {
+            element_id: paged_wire::ElementId::parse(&first_body_text_frame(m))
+                .expect("a parseable frame address"),
+            path: PropertyPath::TextFrameColumnCount,
+            value: paged_mutate::Value::Length(Some(3.0)),
+        }
+    }));
+    c.push(paints("SetProperty textFrameColumnGutter", "layout", |m| {
+        // A gutter only moves pixels when there is more than one
+        // column to gap between; the case sets both, and the
+        // `ColumnCount` case above is what proves the count alone
+        // paints.
+        Mutation::Batch {
+            ops: vec![
+                Mutation::SetElementProperty {
+                    element_id: paged_wire::ElementId::parse(&first_body_text_frame(m))
+                        .expect("a parseable frame address"),
+                    path: PropertyPath::TextFrameColumnCount,
+                    value: paged_mutate::Value::Length(Some(2.0)),
+                },
+                Mutation::SetElementProperty {
+                    element_id: paged_wire::ElementId::parse(&first_body_text_frame(m))
+                        .expect("a parseable frame address"),
+                    path: PropertyPath::TextFrameColumnGutter,
+                    value: paged_mutate::Value::Length(Some(60.0)),
+                },
+            ],
+        }
+    }));
     c.push(paints("SetProperty frameFeatherEnabled", "effects", |m| {
         enable_effect(m, PropertyPath::FrameFeatherEnabled)
     }));

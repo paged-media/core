@@ -541,6 +541,10 @@ pub struct TextFramePref {
     /// `TextColumnGutter` — gutter (pt) between adjacent text columns.
     /// `None` ⇒ omit (InDesign's default gutter).
     pub text_column_gutter: Option<f32>,
+    /// `VerticalBalanceColumns` — `Some(true)` levels the last chunk of
+    /// text across the columns instead of filling the first to the
+    /// bottom. `None` ⇒ omit (InDesign's default, false).
+    pub vertical_balance_columns: Option<bool>,
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
@@ -1065,6 +1069,9 @@ impl Rect {
             if let Some(tg) = tfp.text_column_gutter {
                 col_gutter = format_f32(tg);
                 tfa.push(("TextColumnGutter", col_gutter.as_str()));
+            }
+            if let Some(bal) = tfp.vertical_balance_columns {
+                tfa.push(("VerticalBalanceColumns", if bal { "true" } else { "false" }));
             }
             // The insets are a typed `<InsetSpacing>` child of
             // `<Properties>`, never an attribute. Measured on InDesign

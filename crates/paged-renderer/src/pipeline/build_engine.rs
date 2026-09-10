@@ -349,6 +349,112 @@ pub(super) fn collect_nested_text_clips(document: &Document) -> NestedTextClips 
     out
 }
 
+/// Expand a frame chain so every multi-column frame becomes N
+/// side-by-side single-column frames, in flow order.
+///
+/// **Columns are a chain of regions.** The emitter already walks a
+/// chain and steps to the next entry when a line overflows the current
+/// one; a two-column frame is two regions side by side, so expanding
+/// the chain gives column flow, the column x origin and the column
+/// wrap width out of machinery that already exists and is already
+/// tested. Nothing in the emit loop needs to learn what a column is.
+///
+/// Before this, `TextColumnCount` was parsed, stored, round-tripped and
+/// advertised as a settable path — and the renderer laid every frame
+/// out at its full inner width regardless, so one column and two
+/// rendered byte-identically in both the raster and PDF lanes.
+///
+/// Returns an EMPTY vec when no frame declares more than one column,
+/// and the caller then keeps its original borrowed chain — so the
+/// single-column path allocates nothing and cannot shift by a pixel.
+///
+/// The column geometry itself comes from
+/// [`paged_flow::RegionGeometry::column_boxes`], the one place that sum
+/// is written; a second copy here is how one capability becomes two
+/// answers that disagree.
+fn expand_column_chain(
+    chain: &[&TextFrame],
+    balance: Option<&ColumnBalance<'_>>,
+) -> Vec<TextFrame> {
+    if !chain.iter().any(|f| f.column_count.unwrap_or(1) > 1) {
+        return Vec::new();
+    }
+    let mut out: Vec<TextFrame> = Vec::with_capacity(chain.len());
+    for f in chain {
+        let n = f.column_count.unwrap_or(1).max(1);
+        if n == 1 {
+            out.push((*f).clone());
+            continue;
+        }
+        let [inset_top, inset_left, inset_bottom, inset_right] =
+            f.inset_spacing.unwrap_or([0.0; 4]);
+        let geom = paged_flow::RegionGeometry {
+            width_pt: (f.bounds.width() - inset_left - inset_right).max(0.0),
+            height_pt: f.bounds.height().max(0.0),
+            columns: n,
+            column_gap_pt: f.column_gutter.unwrap_or(DEFAULT_COLUMN_GUTTER_PT),
+        };
+        // `VerticalBalanceColumns` — InDesign levels the LINE COUNT,
+        // measured against its own export: 44 single-line paragraphs in
+        // a balanced two-column frame come back 22 / 22, where the same
+        // frame unbalanced gives 35 / 9. So the columns are not filled
+        // to the same height by some separate pass; they are each
+        // capped at ceil(total / n) lines and the frame keeps whatever
+        // space is left below.
+        //
+        // The cap is expressed as a shortened column, because the
+        // emitter's only notion of "full" is a baseline crossing the
+        // bottom. Cutting between the k-th and (k+1)-th baseline puts
+        // exactly k lines in each column and needs no new concept in
+        // the emit loop.
+        let balanced_bottom = balance
+            .filter(|_| f.column_balance == Some(true))
+            .and_then(|b| {
+                let widest = geom.column_boxes().first()?.width_pt;
+                let baselines = b.measurer.line_baselines(f, b.story, widest);
+                let per_column = baselines.len().div_ceil(n as usize);
+                // Only a cut BETWEEN two lines shortens anything: when
+                // the whole story already fits one column there is
+                // nothing to balance.
+                let next = baselines.get(per_column)?;
+                let last_kept = baselines.get(per_column.checked_sub(1)?)?;
+                Some(f.bounds.top + (last_kept + next) * 0.5)
+            });
+        for band in geom.column_boxes() {
+            let mut col = (*f).clone();
+            let left = f.bounds.left + inset_left + band.x_pt;
+            col.bounds = paged_model::Bounds {
+                left,
+                right: left + band.width_pt,
+                bottom: balanced_bottom.unwrap_or(f.bounds.bottom),
+                ..f.bounds
+            };
+            // The band already excludes the horizontal insets, so
+            // re-applying them would inset each column twice. The
+            // vertical pair still applies to every column.
+            col.inset_spacing = Some([inset_top, 0.0, inset_bottom, 0.0]);
+            // A column is not itself columnar — clearing these is what
+            // stops a re-entrant expansion.
+            col.column_count = None;
+            col.column_gutter = None;
+            out.push(col);
+        }
+    }
+    out
+}
+
+/// What a balanced multi-column frame needs to measure itself: the
+/// auto-size trial machinery, and the story whose lines are counted.
+struct ColumnBalance<'a> {
+    measurer: &'a auto_size::Measurer<'a>,
+    story: &'a paged_scene::ParsedStory,
+}
+
+/// IDML's default gutter when a frame declares a column count and no
+/// `TextColumnGutter`. Mirrors `paged_scene`'s constant of the same
+/// name — both read the same IDML default, and neither owns the other.
+const DEFAULT_COLUMN_GUTTER_PT: f32 = 12.0;
+
 pub(super) fn build_document_inner(
     document: &Document,
     options: &PipelineOptions,
@@ -2217,7 +2323,7 @@ pub(super) fn build_document_inner(
         // An auto-sizing frame composes at its FITTED bounds: swap in
         // the clone the fit pass prepared (routing already ran on the
         // authored bounds, so the chain's pages are unchanged).
-        let chain: Vec<&TextFrame> = document
+        let authored_chain: Vec<&TextFrame> = document
             .frame_chain(&parsed.self_id)
             .into_iter()
             .map(|f| {
@@ -2227,6 +2333,23 @@ pub(super) fn build_document_inner(
                     .unwrap_or(f)
             })
             .collect();
+        // Multi-column frames become N side-by-side regions here, so
+        // everything downstream — chain pages, spread bounds, wrap
+        // rects, the emitter's overflow walk — sees columns as the
+        // frames they behave like. Empty when nothing is columnar,
+        // and then the authored chain is used unchanged.
+        let column_arena = expand_column_chain(
+            &authored_chain,
+            Some(&ColumnBalance {
+                measurer: &measurer,
+                story: parsed,
+            }),
+        );
+        let chain: Vec<&TextFrame> = if column_arena.is_empty() {
+            authored_chain
+        } else {
+            column_arena.iter().collect()
+        };
         if chain.is_empty() {
             continue;
         }
@@ -5289,7 +5412,34 @@ pub(super) fn emit_paragraph_into_chain(
     } else {
         None
     };
+    // The running baseline shift owed to every frame advance so far in
+    // THIS paragraph.
+    //
+    // The advance below used to move only the line that overflowed. The
+    // lines after it kept baselines composed for one continuous run, so
+    // they were still measured against the *previous* frame's extent —
+    // already past the new frame's bottom — and the drop branch ate
+    // them. A paragraph spanning a frame break therefore put ONE line
+    // in the continuation frame and dropped the rest.
+    //
+    // It stayed invisible because a paragraph BOUNDARY re-enters this
+    // function with a fresh line set, so multi-paragraph stories thread
+    // correctly; only a single paragraph crossing the break was wrong.
+    // Columns made it obvious — equal-height columns put the very next
+    // baseline past the bottom immediately, so column two got exactly
+    // one line — but threaded frames had it first.
+    //
+    // Carrying the shift forward is what makes the continuation
+    // continuous: the next line lands at `new_baseline + line_h`,
+    // because `shift == new_baseline - prev_baseline`.
+    let mut chain_shift_64: i32 = 0;
     for mut line in laid_out.lines.into_iter() {
+        if chain_shift_64 != 0 {
+            line.baseline_y += chain_shift_64;
+            for g in &mut line.glyphs {
+                g.y += chain_shift_64;
+            }
+        }
         // A line advances by its leading: the explicit one (a run's, or
         // its style's, cascaded) when there is one, else auto leading
         // from the largest glyph. The composer already pitched the
@@ -5338,6 +5488,7 @@ pub(super) fn emit_paragraph_into_chain(
                 head_font_metrics,
             );
             let dy = new_baseline - prev_baseline;
+            chain_shift_64 += dy;
             for g in &mut line.glyphs {
                 g.y += dy;
             }

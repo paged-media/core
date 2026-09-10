@@ -92,6 +92,16 @@ pub struct RegionGeometry {
     pub column_gap_pt: f32,
 }
 
+/// One text column's horizontal band within a content box: its x offset
+/// from the box's left edge, and its width. Both in pt.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColumnBox {
+    /// Offset from the content box's left edge, in pt.
+    pub x_pt: f32,
+    /// The column's width — what text is line-broken to.
+    pub width_pt: f32,
+}
+
 impl RegionGeometry {
     /// A single-column content box of the given size.
     pub fn new(width_pt: f32, height_pt: f32) -> Self {
@@ -101,6 +111,41 @@ impl RegionGeometry {
             columns: 1,
             column_gap_pt: 0.0,
         }
+    }
+
+    /// The column bands this content box splits into, left to right.
+    ///
+    /// **This is the one place column arithmetic is written.** The
+    /// geometry was already carried here by `paged-scene` and read by
+    /// nobody, so the renderer laid every frame out at its full inner
+    /// width no matter what `TextColumnCount` said — accepted, read
+    /// back, and invisible on the page. A second copy of this sum in
+    /// the renderer is how that becomes two answers instead of none.
+    ///
+    /// `columns <= 1` yields the whole box, so a single-column caller
+    /// gets back exactly what it had. N columns share the gaps between
+    /// them: `N` columns have `N - 1` gaps, and a box too narrow to
+    /// hold them clamps to zero width rather than going negative.
+    #[must_use]
+    pub fn column_boxes(&self) -> Vec<ColumnBox> {
+        let n = self.columns.max(1);
+        if n == 1 {
+            return vec![ColumnBox {
+                x_pt: 0.0,
+                width_pt: self.width_pt.max(0.0),
+            }];
+        }
+        let gaps =
+            self.column_gap_pt.max(0.0) * f32::from(u16::try_from(n - 1).unwrap_or(u16::MAX));
+        let usable = (self.width_pt - gaps).max(0.0);
+        let each = usable / f32::from(u16::try_from(n).unwrap_or(u16::MAX));
+        (0..n)
+            .map(|i| ColumnBox {
+                x_pt: f32::from(u16::try_from(i).unwrap_or(u16::MAX))
+                    * (each + self.column_gap_pt.max(0.0)),
+                width_pt: each,
+            })
+            .collect()
     }
 }
 
@@ -441,5 +486,89 @@ mod tests {
         // Same rule in the emitter's 1/64-pt integer unit.
         assert!(region_overflows(6401_i32, 6400));
         assert!(!region_overflows(6400_i32, 6400));
+    }
+
+    // ---------------------------------------------------------------
+    // Column bands
+    // ---------------------------------------------------------------
+
+    /// One column is the whole box — the single-column caller must get
+    /// back exactly what it had, or every existing frame moves.
+    #[test]
+    fn one_column_is_the_whole_box() {
+        let g = RegionGeometry::new(500.0, 700.0);
+        assert_eq!(
+            g.column_boxes(),
+            vec![ColumnBox {
+                x_pt: 0.0,
+                width_pt: 500.0
+            }]
+        );
+        // A gap is meaningless with nothing to gap between.
+        let g = RegionGeometry {
+            column_gap_pt: 24.0,
+            ..RegionGeometry::new(500.0, 700.0)
+        };
+        assert_eq!(g.column_boxes().len(), 1);
+        assert_eq!(g.column_boxes()[0].width_pt, 500.0);
+    }
+
+    /// N columns have N-1 gaps, and the bands tile the box exactly:
+    /// last band's right edge == the box width.
+    #[test]
+    fn columns_share_the_gaps_and_tile_the_box() {
+        let g = RegionGeometry {
+            columns: 2,
+            column_gap_pt: 24.0,
+            ..RegionGeometry::new(524.0, 700.0)
+        };
+        let c = g.column_boxes();
+        assert_eq!(c.len(), 2);
+        // (524 - 24) / 2 = 250 each.
+        assert_eq!(
+            c[0],
+            ColumnBox {
+                x_pt: 0.0,
+                width_pt: 250.0
+            }
+        );
+        assert_eq!(
+            c[1],
+            ColumnBox {
+                x_pt: 274.0,
+                width_pt: 250.0
+            }
+        );
+        assert_eq!(c[1].x_pt + c[1].width_pt, 524.0, "bands must tile the box");
+
+        let g = RegionGeometry {
+            columns: 3,
+            column_gap_pt: 12.0,
+            ..RegionGeometry::new(300.0, 700.0)
+        };
+        let c = g.column_boxes();
+        assert_eq!(c.len(), 3);
+        // (300 - 24) / 3 = 92 each.
+        for b in &c {
+            assert_eq!(b.width_pt, 92.0);
+        }
+        assert_eq!(c[2].x_pt + c[2].width_pt, 300.0, "bands must tile the box");
+    }
+
+    /// A box too narrow for its own gutters clamps to zero rather than
+    /// handing the line-breaker a negative measure.
+    #[test]
+    fn a_box_narrower_than_its_gutters_clamps_to_zero() {
+        let g = RegionGeometry {
+            columns: 4,
+            column_gap_pt: 50.0,
+            ..RegionGeometry::new(100.0, 700.0)
+        };
+        let c = g.column_boxes();
+        assert_eq!(c.len(), 4);
+        assert!(
+            c.iter().all(|b| b.width_pt == 0.0),
+            "150pt of gutters in a 100pt box leaves no column, not a negative one"
+        );
     }
 }
