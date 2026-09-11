@@ -666,6 +666,20 @@ pub enum PropertyPath {
     /// hyphenation default) rather than `None`. Writes over an
     /// explicit prior round-trip bytewise.
     ParagraphHyphenation,
+    /// `HyphenationZone` in pt — how close to the right margin a line
+    /// must already be before the composer will hyphenate at all
+    /// (`Value::Length`; `None` clears the override).
+    ///
+    /// The composer has honoured this since it was written
+    /// (`paged-text/src/compose.rs` gates a break on
+    /// `column_width - hyphenation_zone`, with its own tests), the
+    /// parser reads it off `<ParagraphStyleRange>` and the cascade
+    /// resolves it — but until 2026-09-11 no surface could SET it, so
+    /// an authored paragraph always composed with no zone at all and
+    /// hyphenated far more freely than the same copy does in InDesign.
+    /// Found by recreating a real brochure: the same 13-line quote
+    /// came back with seven hyphens where Adobe's had three.
+    ParagraphHyphenationZone,
     /// W0.2 — keep-lines-together toggle (`KeepLinesTogether`).
     /// `Value::Bool`. Reflow-affecting (changes column / frame
     /// breaking). Same `None`→default undo note as
@@ -1348,6 +1362,7 @@ impl PropertyPath {
             PropertyPath::ParagraphDropCapCharacters => "paragraph.dropCapCharacters",
             PropertyPath::ParagraphDropCapLines => "paragraph.dropCapLines",
             PropertyPath::ParagraphHyphenation => "paragraph.hyphenation",
+            PropertyPath::ParagraphHyphenationZone => "paragraph.hyphenationZone",
             PropertyPath::ParagraphKeepLinesTogether => "paragraph.keepLinesTogether",
             PropertyPath::ParagraphKeepWithNext => "paragraph.keepWithNext",
             PropertyPath::ParagraphRuleAbove => "paragraph.ruleAbove",

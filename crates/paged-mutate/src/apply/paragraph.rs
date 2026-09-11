@@ -416,6 +416,9 @@ pub(super) fn apply_paragraph_field(
         PropertyPath::ParagraphHyphenation => {
             set_para_bool_field(path, value, &mut para.hyphenation, true)
         }
+        PropertyPath::ParagraphHyphenationZone => {
+            set_para_length_field(path, value, &mut para.hyphenation_zone)
+        }
         PropertyPath::ParagraphKeepLinesTogether => {
             set_para_bool_field(path, value, &mut para.keep_lines_together, false)
         }

@@ -2093,6 +2093,7 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphDropCapCharacters
             | PropertyPath::ParagraphDropCapLines
             | PropertyPath::ParagraphHyphenation
+            | PropertyPath::ParagraphHyphenationZone
             | PropertyPath::ParagraphKeepLinesTogether
             | PropertyPath::ParagraphKeepWithNext
             | PropertyPath::ParagraphRuleAbove

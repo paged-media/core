@@ -164,7 +164,7 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        202,
+        203,
         "the advertised roster changed; move the count with the decision"
     );
 }

@@ -1221,6 +1221,7 @@
     "paragraphDropCapCharacters",
     "paragraphDropCapLines",
     "paragraphHyphenation",
+    "paragraphHyphenationZone",
     "paragraphKeepLinesTogether",
     "paragraphKeepWithNext",
     "paragraphRuleAbove",

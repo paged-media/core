@@ -1838,6 +1838,54 @@ pub(super) fn style_node_marker(style_id: &str) -> NodeId {
     NodeId::Layer(style_id.to_string())
 }
 
+/// The three typographic fields both style kinds carry and neither
+/// could set until 2026-09-11.
+///
+/// `ParagraphStyleDef` and `CharacterStyleDef` have modelled `font`,
+/// `font_style` and `leading` since the parser learned to read them,
+/// the cascade resolves them, and the renderer honours them — but
+/// `SetStyleProperty` accepted only size, tracking and fill, so a style
+/// panel could change a style's SIZE and not its TYPEFACE, from any
+/// surface on the wire. Found by authoring a document whose styles are
+/// "Avenir Black 20 pt" and "Minion Pro 8 pt": the size landed and the
+/// face did not.
+macro_rules! style_type_fields {
+    ($def:expr, $path:expr, $value:expr, $type_err:expr) => {
+        match $path {
+            PropertyPath::CharacterFontFamily => {
+                let Value::Text(s) = $value else {
+                    return Err($type_err());
+                };
+                let prior = Value::Text($def.font.clone().unwrap_or_default());
+                // The empty string CLEARS, matching the run-level
+                // `CharacterFontFamily` arm and `ParagraphStyleNextStyle`
+                // above — one spelling for "unset" across the file.
+                $def.font = if s.is_empty() { None } else { Some(s.clone()) };
+                Some(prior)
+            }
+            PropertyPath::CharacterFontStyle => {
+                let Value::Text(s) = $value else {
+                    return Err($type_err());
+                };
+                let prior = Value::Text($def.font_style.clone().unwrap_or_default());
+                $def.font_style = if s.is_empty() { None } else { Some(s.clone()) };
+                Some(prior)
+            }
+            PropertyPath::CharacterLeading => {
+                let Value::Length(n) = $value else {
+                    return Err($type_err());
+                };
+                let prior = Value::Length($def.leading);
+                // `None` is IDML's `Auto`, which is why the value is an
+                // Option rather than a number with a sentinel.
+                $def.leading = *n;
+                Some(prior)
+            }
+            _ => None,
+        }
+    };
+}
+
 pub(super) fn set_paragraph_style_field(
     def: &mut paged_model::ParagraphStyleDef,
     path: PropertyPath,
@@ -1909,6 +1957,11 @@ pub(super) fn set_paragraph_style_field(
             def.justification = paged_model::Justification::from_idml(s);
             Ok(prior)
         }
+        PropertyPath::CharacterFontFamily
+        | PropertyPath::CharacterFontStyle
+        | PropertyPath::CharacterLeading => {
+            Ok(style_type_fields!(def, path, value, type_err).expect("arm matched above"))
+        }
         // styles.next-style (W1.22) — set the paragraph style's
         // `NextStyle` chain. Value is the next style's self id; the
         // empty string clears it (`None`). Prior is captured as the
@@ -1962,6 +2015,11 @@ pub(super) fn set_character_style_field(
             let prior = Value::ColorRef(def.fill_color.clone());
             def.fill_color = c.clone();
             Ok(prior)
+        }
+        PropertyPath::CharacterFontFamily
+        | PropertyPath::CharacterFontStyle
+        | PropertyPath::CharacterLeading => {
+            Ok(style_type_fields!(def, path, value, type_err).expect("arm matched above"))
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),
