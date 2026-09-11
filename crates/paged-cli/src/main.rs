@@ -75,6 +75,25 @@ fn main() -> Result<()> {
             }
         }
         Command::Read { what } => paged_cli::read::run(&what),
+        Command::Place {
+            doc,
+            frame,
+            image,
+            fit,
+            transform,
+            out,
+            pdf,
+            assets,
+        } => paged_cli::place::run(
+            &doc,
+            &assets,
+            &frame,
+            &image,
+            fit.as_deref(),
+            transform.as_deref(),
+            out.as_ref(),
+            &pdf,
+        ),
         Command::Parts { what } => paged_cli::parts::run(&what),
         Command::Describe { compact } => paged_cli::inspect::describe(compact),
         Command::Digest {

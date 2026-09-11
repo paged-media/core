@@ -2810,6 +2810,226 @@
       ]
     },
     {
+      "about": "Put an image file into a graphic frame",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The graphic frame, as `rectangle:<id>` (also oval:/polygon:)",
+          "long": null,
+          "name": "frame",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FRAME"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Image file. PNG / JPEG / WebP / TIFF / GIF / BMP — the formats the engine decodes",
+          "long": null,
+          "name": "image",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "IMAGE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "`<FrameFittingOption>` fitting mode, e.g. FillProportionally",
+          "long": "fit",
+          "name": "fit",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FIT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The placed image's own transform, `a,b,c,d,tx,ty` — how a crop is expressed exactly rather than approximated by a fit",
+          "long": "transform",
+          "name": "transform",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "A,B,C,D,TX,TY"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the result here. The format follows the extension",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [
+            "pdf17"
+          ],
+          "help": "\"pdf17\" (default) or \"pdfx4\". X-4 needs a resolvable output intent — give one here or let the document's profile serve",
+          "long": "standard",
+          "name": "standard",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "STANDARD"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output-intent profile NAME, resolved against what this run registered. Defaults to the working space",
+          "long": "output-intent",
+          "name": "output_intent",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_INTENT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Human-readable output condition for the OutputIntent dict",
+          "long": "output-condition",
+          "name": "output_condition",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_CONDITION"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Crop marks, registration marks, colour bars, page info",
+          "long": "marks",
+          "name": "marks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "MARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "0-based inclusive page range, e.g. `0-9`",
+          "long": "pages",
+          "name": "pages",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": "Put an image file into a graphic frame.\n\nThe engine's only image lane through this door is inline bytes — a `placeImage` link resolves against a resolver the CLI never populates — and from a script those bytes are a JS array literal per pixel row. This is the same `Mutation::ReplaceImageBytes`, handed a file.",
+      "name": "place",
+      "subcommands": []
+    },
+    {
       "about": "List, read and write a `.paged` container's content parts",
       "args": [],
       "longAbout": null,

@@ -29,6 +29,15 @@
 //! reach past the dispatcher), taking this to **32 of 62**; what
 //! remains is almost entirely the first kind.
 //!
+//! **What this gate cannot see.** It counts message KINDS, and
+//! `Mutate` has been one of them since the colour-profile activation in
+//! `options.rs`. So a subcommand that reaches a mutation the CLI could
+//! not express before — `paged place` and `ReplaceImageBytes`, added
+//! 2026-09-11 — moves nothing here. The second axis (which of the 117
+//! mutation ops each surface can send) is the capability matrix's, not
+//! this file's; a reader who wants "can the CLI place an image" must
+//! ask there.
+//!
 //! **Why there is no `paged wire <json>`.** It would reach every
 //! remaining kind at a stroke, and it would be a second general door:
 //! `paged session` already speaks the whole protocol, one message per

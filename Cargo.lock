@@ -2530,7 +2530,9 @@ dependencies = [
  "paged-color",
  "paged-fidelity",
  "paged-gen",
+ "paged-mutate",
  "paged-script",
+ "paged-wire",
  "serde",
  "serde_json",
 ]

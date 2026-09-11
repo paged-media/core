@@ -18,6 +18,13 @@ path = "src/main.rs"
 # subcommand without the dependency cycle that keeps `paged-inspect` and
 # `paged-export` in separate binaries.
 paged-canvas = { path = "../paged-canvas" }
+# `paged place` names a `PropertyPath` and a `Value` to set the fit and
+# the placed image's transform. Both come through `paged-canvas`
+# already; naming the crate makes the existing dependency honest rather
+# than adding one.
+paged-mutate = { path = "../paged-mutate" }
+# `ElementId::parse` — the address grammar `paged describe` publishes.
+paged-wire = { path = "../paged-wire" }
 # The typed wire door: `WorkerCore::dispatch` is the same code path the
 # editor drives, so a CLI built on it cannot express a mutation the
 # product cannot.

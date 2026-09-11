@@ -148,6 +148,36 @@ pub enum Command {
         #[command(subcommand)]
         what: crate::read::ReadCommand,
     },
+    /// Put an image file into a graphic frame.
+    ///
+    /// The engine's only image lane through this door is inline bytes
+    /// — a `placeImage` link resolves against a resolver the CLI never
+    /// populates — and from a script those bytes are a JS array
+    /// literal per pixel row. This is the same
+    /// `Mutation::ReplaceImageBytes`, handed a file.
+    Place {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// The graphic frame, as `rectangle:<id>` (also oval:/polygon:).
+        frame: String,
+        /// Image file. PNG / JPEG / WebP / TIFF / GIF / BMP — the
+        /// formats the engine decodes.
+        image: PathBuf,
+        /// `<FrameFittingOption>` fitting mode, e.g. FillProportionally.
+        #[arg(long)]
+        fit: Option<String>,
+        /// The placed image's own transform, `a,b,c,d,tx,ty` — how a
+        /// crop is expressed exactly rather than approximated by a fit.
+        #[arg(long, value_name = "A,B,C,D,TX,TY")]
+        transform: Option<String>,
+        /// Write the result here. The format follows the extension.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        #[command(flatten)]
+        pdf: PdfOptions,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// List, read and write a `.paged` container's content parts.
     Parts {
         #[command(subcommand)]
