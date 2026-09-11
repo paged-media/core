@@ -205,11 +205,24 @@ impl<'a> Measurer<'a> {
         match at {
             AutoSizingType::Off => return None,
             AutoSizingType::HeightOnly => {
-                let t = trial(authored_w, UNBOUNDED_PT);
-                if t.lines == 0 {
-                    return None;
+                // A multi-column frame grows to the height of its
+                // TALLEST column, not to the height its story needs
+                // full-width. Measured against InDesign's own export of
+                // `layout` page 11 (2026-09-10): twenty lines in a
+                // two-column auto-height frame come back 10 / 10 with
+                // the frame ten lines tall. That is the same rule
+                // `VerticalBalanceColumns` follows — each column holds
+                // ceil(total / n) lines — which is why balancing an
+                // auto-height frame changes nothing.
+                if let Some(h) = self.column_grown_height(frame, story) {
+                    grown_h = (h + insets[2]).max(min_h);
+                } else {
+                    let t = trial(authored_w, UNBOUNDED_PT);
+                    if t.lines == 0 {
+                        return None;
+                    }
+                    grown_h = (t.last_baseline_rel + insets[2]).max(min_h);
                 }
-                grown_h = (t.last_baseline_rel + insets[2]).max(min_h);
             }
             AutoSizingType::WidthOnly => {
                 if let Some(stalled) = stalled_width(authored, frame.item_transform, rp, obstacles)
@@ -306,13 +319,36 @@ impl<'a> Measurer<'a> {
         })
     }
 
-    /// Compose the frame's story at `w × h` (outer, pt) into a scratch
-    /// page and read the emitter's verdict. The clone keeps everything
-    /// but its bounds — insets, first-baseline rule, columns, the
-    /// `ItemTransform` — so the trial composes exactly as the final
-    /// layout will.
-    /// Every line baseline this story produces at `width_pt`, in pt
-    /// below the frame's spread top, in composition order.
+    /// The last baseline of the TALLEST column, for a frame that
+    /// declares more than one — i.e. the height an auto-height frame
+    /// has to grow to. `None` for a single-column frame (the caller's
+    /// existing full-width measure is then the right one) and for a
+    /// story that composes to nothing.
+    ///
+    /// Only `HeightOnly` is answered here, because only `HeightOnly` is
+    /// MEASURED: the width-growing modes bisect a width against a
+    /// full-width line list, and what InDesign does when it grows the
+    /// width of a columnar frame is a question no fixture has asked it
+    /// yet. Guessing it would put an unmeasured rule in the same file
+    /// as a measured one.
+    fn column_grown_height(
+        &self,
+        frame: &TextFrame,
+        story: &paged_scene::ParsedStory,
+    ) -> Option<f32> {
+        let geom = super::build_engine::frame_column_geometry(frame);
+        if geom.columns <= 1 {
+            return None;
+        }
+        let band = geom.column_boxes().into_iter().next()?;
+        let baselines = self.line_baselines(frame, story, band.width_pt);
+        let per_column = baselines.len().div_ceil(geom.columns as usize);
+        baselines.get(per_column.checked_sub(1)?).copied()
+    }
+
+    /// Every line baseline this story produces at `width_pt` — a
+    /// CONTENT measure, the way a column band is — in pt below the
+    /// frame's spread top, in composition order.
     ///
     /// `VerticalBalanceColumns` needs to know where the k-th line falls
     /// before anything is emitted, and the auto-size trial already
@@ -331,10 +367,22 @@ impl<'a> Measurer<'a> {
         let mut probe = frame.clone();
         probe.column_count = None;
         probe.column_gutter = None;
+        // A column band already excludes the frame's horizontal insets,
+        // so leaving them on the probe would inset the measure a second
+        // time. The vertical pair stays: it is what puts the first
+        // baseline where the frame puts it.
+        if let Some([t, _, b, _]) = probe.inset_spacing {
+            probe.inset_spacing = Some([t, 0.0, b, 0.0]);
+        }
         self.trial(&probe, story, frame.bounds, width_pt, UNBOUNDED_PT)
             .baselines
     }
 
+    /// Compose the frame's story at `w × h` (outer, pt) into a scratch
+    /// page and read the emitter's verdict. The clone keeps everything
+    /// but its bounds — insets, first-baseline rule, columns, the
+    /// `ItemTransform` — so the trial composes exactly as the final
+    /// layout will.
     fn trial(
         &self,
         frame: &TextFrame,

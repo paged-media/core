@@ -112,7 +112,7 @@
       "name": "layout",
       "idml": "layout.idml",
       "pdf": "layout.pdf",
-      "pages": 10,
+      "pages": 11,
       "passing": 2,
       "diff_dir": "/tmp/idml-generated-diff/layout",
       "report": "/tmp/idml-generated-diff/layout/report.json"

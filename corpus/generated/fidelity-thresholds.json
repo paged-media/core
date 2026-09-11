@@ -126,11 +126,11 @@
     },
     {
       "name": "layout",
-      "max_pages_with_pdf": 10,
+      "max_pages_with_pdf": 11,
       "max_mean_de": 1.302,
       "max_p99_de": 54.38,
       "min_ssim": 0.939,
-      "rationale": "Re-gated 2026-09-10 for the column wave. Two changes pull in opposite directions and both are recorded here. TIGHTER: p99 59.11 -> 54.38, because layout.fonts.sh now registers Inter — the fixture sets its body copy in Inter (samples/layout.rs BODY_FONT) and the harness default registered only Open Sans + Minion Pro, so every body run fell back to SourceSerif4 while InDesign exported it in Inter. Pages 1-4 improved on that alone (0.417/0.524/0.457/0.902 -> 0.154/0.218/0.251/0.582). LOOSER: mean 1.083 -> 1.302 and ssim 0.9502 -> 0.939, NOT to mask a regression but because the fixture gained four pages (7-10, the column cases) carrying 44 lines of body copy each — denser than anything it held before, so the worst page moved from page 4 (0.902) to page 10 (1.132). Worst across all 10 pages: mean 1.132 / p99 47.289 / ssim 0.944; sized at worst * 1.15 and worst_ssim - 0.005."
+      "rationale": "Re-gated 2026-09-10 for the column wave. Two changes pull in opposite directions and both are recorded here. TIGHTER: p99 59.11 -> 54.38, because layout.fonts.sh now registers Inter — the fixture sets its body copy in Inter (samples/layout.rs BODY_FONT) and the harness default registered only Open Sans + Minion Pro, so every body run fell back to SourceSerif4 while InDesign exported it in Inter. Pages 1-4 improved on that alone (0.417/0.524/0.457/0.902 -> 0.154/0.218/0.251/0.582). LOOSER: mean 1.083 -> 1.302 and ssim 0.9502 -> 0.939, NOT to mask a regression but because the fixture gained four pages (7-10, the column cases) carrying 44 lines of body copy each — denser than anything it held before, so the worst page moved from page 4 (0.902) to page 10 (1.132). Worst across all 10 pages: mean 1.132 / p99 47.289 / ssim 0.944; sized at worst * 1.15 and worst_ssim - 0.005. Page 11 (2col-autosize-height) joined the gate 2026-09-11 and moved NO threshold: it measures mean 0.363 / p99 15.627 / ssim 0.987, well inside the values above, so only max_pages_with_pdf changed. It is gated because the rule it pins is a MEASURED one — InDesign grows a two-column auto-height frame to ten lines and splits 10/10, where we grew it to twenty in one full-width column."
     },
     {
       "name": "links-broken",

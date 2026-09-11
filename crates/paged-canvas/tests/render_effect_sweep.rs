@@ -1268,6 +1268,28 @@ fn property_cases() -> Vec<Case> {
             ],
         }
     }));
+    c.push(paints(
+        "SetProperty textFrameColumnBalance",
+        "layout",
+        |m| {
+            // Balance has nothing to level until the frame HAS columns, so
+            // the count goes in as SETUP — it is not counted as balance's
+            // own effect, which is the whole point of `prepare` running
+            // before the baseline fingerprint.
+            let id = first_body_text_frame(m);
+            m.apply_mutation(&Mutation::SetElementProperty {
+                element_id: paged_wire::ElementId::parse(&id).expect("a parseable frame address"),
+                path: PropertyPath::TextFrameColumnCount,
+                value: paged_mutate::Value::Length(Some(2.0)),
+            })
+            .expect("give the frame two columns to balance");
+            Mutation::SetElementProperty {
+                element_id: paged_wire::ElementId::parse(&id).expect("a parseable frame address"),
+                path: PropertyPath::TextFrameColumnBalance,
+                value: paged_mutate::Value::Bool(true),
+            }
+        },
+    ));
     c.push(paints("SetProperty frameFeatherEnabled", "effects", |m| {
         enable_effect(m, PropertyPath::FrameFeatherEnabled)
     }));

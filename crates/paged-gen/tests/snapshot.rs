@@ -1335,7 +1335,18 @@ fn layout_round_trips_margins_columns_guides_and_spread_xform() {
     let sample = paged_gen::samples::layout::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
-    assert_eq!(doc.spreads.len(), 6, "six layout pages");
+    // Derived, not counted. A literal here was written when the fixture
+    // had six pages and went stale the moment the column wave added
+    // four more — reddening core's `ci` lane while `fidelity` and `gpu`
+    // stayed green, which is exactly how a page-count assertion earns
+    // its keep and then quietly stops. What this line is FOR is that
+    // every page the sample declares survives the round trip; the
+    // number is the sample's to say.
+    assert_eq!(
+        doc.spreads.len(),
+        sample.spreads.len(),
+        "every declared spread round-trips"
+    );
 
     // Page 0 — asymmetric 3-column margin grid + two boundary guides.
     let p0 = &doc.spreads[0].spread;

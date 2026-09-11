@@ -372,6 +372,23 @@ pub(super) fn collect_nested_text_clips(document: &Document) -> NestedTextClips 
 /// [`paged_flow::RegionGeometry::column_boxes`], the one place that sum
 /// is written; a second copy here is how one capability becomes two
 /// answers that disagree.
+/// The column geometry a text frame declares, measured in its own
+/// CONTENT box (horizontal insets already removed).
+///
+/// One function, because two callers have to agree exactly: the chain
+/// expansion below lays the columns out, and the auto-size fitter has
+/// to measure against the same bands or it grows the frame to a height
+/// its own columns never use.
+pub(super) fn frame_column_geometry(f: &TextFrame) -> paged_flow::RegionGeometry {
+    let [_, inset_left, _, inset_right] = f.inset_spacing.unwrap_or([0.0; 4]);
+    paged_flow::RegionGeometry {
+        width_pt: (f.bounds.width() - inset_left - inset_right).max(0.0),
+        height_pt: f.bounds.height().max(0.0),
+        columns: f.column_count.unwrap_or(1).max(1),
+        column_gap_pt: f.column_gutter.unwrap_or(DEFAULT_COLUMN_GUTTER_PT),
+    }
+}
+
 fn expand_column_chain(
     chain: &[&TextFrame],
     balance: Option<&ColumnBalance<'_>>,
@@ -386,14 +403,8 @@ fn expand_column_chain(
             out.push((*f).clone());
             continue;
         }
-        let [inset_top, inset_left, inset_bottom, inset_right] =
-            f.inset_spacing.unwrap_or([0.0; 4]);
-        let geom = paged_flow::RegionGeometry {
-            width_pt: (f.bounds.width() - inset_left - inset_right).max(0.0),
-            height_pt: f.bounds.height().max(0.0),
-            columns: n,
-            column_gap_pt: f.column_gutter.unwrap_or(DEFAULT_COLUMN_GUTTER_PT),
-        };
+        let [inset_top, inset_left, inset_bottom, _] = f.inset_spacing.unwrap_or([0.0; 4]);
+        let geom = frame_column_geometry(f);
         // `VerticalBalanceColumns` — InDesign levels the LINE COUNT,
         // measured against its own export: 44 single-line paragraphs in
         // a balanced two-column frame come back 22 / 22, where the same

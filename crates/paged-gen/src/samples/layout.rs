@@ -14,7 +14,7 @@
 
 //! W4.10 mega-file: `layout.idml` — page-geometry features.
 //!
-//! Six A4 pages, each a single layout concern so per-page heatmaps stay
+//! Eleven A4 pages, each a single layout concern so per-page heatmaps stay
 //! self-describing (the `layout · variant · detail` `Page.Name`
 //! convention):
 //!
@@ -28,12 +28,6 @@
 //!      custom 24pt `TextColumnGutter`. Its filler never fills column
 //!      one, so it pins the line-break WIDTH and says nothing about the
 //!      flow between columns — which is what pages 7-10 are for.
-//!   7. The column wave — `2col-fill-and-flow`, `3col`,
-//!      `2col-balanced` and `2col-insets`: frames sized so the text MUST
-//!      cross a column boundary. Numbered paragraphs, so where the break
-//!      falls is readable at a glance against InDesign's export rather
-//!      than a smear of grey in a diff.
-//!
 //!   3. `layout · autosize · height-only-grow` — the W1.7 Phase A+B
 //!      downward-grow case (`AutoSizingType=HeightOnly`,
 //!      `TopLeftPoint`): an undersized headline box the renderer grows
@@ -50,6 +44,17 @@
 //!      emitted fill transform must pick up the rotation.
 //!   6. `layout · spread-transform · scale-1p25` — the body `<Spread>`
 //!      carries a 1.25× uniform scale `ItemTransform` (W1.9).
+//!   7. `layout · text-columns · 2col-fill-and-flow`, 8. `3col`,
+//!      9. `2col-balanced`, 10. `2col-insets` — the column wave: frames
+//!      sized so the text MUST cross a column boundary. Numbered
+//!      paragraphs, so where the break falls is readable at a glance
+//!      against InDesign's export rather than a smear of grey in a diff.
+//!   11. `layout · text-columns · 2col-autosize-height` — columns ×
+//!       auto-size, the interaction the wave's plan flagged as a risk:
+//!       the fitter measures at the frame's authored width and knows
+//!       nothing of columns, so what the grown height should be is a
+//!       question for InDesign, not for us. Its answer: a two-column
+//!       auto-height frame grows to the height of its TALLEST column.
 //!
 //! Body text pins `AppliedFont="Inter"` so the autosize grow is
 //! deterministic against `corpus/fonts/Inter.ttf`. Fixtures are
@@ -123,6 +128,11 @@ pub fn build() -> Sample {
         "layout · text-columns · 3col",
         "layout · text-columns · 2col-balanced",
         "layout · text-columns · 2col-insets",
+        // The interaction the plan flagged as a risk: auto-size measures
+        // against the frame's authored width and knows nothing of
+        // columns. Only InDesign can say what the grown height should
+        // be, so the fixture asks it.
+        "layout · text-columns · 2col-autosize-height",
     ];
 
     let mut master_spreads = Vec::with_capacity(names.len());
@@ -420,6 +430,59 @@ pub fn build() -> Sample {
                             text_column_gutter: Some(18.0),
                             vertical_balance_columns: balance,
                             inset_spacing: insets,
+                            ..Default::default()
+                        }),
+                        custom_subpaths: None,
+                    }
+                    .into(),
+                );
+            }
+            // 11. Columns × auto-size. The frame is authored far too
+            // short and grows downward; with two columns the grown
+            // height is the height of the TALLEST column, not of the
+            // whole story set full-width. Reference point is TopLeft so
+            // the growth direction is one variable, not two.
+            10 => {
+                stories.push((
+                    body_story_id.clone(),
+                    write_story(&Story {
+                        extra_story_attrs: Vec::new(),
+                        self_id: body_story_id.clone(),
+                        paragraphs: (0..20)
+                            .map(|n| {
+                                inter_paragraph(
+                                    &format!("Paragraph {n} of the growing column copy."),
+                                    9.0,
+                                )
+                            })
+                            .collect(),
+                    }),
+                ));
+                story_refs.push(body_story_id.clone());
+                page_items.push(
+                    Rect {
+                        self_id: body_frame_id,
+                        width_pt: 460.0,
+                        height_pt: 40.0,
+                        item_transform: translate(67.0, 80.0),
+                        fill_color: None,
+                        stroke_color: Some("Color/RGBCyan".to_string()),
+                        stroke_weight_pt: Some(0.5),
+                        parent_story: Some(body_story_id.clone()),
+                        next_text_frame: None,
+                        previous_text_frame: None,
+                        extra_attrs: Vec::new(),
+                        blending: None,
+                        drop_shadow: None,
+                        placed_image: None,
+                        text_wrap: None,
+                        anchored_setting: None,
+                        frame_effects: Vec::new(),
+                        text_frame_pref: Some(TextFramePref {
+                            text_column_count: Some(2),
+                            text_column_gutter: Some(18.0),
+                            auto_sizing_type: Some("HeightOnly"),
+                            auto_sizing_reference_point: Some("TopLeftPoint"),
                             ..Default::default()
                         }),
                         custom_subpaths: None,
