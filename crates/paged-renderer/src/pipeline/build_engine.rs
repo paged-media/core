@@ -2761,7 +2761,43 @@ pub(super) fn build_document_inner(
         // for an extra pass, so its passes are exactly the footnote ones.
         let mut forced_breaks: HashMap<u32, u32> = HashMap::new();
         let mut footnotes_settled = false;
-        for pass in 0..MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES {
+        // ADR 027 plan step 3 — start from the breaks the previous build
+        // settled on when they provably carry over (see `KeepSeed`). A story
+        // that reads variables (a page count, a running header) can lay out
+        // differently before the edit too, and is never seeded.
+        let seed_key = (parsed.self_id.clone(), post.is_some());
+        let reads_variables = toc_paragraphs.is_some()
+            || parsed
+                .story
+                .paragraphs
+                .iter()
+                .any(|p| p.runs.iter().any(|r| r.text_variable.is_some()));
+        let seed_sig = options
+            .keep_seeds
+            .map(|_| body_story_signature(&chain_for_post, &chain_pages_pre, &wrap_rects_per_page));
+        let seed_edit: Option<u32> = options
+            .keep_seed_hints
+            .and_then(|h| h.get(&parsed.self_id).copied())
+            .filter(|_| !reads_variables);
+        if let (Some(store), Some(e), Some(sig)) = (options.keep_seeds, seed_edit, seed_sig) {
+            if let Some(seed) = store.borrow().get(&seed_key) {
+                if seed.chain_sig == sig && seed.last_active.is_some_and(|a| a + 1 < e) {
+                    forced_breaks = seed.forced.clone();
+                }
+            }
+        }
+        let mut seeded = !forced_breaks.is_empty();
+        let mut last_active: Option<u32> = None;
+        let mut converged = false;
+        // Passes spent before the cold fixpoint started (1 after a seed
+        // that did not hold), so the caps count exactly as a cold build's.
+        let mut pass_base = 0;
+        let pass_cap = MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES;
+        for pass in 0..pass_cap + 1 {
+            let p = pass - pass_base;
+            if p >= pass_cap {
+                break;
+            }
             // Re-emit passes start from the pre-story snapshot so the
             // page accumulates exactly one story's worth of commands.
             if pass > 0 {
@@ -2860,6 +2896,7 @@ pub(super) fn build_document_inner(
             let next_forced = emitter.keep_breaks();
             let keeps_changed = next_forced != forced_breaks;
             forced_breaks = next_forced;
+            last_active = emitter.last_active_keep();
 
             // Measure each frame's footnote pool and fold it into the
             // reservation. Vertical-writing stories lay the pool out in
@@ -2880,7 +2917,7 @@ pub(super) fn build_document_inner(
                                 (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
                         }
                     }
-                    if next_reserved == reserved_64 || pass + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
+                    if next_reserved == reserved_64 || p + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
                         // Fixpoint, or the bail cap — accept the reservation.
                         // The pool emit post-pass paints below the reserved band.
                         footnotes_settled = true;
@@ -2891,11 +2928,54 @@ pub(super) fn build_document_inner(
             // Done when the footnote reservation and the keep breaks both
             // hold. A keep change re-emits until its own cap, accepting the
             // last pass after that (text is then placed, never dropped).
+            // A seeded pass is kept only when it is what the cold fixpoint
+            // ends on: the seed held, no keep option can act from the edit
+            // on, and the story reserved no footnote space. Otherwise run
+            // the cold fixpoint from no forced breaks.
+            if seeded {
+                seeded = false;
+                let holds = !keeps_changed
+                    && footnotes_settled
+                    && reserved_64.iter().all(|r| *r == 0)
+                    && seed_edit.is_some_and(|e| last_active.map_or(true, |a| a + 1 < e));
+                if !holds {
+                    forced_breaks = HashMap::new();
+                    reserved_64 = vec![0; chain_for_post.len()];
+                    footnotes_settled = false;
+                    pass_base = pass + 1;
+                    continue;
+                }
+            }
             if footnotes_settled && !keeps_changed {
+                converged = true;
+                if pass == 0 && !forced_breaks.is_empty() {
+                    total_stats.keep_seeds_used += 1;
+                }
                 break;
             }
-            if footnotes_settled && pass + 1 >= MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES {
+            if footnotes_settled && p + 1 >= pass_cap {
                 break;
+            }
+        }
+        // Keep the settled breaks for the next build's seed. A story that
+        // reads variables or carries footnotes is never seeded, so it is
+        // not stored either.
+        if let (Some(store), Some(sig)) = (options.keep_seeds, seed_sig) {
+            let footnoted = pages
+                .iter()
+                .zip(&pre_snapshot)
+                .any(|(page, snap)| page.footnotes.len() > snap.6);
+            if converged && !reads_variables && !footnoted {
+                store.borrow_mut().insert(
+                    seed_key,
+                    KeepSeed {
+                        forced: forced_breaks.clone(),
+                        chain_sig: sig,
+                        last_active,
+                    },
+                );
+            } else {
+                store.borrow_mut().remove(&seed_key);
             }
         }
 
@@ -3738,6 +3818,14 @@ impl<'a> StoryEmitter<'a> {
     pub(super) fn with_forced_breaks(mut self, forced: &HashMap<u32, u32>) -> Self {
         self.forced_breaks = forced.clone();
         self
+    }
+
+    /// Index of the last paragraph whose keep options can force a break.
+    pub(super) fn last_active_keep(&self) -> Option<u32> {
+        self.keep_specs
+            .iter()
+            .rposition(|k| !k.is_inert())
+            .map(|i| i as u32)
     }
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep

@@ -1334,6 +1334,13 @@ pub struct CanvasModel {
     /// cold build ([`Self::digest_gate_check`]) and a difference panics.
     /// Seeded from `PAGED_DIGEST_GATE=1`; a CI / debug lane only.
     digest_gate: bool,
+    /// thoughts ADR 027 plan step 3 — each story's settled keep-option
+    /// breaks, seeding the next build's keeps fixpoint.
+    keep_seeds: paged_renderer::KeepSeedStore,
+    /// Story id → first paragraph a text edit changed since the last
+    /// build: the part of a story whose keep breaks may be reused.
+    /// Consumed by the rebuild.
+    pending_keep_hints: HashMap<String, u32>,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1694,6 +1701,8 @@ impl CanvasModel {
             rebuild_deferred: false,
             rebuild_owed: false,
             digest_gate: std::env::var("PAGED_DIGEST_GATE").is_ok_and(|v| v == "1"),
+            keep_seeds: Default::default(),
+            pending_keep_hints: HashMap::new(),
         })
     }
 
@@ -2183,6 +2192,7 @@ impl CanvasModel {
         // W1.24 (audit B18) — time the scene edit; the next rebuild
         // folds it into RebuildStats.op_apply_ms.
         let t_op = phase_now();
+        let edit = crate::mutate::first_changed_paragraph(&text_op, &self.scene);
         let applied = crate::mutate::apply(&mut self.scene, &text_op).map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("text mutation failed: {e}"),
@@ -2192,7 +2202,7 @@ impl CanvasModel {
         // Perf-BodyStory — text edits change the *content* of a story
         // but not its frame chain, so the body-story signature would
         // wrongly match and the edit would never display.
-        self.commit_and_rebuild(Invalidation::Everything)
+        self.commit_and_rebuild(Invalidation::Text { edit })
             .map_err(|e| crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after mutation: {e}"),
             })?;
@@ -4096,9 +4106,12 @@ impl CanvasModel {
     /// unified log.
     pub fn undo(&mut self) -> Option<UndoOutcome> {
         let rec = self.applied_log.pop()?;
+        let mut invalidation = Invalidation::Everything;
         let affected_story_id = match &rec.kind {
             LoggedMutation::Text { op: _, inverse } => {
+                let edit = crate::mutate::first_changed_paragraph(inverse, &self.scene);
                 let _ = crate::mutate::apply(&mut self.scene, inverse).ok()?;
+                invalidation = Invalidation::Text { edit };
                 Some(story_id_of_text_op(inverse).to_string())
             }
             LoggedMutation::Frame(applied) => {
@@ -4128,7 +4141,7 @@ impl CanvasModel {
         // splice back in), and a structural inverse (page remove, frame
         // re-insert) shifts page indices under the cached per-page
         // deltas. Mirror apply_mutation / apply_operation.
-        self.commit_and_rebuild(Invalidation::Everything).ok()?;
+        self.commit_and_rebuild(invalidation).ok()?;
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
@@ -4145,9 +4158,12 @@ impl CanvasModel {
     /// — handles both text and frame variants.
     pub fn redo(&mut self) -> Option<UndoOutcome> {
         let rec = self.redo_log.pop()?;
+        let mut invalidation = Invalidation::Everything;
         let (new_kind, affected_story_id) = match &rec.kind {
             LoggedMutation::Text { op, inverse: _ } => {
+                let edit = crate::mutate::first_changed_paragraph(op, &self.scene);
                 let applied = crate::mutate::apply(&mut self.scene, op).ok()?;
+                invalidation = Invalidation::Text { edit };
                 let sid = Some(story_id_of_text_op(op).to_string());
                 (
                     LoggedMutation::Text {
@@ -4178,7 +4194,7 @@ impl CanvasModel {
         };
         // Perf-MasterText + Perf-BodyStory — same invariant as undo():
         // the replayed op mutates content/structure under the caches.
-        self.commit_and_rebuild(Invalidation::Everything).ok()?;
+        self.commit_and_rebuild(invalidation).ok()?;
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
@@ -8512,6 +8528,8 @@ impl CanvasModel {
                 // master-text and per-story body emit deltas.
                 master_text_emit_cache: Some(&self.master_text_emit_cache),
                 body_story_emit_cache: Some(&self.body_story_emit_cache),
+                keep_seeds: Some(&self.keep_seeds),
+                keep_seed_hints: Some(&self.pending_keep_hints),
                 render_scale: self.resource_render_scale,
                 // A5 — live rebuilds keep the degraded-asset markers on
                 // (mirrors the initial load); an export stays faithful.
@@ -8609,6 +8627,24 @@ impl CanvasModel {
             Invalidation::Everything => {
                 self.master_text_emit_cache.borrow_mut().clear();
                 self.body_story_emit_cache.borrow_mut().clear();
+                self.keep_seeds.borrow_mut().clear();
+                self.pending_keep_hints.clear();
+            }
+            Invalidation::Text { edit } => {
+                self.master_text_emit_cache.borrow_mut().clear();
+                self.body_story_emit_cache.borrow_mut().clear();
+                match edit {
+                    Some((story, paragraph)) => {
+                        let hint = self.pending_keep_hints.entry(story).or_insert(paragraph);
+                        *hint = (*hint).min(paragraph);
+                    }
+                    // Where the edit landed is unknown: nothing of any
+                    // story's breaks may be reused.
+                    None => {
+                        self.keep_seeds.borrow_mut().clear();
+                        self.pending_keep_hints.clear();
+                    }
+                }
             }
         }
         self.rebuild_after_mutation()
@@ -8671,6 +8707,7 @@ impl CanvasModel {
             applied_log_len: self.applied_log.len(),
         };
         self.built = built;
+        self.pending_keep_hints.clear();
         if self.digest_gate {
             if let Err(e) = self.digest_gate_check() {
                 panic!("ADR 027 digest gate: incremental build != cold build: {e}");
@@ -8720,6 +8757,8 @@ impl CanvasModel {
         options.grow_hint = Some(&fresh_hint);
         options.master_text_emit_cache = None;
         options.body_story_emit_cache = None;
+        options.keep_seeds = None;
+        options.keep_seed_hints = None;
         let (built, _) =
             paged_text::cache::with_layout_cache(paged_text::LayoutCache::default(), || {
                 pipeline::build_document(&self.scene, &options)
@@ -9259,6 +9298,9 @@ enum Invalidation {
     /// Content or structure changed in a way the cache keys cannot see:
     /// drop every master-text and body-story delta.
     Everything,
+    /// A text edit inside one story: `edit` names the story and the first
+    /// paragraph it changed, when that is known (`None` for a cell edit).
+    Text { edit: Option<(String, u32)> },
 }
 
 /// What a model build is for (thoughts ADR 027 §5).

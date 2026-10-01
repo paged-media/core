@@ -499,6 +499,37 @@ fn locate_para_local(paragraphs: &[paged_model::Paragraph], offset: u32) -> (usi
     }
 }
 
+/// thoughts ADR 027 — the index of the body paragraph a text op at
+/// `offset` starts changing (the paragraph the offset falls in). Every
+/// paragraph before it is untouched by the op.
+pub(crate) fn first_changed_paragraph(op: &TextOp, doc: &Document) -> Option<(String, u32)> {
+    let (story_id, offset, cell) = match op {
+        TextOp::InsertText {
+            story_id,
+            offset,
+            cell,
+            ..
+        } => (story_id, *offset, cell),
+        TextOp::DeleteRange {
+            story_id,
+            start,
+            cell,
+            ..
+        } => (story_id, *start, cell),
+    };
+    // A cell edit changes the paragraph hosting the table; which one is
+    // not worth resolving here.
+    if cell.is_some() {
+        return None;
+    }
+    let story = doc.stories.iter().find(|s| &s.self_id == story_id)?;
+    if story.story.paragraphs.is_empty() {
+        return Some((story_id.clone(), 0));
+    }
+    let (idx, _) = locate_para_local(&story.story.paragraphs, offset);
+    Some((story_id.clone(), idx as u32))
+}
+
 /// Sum of run text bytes that precede `target_run` in `para`'s run
 /// list. Returns `usize::MAX` if `target_run` isn't in the list
 /// (defensive — shouldn't happen since the caller iterates `para.runs`).

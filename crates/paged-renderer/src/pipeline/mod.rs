@@ -385,6 +385,16 @@ pub struct PipelineOptions<'a> {
     /// any given gesture, so the win ratio is high.
     pub body_story_emit_cache:
         Option<&'a std::cell::RefCell<HashMap<(String, u64), BodyStoryEmissionDelta>>>,
+    /// thoughts ADR 027 plan step 3 — each story's settled keep-option
+    /// breaks from the previous build, read as the keeps fixpoint's
+    /// starting point and written with the breaks the build settled on.
+    /// Only a story named in [`Self::keep_seed_hints`] is seeded. `None`
+    /// starts every fixpoint from no forced breaks (the cold build).
+    pub keep_seeds: Option<&'a KeepSeedStore>,
+    /// Story id → index of the first paragraph an edit changed since the
+    /// build that wrote [`Self::keep_seeds`]. Paragraphs before it are
+    /// unchanged, which is what makes their breaks reusable.
+    pub keep_seed_hints: Option<&'a HashMap<String, u32>>,
     /// W1.18a — the date clock for `CreationDate` / `ModificationDate` /
     /// `OutputDate` text variables. Explicit + injectable so date
     /// variables resolve deterministically (never the wall clock). The
@@ -453,6 +463,29 @@ pub struct BodyStoryEmissionDelta {
     pub anchored: Vec<AnchoredImageEmit>,
     pub breaks: Vec<BreakRecord>,
 }
+
+/// thoughts ADR 027 plan step 3 — one story's settled keep-option breaks,
+/// kept from one build to the next.
+///
+/// The keeps fixpoint (ADR 028) starts from no forced breaks and adds the
+/// breaks each pass's placement asks for, carrying earlier ones over, so
+/// its result depends on the passes it went through. A seed is therefore
+/// reused only where that history cannot differ: every paragraph with an
+/// active keep option ends before the edited one (paragraph `e`), so the
+/// breaks before it evolve exactly as they did, and nothing after it can
+/// ever force one. The pipeline checks that on the seeded pass too and
+/// falls back to the cold fixpoint when it does not hold.
+#[derive(Debug, Clone, Default)]
+pub struct KeepSeed {
+    pub(crate) forced: HashMap<u32, u32>,
+    /// `body_story_signature` of the chain the breaks were settled on.
+    pub(crate) chain_sig: u64,
+    /// Index of the last paragraph whose keep options can force a break.
+    pub(crate) last_active: Option<u32>,
+}
+
+/// Story id and "is the post-layout pass" → [`KeepSeed`].
+pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
 
 /// Perf-BodyStory — single page's worth of captured emission state.
 /// Splice on hit: push `paths` through `PathBuffer::push_anon`
@@ -540,6 +573,8 @@ impl Default for PipelineOptions<'_> {
             cmyk_transform_cache: None,
             master_text_emit_cache: None,
             body_story_emit_cache: None,
+            keep_seeds: None,
+            keep_seed_hints: None,
             document_clock: DocumentClock::default(),
             scene_layers: None,
             resource_providers: None,
@@ -957,6 +992,10 @@ pub struct PipelineStats {
     /// Surfaced for diagnostics; non-zero means a story didn't fit
     /// its declared frame chain (P-13).
     pub dropped_overflow_lines: usize,
+    /// thoughts ADR 027 plan step 3 — stories whose keeps fixpoint
+    /// started from the previous build's settled breaks and kept them,
+    /// one emit pass instead of two.
+    pub keep_seeds_used: usize,
 }
 
 /// W1.18c / W1.19 — the post-layout resolution context handed to the

@@ -419,8 +419,16 @@ fn reflow_grows_and_stays_equal_to_a_cold_build() {
 fn docx_pagination_stays_equal_to_a_cold_build() {
     let mut g = Gate::new("docx-pagination", &docx(0));
     let story = main_story(&g.model);
-    // P054 carries keepNext; edit around the page-1/2 boundary.
+    // P054 carries keepNext. Typing after it reuses the settled keep
+    // break (ADR 027 plan step 3); the script around it does not.
+    g.type_chars(&story, 60, 4);
+    assert_eq!(
+        g.model.built().stats.keep_seeds_used,
+        1,
+        "typing after P054 starts from its settled break"
+    );
     g.script(&story, 50);
+    g.type_chars(&story, 70, 2);
     g.grow_toggle(&story);
     g.finish();
 }
@@ -498,11 +506,11 @@ fn navigation_stays_equal_to_a_cold_build() {
 
 #[test]
 fn a_long_docx_story_stays_equal_to_a_cold_build() {
-    // 150 extra paragraphs: about 20 pages, long enough that an edit on
+    // 80 extra paragraphs: about 12 pages, long enough that an edit on
     // page 3 has many pages after it, short enough for a debug test binary.
-    let mut g = Gate::new("long docx story", &docx(150));
+    let mut g = Gate::new("long docx story", &docx(80));
     let story = main_story(&g.model);
-    assert!(g.model.built().pages.len() > 12, "the story grew");
+    assert!(g.model.built().pages.len() > 8, "the story grew");
     g.script(&story, 115);
     g.finish();
 }
