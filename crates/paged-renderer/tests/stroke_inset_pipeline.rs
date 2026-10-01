@@ -178,26 +178,9 @@ const INDESIGN: &[(usize, &str, f32, f32, f32)] = &[
 ];
 
 /// Cases the engine cannot match yet, with the reason. Everything else
-/// must land within [`TOLERANCE`].
-///
-/// A text frame's `StrokeAlignment` does not reach the model: the IDML
-/// importer (plugin-publish `idml-import`) reads it on rectangles, ovals
-/// and polygons but not on text frames, so these frames are painted AND
-/// inset as centred. Real documents do not hit it — 0 of the 13,727 text
-/// frames in the corpus packs spell `StrokeAlignment`.
+/// must land within [`TOLERANCE`] — the inside / outside alignments
+/// included, since the frame's `StrokeAlignment` reaches the model.
 const KNOWN: &[(usize, &str)] = &[
-    (1, "inside alignment not in the model"),
-    (2, "outside alignment not in the model"),
-    (4, "inside alignment not in the model"),
-    (5, "outside alignment not in the model"),
-    (7, "inside alignment not in the model"),
-    (8, "outside alignment not in the model"),
-    (10, "inside alignment not in the model"),
-    (11, "outside alignment not in the model"),
-    (16, "inside alignment not in the model"),
-    (17, "outside alignment not in the model"),
-    (22, "inside alignment not in the model"),
-    (24, "inside alignment not in the model"),
     // The engine composes a rounded-corner text frame as its rectangle
     // (the corner effect is painted, not laid out): line 1 and line 5 sit
     // in the corners. The same residue with no stroke at all (case 26).
@@ -303,7 +286,7 @@ fn every_line_lands_where_indesign_puts_it() {
             )
         );
     }
-    assert!(checked >= 13, "only {checked} cases checked");
+    assert!(checked >= 25, "only {checked} cases checked");
     assert_eq!(
         failures,
         0,

@@ -275,7 +275,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_stroke_angle: frame.gradient_stroke_angle,
             gradient_stroke_length: frame.gradient_stroke_length,
             drop_shadow: frame.drop_shadow.as_ref(),
-            stroke_alignment: None,
+            stroke_alignment: frame.stroke_alignment.as_deref(),
             stroke_type: frame.stroke_type.as_deref(),
             end_cap: None,
             end_join: None,

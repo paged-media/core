@@ -782,9 +782,8 @@ pub(crate) fn stroke_inset_share(alignment: Option<&str>, weight: f32) -> f32 {
 ///
 /// Resolved the way `emit_text_frame_into` resolves the stroke it
 /// paints (the frame, then its object style), so the text moves exactly
-/// when a stroke is drawn. A text frame's `StrokeAlignment` does not
-/// reach the model today (the importer reads it on rectangles, ovals and
-/// polygons only), so the frame is both painted and inset as centred.
+/// when a stroke is drawn, by the share its `StrokeAlignment` gives it
+/// (the same alignment `emit_text_frame_into` strokes the outline by).
 pub(crate) fn stroke_text_inset(frame: &TextFrame, document: &Document) -> f32 {
     let mut resolved = ResolvedFrame::from_text_frame(frame);
     let style = crate::module::resolve_applied_style(&resolved, document);
@@ -929,6 +928,15 @@ pub(super) fn emit_text_frame_into(
     // `fill_path = None` when no corner effect resolves, so an ordinary
     // text frame keeps the cheap rect primitive it always used.
     let corner = crate::module::corner_path_module(&resolved, page);
+    let stroke_weight = resolved.effective_stroke_weight();
+    // Where the stroke paints, for its `StrokeAlignment` — the same
+    // geometry a `<Rectangle>` / `<Polygon>` strokes: the outline moved
+    // in (Inside) or out (Outside) by half the weight, so the stroke lies
+    // wholly inside / outside the frame edge. `None` when the stroke is
+    // centred (the outline itself is stroked), and for a corner-effected
+    // panel, whose corner module already baked the alignment into
+    // `corner.stroke`.
+    let mut aligned_stroke = None;
     let fill_path = if let Geometry::Polygon {
         anchors,
         subpath_starts,
@@ -950,11 +958,30 @@ pub(super) fn emit_text_frame_into(
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(anchors),
         };
+        aligned_stroke =
+            super::shapes::aligned_outline_path(&path, resolved.stroke_alignment, stroke_weight)
+                .map(|p| page.list.paths.intern(cache_key ^ 0xA11A_0000, p).0);
         let (id, _) = page.list.paths.intern(cache_key, path);
         Some(id)
     } else {
         corner.fill
     };
+    if let (Geometry::TextFrameRect { rect }, None) = (&resolved.geometry, corner.stroke) {
+        let offset = stroke_alignment_offset(resolved.stroke_alignment, stroke_weight);
+        if offset != 0.0 {
+            let inset = super::shapes::inset_rect(*rect, offset);
+            let seed = resolved
+                .self_id
+                .map(|id| fnv_1a_u64(id.as_bytes()))
+                .unwrap_or_else(|| fnv_1a_u64(format!("{rect:?}").as_bytes()));
+            let key = seed ^ 0xA11A_0000 ^ u64::from(offset.to_bits());
+            let (id, _) = page
+                .list
+                .paths
+                .intern(key, super::shapes::axis_rect_path(inset));
+            aligned_stroke = Some(id);
+        }
+    }
     // Q-04: extended GradientFeather (and the rest of FrameEffects) to
     // TextFrame. For the rectangular panel we route through the unit-
     // rect path the same way `emit_rectangle_into` does (intern the
@@ -1024,16 +1051,13 @@ pub(super) fn emit_text_frame_into(
         color_ctx,
         outer,
         // C-18: the corner module returns a SEPARATE stroke path with
-        // `StrokeAlignment` baked in. A text frame never carries an
-        // alignment (`from_text_frame` leaves it `None` ⇒ zero offset),
-        // so today the two paths are congruent — but taking the stroke
-        // one keeps this emitter on the same contract as
-        // `emit_rectangle_into` for the day it does. `.or(fill_path)`
-        // covers the pathed case, where the corner module stood down.
-        corner.stroke.or(fill_path),
+        // `StrokeAlignment` baked in, as for `emit_rectangle_into`; an
+        // aligned flat panel or pathed frame strokes its moved outline;
+        // `.or(fill_path)` is the centred pathed case.
+        corner.stroke.or(aligned_stroke).or(fill_path),
         stroke_for(
             resolved.stroke_type,
-            resolved.effective_stroke_weight(),
+            stroke_weight,
             resolved.end_cap,
             resolved.end_join,
             resolved.miter_limit,
