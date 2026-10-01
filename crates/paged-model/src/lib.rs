@@ -2645,6 +2645,18 @@ impl<'a> SectionWalk<'a> {
     pub fn used_fallback(&self) -> bool {
         self.used_fallback
     }
+
+    /// The number the section rules gave the most recently walked page
+    /// (before its numbering style and prefix are applied).
+    pub fn current_number(&self) -> u32 {
+        self.current_number
+    }
+
+    /// Index into the walked `sections` of the section the most recently
+    /// walked page belongs to; `None` before the first section starts.
+    pub fn active_section(&self) -> Option<usize> {
+        self.active
+    }
 }
 
 /// IDML `<Article>` definition. Members reference stories via
@@ -2734,11 +2746,16 @@ pub struct IndexTopic {
 /// IDML `<TextVariable>` declaration. W1.4: the renderer resolves the
 /// value per `variable_type` at emit time (falling back to each
 /// instance's baked `ResultText` when the type's inputs aren't
-/// modelled). The `<TextVariablePreference>` child carries the
-/// type-specific payload — the literal contents of a custom variable,
-/// the date `Format` string, and the surrounding `TextBefore` /
-/// `TextAfter` decoration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// modelled).
+///
+/// InDesign writes the type-specific payload as a typed child —
+/// `<MatchParagraphStylePreference>`, `<MatchCharacterStylePreference>`,
+/// `<PageNumberVariablePreference>`, `<ChapterNumberVariablePreference>`,
+/// `<FileNameVariablePreference>`, `<DateVariablePreference>`,
+/// `<CustomTextVariablePreference>` (measured, InDesign 20.0.1; thoughts
+/// ADR 033). The engine's older fixtures wrote a generic
+/// `<TextVariablePreference>` instead; both fill these fields.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TextVariable {
     pub self_id: String,
     pub name: Option<String>,
@@ -2764,10 +2781,53 @@ pub struct TextVariable {
     /// the style whose nearest on-page occurrence supplies the header
     /// text. `None` for non-header variables.
     pub running_header_style: Option<String>,
-    /// W1.18c — `<TextVariablePreference Use="FirstOnPage|LastOnPage">`
-    /// — which on-page match a running header picks up. `None` ⇒
-    /// FirstOnPage (InDesign's default).
+    /// W1.18c — `SearchStrategy="FirstOnPage|LastOnPage"` on a
+    /// `<Match…StylePreference>` (the older fixtures' `Use`) — which
+    /// on-page match a running header picks up. `None` ⇒ FirstOnPage
+    /// (InDesign's default).
     pub running_header_use: Option<String>,
+    /// `<MatchCharacterStylePreference AppliedCharacterStyle="...">` — the
+    /// character style a `MatchCharacterStyleType` running header picks
+    /// up. Its own slot: a paragraph style and a character style are
+    /// different namespaces, and the two variable types match different
+    /// things (a whole paragraph vs a contiguous styled range).
+    #[serde(default)]
+    pub running_header_character_style: Option<String>,
+    /// `ChangeCase` on a running header: `None` / `Uppercase` /
+    /// `Lowercase` / `Titlecase` / `Sentencecase` (InDesign's spelling).
+    #[serde(default)]
+    pub change_case: Option<String>,
+    /// `DeleteEndPunctuation="true"` on a running header.
+    #[serde(default)]
+    pub delete_end_punctuation: bool,
+    /// `<PageNumberVariablePreference Scope="DocumentScope|SectionScope">`
+    /// for `LastPageNumberType`.
+    #[serde(default)]
+    pub page_number_scope: Option<String>,
+    /// `Format` of a `<PageNumberVariablePreference>` or
+    /// `<ChapterNumberVariablePreference>`: `Current` (the page's or the
+    /// chapter's own numbering) or a numbering style (`UpperRoman`, …).
+    #[serde(default)]
+    pub number_format: Option<String>,
+    /// `<FileNameVariablePreference IncludeExtension="true">`.
+    #[serde(default)]
+    pub include_extension: bool,
+    /// `<FileNameVariablePreference IncludePath="true">`.
+    #[serde(default)]
+    pub include_path: bool,
+}
+
+/// `<ChapterNumberPreference>` (in `Resources/Preferences.xml`): the
+/// document's chapter number, which `ChapterNumberType` variables print.
+/// It is a DOCUMENT setting (a book numbers its documents), not a section
+/// one: InDesign 20.0.1 printed "1" for a chapter-number variable on pages
+/// whose sections carried markers and restarts (measured 2026-10-01).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChapterNumberPreference {
+    /// `ChapterNumber` (default 1).
+    pub number: Option<u32>,
+    /// `<ChapterNumberFormat>` — `1, 2, 3, 4...`, `I, II, III, IV...`, …
+    pub format: Option<String>,
 }
 
 /// IDML `<Layer>` definition. Only the fields the renderer needs
@@ -5808,6 +5868,11 @@ pub struct DesignMap {
     /// auto-page-number marker reflow). When `Name` is present it stays
     /// authoritative.
     pub sections: Vec<Section>,
+    /// The document's `<ChapterNumberPreference>` (from
+    /// `Resources/Preferences.xml`); `None` when the package carries none,
+    /// which InDesign reads as chapter 1.
+    #[serde(default)]
+    pub chapter_number: Option<ChapterNumberPreference>,
 }
 
 /// Private-use Unicode codepoint placed inline by the story parser
@@ -5817,6 +5882,29 @@ pub struct DesignMap {
 /// rendered glyph plane, never produced by real text. (Moved out of
 /// `paged-parse::story` so type-only dependents can drop the parser — N8.)
 pub const AUTO_PAGE_NUMBER_MARKER: char = '\u{E018}';
-/// Same idea for `<?ACE 19?>` (next-page-number marker; used in
-/// "continued on page" footers).
+/// The NEXT page number: `<?ACE 18?>` inside a range carrying
+/// `PageNumberType="NextPageNumber"` (measured, InDesign 20.0.1). It
+/// prints the page of the next frame in the story's thread, or the
+/// frame's own page at the end of the thread.
 pub const NEXT_PAGE_NUMBER_MARKER: char = '\u{E019}';
+/// The PREVIOUS page number: `<?ACE 18?>` inside a range carrying
+/// `PageNumberType="PreviousPageNumber"` — the page of the previous frame
+/// in the thread, or the frame's own page at its head.
+pub const PREVIOUS_PAGE_NUMBER_MARKER: char = '\u{E01A}';
+/// The SECTION MARKER: `<?ACE 19?>` — the `Marker` of the section the
+/// page belongs to. (The engine once read ACE 19 as the next page number;
+/// InDesign writes it for the section marker.)
+pub const SECTION_MARKER: char = '\u{E01B}';
+
+/// True for the private-use characters the story parser leaves for the
+/// page-dependent markers, which renderers substitute and text extractors
+/// drop.
+pub fn is_page_marker(ch: char) -> bool {
+    matches!(
+        ch,
+        AUTO_PAGE_NUMBER_MARKER
+            | NEXT_PAGE_NUMBER_MARKER
+            | PREVIOUS_PAGE_NUMBER_MARKER
+            | SECTION_MARKER
+    )
+}
