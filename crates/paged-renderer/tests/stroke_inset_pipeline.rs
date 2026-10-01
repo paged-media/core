@@ -186,16 +186,8 @@ const KNOWN: &[(usize, &str)] = &[
     // in the corners. The same residue with no stroke at all (case 26).
     (25, "text does not follow rounded corners"),
     (26, "text does not follow rounded corners"),
-    // A shaped frame: the first line of a later paragraph is measured
-    // from its own ascent where InDesign measures from the previous
-    // baseline, and a band edge on a whole point is dropped on the right.
-    // Both appear unchanged without a stroke (28, 30). And a shaped
-    // frame is not inset by its stroke yet (`text_area_frame`); what
-    // InDesign does there is pinned by `a_stroke_erodes_a_shaped_frame`.
-    (27, "shaped-frame slug and right-edge residue"),
-    (28, "shaped-frame slug and right-edge residue"),
-    (29, "shaped-frame slug and right-edge residue"),
-    (30, "shaped-frame slug and right-edge residue"),
+    // The chamfered frames (27-30) land exactly since shaped frames
+    // take InDesign's band rules (`shaped_bands_pipeline.rs`).
 ];
 
 const TOLERANCE: f32 = 0.05;
@@ -286,7 +278,7 @@ fn every_line_lands_where_indesign_puts_it() {
             )
         );
     }
-    assert!(checked >= 25, "only {checked} cases checked");
+    assert!(checked >= 29, "only {checked} cases checked");
     assert_eq!(
         failures,
         0,
@@ -299,25 +291,15 @@ fn every_line_lands_where_indesign_puts_it() {
     );
 }
 
-/// What a stroke does to a SHAPED frame, independent of the shaped-frame
-/// residues above: a chamfered frame with a 6 pt centre stroke against
-/// the same frame unstroked, with no inset (cases 27 / 28) and with a
-/// 4 pt inset (29 / 30). InDesign erodes the outline by the stroke's
-/// share exactly as by an inset, and on TOP of one: the first baseline
-/// drops 3 pt either way, the chamfer's first line moves right by 1 pt
-/// (3 pt across a 45° edge, then the whole-point floor), and every
-/// line's change from the unstroked frame must be the engine's too.
-///
-/// Read on every baseline and on the left edge where it is the frame's
-/// straight side. The right edge is the residue named in `KNOWN`:
-/// InDesign keeps a band edge that lands exactly on a whole point (200 →
-/// 272 here), the engine drops it (`ceil - 1`), and an eroded straight
-/// edge comes back a hair either side of 197, so its delta is -2 or -3
-/// by rounding alone.
+/// What a stroke does to a SHAPED frame: a chamfered frame with a 6 pt
+/// centre stroke against the same frame unstroked, with no inset (cases
+/// 27 / 28) and with a 4 pt inset (29 / 30). InDesign erodes the outline
+/// by the stroke's share exactly as by an inset, and on TOP of one: the
+/// first baseline drops 3 pt either way, the chamfer's first line moves
+/// right by 1 pt (3 pt across a 45° edge, then the whole-point grid),
+/// and every line's change from the unstroked frame — left edge, right
+/// edge and baseline — must be the engine's too.
 #[test]
-#[ignore = "shaped frames are not inset by their stroke yet: folding it moves text-in-shape's \
-            donut onto InDesign's bands, where the composer breaks the paragraph shorter than \
-            InDesign does (see text_area_frame)"]
 fn a_stroke_erodes_a_shaped_frame() {
     let bytes = paged_gen::write_idml(&paged_gen::samples::stroke_inset::build()).expect("idml");
     let doc = idml_import::import_idml_doc(&bytes).expect("import");
@@ -358,7 +340,7 @@ fn a_stroke_erodes_a_shaped_frame() {
             .map(|(k, r)| (if is_right(k) { r.3 } else { r.2 } - ox, r.4 - oy))
             .collect()
     };
-    for (stroked, plain, inset) in [(27usize, 28usize, 0.0_f32), (29, 30, 4.0)] {
+    for (stroked, plain) in [(27usize, 28usize), (29, 30)] {
         let (es, ep, is, ip) = (
             edges(stroked),
             edges(plain),
@@ -375,17 +357,10 @@ fn a_stroke_erodes_a_shaped_frame() {
                 dy.0,
                 dy.1
             );
-            // The left edge where it is the frame's straight side: a line
-            // under the chamfer is floored to whole points from a slug the
-            // engine measures from elsewhere (the residue above), so its
-            // change is rounding, not the stroke.
-            if is_right(k) || ip[k].0 > inset + 0.5 {
-                continue;
-            }
             let dx = (es[k].0 - ep[k].0, is[k].0 - ip[k].0);
             assert!(
                 (dx.0 - dx.1).abs() <= TOLERANCE,
-                "case {stroked} line {k}: the stroke moved the left edge {} in the engine, {} in InDesign",
+                "case {stroked} line {k}: the stroke moved the edge {} in the engine, {} in InDesign",
                 dx.0,
                 dx.1
             );

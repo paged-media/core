@@ -5693,6 +5693,36 @@ pub(super) fn emit_paragraph_into_chain(
         }
     }
 
+    // A row a hole splits is ONE line to InDesign, and a centred one
+    // closes in on the hole: its first part sits flush right, its last
+    // flush left (measured on InDesign 20.0.1, `shaped-bands` and
+    // `text-in-shape`'s donut — every split row of both). The composer
+    // centred each part in its own band; move them.
+    if lopts.compose.minimum_raggedness
+        && lopts.alignment == paged_text::Alignment::Center
+        && twins_present
+    {
+        let n = laid_out.lines.len();
+        let mut i = 0;
+        while i < n {
+            let mut j = i + 1;
+            while j < n && twin_after.get(j).copied().unwrap_or(false) {
+                j += 1;
+            }
+            if j - i >= 2 {
+                for (k, sign) in [(i, 1), (j - 1, -1)] {
+                    let line = &mut laid_out.lines[k];
+                    // A centred part starts half its slack in.
+                    let lead = line.glyphs.first().map_or(0, |g| g.x);
+                    for g in &mut line.glyphs {
+                        g.x += sign * lead;
+                    }
+                }
+            }
+            i = j;
+        }
+    }
+
     // Apply per-line x-shifts (text wrap around objects).
     if !line_x_shifts_64.is_empty() {
         for (i, line) in laid_out.lines.iter_mut().enumerate() {

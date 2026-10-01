@@ -249,6 +249,22 @@ pub struct ComposeOptions<'a> {
     /// the paragraph's resolved `mojikumi_table` / `mojikumi_set`
     /// (any non-None value ⇒ apply).
     pub mojikumi_half_width: bool,
+    /// Break RAGGED (non-justified) text by minimum raggedness — the sum
+    /// of the squared space each line leaves at its measure's end —
+    /// instead of by Knuth–Plass's glue stretch. InDesign's composer does
+    /// this where lines have different measures (a shaped frame; see
+    /// `ragged.rs`). Justified text ignores it.
+    pub minimum_raggedness: bool,
+    /// How many composer lines the frame (chain) holds. With
+    /// `minimum_raggedness` the lines past it are overset and their slack
+    /// costs nothing — all but the first, the line InDesign sets to find
+    /// that it does not fit (`ragged.rs`). `None`: every line counts.
+    pub visible_lines: Option<usize>,
+    /// Per composer line: `true` when line `i` continues line `i − 1` on
+    /// the same row, across a gap — the far side of a hole in a shaped
+    /// frame. To InDesign that row is ONE line, so with
+    /// `minimum_raggedness` no word is hyphenated across the gap.
+    pub joined_lines: Option<Vec<bool>>,
 }
 
 impl ComposeOptions<'_> {
@@ -288,6 +304,9 @@ impl ComposeOptions<'_> {
             hyphenation_zone: 0,
             kinsoku_enforce: false,
             mojikumi_half_width: false,
+            minimum_raggedness: false,
+            visible_lines: None,
+            joined_lines: None,
         }
     }
 }

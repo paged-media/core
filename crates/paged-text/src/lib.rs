@@ -31,6 +31,7 @@ pub mod frame_shape;
 pub mod hyphenate;
 pub mod layout;
 pub mod libhyphen;
+pub(crate) mod ragged;
 pub mod shape;
 
 pub use cache::{CacheStats, LayoutCache, LayoutKeyHasher};

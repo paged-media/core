@@ -156,10 +156,13 @@ pub(super) fn frame_shape_spread(frame: &TextFrame) -> Option<paged_text::FrameS
     // composer directly, but the band is now snapped to whole points,
     // and near the top of an oval the chord's x moves arbitrarily fast
     // in y: half a point of sagitta cost the first line of a 320 pt
-    // circle EIGHT points of measure. 0.02 pt puts the flattening two
-    // orders of magnitude under the grid it feeds — ~50 segments per
-    // quarter of a 160 pt arc, which the scanline walks per line.
-    const FLATTEN_TOL_PT: f32 = 0.02;
+    // circle EIGHT points of measure. 0.02 pt was still a point too
+    // narrow one point below a 200 pt circle's top (`shaped-bands`: the
+    // chord there moves seven points of x per point of y, so 0.02 of
+    // sagitta is 0.14 of edge, across a grid line); 0.002 pt holds the
+    // edge to hundredths — ~160 segments per quarter of a 100 pt arc,
+    // which the scanline walks per line.
+    const FLATTEN_TOL_PT: f32 = 0.002;
     let mut contours: Vec<paged_text::Contour> = Vec::with_capacity(ranges.len());
     for (range_idx, (lo, hi)) in ranges.iter().copied().enumerate() {
         // Open contours describe lassoed strokes / text-on-path hosts,
@@ -208,17 +211,27 @@ pub(super) fn frame_shape_spread(frame: &TextFrame) -> Option<paged_text::FrameS
 // out correctly. `build_perline_wrap_widths` calls
 // `FrameShape::segments_in_band` directly.
 
-/// The top of line `i`'s slug, relative to the frame's top — the y a
-/// shaped outline is measured from.
+/// How far short of a grid point an edge may fall and still count as ON
+/// it: an edge InDesign puts exactly on a point — a straight side at
+/// x = 272 — comes back from the float arithmetic a hair either side.
+/// Kept to a thousandth: a narrow ellipse's chord at 85.992 pt is 85 in
+/// InDesign, and a hundredth would round it up.
+const BAND_GRID_EPS_PT: f32 = 0.001;
+
+/// A band's ends on InDesign's whole-point grid.
 ///
-/// Measured on InDesign 20.0.1 across circles, ellipses, upward- and
-/// downward-pointing wedges: every line after the first is measured
-/// from the PREVIOUS baseline (one leading up), and the first from its
-/// own ascent. Taking the outline's narrowest chord between there and
-/// the baseline then reproduces both directions — a widening shape is
-/// governed by the slug's top, a narrowing one by its bottom.
-fn shaped_slug_top_pt(baseline_pt: f32, i: usize, first_ascent_pt: f32, leading_pt: f32) -> f32 {
-    baseline_pt - if i == 0 { first_ascent_pt } else { leading_pt }
+/// Measured on InDesign 20.0.1 (`shaped-bands`, and the 23 left edges
+/// behind `text_in_shape.rs`): both ends are FLOORED to whole points, and
+/// the grid starts at the text area's left edge — the frame's edge plus
+/// its inset and its stroke's share — not at the page's or the frame's
+/// origin. `text-in-shape`'s donut (frame at x = 137.638, 4 pt inset plus
+/// half a 0.75 pt stroke) has its bands at 142.013 / 235.013 / 359.013 /
+/// 453.013, every one a whole number of points from 142.013. An end
+/// exactly on a grid point stays where it is: a straight side at 272
+/// keeps 272, it does not lose a point on the right.
+fn snap_band(a: f32, b: f32, grid_origin: f32) -> (f32, f32) {
+    let snap = |x: f32| grid_origin + (x - grid_origin + BAND_GRID_EPS_PT).floor();
+    (snap(a), snap(b))
 }
 
 /// The advance of the paragraph's first word, in pt — what a shaped
@@ -256,11 +269,11 @@ fn first_word_advance_pt(runs: &[paged_text::StyledRun]) -> f32 {
 /// laid-out line's is, so the two agree by construction.
 fn shaped_first_baseline_push_pt(
     shape: &paged_text::FrameShape,
-    frame_top_pt: f32,
+    text_top_pt: f32,
     frame_height_pt: f32,
-    baseline_pt: f32,
-    ascent_pt: f32,
+    first_drop_pt: f32,
     inset_pt: f32,
+    grid_origin: f32,
     word_pt: f32,
 ) -> f32 {
     // One point per step, and never past the frame's own bottom: a
@@ -269,20 +282,23 @@ fn shaped_first_baseline_push_pt(
     // bound matters — each step is an erosion query, and an unbounded
     // walk on a tall narrow shape would be thousands of them.
     let max_steps = frame_height_pt.max(0.0).ceil() as usize + 1;
-    let needed = word_pt;
     for k in 0..max_steps {
         let step = k as f32;
-        let baseline = baseline_pt + step;
+        // The first line's slug runs from the text area's top (moved
+        // with the line) down to its baseline.
         let widest = shape
             .segments_in_band_eroded(
-                frame_top_pt + baseline - ascent_pt,
-                frame_top_pt + baseline,
+                text_top_pt + step,
+                text_top_pt + step + first_drop_pt,
                 inset_pt,
             )
             .into_iter()
-            .map(|(a, b)| (b.ceil() - 1.0) - a.floor())
+            .map(|(a, b)| {
+                let (a, b) = snap_band(a, b, grid_origin);
+                b - a
+            })
             .fold(0.0_f32, f32::max);
-        if widest >= needed {
+        if widest >= word_pt {
             return step;
         }
     }
@@ -337,23 +353,15 @@ pub(super) fn build_perline_wrap_widths(
     if !any_chain_overlap && !any_polygon_clip {
         return empty;
     }
-    // Estimate leading from the first run's point size × 1.2.
-    // Matches paged-text's auto-leading default.
+    // The paragraph's leading: its own when the caller set one, else
+    // the first run's point size × 1.2 (paged-text's auto-leading
+    // default).
     let head_size_pt = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-    let leading_pt = head_size_pt * 1.2;
-    // The first line's slug reaches its own ascent above the baseline —
-    // the real face's `hhea` ascender, the same figure the first
-    // baseline itself is placed from. A substituted face has no
-    // trustworthy ascender here, so the leading's 0.8 split stands in.
-    let first_ascent_pt = styled_runs
-        .first()
-        .filter(|r| !r.substituted)
-        .and_then(|r| {
-            let upem = r.face.units_per_em() as f32;
-            (upem > 0.0).then(|| r.face.ascender() as f32 / upem * r.point_size)
-        })
-        .unwrap_or(leading_pt * 0.8);
-    let leading_64 = ((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32).max(1);
+    let leading_64 = match lopts.leading_override.unwrap_or(lopts.line_height) {
+        l if l > 0 => l,
+        _ => ((head_size_pt * 1.2 * paged_text::shape::ADVANCE_PRECISION).round() as i32).max(1),
+    };
+    let leading_pt = leading_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
     let scalar_width_64 =
         (em.column_width_pt.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
 
@@ -361,6 +369,10 @@ pub(super) fn build_perline_wrap_widths(
     let mut shifts_64: Vec<i32> = Vec::new();
     let mut twin_after: Vec<bool> = Vec::new();
     let mut no_room: Vec<bool> = Vec::new();
+    // Composer lines up to here sit inside the frame (chain); past it
+    // they are overset.
+    let mut visible_lines = 0usize;
+    let mut last_row_fits = false;
 
     // Walk every frame in the chain. Head frame starts at y_cursor
     // (already accounts for FirstBaselineOffset + SpaceBefore);
@@ -380,20 +392,20 @@ pub(super) fn build_perline_wrap_widths(
             em.chain_spread_bounds.get(start_frame),
             em.chain.get(start_frame),
         ) {
-            (Some(shape), Some(bounds), Some(frame)) => shaped_first_baseline_push_pt(
-                shape,
-                bounds.top,
-                bounds.height(),
-                em.y_cursor.max(0) as f32 / paged_text::shape::ADVANCE_PRECISION,
-                first_ascent_pt,
-                frame
-                    .inset_spacing
-                    .unwrap_or([0.0; 4])
-                    .iter()
-                    .copied()
-                    .fold(0.0_f32, f32::max),
-                first_word_advance_pt(styled_runs),
-            ),
+            (Some(shape), Some(bounds), Some(frame)) => {
+                let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+                let first_baseline_pt =
+                    em.y_cursor.max(0) as f32 / paged_text::shape::ADVANCE_PRECISION;
+                shaped_first_baseline_push_pt(
+                    shape,
+                    bounds.top + insets[0],
+                    bounds.height(),
+                    first_baseline_pt - insets[0],
+                    insets.iter().copied().fold(0.0_f32, f32::max),
+                    bounds.left + insets[1],
+                    first_word_advance_pt(styled_runs),
+                )
+            }
             _ => 0.0,
         }
     } else {
@@ -441,6 +453,12 @@ pub(super) fn build_perline_wrap_widths(
         let frame_legacy = shape.is_none() && !frame_has_wraps;
         let frame_first_line = widths_64.len();
         for i in 0..n_lines {
+            if last_row_fits {
+                visible_lines = widths_64.len();
+            }
+            let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
+                / paged_text::shape::ADVANCE_PRECISION;
+            last_row_fits = baseline_pt <= frame_height_pt - insets[2] + 0.01;
             if frame_legacy {
                 widths_64.push(scalar_width_64);
                 shifts_64.push(0);
@@ -448,20 +466,34 @@ pub(super) fn build_perline_wrap_widths(
                 no_room.push(false);
                 continue;
             }
-            let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
-                / paged_text::shape::ADVANCE_PRECISION;
             // The line's SLUG in spread coords — the band a shaped
             // outline is measured across. Measured on InDesign 20.0.1
-            // (see `shaped_slug_top_pt`): the slug runs from the
-            // previous baseline (the first line: from its own ascent)
-            // down to *this* baseline, and the band is the narrowest
-            // the outline gets anywhere in it. Nothing below the
-            // baseline counts: an apex-down wedge places its lines
-            // exactly where the chord at the baseline says, and a
-            // descender's worth lower would put them 1.5 pt right of
-            // where InDesign puts them.
-            let line_top =
-                frame_bounds.top + shaped_slug_top_pt(baseline_pt, i, first_ascent_pt, leading_pt);
+            // (`shaped-bands`, `text_in_shape.rs`): it runs from the
+            // PREVIOUS line's baseline down to this one's, whichever
+            // paragraph that line belonged to, and the band is the
+            // narrowest the outline gets anywhere in it. The frame's
+            // first line reaches up to the text area's top (moved down
+            // with any first-baseline push): its ascent for
+            // `AscentOffset`, its leading for `LeadingOffset`. Nothing
+            // below the baseline counts: an apex-down wedge places its
+            // lines exactly where the chord at the baseline says.
+            let slug_top_rel = if i > 0 {
+                baseline_pt - leading_pt
+            } else {
+                let prev_64 = em
+                    .frame_max_baseline_64
+                    .get(frame_idx)
+                    .copied()
+                    .unwrap_or(0);
+                if frame_idx == start_frame && !frame_first_paragraph && prev_64 > 0 {
+                    prev_64 as f32 / paged_text::shape::ADVANCE_PRECISION
+                } else if frame_idx == start_frame {
+                    insets[0] + first_baseline_push_pt
+                } else {
+                    insets[0]
+                }
+            };
+            let line_top = frame_bounds.top + slug_top_rel;
             let line_bottom = frame_bounds.top + baseline_pt;
 
             let frame_inner_left = frame_left_pt + insets[1];
@@ -487,19 +519,9 @@ pub(super) fn build_perline_wrap_widths(
                 shape
                     .segments_in_band_eroded(line_top, line_bottom, inset)
                     .into_iter()
-                    // Whole-point grid: InDesign resolves a shaped
-                    // frame's interior to whole points. Across 23
-                    // measured lines on circles, ellipses and triangles
-                    // every left-aligned line began at the FLOOR of the
-                    // true chord's left edge, and five centred lines in
-                    // a 320 pt circle sat at 259.50 against a frame
-                    // centre of 260.0 — which is where flooring BOTH
-                    // ends puts the middle, and half a point from where
-                    // rounding outward would. An edge landing exactly
-                    // on a point is outside on the right (`ceil - 1`,
-                    // the same as `floor` off the grid): without that a
-                    // 22 pt first line starts one point above InDesign.
-                    .map(|(a, b)| (a.floor(), b.ceil() - 1.0))
+                    // The whole-point grid from the text area's left
+                    // edge (`snap_band`).
+                    .map(|(a, b)| snap_band(a, b, frame_inner_left))
                     .filter(|(a, b)| b > a)
                     .collect()
             } else {
@@ -628,6 +650,10 @@ pub(super) fn build_perline_wrap_widths(
                 no_room.push(false);
             }
         }
+        if last_row_fits {
+            visible_lines = widths_64.len();
+        }
+        last_row_fits = false;
         // Only the bands past the LAST one with room count as no room:
         // the tip of a shape (bands before the first usable one) keeps
         // the full-width fallback it always had, because the composer
@@ -656,6 +682,13 @@ pub(super) fn build_perline_wrap_widths(
         };
     }
     lopts.compose.column_widths = Some(widths_64);
+    // A shaped frame's ragged lines break the way InDesign breaks them
+    // there: by minimum raggedness (`paged_text` `ragged.rs`).
+    if chain_shapes.iter().any(Option::is_some) {
+        lopts.compose.minimum_raggedness = true;
+        lopts.compose.visible_lines = Some(visible_lines);
+        lopts.compose.joined_lines = Some(twin_after.clone());
+    }
     WrapPlan {
         line_x_shifts_64: shifts_64,
         twin_after,
@@ -808,23 +841,15 @@ pub(crate) fn stroke_text_inset(frame: &TextFrame, document: &Document) -> f32 {
 /// master frame's copy, the auto-size fit): a frame this returns still
 /// carries its stroke, so folding it again would inset twice.
 ///
-/// RECTANGULAR frames only, for now. InDesign erodes a shaped frame's
-/// outline by the stroke's share too, on top of its inset (measured on
-/// `stroke-inset`'s chamfered frames, and on `text-in-shape`'s donut,
-/// whose bands InDesign sets at exactly [142, 235] / [359, 453] — the
-/// 4 pt inset plus half the 0.75 pt stroke). Folding it there puts the
-/// engine's bands on InDesign's, but the composer then breaks the donut's
-/// paragraph into much shorter lines than InDesign does at the same
-/// measure (it matched before only because the band was a point wider),
-/// so the shaped case waits for that composer gap; see
-/// `tests/stroke_inset_pipeline.rs::a_stroke_erodes_a_shaped_frame`.
+/// A shaped frame's outline is eroded by the sum, as InDesign does
+/// (`stroke-inset`'s chamfered frames, `shaped-bands`' stroked circle,
+/// triangle, donuts and notch, and `text-in-shape`'s donut, whose bands
+/// InDesign sets at exactly [142, 235] / [359, 453] — the 4 pt inset
+/// plus half the 0.75 pt stroke).
 pub(crate) fn text_area_frame<'f>(
     frame: &'f TextFrame,
     document: &Document,
 ) -> std::borrow::Cow<'f, TextFrame> {
-    if frame_polygon_spread(frame).is_some() || frame_shape_spread(frame).is_some() {
-        return std::borrow::Cow::Borrowed(frame);
-    }
     let share = stroke_text_inset(frame, document);
     if share <= 0.0 {
         return std::borrow::Cow::Borrowed(frame);

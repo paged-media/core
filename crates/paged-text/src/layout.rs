@@ -270,6 +270,7 @@ pub fn layout_paragraph<S: TextShaper>(
             options.alignment,
             is_last && !options.justify_last_line,
             text.as_bytes(),
+            false,
         );
         lines.push(LaidOutLine {
             byte_range: line.byte_range.clone(),
@@ -340,11 +341,18 @@ fn apply_alignment(
     alignment: Alignment,
     is_last_line: bool,
     paragraph_bytes: &[u8],
+    squeeze_ragged: bool,
 ) {
     if glyphs.is_empty() || column_width <= 0 {
         return;
     }
-    let extra = column_width - natural_width;
+    let mut extra = column_width - natural_width;
+    // A ragged line the minimum-raggedness breaker chose to set over its
+    // measure has its word spaces squeezed onto it (`ragged.rs`).
+    if squeeze_ragged && alignment != Alignment::Justify && extra < 0 {
+        spread_spaces(glyphs, extra, paragraph_bytes);
+        extra = 0;
+    }
     match alignment {
         Alignment::Left => {}
         Alignment::Right => {
@@ -362,41 +370,51 @@ fn apply_alignment(
             if is_last_line || extra <= 0 {
                 return;
             }
-            // Only the glue after the line's last tab stretches: what
-            // precedes it is pinned by the stop (measured on `tab-breaks`
-            // c09/c10, InDesign 20.0.1: the spaces before the tab keep
-            // their natural width, those after it fill the line).
-            let first = glyphs
-                .iter()
-                .rposition(|g| paragraph_bytes.get(g.cluster as usize) == Some(&b'\t'))
-                .map_or(1, |t| t + 1);
-            // Count glyphs whose cluster points at a whitespace byte
-            // (skipping the first glyph so we don't indent the line).
-            let space_count = glyphs
-                .iter()
-                .skip(first)
-                .filter(|g| is_ws_at(paragraph_bytes, g.cluster as usize))
-                .count() as i32;
-            if space_count == 0 {
-                return;
-            }
-            let per_space = extra / space_count;
-            let remainder = extra - per_space * space_count;
-            // Walk glyphs left-to-right, accumulating a shift as each
-            // space is encountered. Integer division leaves a small
-            // remainder which we bleed into the first few spaces so
-            // the last glyph lands exactly on the column edge.
-            let mut shift = 0i32;
-            let mut spaces_seen = 0i32;
-            for (i, g) in glyphs.iter_mut().enumerate() {
-                if i >= first && is_ws_at(paragraph_bytes, g.cluster as usize) {
-                    let bleed = if spaces_seen < remainder { 1 } else { 0 };
-                    shift += per_space + bleed;
-                    spaces_seen += 1;
-                }
-                g.x += shift;
-            }
+            spread_spaces(glyphs, extra, paragraph_bytes);
         }
+    }
+}
+
+/// Spread `extra` (1/64 pt; negative squeezes) over the line's word
+/// spaces, so its last glyph moves by exactly `extra`.
+fn spread_spaces(glyphs: &mut [PositionedGlyph], extra: i32, paragraph_bytes: &[u8]) {
+    // Only the glue after the line's last tab stretches: what
+    // precedes it is pinned by the stop (measured on `tab-breaks`
+    // c09/c10, InDesign 20.0.1: the spaces before the tab keep
+    // their natural width, those after it fill the line).
+    let first = glyphs
+        .iter()
+        .rposition(|g| paragraph_bytes.get(g.cluster as usize) == Some(&b'\t'))
+        .map_or(1, |t| t + 1);
+    // Count glyphs whose cluster points at a whitespace byte
+    // (skipping the first glyph so we don't indent the line).
+    let space_count = glyphs
+        .iter()
+        .skip(first)
+        .filter(|g| is_ws_at(paragraph_bytes, g.cluster as usize))
+        .count() as i32;
+    if space_count == 0 {
+        return;
+    }
+    let per_space = extra / space_count;
+    let remainder = extra - per_space * space_count;
+    // Walk glyphs left-to-right, accumulating a shift as each
+    // space is encountered. Integer division leaves a small
+    // remainder which we bleed into the first few spaces so
+    // the last glyph lands exactly on the column edge.
+    let mut shift = 0i32;
+    let mut spaces_seen = 0i32;
+    for (i, g) in glyphs.iter_mut().enumerate() {
+        if i >= first && is_ws_at(paragraph_bytes, g.cluster as usize) {
+            let bleed = if spaces_seen < remainder.abs() {
+                remainder.signum()
+            } else {
+                0
+            };
+            shift += per_space + bleed;
+            spaces_seen += 1;
+        }
+        g.x += shift;
     }
 }
 
@@ -1059,6 +1077,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             options.alignment,
             i == last_break && !options.justify_last_line,
             bytes,
+            opts.minimum_raggedness,
         );
         // Per-line line-height: explicit `leading_override` wins
         // (mirrors IDML's `Leading` attribute), otherwise the largest
@@ -1112,6 +1131,23 @@ fn knuth_plass_breaks(
     alignment: Alignment,
     ragged_stretch: i32,
 ) -> Vec<Breakpoint> {
+    if opts.minimum_raggedness && alignment != Alignment::Justify {
+        let breaks = crate::ragged::min_ragged_breaks(
+            items,
+            lengths,
+            &crate::ragged::RaggedLines {
+                free_after: opts
+                    .visible_lines
+                    .map_or(usize::MAX, |v| v.saturating_add(1)),
+                joined: opts.joined_lines.as_deref().unwrap_or(&[]),
+                hyphen_penalty: opts.hyphen_penalty,
+                space_shrink: opts.shrink_ratio,
+            },
+        );
+        if !breaks.is_empty() {
+            return breaks;
+        }
+    }
     // paragraph_breaker returns an empty break list when no feasible
     // fit exists at the configured tolerance. Real-world body copy
     // that interleaves many run-color-switch boxes or runs past the
@@ -2009,6 +2045,9 @@ mod tests {
                 hyphenation_zone: 0,
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,
+                minimum_raggedness: false,
+                visible_lines: None,
+                joined_lines: None,
             },
             line_height: 20,
             first_baseline: 15,

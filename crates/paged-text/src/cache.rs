@@ -292,7 +292,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   default grid, line starts).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
-///   hyphenator language id, hyphen_penalty, kinsoku_enforce.
+///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
+///   minimum_raggedness, visible_lines, joined_lines.
 ///
 /// **Caching contract assumption.** `font_id` is treated as a stable
 /// per-font identifier within a render. If the caller maps different
@@ -410,6 +411,24 @@ fn fold_compose_options(h: &mut LayoutKeyHasher, options: &ComposeOptions) {
     h.add_i32(options.hyphen_penalty);
     h.add_i32(options.hyphenation_zone);
     h.add_bool(options.kinsoku_enforce);
+    h.add_bool(options.minimum_raggedness);
+    match options.visible_lines {
+        Some(n) => {
+            h.add_bool(true);
+            h.add_u32(n as u32);
+        }
+        None => h.add_bool(false),
+    }
+    match &options.joined_lines {
+        Some(js) => {
+            h.add_bool(true);
+            h.add_u32(js.len() as u32);
+            for j in js {
+                h.add_bool(*j);
+            }
+        }
+        None => h.add_bool(false),
+    }
 }
 
 fn alignment_tag(a: Alignment) -> u32 {

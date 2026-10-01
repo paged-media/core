@@ -120,8 +120,11 @@ impl FrameShape {
         let mid = 0.5 * (lo + hi);
         // Nudge the edge samples inward by a hair so a band edge that
         // grazes a vertex doesn't drop the whole line on a rounding
-        // tie.
-        let eps = ((hi - lo) * 1e-3).max(1e-4);
+        // tie. A hair, not a share of the band: InDesign reads the chord
+        // AT the slug's top, and near the top of a circle the chord's x
+        // moves two points per point of y — a 0.012 pt nudge (a
+        // thousandth of a 12 pt slug) floored a 54.98 pt edge to 55.
+        let eps = 1e-4;
         let top = self.intervals_at_y(lo + eps);
         let middle = self.intervals_at_y(mid);
         let bottom = self.intervals_at_y(hi - eps);
@@ -165,7 +168,11 @@ impl FrameShape {
         }
         // `1 − cos(π/n) ≈ (π/n)² / 2`, so `n ≈ π·√(inset / 2·tol)`.
         let directions = (std::f32::consts::PI * (inset / (2.0 * ERODE_TOL_PT)).sqrt()).ceil();
-        let directions = (directions as usize).clamp(32, 512);
+        // A multiple of eight, so the axes and the diagonals are sampled
+        // exactly: a straight side (and a 45° chamfer) erodes to its
+        // true offset, which the whole-point grid can then tell from a
+        // hair past a point.
+        let directions = (directions as usize).clamp(32, 512).div_ceil(8) * 8;
         let mut acc: Option<Vec<(f32, f32)>> = None;
         for k in 0..directions {
             let theta = std::f32::consts::TAU * (k as f32) / (directions as f32);

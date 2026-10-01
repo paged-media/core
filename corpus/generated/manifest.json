@@ -253,6 +253,15 @@
       "report": "/tmp/idml-generated-diff/reflow/report.json"
     },
     {
+      "name": "shaped-bands",
+      "idml": "shaped-bands.idml",
+      "pdf": "shaped-bands.pdf",
+      "pages": 3,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/shaped-bands",
+      "report": "/tmp/idml-generated-diff/shaped-bands/report.json"
+    },
+    {
       "name": "showcase-base",
       "idml": "showcase-base.idml",
       "pdf": "showcase-base.pdf",

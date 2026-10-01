@@ -44,6 +44,7 @@ pub mod numbering;
 pub mod paste_into;
 pub mod preflight;
 pub mod reflow;
+pub mod shaped_bands;
 pub mod showcase_base;
 pub mod span_columns;
 pub mod split_boundaries;
@@ -121,6 +122,7 @@ pub const SAMPLES: &[&str] = &[
     "list-overrides",
     "list-marker-styles",
     "stroke-inset",
+    "shaped-bands",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -176,6 +178,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "list-overrides" => list_overrides::build(),
         "list-marker-styles" => list_marker_styles::build(),
         "stroke-inset" => stroke_inset::build(),
+        "shaped-bands" => shaped_bands::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -211,7 +214,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            50,
+            51,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

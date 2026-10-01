@@ -295,10 +295,10 @@
     {
       "name": "text-in-shape",
       "max_pages_with_pdf": 3,
-      "max_mean_de": 2.4,
-      "max_p99_de": 93.72,
-      "min_ssim": 0.8971,
-      "rationale": "Set 2026-09-08 from the wrap-inside rule measured against InDesign (outline eroded by the inset, band over the line's slug, edges on the whole-point grid) plus the insets crossing the wire in both directions: worst page mean 2.898 -> 2.000. The body text then lost the two words only Adobe's proprietary patterns break (\"lazy\" -> \"sleepy\", \"windowsill\" -> \"window ledge\") — this fixture gates wrap-INSIDE geometry, and those words measured whose hyphenation dictionary is richer instead; the donut page went 2.239 -> 1.156 on that alone. Current worst page: mean 2.004 / p99 79.5 / SSIM 0.9007 across 3 page(s). Held at the earlier numbers rather than re-baselined: worst + 20% would be LOOSER than these."
+      "max_mean_de": 1.271,
+      "max_p99_de": 57.12,
+      "min_ssim": 0.9439,
+      "rationale": "Set 2026-09-08 from the wrap-inside rule measured against InDesign (outline eroded by the inset, band over the line's slug, edges on the whole-point grid) plus the insets crossing the wire in both directions: worst page mean 2.898 -> 2.000. The body text then lost the two words only Adobe's proprietary patterns break (\"lazy\" -> \"sleepy\", \"windowsill\" -> \"window ledge\") — this fixture gates wrap-INSIDE geometry, and those words measured whose hyphenation dictionary is richer instead; the donut page went 2.239 -> 1.156 on that alone. Current worst page: mean 2.004 / p99 79.5 / SSIM 0.9007 across 3 page(s). Held at the earlier numbers rather than re-baselined: worst + 20% would be LOOSER than these. TIGHTENED 2026-10-01 (shaped frames take InDesign's band rules: stroke erodes the outline, slug from the previous baseline, whole-point grid from the text area, minimum-raggedness breaking, split rows centred onto the hole): worst page now mean 1.059 / p99 49.668 / ssim 0.9489 (was 2.053 / 80.300 / 0.8983); mean x1.20 (<=50%), p99 x1.15 (50-75%), ssim worst - 0.005."
     },
     {
       "name": "text-letterspacing",
@@ -415,10 +415,18 @@
     {
       "name": "stroke-inset",
       "max_pages_with_pdf": 2,
-      "max_mean_de": 0.641,
-      "max_p99_de": 10.67,
-      "min_ssim": 0.967,
-      "rationale": "Added 2026-10-01 to ask InDesign how a text frame's stroke moves its text. Thirty-one one-frame cases on two pages (Inter 10/12, LeadingOffset, hyphenation off; one-line paragraphs alternating left/right): stroke weights 0.25 / 1 / 6 / 12 pt at centre / inside / outside, a stroke with no colour, InsetSpacing plus a stroke, frames whose height lets the stroke decide whether the fifth line fits, two-column frames, rounded corners and a chamfered polygon. The reference is InDesign 20.0.1's own export; its rule (a painted stroke insets the text area on all four sides by half its weight centred, all of it inside, none outside, on top of InsetSpacing; the gutter is unchanged) is pinned line by line within 0.05 pt by crates/paged-renderer/tests/stroke_inset_pipeline.rs. Worst page measured: mean 4.025 / p99 84.138 / ssim 0.8960; sized at worst * 1.20 and worst_ssim - 0.005. TIGHTENED 2026-10-01 (a text frame's StrokeAlignment reaches the model, plugin-publish 2ab572b, and the renderer strokes the outline it names): the twelve inside / outside frames, which were painted and inset as centred, now paint and set where InDesign does (pinned within 0.05 pt); worst page mean 4.025 -> 0.534, p99 84.138 -> 8.891, ssim 0.8960 -> 0.9724 (page 2), all <= 50% of the old budget, so sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the rounded-corner frames (the engine does not lay text out around corner effects); and shaped frames, which the engine does not inset by their stroke yet (see text_area_frame). Body copy is Inter, registered by stroke-inset.fonts.sh."
+      "max_mean_de": 0.273,
+      "max_p99_de": 5.37,
+      "min_ssim": 0.9822,
+      "rationale": "Added 2026-10-01 to ask InDesign how a text frame's stroke moves its text. Thirty-one one-frame cases on two pages (Inter 10/12, LeadingOffset, hyphenation off; one-line paragraphs alternating left/right): stroke weights 0.25 / 1 / 6 / 12 pt at centre / inside / outside, a stroke with no colour, InsetSpacing plus a stroke, frames whose height lets the stroke decide whether the fifth line fits, two-column frames, rounded corners and a chamfered polygon. The reference is InDesign 20.0.1's own export; its rule (a painted stroke insets the text area on all four sides by half its weight centred, all of it inside, none outside, on top of InsetSpacing; the gutter is unchanged) is pinned line by line within 0.05 pt by crates/paged-renderer/tests/stroke_inset_pipeline.rs. Worst page measured: mean 4.025 / p99 84.138 / ssim 0.8960; sized at worst * 1.20 and worst_ssim - 0.005. TIGHTENED 2026-10-01 (a text frame's StrokeAlignment reaches the model, plugin-publish 2ab572b, and the renderer strokes the outline it names): the twelve inside / outside frames, which were painted and inset as centred, now paint and set where InDesign does (pinned within 0.05 pt); worst page mean 4.025 -> 0.534, p99 84.138 -> 8.891, ssim 0.8960 -> 0.9724 (page 2), all <= 50% of the old budget, so sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the rounded-corner frames (the engine does not lay text out around corner effects); and shaped frames, which the engine does not inset by their stroke yet (see text_area_frame). Body copy is Inter, registered by stroke-inset.fonts.sh. TIGHTENED 2026-10-01 (shaped frames are inset by their stroke too, and the chamfered cases 27-30 land on InDesign's lines): worst page now mean 0.228 / p99 4.474 / ssim 0.9872 (was 0.534 / 8.893 / 0.9724); mean and p99 x1.20 (<=50%), ssim worst - 0.005."
+    },
+    {
+      "name": "shaped-bands",
+      "max_pages_with_pdf": 3,
+      "max_mean_de": 0.546,
+      "max_p99_de": 14.87,
+      "min_ssim": 0.9861,
+      "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh."
     }
   ]
 }
