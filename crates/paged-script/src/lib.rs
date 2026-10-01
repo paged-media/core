@@ -781,7 +781,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(
             guarded(paged_set_flow_grow_rule),
             js_string!("setFlowGrowRule"),
-            3,
+            4,
         )
         .function(
             guarded(paged_activate_condition_set),
@@ -3127,7 +3127,7 @@ fn paged_set_condition_visible(
     }))
 }
 
-/// `paged.setFlowGrowRule(storyId, grow, maxPages?)`
+/// `paged.setFlowGrowRule(storyId, grow, maxPages?, copyFrameOptions?)`
 /// (`Mutation::SetFlowGrowRule`, thoughts ADR 026).
 fn paged_set_flow_grow_rule(
     _this: &JsValue,
@@ -3143,10 +3143,15 @@ fn paged_set_flow_grow_rule(
         v if v.is_undefined() || v.is_null() => None,
         v => Some(v.to_u32(ctx)?),
     };
+    let copy_frame_options = match args.get_or_undefined(3) {
+        v if v.is_undefined() || v.is_null() => None,
+        v => Some(v.to_boolean()),
+    };
     Ok(apply_bool(&Mutation::SetFlowGrowRule {
         story_id,
         grow,
         max_pages,
+        copy_frame_options,
     }))
 }
 

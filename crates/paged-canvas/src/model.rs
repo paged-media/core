@@ -3713,10 +3713,12 @@ impl CanvasModel {
                 story_id,
                 grow,
                 max_pages,
+                copy_frame_options,
             } => Some(Operation::SetFlowGrowRule {
                 story_id: story_id.clone(),
                 rule: grow.then(|| paged_model::FlowGrowRule {
                     max_pages: *max_pages,
+                    copy_frame_options: copy_frame_options.unwrap_or(false),
                 }),
             }),
             Mutation::ActivateConditionSet { set } => {

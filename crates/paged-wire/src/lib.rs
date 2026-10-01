@@ -1495,11 +1495,15 @@ pub enum Mutation {
     /// oversets, the way InDesign's Smart Text Reflow adds them, and dropped
     /// when they end up empty. `grow: false` clears the rule. `maxPages`
     /// caps the generated pages (renderer default when absent).
+    /// `copyFrameOptions` gives generated frames the chain's frame options
+    /// instead of InDesign's defaults (a Word section's mode, ADR 029).
     SetFlowGrowRule {
         story_id: String,
         grow: bool,
         #[serde(default)]
         max_pages: Option<u32>,
+        #[serde(default)]
+        copy_frame_options: Option<bool>,
     },
     /// W0.5 — "show only this set": activate one `<ConditionSet>`.
     ActivateConditionSet {

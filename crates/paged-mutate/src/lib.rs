@@ -1624,7 +1624,10 @@ mod tests {
             },
             Operation::SetFlowGrowRule {
                 story_id: "u1".to_string(),
-                rule: Some(paged_model::FlowGrowRule { max_pages: Some(9) }),
+                rule: Some(paged_model::FlowGrowRule {
+                    max_pages: Some(9),
+                    copy_frame_options: true,
+                }),
             },
             Operation::ActivateConditionSet {
                 set: "ConditionSet/Print".to_string(),

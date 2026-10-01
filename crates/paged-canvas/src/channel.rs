@@ -3658,6 +3658,7 @@ mod tests {
                 story_id: "u1".into(),
                 grow: true,
                 max_pages: Some(12),
+                copy_frame_options: Some(true),
             },
             Mutation::ActivateConditionSet {
                 set: "ConditionSet/Print".into(),

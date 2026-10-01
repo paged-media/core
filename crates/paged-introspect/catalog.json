@@ -632,10 +632,10 @@
     },
     {
       "name": "paged.setFlowGrowRule",
-      "params": "(storyId, grow, maxPages?)",
+      "params": "(storyId, grow, maxPages?, copyFrameOptions?)",
       "returns": "bool",
       "kind": "write",
-      "summary": "Let a story's frame chain grow: generated pages are added after its last frame's page while it oversets (InDesign's Smart Text Reflow), and removed when empty. grow=false clears the rule."
+      "summary": "Let a story's frame chain grow: generated pages are added after its last frame's page while it oversets (InDesign's Smart Text Reflow), and removed when empty. copyFrameOptions gives generated frames the chain's frame options (a Word section's mode) instead of InDesign's defaults. grow=false clears the rule."
     },
     {
       "name": "paged.activateConditionSet",

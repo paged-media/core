@@ -344,7 +344,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.deleteSection", "(sectionId)", "bool", "author", "Delete a <Section>."),
         // --- conditions ---
         f!("paged.setConditionVisible", "(conditionId, visible)", "bool", "write", "Flip a condition's visibility."),
-        f!("paged.setFlowGrowRule", "(storyId, grow, maxPages?)", "bool", "write", "Let a story's frame chain grow: generated pages are added after its last frame's page while it oversets (InDesign's Smart Text Reflow), and removed when empty. grow=false clears the rule."),
+        f!("paged.setFlowGrowRule", "(storyId, grow, maxPages?, copyFrameOptions?)", "bool", "write", "Let a story's frame chain grow: generated pages are added after its last frame's page while it oversets (InDesign's Smart Text Reflow), and removed when empty. copyFrameOptions gives generated frames the chain's frame options (a Word section's mode) instead of InDesign's defaults. grow=false clears the rule."),
         f!("paged.activateConditionSet", "(setId)", "bool", "write", "Activate one <ConditionSet> (\"show only this set\")."),
         // --- layers ---
         f!("paged.layerInsert", "(position, name)", "bool", "author", "Append a layer at the zero-based stacking index."),

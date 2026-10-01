@@ -2168,6 +2168,7 @@ fn structure_cases(c: &mut Vec<Case>) {
             story_id: story,
             grow: true,
             max_pages: None,
+            copy_frame_options: None,
         }
     }));
     c.push(paints("ActivateConditionSet", "conditions", |m| {
