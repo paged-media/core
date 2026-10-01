@@ -547,7 +547,23 @@ fn the_annual_stays_equal_to_a_cold_build() {
         .map(|l| l.story_id.clone())
         .expect("text on page 3");
     g.script(&story, 0);
+    // Story/u38, the body story the plan types into: only its own entry
+    // is dropped, every other story is spliced from the cache.
+    if g.model
+        .scene()
+        .stories
+        .iter()
+        .any(|s| s.self_id == "Story/u38")
+    {
+        g.type_chars("Story/u38", 0, 4);
+        g.step(Step::Undo);
+    }
     let longest = main_story(&g.model);
     g.type_chars(&longest, 1, 3);
+    eprintln!(
+        "annual: last build reused {} of {} body stories",
+        g.model.built().stats.body_stories_reused,
+        g.model.built().stats.stories
+    );
     g.finish();
 }

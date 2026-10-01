@@ -462,6 +462,16 @@ pub struct BodyStoryEmissionDelta {
     pub per_page: Vec<(usize, BodyStoryPageDelta)>,
     pub anchored: Vec<AnchoredImageEmit>,
     pub breaks: Vec<BreakRecord>,
+    /// thoughts ADR 027 plan step 4 — the diagnostics the emit reported
+    /// (overset, ...), replayed on a hit, so a story that reports one is
+    /// cacheable too.
+    pub diagnostics: Vec<Diagnostic>,
+    /// The cross-story numbering ledger after the story, when the
+    /// document has one. The key carries the ledger before it, so a hit
+    /// replays the story's ledger update by restoring this.
+    pub ledger_out: Option<HashMap<String, u32>>,
+    /// What the emit added to the build's [`PipelineStats`].
+    pub stats: PipelineStats,
 }
 
 /// thoughts ADR 027 plan step 3 — one story's settled keep-option breaks,
@@ -495,6 +505,14 @@ pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
 #[derive(Debug, Clone)]
 pub struct BodyStoryPageDelta {
     pub paths: Vec<paged_compose::PathData>,
+    /// The intern key of each of `paths` (`None` = anonymous), so the
+    /// replay registers them as the emit did (thoughts ADR 027).
+    pub path_keys: Vec<Option<u64>>,
+    /// The page's path-buffer fingerprint before the story emitted: a
+    /// hit is spliced only into a buffer that has it, which is what makes
+    /// the delta's path ids (including references to paths an earlier
+    /// emit interned) resolve as they did.
+    pub pre_fingerprint: u64,
     pub commands: Vec<paged_compose::DisplayCommand>,
     pub story_layout: Vec<LineLayout>,
     pub footnotes: Vec<EmittedFootnote>,
@@ -521,6 +539,11 @@ pub struct MasterTextEmitDelta {
     /// stay sequential and the relative offsets in `commands`
     /// resolve correctly.
     pub paths: Vec<paged_compose::PathData>,
+    /// The intern key of each of `paths` (thoughts ADR 027).
+    pub path_keys: Vec<Option<u64>>,
+    /// The page's path-buffer fingerprint before the emit; a hit is
+    /// spliced only into a buffer that has it.
+    pub pre_fingerprint: u64,
     /// Commands appended by emit, with path-id fields rebased to
     /// `0..paths.len()`. Replay adds the current path-buffer
     /// size to each id before pushing.
@@ -996,6 +1019,34 @@ pub struct PipelineStats {
     /// started from the previous build's settled breaks and kept them,
     /// one emit pass instead of two.
     pub keep_seeds_used: usize,
+    /// thoughts ADR 027 plan step 4 — body stories spliced from the emit
+    /// cache instead of laid out.
+    pub body_stories_reused: usize,
+}
+
+impl PipelineStats {
+    /// The emit counters a story added since `before` (thoughts ADR 027:
+    /// a cached story replays them). `keep_seeds_used` is not replayed:
+    /// a hit runs no fixpoint.
+    pub(crate) fn emitted_since(&self, before: &Self) -> Self {
+        Self {
+            paragraphs: self.paragraphs - before.paragraphs,
+            runs: self.runs - before.runs,
+            glyphs: self.glyphs - before.glyphs,
+            lines: self.lines - before.lines,
+            dropped_overflow_lines: self.dropped_overflow_lines - before.dropped_overflow_lines,
+            ..Self::default()
+        }
+    }
+
+    /// Add what [`Self::emitted_since`] measured.
+    pub(crate) fn add_emitted(&mut self, d: &Self) {
+        self.paragraphs += d.paragraphs;
+        self.runs += d.runs;
+        self.glyphs += d.glyphs;
+        self.lines += d.lines;
+        self.dropped_overflow_lines += d.dropped_overflow_lines;
+    }
 }
 
 /// W1.18c / W1.19 — the post-layout resolution context handed to the
@@ -1154,7 +1205,11 @@ fn build_document_fixed(
     // then re-run with it in hand. Only one re-run ever happens (the
     // inner builder, given a `post`, never asks for another).
     let post = build_post_layout_ctx(document, &first);
-    build_document_inner(document, options, Some(&post))
+    let mut second = build_document_inner(document, options, Some(&post))?;
+    // The reuse counters describe the whole build, both passes.
+    second.stats.keep_seeds_used += first.stats.keep_seeds_used;
+    second.stats.body_stories_reused += first.stats.body_stories_reused;
+    Ok(second)
 }
 
 /// W1.18c / W1.19 — derive the running-header pickup index + the

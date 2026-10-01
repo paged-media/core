@@ -110,19 +110,19 @@ pub(super) fn body_story_signature(
 }
 
 /// Perf-MasterText — splice a cached delta into a page's display
-/// list. Appends the delta's path entries (via `push_anon`, no
-/// intern dedup — the rebuild's master+frame pass may have already
-/// interned the same glyph outlines under different ids, but that
-/// wastes a few path slots and not correctness), then pushes the
-/// cached commands with their relative path-ids rebased to the
-/// page's NEW path-buffer base.
+/// list. Replays the delta's path entries under their intern keys
+/// (thoughts ADR 027: the caller has checked the page's path buffer
+/// has the fingerprint the emit started from, so every id lines up and
+/// later emits on the page intern exactly as after the real emit), then
+/// pushes the cached commands with their relative path-ids rebased to
+/// the page's NEW path-buffer base.
 pub(super) fn splice_master_text_delta(
     list: &mut paged_compose::DisplayList,
     delta: &MasterTextEmitDelta,
 ) {
     let new_base = list.paths.len() as i64;
-    for path in &delta.paths {
-        list.paths.push_anon(path.clone());
+    for (path, key) in delta.paths.iter().zip(&delta.path_keys) {
+        list.paths.replay(*key, path.clone());
     }
     for cmd in &delta.commands {
         let mut c = cmd.clone();
@@ -137,8 +137,8 @@ pub(super) fn splice_master_text_delta(
 /// footnote queries match a from-scratch emit.
 pub(super) fn splice_body_story_page_delta(page: &mut BuiltPage, delta: &BodyStoryPageDelta) {
     let new_base = page.list.paths.len() as i64;
-    for path in &delta.paths {
-        page.list.paths.push_anon(path.clone());
+    for (path, key) in delta.paths.iter().zip(&delta.path_keys) {
+        page.list.paths.replay(*key, path.clone());
     }
     for cmd in &delta.commands {
         let mut c = cmd.clone();

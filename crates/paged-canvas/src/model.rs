@@ -2202,10 +2202,13 @@ impl CanvasModel {
         // Perf-BodyStory — text edits change the *content* of a story
         // but not its frame chain, so the body-story signature would
         // wrongly match and the edit would never display.
-        self.commit_and_rebuild(Invalidation::Text { edit })
-            .map_err(|e| crate::channel::WorkerError::NotImplemented {
-                what: format!("rebuild after mutation: {e}"),
-            })?;
+        self.commit_and_rebuild(Invalidation::Text {
+            story: story_id_of_text_op(&text_op).to_string(),
+            edit,
+        })
+        .map_err(|e| crate::channel::WorkerError::NotImplemented {
+            what: format!("rebuild after mutation: {e}"),
+        })?;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
         // Shift the active selection through the mutation so caret
@@ -4111,7 +4114,10 @@ impl CanvasModel {
             LoggedMutation::Text { op: _, inverse } => {
                 let edit = crate::mutate::first_changed_paragraph(inverse, &self.scene);
                 let _ = crate::mutate::apply(&mut self.scene, inverse).ok()?;
-                invalidation = Invalidation::Text { edit };
+                invalidation = Invalidation::Text {
+                    story: story_id_of_text_op(inverse).to_string(),
+                    edit,
+                };
                 Some(story_id_of_text_op(inverse).to_string())
             }
             LoggedMutation::Frame(applied) => {
@@ -4163,7 +4169,10 @@ impl CanvasModel {
             LoggedMutation::Text { op, inverse: _ } => {
                 let edit = crate::mutate::first_changed_paragraph(op, &self.scene);
                 let applied = crate::mutate::apply(&mut self.scene, op).ok()?;
-                invalidation = Invalidation::Text { edit };
+                invalidation = Invalidation::Text {
+                    story: story_id_of_text_op(op).to_string(),
+                    edit,
+                };
                 let sid = Some(story_id_of_text_op(op).to_string());
                 (
                     LoggedMutation::Text {
@@ -8630,9 +8639,29 @@ impl CanvasModel {
                 self.keep_seeds.borrow_mut().clear();
                 self.pending_keep_hints.clear();
             }
-            Invalidation::Text { edit } => {
+            Invalidation::Text { story, edit } => {
+                // thoughts ADR 027 plan step 4 — a text edit changes one
+                // story's content, so only that story's body emission is
+                // stale: every input another story reads (its own content,
+                // chain geometry, wrap, page numbering, the list ledger in,
+                // the path buffer it replays into) is in its key or checked
+                // on the hit. Master text is cheap and is re-emitted. A
+                // story laid out inside another story's emission (an
+                // anchored or inline frame) or without a chain of its own
+                // has no entry of its own to drop, so it drops them all.
                 self.master_text_emit_cache.borrow_mut().clear();
-                self.body_story_emit_cache.borrow_mut().clear();
+                let own_chain = self
+                    .scene
+                    .frame_chain(&story)
+                    .first()
+                    .is_some_and(|f| !f.is_anchored);
+                if own_chain {
+                    self.body_story_emit_cache
+                        .borrow_mut()
+                        .retain(|(id, _), _| id != &story);
+                } else {
+                    self.body_story_emit_cache.borrow_mut().clear();
+                }
                 match edit {
                     Some((story, paragraph)) => {
                         let hint = self.pending_keep_hints.entry(story).or_insert(paragraph);
@@ -9298,9 +9327,12 @@ enum Invalidation {
     /// Content or structure changed in a way the cache keys cannot see:
     /// drop every master-text and body-story delta.
     Everything,
-    /// A text edit inside one story: `edit` names the story and the first
+    /// A text edit inside `story`: `edit` names the story and the first
     /// paragraph it changed, when that is known (`None` for a cell edit).
-    Text { edit: Option<(String, u32)> },
+    Text {
+        story: String,
+        edit: Option<(String, u32)>,
+    },
 }
 
 /// What a model build is for (thoughts ADR 027 §5).

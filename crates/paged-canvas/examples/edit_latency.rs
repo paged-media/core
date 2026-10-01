@@ -166,12 +166,10 @@ fn main() {
             let t = std::time::Instant::now();
             let mut m = CanvasModel::load("annual", &bytes, options(true)).expect("load");
             println!("annual: load {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
-            // The plan's edit: the story whose first line is on page 3.
-            let story = m.built().pages[2]
-                .story_layout
-                .first()
-                .map(|l| (l.story_id.clone(), l.paragraph_idx as usize))
-                .expect("text on page 3");
+            // The plan's edit: Story/u38, a body story on page 3 (or
+            // STORY=<id>), typed into its first paragraph.
+            let wanted = std::env::var("STORY").unwrap_or_else(|_| "Story/u38".to_string());
+            let story = (wanted, 0usize);
             type_into("annual", &mut m, &story.0, story.1, edits);
         }
         "reflow" => {

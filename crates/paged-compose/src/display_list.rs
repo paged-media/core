@@ -327,7 +327,22 @@ pub struct PathBuffer {
     /// Cache key → PathId. Callers are responsible for making the key
     /// unique for their domain (glyph caches use `GlyphCacheKey`).
     cache: std::collections::HashMap<u64, PathId>,
+    /// The intern key each path was stored under (`None` for an
+    /// anonymous push), parallel to `paths`. A cached emission records
+    /// these so its replay re-registers the keys, exactly as the emit it
+    /// stands in for would have (thoughts ADR 027).
+    keys: Vec<Option<u64>>,
+    /// Running fingerprint of `keys` after each path, parallel to
+    /// `paths`. Two buffers with equal fingerprints hand out the same
+    /// ids for the same keys, which is what a cached emission's path
+    /// ids assume of the buffer it is replayed into.
+    prints: Vec<u64>,
 }
+
+/// Fingerprint of an empty [`PathBuffer`].
+const PATH_PRINT_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+/// What an anonymous path contributes to the fingerprint.
+const PATH_PRINT_ANON: u64 = 0x9e37_79b9_7f4a_7c15;
 
 impl PathBuffer {
     pub fn new() -> Self {
@@ -343,9 +358,38 @@ impl PathBuffer {
             return (*id, false);
         }
         let id = PathId(self.paths.len() as u32);
-        self.paths.push(path);
+        self.store(Some(key), path);
         self.cache.insert(key, id);
         (id, true)
+    }
+
+    fn store(&mut self, key: Option<u64>, path: PathData) {
+        let prev = self.fingerprint();
+        let mixed = (prev ^ key.unwrap_or(PATH_PRINT_ANON)).wrapping_mul(0x0000_0100_0000_01b3);
+        self.paths.push(path);
+        self.keys.push(key);
+        self.prints.push(mixed.rotate_left(17));
+    }
+
+    /// Fingerprint of the keys stored so far, in order (see `prints`).
+    pub fn fingerprint(&self) -> u64 {
+        self.prints.last().copied().unwrap_or(PATH_PRINT_SEED)
+    }
+
+    /// The intern keys of paths `[start, end)` (`None` = anonymous).
+    pub fn keys(&self, start: usize, end: usize) -> &[Option<u64>] {
+        &self.keys[start.min(self.keys.len())..end.min(self.keys.len())]
+    }
+
+    /// Replay one path of a cached emission: intern it under `key` when
+    /// it had one, else push it anonymously. On a buffer whose
+    /// fingerprint equals the one the emission started from, this hands
+    /// out the id the emission's own `intern` / `push_anon` did.
+    pub fn replay(&mut self, key: Option<u64>, path: PathData) -> PathId {
+        match key {
+            Some(k) => self.intern(k, path).0,
+            None => self.push_anon(path),
+        }
     }
 
     /// Probe for an existing interned id without inserting. Useful
@@ -358,7 +402,7 @@ impl PathBuffer {
     /// Store `path` without interning. Useful for one-off shapes.
     pub fn push_anon(&mut self, path: PathData) -> PathId {
         let id = PathId(self.paths.len() as u32);
-        self.paths.push(path);
+        self.store(None, path);
         id
     }
 
@@ -396,6 +440,8 @@ impl PathBuffer {
             return;
         }
         self.paths.truncate(len);
+        self.keys.truncate(len);
+        self.prints.truncate(len);
         let cutoff = len as u32;
         self.cache.retain(|_, id| id.0 < cutoff);
     }

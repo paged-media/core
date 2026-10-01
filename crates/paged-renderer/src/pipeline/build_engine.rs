@@ -47,6 +47,33 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// Queue one contiguous command block for the z-slot of the text frame
 /// `frame_id` on `page_idx`. A frame with no recorded slot (no `Self`
 /// id, or a page the walk never gave it) keeps the block where it is.
+/// thoughts ADR 027 — what a cached emission assumes of the page it is
+/// replayed into: the path buffer's fingerprint (the ids it hands out per
+/// intern key) and the other pools (the ids a command can refer to). Two
+/// lists with equal prints resolve a delta's ids alike.
+fn pool_print(list: &paged_compose::DisplayList) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    list.paths.fingerprint().hash(&mut h);
+    other_pools_print(list).hash(&mut h);
+    h.finish()
+}
+
+/// The non-path pools' part of [`pool_print`]. A delta replays paths and
+/// commands only, so an emit that changed any of these is not cached.
+fn other_pools_print(list: &paged_compose::DisplayList) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    list.gradients.len().hash(&mut h);
+    list.radial_gradients.len().hash(&mut h);
+    list.sweep_gradients.len().hash(&mut h);
+    list.images.len().hash(&mut h);
+    for ink in &list.spot_inks {
+        ink.name.hash(&mut h);
+    }
+    h.finish()
+}
+
 fn record_text_block(
     pending: &mut [Vec<text_slots::TextBlock>],
     slots: &HashMap<(usize, String), crate::module::TextSlot>,
@@ -2263,10 +2290,13 @@ pub(super) fn build_document_inner(
             // A delta captured under other page numbering printed other
             // page numbers — a footer's "of N" from before a grow pass
             // added pages (thoughts ADR 033). Re-emit it.
+            // thoughts ADR 027 — and a delta replays only into the path
+            // buffer it was captured from, or its path ids point elsewhere.
+            let print = pool_print(&pages[*page_idx].list);
             let hit = rc
                 .borrow()
                 .get(key)
-                .filter(|d| d.numbering == numbering_key)
+                .filter(|d| d.numbering == numbering_key && d.pre_fingerprint == print)
                 .cloned();
             if let Some(delta) = hit {
                 let base = pages[*page_idx].list.commands.len();
@@ -2286,6 +2316,8 @@ pub(super) fn build_document_inner(
         // Snapshot path-buffer + commands + side-effect pools BEFORE
         // emit so the post-emit extraction can compute deltas.
         let path_base = pages[*page_idx].list.paths.len();
+        let pre_fingerprint = pool_print(&pages[*page_idx].list);
+        let pre_others = other_pools_print(&pages[*page_idx].list);
         let cmd_base = pages[*page_idx].list.commands.len();
         let grad_base = pages[*page_idx].list.gradients.len();
         let rad_grad_base = pages[*page_idx].list.radial_gradients.len();
@@ -2352,6 +2384,7 @@ pub(super) fn build_document_inner(
         let uncacheable = list.gradients.len() != grad_base
             || list.radial_gradients.len() != rad_grad_base
             || list.images.len() != image_base
+            || other_pools_print(list) != pre_others
             || !anchored_q.is_empty()
             || !new_breaks.is_empty()
             || !new_diags.is_empty();
@@ -2370,6 +2403,8 @@ pub(super) fn build_document_inner(
                 key.clone(),
                 MasterTextEmitDelta {
                     paths: new_paths,
+                    path_keys: list.paths.keys(path_base, list.paths.len()).to_vec(),
+                    pre_fingerprint,
                     commands: new_commands,
                     numbering: numbering_key,
                 },
@@ -2625,16 +2660,34 @@ pub(super) fn build_document_inner(
                     .unwrap_or(0)
             })
             .collect();
-        // W1.22 — a continue-across-stories list makes a story's
-        // numbering depend on the documents-order prefix of stories,
-        // not just its own frames/wrap; a cached splice replay wouldn't
-        // re-run the ledger update, so disable the cache document-wide
-        // when such a list exists (conservative, like the
-        // gradient/image-pool rule below).
-        let cache_key: Option<(String, u64)> = if body_story_emit_cache.is_some()
-            && cross_story_numbering.is_none()
-        {
+        // thoughts ADR 027 plan step 4 — a TOC's paragraphs are built from
+        // OTHER stories' headings, which no key of its own can see: never
+        // cached.
+        let is_toc = chain
+            .first()
+            .and_then(|f| f.applied_toc_style.as_deref())
+            .is_some_and(|id| document.styles.toc_styles.contains_key(id));
+        let cache_key: Option<(String, u64)> = if body_story_emit_cache.is_some() && !is_toc {
             let signature = body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page);
+            // A continued list counts on from the ledger the stories
+            // before left (W1.22): the ledger IN is an input, and the
+            // delta stores the ledger OUT a hit restores.
+            let signature = match cross_story_numbering.as_ref() {
+                Some(ledger) => {
+                    use std::hash::{Hash, Hasher};
+                    let mut entries: Vec<(String, u32)> = ledger
+                        .borrow()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), *v))
+                        .collect();
+                    entries.sort();
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    signature.hash(&mut h);
+                    entries.hash(&mut h);
+                    h.finish()
+                }
+                None => signature,
+            };
             // A story that prints page numbers or variables depends on
             // the page numbering too, which its frames do not capture.
             let signature = if story_prints_page_context(&parsed.story) {
@@ -2655,7 +2708,13 @@ pub(super) fn build_document_inner(
                 // inside the worker (mutate() never resolves). If any
                 // captured index is out of range, treat the entry as a
                 // miss and re-emit fresh.
-                if delta.per_page.iter().all(|(idx, _)| *idx < pages.len()) {
+                //
+                // thoughts ADR 027 — every page must also hold the path
+                // buffer the delta was captured from: an earlier story on
+                // the page that re-emitted moves the ids it refers to.
+                if delta.per_page.iter().all(|(idx, d)| {
+                    *idx < pages.len() && pool_print(&pages[*idx].list) == d.pre_fingerprint
+                }) {
                     for (page_idx, page_delta) in &delta.per_page {
                         let base = pages[*page_idx].list.commands.len();
                         splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
@@ -2675,6 +2734,14 @@ pub(super) fn build_document_inner(
                     }
                     anchored_image_queue.extend(delta.anchored.iter().cloned());
                     breaks.extend(delta.breaks.iter().cloned());
+                    emit_diagnostics.extend(delta.diagnostics.iter().cloned());
+                    if let (Some(ledger), Some(out)) =
+                        (cross_story_numbering.as_ref(), delta.ledger_out.as_ref())
+                    {
+                        *ledger.borrow_mut() = out.clone();
+                    }
+                    total_stats.add_emitted(&delta.stats);
+                    total_stats.body_stories_reused += 1;
                     continue;
                 }
             }
@@ -2697,6 +2764,21 @@ pub(super) fn build_document_inner(
                     p.list.images.len(),
                     p.story_layout.len(),
                     p.footnotes.len(),
+                )
+            })
+            .collect();
+        // The pool prints of the pages the story lays out on (its chain's),
+        // for the cache capture below.
+        let pre_prints: HashMap<usize, (u64, u64)> = chain_pages_pre
+            .iter()
+            .filter(|&&p| p < pages.len())
+            .map(|&p| {
+                (
+                    p,
+                    (
+                        pool_print(&pages[p].list),
+                        other_pools_print(&pages[p].list),
+                    ),
                 )
             })
             .collect();
@@ -3066,10 +3148,9 @@ pub(super) fn build_document_inner(
         // image entries were added, since the cached splice path
         // only renumbers path-ids.
         if let (Some(ref key), Some(rc)) = (&cache_key, body_story_emit_cache) {
-            // Diagnostics (overset) ride the emit channel, not the
-            // cached delta — a story that produced any is left
-            // uncacheable so a future hit re-emits and re-reports.
-            let mut uncacheable = !new_diags.is_empty();
+            // Diagnostics (overset) ride along in the delta and are
+            // replayed on a hit (thoughts ADR 027 plan step 4).
+            let mut uncacheable = false;
             let mut per_page: Vec<(usize, BodyStoryPageDelta)> = Vec::new();
             for (page_idx, snap) in pre_snapshot.iter().enumerate() {
                 let page = &pages[page_idx];
@@ -3077,6 +3158,9 @@ pub(super) fn build_document_inner(
                 if list.gradients.len() != snap.2
                     || list.radial_gradients.len() != snap.3
                     || list.images.len() != snap.4
+                    || pre_prints
+                        .get(&page_idx)
+                        .is_some_and(|p| other_pools_print(list) != p.1)
                 {
                     uncacheable = true;
                     break;
@@ -3085,6 +3169,12 @@ pub(super) fn build_document_inner(
                 let grew_layout = page.story_layout.len() > snap.5;
                 let grew_footnotes = page.footnotes.len() > snap.6;
                 if grew_list || grew_layout || grew_footnotes {
+                    // Output off the story's own chain pages has no print to
+                    // replay against.
+                    let Some(&(pre_print, _)) = pre_prints.get(&page_idx) else {
+                        uncacheable = true;
+                        break;
+                    };
                     let new_paths: Vec<paged_compose::PathData> =
                         list.paths.slice(snap.0, list.paths.len()).to_vec();
                     let mut new_commands: Vec<paged_compose::DisplayCommand> =
@@ -3107,6 +3197,8 @@ pub(super) fn build_document_inner(
                         page_idx,
                         BodyStoryPageDelta {
                             paths: new_paths,
+                            path_keys: list.paths.keys(snap.0, list.paths.len()).to_vec(),
+                            pre_fingerprint: pre_print,
                             commands: new_commands,
                             story_layout: new_story_layout,
                             footnotes: new_footnotes,
@@ -3122,6 +3214,9 @@ pub(super) fn build_document_inner(
                         per_page,
                         anchored: new_anchored,
                         breaks: new_breaks,
+                        diagnostics: new_diags,
+                        ledger_out: cross_story_numbering.as_ref().map(|l| l.borrow().clone()),
+                        stats: total_stats.emitted_since(&pre_total_stats),
                     },
                 );
             }
