@@ -11,7 +11,7 @@ description = "Print-grade PDF (PDF/X-4) export backend over the resolved displa
 workspace = true
 
 [dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "92e016cb9d78352863dfef97399ffaa8b17437d0" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "412b884b75cf8c12628d4b5ae4aaf17c814b35f3" }
 paged-compose = { path = "../paged-compose" }
 paged-renderer = { path = "../paged-renderer", default-features = false }
 paged-color = { path = "../paged-color" }

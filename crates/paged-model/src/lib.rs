@@ -3548,6 +3548,24 @@ pub struct ParagraphStyleDef {
     /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
+    /// Keep options (ADR 028). `KeepLinesTogether` switches them ON;
+    /// `KeepAllLinesTogether` then picks "all lines" over the
+    /// first/last-line counts (`KeepFirstLines` / `KeepLastLines`,
+    /// InDesign default 2 / 2). Measured against InDesign 2025 with the
+    /// `keeps` paged-gen fixture.
+    pub keep_lines_together: Option<bool>,
+    /// `KeepAllLinesTogether` — see `keep_lines_together`.
+    pub keep_all_lines_together: Option<bool>,
+    /// `KeepFirstLines` — lines that must stay together at a paragraph's
+    /// start (orphan control). Default 2 when keeps are on.
+    pub keep_first_lines: Option<u32>,
+    /// `KeepLastLines` — lines that must stay together at a paragraph's
+    /// end (widow control). Default 2 when keeps are on.
+    pub keep_last_lines: Option<u32>,
+    /// `KeepWithNext` — lines of the FOLLOWING paragraph that must share
+    /// a column/frame with this paragraph's last line. InDesign moves
+    /// only this paragraph's last line, not the whole paragraph.
+    pub keep_with_next: Option<u32>,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
@@ -3812,6 +3830,24 @@ pub struct ResolvedParagraph {
     /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
+    /// Keep options (ADR 028). `KeepLinesTogether` switches them ON;
+    /// `KeepAllLinesTogether` then picks "all lines" over the
+    /// first/last-line counts (`KeepFirstLines` / `KeepLastLines`,
+    /// InDesign default 2 / 2). Measured against InDesign 2025 with the
+    /// `keeps` paged-gen fixture.
+    pub keep_lines_together: Option<bool>,
+    /// `KeepAllLinesTogether` — see `keep_lines_together`.
+    pub keep_all_lines_together: Option<bool>,
+    /// `KeepFirstLines` — lines that must stay together at a paragraph's
+    /// start (orphan control). Default 2 when keeps are on.
+    pub keep_first_lines: Option<u32>,
+    /// `KeepLastLines` — lines that must stay together at a paragraph's
+    /// end (widow control). Default 2 when keeps are on.
+    pub keep_last_lines: Option<u32>,
+    /// `KeepWithNext` — lines of the FOLLOWING paragraph that must share
+    /// a column/frame with this paragraph's last line. InDesign moves
+    /// only this paragraph's last line, not the whole paragraph.
+    pub keep_with_next: Option<u32>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -4105,6 +4141,11 @@ impl ResolvedParagraph {
             .or(def.hyphenate_across_columns);
         self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(def.hyphenate_ladder_limit);
         self.hyphen_weight = self.hyphen_weight.or(def.hyphen_weight);
+        self.keep_lines_together = self.keep_lines_together.or(def.keep_lines_together);
+        self.keep_all_lines_together = self.keep_all_lines_together.or(def.keep_all_lines_together);
+        self.keep_first_lines = self.keep_first_lines.or(def.keep_first_lines);
+        self.keep_last_lines = self.keep_last_lines.or(def.keep_last_lines);
+        self.keep_with_next = self.keep_with_next.or(def.keep_with_next);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -4331,15 +4372,23 @@ pub struct Paragraph {
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
     /// `KeepLinesTogether` boolean — when `true`, InDesign tries to
-    /// keep all lines of the paragraph in the same column / frame.
-    /// `None` ⇒ inherit. Parser+mutate only (the frame-breaker does
-    /// not yet honour keep options).
+    /// switch keep options on for this paragraph (ADR 028); WHICH lines
+    /// stay together is `keep_all_lines_together` / `keep_first_lines` /
+    /// `keep_last_lines`. `None` ⇒ inherit from the paragraph style.
     pub keep_lines_together: Option<bool>,
     /// `KeepWithNext` — the number of lines of the *following*
     /// paragraph that InDesign keeps together with the end of this
     /// one (IDML serialises a line count, not a boolean). `None` ⇒
-    /// inherit; `Some(0)` is the explicit "off". Parser+mutate only.
+    /// inherit; `Some(0)` is the explicit "off".
     pub keep_with_next: Option<u32>,
+    /// `KeepAllLinesTogether` (ADR 028) — with `keep_lines_together`
+    /// on, true keeps every line together; false applies the
+    /// first/last-line counts below.
+    pub keep_all_lines_together: Option<bool>,
+    /// `KeepFirstLines` — orphan control (InDesign default 2).
+    pub keep_first_lines: Option<u32>,
+    /// `KeepLastLines` — widow control (InDesign default 2).
+    pub keep_last_lines: Option<u32>,
     /// `RuleAbove*` — the horizontal rule stroked above the first
     /// line when `on` is true. W0.2: surfaced as a whole-struct
     /// paragraph-scope mutate path. Defaults (all-`None`) mean "not

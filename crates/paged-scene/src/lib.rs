@@ -1079,6 +1079,11 @@ impl ResolvedParagraphAttrs {
             hyphenate_across_columns: paragraph.hyphenate_across_columns,
             hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
             hyphen_weight: paragraph.hyphen_weight,
+            keep_lines_together: paragraph.keep_lines_together,
+            keep_all_lines_together: paragraph.keep_all_lines_together,
+            keep_first_lines: paragraph.keep_first_lines,
+            keep_last_lines: paragraph.keep_last_lines,
+            keep_with_next: paragraph.keep_with_next,
             applied_language: None,
             minimum_word_spacing: None,
             desired_word_spacing: None,
@@ -1173,6 +1178,11 @@ impl ResolvedParagraphAttrs {
             self.hyphenate_across_columns.or(p.hyphenate_across_columns);
         self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(p.hyphenate_ladder_limit);
         self.hyphen_weight = self.hyphen_weight.or(p.hyphen_weight);
+        self.keep_lines_together = self.keep_lines_together.or(p.keep_lines_together);
+        self.keep_all_lines_together = self.keep_all_lines_together.or(p.keep_all_lines_together);
+        self.keep_first_lines = self.keep_first_lines.or(p.keep_first_lines);
+        self.keep_last_lines = self.keep_last_lines.or(p.keep_last_lines);
+        self.keep_with_next = self.keep_with_next.or(p.keep_with_next);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
         }
@@ -1492,6 +1502,12 @@ pub struct ResolvedParagraphAttrs {
     pub hyphenate_ladder_limit: Option<u32>,
     pub hyphen_weight: Option<u32>,
     pub hyphenation_zone: Option<f32>,
+    /// Keep options (ADR 028), direct > style.
+    pub keep_lines_together: Option<bool>,
+    pub keep_all_lines_together: Option<bool>,
+    pub keep_first_lines: Option<u32>,
+    pub keep_last_lines: Option<u32>,
+    pub keep_with_next: Option<u32>,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
     pub applied_language: Option<String>,

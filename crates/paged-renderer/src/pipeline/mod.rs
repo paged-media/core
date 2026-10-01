@@ -54,6 +54,7 @@ mod geom;
 mod image_convert;
 mod image_decode;
 mod images;
+mod keeps;
 /// C-26 — the inline-image cache key is shared with `paged-canvas`'s
 /// `placed_asset_bytes` door on purpose. Two copies of this format
 /// string that drift apart is exactly the bug C-26 was: the renderer

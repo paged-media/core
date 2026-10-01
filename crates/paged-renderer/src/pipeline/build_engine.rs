@@ -19,6 +19,12 @@
 use super::*;
 use std::collections::HashMap;
 
+/// ADR 028 — re-emit passes a story may spend on keep options beyond the
+/// footnote ones. Each pass can only add or move breaks earlier, so chains
+/// (a heading kept with a heading kept with text) settle in a few passes;
+/// the cap bounds a pathological oscillation.
+const MAX_KEEP_PASSES: usize = 4;
+
 use paged_compose::{
     emit_glyph_slice, emit_glyph_slice_stroke, DisplayList, DropShadow, Paint, PathData,
     PathSegment, Rect, Transform, TtfOutliner,
@@ -2548,7 +2554,12 @@ pub(super) fn build_document_inner(
         let cross_story_pre: Option<HashMap<String, u32>> =
             cross_story_numbering.as_ref().map(|c| c.borrow().clone());
 
-        for pass in 0..MAX_FOOTNOTE_RESERVE_PASSES {
+        // ADR 028 — keep options re-emit the story with forced frame breaks
+        // until the set stops changing. A story without keeps never asks
+        // for an extra pass, so its passes are exactly the footnote ones.
+        let mut forced_breaks: HashMap<u32, u32> = HashMap::new();
+        let mut footnotes_settled = false;
+        for pass in 0..MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES {
             // Re-emit passes start from the pre-story snapshot so the
             // page accumulates exactly one story's worth of commands.
             if pass > 0 {
@@ -2583,6 +2594,7 @@ pub(super) fn build_document_inner(
             .with_page_index_map(&page_index_map)
             .with_chapter_numbers(&chapter_numbers)
             .with_footnote_reservation(&reserved_64)
+            .with_forced_breaks(&forced_breaks)
             .with_all_text_overset(all_text_overset);
             // W1.18c — running-header pickup index on the post-layout pass.
             if let Some(index) = running_header_index {
@@ -2640,30 +2652,48 @@ pub(super) fn build_document_inner(
             new_breaks = emitter.take_breaks();
             new_diags = emitter.take_diagnostics();
 
+            // ADR 028 — the breaks the next pass must force; equal to
+            // `forced_breaks` when this pass satisfied every keep option.
+            let next_forced = emitter.keep_breaks();
+            let keeps_changed = next_forced != forced_breaks;
+            forced_breaks = next_forced;
+
             // Measure each frame's footnote pool and fold it into the
             // reservation. Vertical-writing stories lay the pool out in
             // horizontal page space too, so the measure is valid there;
             // we skip the reserve loop only when no footnotes captured.
-            let any_footnotes = pages.iter().any(|p| !p.footnotes.is_empty());
-            if !any_footnotes {
-                break;
-            }
-            let pool_heights =
-                measure_footnote_pools(&pages, options, document, font_table, palette, color_ctx);
-            let mut next_reserved = vec![0i32; reserved_64.len()];
-            for (frame_idx, key) in frame_host_keys.iter().enumerate() {
-                if let Some(h_pt) = pool_heights.get(key) {
-                    next_reserved[frame_idx] =
-                        (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+            if !footnotes_settled {
+                let any_footnotes = pages.iter().any(|p| !p.footnotes.is_empty());
+                if !any_footnotes {
+                    footnotes_settled = true;
+                } else {
+                    let pool_heights = measure_footnote_pools(
+                        &pages, options, document, font_table, palette, color_ctx,
+                    );
+                    let mut next_reserved = vec![0i32; reserved_64.len()];
+                    for (frame_idx, key) in frame_host_keys.iter().enumerate() {
+                        if let Some(h_pt) = pool_heights.get(key) {
+                            next_reserved[frame_idx] =
+                                (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+                        }
+                    }
+                    if next_reserved == reserved_64 || pass + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
+                        // Fixpoint, or the bail cap — accept the reservation.
+                        // The pool emit post-pass paints below the reserved band.
+                        footnotes_settled = true;
+                    }
+                    reserved_64 = next_reserved;
                 }
             }
-            if next_reserved == reserved_64 || pass + 1 == MAX_FOOTNOTE_RESERVE_PASSES {
-                // Fixpoint, or the bail cap — accept this pass. The pool
-                // emit post-pass paints below the reserved band.
-                reserved_64 = next_reserved;
+            // Done when the footnote reservation and the keep breaks both
+            // hold. A keep change re-emits until its own cap, accepting the
+            // last pass after that (text is then placed, never dropped).
+            if footnotes_settled && !keeps_changed {
                 break;
             }
-            reserved_64 = next_reserved;
+            if footnotes_settled && pass + 1 >= MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES {
+                break;
+            }
         }
 
         anchored_image_queue.extend(new_anchored.iter().cloned());
@@ -3111,6 +3141,20 @@ pub(super) struct StoryEmitter<'a> {
     /// Track 2: monotonically incremented as `emit_paragraph` fires.
     /// Resets to 0 per emitter (i.e. per story).
     pub(super) paragraph_idx: u32,
+    /// ADR 028 — keep options. Breaks this pass must force: top-level
+    /// paragraph index → the line (within it) that opens the next frame.
+    /// Decided from the previous pass by `keeps::keep_breaks`.
+    pub(super) forced_breaks: HashMap<u32, u32>,
+    /// Resolved keep options per top-level paragraph, this pass.
+    pub(super) keep_specs: Vec<super::keeps::KeepSpec>,
+    /// Where each laid-out line of each top-level paragraph landed.
+    pub(super) placements: Vec<Vec<super::keeps::LinePlace>>,
+    /// Line counter within the current top-level paragraph (split
+    /// sub-paragraphs share it).
+    pub(super) para_line: u32,
+    /// Frame of the most recently PLACED line: a line opens its frame when
+    /// this differs from the current frame.
+    pub(super) last_placed_frame: Option<usize>,
     /// Lossy-render signals collected during this story's emit (overset
     /// drop). Drained by `take_diagnostics` into the document-level
     /// collector, mirroring `breaks`. A non-empty drain marks the emit
@@ -3255,6 +3299,11 @@ impl<'a> StoryEmitter<'a> {
             frame_idx: 0,
             y_cursor: -1,
             prev_line_height_64: None,
+            forced_breaks: HashMap::new(),
+            keep_specs: Vec::new(),
+            placements: Vec::new(),
+            para_line: 0,
+            last_placed_frame: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
             reserved_footnote_64: vec![0; len],
@@ -3411,14 +3460,45 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
+    /// ADR 028 — the keep-option breaks this pass must force (from the
+    /// previous pass's `keeps::keep_breaks`).
+    pub(super) fn with_forced_breaks(mut self, forced: &HashMap<u32, u32>) -> Self {
+        self.forced_breaks = forced.clone();
+        self
+    }
+
+    /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
+    /// options to hold (`forced` itself when every rule held).
+    pub(super) fn keep_breaks(&self) -> HashMap<u32, u32> {
+        super::keeps::keep_breaks(&self.placements, &self.keep_specs, &self.forced_breaks)
+    }
+
     pub(super) fn emit_paragraph(
         &mut self,
         paragraph: &paged_model::Paragraph,
         pages: &mut [BuiltPage],
         total_stats: &mut PipelineStats,
     ) {
+        let attrs = self.document.resolved_paragraph_attrs(paragraph);
+        self.keep_specs
+            .push(super::keeps::KeepSpec::from_attrs(&attrs));
+        self.placements.push(Vec::new());
+        self.para_line = 0;
         emit_paragraph_into_chain(self, paragraph, pages, total_stats);
         self.paragraph_idx = self.paragraph_idx.saturating_add(1);
+    }
+
+    /// Record where the current top-level paragraph's next line landed
+    /// (`None` = dropped as overset).
+    fn record_line(&mut self, frame: Option<usize>) {
+        let opens_frame = frame.is_some() && self.last_placed_frame != frame;
+        if frame.is_some() {
+            self.last_placed_frame = frame;
+        }
+        if let Some(lines) = self.placements.last_mut() {
+            lines.push(super::keeps::LinePlace { frame, opens_frame });
+        }
+        self.para_line = self.para_line.saturating_add(1);
     }
 
     pub(super) fn apply_vertical_justification(&self, pages: &mut [BuiltPage]) {
@@ -5485,7 +5565,14 @@ pub(super) fn emit_paragraph_into_chain(
         // A line whose band lies outside the frame's outline has no
         // room even when its baseline is inside the bounding box.
         let no_room_here = plan_no_room.get(current_line_idx).copied().unwrap_or(false);
-        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64) || no_room_here)
+        // ADR 028 — a keep option decided (from the previous pass) that
+        // this line opens the next frame. Only when something already sits
+        // in this frame; an empty frame gains nothing from a break.
+        let keep_break_here = em.forced_breaks.get(&em.paragraph_idx) == Some(&em.para_line)
+            && em.last_placed_frame == Some(em.frame_idx);
+        if (paged_flow::region_overflows(line.baseline_y, text_bottom_64)
+            || no_room_here
+            || keep_break_here)
             && em.frame_idx + 1 < em.chain.len()
         {
             let prev_baseline = line.baseline_y;
@@ -5552,9 +5639,11 @@ pub(super) fn emit_paragraph_into_chain(
                 }
                 em.diagnostics.push(d);
             }
+            em.record_line(None);
             continue;
         }
 
+        em.record_line(Some(em.frame_idx));
         let target_page = em.chain_pages[em.frame_idx];
         pages[target_page].stats.glyphs += line.glyphs.len();
         pages[target_page].stats.lines += 1;
