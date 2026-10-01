@@ -4306,26 +4306,26 @@ pub(super) fn emit_paragraph_into_chain(
             .runs
             .first()
             .and_then(|r| em.document.resolved_run_attrs(paragraph, r).point_size);
-        let para_pt = run_pt.unwrap_or_else(|| {
-            em.document
-                .styles
-                .resolve_paragraph(
-                    paragraph
-                        .paragraph_style
-                        .as_deref()
-                        .unwrap_or("ParagraphStyle/$ID/[No paragraph style]"),
-                )
-                .point_size
-                .unwrap_or(em.options.default_point_size)
-        });
+        let style = em.document.styles.resolve_paragraph(
+            paragraph
+                .paragraph_style
+                .as_deref()
+                .unwrap_or("ParagraphStyle/$ID/[No paragraph style]"),
+        );
+        let para_pt =
+            run_pt.unwrap_or_else(|| style.point_size.unwrap_or(em.options.default_point_size));
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
         // An empty paragraph advances by its leading too — the explicit
-        // one its runs or style carry, else auto (1.2 × size).
+        // one its runs or style carry, else auto (1.2 × size). With NO
+        // run (a blank line a plugin poured and styled) the paragraph
+        // style's own leading is the only one there is: Word's blank
+        // lines carry their spacing that way (plugin-doc, ADR 029).
         let line_height_64 = paragraph
             .runs
             .first()
             .and_then(|r| em.document.resolved_run_attrs(paragraph, r).leading)
+            .or(style.leading)
             .filter(|l| *l > 0.0)
             .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
             .unwrap_or_else(|| {
