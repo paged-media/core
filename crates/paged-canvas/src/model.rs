@@ -6666,9 +6666,14 @@ impl CanvasModel {
         let bleed = self.scene.designmap.document_preference;
         // Build page-self-id → MarginPreference once across all
         // spreads (each spread carries its own pages' margins).
+        // ADR 026 — generated pages are derived, so the model holds no
+        // margins for them: read the document as the last build grew it.
+        let grown = (!self.scene.growing_stories().is_empty())
+            .then(|| self.scene.with_generated_pages(&self.grow_hint.borrow()));
+        let scene = grown.as_ref().unwrap_or(&self.scene);
         let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
-        for parsed in &self.scene.spreads {
+        for parsed in &scene.spreads {
             for (pid, m) in &parsed.spread.page_margins {
                 margins.insert(pid.as_str(), m);
             }

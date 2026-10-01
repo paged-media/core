@@ -60,4 +60,10 @@ fn a_native_skeleton_with_grow_rules_opens_and_grows() {
         5,
         "Word paginates this document to 5 pages"
     );
+
+    // Generated pages report their section's margins, like the authored
+    // page they copy (the editor's page list and margin guides read these).
+    let pages = model.pages();
+    let margins: Vec<f32> = pages.iter().map(|p| p.margin_top_pt).collect();
+    assert_eq!(margins, vec![72.0, 72.0, 72.0, 36.0, 36.0]);
 }
