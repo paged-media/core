@@ -853,16 +853,13 @@ pub(crate) fn page_index_for_bounds(
 }
 
 /// Concatenate a paragraph's `runs` text into a plain string,
-/// dropping the IDML auto-page-number / next-page-number sentinel
-/// characters (they'd appear as private-use code-points in the TOC
-/// output otherwise).
+/// dropping the IDML page-marker sentinel characters (they'd appear
+/// as private-use code-points in the TOC output otherwise).
 fn paragraph_plain_text(p: &Paragraph) -> String {
     let mut buf = String::new();
     for run in &p.runs {
         for ch in run.text.chars() {
-            if ch == paged_model::AUTO_PAGE_NUMBER_MARKER
-                || ch == paged_model::NEXT_PAGE_NUMBER_MARKER
-            {
+            if paged_model::is_page_marker(ch) {
                 continue;
             }
             buf.push(ch);

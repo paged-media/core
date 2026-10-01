@@ -26,18 +26,20 @@
 //! baked string — mirroring how the auto-page-number marker is
 //! substituted in `pipeline::mod`.
 //!
-//! Per-type semantics:
+//! Per-type semantics, as InDesign 20.0.1 resolves them (asked by
+//! building the constructs through its DOM and reading its PDF export;
+//! thoughts ADR 033, and the `variables` paged-gen fixture):
 //!
 //! | VariableType        | Resolution                                    |
 //! |---------------------|-----------------------------------------------|
 //! | `CustomTextType`    | `TextBefore` + `Contents` + `TextAfter` (literal, from the IDML) |
-//! | `PageCountType`     | real total body-page count                    |
-//! | `FileNameType`      | document `Name` (`.indd`), else `ResultText`, else `"untitled.indd"` |
-//! | `CreationDateType`  | W1.18a — `date_format` tokens applied to the document clock's `creation` date |
-//! | `ModificationDateType` | W1.18a — `date_format` applied to the clock's `modification` date |
-//! | `OutputDateType`    | W1.18a — `date_format` applied to the clock's INJECTED `output` instant (never wall-clock) |
-//! | `ChapterNumberType` | W1.18b — the section's chapter number, styled per `<Section>` numbering |
-//! | `RunningHeaderType` / `RunningHeaderVariableType` | W1.18c — text of the nearest paragraph/character on the SAME page matching the named style; resolved post-layout |
+//! | `MatchParagraphStyleType` (aliases `RunningHeaderType`, `RunningHeaderVariableType`) | the text of the first / last paragraph in the style on the page; a page without one carries forward (see [`RunningHeaderIndex`]); then `DeleteEndPunctuation`, `ChangeCase` |
+//! | `MatchCharacterStyleType` | the same over contiguous ranges in a character style |
+//! | `LastPageNumberType` | the LABEL of the last page of the document (`DocumentScope`) or of the page's section (`SectionScope`): "3" on a five-page document whose numbering restarts — not a count; `Format` other than `Current` re-styles that page's number |
+//! | `PageCountType`     | real total page count (the engine's own older name; InDesign does not write it) |
+//! | `ChapterNumberType` | the DOCUMENT's chapter number (`<ChapterNumberPreference>`, default 1) — not a section property: InDesign printed "1" on pages whose sections had markers and restarts |
+//! | `FileNameType`      | document `Name`, without its extension unless `IncludeExtension` |
+//! | `CreationDateType` / `ModificationDateType` / `OutputDateType` | `Format` tokens applied to the document clock |
 //! | (anything else)     | baked `ResultText`                            |
 //!
 //! Date variables are computed from the deterministic
@@ -67,69 +69,123 @@
 use std::collections::HashMap;
 
 use paged_compose::LinkTarget;
-use paged_model::{DesignMap, HyperlinkDestinationKind, NumberingStyle, Section};
+use paged_model::{DesignMap, HyperlinkDestinationKind, NumberingStyle};
 
 use super::datefmt::{self, DateParts};
 use super::DocumentClock;
 
 /// W1.18c — per-page running-header pickup index, built after the first
-/// layout pass. Maps a paragraph-style id to the text of its first and
-/// last occurrence on each page, so a `RunningHeaderType` variable in a
-/// header/footer frame resolves to the matching content on that page.
+/// layout pass. Keys are `(flat page index, style id)`; a style id is a
+/// `ParagraphStyle/…` or a `CharacterStyle/…`, so both kinds share the
+/// maps without colliding.
 ///
-/// `style_first[(page_idx, style_id)]` = text of the first paragraph on
-/// `page_idx` whose applied paragraph style is `style_id`;
-/// `style_last` is the same for the last such paragraph. InDesign's
-/// "Use" option (`FirstOnPage` / `LastOnPage`) picks which one. When a
-/// page has no matching paragraph, InDesign falls back to the most
-/// recent match from an earlier page — captured by `style_fallback`,
-/// the running last-seen text walking pages in order.
+/// `first` / `last` hold the value a `FirstOnPage` / `LastOnPage`
+/// variable shows on that page — already carried forward for a page with
+/// no match of its own. InDesign's carry-forward, measured (InDesign
+/// 20.0.1, 2026-10-01): a page without a match takes the last match that
+/// PRECEDES the page's text in its own story; when its story has none
+/// (each page its own story), it shows what the previous page showed, per
+/// strategy. So two headings on page 1 and none on page 2 read
+/// first/last = H-B/H-B on page 2 when one story threads both pages, and
+/// H-A/H-B when the pages hold separate stories.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct RunningHeaderIndex {
     pub first: HashMap<(usize, String), String>,
     pub last: HashMap<(usize, String), String>,
-    /// Most-recent matching text at or before each page (carry-forward
-    /// fallback for pages with no own match).
-    pub fallback: HashMap<(usize, String), String>,
 }
 
 impl RunningHeaderIndex {
-    /// Resolve the running-header text for `style_id` on `page_idx`,
-    /// honouring `use_last` (LastOnPage vs FirstOnPage) and falling back
-    /// to the carry-forward text from an earlier page.
+    /// The running-header text for `style_id` on `page_idx`, honouring
+    /// `use_last` (LastOnPage vs FirstOnPage).
     pub fn resolve(&self, page_idx: usize, style_id: &str, use_last: bool) -> Option<String> {
         let key = (page_idx, style_id.to_string());
-        let own = if use_last {
+        if use_last {
             self.last.get(&key)
         } else {
             self.first.get(&key)
-        };
-        own.or_else(|| self.fallback.get(&key)).cloned()
+        }
+        .cloned()
+    }
+}
+
+/// Per-page numbering facts the page-dependent variables and markers
+/// read, computed once per build from the section walk.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct PageNumbering {
+    /// The number the section rules give each page (before its numbering
+    /// style and prefix). Parallel to the page labels.
+    pub numbers: Vec<u32>,
+    /// Index into `designmap.sections` of each page's section.
+    pub section_of: Vec<Option<usize>>,
+}
+
+impl PageNumbering {
+    /// A shared empty table, for emitters built without one.
+    pub(crate) fn empty() -> &'static PageNumbering {
+        static EMPTY: std::sync::OnceLock<PageNumbering> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(PageNumbering::default)
+    }
+
+    /// Flat index of the last page of `page_idx`'s section (pages before
+    /// any section, or a document without sections, form one implicit
+    /// section).
+    fn section_last_page(&self, page_idx: usize) -> usize {
+        let section = self.section_of.get(page_idx).copied().flatten();
+        let mut last = page_idx;
+        while self.section_of.get(last + 1).is_some_and(|s| *s == section) {
+            last += 1;
+        }
+        last
     }
 }
 
 /// W1.18 — render-time resolution context threaded into
 /// [`resolve_variable`]. Carries everything a variable needs beyond the
-/// designmap + its baked text: the deterministic date clock, the
-/// pre-computed chapter number, the host page index, and (post-layout)
-/// the running-header pickup index.
+/// designmap + its baked text: the deterministic date clock, the page
+/// labels and numbering, the host page index, and (post-layout) the
+/// running-header pickup index.
 pub(crate) struct VarResolveCtx<'a> {
     pub designmap: &'a DesignMap,
     pub total_pages: usize,
     /// Deterministic date clock (creation / modification / output).
     pub clock: &'a DocumentClock,
-    /// Chapter number for the section hosting this frame's page,
-    /// already styled per the section's numbering. `None` when the
-    /// document declares no sections (then `ResultText` / a placeholder
-    /// is used).
-    pub chapter_number: Option<&'a str>,
+    /// Every page's label, by flat index.
+    pub page_labels: &'a [String],
+    /// Every page's number and section, by flat index.
+    pub numbering: &'a PageNumbering,
     /// Flat 0-based page index of the frame currently emitting — the
     /// page a running header resolves *for*.
     pub page_index: usize,
     /// Post-layout running-header pickup index. `None` on the first
-    /// (pre-layout) pass; populated for the re-emit so
-    /// `RunningHeaderType` variables resolve to live content.
+    /// (pre-layout) pass; populated for the re-emit so running headers
+    /// resolve to live content.
     pub running_headers: Option<&'a RunningHeaderIndex>,
+}
+
+/// True for the variable types whose value is another paragraph's or
+/// range's text on the page (they need the post-layout pass).
+pub(crate) fn is_running_header_type(variable_type: Option<&str>) -> bool {
+    matches!(
+        variable_type,
+        Some(
+            "MatchParagraphStyleType"
+                | "MatchCharacterStyleType"
+                | "RunningHeaderType"
+                | "RunningHeaderVariableType"
+        )
+    )
+}
+
+/// The style a running-header variable matches: the character style of
+/// a `MatchCharacterStyleType`, the paragraph style otherwise.
+pub(crate) fn running_header_style(var: &paged_model::TextVariable) -> Option<&str> {
+    if var.variable_type.as_deref() == Some("MatchCharacterStyleType") {
+        var.running_header_character_style
+            .as_deref()
+            .or(var.running_header_style.as_deref())
+    } else {
+        var.running_header_style.as_deref()
+    }
 }
 
 /// Resolve a tagged variable run to its render-time value, or `None`
@@ -162,6 +218,20 @@ pub(crate) fn resolve_variable(
             Some(decorate(contents))
         }
         "PageCountType" => Some(decorate(ctx.total_pages.to_string())),
+        "LastPageNumberType" => {
+            let last = if var.page_number_scope.as_deref() == Some("SectionScope") {
+                ctx.numbering.section_last_page(ctx.page_index)
+            } else {
+                ctx.page_labels.len().saturating_sub(1)
+            };
+            let label = match explicit_number_style(var.number_format.as_deref()) {
+                Some(style) => ctx.numbering.numbers.get(last).map(|n| style.format(*n)),
+                None => ctx.page_labels.get(last).cloned(),
+            };
+            Some(decorate(
+                label.unwrap_or_else(|| ctx.total_pages.to_string()),
+            ))
+        }
         "FileNameType" => {
             let name = ctx
                 .designmap
@@ -174,6 +244,14 @@ pub(crate) fn resolve_variable(
                         .map(str::to_string)
                 })
                 .unwrap_or_else(|| "untitled.indd".to_string());
+            let name = if var.include_extension {
+                name
+            } else {
+                match name.rsplit_once('.') {
+                    Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+                    _ => name,
+                }
+            };
             Some(decorate(name))
         }
         // W1.18a — date variables: apply the declared format tokens to
@@ -182,26 +260,21 @@ pub(crate) fn resolve_variable(
         "CreationDateType" => Some(decorate(format_date_var(var, ctx.clock.creation))),
         "ModificationDateType" => Some(decorate(format_date_var(var, ctx.clock.modification))),
         "OutputDateType" => Some(decorate(format_date_var(var, ctx.clock.output))),
-        // W1.18b — chapter number from section settings (styled per the
-        // section's numbering). Falls back to the baked ResultText, then
-        // a placeholder, so the slot is never blank.
         "ChapterNumberType" => {
-            let n = ctx
-                .chapter_number
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
+            let pref = ctx.designmap.chapter_number.as_ref();
+            let number = pref.and_then(|p| p.number).unwrap_or(1);
+            let style = explicit_number_style(var.number_format.as_deref())
                 .or_else(|| {
-                    Some(result_text)
-                        .filter(|s| !s.is_empty())
-                        .map(str::to_string)
+                    pref.and_then(|p| p.format.as_deref())
+                        .map(chapter_format_style)
                 })
-                .unwrap_or_else(|| "1".to_string());
-            Some(decorate(n))
+                .unwrap_or(NumberingStyle::Arabic);
+            Some(decorate(style.format(number)))
         }
         // W1.18c — running header. Post-layout, the index carries the
-        // matching paragraph text per page; pre-layout (index None) we
-        // keep the baked value so the first pass still renders something.
-        "RunningHeaderType" | "RunningHeaderVariableType" => {
+        // matching text per page; pre-layout (index None) we keep the
+        // baked value so the first pass still renders something.
+        _ if is_running_header_type(Some(kind)) => {
             let Some(index) = ctx.running_headers else {
                 // First pass: keep baked ResultText (or a placeholder if
                 // even that is empty) so layout is stable.
@@ -216,25 +289,94 @@ pub(crate) fn resolve_variable(
                 .as_deref()
                 .map(running_header_use_last)
                 .unwrap_or(false);
-            let resolved = var
-                .running_header_style
-                .as_deref()
+            let resolved = running_header_style(var)
                 .and_then(|style_id| index.resolve(ctx.page_index, style_id, use_last));
-            match resolved {
-                Some(text) if !text.is_empty() => Some(decorate(text)),
-                // No match on this page (and no carry-forward): InDesign
-                // shows the baked value, else nothing. Keep the run's
-                // text rather than overwriting with a placeholder.
-                _ => {
-                    if result_text.is_empty() {
-                        Some(decorate(String::new()))
-                    } else {
-                        None
+            // No match on this page and nothing to carry forward: InDesign
+            // prints nothing.
+            let text = resolved.unwrap_or_default();
+            let text = if var.delete_end_punctuation {
+                delete_end_punctuation(&text)
+            } else {
+                text
+            };
+            Some(decorate(change_case(&text, var.change_case.as_deref())))
+        }
+        _ => None,
+    }
+}
+
+/// A `Format` naming an explicit numbering style; `None` for `Current`
+/// (and absent), which keeps the page's / chapter's own numbering.
+fn explicit_number_style(format: Option<&str>) -> Option<NumberingStyle> {
+    match format {
+        None | Some("Current") | Some("") => None,
+        Some(f) => Some(NumberingStyle::from_idml(f)),
+    }
+}
+
+/// `<ChapterNumberFormat>` spells its style by example (`1, 2, 3, 4...`,
+/// `I, II, III, IV...`, `a, b, c, d...`).
+fn chapter_format_style(format: &str) -> NumberingStyle {
+    match format.trim_start().chars().next() {
+        Some('I') => NumberingStyle::UpperRoman,
+        Some('i') => NumberingStyle::LowerRoman,
+        Some('A') => NumberingStyle::UpperAlpha,
+        Some('a') => NumberingStyle::LowerAlpha,
+        _ => NumberingStyle::Arabic,
+    }
+}
+
+/// `DeleteEndPunctuation`: drop the punctuation that ends the text.
+/// Measured: a trailing `.` and `!` go, a closing `)` stays.
+fn delete_end_punctuation(text: &str) -> String {
+    text.trim_end_matches(['.', ',', ';', ':', '!', '?', '…'])
+        .to_string()
+}
+
+/// `ChangeCase` as InDesign applies it to a running header (measured,
+/// InDesign 20.0.1): `Titlecase` capitalises the first character of every
+/// space-separated word and lowercases the rest ("PART TWO begins (a third
+/// heading)" → "Part Two Begins (a Third Heading)" — a word opening with
+/// `(` keeps its letter); `Sentencecase` lowercases everything and
+/// capitalises the first letter of each sentence ("Introduction: the First
+/// Heading." → "Introduction: the first heading.").
+fn change_case(text: &str, case: Option<&str>) -> String {
+    match case {
+        Some("Uppercase") => text.to_uppercase(),
+        Some("Lowercase") => text.to_lowercase(),
+        Some("Titlecase") => {
+            let mut out = String::with_capacity(text.len());
+            let mut word_start = true;
+            for ch in text.chars() {
+                if ch.is_whitespace() {
+                    word_start = true;
+                    out.push(ch);
+                } else if word_start {
+                    out.extend(ch.to_uppercase());
+                    word_start = false;
+                } else {
+                    out.extend(ch.to_lowercase());
+                }
+            }
+            out
+        }
+        Some("Sentencecase") => {
+            let mut out = String::with_capacity(text.len());
+            let mut sentence_start = true;
+            for ch in text.chars() {
+                if sentence_start && ch.is_alphabetic() {
+                    out.extend(ch.to_uppercase());
+                    sentence_start = false;
+                } else {
+                    out.extend(ch.to_lowercase());
+                    if matches!(ch, '.' | '!' | '?') {
+                        sentence_start = true;
                     }
                 }
             }
+            out
         }
-        _ => None,
+        _ => text.to_string(),
     }
 }
 
@@ -250,57 +392,10 @@ fn format_date_var(var: &paged_model::TextVariable, date: DateParts) -> String {
     datefmt::format_date(pattern, date)
 }
 
-/// IDML `<DateVariablePreference>` records its day-of-week first/last
-/// pickup as `DateOrder`-adjacent enums; running headers use a separate
-/// flag. Map the `RunningHeaderVariablePreference Use` value to whether
-/// the LAST on-page match is wanted (`LastOnPage`) vs the first.
+/// `SearchStrategy` (the older fixtures' `Use`): whether the LAST on-page
+/// match is wanted (`LastOnPage`) rather than the first.
 fn running_header_use_last(use_value: &str) -> bool {
     matches!(use_value, "LastOnPage" | "lastOnPage")
-}
-
-/// W1.18b — compute the chapter number for the page at flat index
-/// `page_idx`, styled per the owning `<Section>`'s numbering. Returns
-/// `None` when the document has no sections.
-///
-/// IDML models chapter numbering on `<Section>`: `Marker` is the
-/// explicit chapter label (used verbatim when present), otherwise the
-/// chapter NUMBER is the section's `PageNumberStart` formatted in its
-/// `PageNumberStyle` — InDesign shares the same numbering machinery for
-/// page and chapter numbers. `page_starts` maps a section's
-/// `PageStart` `<Page Self>` id to its flat page index so we can find
-/// which section owns `page_idx`.
-pub(crate) fn chapter_number_for_page(
-    sections: &[Section],
-    page_starts: &HashMap<String, usize>,
-    page_idx: usize,
-) -> Option<String> {
-    if sections.is_empty() {
-        return None;
-    }
-    // Find the section whose start page is the greatest one <= page_idx
-    // (the last section to begin at or before this page owns it).
-    let mut best: Option<(usize, &Section)> = None;
-    for sec in sections {
-        let start = sec
-            .page_start
-            .as_deref()
-            .and_then(|id| page_starts.get(id).copied())
-            .unwrap_or(0);
-        if start <= page_idx {
-            match best {
-                Some((bstart, _)) if bstart >= start => {}
-                _ => best = Some((start, sec)),
-            }
-        }
-    }
-    let (_, sec) = best.or_else(|| sections.first().map(|s| (0, s)))?;
-    // An explicit chapter marker wins verbatim.
-    if let Some(marker) = sec.marker.as_deref().filter(|s| !s.is_empty()) {
-        return Some(marker.to_string());
-    }
-    let style: NumberingStyle = sec.numbering_style;
-    let n = sec.start_at.unwrap_or(1).max(1);
-    Some(style.format(n))
 }
 
 /// Resolve a hyperlink/cross-reference *source* span id to a concrete
@@ -361,14 +456,8 @@ mod tests {
     fn var(id: &str, ty: &str) -> TextVariable {
         TextVariable {
             self_id: id.to_string(),
-            name: None,
             variable_type: Some(ty.to_string()),
-            contents: None,
-            date_format: None,
-            text_before: None,
-            text_after: None,
-            running_header_style: None,
-            running_header_use: None,
+            ..TextVariable::default()
         }
     }
 
@@ -403,18 +492,31 @@ mod tests {
         }
     }
 
+    /// The five-page document of thoughts ADR 033: a section restarting
+    /// at 1 on page 3, so the labels read 1 2 1 2 3.
+    fn restart_numbering() -> (Vec<String>, PageNumbering) {
+        let labels = ["1", "2", "1", "2", "3"].map(String::from).to_vec();
+        let numbering = PageNumbering {
+            numbers: vec![1, 2, 1, 2, 3],
+            section_of: vec![Some(0), Some(0), Some(1), Some(1), Some(1)],
+        };
+        (labels, numbering)
+    }
+
     /// Build a resolution context over `dm` with the given total page
-    /// count. Clock = `test_clock`, no chapter / running-header context.
+    /// count. No labels, no running-header context.
     fn ctx<'a>(
         dm: &'a DesignMap,
         clock: &'a DocumentClock,
         total_pages: usize,
     ) -> VarResolveCtx<'a> {
+        static NO_NUMBERING: std::sync::OnceLock<PageNumbering> = std::sync::OnceLock::new();
         VarResolveCtx {
             designmap: dm,
             total_pages,
             clock,
-            chapter_number: None,
+            page_labels: &[],
+            numbering: NO_NUMBERING.get_or_init(PageNumbering::default),
             page_index: 0,
             running_headers: None,
         }
@@ -432,6 +534,11 @@ mod tests {
             resolve_variable(&ctx(&dm, &clock, 7), "TextVariable/u1", "stale"),
             Some("[Spring]".to_string())
         );
+        // RFI C-39: an instance with an empty stored result resolves too.
+        assert_eq!(
+            resolve_variable(&ctx(&dm, &clock, 7), "TextVariable/u1", ""),
+            Some("[Spring]".to_string())
+        );
     }
 
     #[test]
@@ -444,13 +551,48 @@ mod tests {
         );
     }
 
+    /// Measured (thoughts ADR 033): the last page number is the last page's
+    /// LABEL — 3 on a five-page document whose numbering restarts — and in
+    /// section scope the last label of the page's own section.
     #[test]
-    fn file_name_prefers_document_name() {
-        let dm = designmap_with(vec![var("TextVariable/u3", "FileNameType")]);
+    fn last_page_number_is_a_label_in_document_or_section_scope() {
+        let doc = var("TextVariable/doc", "LastPageNumberType");
+        let mut sec = var("TextVariable/sec", "LastPageNumberType");
+        sec.page_number_scope = Some("SectionScope".to_string());
+        let mut roman = var("TextVariable/roman", "LastPageNumberType");
+        roman.number_format = Some("UpperRoman".to_string());
+        let dm = designmap_with(vec![doc, sec, roman]);
+        let clock = DocumentClock::default();
+        let (labels, numbering) = restart_numbering();
+        let at = |page: usize, id: &str| {
+            let c = VarResolveCtx {
+                page_labels: &labels,
+                numbering: &numbering,
+                page_index: page,
+                ..ctx(&dm, &clock, 5)
+            };
+            resolve_variable(&c, id, "").unwrap()
+        };
+        let per_page = |id: &str| (0..5).map(|p| at(p, id)).collect::<Vec<_>>();
+        assert_eq!(per_page("TextVariable/doc"), ["3", "3", "3", "3", "3"]);
+        assert_eq!(per_page("TextVariable/sec"), ["2", "2", "3", "3", "3"]);
+        assert_eq!(per_page("TextVariable/roman"), ["III"; 5]);
+    }
+
+    #[test]
+    fn file_name_drops_the_extension_unless_asked() {
+        let mut with_ext = var("TextVariable/u3", "FileNameType");
+        with_ext.include_extension = true;
+        let without = var("TextVariable/u4", "FileNameType");
+        let dm = designmap_with(vec![with_ext, without]);
         let clock = DocumentClock::default();
         assert_eq!(
             resolve_variable(&ctx(&dm, &clock, 1), "TextVariable/u3", "old.indd"),
             Some("brochure.indd".to_string())
+        );
+        assert_eq!(
+            resolve_variable(&ctx(&dm, &clock, 1), "TextVariable/u4", "old.indd"),
+            Some("brochure".to_string())
         );
     }
 
@@ -492,26 +634,42 @@ mod tests {
         );
     }
 
+    /// Measured: the chapter number is the DOCUMENT's
+    /// (`<ChapterNumberPreference>`, default 1), not a section property.
     #[test]
-    fn chapter_number_uses_section_context() {
-        let dm = designmap_with(vec![var("TextVariable/uch", "ChapterNumberType")]);
+    fn chapter_number_is_the_documents() {
+        let mut v = var("TextVariable/uch", "ChapterNumberType");
+        v.number_format = Some("Current".to_string());
+        let mut dm = designmap_with(vec![v]);
+        dm.sections = vec![paged_model::Section {
+            self_id: "s".to_string(),
+            page_start: None,
+            continue_numbering: false,
+            start_at: Some(2),
+            numbering_style: NumberingStyle::UpperRoman,
+            section_prefix: None,
+            marker: Some("Appendix".to_string()),
+            include_prefix: false,
+        }];
         let clock = DocumentClock::default();
-        let mut c = ctx(&dm, &clock, 1);
-        c.chapter_number = Some("IV");
-        assert_eq!(
-            resolve_variable(&c, "TextVariable/uch", "1"),
-            Some("IV".to_string())
-        );
-        // No section context → fall back to baked value.
         assert_eq!(
             resolve_variable(&ctx(&dm, &clock, 1), "TextVariable/uch", "7"),
-            Some("7".to_string())
+            Some("1".to_string()),
+            "no preference: chapter 1, whatever the sections say"
+        );
+        dm.chapter_number = Some(paged_model::ChapterNumberPreference {
+            number: Some(4),
+            format: Some("I, II, III, IV...".to_string()),
+        });
+        assert_eq!(
+            resolve_variable(&ctx(&dm, &clock, 1), "TextVariable/uch", "7"),
+            Some("IV".to_string())
         );
     }
 
     #[test]
     fn running_header_resolves_post_layout_per_page() {
-        let mut v = var("TextVariable/urh", "RunningHeaderType");
+        let mut v = var("TextVariable/urh", "MatchParagraphStyleType");
         v.running_header_style = Some("ParagraphStyle/Heading".to_string());
         let dm = designmap_with(vec![v]);
         let clock = DocumentClock::default();
@@ -548,91 +706,77 @@ mod tests {
     }
 
     #[test]
-    fn running_header_last_on_page_and_carry_forward() {
-        let mut v = var("TextVariable/urh", "RunningHeaderType");
-        v.running_header_style = Some("ParagraphStyle/Term".to_string());
+    fn character_style_running_header_reads_its_own_slot() {
+        let mut v = var("TextVariable/uk", "MatchCharacterStyleType");
+        v.running_header_character_style = Some("CharacterStyle/Keyword".to_string());
         v.running_header_use = Some("LastOnPage".to_string());
         let dm = designmap_with(vec![v]);
         let clock = DocumentClock::default();
         let mut index = RunningHeaderIndex::default();
-        index.first.insert(
-            (0, "ParagraphStyle/Term".to_string()),
-            "Aardvark".to_string(),
+        index.last.insert(
+            (0, "CharacterStyle/Keyword".to_string()),
+            "beta".to_string(),
         );
-        index
-            .last
-            .insert((0, "ParagraphStyle/Term".to_string()), "Azure".to_string());
-        // Page 1 has no own match but carries forward the last seen.
-        index
-            .fallback
-            .insert((1, "ParagraphStyle/Term".to_string()), "Azure".to_string());
-        // LastOnPage on page 0 → "Azure" (the last term, not first).
-        let mut c0 = ctx(&dm, &clock, 2);
-        c0.running_headers = Some(&index);
-        c0.page_index = 0;
+        let mut c = ctx(&dm, &clock, 1);
+        c.running_headers = Some(&index);
         assert_eq!(
-            resolve_variable(&c0, "TextVariable/urh", "baked"),
-            Some("Azure".to_string())
-        );
-        // Page 1 (no own match) carries forward "Azure".
-        let mut c1 = ctx(&dm, &clock, 2);
-        c1.running_headers = Some(&index);
-        c1.page_index = 1;
-        assert_eq!(
-            resolve_variable(&c1, "TextVariable/urh", "baked"),
-            Some("Azure".to_string())
+            resolve_variable(&c, "TextVariable/uk", "<Keyword>"),
+            Some("beta".to_string())
         );
     }
 
+    /// InDesign's answers for the `variables` fixture's headings.
     #[test]
-    fn chapter_number_for_page_picks_owning_section() {
-        let sections = vec![
-            Section {
-                self_id: "sec1".to_string(),
-                page_start: Some("Page/p1".to_string()),
-                continue_numbering: false,
-                start_at: Some(1),
-                numbering_style: NumberingStyle::Arabic,
-                section_prefix: None,
-                marker: None,
-                include_prefix: false,
-            },
-            Section {
-                self_id: "sec2".to_string(),
-                page_start: Some("Page/p3".to_string()),
-                continue_numbering: false,
-                start_at: Some(2),
-                numbering_style: NumberingStyle::UpperRoman,
-                section_prefix: None,
-                marker: None,
-                include_prefix: false,
-            },
+    fn change_case_and_end_punctuation_follow_indesign() {
+        let cases = [
+            (
+                "Titlecase",
+                "Introduction: the First Heading.",
+                "Introduction: The First Heading.",
+            ),
+            (
+                "Titlecase",
+                "PART TWO begins (a third heading)",
+                "Part Two Begins (a Third Heading)",
+            ),
+            ("Titlecase", "the final heading!", "The Final Heading!"),
+            (
+                "Sentencecase",
+                "Introduction: the First Heading.",
+                "Introduction: the first heading.",
+            ),
+            (
+                "Sentencecase",
+                "PART TWO begins (a third heading)",
+                "Part two begins (a third heading)",
+            ),
+            (
+                "Sentencecase",
+                "heading a. the first",
+                "Heading a. The first",
+            ),
+            (
+                "Lowercase",
+                "PART TWO begins (a third heading)",
+                "part two begins (a third heading)",
+            ),
+            ("Uppercase", "the final heading!", "THE FINAL HEADING!"),
         ];
-        let mut starts = HashMap::new();
-        starts.insert("Page/p1".to_string(), 0usize);
-        starts.insert("Page/p3".to_string(), 2usize);
-        // Page 0,1 → section 1 (chapter "1"); page 2,3 → section 2 ("II").
+        for (case, input, want) in cases {
+            assert_eq!(change_case(input, Some(case)), want, "{case} of {input:?}");
+        }
         assert_eq!(
-            chapter_number_for_page(&sections, &starts, 0).as_deref(),
-            Some("1")
+            delete_end_punctuation("Introduction: the First Heading."),
+            "Introduction: the First Heading"
         );
         assert_eq!(
-            chapter_number_for_page(&sections, &starts, 1).as_deref(),
-            Some("1")
+            delete_end_punctuation("the final heading!"),
+            "the final heading"
         );
         assert_eq!(
-            chapter_number_for_page(&sections, &starts, 2).as_deref(),
-            Some("II")
+            delete_end_punctuation("PART TWO begins (a third heading)"),
+            "PART TWO begins (a third heading)"
         );
-        // Explicit marker wins verbatim.
-        let mut marked = sections.clone();
-        marked[1].marker = Some("Appendix".to_string());
-        assert_eq!(
-            chapter_number_for_page(&marked, &starts, 3).as_deref(),
-            Some("Appendix")
-        );
-        // No sections → None.
-        assert_eq!(chapter_number_for_page(&[], &starts, 0), None);
     }
 
     #[test]

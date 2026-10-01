@@ -126,6 +126,121 @@ pub struct TextVariableDef {
     pub running_header_style: Option<String>,
     /// W1.18c — `Use="FirstOnPage|LastOnPage"`.
     pub running_header_use: Option<String>,
+    /// The preference element InDesign itself writes for this type
+    /// (`<MatchParagraphStylePreference>`, `<PageNumberVariablePreference>`,
+    /// …). When set it REPLACES the `<TextVariablePreference>` above, a
+    /// spelling InDesign never writes and ignores on open (measured,
+    /// InDesign 20.0.1: the `variables` reference printed nothing for a
+    /// running header and a date written that way — thoughts ADR 033).
+    /// `None` keeps the older samples' bytes.
+    pub preference: Option<VariablePreference>,
+}
+
+/// A `<TextVariable>`'s type-specific child as InDesign 20.0.1 serialises
+/// it (read back from its own IDML export, 2026-10-01). Attribute order
+/// follows InDesign's.
+pub enum VariablePreference {
+    /// `MatchParagraphStyleType` / `MatchCharacterStyleType` (running
+    /// headers). `style` is the `ParagraphStyle/…` or `CharacterStyle/…`
+    /// ref; `search_strategy` `FirstOnPage` / `LastOnPage`; `change_case`
+    /// `None` / `Uppercase` / `Lowercase` / `Titlecase` / `Sentencecase`
+    /// (InDesign's spelling, lower-case `c`).
+    MatchStyle {
+        character: bool,
+        style: String,
+        search_strategy: &'static str,
+        change_case: &'static str,
+        delete_end_punctuation: bool,
+    },
+    /// `LastPageNumberType`: `scope` `DocumentScope` / `SectionScope`,
+    /// `format` `Current` or a numbering style (`UpperRoman`).
+    PageNumber {
+        scope: &'static str,
+        format: &'static str,
+    },
+    /// `ChapterNumberType`: `format` `Current` or a numbering format.
+    ChapterNumber { format: &'static str },
+    /// `FileNameType`.
+    FileName {
+        include_path: bool,
+        include_extension: bool,
+    },
+    /// The three date types: an ICU-style `format`.
+    Date { format: String },
+    /// `CustomTextType`: the literal, as a typed `<Properties>` child.
+    CustomText { contents: String },
+}
+
+fn write_variable_preference(b: &mut XmlBuilder, pref: &VariablePreference) {
+    let bool_str = |v: bool| if v { "true" } else { "false" };
+    match pref {
+        VariablePreference::MatchStyle {
+            character,
+            style,
+            search_strategy,
+            change_case,
+            delete_end_punctuation,
+        } => {
+            let (element, style_attr) = if *character {
+                ("MatchCharacterStylePreference", "AppliedCharacterStyle")
+            } else {
+                ("MatchParagraphStylePreference", "AppliedParagraphStyle")
+            };
+            b.empty(
+                element,
+                &[
+                    ("TextBefore", ""),
+                    ("TextAfter", ""),
+                    (style_attr, style.as_str()),
+                    ("SearchStrategy", search_strategy),
+                    ("ChangeCase", change_case),
+                    ("DeleteEndPunctuation", bool_str(*delete_end_punctuation)),
+                ],
+            );
+        }
+        VariablePreference::PageNumber { scope, format } => b.empty(
+            "PageNumberVariablePreference",
+            &[
+                ("TextBefore", ""),
+                ("Format", format),
+                ("TextAfter", ""),
+                ("Scope", scope),
+            ],
+        ),
+        VariablePreference::ChapterNumber { format } => b.empty(
+            "ChapterNumberVariablePreference",
+            &[("TextBefore", ""), ("Format", format), ("TextAfter", "")],
+        ),
+        VariablePreference::FileName {
+            include_path,
+            include_extension,
+        } => b.empty(
+            "FileNameVariablePreference",
+            &[
+                ("TextBefore", ""),
+                ("IncludePath", bool_str(*include_path)),
+                ("IncludeExtension", bool_str(*include_extension)),
+                ("TextAfter", ""),
+            ],
+        ),
+        VariablePreference::Date { format } => b.empty(
+            "DateVariablePreference",
+            &[
+                ("TextBefore", ""),
+                ("Format", format.as_str()),
+                ("TextAfter", ""),
+            ],
+        ),
+        VariablePreference::CustomText { contents } => {
+            b.start("CustomTextVariablePreference", &[]);
+            b.start("Properties", &[]);
+            b.start("Contents", &[("type", "string")]);
+            b.text(contents);
+            b.end("Contents");
+            b.end("Properties");
+            b.end("CustomTextVariablePreference");
+        }
+    }
 }
 
 /// W1.4 — a `<Hyperlink>` (source span → destination resource).
@@ -159,8 +274,14 @@ pub struct SectionDef {
     pub number_style: Option<String>,
     /// `PageNumberStart` — the section's first number.
     pub start_at: Option<u32>,
-    /// `Marker` — an explicit chapter label (wins verbatim).
+    /// `Marker` — the section marker text (`<?ACE 19?>` prints it).
     pub marker: Option<String>,
+    /// `ContinueNumbering` — written only when set. InDesign reads an
+    /// absent attribute as continuing, so a restart needs `Some(false)`.
+    pub continue_numbering: Option<bool>,
+    /// `Length` — the section's page count, which InDesign writes on
+    /// every section. Written only when set.
+    pub length: Option<u32>,
 }
 
 pub fn write_designmap(dm: &DesignMap) -> Vec<u8> {
@@ -279,6 +400,11 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
                 ("VariableType", v.variable_type.as_str()),
             ],
         );
+        if let Some(pref) = v.preference.as_ref() {
+            write_variable_preference(&mut b, pref);
+            b.end("TextVariable");
+            continue;
+        }
         // Real exports nest a <TextVariablePreference> carrying the
         // type-specific payload: `Contents` for custom text, `Format`
         // for dates, `AppliedParagraphStyle` + `Use` for running
@@ -359,10 +485,21 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
     // numbering style as InDesign's typed Properties child (a union type
     // — it may also name a custom list — so never an attribute).
     for sec in &markers.sections {
-        let mut attrs: Vec<(&str, &str)> = vec![
-            ("Self", sec.self_id.as_str()),
-            ("PageStart", sec.page_start.as_str()),
-        ];
+        // InDesign's own attribute order, and the order is LOAD-BEARING:
+        // its reader applies `PageNumberStart` only when
+        // `ContinueNumbering="false"` has already been read. Written the
+        // other way round, InDesign 20.0.1 opened the section, kept its
+        // marker, and numbered straight through (measured 2026-10-01 on
+        // `variables`: "Page 3 of 5" where the restart reads "Page 1 of 3").
+        let mut attrs: Vec<(&str, &str)> = vec![("Self", sec.self_id.as_str())];
+        let length_buf;
+        if let Some(length) = sec.length {
+            length_buf = length.to_string();
+            attrs.push(("Length", &length_buf));
+        }
+        if let Some(cont) = sec.continue_numbering {
+            attrs.push(("ContinueNumbering", if cont { "true" } else { "false" }));
+        }
         let start_buf;
         if let Some(start) = sec.start_at {
             start_buf = start.to_string();
@@ -371,6 +508,7 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
         if let Some(marker) = sec.marker.as_deref() {
             attrs.push(("Marker", marker));
         }
+        attrs.push(("PageStart", sec.page_start.as_str()));
         match sec.number_style.as_deref() {
             Some(style) => {
                 b.start("Section", &attrs);

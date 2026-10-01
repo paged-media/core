@@ -783,6 +783,7 @@ pub(super) fn build_document_inner(
     // coordinate system and two spreads' page bounds can collide.
     let mut page_geometries: Vec<PageGeom> = Vec::new();
     let mut page_labels: Vec<String> = Vec::new();
+    let mut page_numbering = links::PageNumbering::default();
     let mut section_walk = SectionWalk::new(&document.designmap.sections);
     let mut spread_page_ranges: Vec<std::ops::Range<usize>> =
         Vec::with_capacity(document.spreads.len());
@@ -813,6 +814,10 @@ pub(super) fn build_document_inner(
             // `<Section>` numbering rules (falling back to the 1-based
             // body-page index when no section applies).
             page_labels.push(section_walk.next_label(p.self_id.as_deref(), p.name.as_deref()));
+            page_numbering.numbers.push(section_walk.current_number());
+            page_numbering
+                .section_of
+                .push(section_walk.active_section());
             let page_id = p
                 .self_id
                 .clone()
@@ -890,6 +895,8 @@ pub(super) fn build_document_inner(
             local_page_idx: 0,
         });
         page_labels.push("1".to_string());
+        page_numbering.numbers.push(1);
+        page_numbering.section_of.push(None);
     }
 
     // W1.4 — total body-page count, frozen here (pages are all created
@@ -920,20 +927,19 @@ pub(super) fn build_document_inner(
         }
     }
 
-    // W1.18b — chapter number per flat body-page index, computed once
-    // from `<Section>` settings. `<Page Self>` → flat index lets us find
-    // which section owns each page. Empty Strings (and an all-empty
-    // table) when the document declares no sections, in which case
-    // `ChapterNumberType` variables fall back to their baked text.
-    let page_starts: HashMap<String, usize> = pages
-        .iter()
-        .enumerate()
-        .map(|(idx, p)| (p.id.0.clone(), idx))
-        .collect();
-    let sections = &document.designmap.sections;
-    let chapter_numbers: Vec<String> = (0..pages.len())
-        .map(|idx| links::chapter_number_for_page(sections, &page_starts, idx).unwrap_or_default())
-        .collect();
+    // Page-numbering context of everything that prints a page: the
+    // labels and numbers above, plus the page count. A cached master or
+    // body emission captured under a different context printed different
+    // page numbers (a grow pass adds pages), so the caches key on it.
+    let numbering_key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        page_labels.hash(&mut h);
+        page_numbering.numbers.hash(&mut h);
+        page_numbering.section_of.hash(&mut h);
+        total_page_count.hash(&mut h);
+        h.finish()
+    };
     // W1.18c — the post-layout running-header pickup index, threaded into
     // the emit passes only on the second (post-layout) build. `None` on
     // the first pass — running headers then keep their baked value.
@@ -2226,7 +2232,14 @@ pub(super) fn build_document_inner(
             .as_deref()
             .map(|id| (id.to_string(), *page_idx));
         if let (Some(ref key), Some(rc)) = (&cache_key, master_text_emit_cache) {
-            let hit = rc.borrow().get(key).cloned();
+            // A delta captured under other page numbering printed other
+            // page numbers — a footer's "of N" from before a grow pass
+            // added pages (thoughts ADR 033). Re-emit it.
+            let hit = rc
+                .borrow()
+                .get(key)
+                .filter(|d| d.numbering == numbering_key)
+                .cloned();
             if let Some(delta) = hit {
                 let base = pages[*page_idx].list.commands.len();
                 splice_master_text_delta(&mut pages[*page_idx].list, &delta);
@@ -2275,7 +2288,7 @@ pub(super) fn build_document_inner(
         .with_story_id(&parsed.self_id)
         .with_page_count(total_page_count)
         .with_page_index_map(&page_index_map)
-        .with_chapter_numbers(&chapter_numbers);
+        .with_page_numbering(&page_numbering);
         if let Some(index) = running_header_index {
             emitter = emitter.with_running_headers(index);
         }
@@ -2330,6 +2343,7 @@ pub(super) fn build_document_inner(
                 MasterTextEmitDelta {
                     paths: new_paths,
                     commands: new_commands,
+                    numbering: numbering_key,
                 },
             );
         }
@@ -2581,15 +2595,21 @@ pub(super) fn build_document_inner(
         // re-run the ledger update, so disable the cache document-wide
         // when such a list exists (conservative, like the
         // gradient/image-pool rule below).
-        let cache_key: Option<(String, u64)> =
-            if body_story_emit_cache.is_some() && cross_story_numbering.is_none() {
-                Some((
-                    parsed.self_id.clone(),
-                    body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page),
-                ))
+        let cache_key: Option<(String, u64)> = if body_story_emit_cache.is_some()
+            && cross_story_numbering.is_none()
+        {
+            let signature = body_story_signature(&chain, &chain_pages_pre, &wrap_rects_per_page);
+            // A story that prints page numbers or variables depends on
+            // the page numbering too, which its frames do not capture.
+            let signature = if story_prints_page_context(&parsed.story) {
+                signature.rotate_left(17) ^ numbering_key
             } else {
-                None
+                signature
             };
+            Some((parsed.self_id.clone(), signature))
+        } else {
+            None
+        };
         if let (Some(ref key), Some(rc)) = (&cache_key, body_story_emit_cache) {
             if let Some(delta) = rc.borrow().get(key) {
                 // Defense in depth — the signature includes the chain's
@@ -2774,7 +2794,7 @@ pub(super) fn build_document_inner(
             .with_story_id(&parsed.self_id)
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
-            .with_chapter_numbers(&chapter_numbers)
+            .with_page_numbering(&page_numbering)
             .with_footnote_reservation(&reserved_64)
             .with_forced_breaks(&forced_breaks)
             .with_span_plan(&span_starts, &span_widths)
@@ -3360,11 +3380,9 @@ pub(super) struct StoryEmitter<'a> {
     /// collection is off (the map isn't built). Owned by the build, not
     /// the emitter.
     pub(super) page_index_map: Option<&'a HashMap<String, u32>>,
-    /// W1.18b — chapter number per flat body-page index, pre-computed
-    /// once per build from `<Section>` settings. Empty (every
-    /// `ChapterNumberType` falls back to baked text) when the document
-    /// declares no sections. Owned by the build.
-    pub(super) chapter_numbers: &'a [String],
+    /// Every page's number and section, by flat index — read by the
+    /// section marker and the page-number variables. Owned by the build.
+    pub(super) page_numbering: &'a links::PageNumbering,
     /// W1.18c — post-layout running-header pickup index. `None` on the
     /// first (pre-layout) pass — running headers then keep their baked
     /// value; populated for the re-emit so they resolve to the matching
@@ -3566,7 +3584,7 @@ impl<'a> StoryEmitter<'a> {
             page_count: 0,
             collect_link_regions: options.collect_link_regions,
             page_index_map: None,
-            chapter_numbers: &[],
+            page_numbering: links::PageNumbering::empty(),
             running_headers: None,
             force_overset: false,
             start_rule: paged_model::StartParagraph::Anywhere,
@@ -3591,10 +3609,10 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
-    /// W1.18b — wire the per-page chapter-number table used by
-    /// `ChapterNumberType` variables. Empty slice ⇒ no sections.
-    pub(super) fn with_chapter_numbers(mut self, numbers: &'a [String]) -> Self {
-        self.chapter_numbers = numbers;
+    /// Wire the per-page numbering the section marker and the
+    /// page-number variables read.
+    pub(super) fn with_page_numbering(mut self, numbering: &'a links::PageNumbering) -> Self {
+        self.page_numbering = numbering;
         self
     }
 
@@ -4882,34 +4900,50 @@ pub(super) fn emit_paragraph_into_chain(
             .insert(id.to_string(), em.numbered_counter);
     }
 
-    // Substitute IDML auto-page-number markers with the current
-    // page number. The parser leaves a private-use sentinel in
-    // run.text; expand here so master-spread footers print the
-    // live page number rather than nothing.
-    // Auto-page-number substitution. The page-labels table is keyed
-    // by flat body-page index and already carries the user-visible
-    // label (Arabic / Roman / section-overridden). ACE 19 (next-page)
-    // peeks one slot ahead in the same table; for the last page it
-    // numerically increments the current label as a best-effort.
+    // Page-marker substitution. The parser leaves a private-use sentinel
+    // per marker in run.text; expand them for the page this frame sits
+    // on. The labels table is keyed by flat body-page index and carries
+    // the user-visible label (Arabic / Roman / section-overridden).
+    // Measured on InDesign 20.0.1: the NEXT page number is the page of the
+    // next frame in the story's thread and the PREVIOUS one that of the
+    // previous frame, each falling back to the frame's own page at the end
+    // of the thread (a frame outside any thread — a master footer — prints
+    // its own page); the section marker is the `Marker` of the page's
+    // section.
     let cur_idx = em.chain_pages[em.frame_idx];
-    let current_page_str = em
-        .page_labels
-        .get(cur_idx)
-        .cloned()
-        .unwrap_or_else(|| (cur_idx + 1).to_string());
-    let next_page_str = em.page_labels.get(cur_idx + 1).cloned().unwrap_or_else(|| {
-        current_page_str
-            .parse::<i64>()
-            .map(|n| (n + 1).to_string())
-            .unwrap_or_else(|_| current_page_str.clone())
-    });
-    let needs_page_subst = paragraph.runs.iter().any(|r| {
-        r.text.contains(paged_model::AUTO_PAGE_NUMBER_MARKER)
-            || r.text.contains(paged_model::NEXT_PAGE_NUMBER_MARKER)
-    }) || list_first_text
-        .as_deref()
-        .is_some_and(|t| t.contains(paged_model::AUTO_PAGE_NUMBER_MARKER));
+    let label_of = |idx: usize| {
+        em.page_labels
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (idx + 1).to_string())
+    };
+    let current_page_str = label_of(cur_idx);
+    let needs_page_subst = paragraph
+        .runs
+        .iter()
+        .any(|r| r.text.chars().any(paged_model::is_page_marker))
+        || list_first_text
+            .as_deref()
+            .is_some_and(|t| t.contains(paged_model::AUTO_PAGE_NUMBER_MARKER));
     let page_substituted: Vec<String> = if needs_page_subst {
+        let next_page_str = em
+            .chain_pages
+            .get(em.frame_idx + 1)
+            .map_or_else(|| current_page_str.clone(), |&idx| label_of(idx));
+        let previous_page_str = em
+            .frame_idx
+            .checked_sub(1)
+            .and_then(|i| em.chain_pages.get(i))
+            .map_or_else(|| current_page_str.clone(), |&idx| label_of(idx));
+        let section_marker = em
+            .page_numbering
+            .section_of
+            .get(cur_idx)
+            .copied()
+            .flatten()
+            .and_then(|si| em.document.designmap.sections.get(si))
+            .and_then(|sec| sec.marker.clone())
+            .unwrap_or_default();
         paragraph
             .runs
             .iter()
@@ -4917,6 +4951,8 @@ pub(super) fn emit_paragraph_into_chain(
                 r.text
                     .replace(paged_model::AUTO_PAGE_NUMBER_MARKER, &current_page_str)
                     .replace(paged_model::NEXT_PAGE_NUMBER_MARKER, &next_page_str)
+                    .replace(paged_model::PREVIOUS_PAGE_NUMBER_MARKER, &previous_page_str)
+                    .replace(paged_model::SECTION_MARKER, &section_marker)
             })
             .collect()
     } else {
@@ -4944,7 +4980,8 @@ pub(super) fn emit_paragraph_into_chain(
             designmap: &em.document.designmap,
             total_pages,
             clock: &em.options.document_clock,
-            chapter_number: em.chapter_numbers.get(host_page).map(String::as_str),
+            page_labels: em.page_labels,
+            numbering: em.page_numbering,
             page_index: host_page,
             running_headers: em.running_headers,
         };
@@ -6904,4 +6941,20 @@ pub(super) fn emit_paragraph_into_chain(
             total_stats,
         );
     }
+}
+
+/// True when the story's text depends on the page numbering: a page
+/// marker or a text variable anywhere in it (table cells included).
+fn story_prints_page_context(story: &paged_model::Story) -> bool {
+    fn paragraphs_print(paragraphs: &[paged_model::Paragraph]) -> bool {
+        paragraphs.iter().any(|p| {
+            p.runs.iter().any(|r| {
+                r.text_variable.is_some() || r.text.chars().any(paged_model::is_page_marker)
+            }) || p
+                .table
+                .as_ref()
+                .is_some_and(|t| t.cells.iter().any(|c| paragraphs_print(&c.paragraphs)))
+        })
+    }
+    paragraphs_print(&story.paragraphs)
 }

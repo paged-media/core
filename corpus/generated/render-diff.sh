@@ -118,9 +118,30 @@ if [ "$SAMPLE_DIR" = "$GENERATED_DIR" ]; then
     SNAP_FLAG="--snap-glyph-origins"
 fi
 
+# Date variables print the day InDesign opened and exported the reference
+# (its creation, modification and output date), so render them for the day
+# the export meta records rather than the renderer's 1970 default.
+DATE_FLAG=()
+META="${IDML%.idml}.export.meta.json"
+if [ -f "$META" ]; then
+    EXPORT_DAY="$(python3 - "$META" <<'PY'
+import json, sys, datetime
+raw = json.load(open(sys.argv[1])).get("exported_at", "")
+try:
+    print(datetime.datetime.strptime(" ".join(raw.split()[1:4]), "%b %d %Y").strftime("%Y-%m-%d"))
+except ValueError:
+    pass
+PY
+)"
+    if [ -n "$EXPORT_DAY" ]; then
+        DATE_FLAG=(--document-date "$EXPORT_DAY")
+    fi
+fi
+
 (cd "$ROOT" && cargo run -q --release -p paged-renderer --bin paged-inspect -- \
     "$IDML" \
     --render "$OUT/cand.png" \
+    ${DATE_FLAG[@]+"${DATE_FLAG[@]}"} \
     --default-font "$DEFAULT_FONT" \
     "${FONT_FLAGS[@]}" \
     $LINKS_FLAG \

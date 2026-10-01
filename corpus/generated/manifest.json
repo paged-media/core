@@ -445,8 +445,8 @@
       "name": "variables",
       "idml": "variables.idml",
       "pdf": "variables.pdf",
-      "pages": 2,
-      "passing": 1,
+      "pages": 5,
+      "passing": 4,
       "diff_dir": "/tmp/idml-generated-diff/variables",
       "report": "/tmp/idml-generated-diff/variables/report.json"
     }

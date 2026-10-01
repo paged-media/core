@@ -492,6 +492,10 @@ pub struct MasterTextEmitDelta {
     /// `0..paths.len()`. Replay adds the current path-buffer
     /// size to each id before pushing.
     pub commands: Vec<paged_compose::DisplayCommand>,
+    /// Hash of the page-numbering context (labels, numbers, sections,
+    /// page count) the delta was emitted under. A hit under a different
+    /// context is a miss: the text printed page numbers that changed.
+    pub numbering: u64,
 }
 
 impl std::fmt::Debug for PipelineOptions<'_> {
@@ -1092,12 +1096,10 @@ fn build_document_fixed(
     // inner builder uses; cheap to recompute and avoids plumbing a flag
     // back out.)
     let dm = &document.designmap;
-    let has_running_header = dm.text_variables.iter().any(|v| {
-        matches!(
-            v.variable_type.as_deref(),
-            Some("RunningHeaderType") | Some("RunningHeaderVariableType")
-        )
-    });
+    let has_running_header = dm
+        .text_variables
+        .iter()
+        .any(|v| links::is_running_header_type(v.variable_type.as_deref()));
     let has_text_anchor_dest = options.collect_link_regions
         && dm.hyperlink_destinations.iter().any(|d| {
             matches!(
@@ -1117,75 +1119,167 @@ fn build_document_fixed(
 }
 
 /// W1.18c / W1.19 — derive the running-header pickup index + the
-/// story→page map from a first-pass [`BuiltDocument`]. Walks every
-/// page's `story_layout`, attributing each line's source paragraph to
-/// its applied paragraph style, and records the first / last matching
-/// text per (page, style). `fallback` carries forward the most-recent
-/// match so a page with no own occurrence inherits the prior page's.
+/// story→page map from a first-pass [`BuiltDocument`].
+///
+/// Every paragraph in a matched paragraph style, and every contiguous
+/// range in a matched character style, is a MATCH with a position in its
+/// story. A page's own matches are those its lines show, in line order;
+/// a page without one carries forward as InDesign does (see
+/// [`links::RunningHeaderIndex`]): the last match preceding the page's
+/// text in its own story, else the previous page's value.
 fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayoutCtx {
     let mut running_headers = links::RunningHeaderIndex::default();
     let mut story_page: HashMap<String, u32> = HashMap::new();
 
-    // Pre-index each story's paragraphs by index → (applied style,
-    // concatenated text) so we can attribute a laid-out line to its
-    // source paragraph's style + read its full text.
-    let mut para_style: HashMap<(&str, u32), &str> = HashMap::new();
-    let mut para_text: HashMap<(&str, u32), String> = HashMap::new();
+    // The styles the document's running headers match.
+    let styles: std::collections::BTreeSet<&str> = document
+        .designmap
+        .text_variables
+        .iter()
+        .filter(|v| links::is_running_header_type(v.variable_type.as_deref()))
+        .filter_map(links::running_header_style)
+        .collect();
+
+    // Story → style → its matches in story order: (paragraph, byte start,
+    // byte end, text). A paragraph match spans its whole paragraph.
+    type Match = (u32, u32, u32, String);
+    let mut matches: HashMap<(&str, &str), Vec<Match>> = HashMap::new();
     for parsed in &document.stories {
         for (p_idx, para) in parsed.story.paragraphs.iter().enumerate() {
-            let key = (parsed.self_id.as_str(), p_idx as u32);
-            if let Some(style) = para.paragraph_style.as_deref() {
-                para_style.insert(key, style);
+            let p_idx = p_idx as u32;
+            if let Some(style) = para
+                .paragraph_style
+                .as_deref()
+                .filter(|s| styles.contains(s))
+            {
+                let text: String = para
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.text.chars())
+                    .filter(|c| !paged_model::is_page_marker(*c))
+                    .collect();
+                let text = text.trim_end_matches(['\n', '\r']).to_string();
+                if !text.is_empty() {
+                    matches
+                        .entry((parsed.self_id.as_str(), style))
+                        .or_default()
+                        .push((p_idx, 0, u32::MAX, text));
+                }
             }
-            let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
-            para_text.insert(key, text);
+            // Contiguous character-style ranges (consecutive runs in the
+            // same style merge into one match).
+            let mut offset = 0u32;
+            let mut open: Option<(&str, Match)> = None;
+            for run in &para.runs {
+                let len = run.text.len() as u32;
+                let style = run
+                    .character_style
+                    .as_deref()
+                    .filter(|s| styles.contains(s));
+                match (&mut open, style) {
+                    (Some((open_style, m)), Some(style)) if *open_style == style => {
+                        m.2 = offset + len;
+                        m.3.push_str(&run.text);
+                    }
+                    _ => {
+                        if let Some((open_style, m)) = open.take() {
+                            matches
+                                .entry((parsed.self_id.as_str(), open_style))
+                                .or_default()
+                                .push(m);
+                        }
+                        if let Some(style) = style {
+                            open = Some((style, (p_idx, offset, offset + len, run.text.clone())));
+                        }
+                    }
+                }
+                offset += len;
+            }
+            if let Some((open_style, m)) = open.take() {
+                matches
+                    .entry((parsed.self_id.as_str(), open_style))
+                    .or_default()
+                    .push(m);
+            }
         }
     }
-
-    // Walk pages in order; for each line, record where its story landed
-    // (first occurrence wins) and, when its paragraph carries a style,
-    // the first / last matching text on that page.
-    //
-    // `seen_on_page` tracks which (page, style) firsts are already set so
-    // a later line on the same page only updates `last`. `carry` holds
-    // the most-recent matched text per style for the fallback walk.
-    let mut carry: HashMap<String, String> = HashMap::new();
-    for (page_idx, page) in first.pages.iter().enumerate() {
-        // Seed every style's fallback for this page from the carry-over
-        // BEFORE processing the page's own lines, so a page with no own
-        // match inherits the prior page's value.
-        for (style, text) in &carry {
-            running_headers
-                .fallback
-                .insert((page_idx, style.clone()), text.clone());
+    for list in matches.values_mut() {
+        for m in list.iter_mut() {
+            m.3 =
+                m.3.chars()
+                    .filter(|c| !paged_model::is_page_marker(*c))
+                    .collect();
         }
+        list.retain(|m| !m.3.trim().is_empty());
+    }
+
+    for (page_idx, page) in first.pages.iter().enumerate() {
         for line in &page.story_layout {
             // Story → first page it appears on.
             story_page
                 .entry(line.story_id.clone())
                 .or_insert(page_idx as u32);
-            let key = (line.story_id.as_str(), line.paragraph_idx);
-            let Some(style) = para_style.get(&key).copied() else {
-                continue;
-            };
-            let text = para_text.get(&key).cloned().unwrap_or_default();
-            let trimmed = text.trim().to_string();
-            if trimmed.is_empty() {
+        }
+        // Body-flow lines in reading order (table cells keep their own
+        // paragraph streams and are not searched).
+        let lines: Vec<_> = page
+            .story_layout
+            .iter()
+            .filter(|l| l.cell.is_none())
+            .collect();
+        for &style in &styles {
+            let mut own: Vec<&str> = Vec::new();
+            for line in &lines {
+                let Some(list) = matches.get(&(line.story_id.as_str(), style)) else {
+                    continue;
+                };
+                for m in list {
+                    let overlaps = m.0 == line.paragraph_idx
+                        && m.1 < line.byte_range.end.max(line.byte_range.start + 1)
+                        && line.byte_range.start < m.2;
+                    if overlaps && own.last() != Some(&m.3.as_str()) {
+                        own.push(m.3.as_str());
+                    }
+                }
+            }
+            let key = (page_idx, style.to_string());
+            if let (Some(f), Some(l)) = (own.first(), own.last()) {
+                running_headers.first.insert(key.clone(), (*f).to_string());
+                running_headers.last.insert(key, (*l).to_string());
                 continue;
             }
-            let idx_key = (page_idx, style.to_string());
-            running_headers
-                .first
-                .entry(idx_key.clone())
-                .or_insert_with(|| trimmed.clone());
-            running_headers.last.insert(idx_key, trimmed.clone());
-            // Update both the carry-forward AND this page's fallback so
-            // a LATER page with no match (and this page, were it queried
-            // for fallback) sees the freshest value.
-            carry.insert(style.to_string(), trimmed.clone());
-            running_headers
-                .fallback
-                .insert((page_idx, style.to_string()), trimmed);
+            // No match of its own: the last match preceding the page's
+            // text in its story, for the first story on the page that has
+            // one.
+            let mut seen: Vec<&str> = Vec::new();
+            let mut carried: Option<&str> = None;
+            for line in &lines {
+                if seen.contains(&line.story_id.as_str()) {
+                    continue;
+                }
+                seen.push(line.story_id.as_str());
+                let at = (line.paragraph_idx, line.byte_range.start);
+                carried = matches
+                    .get(&(line.story_id.as_str(), style))
+                    .and_then(|list| list.iter().rev().find(|m| (m.0, m.1) < at))
+                    .map(|m| m.3.as_str());
+                if carried.is_some() {
+                    break;
+                }
+            }
+            if let Some(text) = carried {
+                running_headers.first.insert(key.clone(), text.to_string());
+                running_headers.last.insert(key, text.to_string());
+            } else if page_idx > 0 {
+                // Else what the previous page showed, per strategy.
+                let prev = (page_idx - 1, style.to_string());
+                if let Some(t) = running_headers.first.get(&prev).cloned() {
+                    running_headers.first.insert(key.clone(), t);
+                }
+                if let Some(t) = running_headers.last.get(&prev).cloned() {
+                    running_headers.last.insert(key, t);
+                }
+            }
         }
     }
 

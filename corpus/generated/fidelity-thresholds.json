@@ -342,11 +342,11 @@
     },
     {
       "name": "variables",
-      "max_pages_with_pdf": 2,
-      "max_mean_de": 0.45,
-      "max_p99_de": 0.3,
-      "min_ssim": 0.9739,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.375 / p99 0.000 / SSIM 0.9819 across 2 page(s); sized at worst + ~20%."
+      "max_pages_with_pdf": 5,
+      "max_mean_de": 0.156,
+      "max_p99_de": 3.98,
+      "min_ssim": 0.9924,
+      "rationale": "RE-SIZED 2026-10-01 on a NEW reference (thoughts ADR 033, RFI C-37). The old sample wrote variable types and a <TextVariablePreference> InDesign never writes, an undefined Heading style and paragraphs without <Br/> marks; InDesign's reference printed NOTHING for its running header and dates, so the old numbers (mean 0.45 / p99 0.3 / ssim 0.9739 over 2 pages, sized on worst mean 0.375 / p99 0.000) measured a blank slot against a blank slot. The sample is now five pages in InDesign's own vocabulary (MatchParagraph/CharacterStyleType, LastPageNumberType, ACE 18 + PageNumberType, ACE 19 section marker, a restart to 1 on page 3), re-exported by InDesign 20.0.1; every page's resolved text equals InDesign's (crates/paged-renderer/tests/variables.rs) and the gate renders the dates for the export day (render-diff.sh --document-date). Worst page measured: mean 0.130 / p99 3.320 / ssim 0.9974 (p1, dense text: antialiasing at glyph edges, the same text); sized at worst * 1.20 and ssim worst - 0.005. Mean and SSIM are TIGHTER than before; p99 is looser because the old reference had almost no text to differ on."
     },
     {
       "name": "start-paragraph",

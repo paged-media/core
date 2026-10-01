@@ -169,6 +169,12 @@ struct Args {
     /// because its references are `pdftoppm` renders.
     #[arg(long)]
     snap_glyph_origins: bool,
+    /// `YYYY-MM-DD`: the day the creation / modification / output date
+    /// variables print (default: the deterministic 1970-01-01). The
+    /// fidelity gate passes the day InDesign exported a fixture's
+    /// reference, which is the day those variables printed there.
+    #[arg(long, value_parser = parse_document_date)]
+    document_date: Option<paged_renderer::DateParts>,
     /// A3/A4 — draw editor-style degraded-asset markers: a pink
     /// highlight behind text whose font was substituted (resolver
     /// catch-all / default-font stand-in) and a stroke-only
@@ -545,6 +551,14 @@ fn main() -> Result<()> {
         break_story_filter: args.break_story_id.clone(),
         break_page_range,
         collect_glyph_runs: args.snap_glyph_origins,
+        document_clock: args
+            .document_date
+            .map(|day| paged_renderer::DocumentClock {
+                creation: day,
+                modification: day,
+                output: day,
+            })
+            .unwrap_or_default(),
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.
@@ -1566,4 +1580,25 @@ fn rasterize_vello(
          `--features gpu`. Rendering on the CPU instead."
     );
     paged_gpu::rasterize(list, opts)
+}
+
+/// `--document-date YYYY-MM-DD`.
+fn parse_document_date(s: &str) -> Result<paged_renderer::DateParts, String> {
+    let parts: Vec<&str> = s.split('-').collect();
+    let [y, m, d] = parts.as_slice() else {
+        return Err(format!("expected YYYY-MM-DD, got {s:?}"));
+    };
+    let num = |v: &str| v.parse::<i32>().map_err(|e| format!("{s:?}: {e}"));
+    let (year, month, day) = (num(y)?, num(m)?, num(d)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Err(format!("{s:?} is not a calendar date"));
+    }
+    Ok(paged_renderer::DateParts {
+        year,
+        month: month as u8,
+        day: day as u8,
+        hour: 0,
+        minute: 0,
+        second: 0,
+    })
 }

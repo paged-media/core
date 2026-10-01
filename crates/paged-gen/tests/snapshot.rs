@@ -504,33 +504,39 @@ fn variables_round_trips_through_parser() {
     let bytes = paged_gen::write_idml(&sample).unwrap();
     let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
     let dm = &dm(&container);
-    // Four variables (creation date / chapter / running-header / output
-    // date), one section, one xref hyperlink + its text-anchor
-    // destination.
-    assert_eq!(dm.text_variables.len(), 4);
-    assert_eq!(dm.sections.len(), 1);
+    // Sixteen variables in InDesign's vocabulary, two sections (the
+    // second restarting at 1), one xref hyperlink + its destination.
+    assert_eq!(dm.text_variables.len(), 16);
+    assert_eq!(dm.sections.len(), 2);
+    assert!(!dm.sections[1].continue_numbering);
+    assert_eq!(dm.sections[1].start_at, Some(1));
+    assert_eq!(dm.sections[1].marker.as_deref(), Some("Part Two"));
     assert_eq!(dm.hyperlinks.len(), 1);
     assert_eq!(dm.hyperlink_destinations.len(), 1);
-    // The date variable round-trips its Format; the running-header
-    // variable its pickup style + Use.
+    let ty = |t: &str| {
+        dm.text_variables
+            .iter()
+            .filter(|v| v.variable_type.as_deref() == Some(t))
+            .count()
+    };
+    assert_eq!(ty("MatchParagraphStyleType"), 6);
+    assert_eq!(ty("MatchCharacterStyleType"), 2);
+    assert_eq!(ty("LastPageNumberType"), 3);
+    // No private names left.
+    assert_eq!(ty("RunningHeaderType") + ty("PageCountType"), 0);
+    assert!(dm.text_variables.iter().any(|v| {
+        v.running_header_character_style.as_deref() == Some("CharacterStyle/Keyword")
+            && v.running_header_use.as_deref() == Some("LastOnPage")
+    }));
+    assert!(dm.text_variables.iter().any(|v| {
+        v.page_number_scope.as_deref() == Some("SectionScope")
+            && v.number_format.as_deref() == Some("Current")
+    }));
     assert!(dm
         .text_variables
         .iter()
-        .any(|v| v.variable_type.as_deref() == Some("CreationDateType")
-            && v.date_format.as_deref() == Some("MMMM d, yyyy")));
-    assert!(dm
-        .text_variables
-        .iter()
-        .any(|v| v.variable_type.as_deref() == Some("RunningHeaderType")
-            && v.running_header_style.as_deref() == Some("ParagraphStyle/Heading")
-            && v.running_header_use.as_deref() == Some("FirstOnPage")));
-    // The section carries the UpperRoman numbering + start 2.
-    assert_eq!(
-        dm.sections[0].numbering_style,
-        idml_import::NumberingStyle::UpperRoman
-    );
-    assert_eq!(dm.sections[0].start_at, Some(2));
-    // The xref destination is a text anchor (story-targeting).
+        .any(|v| v.variable_type.as_deref() == Some("CustomTextType")
+            && v.contents.as_deref() == Some("Edition 7")));
     assert!(matches!(
         &dm.hyperlink_destinations[0].kind,
         idml_import::HyperlinkDestinationKind::TextAnchor(_)
@@ -2362,11 +2368,16 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
         !p15.contains("CHAPTER"),
         "master recto head suppressed on p15: {p15}"
     );
-    // …while the un-overridden recto p17 still shows the variable's
-    // baked ResultText (no Chapter Title paragraphs exist yet to pick
-    // up).
+    // …and the un-overridden recto p17 prints nothing for its running
+    // head: no Chapter Title paragraph exists yet to pick up, and an
+    // unmatched running header is empty — InDesign's own export of this
+    // fixture prints nothing there (`annual-base.pdf` p17), not the
+    // stored "Chapter" (thoughts ADR 033).
     let p17 = glyphs(16);
-    assert!(p17.contains("CHAPTER"), "master recto head on p17: {p17}");
+    assert!(
+        !p17.contains("CHAPTER"),
+        "unmatched recto head on p17: {p17}"
+    );
     assert!(
         !p17.contains("THEPAGEDANNUAL"),
         "no verso furniture leaks onto a recto: {p17}"
