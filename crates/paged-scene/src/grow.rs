@@ -107,7 +107,9 @@ impl Document {
                 .unwrap_or_default();
             doc.append_generated_pages(story, n, &rule);
         }
-        doc.rebuild_indexes();
+        // The stories are untouched, so the clone's story-derived indexes
+        // (the heading-anchor table) are already right; each append left
+        // the frame indexes current.
         doc
     }
 
@@ -149,7 +151,13 @@ impl Document {
             right: pb.right - margins.right,
         };
 
-        let mut prev_id = last_id;
+        // Where the chain's current last frame sits. Spreads are only ever
+        // inserted AFTER it, so its position stays valid without
+        // re-indexing the whole document per generated page.
+        let Some(&first_link) = self.text_frame_index.get(&last_id) else {
+            return;
+        };
+        let mut prev_at = first_link;
         let mut insert_at = spread_idx + 1;
         for k in 1..=n {
             let page_id = generated_page_id(story, k);
@@ -218,9 +226,8 @@ impl Document {
             };
 
             // Thread the previous chain end onto the new frame.
-            if let Some(&(si, fi)) = self.text_frame_index.get(&prev_id) {
-                self.spreads[si].spread.text_frames[fi].next_text_frame = Some(frame_id.clone());
-            }
+            let (si, fi) = prev_at;
+            self.spreads[si].spread.text_frames[fi].next_text_frame = Some(frame_id);
             self.spreads.insert(
                 insert_at,
                 crate::ParsedSpread {
@@ -228,12 +235,12 @@ impl Document {
                     spread,
                 },
             );
-            // Indices shift with every insert; keep them current for the
-            // next link.
-            self.rebuild_indexes();
-            prev_id = frame_id;
+            prev_at = (insert_at, 0);
             insert_at += 1;
         }
+        // Once per story, not per page: the next story's chain lookup needs
+        // the shifted spread indices.
+        self.rebuild_frame_indexes();
     }
 }
 

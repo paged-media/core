@@ -193,6 +193,13 @@ impl Document {
     /// is what keeps the caches true of a MUTATED document. Must reproduce
     /// exactly what `open` used to build inline.
     pub fn rebuild_indexes(&mut self) {
+        self.rebuild_frame_indexes();
+        self.rebuild_anchor_table();
+    }
+
+    /// The frame-derived half of [`Self::rebuild_indexes`]:
+    /// `frame_for_story` and `text_frame_index`.
+    pub(crate) fn rebuild_frame_indexes(&mut self) {
         let mut frame_for_story = HashMap::new();
         let mut text_frame_index: HashMap<String, (usize, usize)> = HashMap::new();
         for (spread_idx, parsed) in self.spreads.iter().enumerate() {
@@ -207,7 +214,10 @@ impl Document {
         }
         self.frame_for_story = frame_for_story;
         self.text_frame_index = text_frame_index;
+    }
 
+    /// The story-derived half of [`Self::rebuild_indexes`].
+    fn rebuild_anchor_table(&mut self) {
         // Heading-anchor table (Phase G): heading paragraphs become anchors so
         // the Tier 3 resolver can populate the numbering map for cross-refs /
         // TOC entries.

@@ -1327,6 +1327,10 @@ pub struct CanvasModel {
     /// build the batch executor runs when its children are done. A batch
     /// whose children changed nothing owes nothing and builds nothing.
     rebuild_owed: bool,
+    /// thoughts ADR 027 §4 — when set, every rebuild is checked against a
+    /// cold build ([`Self::digest_gate_check`]) and a difference panics.
+    /// Seeded from `PAGED_DIGEST_GATE=1`; a CI / debug lane only.
+    digest_gate: bool,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1683,6 +1687,7 @@ impl CanvasModel {
             pending_op_apply_ms: 0.0,
             rebuild_deferred: false,
             rebuild_owed: false,
+            digest_gate: std::env::var("PAGED_DIGEST_GATE").is_ok_and(|v| v == "1"),
         })
     }
 
@@ -8448,6 +8453,90 @@ impl CanvasModel {
             .collect()
     }
 
+    /// thoughts ADR 027 §5 — the ONE place the model turns its state into
+    /// [`PipelineOptions`]. The live rebuild, the export build and the
+    /// digest gate's cold build all start here, so they cannot drift apart.
+    fn pipeline_options<'a>(
+        &'a self,
+        purpose: PipelinePurpose,
+        assets: Option<&'a dyn paged_renderer::AssetResolver>,
+        resource_providers: &'a HashMap<
+            String,
+            paged_renderer::pipeline::ResourceProviderEntry<'a>,
+        >,
+    ) -> PipelineOptions<'a> {
+        let base = PipelineOptions {
+            font: self.font_bytes.as_deref(),
+            assets,
+            // Ink Manager — "Use Standard Lab Values for Spots"
+            // (`SetUseStandardLabForSpots`). The Swatches chip reads the
+            // same flag through `color_preview`; this is what makes the
+            // PAGE agree with the chip. An export honours it too: it
+            // describes the inks themselves, not a viewing condition.
+            use_standard_lab_for_spots: self.use_standard_lab_for_spots,
+            // Perf-S — the decode cache is content-addressed (URI →
+            // DecodedImage), not positional, so every build may share it.
+            image_decode_cache: Some(&self.image_decode_cache),
+            grow_hint: Some(&self.grow_hint),
+            // Perf-FontTable — reuse the shaping table built at load
+            // (saves the ~225ms harvest+resolve walk).
+            pre_built_font_table: Some(&self.font_table),
+            // C-1 — plugin scene layers render inside their frames, and a
+            // printed/exported sheet includes them (document-grade vector
+            // output).
+            scene_layers: Some(&self.scene_layers),
+            // C-6 — claimed image providers assemble pyramid tiles inside
+            // their frames; missing tiles land on
+            // `BuiltDocument::resource_tiles_needed`.
+            resource_providers: Some(resource_providers),
+            ..PipelineOptions::default()
+        };
+        match purpose {
+            PipelinePurpose::Live => PipelineOptions {
+                // Soft-proof active => CMYK renders through the PROOF
+                // condition (paper white = absolute colorimetric);
+                // otherwise the working space + document settings.
+                cmyk_icc_profile: match &self.proof_state {
+                    Some(p) => Some(p.bytes.as_slice()),
+                    None => self.icc_bytes.as_deref(),
+                },
+                cmyk_intent: match &self.proof_state {
+                    Some(p) if p.simulate_paper_white => paged_color::Intent::AbsoluteColorimetric,
+                    Some(p) => p.intent,
+                    None => self.color_settings.intent,
+                },
+                cmyk_bpc: match &self.proof_state {
+                    // Paper-white simulation wants the true media white:
+                    // BPC would re-anchor the black point and dilute it.
+                    Some(p) => !p.simulate_paper_white && self.color_settings.bpc,
+                    None => self.color_settings.bpc,
+                },
+                // Perf-MasterText / Perf-BodyStory — reuse the per-page
+                // master-text and per-story body emit deltas.
+                master_text_emit_cache: Some(&self.master_text_emit_cache),
+                body_story_emit_cache: Some(&self.body_story_emit_cache),
+                render_scale: self.resource_render_scale,
+                // A5 — live rebuilds keep the degraded-asset markers on
+                // (mirrors the initial load); an export stays faithful.
+                degraded_asset_markers: true,
+                ..base
+            },
+            // Concept 3 — the export-time ONE-SHOT build: glyph side-channel
+            // ON, splice caches OFF (a spliced command range would desync the
+            // glyph table's `command_index` parallelism). Proof simulation
+            // is deliberately ignored — export renders the WORKING space —
+            // and the providers serve full resolution (scale 1.0).
+            PipelinePurpose::Export => PipelineOptions {
+                cmyk_icc_profile: self.icc_bytes.as_deref(),
+                cmyk_intent: self.color_settings.intent,
+                cmyk_bpc: self.color_settings.bpc,
+                collect_glyph_runs: true,
+                render_scale: 1.0,
+                ..base
+            },
+        }
+    }
+
     /// Rebuild the `BuiltDocument` from the (possibly-mutated) scene.
     /// Phase 4 Step 1 — installs the persistent `layout_cache` so
     /// paragraphs whose `(text, style, width, font)` signature didn't
@@ -8467,34 +8556,13 @@ impl CanvasModel {
     ) -> Result<paged_renderer::BuiltDocument, crate::channel::LoadError> {
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         let resource_providers = self.resource_tiles.provider_entries();
-        let options = PipelineOptions {
-            font: self.font_bytes.as_deref(),
-            assets: resolver
+        let options = self.pipeline_options(
+            PipelinePurpose::Export,
+            resolver
                 .as_ref()
                 .map(|r| r as &dyn paged_renderer::AssetResolver),
-            cmyk_icc_profile: self.icc_bytes.as_deref(),
-            cmyk_intent: self.color_settings.intent,
-            cmyk_bpc: self.color_settings.bpc,
-            // Ink-manager state IS honoured by an export — unlike the
-            // soft proof below, it describes the inks themselves, not a
-            // viewing condition.
-            use_standard_lab_for_spots: self.use_standard_lab_for_spots,
-            collect_glyph_runs: true,
-            // Image decode cache is content-addressed (URI →
-            // DecodedImage), not positional — safe to share.
-            image_decode_cache: Some(&self.image_decode_cache),
-            grow_hint: Some(&self.grow_hint),
-            pre_built_font_table: Some(&self.font_table),
-            // C-1 — a printed/exported sheet includes its in-frame plugin
-            // content (the scene layer is document-grade vector output).
-            scene_layers: Some(&self.scene_layers),
-            // C-6 — an export pulls the FULL-resolution tiles (level 0):
-            // a printed sheet wants the sharpest available pyramid level,
-            // not the viewport's coarse LOD.
-            resource_providers: Some(&resource_providers),
-            render_scale: 1.0,
-            ..PipelineOptions::default()
-        };
+            &resource_providers,
+        );
         pipeline::build_document(&self.scene, &options)
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
@@ -8543,77 +8611,20 @@ impl CanvasModel {
             self.rebuild_owed = true;
             return Ok(());
         }
+        let mut cache = std::mem::take(&mut self.layout_cache);
+        cache.reset_stats();
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         // C-6 — build the per-frame provider entry map, borrowing the tile
         // store as the shared provider. Built before `options` so it lives
         // through the build.
         let resource_providers = self.resource_tiles.provider_entries();
-        let options = PipelineOptions {
-            font: self.font_bytes.as_deref(),
-            assets: resolver
+        let options = self.pipeline_options(
+            PipelinePurpose::Live,
+            resolver
                 .as_ref()
                 .map(|r| r as &dyn paged_renderer::AssetResolver),
-            // Soft-proof active => CMYK renders through the PROOF
-            // condition (paper white = absolute colorimetric);
-            // otherwise the working space + document settings.
-            cmyk_icc_profile: match &self.proof_state {
-                Some(p) => Some(p.bytes.as_slice()),
-                None => self.icc_bytes.as_deref(),
-            },
-            cmyk_intent: match &self.proof_state {
-                Some(p) if p.simulate_paper_white => paged_color::Intent::AbsoluteColorimetric,
-                Some(p) => p.intent,
-                None => self.color_settings.intent,
-            },
-            cmyk_bpc: match &self.proof_state {
-                // Paper-white simulation wants the true media white:
-                // BPC would re-anchor the black point and dilute it.
-                Some(p) => !p.simulate_paper_white && self.color_settings.bpc,
-                None => self.color_settings.bpc,
-            },
-            // Ink Manager — "Use Standard Lab Values for Spots"
-            // (`SetUseStandardLabForSpots`). The Swatches chip reads the
-            // same flag through `color_preview`; this is what makes the
-            // PAGE agree with the chip.
-            use_standard_lab_for_spots: self.use_standard_lab_for_spots,
-            // Perf-S — reuse the persistent image-decode cache so
-            // placed images don't re-decode on every gesture rebuild.
-            image_decode_cache: Some(&self.image_decode_cache),
-            grow_hint: Some(&self.grow_hint),
-            // Perf-FontTable — reuse the shaping table built at
-            // load. Saves the ~225ms harvest+resolve walk that
-            // FontTable::build does internally.
-            pre_built_font_table: Some(&self.font_table),
-            // Perf-MasterText — reuse the per-page master-text
-            // emit deltas captured at load. Saves the ~161ms
-            // emission walk for footers/headers across body pages.
-            // `apply_operation` clears this when a structural
-            // mutation lands so the next rebuild repopulates.
-            master_text_emit_cache: Some(&self.master_text_emit_cache),
-            // Perf-BodyStory — reuse the per-story body emit
-            // deltas. Signature-keyed so stories whose frame
-            // chain isn't affected by the active gesture keep
-            // hitting; the dragged frame's story misses and
-            // re-emits. Largest single perf opportunity in
-            // build_document; ~613ms ceiling on a multi-spread
-            // fixture.
-            body_story_emit_cache: Some(&self.body_story_emit_cache),
-            // C-1 — plugin scene layers render inside their frames on every
-            // rebuild (gesture, mutation, scene-layer submit).
-            scene_layers: Some(&self.scene_layers),
-            // C-6 — claimed image providers assemble pyramid tiles inside
-            // their frames at the camera-scale mip level; missing tiles
-            // land on `BuiltDocument::resource_tiles_needed`.
-            resource_providers: Some(&resource_providers),
-            render_scale: self.resource_render_scale,
-            // A5 — live rebuilds keep the degraded-asset markers on
-            // (mirrors the initial load); `build_for_export` stays at
-            // the default `false`.
-            degraded_asset_markers: true,
-            ..PipelineOptions::default()
-        };
-        let mut cache = std::mem::take(&mut self.layout_cache);
-        cache.reset_stats();
+            &resource_providers,
+        );
         // W1.24 (audit B18) — time just the pipeline build (the
         // dominant cost; op-apply is staged separately by the caller).
         let t_build = phase_now();
@@ -8646,7 +8657,60 @@ impl CanvasModel {
             applied_log_len: self.applied_log.len(),
         };
         self.built = built;
+        if self.digest_gate {
+            if let Err(e) = self.digest_gate_check() {
+                panic!("ADR 027 digest gate: incremental build != cold build: {e}");
+            }
+        }
         Ok(())
+    }
+
+    /// thoughts ADR 027 §4 — the digest gate. Builds the scene COLD (fresh
+    /// layout cache, no emit caches, no grow hint) and compares it with the
+    /// incremental `built`: page count, page ids, every page's
+    /// [`paged_compose::DisplayList::digest`], every page's `story_layout`
+    /// (caret and hit-test geometry, which the digest does not cover) and
+    /// the diagnostics. `Err` names the first difference.
+    ///
+    /// Two builds plus a digest per page: a CI / debug lane, never the hot
+    /// path. Enabled per model with [`Self::set_digest_gate`] or for every
+    /// model with `PAGED_DIGEST_GATE=1`; then every rebuild runs it and a
+    /// difference panics.
+    pub fn digest_gate_check(&self) -> Result<(), String> {
+        let cold = self
+            .cold_build()
+            .map_err(|e| format!("cold build failed: {e}"))?;
+        compare_builds(&self.built, &cold)
+    }
+
+    /// Turn the per-rebuild digest gate on or off for this model.
+    pub fn set_digest_gate(&mut self, on: bool) {
+        self.digest_gate = on;
+    }
+
+    /// The build a freshly loaded model would produce for the current
+    /// scene: the live rebuild's options with every cross-build cache and
+    /// hint left out. The registries (fonts, profiles, scene layers) are
+    /// inputs, not caches, and are shared.
+    fn cold_build(&self) -> Result<BuiltDocument, crate::channel::LoadError> {
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let resource_providers = self.resource_tiles.provider_entries();
+        let fresh_hint: std::cell::RefCell<HashMap<String, u32>> = Default::default();
+        let mut options = self.pipeline_options(
+            PipelinePurpose::Live,
+            resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
+            &resource_providers,
+        );
+        options.grow_hint = Some(&fresh_hint);
+        options.master_text_emit_cache = None;
+        options.body_story_emit_cache = None;
+        let (built, _) =
+            paged_text::cache::with_layout_cache(paged_text::LayoutCache::default(), || {
+                pipeline::build_document(&self.scene, &options)
+            });
+        built.map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
 
     /// C-1 — register (or replace) the plugin scene layer for the frame
@@ -9171,6 +9235,57 @@ fn rgb_to_hex(rgb: [f32; 3]) -> String {
         to_byte(rgb[1]),
         to_byte(rgb[2])
     )
+}
+
+/// What a model build is for (thoughts ADR 027 §5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelinePurpose {
+    /// The interactive canvas build: emit caches on, proof condition,
+    /// degraded-asset markers, the camera's resource scale.
+    Live,
+    /// The one-shot export build: glyph runs on, caches off, working space.
+    Export,
+}
+
+/// thoughts ADR 027 §4 — compare an incremental build with a cold one.
+/// `Err` names the first difference.
+fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(), String> {
+    let ids = |b: &BuiltDocument| b.pages.iter().map(|p| p.id.0.clone()).collect::<Vec<_>>();
+    if ids(incremental) != ids(cold) {
+        return Err(format!(
+            "page set differs: incremental {} pages {:?}, cold {} pages {:?}",
+            incremental.pages.len(),
+            ids(incremental),
+            cold.pages.len(),
+            ids(cold)
+        ));
+    }
+    for (i, (a, b)) in incremental.pages.iter().zip(&cold.pages).enumerate() {
+        if a.list.digest() != b.list.digest() {
+            return Err(format!(
+                "page {i} ({}) display-list digest differs ({} vs {} commands)",
+                a.id.0,
+                a.list.commands.len(),
+                b.list.commands.len()
+            ));
+        }
+        if format!("{:?}", a.story_layout) != format!("{:?}", b.story_layout) {
+            return Err(format!(
+                "page {i} ({}) story_layout differs ({} vs {} lines)",
+                a.id.0,
+                a.story_layout.len(),
+                b.story_layout.len()
+            ));
+        }
+    }
+    let diags = |b: &BuiltDocument| format!("{:?}", b.diagnostics.items);
+    if diags(incremental) != diags(cold) {
+        return Err(format!(
+            "diagnostics differ: incremental {:?}, cold {:?}",
+            incremental.diagnostics.items, cold.diagnostics.items
+        ));
+    }
+    Ok(())
 }
 
 fn build_font_resolver(
