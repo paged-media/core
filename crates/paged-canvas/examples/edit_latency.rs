@@ -24,6 +24,10 @@
 //! cargo run --release -p paged-canvas --example edit_latency -- reflow|docx|paste
 //! ```
 //!
+//! `save-long PATH` writes the long story's `.paged` (for the wasm harness,
+//! which drives the same edit through `handleMessage`) and prints the story
+//! id and the caret offset typed at.
+//!
 //! `long` is the plan's long DOCX-shaped story: `docx-pagination` with 2 000
 //! Word-like paragraphs appended to section 1 (about 232 Letter pages),
 //! typed on page 3. `paste` pastes 60 paragraphs on page 3 of it.
@@ -122,6 +126,7 @@ fn type_into(name: &str, m: &mut CanvasModel, story: &str, idx: usize, edits: us
         })
         .map_or(0, |c| c.len_utf8() as u32);
     let base = text_offset(m, story, idx) + first;
+    println!("{name}: typing into {story} at byte offset {base}");
     let (mut wall, mut build) = (Vec::new(), Vec::new());
     for i in 0..=edits {
         let t = std::time::Instant::now();
@@ -219,6 +224,14 @@ fn main() {
                     m.built().pages.len()
                 );
             }
+        }
+        "save-long" => {
+            let path = args.get(1).expect("save-long needs an output path");
+            let bytes = docx(2000);
+            std::fs::write(path, &bytes).expect("write");
+            let m = CanvasModel::load("long", &bytes, options(false)).expect("load");
+            let story = paged_gen::samples::docx_pagination::section_story_id(0);
+            println!("story={story} offset={}", text_offset(&m, &story, 115) + 1);
         }
         other => panic!("unknown document {other:?}"),
     }

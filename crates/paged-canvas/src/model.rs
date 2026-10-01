@@ -2191,14 +2191,8 @@ impl CanvasModel {
         self.stage_op_apply_ms(phase_elapsed_ms(t_op));
         // Perf-BodyStory — text edits change the *content* of a story
         // but not its frame chain, so the body-story signature would
-        // wrongly match and the edit would never display. Blow the
-        // cache; the rebuild repopulates from the new content. We
-        // also clear master_text for symmetry with apply_operation —
-        // text in a master is rare but if it happens we want the
-        // same invariant.
-        self.master_text_emit_cache.borrow_mut().clear();
-        self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation()
+        // wrongly match and the edit would never display.
+        self.commit_and_rebuild(Invalidation::Everything)
             .map_err(|e| crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after mutation: {e}"),
             })?;
@@ -4077,9 +4071,7 @@ impl CanvasModel {
         // re-pins. Gesture-driven update_gesture mutates the
         // scene directly without going through apply_operation,
         // so the cache survives the whole drag.
-        self.master_text_emit_cache.borrow_mut().clear();
-        self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation()
+        self.commit_and_rebuild(Invalidation::Everything)
             .map_err(|e| crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after frame mutation: {e}"),
             })?;
@@ -4135,11 +4127,8 @@ impl CanvasModel {
         // body-story signature matching (the stale pre-undo emit would
         // splice back in), and a structural inverse (page remove, frame
         // re-insert) shifts page indices under the cached per-page
-        // deltas. Mirror apply_mutation / apply_operation and blow both
-        // caches before the rebuild.
-        self.master_text_emit_cache.borrow_mut().clear();
-        self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation().ok()?;
+        // deltas. Mirror apply_mutation / apply_operation.
+        self.commit_and_rebuild(Invalidation::Everything).ok()?;
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
@@ -4189,9 +4178,7 @@ impl CanvasModel {
         };
         // Perf-MasterText + Perf-BodyStory — same invariant as undo():
         // the replayed op mutates content/structure under the caches.
-        self.master_text_emit_cache.borrow_mut().clear();
-        self.body_story_emit_cache.borrow_mut().clear();
-        self.rebuild_after_mutation().ok()?;
+        self.commit_and_rebuild(Invalidation::Everything).ok()?;
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
@@ -8610,6 +8597,23 @@ impl CanvasModel {
         &self.scene.palette
     }
 
+    /// thoughts ADR 027 §5 — the ONE commit path: drop what `invalidation`
+    /// names from the cross-build emit caches, then rebuild. Every
+    /// committed edit (a text op, an operation, undo, redo) comes through
+    /// here, so invalidation has one place to live.
+    fn commit_and_rebuild(
+        &mut self,
+        invalidation: Invalidation,
+    ) -> Result<(), crate::channel::LoadError> {
+        match invalidation {
+            Invalidation::Everything => {
+                self.master_text_emit_cache.borrow_mut().clear();
+                self.body_story_emit_cache.borrow_mut().clear();
+            }
+        }
+        self.rebuild_after_mutation()
+    }
+
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {
         // Perf-Batch — inside a batch the children each ask for a
         // rebuild and only the last one is worth running. Record the
@@ -9245,6 +9249,16 @@ fn rgb_to_hex(rgb: [f32; 3]) -> String {
         to_byte(rgb[1]),
         to_byte(rgb[2])
     )
+}
+
+/// What a committed edit invalidates in the cross-build emit caches
+/// (thoughts ADR 027 §5). [`CanvasModel::commit_and_rebuild`] is its one
+/// consumer.
+#[derive(Clone, Debug)]
+enum Invalidation {
+    /// Content or structure changed in a way the cache keys cannot see:
+    /// drop every master-text and body-story delta.
+    Everything,
 }
 
 /// What a model build is for (thoughts ADR 027 §5).
