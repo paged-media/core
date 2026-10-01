@@ -27,11 +27,13 @@ var PAGED_REFLOW_VARIANT = "${PAGED_REFLOW_VARIANT:-}";
 var PAGED_REFLOW_PHASE = "$1";
 \$.evalFile(File("$JSX"));
 JSX
+    # `do script` by its raw event code: see run-export.sh (it compiles
+    # without InDesign's dynamic terminology).
     osascript <<OSA
 with timeout of 300 seconds
     tell application "$APP"
         activate
-        do script POSIX file "$SHIM" language javascript
+        «event K2  dosc» (POSIX file "$SHIM") given «class doLg»:«constant ****JSLg»
     end tell
 end timeout
 OSA

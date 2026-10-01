@@ -55,11 +55,22 @@ JSX
 # A cold InDesign launch plus a document open runs well past
 # AppleScript's default 120 s reply timeout (measured: a 60 s open
 # killed a run in 2026-09).
+#
+# `do script` is spelled by its raw event code. InDesign's terminology is
+# DYNAMIC: AppleScript asks the running app for it (an `ascr/gdte` event)
+# while COMPILING, and where that request is refused — a sandboxed shell,
+# as the agent shells on this machine are — `do script ... language
+# javascript` does not compile ("Expected end of line, etc. but found
+# 'script'", -2741) although plain `get version` still answers. The raw
+# form needs no terminology and sends the identical event
+# ({K2  ,dosc} doLg=JSLg, checked with AEDebugSends=1). JXA's
+# `app.doScript` also avoids the compile step, but cannot lift the 120 s
+# reply timeout, which `with timeout` does.
 osascript <<EOF
 with timeout of 900 seconds
     tell application "$APP"
         activate
-        do script POSIX file "$SHIM" language javascript
+        «event K2  dosc» (POSIX file "$SHIM") given «class doLg»:«constant ****JSLg»
     end tell
 end timeout
 EOF
