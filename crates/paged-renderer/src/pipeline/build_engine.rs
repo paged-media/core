@@ -492,14 +492,42 @@ struct SpanPlan {
 /// Plan a story whose paragraphs span or split columns (see
 /// `span_columns`); `None` when none does, and the story keeps the
 /// plain column expansion.
-fn plan_span_columns(
-    document: &Document,
+///
+/// `style_spans` memoises, per applied paragraph style and for one build,
+/// whether the style resolves to a span or split. A paragraph whose own
+/// `SpanColumnType` is unset takes its style's, so a story none of whose
+/// paragraphs or styles span or split returns before resolving every
+/// paragraph's attributes (most stories, every build).
+fn plan_span_columns<'d>(
+    document: &'d Document,
     measurer: &auto_size::Measurer<'_>,
-    story: &paged_scene::ParsedStory,
+    story: &'d paged_scene::ParsedStory,
     chain: &[&TextFrame],
+    style_spans: &mut HashMap<Option<&'d str>, bool>,
 ) -> Option<SpanPlan> {
     use super::span_columns::{self, FrameSpec, Kind, Measured, ParaSpec, Top};
+    use paged_model::SpanColumnType;
     let head = *chain.first()?;
+    let may_span = story
+        .story
+        .paragraphs
+        .iter()
+        .any(|p| match p.span_columns.column_type {
+            Some(t) => t != SpanColumnType::SingleColumn,
+            None => *style_spans
+                .entry(p.paragraph_style.as_deref())
+                .or_insert_with(|| {
+                    document
+                        .resolved_paragraph_attrs(p)
+                        .span_columns
+                        .column_type
+                        .unwrap_or_default()
+                        != SpanColumnType::SingleColumn
+                }),
+        });
+    if !may_span {
+        return None;
+    }
     let paras: Vec<ParaSpec> = story
         .story
         .paragraphs
@@ -2513,6 +2541,8 @@ pub(super) fn build_document_inner(
         .any(|d| d.continue_across_stories == Some(true));
     let cross_story_numbering: Option<std::cell::RefCell<HashMap<String, u32>>> =
         has_continue_across_stories.then(|| std::cell::RefCell::new(HashMap::new()));
+    // Span/split planning: which applied paragraph styles span or split.
+    let mut span_style_memo: HashMap<Option<&str>, bool> = HashMap::new();
 
     for parsed in &document.stories {
         total_stats.stories += 1;
@@ -2540,7 +2570,13 @@ pub(super) fn build_document_inner(
             .first()
             .is_some_and(|f| f.applied_toc_style.is_none())
         {
-            plan_span_columns(document, &measurer, parsed, &authored_chain)
+            plan_span_columns(
+                document,
+                &measurer,
+                parsed,
+                &authored_chain,
+                &mut span_style_memo,
+            )
         } else {
             None
         };

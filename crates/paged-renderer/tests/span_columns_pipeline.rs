@@ -719,3 +719,59 @@ fn split_block_boundaries_land_where_indesign_puts_them() {
         INDESIGN_SPLIT_BOUNDARIES,
     );
 }
+
+/// ADR 027 plan step 2 — span/split planning returns early for a story
+/// whose paragraphs and paragraph styles neither span nor split. A span or
+/// split declared by the paragraph STYLE (no local override) must still be
+/// planned: moving every local declaration into a style renders the same
+/// pages.
+#[test]
+fn a_span_declared_by_the_paragraph_style_is_planned_like_a_local_one() {
+    let font = inter_font();
+    let opts = paged_renderer::PipelineOptions {
+        font: Some(&font),
+        ..paged_renderer::PipelineOptions::default()
+    };
+    let digests = |doc: &paged_scene::Document| -> Vec<u64> {
+        paged_renderer::pipeline::build_document(doc, &opts)
+            .expect("build")
+            .pages
+            .iter()
+            .map(|p| p.list.digest())
+            .collect()
+    };
+    for sample in [
+        paged_gen::samples::span_columns::build(),
+        paged_gen::samples::split_boundaries::build(),
+    ] {
+        let bytes = paged_gen::write_idml(&sample).expect("idml");
+        let local = idml_import::import_idml_doc(&bytes).expect("import");
+        let mut styled = local.clone();
+        let mut moved = 0;
+        let mut new_styles = Vec::new();
+        for (si, story) in styled.stories.iter_mut().enumerate() {
+            for (pi, p) in story.story.paragraphs.iter_mut().enumerate() {
+                if p.span_columns.is_unset() {
+                    continue;
+                }
+                let id = format!("ParagraphStyle/SpanTest_{si}_{pi}");
+                new_styles.push(paged_model::ParagraphStyleDef {
+                    self_id: id.clone(),
+                    based_on: p.paragraph_style.clone(),
+                    span_columns: std::mem::take(&mut p.span_columns),
+                    ..Default::default()
+                });
+                p.paragraph_style = Some(id);
+                moved += 1;
+            }
+        }
+        for def in new_styles {
+            styled
+                .styles
+                .paragraph_styles
+                .insert(def.self_id.clone(), def);
+        }
+        assert!(moved > 0, "the fixture declares spans or splits locally");
+        assert_eq!(digests(&styled), digests(&local));
+    }
+}
