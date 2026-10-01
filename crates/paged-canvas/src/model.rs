@@ -1266,6 +1266,10 @@ pub struct CanvasModel {
     /// in the current test harness; this stays as forward-looking
     /// infra for when asset resolvers wire up.
     image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>>,
+    /// thoughts ADR 026 — generated-page counts per growing story, carried
+    /// from one build to the next so an edit starts from the pages it had
+    /// (usually one build) instead of growing from zero.
+    grow_hint: std::cell::RefCell<HashMap<String, u32>>,
     /// Perf-FontTable — pre-built shaping table reused across every
     /// `rebuild_after_mutation`. The `FontTable::build` walk costs
     /// ~225ms on a multi-spread fixture (harvests every paragraph's
@@ -1538,6 +1542,8 @@ impl CanvasModel {
         // mutation-driven rebuild after that reuses.
         let image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>> =
             std::cell::RefCell::new(HashMap::new());
+        let grow_hint: std::cell::RefCell<HashMap<String, u32>> =
+            std::cell::RefCell::new(HashMap::new());
         // Perf-FontTable — pre-build the shaping table once so the
         // initial build_document + every subsequent
         // rebuild_after_mutation skips the harvest walk
@@ -1569,6 +1575,7 @@ impl CanvasModel {
                     .map(|r| r as &dyn paged_renderer::AssetResolver),
                 cmyk_icc_profile: icc_bytes.as_deref(),
                 image_decode_cache: Some(&image_decode_cache),
+                grow_hint: Some(&grow_hint),
                 pre_built_font_table: Some(&font_table),
                 master_text_emit_cache: Some(&master_text_emit_cache),
                 body_story_emit_cache: Some(&body_story_emit_cache),
@@ -1651,6 +1658,7 @@ impl CanvasModel {
             // above; subsequent rebuild_after_mutation calls share
             // this RefCell so decode cost amortises.
             image_decode_cache,
+            grow_hint,
             // Perf-FontTable — built once above and reused by every
             // rebuild_after_mutation.
             font_table,
@@ -8313,6 +8321,7 @@ impl CanvasModel {
             // Image decode cache is content-addressed (URI →
             // DecodedImage), not positional — safe to share.
             image_decode_cache: Some(&self.image_decode_cache),
+            grow_hint: Some(&self.grow_hint),
             pre_built_font_table: Some(&self.font_table),
             // C-1 — a printed/exported sheet includes its in-frame plugin
             // content (the scene layer is document-grade vector output).
@@ -8408,6 +8417,7 @@ impl CanvasModel {
             // Perf-S — reuse the persistent image-decode cache so
             // placed images don't re-decode on every gesture rebuild.
             image_decode_cache: Some(&self.image_decode_cache),
+            grow_hint: Some(&self.grow_hint),
             // Perf-FontTable — reuse the shaping table built at
             // load. Saves the ~225ms harvest+resolve walk that
             // FontTable::build does internally.

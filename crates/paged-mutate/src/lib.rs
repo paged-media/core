@@ -2986,6 +2986,7 @@ mod tests {
             optical_margin_alignment: false,
             optical_margin_size: 0.0,
             story_direction: None,
+            grow: None,
         };
 
         Document {

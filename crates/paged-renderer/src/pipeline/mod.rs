@@ -313,6 +313,11 @@ pub struct PipelineOptions<'a> {
     /// rasterise it). Default `false` so exports and the fidelity gate
     /// stay pixel-identical; the canvas enables it for live builds only.
     pub degraded_asset_markers: bool,
+    /// thoughts ADR 026 — generated-page counts per growing story, carried
+    /// between builds. Read as the starting point (so an edit usually
+    /// settles in one build) and written with the counts the build settled
+    /// on. `None` starts every growing story from zero.
+    pub grow_hint: Option<&'a std::cell::RefCell<HashMap<String, u32>>>,
     /// Track 2: when true, the renderer records one [`BreakRecord`] per
     /// laid-out line into [`BuiltDocument::breaks`]. Cheap (Vec push
     /// per line) and gated so production renders pay zero cost.
@@ -515,6 +520,7 @@ impl Default for PipelineOptions<'_> {
             font_metrics_overrides: &[],
             missing_image_placeholder: true,
             degraded_asset_markers: false,
+            grow_hint: None,
             collect_breaks: false,
             break_story_filter: None,
             break_page_range: None,
@@ -972,7 +978,103 @@ struct PostLayoutCtx {
 /// each style / story landed and re-run so running headers + page-number
 /// cross-references resolve against the CURRENT layout. The re-run is
 /// gated; documents without those features build in a single pass.
+/// Cap on generated pages for a growing story whose rule sets none.
+pub const DEFAULT_MAX_GENERATED_PAGES: u32 = 2000;
+
+/// Cap on build passes the page-growth loop may spend. Doubling reaches
+/// the default page cap in ~11 passes; a hinted rebuild needs one or two.
+const MAX_GROW_PASSES: usize = 24;
+
+/// Build the document. Stories with a grow rule (thoughts ADR 026) get
+/// generated pages until they no longer overset: each pass materialises the
+/// current counts ([`Document::with_generated_pages`]) and builds. A story
+/// that still oversets doubles its count; one that fits drops the trailing
+/// generated frames that received no line. A document without grow rules
+/// is built exactly once, as before.
 pub fn build_document(
+    document: &Document,
+    options: &PipelineOptions,
+) -> anyhow::Result<BuiltDocument> {
+    let growing = document.growing_stories();
+    if growing.is_empty() {
+        return build_document_fixed(document, options);
+    }
+    let mut counts: HashMap<String, u32> = growing
+        .iter()
+        .map(|s| {
+            let hinted = options
+                .grow_hint
+                .and_then(|h| h.borrow().get(s).copied())
+                .unwrap_or(0);
+            (s.clone(), hinted)
+        })
+        .collect();
+    let caps: HashMap<String, u32> = document
+        .stories
+        .iter()
+        .filter_map(|s| {
+            s.story.grow.as_ref().map(|g| {
+                (
+                    s.self_id.clone(),
+                    g.max_pages.unwrap_or(DEFAULT_MAX_GENERATED_PAGES),
+                )
+            })
+        })
+        .collect();
+
+    let mut pass = 0;
+    loop {
+        let grown = document.with_generated_pages(&counts);
+        let built = build_document_fixed(&grown, options)?;
+        pass += 1;
+        let mut changed = false;
+        for story in &growing {
+            let count = counts[story];
+            let overset = built.diagnostics.items.iter().any(|d| {
+                d.code == crate::diagnostics::DiagnosticCode::OversetTextDropped
+                    && d.story_id.as_deref() == Some(story.as_str())
+            });
+            if overset {
+                let cap = caps
+                    .get(story)
+                    .copied()
+                    .unwrap_or(DEFAULT_MAX_GENERATED_PAGES);
+                let next = count.saturating_mul(2).max(1).min(cap);
+                if next != count {
+                    counts.insert(story.clone(), next);
+                    changed = true;
+                }
+            } else if count > 0 {
+                // Drop trailing generated frames that received no line.
+                let lines = built.story_layout(story);
+                let mut used = count;
+                while used > 0 {
+                    let id = paged_scene::grow::generated_frame_id(story, used);
+                    if lines
+                        .iter()
+                        .any(|l| l.frame_id.as_deref() == Some(id.as_str()))
+                    {
+                        break;
+                    }
+                    used -= 1;
+                }
+                if used != count {
+                    counts.insert(story.clone(), used);
+                    changed = true;
+                }
+            }
+        }
+        if !changed || pass >= MAX_GROW_PASSES {
+            if let Some(hint) = options.grow_hint {
+                *hint.borrow_mut() = counts;
+            }
+            return Ok(built);
+        }
+    }
+}
+
+/// Build `document` exactly as given (no page growth).
+fn build_document_fixed(
     document: &Document,
     options: &PipelineOptions,
 ) -> anyhow::Result<BuiltDocument> {

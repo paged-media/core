@@ -2219,6 +2219,7 @@ fn measure_cell_paragraph(
         paragraph_size,
         ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
         head_metrics,
+        None,
     );
     // Cascaded `Leading` governs a cell's line spacing exactly as it
     // governs a frame's; the cells used 1.2 × pt regardless.
@@ -2483,6 +2484,7 @@ pub(super) fn emit_cell_paragraph(
         paragraph_size,
         ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
         head_metrics,
+        None,
     );
     // Cascaded `Leading` governs a cell's line spacing exactly as it
     // governs a frame's; the cells used 1.2 × pt regardless.

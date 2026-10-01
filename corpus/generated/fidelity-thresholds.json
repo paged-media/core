@@ -135,10 +135,18 @@
     {
       "name": "keeps",
       "max_pages_with_pdf": 8,
-      "max_mean_de": 0.544,
-      "max_p99_de": 11.27,
-      "min_ssim": 0.965,
-      "rationale": "Added 2026-10-01 with ADR 028 (paragraph keep options). Eight two-column pages on an exact ten-lines-per-column grid, each keep rule beside a no-keep control; the reference is InDesign 2025's own export, and the column split of every page matches it (also pinned structurally by crates/paged-renderer/tests/keeps_pipeline.rs). Worst page measured: mean 0.453 / p99 9.392 / ssim 0.9698; sized at worst * 1.20 and worst_ssim - 0.005 per the rule above. Body copy is Inter, registered by keeps.fonts.sh."
+      "max_mean_de": 0.234,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.976,
+      "rationale": "Added 2026-10-01 with ADR 028 (paragraph keep options). Eight two-column pages on an exact ten-lines-per-column grid, each keep rule beside a no-keep control; the reference is InDesign 2025's own export, and the column split of every page matches it (also pinned structurally by crates/paged-renderer/tests/keeps_pipeline.rs). Worst page measured: mean 0.453 / p99 9.392 / ssim 0.9698; sized at worst * 1.20 and worst_ssim - 0.005 per the rule above. Body copy is Inter, registered by keeps.fonts.sh. TIGHTENED same day (ADR 026 work): the LeadingOffset first-baseline fix put every line 4 pt lower, where InDesign has it; worst page now mean 0.195 / p99 0.0 / ssim 0.9814 (was 0.453 / 9.392 / 0.9698). Sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005."
+    },
+    {
+      "name": "reflow",
+      "max_pages_with_pdf": 3,
+      "max_mean_de": 1.062,
+      "max_p99_de": 29.68,
+      "min_ssim": 0.943,
+      "rationale": "Added 2026-10-01 with ADR 026 (page growth). The reference is InDesign 2025's export AFTER Smart Text Reflow grew the two-page fixture to three (tools/indesign-export/reflow-probe.sh); reflow.fonts.sh passes --grow-story so the engine grows the same story. Page 3 is GENERATED on both sides (margin-box frame, default frame options). Worst page measured: mean 0.885 / p99 24.736 / ssim 0.948 (page 3: 0.835 / 24.736 / 0.948); sized at worst * 1.20 and worst_ssim - 0.005. Pages 1-2 scored mean 7.9 before the LeadingOffset first-baseline fix in the same change."
     },
     {
       "name": "links-broken",

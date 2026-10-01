@@ -208,6 +208,15 @@
       "report": "/tmp/idml-generated-diff/preflight/report.json"
     },
     {
+      "name": "reflow",
+      "idml": "reflow.idml",
+      "pdf": "reflow.pdf",
+      "pages": 3,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/reflow",
+      "report": "/tmp/idml-generated-diff/reflow/report.json"
+    },
+    {
       "name": "showcase-base",
       "idml": "showcase-base.idml",
       "pdf": "showcase-base.pdf",

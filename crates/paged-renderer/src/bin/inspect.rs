@@ -93,6 +93,14 @@ struct Args {
     /// engine's composition beside InDesign's `story.lines` probe.
     #[arg(long, value_name = "STORY_ID")]
     story_lines: Option<String>,
+
+    /// thoughts ADR 026 — let this story's frame chain GROW (generated
+    /// pages until it no longer oversets), as if it carried a grow rule.
+    /// IDML never carries one (InDesign does not reflow on open), so this
+    /// is how a reflow fixture is rendered against InDesign's reflowed
+    /// export. Repeatable.
+    #[arg(long = "grow-story", value_name = "STORY_ID")]
+    grow_story: Vec<String>,
     /// W4.14 — mutation save-back round-trip check. Open the input, apply
     /// ONE typed `paged_mutate` Operation against a target picked from the
     /// document (first TextFrame else first Rectangle / first non-empty
@@ -263,7 +271,13 @@ fn main() -> Result<()> {
 
     // The importer now lives in `paged-parse` (the IDML adapter) and returns the
     // raw source archive alongside the model — the model no longer carries it (N9).
-    let (document, source_archive) = idml_import::import_idml(&bytes).context("open IDML")?;
+    let (mut document, source_archive) = idml_import::import_idml(&bytes).context("open IDML")?;
+    for id in &args.grow_story {
+        match document.stories.iter_mut().find(|s| &s.self_id == id) {
+            Some(s) => s.story.grow = Some(paged_model::FlowGrowRule::default()),
+            None => anyhow::bail!("--grow-story: no story {id}"),
+        }
+    }
     let palette = &document.palette;
 
     if !args.json {

@@ -5394,6 +5394,35 @@ pub struct Story {
     /// does not yet honour this — see docs/plan.md Tier 4 — CJK
     /// Stage 3.
     pub story_direction: Option<StoryDirection>,
+    /// thoughts ADR 026 — the story's frame chain GROWS: when the story
+    /// oversets its last frame, the renderer appends generated pages (and
+    /// removes generated pages that end up empty). `None` = a fixed chain,
+    /// the IDML default. Never set from IDML: InDesign does not reflow on
+    /// open, so an imported document keeps its authored pages.
+    #[serde(default)]
+    pub grow: Option<FlowGrowRule>,
+}
+
+/// thoughts ADR 026 — how a story's chain grows, mirroring InDesign 2025's
+/// Smart Text Reflow as measured with the `reflow` paged-gen fixture
+/// (`tools/indesign-export/reflow-probe.sh`):
+///
+/// - pages are added after the page of the chain's LAST frame (end of story);
+/// - a generated page copies that page's size and applied master;
+/// - its text frame is the page's MARGIN BOX (not the master frame and not
+///   the last frame's geometry), threaded onto the chain, with DEFAULT frame
+///   options (InDesign's new frame takes an ascent first baseline, not the
+///   chain's settings);
+/// - generated pages that end up empty are removed.
+///
+/// Pages are DERIVED: they are rebuilt from this rule on every layout and
+/// never stored, so undo and save see only the rule.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FlowGrowRule {
+    /// Upper bound on generated pages for this story (a runaway guard, e.g.
+    /// a frame too small to hold one line). `None` = the renderer's default.
+    #[serde(default)]
+    pub max_pages: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

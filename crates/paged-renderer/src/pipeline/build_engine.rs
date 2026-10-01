@@ -4277,6 +4277,7 @@ pub(super) fn emit_paragraph_into_chain(
                 para_pt,
                 (para_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_metrics,
+                None,
             );
         }
         em.y_cursor += space_before_64.round() as i32;
@@ -4796,6 +4797,7 @@ pub(super) fn emit_paragraph_into_chain(
             paragraph_size,
             lopts.first_baseline,
             head_font_metrics,
+            Some(lopts.leading_override.unwrap_or(lopts.line_height)),
         );
     } else {
         let space_before_64 =
@@ -5584,6 +5586,7 @@ pub(super) fn emit_paragraph_into_chain(
                 paragraph_size,
                 (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_font_metrics,
+                Some(line_h),
             );
             let dy = new_baseline - prev_baseline;
             chain_shift_64 += dy;

@@ -993,6 +993,7 @@ pub(super) fn first_baseline_offset_64(
     point_size: f32,
     default_64: i32,
     metrics: Option<&FontMetrics>,
+    leading_64: Option<i32>,
 ) -> i32 {
     const CAP_HEIGHT_FALLBACK: f32 = 0.70;
     const X_HEIGHT_FALLBACK: f32 = 0.50;
@@ -1011,11 +1012,25 @@ pub(super) fn first_baseline_offset_64(
                 .unwrap_or(X_HEIGHT_FALLBACK),
         ),
         Some(F::EmBoxHeight) => pt_to_64(point_size),
-        // FixedHeight / LeadingOffset use MinimumFirstBaselineOffset
-        // verbatim. Falls back to default when missing.
-        Some(F::FixedHeight) | Some(F::LeadingOffset) => {
-            minimum_offset_pt.map(pt_to_64).unwrap_or(default_64)
+        // LeadingOffset: the first line's LEADING, never less than
+        // MinimumFirstBaselineOffset. Measured against InDesign 2025 (the
+        // `reflow` fixture, 2026-10-01): 12 pt leading puts the first
+        // baseline 12 pt below the frame top. It used to take the minimum
+        // or the caller's 0.8 x point-size default (8 pt at 10 pt), so every
+        // LeadingOffset frame sat 4 pt high. Callers without the leading
+        // (`None`) keep the old fallback.
+        Some(F::LeadingOffset) => {
+            let min_64 = minimum_offset_pt.map(pt_to_64);
+            match (leading_64, min_64) {
+                (Some(l), Some(m)) => l.max(m),
+                (Some(l), None) => l,
+                (None, Some(m)) => m,
+                (None, None) => default_64,
+            }
         }
+        // FixedHeight uses MinimumFirstBaselineOffset verbatim. Falls back
+        // to default when missing.
+        Some(F::FixedHeight) => minimum_offset_pt.map(pt_to_64).unwrap_or(default_64),
         // AscentOffset (IDML default) and `None` (unrecognised /
         // absent attribute): use the font's ascender if available;
         // otherwise fall through to the LayoutOptions heuristic.
@@ -1030,6 +1045,7 @@ pub(super) fn first_baseline_for_frame(
     point_size: f32,
     default_64: i32,
     metrics: Option<&FontMetrics>,
+    leading_64: Option<i32>,
 ) -> i32 {
     const CAP_HEIGHT_FALLBACK: f32 = 0.70;
     let top_inset_64 = frame
@@ -1044,6 +1060,7 @@ pub(super) fn first_baseline_for_frame(
         point_size,
         default_64,
         metrics,
+        leading_64,
     );
     // Display-headline clamp: when the frame is sized to the visual
     // letterform (cap height) rather than the typo ascent — common
