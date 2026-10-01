@@ -59,6 +59,11 @@ fn roundtrip_with_effect(
 /// export-idml have real content to operate on. Story `story1` carries
 /// "Hello world" in frame `tf1` on page `p1`.
 fn small_idml() -> Vec<u8> {
+    small_idml_in(None)
+}
+
+/// `small_idml()` with its run asking for `font` (`AppliedFont`).
+fn small_idml_in(font: Option<&str>) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
@@ -95,14 +100,20 @@ fn small_idml() -> Vec<u8> {
         )
         .unwrap();
         zip.start_file("Stories/Story_story1.xml", opts).unwrap();
+        let applied_font = font
+            .map(|f| format!(r#" AppliedFont="{f}""#))
+            .unwrap_or_default();
         zip.write_all(
-            br#"<?xml version="1.0" encoding="UTF-8"?>
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
 <idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
 <Story Self="story1">
 <ParagraphStyleRange>
-<CharacterStyleRange><Content>Hello world</Content></CharacterStyleRange>
+<CharacterStyleRange{applied_font}><Content>Hello world</Content></CharacterStyleRange>
 </ParagraphStyleRange>
-</Story></idPkg:Story>"#,
+</Story></idPkg:Story>"#
+            )
+            .as_bytes(),
         )
         .unwrap();
         zip.finish().unwrap();
@@ -794,6 +805,68 @@ fn register_then_clear_font_registry_round_trips() {
     );
     assert_eq!(cleared["kind"], "fontRegistryCleared");
     assert!(core.font_registry.is_empty());
+}
+
+/// A font registered while a document is open reaches that document: the
+/// run asking for it re-lays out before the reply, and the GPU scene cache
+/// is dropped. It used to be accepted and ignored until the next load.
+#[test]
+fn register_font_reaches_the_open_document() {
+    let fonts = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
+    let (Ok(inter), Ok(lora)) = (
+        std::fs::read(fonts.join("Inter.ttf")),
+        std::fs::read(fonts.join("Lora.ttf")),
+    ) else {
+        eprintln!("skip: Inter.ttf / Lora.ttf not present");
+        return;
+    };
+    let mut core = WorkerCore::new();
+    let loaded = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1,
+            "protocol": protocol(),
+            "kind": "loadDocument",
+            "payload": { "bytes": small_idml_in(Some("Lora")), "font": inter }
+        }),
+    );
+    assert_eq!(loaded["kind"], "documentLoaded", "{loaded}");
+    let advances = |core: &WorkerCore| -> Vec<u32> {
+        core.model
+            .as_ref()
+            .expect("a document")
+            .built()
+            .story_layout("story1")
+            .iter()
+            .flat_map(|l| l.clusters.iter().map(|c| c.x_pt.to_bits()))
+            .collect()
+    };
+    let fallback = advances(&core);
+    assert!(!fallback.is_empty(), "the story is laid out");
+
+    let (reg, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 2,
+            "protocol": protocol(),
+            "kind": "registerFont",
+            "payload": { "family": "Lora", "bytes": lora }
+        }),
+    );
+    assert_eq!(reg["kind"], "fontRegistered");
+    assert!(
+        matches!(effect, CacheEffect::ClearAll),
+        "scene cache dropped"
+    );
+    assert_ne!(advances(&core), fallback, "the run lays out in Lora now");
+
+    let (cleared, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({ "seq": 3, "protocol": protocol(), "kind": "clearFontRegistry" }),
+    );
+    assert_eq!(cleared["kind"], "fontRegistryCleared");
+    assert!(matches!(effect, CacheEffect::ClearAll));
+    assert_eq!(advances(&core), fallback, "back to the fallback face");
 }
 
 /// v43 (W-06) — register a real TTF, then read its face bytes back over

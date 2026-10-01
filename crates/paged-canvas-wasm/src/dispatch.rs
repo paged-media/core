@@ -555,15 +555,33 @@ impl WorkerCore {
                 style,
                 bytes,
             } => {
-                self.font_registry.push(FontEntry {
+                let entry = FontEntry {
                     family: family.clone(),
                     style,
                     bytes: bytes.into_vec(),
-                });
+                };
+                // The worker copy seeds future loads; the LIVE model gets
+                // the face too and re-lays out the stories it changes (it
+                // used to be ignored until the next load).
+                if let Some(model) = self.model.as_mut() {
+                    match model.register_font(entry.clone()) {
+                        Ok(affected) if !affected.is_empty() => effect = CacheEffect::ClearAll,
+                        Ok(_) => {}
+                        // The registry took the face; a failed relayout
+                        // leaves the previous build standing.
+                        Err(_) => effect = CacheEffect::ClearAll,
+                    }
+                }
+                self.font_registry.push(entry);
                 WorkerToMainKind::FontRegistered { family }
             }
             MainToWorkerKind::ClearFontRegistry => {
                 self.font_registry.clear();
+                if let Some(model) = self.model.as_mut() {
+                    if !matches!(model.clear_font_registry(), Ok(a) if a.is_empty()) {
+                        effect = CacheEffect::ClearAll;
+                    }
+                }
                 WorkerToMainKind::FontRegistryCleared
             }
             MainToWorkerKind::RegisterColorProfile { name, bytes } => {

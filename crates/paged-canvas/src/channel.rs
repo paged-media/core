@@ -762,9 +762,12 @@ pub enum MainToWorkerKind {
         #[tsify(type = "number[] | null")]
         font: Option<ByteBuf>,
     },
-    /// Register a named font with the worker's family resolver. Sent
-    /// any time before `LoadDocument` (and persists across loads so a
-    /// fidelity test can preload Poppins/Roboto/etc once per worker).
+    /// Register a named font with the worker's family resolver. Persists
+    /// across loads so a fidelity test can preload Poppins/Roboto/etc
+    /// once per worker. Sent while a document is open, it also reaches
+    /// that document: the stories whose runs now resolve to the new face
+    /// are re-laid out before the reply (no protocol change: the reply is
+    /// still `FontRegistered`; re-render to see it).
     /// Reply: `FontRegistered`.
     RegisterFont {
         family: String,

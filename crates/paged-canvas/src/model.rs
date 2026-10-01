@@ -1274,9 +1274,15 @@ pub struct CanvasModel {
     /// `rebuild_after_mutation`. The `FontTable::build` walk costs
     /// ~225ms on a multi-spread fixture (harvests every paragraph's
     /// cascade-resolved font key, then resolver-fetches bytes per
-    /// key). The document's font registry only changes at
-    /// loadDocument boundaries — fresh CanvasModel ⇒ fresh table —
-    /// so we never need to invalidate mid-lifetime.
+    /// key).
+    ///
+    /// It is a snapshot of the fonts the document asked for and the
+    /// registry could serve when it was built, so it goes stale two
+    /// ways: a font registered after load ([`Self::register_font`]),
+    /// and an edit that brings in a (family, style) the table never saw
+    /// (every family of a Word document poured into an empty skeleton).
+    /// Either way the runs shaped in the fallback face.
+    /// [`Self::refresh_font_table`] rebuilds it when either happens.
     font_table: paged_renderer::FontTable,
     /// ADR 027 plan step 2 — the CMYK display transform, rebuilt only
     /// when the profile, intent or black-point compensation changes.
@@ -1341,6 +1347,11 @@ pub struct CanvasModel {
     /// build: the part of a story whose keep breaks may be reused.
     /// Consumed by the rebuild.
     pending_keep_hints: HashMap<String, u32>,
+    /// A committed edit may have changed which fonts the document asks
+    /// for: the next real rebuild checks the font table against the
+    /// scene first ([`Self::refresh_font_table`]). Gesture rebuilds
+    /// (drags) never set it, so they never pay the walk.
+    font_check_owed: bool,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1562,15 +1573,7 @@ impl CanvasModel {
         // initial build_document + every subsequent
         // rebuild_after_mutation skips the harvest walk
         // (~225ms/call on a multi-spread fixture).
-        let font_table_options = PipelineOptions {
-            font: font_bytes.as_deref(),
-            assets: resolver
-                .as_ref()
-                .map(|r| r as &dyn paged_renderer::AssetResolver),
-            cmyk_icc_profile: icc_bytes.as_deref(),
-            ..PipelineOptions::default()
-        };
-        let font_table = paged_renderer::FontTable::build(&scene, &font_table_options);
+        let font_table = build_font_table(&scene, font_bytes.as_deref(), resolver.as_ref());
         let cmyk_transform_cache = paged_renderer::CmykTransformCache::new();
         // Perf-MasterText — empty cache; the initial build_document
         // below populates it as each master-text emit runs.
@@ -1703,6 +1706,7 @@ impl CanvasModel {
             digest_gate: std::env::var("PAGED_DIGEST_GATE").is_ok_and(|v| v == "1"),
             keep_seeds: Default::default(),
             pending_keep_hints: HashMap::new(),
+            font_check_owed: false,
         })
     }
 
@@ -2504,6 +2508,7 @@ impl CanvasModel {
         for entry in applied.into_iter().rev() {
             self.revert_logged(&entry);
         }
+        self.font_check_owed = true;
         let _ = self.rebuild_after_mutation();
         crate::channel::WorkerError::NotImplemented {
             what: format!(
@@ -8632,6 +8637,9 @@ impl CanvasModel {
         &mut self,
         invalidation: Invalidation,
     ) -> Result<(), crate::channel::LoadError> {
+        // Any committed edit may change the fonts the document asks for
+        // (a run's family, a style's font, a poured story).
+        self.font_check_owed = true;
         match invalidation {
             Invalidation::Everything => {
                 self.master_text_emit_cache.borrow_mut().clear();
@@ -8689,6 +8697,9 @@ impl CanvasModel {
         if self.rebuild_deferred {
             self.rebuild_owed = true;
             return Ok(());
+        }
+        if std::mem::take(&mut self.font_check_owed) {
+            self.refresh_font_table(false);
         }
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
@@ -8784,6 +8795,10 @@ impl CanvasModel {
             &resource_providers,
         );
         options.grow_hint = Some(&fresh_hint);
+        // The font table is a cache too: a cold build harvests its own
+        // from the scene, as a fresh load would, so a stale table shows
+        // up as a digest difference.
+        options.pre_built_font_table = None;
         options.master_text_emit_cache = None;
         options.body_story_emit_cache = None;
         options.keep_seeds = None;
@@ -9115,6 +9130,145 @@ impl CanvasModel {
         self.color_profiles.insert(name, bytes);
     }
 
+    /// Add a font to the LIVE model's registry and re-lay out what it
+    /// changes. A font registered after load used to be accepted and
+    /// ignored until the next load: the font table is built from the
+    /// registry, and only a load built it.
+    ///
+    /// Only the stories with a run that now resolves to a different face
+    /// are re-laid out; the rest reuse their cached emission. Returns the
+    /// ids of the re-laid-out stories, empty when the font changed nothing
+    /// (no rebuild then).
+    pub fn register_font(
+        &mut self,
+        entry: FontEntry,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        self.font_registry.push(entry);
+        self.relayout_for_registry_change()
+    }
+
+    /// Drop every registered font from the LIVE model (the worker's
+    /// `ClearFontRegistry`), re-laying out the stories that lose a face.
+    pub fn clear_font_registry(&mut self) -> Result<Vec<String>, crate::channel::LoadError> {
+        if self.font_registry.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.font_registry.clear();
+        self.relayout_for_registry_change()
+    }
+
+    fn relayout_for_registry_change(&mut self) -> Result<Vec<String>, crate::channel::LoadError> {
+        let affected = self.refresh_font_table(true);
+        if !affected.is_empty() {
+            self.rebuild_after_mutation()?;
+        }
+        Ok(affected)
+    }
+
+    /// Bring the font table up to date with the scene and the registry,
+    /// and drop the cross-build caches of every story whose layout that
+    /// changes. Returns those stories' ids (sorted).
+    ///
+    /// Without `registry_changed` the table is kept as long as the scene
+    /// asks for exactly the keys it was built for: a key-set walk, no
+    /// resolver calls. Otherwise it is rebuilt exactly as a load builds
+    /// it, so the incremental model and a cold load agree (the digest
+    /// gate's cold build harvests its own table to check that).
+    ///
+    /// A story is affected when one of its keys resolves to another face
+    /// (or loses / gains the substitute flag) in the new table, and so is
+    /// the story hosting its anchored frame, whose emission contains it.
+    /// Its body-story emission and keep seeds are dropped; the layout
+    /// cache needs nothing, since its keys carry the font id. Master text
+    /// is re-emitted, as after a text edit.
+    fn refresh_font_table(&mut self, registry_changed: bool) -> Vec<String> {
+        let story_keys = paged_renderer::FontTable::story_font_keys(&self.scene);
+        if !registry_changed {
+            let mut wanted: std::collections::BTreeSet<&paged_renderer::FontKey> =
+                std::collections::BTreeSet::new();
+            for (_, keys) in &story_keys {
+                wanted.extend(keys.iter());
+            }
+            if wanted.len() == self.font_table.keys().len()
+                && wanted.iter().all(|k| self.font_table.keys().contains(*k))
+            {
+                return Vec::new();
+            }
+        }
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let table = build_font_table(&self.scene, self.font_bytes.as_deref(), resolver.as_ref());
+        let old = std::mem::replace(&mut self.font_table, table);
+        let new = &self.font_table;
+        let changed: std::collections::BTreeSet<&paged_renderer::FontKey> = old
+            .keys()
+            .iter()
+            .chain(new.keys().iter())
+            .filter(|(family, style)| {
+                old.resolution(family, style.as_deref()) != new.resolution(family, style.as_deref())
+            })
+            .collect();
+        if changed.is_empty() {
+            return Vec::new();
+        }
+        let mut affected: std::collections::BTreeSet<String> = story_keys
+            .iter()
+            .filter(|(_, keys)| keys.iter().any(|k| changed.contains(k)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        // An anchored frame's story is emitted inside its host story's
+        // emission: the host is affected too (to a fixpoint, frames nest).
+        let hosts: Vec<(String, String)> = self
+            .scene
+            .stories
+            .iter()
+            .flat_map(|parsed| {
+                let host = parsed.self_id.clone();
+                parsed
+                    .story
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| p.anchored_frames.iter())
+                    .filter_map(|f| f.parent_story.clone())
+                    .map(move |inner| (inner, host.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        loop {
+            let before = affected.len();
+            for (inner, host) in &hosts {
+                if affected.contains(inner) {
+                    affected.insert(host.clone());
+                }
+            }
+            if affected.len() == before {
+                break;
+            }
+        }
+        // The same rule a text edit follows (ADR 027 plan step 4): master
+        // text is cheap and re-emitted; a story with a chain of its own
+        // drops its own body emission, and one laid out inside another
+        // story's emission (anchored, inline) or with no chain drops them
+        // all.
+        self.master_text_emit_cache.borrow_mut().clear();
+        let own_chain = |story: &String| {
+            self.scene
+                .frame_chain(story)
+                .first()
+                .is_some_and(|f| !f.is_anchored)
+        };
+        if affected.iter().all(own_chain) {
+            self.body_story_emit_cache
+                .borrow_mut()
+                .retain(|(story, _), _| !affected.contains(story));
+        } else {
+            self.body_story_emit_cache.borrow_mut().clear();
+        }
+        for story in &affected {
+            self.pending_keep_hints.insert(story.clone(), 0);
+        }
+        affected.into_iter().collect()
+    }
+
     /// Concept 2 — the CMM matching the active colour settings,
     /// built lazily and cached until `SetColorSettings` changes the
     /// inputs.
@@ -9384,6 +9538,21 @@ fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(
         ));
     }
     Ok(())
+}
+
+/// The model's font table for `scene`: one place, so a load, a late
+/// registration and an edit that brings in a new family build it alike.
+fn build_font_table(
+    scene: &Document,
+    default_font: Option<&[u8]>,
+    resolver: Option<&BytesResolver>,
+) -> paged_renderer::FontTable {
+    let options = PipelineOptions {
+        font: default_font,
+        assets: resolver.map(|r| r as &dyn paged_renderer::AssetResolver),
+        ..PipelineOptions::default()
+    };
+    paged_renderer::FontTable::build(scene, &options)
 }
 
 fn build_font_resolver(

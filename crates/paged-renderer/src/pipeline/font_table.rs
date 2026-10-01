@@ -20,6 +20,47 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use paged_scene::Document;
 
+/// Every run's resolved attributes, plus the list marker's when
+/// its character style gives it a face of its own (see
+/// `marker_run_attrs`) — the marker is shaped as a run too.
+fn shaped_run_attrs(
+    document: &Document,
+    paragraph: &paged_model::Paragraph,
+) -> Vec<paged_scene::ResolvedRunAttrs> {
+    let mut out: Vec<paged_scene::ResolvedRunAttrs> = paragraph
+        .runs
+        .iter()
+        .map(|run| document.resolved_run_attrs(paragraph, run))
+        .collect();
+    if let Some(head) = out.first() {
+        let p = document.resolved_paragraph_attrs(paragraph);
+        if let Some(marker) = super::marker_run_attrs(document, &p, head) {
+            out.push(marker);
+        }
+    }
+    out
+}
+
+/// The paragraphs shaped inside `paragraph` besides its own runs: its
+/// table cells' paragraphs and its footnote bodies.
+fn nested_paragraphs(
+    paragraph: &paged_model::Paragraph,
+) -> impl Iterator<Item = &paged_model::Paragraph> + '_ {
+    let cells = paragraph
+        .table
+        .iter()
+        .flat_map(|table| table.cells.iter())
+        .flat_map(|cell| cell.paragraphs.iter());
+    let footnotes = paragraph
+        .footnotes
+        .iter()
+        .flat_map(|footnote| footnote.paragraphs.iter());
+    cells.chain(footnotes)
+}
+
+/// A (family, style) font request as a run's resolved attributes carry it.
+pub type FontKey = (String, Option<String>);
+
 /// Per-render font cache. Pre-resolves every distinct (family, style)
 /// pair referenced anywhere in the document via the configured
 /// `AssetResolver`. Falls back to `options.font` when nothing
@@ -79,14 +120,17 @@ pub struct FontTable {
     /// contract on `faces` above.
     #[allow(dead_code)]
     pub(super) face_bytes: HashMap<u32, Bytes>,
-    pub(super) cache: HashMap<(String, Option<String>), Bytes>,
+    /// Every (family, style) key the document's runs asked for when the
+    /// table was built, resolved or not. See [`Self::keys`].
+    pub(super) keys: std::collections::BTreeSet<FontKey>,
+    pub(super) cache: HashMap<FontKey, Bytes>,
     /// A1 — cache keys whose bytes the resolver reported as a
     /// *substitute* (its catch-all default font stood in for the
     /// requested face — see `AssetResolver::resolve_font_traced`).
     /// `bytes_for` re-reads this to flag runs for the degraded-asset
     /// pink highlight. `BTreeSet` so the once-per-(family, style)
     /// `FontSubstituted` diagnostics emit in a deterministic order.
-    pub(super) substituted: std::collections::BTreeSet<(String, Option<String>)>,
+    pub(super) substituted: std::collections::BTreeSet<FontKey>,
     pub(super) fallback: Option<Bytes>,
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
     /// the pipeline uses for glyph-cache routing).
@@ -128,77 +172,90 @@ impl FontTable {
         self.face_bytes.get(&font_id).map(|b| b.as_ref())
     }
 
-    pub fn build(document: &Document, options: &PipelineOptions) -> Self {
-        /// Every run's resolved attributes, plus the list marker's when
-        /// its character style gives it a face of its own (see
-        /// `marker_run_attrs`) — the marker is shaped as a run too.
-        fn shaped_run_attrs(
+    /// The (family, style) keys the table was built for: every key a
+    /// shaped run of the document asked for at build time, whether the
+    /// resolver served it or not.
+    ///
+    /// The table is a snapshot of the document's fonts. A family that a
+    /// later edit introduces is not in it and shapes in the fallback face,
+    /// so a caller that keeps a table across edits (`CanvasModel`) compares
+    /// this set with [`Self::story_font_keys`] of the edited document and
+    /// rebuilds the table when they differ.
+    pub fn keys(&self) -> &std::collections::BTreeSet<FontKey> {
+        &self.keys
+    }
+
+    /// The face a run asking for `(family, style)` shapes with in this
+    /// table, as `(font id, substituted)` — the same lookup the pipeline
+    /// makes (`(family, style)`, then the bare family, then the fallback).
+    /// Two tables that agree on this for a key lay that key's runs out
+    /// identically. `None` when no face is available at all.
+    pub fn resolution(&self, family: &str, style: Option<&str>) -> Option<(u32, bool)> {
+        self.bytes_for(Some(family), style)
+            .map(|(bytes, substituted)| (font_id(&bytes), substituted))
+    }
+
+    /// The font keys each story's shaped runs ask for, keyed by the
+    /// story's self id. The walk covers everything the pipeline shapes
+    /// inside a story: its paragraphs, their table cells and footnote
+    /// bodies, and list markers with a face of their own. A story with no
+    /// family-bearing run is listed with an empty set.
+    pub fn story_font_keys(
+        document: &Document,
+    ) -> Vec<(String, std::collections::BTreeSet<FontKey>)> {
+        fn harvest(
             document: &Document,
             paragraph: &paged_model::Paragraph,
-        ) -> Vec<paged_scene::ResolvedRunAttrs> {
-            let mut out: Vec<paged_scene::ResolvedRunAttrs> = paragraph
-                .runs
-                .iter()
-                .map(|run| document.resolved_run_attrs(paragraph, run))
-                .collect();
-            if let Some(head) = out.first() {
-                let p = document.resolved_paragraph_attrs(paragraph);
-                if let Some(marker) = super::marker_run_attrs(document, &p, head) {
-                    out.push(marker);
+            keys: &mut std::collections::BTreeSet<FontKey>,
+        ) {
+            for resolved in shaped_run_attrs(document, paragraph) {
+                if let Some(family) = resolved.font {
+                    keys.insert((family, resolved.font_style));
                 }
             }
-            out
+            for inner in nested_paragraphs(paragraph) {
+                harvest(document, inner, keys);
+            }
         }
-
-        let fallback = options.font.map(Bytes::copy_from_slice);
-        let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
-        let mut substituted: std::collections::BTreeSet<(String, Option<String>)> =
-            std::collections::BTreeSet::new();
-        if let Some(resolver) = options.assets {
-            // Walk every run in every story and collect distinct
-            // keys before calling the resolver — `resolve_font`
-            // may be a JS Promise wrapper or a disk read, so
-            // deduping matters. Each run's effective (family,
-            // style) comes from the cascade (run direct > applied
-            // character style > applied paragraph style) so a run
-            // that only carries `AppliedCharacterStyle` still
-            // requests the right font.
-            let mut keys: std::collections::HashSet<(String, Option<String>)> =
-                std::collections::HashSet::new();
-            // Helper: harvest font keys from a paragraph + every
-            // run nested inside its table cells (cells host their
-            // own ParagraphStyleRange children; their runs never
-            // surface through the outer story paragraph list).
-            fn harvest_keys(
-                document: &Document,
-                paragraph: &paged_model::Paragraph,
-                keys: &mut std::collections::HashSet<(String, Option<String>)>,
-            ) {
-                for resolved in shaped_run_attrs(document, paragraph) {
-                    if let Some(family) = resolved.font {
-                        keys.insert((family, resolved.font_style));
-                    }
-                }
-                if let Some(table) = paragraph.table.as_ref() {
-                    for cell in &table.cells {
-                        for inner in &cell.paragraphs {
-                            harvest_keys(document, inner, keys);
-                        }
-                    }
-                }
-            }
-            for parsed in &document.stories {
+        document
+            .stories
+            .iter()
+            .map(|parsed| {
+                let mut keys = std::collections::BTreeSet::new();
                 for paragraph in &parsed.story.paragraphs {
-                    harvest_keys(document, paragraph, &mut keys);
+                    harvest(document, paragraph, &mut keys);
                 }
-            }
+                (parsed.self_id.clone(), keys)
+            })
+            .collect()
+    }
+
+    pub fn build(document: &Document, options: &PipelineOptions) -> Self {
+        let fallback = options.font.map(Bytes::copy_from_slice);
+        let mut cache: HashMap<FontKey, Bytes> = HashMap::new();
+        let mut substituted: std::collections::BTreeSet<FontKey> =
+            std::collections::BTreeSet::new();
+        // Every run's effective (family, style) comes from the cascade
+        // (run direct > applied character style > applied paragraph
+        // style), so a run that only carries `AppliedCharacterStyle`
+        // still requests the right font. The keys are kept whether or
+        // not a resolver is configured: they are what `CanvasModel`
+        // compares against the document after an edit to learn that a
+        // family appeared that this table was not built for.
+        let keys: std::collections::BTreeSet<FontKey> = Self::story_font_keys(document)
+            .into_iter()
+            .flat_map(|(_, keys)| keys)
+            .collect();
+        if let Some(resolver) = options.assets {
+            // `resolve_font` may be a JS Promise wrapper or a disk
+            // read, so the keys are deduplicated before it is asked.
             cache.reserve(keys.len());
-            for key in keys {
+            for key in &keys {
                 if let Some(rf) = resolver.resolve_font_traced(&key.0, key.1.as_deref()) {
                     if rf.substituted {
                         substituted.insert(key.clone());
                     }
-                    cache.insert(key, rf.bytes);
+                    cache.insert(key.clone(), rf.bytes);
                 }
             }
         }
@@ -247,12 +304,8 @@ impl FontTable {
                             id_to_bytes.entry(font_id).or_insert_with(|| b.clone());
                         }
                     }
-                    if let Some(table) = paragraph.table.as_ref() {
-                        for cell in &table.cells {
-                            for inner in &cell.paragraphs {
-                                walk(document, cache, fallback, inner, face_keys, id_to_bytes);
-                            }
-                        }
+                    for inner in nested_paragraphs(paragraph) {
+                        walk(document, cache, fallback, inner, face_keys, id_to_bytes);
                     }
                 }
                 walk(
@@ -390,6 +443,7 @@ impl FontTable {
         Self {
             faces,
             face_bytes,
+            keys,
             cache,
             substituted,
             fallback,

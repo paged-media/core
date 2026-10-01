@@ -120,8 +120,8 @@ use color_paint::{color_lerp, linear_gradient_endpoints, midpoint_blend};
 use compose_opts::*;
 use decorations::*;
 use deltas::*;
-pub use font_table::FontTable;
 use font_table::*;
+pub use font_table::{FontKey, FontTable};
 use footnotes::*;
 use geom::*;
 pub(crate) use geom::{
