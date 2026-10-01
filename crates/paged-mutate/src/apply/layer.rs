@@ -1954,7 +1954,19 @@ pub(super) fn set_paragraph_style_field(
                     .map(|j| j.as_idml().to_string())
                     .unwrap_or_default(),
             );
-            def.justification = paged_model::Justification::from_idml(s);
+            // Like the paragraph-level arm: empty clears, an unknown
+            // value is refused (it used to clear the style's alignment).
+            def.justification = if s.is_empty() {
+                None
+            } else {
+                Some(paged_model::Justification::from_idml(s).ok_or_else(|| {
+                    OperationError::InvalidValue {
+                        node: style_node_marker(style_id),
+                        path,
+                        reason: format!("unknown Justification: {s:?}"),
+                    }
+                })?)
+            };
             Ok(prior)
         }
         PropertyPath::CharacterFontFamily

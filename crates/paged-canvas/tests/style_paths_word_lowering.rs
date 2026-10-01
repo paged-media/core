@@ -139,3 +139,27 @@ fn character_styles_take_every_path_the_word_lowering_sets() {
     assert_eq!(def.underline, Some(true));
     assert_eq!(def.strikethru, Some(true));
 }
+
+#[test]
+fn a_style_refuses_an_unknown_justification_and_keeps_its_own() {
+    let mut m = model();
+    set(
+        &mut m,
+        StyleCollection::Paragraph,
+        "ParagraphStyle/w",
+        P::ParagraphJustification,
+        V::Text("CenterAlign".into()),
+    );
+    let refused = m.apply_mutation(&Mutation::SetStyleProperty {
+        collection: StyleCollection::Paragraph,
+        style_id: "ParagraphStyle/w".into(),
+        path: P::ParagraphJustification,
+        value: V::Text("Sideways".into()),
+    });
+    assert!(refused.is_err(), "an unknown alignment is refused");
+    assert_eq!(
+        m.scene().styles.paragraph_styles["ParagraphStyle/w"].justification,
+        Some(paged_model::Justification::CenterAlign),
+        "and the style keeps the alignment it had"
+    );
+}
