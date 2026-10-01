@@ -631,6 +631,13 @@
       "summary": "Flip a condition's visibility."
     },
     {
+      "name": "paged.setFlowGrowRule",
+      "params": "(storyId, grow, maxPages?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Let a story's frame chain grow: generated pages are added after its last frame's page while it oversets (InDesign's Smart Text Reflow), and removed when empty. grow=false clears the rule."
+    },
+    {
       "name": "paged.activateConditionSet",
       "params": "(setId)",
       "returns": "bool",
@@ -1340,6 +1347,7 @@
     "moveGuide",
     "deleteGuide",
     "setConditionVisible",
+    "setFlowGrowRule",
     "activateConditionSet",
     "applyMasterToPage",
     "duplicatePage",

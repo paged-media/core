@@ -2153,6 +2153,23 @@ fn structure_cases(c: &mut Vec<Case>) {
             visible: false,
         }
     }));
+    c.push(paints("SetFlowGrowRule", "text-overset", |m| {
+        // ADR 026: an overset story that may grow gets generated pages,
+        // so the rendered document gains pages and the overset text.
+        let story = m
+            .built()
+            .diagnostics
+            .items
+            .iter()
+            .find(|d| d.code == paged_renderer::diagnostics::DiagnosticCode::OversetTextDropped)
+            .and_then(|d| d.story_id.clone())
+            .expect("text-overset fixture has an overset story");
+        Mutation::SetFlowGrowRule {
+            story_id: story,
+            grow: true,
+            max_pages: None,
+        }
+    }));
     c.push(paints("ActivateConditionSet", "conditions", |m| {
         let set = m
             .scene()

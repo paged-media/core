@@ -500,7 +500,14 @@ export type WorkerToMain = WorkerToMainKind & {
 // The surface is shared now and only the parameter differs. Additive:
 // serde defaults the field, an older worker ignores it and runs the
 // default budget, and every existing caller is unchanged.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(63);
+// v64 — `SetFlowGrowRule` (thoughts ADR 026): a story's frame chain may
+// GROW. The renderer then adds generated pages after the last frame's page
+// while the story oversets, as InDesign's Smart Text Reflow does (measured:
+// end of story, the last page's master, a margin-box frame with default
+// options), and drops them when empty. The pages are derived at layout, so
+// the op carries only the rule and its inverse is the prior rule. A new op
+// an older worker cannot apply, hence the bump.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(64);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -3647,6 +3654,11 @@ mod tests {
                 condition: "Condition/A".into(),
                 visible: false,
             },
+            Mutation::SetFlowGrowRule {
+                story_id: "u1".into(),
+                grow: true,
+                max_pages: Some(12),
+            },
             Mutation::ActivateConditionSet {
                 set: "ConditionSet/Print".into(),
             },
@@ -3746,8 +3758,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v63() {
-        assert_eq!(PROTOCOL_VERSION.0, 63);
+    fn protocol_version_is_v64() {
+        assert_eq!(PROTOCOL_VERSION.0, 64);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

@@ -3709,6 +3709,16 @@ impl CanvasModel {
                     visible: *visible,
                 })
             }
+            Mutation::SetFlowGrowRule {
+                story_id,
+                grow,
+                max_pages,
+            } => Some(Operation::SetFlowGrowRule {
+                story_id: story_id.clone(),
+                rule: grow.then(|| paged_model::FlowGrowRule {
+                    max_pages: *max_pages,
+                }),
+            }),
             Mutation::ActivateConditionSet { set } => {
                 Some(Operation::ActivateConditionSet { set: set.clone() })
             }

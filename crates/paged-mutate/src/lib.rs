@@ -1622,6 +1622,10 @@ mod tests {
                 condition: "Condition/A".to_string(),
                 visible: false,
             },
+            Operation::SetFlowGrowRule {
+                story_id: "u1".to_string(),
+                rule: Some(paged_model::FlowGrowRule { max_pages: Some(9) }),
+            },
             Operation::ActivateConditionSet {
                 set: "ConditionSet/Print".to_string(),
             },

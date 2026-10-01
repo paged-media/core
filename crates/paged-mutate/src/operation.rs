@@ -3505,6 +3505,13 @@ pub enum Operation {
         condition: String,
         visible: bool,
     },
+    /// thoughts ADR 026 — set or clear (`None`) a story's grow rule: the
+    /// chain gets generated pages while it oversets. The pages are derived
+    /// at layout, so the inverse is simply the prior rule.
+    SetFlowGrowRule {
+        story_id: String,
+        rule: Option<paged_model::FlowGrowRule>,
+    },
     /// W0.5 — make every condition referenced by the named
     /// `<ConditionSet>` visible and every other condition hidden (the
     /// "show only this set" affordance). Apply captures the full prior

@@ -431,6 +431,9 @@ pub(crate) fn apply_inner(
         Operation::SetConditionVisible { condition, visible } => {
             apply_set_condition_visible(doc, condition, *visible)
         }
+        Operation::SetFlowGrowRule { story_id, rule } => {
+            apply_set_flow_grow_rule(doc, story_id, rule)
+        }
         Operation::ActivateConditionSet { set } => apply_activate_condition_set(doc, set),
         Operation::RestoreConditionVisibility { states } => {
             apply_restore_condition_visibility(doc, states)
@@ -797,6 +800,7 @@ mod batch_page;
 mod character;
 mod conditions;
 mod duplicate_page;
+mod flow;
 mod guides;
 mod helpers;
 mod hyperlink;
@@ -827,6 +831,7 @@ use batch_page::*;
 use character::*;
 use conditions::*;
 use duplicate_page::*;
+use flow::*;
 use guides::*;
 use helpers::*;
 use insert_node::*;

@@ -777,6 +777,12 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("setConditionVisible"),
             2,
         )
+        // growing frame chains (ADR 026)
+        .function(
+            guarded(paged_set_flow_grow_rule),
+            js_string!("setFlowGrowRule"),
+            3,
+        )
         .function(
             guarded(paged_activate_condition_set),
             js_string!("activateConditionSet"),
@@ -3118,6 +3124,29 @@ fn paged_set_condition_visible(
     Ok(apply_bool(&Mutation::SetConditionVisible {
         condition,
         visible,
+    }))
+}
+
+/// `paged.setFlowGrowRule(storyId, grow, maxPages?)`
+/// (`Mutation::SetFlowGrowRule`, thoughts ADR 026).
+fn paged_set_flow_grow_rule(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let grow = args.get_or_undefined(1).to_boolean();
+    let max_pages = match args.get_or_undefined(2) {
+        v if v.is_undefined() || v.is_null() => None,
+        v => Some(v.to_u32(ctx)?),
+    };
+    Ok(apply_bool(&Mutation::SetFlowGrowRule {
+        story_id,
+        grow,
+        max_pages,
     }))
 }
 

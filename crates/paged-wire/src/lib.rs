@@ -1490,6 +1490,17 @@ pub enum Mutation {
         condition: String,
         visible: bool,
     },
+    /// thoughts ADR 026 — let a story's frame chain GROW (`grow: true`):
+    /// generated pages are added after its last frame's page while it
+    /// oversets, the way InDesign's Smart Text Reflow adds them, and dropped
+    /// when they end up empty. `grow: false` clears the rule. `maxPages`
+    /// caps the generated pages (renderer default when absent).
+    SetFlowGrowRule {
+        story_id: String,
+        grow: bool,
+        #[serde(default)]
+        max_pages: Option<u32>,
+    },
     /// W0.5 — "show only this set": activate one `<ConditionSet>`.
     ActivateConditionSet {
         set: String,
@@ -1768,6 +1779,7 @@ mutation_vocabulary! {
     MoveGuide,
     DeleteGuide,
     SetConditionVisible,
+    SetFlowGrowRule,
     ActivateConditionSet,
     ApplyMasterToPage,
     DuplicatePage,
