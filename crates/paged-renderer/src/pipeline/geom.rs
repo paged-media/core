@@ -630,6 +630,14 @@ pub(super) fn split_paragraph_into_segments(
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
         numbering_format: paragraph.numbering_format.clone(),
+        bullets_text_after: paragraph.bullets_text_after.clone(),
+        numbering_expression: paragraph.numbering_expression.clone(),
+        numbering_start_at: paragraph.numbering_start_at,
+        numbering_continue: paragraph.numbering_continue,
+        bullets_character_style: paragraph.bullets_character_style.clone(),
+        bullets_and_numbering_digits_character_style: paragraph
+            .bullets_and_numbering_digits_character_style
+            .clone(),
         applied_numbering_list: paragraph.applied_numbering_list.clone(),
         // Drop-cap + anchored frames carry on the FIRST sub-paragraph
         // only; the splits below clone from the source paragraph and
@@ -723,6 +731,14 @@ pub(super) fn split_paragraph_into_segments(
                 bullets_list_type: paragraph.bullets_list_type.clone(),
                 bullet_character: paragraph.bullet_character,
                 numbering_format: paragraph.numbering_format.clone(),
+                bullets_text_after: paragraph.bullets_text_after.clone(),
+                numbering_expression: paragraph.numbering_expression.clone(),
+                numbering_start_at: paragraph.numbering_start_at,
+                numbering_continue: paragraph.numbering_continue,
+                bullets_character_style: paragraph.bullets_character_style.clone(),
+                bullets_and_numbering_digits_character_style: paragraph
+                    .bullets_and_numbering_digits_character_style
+                    .clone(),
                 applied_numbering_list: paragraph.applied_numbering_list.clone(),
                 // Drop cap + anchored frames are first-paragraph-only;
                 // sub-paragraphs after a `\n` reset to defaults.
@@ -862,6 +878,14 @@ pub(super) fn split_paragraph_into_segments(
                 bullets_list_type: paragraph.bullets_list_type.clone(),
                 bullet_character: paragraph.bullet_character,
                 numbering_format: paragraph.numbering_format.clone(),
+                bullets_text_after: paragraph.bullets_text_after.clone(),
+                numbering_expression: paragraph.numbering_expression.clone(),
+                numbering_start_at: paragraph.numbering_start_at,
+                numbering_continue: paragraph.numbering_continue,
+                bullets_character_style: paragraph.bullets_character_style.clone(),
+                bullets_and_numbering_digits_character_style: paragraph
+                    .bullets_and_numbering_digits_character_style
+                    .clone(),
                 applied_numbering_list: paragraph.applied_numbering_list.clone(),
                 // All-`\n` source paragraph: defensive placeholder.
                 // Drop cap + anchored frames don't apply to a glyph-less

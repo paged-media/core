@@ -3683,13 +3683,17 @@ pub struct ParagraphStyleDef {
     pub numbering_format: Option<String>,
     /// `BulletsCharacterStyle` — a `CharacterStyle/<id>` reference
     /// that styles the bullet marker (font, size, colour) independently
-    /// of the paragraph text. IDML applies this only to `BulletList`
+    /// of the paragraph text. InDesign reads it only as a typed
+    /// `<Properties>` child. IDML applies this only to `BulletList`
     /// paragraphs. `None` ⇒ the bullet inherits the first run's
     /// formatting (the historical fallback).
     pub bullets_character_style: Option<String>,
-    /// `BulletsAndNumberingDigitsCharacterStyle` — a `CharacterStyle/<id>`
-    /// reference that styles the digits of a `NumberedList` paragraph's
-    /// marker. IDML overloads this same field as the bullet-style
+    /// The digits' character style — a `CharacterStyle/<id>` reference
+    /// that styles the digits of a `NumberedList` paragraph's marker.
+    /// InDesign spells it `<NumberingCharacterStyle type="object">` in
+    /// `<Properties>` (267 of 267 corpus packages) and ignores an
+    /// attribute; `BulletsAndNumberingDigitsCharacterStyle` was our
+    /// private name for it and is still read for old files. IDML overloads this same field as the bullet-style
     /// reference for `BulletList` paragraphs when
     /// `bullets_character_style` is absent (the InDesign UI presents
     /// one "Character Style" picker regardless of list kind), so the
@@ -4551,13 +4555,41 @@ pub struct Paragraph {
     /// Acts as a local override of the cascaded paragraph style's
     /// bullet character.
     pub bullet_character: Option<u32>,
-    /// `NumberingExpression` template for `NumberedList` paragraphs
-    /// (e.g. `"^#.^t"`). W0.2: a local override surfaced by the
-    /// mutate API. `None` ⇒ inherit from the cascade. The renderer
-    /// reads the numbering expression off the resolved style today;
-    /// this per-paragraph override is parser+mutate only until the
-    /// composer reads it off the instance.
+    /// `NumberingFormat` local override — the sample string naming the
+    /// counter style (`"1, 2, 3, 4..."`, `"I, II, III, IV..."`). InDesign
+    /// reads it only as a typed `<Properties>` child (the attribute is
+    /// ignored). `None` ⇒ inherit from the cascade.
     pub numbering_format: Option<String>,
+    /// `BulletsTextAfter` local override (`^t`, a space, …). InDesign's
+    /// usual spelling of a local override is this attribute on the
+    /// `<ParagraphStyleRange>`; it renders exactly as the same value in
+    /// the paragraph style would (`list-overrides`, InDesign 20.0.1).
+    /// `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullets_text_after: Option<String>,
+    /// `NumberingExpression` local override (`^#.^t`, `(^#)`, …).
+    /// `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_expression: Option<String>,
+    /// `NumberingStartAt` local override. InDesign applies it only where
+    /// the list starts or `NumberingContinue` is false; mid-list it is
+    /// ignored. `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_start_at: Option<i32>,
+    /// `NumberingContinue` local override — `false` restarts the count
+    /// at `NumberingStartAt` (default 1). `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering_continue: Option<bool>,
+    /// `BulletsCharacterStyle` local override (`CharacterStyle/<id>`),
+    /// read from its typed `<Properties>` child. `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullets_character_style: Option<String>,
+    /// IDML `NumberingCharacterStyle` local override — the digits'
+    /// character style, see
+    /// [`ParagraphStyleDef::bullets_and_numbering_digits_character_style`].
+    /// `None` ⇒ inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullets_and_numbering_digits_character_style: Option<String>,
     /// W1.22 — `AppliedNumberingList="NumberingList/<id>"` local
     /// override on the `<ParagraphStyleRange>`. `None` ⇒ inherit the
     /// named list from the applied paragraph style cascade. The

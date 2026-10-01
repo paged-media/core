@@ -1060,13 +1060,19 @@ impl ResolvedParagraphAttrs {
             tab_list: paragraph.tab_list.clone(),
             bullets_list_type: paragraph.bullets_list_type.clone(),
             bullet_character: paragraph.bullet_character,
-            bullets_text_after: None,
-            numbering_format: None,
-            bullets_character_style: None,
-            bullets_and_numbering_digits_character_style: None,
-            numbering_expression: None,
-            numbering_start_at: None,
-            numbering_continue: None,
+            // Every list attribute set on the range beats the style
+            // (`list-overrides`, InDesign 20.0.1: a local spelling renders
+            // exactly as the style one, and over a style that says
+            // otherwise the range wins).
+            bullets_text_after: paragraph.bullets_text_after.clone(),
+            numbering_format: paragraph.numbering_format.clone(),
+            bullets_character_style: paragraph.bullets_character_style.clone(),
+            bullets_and_numbering_digits_character_style: paragraph
+                .bullets_and_numbering_digits_character_style
+                .clone(),
+            numbering_expression: paragraph.numbering_expression.clone(),
+            numbering_start_at: paragraph.numbering_start_at,
+            numbering_continue: paragraph.numbering_continue,
             // W1.22 — instance override wins over the cascade.
             applied_numbering_list: paragraph.applied_numbering_list.clone(),
             // styles.next-style is style-level only (no inline form).
