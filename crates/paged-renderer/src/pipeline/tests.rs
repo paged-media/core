@@ -3568,6 +3568,53 @@ fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8>
     zip.finish().unwrap().into_inner()
 }
 
+/// ADR 027 plan step 2 — the reservation pass measures only the chain's
+/// own pages. That is exact because a pool depends on its own page alone:
+/// measuring each page by itself yields the same map as measuring them all.
+#[test]
+fn footnote_pools_measured_per_page_equal_the_whole_document() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::footnotes::build()).expect("idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let font_bytes = inter_font_bytes();
+    let options = PipelineOptions {
+        font: Some(&font_bytes),
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let with_notes = built
+        .pages
+        .iter()
+        .filter(|p| !p.footnotes.is_empty())
+        .count();
+    assert!(with_notes >= 1, "the fixture captures footnotes");
+    let font_table = FontTable::build(&doc, &options);
+    let measure = |pages: &[usize]| {
+        measure_footnote_pools(
+            &built.pages,
+            pages,
+            &options,
+            &doc,
+            &font_table,
+            &doc.palette,
+            ColorCtx::default(),
+        )
+    };
+    let all: Vec<usize> = (0..built.pages.len()).collect();
+    let whole = measure(&all);
+    let mut per_page = std::collections::HashMap::new();
+    for p in 0..built.pages.len() {
+        let one = measure(&[p]);
+        assert!(
+            one.keys().all(|k| k.0 == p),
+            "page {p} measures only itself"
+        );
+        per_page.extend(one);
+    }
+    assert!(!whole.is_empty());
+    assert_eq!(whole, per_page);
+    assert!(measure(&[]).is_empty(), "no pages, no pools");
+}
+
 #[test]
 fn footnote_pool_reserves_space_below_body_text() {
     // W1.7 (a): with the reservation pass, NO body line's baseline
@@ -3592,6 +3639,7 @@ fn footnote_pool_reserves_space_below_body_text() {
     let font_table = FontTable::build(&doc, &options);
     let pools = measure_footnote_pools(
         &built.pages,
+        &[0],
         &options,
         &doc,
         &font_table,

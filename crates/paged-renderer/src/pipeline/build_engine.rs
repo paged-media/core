@@ -2741,6 +2741,9 @@ pub(super) fn build_document_inner(
             .map(|(f, &p)| footnote_host_key_for_frame(f, p, &pages))
             .collect();
         let mut reserved_64: Vec<i32> = vec![0; chain_for_post.len()];
+        let mut chain_page_set: Vec<usize> = chain_pages_for_post.clone();
+        chain_page_set.sort_unstable();
+        chain_page_set.dedup();
 
         // Captured from the FINAL emit pass for the cache + side
         // channels below.
@@ -2902,13 +2905,24 @@ pub(super) fn build_document_inner(
             // reservation. Vertical-writing stories lay the pool out in
             // horizontal page space too, so the measure is valid there;
             // we skip the reserve loop only when no footnotes captured.
+            // Only the chain's own pages can hold a pool that routes back
+            // to one of its frames (the pools are keyed by page), so the
+            // measure walks those pages, not the document.
             if !footnotes_settled {
-                let any_footnotes = pages.iter().any(|p| !p.footnotes.is_empty());
+                let any_footnotes = chain_page_set
+                    .iter()
+                    .any(|&p| !pages[p].footnotes.is_empty());
                 if !any_footnotes {
                     footnotes_settled = true;
                 } else {
                     let pool_heights = measure_footnote_pools(
-                        &pages, options, document, font_table, palette, color_ctx,
+                        &pages,
+                        &chain_page_set,
+                        options,
+                        document,
+                        font_table,
+                        palette,
+                        color_ctx,
                     );
                     let mut next_reserved = vec![0i32; reserved_64.len()];
                     for (frame_idx, key) in frame_host_keys.iter().enumerate() {

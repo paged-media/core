@@ -447,8 +447,10 @@ pub(super) fn resolve_footnote_metrics(
 /// groups by, so the reservation pass can map a pool back to the chain
 /// frame that hosts it. Returns an empty map when the document carries
 /// no font bytes (footnotes can't be measured or drawn without a face).
+/// Only `page_indices` are measured; a pool depends on its own page alone.
 pub(super) fn measure_footnote_pools(
     pages: &[BuiltPage],
+    page_indices: &[usize],
     options: &PipelineOptions,
     document: &Document,
     font_table: &FontTable,
@@ -459,7 +461,10 @@ pub(super) fn measure_footnote_pools(
     if options.font.is_none() && font_table.fallback.is_none() {
         return out;
     }
-    for (page_idx, page) in pages.iter().enumerate() {
+    for &page_idx in page_indices {
+        let Some(page) = pages.get(page_idx) else {
+            continue;
+        };
         if page.footnotes.is_empty() {
             continue;
         }
