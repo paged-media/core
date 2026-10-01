@@ -129,6 +129,27 @@ impl FontTable {
     }
 
     pub fn build(document: &Document, options: &PipelineOptions) -> Self {
+        /// Every run's resolved attributes, plus the list marker's when
+        /// its character style gives it a face of its own (see
+        /// `marker_run_attrs`) — the marker is shaped as a run too.
+        fn shaped_run_attrs(
+            document: &Document,
+            paragraph: &paged_model::Paragraph,
+        ) -> Vec<paged_scene::ResolvedRunAttrs> {
+            let mut out: Vec<paged_scene::ResolvedRunAttrs> = paragraph
+                .runs
+                .iter()
+                .map(|run| document.resolved_run_attrs(paragraph, run))
+                .collect();
+            if let Some(head) = out.first() {
+                let p = document.resolved_paragraph_attrs(paragraph);
+                if let Some(marker) = super::marker_run_attrs(document, &p, head) {
+                    out.push(marker);
+                }
+            }
+            out
+        }
+
         let fallback = options.font.map(Bytes::copy_from_slice);
         let mut cache: HashMap<(String, Option<String>), Bytes> = HashMap::new();
         let mut substituted: std::collections::BTreeSet<(String, Option<String>)> =
@@ -153,8 +174,7 @@ impl FontTable {
                 paragraph: &paged_model::Paragraph,
                 keys: &mut std::collections::HashSet<(String, Option<String>)>,
             ) {
-                for run in &paragraph.runs {
-                    let resolved = document.resolved_run_attrs(paragraph, run);
+                for resolved in shaped_run_attrs(document, paragraph) {
                     if let Some(family) = resolved.font {
                         keys.insert((family, resolved.font_style));
                     }
@@ -208,8 +228,7 @@ impl FontTable {
                     face_keys: &mut std::collections::HashSet<(u32, u32)>,
                     id_to_bytes: &mut HashMap<u32, Bytes>,
                 ) {
-                    for run in &paragraph.runs {
-                        let resolved = document.resolved_run_attrs(paragraph, run);
+                    for resolved in shaped_run_attrs(document, paragraph) {
                         // Mirror `FontTable::bytes_for`: (family, style)
                         // direct hit, then bare-family, then fallback.
                         let bytes = resolved

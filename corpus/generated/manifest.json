@@ -154,6 +154,15 @@
       "report": "/tmp/idml-generated-diff/links-ok/report.json"
     },
     {
+      "name": "list-marker-styles",
+      "idml": "list-marker-styles.idml",
+      "pdf": "list-marker-styles.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/list-marker-styles",
+      "report": "/tmp/idml-generated-diff/list-marker-styles/report.json"
+    },
+    {
       "name": "list-markers",
       "idml": "list-markers.idml",
       "pdf": "list-markers.pdf",

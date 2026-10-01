@@ -161,6 +161,12 @@ pub struct LayoutOptions<'a> {
     /// (auto leading). Mirrors IDML's explicit `Leading` attribute on
     /// the leading run of a paragraph.
     pub leading_override: Option<i32>,
+    /// Auto leading ignores glyphs whose cluster lies before this byte.
+    /// A list marker is shaped as the paragraph's first bytes, and
+    /// InDesign does not let it raise the line: a 20 pt marker on 10 pt
+    /// auto-leaded text keeps the 12 pt leading (`list-marker-styles`
+    /// m14/m15). `0` lets every glyph count.
+    pub auto_leading_from_byte: u32,
     /// Justify the LAST line too, under [`Alignment::Justify`]. InDesign
     /// does for a line ending in a forced line break (U+2028): it ends
     /// the line, not the paragraph, so the line keeps full measure.
@@ -211,6 +217,7 @@ impl LayoutOptions<'_> {
             line_height,
             first_baseline,
             leading_override: None,
+            auto_leading_from_byte: 0,
             alignment: Alignment::Left,
             justify_last_line: false,
             tabs: None,
@@ -1060,7 +1067,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // fallback.
         let line_height = options
             .leading_override
-            .or_else(|| max_line_height_for_glyphs(&glyphs))
+            .or_else(|| auto_line_height(&glyphs, options.auto_leading_from_byte))
             .unwrap_or(options.line_height);
         lines.push(LaidOutLine {
             byte_range: start..end,
@@ -1393,6 +1400,20 @@ pub fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
             Some(acc.map(|a| a.max(ps)).unwrap_or(ps))
         })
         .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
+}
+
+/// [`max_line_height_for_glyphs`] over the glyphs at or after byte
+/// `from_byte` (see [`LayoutOptions::auto_leading_from_byte`]); a line
+/// with none of those falls back to all of its glyphs.
+pub fn auto_line_height(glyphs: &[PositionedGlyph], from_byte: u32) -> Option<i32> {
+    let counted = glyphs
+        .iter()
+        .filter(|g| g.cluster >= from_byte)
+        .map(|g| g.point_size)
+        .reduce(f32::max);
+    counted
+        .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
+        .or_else(|| max_line_height_for_glyphs(glyphs))
 }
 
 /// In-cell alignment for a tab stop. IDML's `Alignment` attribute on
@@ -1993,6 +2014,7 @@ mod tests {
             first_baseline: 15,
             alignment,
             leading_override: None,
+            auto_leading_from_byte: 0,
             justify_last_line: false,
             tabs: None,
         }
@@ -2185,6 +2207,20 @@ mod tests {
         let glyphs = vec![pg(11.0), pg(22.0), pg(11.0)];
         // 22 * 1.2 * 64 = 1689.6 → 1690.
         assert_eq!(max_line_height_for_glyphs(&glyphs), Some(1690));
+    }
+
+    #[test]
+    fn auto_leading_skips_a_leading_marker() {
+        // A 20 pt marker (bytes 0..2) before 10 pt text: 10 * 1.2 * 64.
+        let at = |cluster, size| PositionedGlyph {
+            cluster,
+            ..pg(size)
+        };
+        let glyphs = vec![at(0, 20.0), at(1, 20.0), at(2, 10.0), at(3, 10.0)];
+        assert_eq!(auto_line_height(&glyphs, 2), Some(768));
+        assert_eq!(auto_line_height(&glyphs, 0), Some(1536));
+        // A line holding nothing past the marker still gets a height.
+        assert_eq!(auto_line_height(&glyphs[..2], 2), Some(1536));
     }
 
     #[test]

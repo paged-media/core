@@ -153,6 +153,24 @@ pub(super) fn bullet_marker_character_style(
     }
 }
 
+/// The list marker's run attributes when its character style changes
+/// anything: the paragraph's first run (`head`) with the marker's
+/// character style applied on top. InDesign sets the WHOLE marker —
+/// number, literal text and separator — in that style (asked of it in
+/// `list-marker-styles`: size, family, bold, colour, baseline shift and
+/// tracking all apply, and a style that sets nothing changes nothing).
+/// `None` when the marker looks like `head`, which keeps it shaped as
+/// part of the first run.
+pub(super) fn marker_run_attrs(
+    document: &paged_scene::Document,
+    p: &paged_scene::ResolvedParagraphAttrs,
+    head: &paged_scene::ResolvedRunAttrs,
+) -> Option<paged_scene::ResolvedRunAttrs> {
+    let id = bullet_marker_character_style(p)?;
+    let marker = head.under_character(&document.styles.resolve_character(id));
+    (marker != *head).then_some(marker)
+}
+
 /// Substitute `^#`, `^.`, `^t` tokens in a NumberingExpression
 /// template. Anything else (including unknown `^x` sequences) passes
 /// through unchanged.

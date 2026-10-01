@@ -134,7 +134,7 @@ use image_decode::decode_image_bytes_with_target_max;
 use metrics::map_tab_alignment;
 pub use metrics::*;
 pub use nested_styles::*;
-use numbering::{bullet_marker_character_style, list_prefix};
+use numbering::{bullet_marker_character_style, list_prefix, marker_run_attrs};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
 use text_frame::*;

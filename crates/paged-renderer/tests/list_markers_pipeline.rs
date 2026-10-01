@@ -12,8 +12,9 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Where the text after a list marker starts, over the generated
-//! `list-markers.idml` and `list-overrides.idml`, against InDesign
+//! Where the text after a list marker starts, and how the marker itself
+//! is set, over the generated `list-markers.idml`, `list-overrides.idml`
+//! and `list-marker-styles.idml`, against InDesign
 //! 20.0.1's PDF export of the same files (`corpus/generated/*.pdf`,
 //! 2026-10-01).
 //!
@@ -204,11 +205,6 @@ const INDESIGN_OVERRIDES: [[(Option<f32>, f32, Option<f32>); 2]; 22] = [
     ],
 ];
 
-/// Cases InDesign renders with the marker's character style at ITS size
-/// (20 pt): the engine applies a marker character style's colour only,
-/// not its size or face, so these two still differ.
-const MARKER_SIZE_NOT_MODELLED: [&str; 2] = ["o14", "o16"];
-
 /// Marker widths agree to well under the 0.2 pt between "2." and "6.".
 const W_TOLERANCE: f32 = 0.1;
 
@@ -230,7 +226,20 @@ fn local_list_overrides_render_where_indesign_puts_them() {
         let (fx, _) = lo::frame_origin(i as u32);
         let lines = built.story_layout(&lo::body_story_id(i as u32));
         assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
-        let gap = MARKER_SIZE_NOT_MODELLED.contains(&case.tag);
+        // A marker that ends in neither a tab nor a space glues to the
+        // tag; InDesign's word is then the whole marker where the font
+        // size splits it off (o16, "2." at 20 pt), so it is measured up
+        // to the tag rather than to the separator.
+        let glued = case
+            .attrs
+            .iter()
+            .map(|&(k, v)| (k, v))
+            .chain(case.props.iter().map(|&(k, _, v)| (k, v)))
+            .any(|(k, v)| {
+                matches!(k, "NumberingExpression" | "BulletsTextAfter")
+                    && !v.ends_with("^t")
+                    && !v.ends_with(' ')
+            });
         for (line, want) in lines.iter().zip(INDESIGN_OVERRIDES[i]) {
             let (start, end) = (line.byte_range.start, line.byte_range.end);
             let x_at = |byte: u32| {
@@ -245,22 +254,16 @@ fn local_list_overrides_render_where_indesign_puts_them() {
             // The marker is everything before the tag; its last byte is
             // the separator (a tab or a space) whenever it is a word of
             // its own.
-            let marker_w = x_at(end - 8) - x_at(start);
+            let marker_w = x_at(if glued { end - 7 } else { end - 8 }) - x_at(start);
             let same = (word - want.1).abs() <= X_TOLERANCE
                 && want.0.is_none_or(|t| (tag - t).abs() <= X_TOLERANCE)
                 && want.2.is_none_or(|w| (marker_w - w).abs() <= W_TOLERANCE);
-            if !gap {
-                ok &= same;
-            }
+            ok &= same;
             report.push(format!(
-                "{} {:34} {:12} engine ({tag:.3}, {word:.3}, w {marker_w:.3})  indesign ({:?}, {:.3}, w {:?})",
+                "{} {:34} {:8} engine ({tag:.3}, {word:.3}, w {marker_w:.3})  indesign ({:?}, {:.3}, w {:?})",
                 case.tag,
                 case.name,
-                match (same, gap) {
-                    (true, _) => "ok",
-                    (false, true) => "known gap",
-                    (false, false) => "DIFFERS",
-                },
+                if same { "ok" } else { "DIFFERS" },
                 want.0,
                 want.1,
                 want.2
@@ -269,4 +272,511 @@ fn local_list_overrides_render_where_indesign_puts_them() {
     }
     assert!(ok, "\n{}", report.join("\n"));
     eprintln!("{}", report.join("\n"));
+}
+
+/// One line of `list-marker-styles` as InDesign 20.0.1 exported it
+/// (`corpus/generated/list-marker-styles.pdf`, 2026-10-01), frame-local
+/// pt, every value less the 0.125 pt this export sits right of and below
+/// its pen. `marker` lists the marker's visible glyphs as (char, pen x,
+/// point size, baseline y); the separator is a space or a tab and has no
+/// outline.
+struct Line {
+    baseline: f32,
+    tag: f32,
+    word: f32,
+    red: bool,
+    marker: &'static [(char, f32, f32, f32)],
+}
+
+/// The rule these pin: InDesign sets the WHOLE marker — number, literal
+/// text and separator — in its character style laid over the first
+/// character's formatting (size, family, bold, colour, baseline shift and
+/// tracking each apply; a style that sets nothing changes nothing; the
+/// style wins over the run's own local values, m20/m21), and the marker
+/// never raises the line: a 20 pt marker on auto-leaded 10 pt text keeps
+/// the 12 pt leading (m14/m15).
+const INDESIGN_MARKER_STYLES: [[Line; 2]; 22] = [
+    // m00
+    [
+        Line {
+            baseline: 12.000,
+            tag: 16.875,
+            word: 41.065,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 16.875,
+            word: 41.065,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 24.000)],
+        },
+    ],
+    // m01
+    [
+        Line {
+            baseline: 12.000,
+            tag: 19.522,
+            word: 41.471,
+            red: false,
+            marker: &[('1', 0.000, 20.0, 12.000), ('.', 8.140, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 23.584,
+            word: 45.534,
+            red: false,
+            marker: &[('2', 0.000, 20.0, 24.000), ('.', 12.200, 20.0, 24.000)],
+        },
+    ],
+    // m02
+    [
+        Line {
+            baseline: 12.000,
+            tag: 7.109,
+            word: 31.089,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 7.109,
+            word: 31.089,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m03
+    [
+        Line {
+            baseline: 12.000,
+            tag: 9.712,
+            word: 33.772,
+            red: false,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 4.312, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 11.699,
+            word: 35.759,
+            red: false,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 6.299, 10.0, 24.000)],
+        },
+    ],
+    // m04
+    [
+        Line {
+            baseline: 12.000,
+            tag: 12.000,
+            word: 36.340,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 12.000,
+            word: 36.340,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m05
+    [
+        Line {
+            baseline: 12.000,
+            tag: 18.000,
+            word: 41.810,
+            red: false,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 6.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 18.000,
+            word: 41.810,
+            red: false,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 6.000, 10.0, 24.000)],
+        },
+    ],
+    // m06
+    [
+        Line {
+            baseline: 12.000,
+            tag: 8.437,
+            word: 32.518,
+            red: true,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 8.437,
+            word: 32.518,
+            red: true,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m07
+    [
+        Line {
+            baseline: 12.000,
+            tag: 9.761,
+            word: 33.104,
+            red: true,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 4.070, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 11.792,
+            word: 35.135,
+            red: true,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 6.100, 10.0, 24.000)],
+        },
+    ],
+    // m08
+    [
+        Line {
+            baseline: 12.000,
+            tag: 8.437,
+            word: 32.507,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 8.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 8.437,
+            word: 32.507,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 20.000)],
+        },
+    ],
+    // m09
+    [
+        Line {
+            baseline: 12.000,
+            tag: 9.761,
+            word: 33.841,
+            red: false,
+            marker: &[('1', 0.000, 10.0, 8.000), ('.', 4.070, 10.0, 8.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 11.792,
+            word: 35.872,
+            red: false,
+            marker: &[('2', 0.000, 10.0, 20.000), ('.', 6.100, 10.0, 20.000)],
+        },
+    ],
+    // m10
+    [
+        Line {
+            baseline: 12.000,
+            tag: 12.437,
+            word: 33.992,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 12.437,
+            word: 33.992,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m11
+    [
+        Line {
+            baseline: 12.000,
+            tag: 15.761,
+            word: 35.075,
+            red: false,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 6.070, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 17.792,
+            word: 37.106,
+            red: false,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 8.100, 10.0, 24.000)],
+        },
+    ],
+    // m12
+    [
+        Line {
+            baseline: 12.000,
+            tag: 8.437,
+            word: 29.781,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 8.437,
+            word: 29.781,
+            red: false,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m13
+    [
+        Line {
+            baseline: 12.000,
+            tag: 9.761,
+            word: 31.185,
+            red: false,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 4.070, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 11.792,
+            word: 33.216,
+            red: false,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 6.100, 10.0, 24.000)],
+        },
+    ],
+    // m14
+    [
+        Line {
+            baseline: 12.000,
+            tag: 16.875,
+            word: 38.579,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 16.875,
+            word: 38.579,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 24.000)],
+        },
+    ],
+    // m15
+    [
+        Line {
+            baseline: 12.000,
+            tag: 19.522,
+            word: 40.696,
+            red: false,
+            marker: &[('1', 0.000, 20.0, 12.000), ('.', 8.140, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 23.584,
+            word: 44.758,
+            red: false,
+            marker: &[('2', 0.000, 20.0, 24.000), ('.', 12.200, 20.0, 24.000)],
+        },
+    ],
+    // m16
+    [
+        Line {
+            baseline: 12.000,
+            tag: 18.000,
+            word: 39.444,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 18.000,
+            word: 39.444,
+            red: false,
+            marker: &[('•', 0.000, 20.0, 24.000)],
+        },
+    ],
+    // m17
+    [
+        Line {
+            baseline: 12.000,
+            tag: 30.000,
+            word: 50.904,
+            red: false,
+            marker: &[('1', 0.000, 20.0, 12.000), ('.', 8.140, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 30.000,
+            word: 50.904,
+            red: false,
+            marker: &[('2', 0.000, 20.0, 24.000), ('.', 12.200, 20.0, 24.000)],
+        },
+    ],
+    // m18
+    [
+        Line {
+            baseline: 12.000,
+            tag: 19.522,
+            word: 40.956,
+            red: false,
+            marker: &[('1', 0.000, 20.0, 12.000), ('.', 8.140, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 23.584,
+            word: 45.018,
+            red: false,
+            marker: &[('2', 0.000, 20.0, 24.000), ('.', 12.200, 20.0, 24.000)],
+        },
+    ],
+    // m19
+    [
+        Line {
+            baseline: 12.000,
+            tag: 7.109,
+            word: 29.009,
+            red: true,
+            marker: &[('•', 0.000, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 7.109,
+            word: 29.009,
+            red: true,
+            marker: &[('•', 0.000, 10.0, 24.000)],
+        },
+    ],
+    // m20
+    [
+        Line {
+            baseline: 12.000,
+            tag: 19.424,
+            word: 43.964,
+            red: false,
+            marker: &[('1', 0.000, 20.0, 12.000), ('.', 8.624, 20.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 23.398,
+            word: 47.938,
+            red: false,
+            marker: &[('2', 0.000, 20.0, 24.000), ('.', 12.598, 20.0, 24.000)],
+        },
+    ],
+    // m21
+    [
+        Line {
+            baseline: 12.000,
+            tag: 9.712,
+            word: 31.452,
+            red: true,
+            marker: &[('1', 0.000, 10.0, 12.000), ('.', 4.312, 10.0, 12.000)],
+        },
+        Line {
+            baseline: 24.000,
+            tag: 11.699,
+            word: 33.439,
+            red: true,
+            marker: &[('2', 0.000, 10.0, 24.000), ('.', 6.299, 10.0, 24.000)],
+        },
+    ],
+];
+
+/// The marker's glyph sizes agree to well under the 0.1 pt asked.
+const SIZE_TOLERANCE: f32 = 0.1;
+
+#[test]
+fn list_marker_character_styles_render_as_indesign_does() {
+    use paged_gen::samples::list_marker_styles as lms;
+    let bytes = paged_gen::write_idml(&lms::build()).expect("idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let font = inter_font();
+    let mono = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/JetBrainsMono-VF.ttf"),
+    )
+    .expect("read JetBrainsMono-VF.ttf");
+    let mut assets = paged_renderer::BytesResolver::new();
+    assets.add_font("Inter", None, font.clone());
+    assets.add_font("JetBrains Mono", None, mono);
+    let opts = PipelineOptions {
+        font: Some(&font),
+        assets: Some(&assets),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).expect("build");
+    let page = &built.pages[0];
+    let glyphs = &page.list.glyph_runs.as_ref().expect("glyph runs").entries;
+
+    let near = |a: f32, b: f32, tol: f32| (a - b).abs() <= tol;
+    let mut report = Vec::new();
+    let mut ok = true;
+    for (i, case) in lms::cases().iter().enumerate() {
+        let (fx, fy) = lms::frame_origin(i as u32);
+        let lines = built.story_layout(&lms::body_story_id(i as u32));
+        assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
+        for (line, want) in lines.iter().zip(&INDESIGN_MARKER_STYLES[i]) {
+            let (start, end) = (line.byte_range.start, line.byte_range.end);
+            let x_at = |byte: u32| {
+                line.clusters
+                    .iter()
+                    .find(|c| c.byte == byte)
+                    .map(|c| c.x_pt - fx)
+                    .unwrap_or(f32::NAN)
+            };
+            let baseline = line.baseline_y_pt - fy;
+            let tag = x_at(end - 7);
+            let word = x_at(end - 3);
+            let marker_left = x_at(start) + fx;
+            let marker_right = x_at(end - 7) + fx;
+            // The marker's visible glyphs: the outlines inside this
+            // line's band left of the tag.
+            let mut marker: Vec<_> = glyphs
+                .iter()
+                .filter(|g| !g.is_stroke)
+                .filter(|g| {
+                    let (x, y) = (g.transform.0[4], g.transform.0[5]);
+                    x >= marker_left - 0.01
+                        && x < marker_right - 0.01
+                        && (y - line.baseline_y_pt).abs() < 6.0
+                })
+                .collect();
+            marker.sort_by(|a, b| a.transform.0[4].total_cmp(&b.transform.0[4]));
+            let red = marker.iter().any(
+                |g| matches!(g.paint, paged_compose::Paint::Solid(c) if c.r > 0.5 && c.g < 0.2),
+            );
+            let mut same = near(baseline, want.baseline, X_TOLERANCE)
+                && near(tag, want.tag, X_TOLERANCE)
+                && near(word, want.word, X_TOLERANCE)
+                && red == want.red
+                && marker.len() == want.marker.len();
+            // The text after the marker keeps its own 10 pt (every case's
+            // `m` is 10 pt in InDesign's export): a slice drawn at the
+            // marker's size would squash it.
+            let tag_size = glyphs
+                .iter()
+                .filter(|g| !g.is_stroke)
+                .find(|g| {
+                    (g.transform.0[4] - marker_right).abs() < 0.01
+                        && (g.transform.0[5] - line.baseline_y_pt).abs() < 6.0
+                })
+                .map_or(f32::NAN, |g| g.font_size);
+            same &= near(tag_size, 10.0, SIZE_TOLERANCE);
+            let mut got = vec![format!("tag {tag_size:.1}pt")];
+            for (g, w) in marker.iter().zip(want.marker) {
+                let (gx, gy) = (g.transform.0[4] - fx, g.transform.0[5] - fy);
+                same &= near(gx, w.1, X_TOLERANCE)
+                    && near(g.font_size, w.2, SIZE_TOLERANCE)
+                    && near(gy, w.3, X_TOLERANCE);
+                got.push(format!("({gx:.3}, {:.1}pt, {gy:.3})", g.font_size));
+            }
+            ok &= same;
+            report.push(format!(
+                "{} {:32} {:8} engine base {baseline:.3} tag {tag:.3} word {word:.3} red {red} [{}]  \
+                 indesign base {:.3} tag {:.3} word {:.3} red {} {:?}",
+                case.tag,
+                case.name,
+                if same { "ok" } else { "DIFFERS" },
+                got.join(" "),
+                want.baseline,
+                want.tag,
+                want.word,
+                want.red,
+                want.marker
+            ));
+        }
+    }
+    eprintln!("{}", report.join("\n"));
+    assert!(ok, "\n{}", report.join("\n"));
 }

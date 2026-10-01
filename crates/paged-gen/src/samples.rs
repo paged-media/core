@@ -33,6 +33,7 @@ pub mod layers_z;
 pub mod layout;
 pub mod links_broken;
 pub mod links_ok;
+pub mod list_marker_styles;
 pub mod list_markers;
 pub mod list_overrides;
 pub mod markers;
@@ -117,6 +118,7 @@ pub const SAMPLES: &[&str] = &[
     "list-markers",
     "tab-breaks",
     "list-overrides",
+    "list-marker-styles",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -170,6 +172,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "list-markers" => list_markers::build(),
         "tab-breaks" => tab_breaks::build(),
         "list-overrides" => list_overrides::build(),
+        "list-marker-styles" => list_marker_styles::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),

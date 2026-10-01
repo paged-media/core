@@ -288,7 +288,7 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   vertical_scale_pct, skew_deg, fallback-face count (not contents —
 ///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height, first_baseline,
-///   leading_override, justify_last_line, and the tab layout (stops,
+///   leading_override, auto_leading_from_byte, justify_last_line, and the tab layout (stops,
 ///   default grid, line starts).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
@@ -357,6 +357,7 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_i32(options.line_height);
     h.add_i32(options.first_baseline);
     h.add_optional_i32(options.leading_override);
+    h.add_u32(options.auto_leading_from_byte);
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
     match &options.tabs {

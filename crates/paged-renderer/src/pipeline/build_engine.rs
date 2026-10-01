@@ -4637,6 +4637,29 @@ pub(super) fn emit_paragraph_into_chain(
     let resolved_paragraph = em
         .segment
         .mask(em.document.resolved_paragraph_attrs(paragraph));
+    // The list marker's own formatting, when its character style gives
+    // it one (`marker_run_attrs`). It is then shaped as a run of its
+    // own, ahead of run 0, in slot `paragraph.runs.len()` of the
+    // per-run font arrays below. A drop cap keeps the marker glued to
+    // run 0: the cap pass carves `styled_runs[0]`.
+    let marker_attrs: Option<paged_scene::ResolvedRunAttrs> = if em.segment.opens_paragraph
+        && !(paragraph.drop_cap_characters > 0 && paragraph.drop_cap_lines > 0)
+    {
+        resolved_runs
+            .first()
+            .and_then(|head| marker_run_attrs(em.document, &resolved_paragraph, head))
+    } else {
+        None
+    };
+    let marker_slot = paragraph.runs.len();
+    let font_runs: std::borrow::Cow<[paged_scene::ResolvedRunAttrs]> = match &marker_attrs {
+        Some(m) => {
+            let mut v = resolved_runs.clone();
+            v.push(m.clone());
+            std::borrow::Cow::Owned(v)
+        }
+        None => std::borrow::Cow::Borrowed(&resolved_runs),
+    };
 
     // Resolve every run's font bytes up front so the borrows for
     // `Face` construction below all live in the same scope. Any run
@@ -4645,7 +4668,7 @@ pub(super) fn emit_paragraph_into_chain(
     // default font) — without this, an IDML referencing one missing
     // font (e.g. an obscure decorative face) would silently drop the
     // entire paragraph and lose every neighbouring run with it.
-    let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
+    let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&font_runs) else {
         return;
     };
     // A1/A2 — split the per-run (bytes, substituted) pairs; the flags
@@ -4659,7 +4682,7 @@ pub(super) fn emit_paragraph_into_chain(
     // would otherwise render at the file's default weight (~400).
     // Pin a wght axis variation per run so bold / light / etc.
     // headings get the right thickness.
-    let wghts: Vec<f32> = resolved_runs
+    let wghts: Vec<f32> = font_runs
         .iter()
         .map(|r| wght_for_font_style(r.font_style.as_deref()))
         .collect();
@@ -4770,13 +4793,11 @@ pub(super) fn emit_paragraph_into_chain(
         .collect();
 
     // Bulleted paragraphs prepend `<bullet><separator>` to the
-    // first run's text. The bullet's font / size still inherit
-    // from the first run; its colour can be overridden by a
-    // `BulletsCharacterStyle` (see `bullet_paint_override` below).
-    // Font / size override through the same character style is a
-    // follow-up — the parser fields are in place. IDML serialises
-    // tabs in BulletsTextAfter as the literal `^t` two-byte
-    // sequence — expand to a real `\t` so apply_tab_stops snaps it.
+    // paragraph text. The marker takes the first run's formatting, or,
+    // when its character style changes that, is shaped as a run of its
+    // own (`marker_run` below). IDML serialises tabs in
+    // BulletsTextAfter as the literal `^t` two-byte sequence — expand
+    // to a real `\t` so apply_tab_stops snaps it.
     // W1.22 — resolve whether this paragraph's named NumberingList
     // wants cross-story continuity. When it does, seed the counter
     // from the document-level ledger (so a list spanning stories keeps
@@ -4799,7 +4820,7 @@ pub(super) fn emit_paragraph_into_chain(
     };
     // The marker belongs to the paragraph's first line only; a line after
     // a forced break neither shows one nor advances the counter.
-    let list_first_text: Option<String> = em
+    let list_prefix_text: Option<String> = em
         .segment
         .opens_paragraph
         .then(|| {
@@ -4811,12 +4832,20 @@ pub(super) fn emit_paragraph_into_chain(
             )
         })
         .flatten()
-        .and_then(|prefix| {
-            paragraph
-                .runs
-                .first()
-                .map(|r| format!("{prefix}{}", r.text))
-        });
+        .filter(|_| !paragraph.runs.is_empty());
+    let list_first_text: Option<String> = list_prefix_text.as_deref().and_then(|prefix| {
+        paragraph
+            .runs
+            .first()
+            .map(|r| format!("{prefix}{}", r.text))
+    });
+    // The marker shaped as its own run: its text and attributes.
+    let marker_run: Option<(&str, &paged_scene::ResolvedRunAttrs)> = list_prefix_text
+        .as_deref()
+        .filter(|prefix| !prefix.is_empty())
+        .zip(marker_attrs.as_ref());
+    // Index of run 0 in `styled_runs` (1 when the marker leads).
+    let head_run = usize::from(marker_run.is_some());
     // Save the post-increment counter back to the ledger so the next
     // story sharing this list continues from here. Only writes for a
     // numbered paragraph that actually advanced the counter (the
@@ -4973,7 +5002,7 @@ pub(super) fn emit_paragraph_into_chain(
             fallback_faces_pool.push(face);
         }
     }
-    let styled_runs: Vec<paged_text::StyledRun> = paragraph
+    let mut styled_runs: Vec<paged_text::StyledRun> = paragraph
         .runs
         .iter()
         .enumerate()
@@ -4991,7 +5020,7 @@ pub(super) fn emit_paragraph_into_chain(
                 resolved_runs[i].position.as_deref(),
             );
             paged_text::StyledRun {
-                text: if i == 0 {
+                text: if i == 0 && marker_run.is_none() {
                     list_first_text.as_deref().unwrap_or_else(|| {
                         if let Some(c) = capitalized[i].as_deref() {
                             c
@@ -5033,6 +5062,35 @@ pub(super) fn emit_paragraph_into_chain(
             }
         })
         .collect();
+    if let Some((prefix, m)) = marker_run {
+        let base_size = m.point_size.unwrap_or(em.options.default_point_size);
+        let (point_size, baseline_shift_pt) =
+            position_adjusted_metrics(base_size, m.baseline_shift, m.position.as_deref());
+        styled_runs.insert(
+            0,
+            paged_text::StyledRun {
+                text: prefix,
+                face: shaping_faces[unique_idx[marker_slot]].unwrap(),
+                point_size,
+                tracking: m.tracking,
+                font_id: font_ids[marker_slot],
+                underline: m.underline.unwrap_or(false),
+                strikethru: m.strikethru.unwrap_or(false),
+                substituted: substituted_flags[marker_slot],
+                baseline_shift_pt,
+                horizontal_scale_pct: m.horizontal_scale.unwrap_or(100.0),
+                vertical_scale_pct: m.vertical_scale.unwrap_or(100.0),
+                skew_deg: m.skew.unwrap_or(0.0),
+                fallback_faces: &fallback_faces_pool,
+                shaping_features: shaping_features_from(
+                    m.ligatures_on,
+                    m.kerning_method.as_deref(),
+                    &m.otf,
+                    m.capitalization.as_deref(),
+                ),
+            },
+        );
+    }
 
     // W1.4 — hyperlink/cross-reference source spans for this paragraph,
     // as paragraph-local byte ranges into the concatenated styled-run
@@ -5043,8 +5101,8 @@ pub(super) fn emit_paragraph_into_chain(
     let link_spans: Vec<(std::ops::Range<usize>, paged_compose::LinkTarget)> =
         if em.collect_link_regions && paragraph.runs.iter().any(|r| r.hyperlink_source.is_some()) {
             let mut spans = Vec::new();
-            let mut byte_cursor = 0usize;
-            for (i, sr) in styled_runs.iter().enumerate() {
+            let mut byte_cursor = marker_run.map_or(0, |(prefix, _)| prefix.len());
+            for (i, sr) in styled_runs.iter().skip(head_run).enumerate() {
                 let run_len = sr.text.len();
                 let start = byte_cursor;
                 byte_cursor += run_len;
@@ -5069,7 +5127,10 @@ pub(super) fn emit_paragraph_into_chain(
             Vec::new()
         };
 
-    let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
+    let paragraph_size = styled_runs
+        .get(head_run)
+        .map(|r| r.point_size)
+        .unwrap_or(12.0);
     let Some(full_col_pt) = em
         .region_widths
         .get(em.frame_idx)
@@ -5088,6 +5149,9 @@ pub(super) fn emit_paragraph_into_chain(
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     lopts.justify_last_line = !em.segment.closes_paragraph;
+    if let Some((prefix, _)) = marker_run {
+        lopts.auto_leading_from_byte = prefix.len() as u32;
+    }
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
@@ -5749,20 +5813,25 @@ pub(super) fn emit_paragraph_into_chain(
         }
     }
 
-    // Bullet-character-style paint override. When the paragraph
-    // style references a `BulletsCharacterStyle` /
-    // `BulletsAndNumberingDigitsCharacterStyle`, resolve that
-    // character style's `FillColor` (with `FillTint` applied) so the
-    // bullet / digit marker can render in a colour distinct from
-    // run 0's fill. Font / size override via the same character
-    // style is not yet wired through; this batch ships colour-only
-    // and the parser fields are in place for the follow-up.
+    // The marker's paint, when its character style gives it one:
+    // the marker run's resolved fill (with `FillTint`) when it is
+    // shaped on its own, else the style's `FillColor` over run 0's.
     let bullet_paint_override: Option<(u32, Paint)> = list_first_text.as_deref().and_then(|lft| {
         let bullet_len = lft
             .len()
             .saturating_sub(paragraph.runs.first().map(|r| r.text.len()).unwrap_or(0));
         if bullet_len == 0 {
             return None;
+        }
+        if let Some((_, m)) = marker_run {
+            // The marker's paint is its own run's: the style's fill, else
+            // run 0's.
+            let base = m
+                .fill_color
+                .as_deref()
+                .and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
+                .unwrap_or(em.options.fallback_text_paint);
+            return Some((bullet_len as u32, apply_fill_tint(base, m.fill_tint)));
         }
         let style_id = bullet_marker_character_style(&resolved_paragraph)?;
         let resolved = em.document.styles.resolve_character(style_id);
@@ -5920,7 +5989,7 @@ pub(super) fn emit_paragraph_into_chain(
         // 30 lines in a frame that holds 28 at 13 pt — measured
         // 2026-09-06 against InDesign, which oversets it).
         let line_h = lopts.leading_override.unwrap_or_else(|| {
-            paged_text::layout::max_line_height_for_glyphs(&line.glyphs)
+            paged_text::layout::auto_line_height(&line.glyphs, lopts.auto_leading_from_byte)
                 .unwrap_or(lopts.line_height)
         });
         let frame_height_64 = (em.chain[em.frame_idx].bounds.height()
@@ -6340,8 +6409,15 @@ pub(super) fn emit_paragraph_into_chain(
         let mut start = 0;
         while start < line.glyphs.len() {
             let fid = line.glyphs[start].font_id;
+            // A slice is drawn at ONE size, so it ends where the size does:
+            // two runs in the same face at different sizes (a list marker in
+            // its 20 pt character style before 10 pt text) share a font_id.
+            let size = line.glyphs[start].point_size;
             let mut end = start + 1;
-            while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
+            while end < line.glyphs.len()
+                && line.glyphs[end].font_id == fid
+                && (line.glyphs[end].point_size - size).abs() < 0.01
+            {
                 end += 1;
             }
             let face_idx = match font_ids.iter().position(|f| *f == fid) {

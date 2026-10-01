@@ -2616,8 +2616,15 @@ pub(super) fn emit_cell_paragraph(
         let mut start = 0;
         while start < line.glyphs.len() {
             let fid = line.glyphs[start].font_id;
+            // A slice is drawn at ONE size, so it ends where the size does:
+            // two runs in the same face at different sizes (a list marker in
+            // its 20 pt character style before 10 pt text) share a font_id.
+            let size = line.glyphs[start].point_size;
             let mut end = start + 1;
-            while end < line.glyphs.len() && line.glyphs[end].font_id == fid {
+            while end < line.glyphs.len()
+                && line.glyphs[end].font_id == fid
+                && (line.glyphs[end].point_size - size).abs() < 0.01
+            {
                 end += 1;
             }
             let face_idx = match font_ids.iter().position(|f| *f == fid) {

@@ -939,6 +939,89 @@ impl ResolvedRunAttrs {
         }
     }
 
+    /// These attributes with character style `c` applied ON TOP: every
+    /// field the style sets wins, the rest stay as they are. This is how
+    /// InDesign formats a list marker — the paragraph's first character,
+    /// overridden by the marker's character style, even where that
+    /// character carries a local value (`list-marker-styles` m20: a run
+    /// with a local 10 pt gets a 20 pt marker).
+    pub fn under_character(&self, c: &paged_model::ResolvedCharacter) -> Self {
+        let mut out = Self::default();
+        out.merge_below_character(c);
+        out.merge_below_resolved(self);
+        out
+    }
+
+    /// Fill any unset field from another resolved run. Destructured so a
+    /// new field cannot be forgotten here.
+    fn merge_below_resolved(&mut self, r: &Self) {
+        let Self {
+            applied_language,
+            font,
+            font_style,
+            point_size,
+            fill_color,
+            fill_tint,
+            stroke_color,
+            stroke_weight,
+            capitalization,
+            baseline_shift,
+            horizontal_scale,
+            vertical_scale,
+            skew,
+            position,
+            tracking,
+            underline,
+            strikethru,
+            leading,
+            ruby_flag,
+            ruby_type,
+            ruby_string,
+            kenten_kind,
+            kenten_character,
+            kenten_font_size,
+            overprint_fill,
+            overprint_stroke,
+            ligatures_on,
+            kerning_method,
+            otf,
+        } = r;
+        fn fill<T: Clone>(slot: &mut Option<T>, below: &Option<T>) {
+            if slot.is_none() {
+                slot.clone_from(below);
+            }
+        }
+        fill(&mut self.applied_language, applied_language);
+        fill(&mut self.font, font);
+        fill(&mut self.font_style, font_style);
+        fill(&mut self.point_size, point_size);
+        fill(&mut self.fill_color, fill_color);
+        fill(&mut self.fill_tint, fill_tint);
+        fill(&mut self.stroke_color, stroke_color);
+        fill(&mut self.stroke_weight, stroke_weight);
+        fill(&mut self.capitalization, capitalization);
+        fill(&mut self.baseline_shift, baseline_shift);
+        fill(&mut self.horizontal_scale, horizontal_scale);
+        fill(&mut self.vertical_scale, vertical_scale);
+        fill(&mut self.skew, skew);
+        fill(&mut self.position, position);
+        fill(&mut self.tracking, tracking);
+        fill(&mut self.underline, underline);
+        fill(&mut self.strikethru, strikethru);
+        fill(&mut self.leading, leading);
+        fill(&mut self.ruby_flag, ruby_flag);
+        fill(&mut self.ruby_type, ruby_type);
+        fill(&mut self.ruby_string, ruby_string);
+        fill(&mut self.kenten_kind, kenten_kind);
+        fill(&mut self.kenten_character, kenten_character);
+        fill(&mut self.kenten_font_size, kenten_font_size);
+        fill(&mut self.overprint_fill, overprint_fill);
+        fill(&mut self.overprint_stroke, overprint_stroke);
+        fill(&mut self.ligatures_on, ligatures_on);
+        fill(&mut self.kerning_method, kerning_method);
+        self.otf.merge_below(otf);
+    }
+
     /// Fill any unset field from a resolved character style.
     pub fn merge_below_character(&mut self, c: &paged_model::ResolvedCharacter) {
         if self.font.is_none() {
