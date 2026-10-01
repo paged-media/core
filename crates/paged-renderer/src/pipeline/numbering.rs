@@ -22,8 +22,8 @@
 /// numbering attributes:
 ///  - BulletList: counter resets to 0 (bullets don't number);
 ///    returns `<bullet><separator>`.
-///  - NumberedList: applies `NumberingStartAt` / `NumberingContinue`
-///    overrides to `counter`, then increments and substitutes
+///  - NumberedList: restarts `counter` at `NumberingStartAt` where the
+///    list starts or `NumberingContinue` is false, then increments and substitutes
 ///    `NumberingExpression` (default `^#.^t`). Tokens: `^#` → the
 ///    formatted counter (per `numbering_format`), `^.` → a literal
 ///    period, `^t` → a literal tab. Literal characters pass through.
@@ -42,10 +42,9 @@
 /// the counter is seeded from `prior` so the first numbered paragraph
 /// of the list in a later story continues the sequence rather than
 /// restarting at 1. `None` ⇒ the legacy per-story scope (no named
-/// continue-across-stories list applies). `NumberingStartAt` still
-/// wins over the seed — an explicit restart is honoured even for a
-/// continued list (matches InDesign, where "Start At" overrides
-/// "Continue from Previous Number").
+/// continue-across-stories list applies). `NumberingContinue="false"`
+/// still wins over the seed — an explicit restart is honoured even for
+/// a continued list.
 pub(super) fn list_prefix(
     p: &paged_scene::ResolvedParagraphAttrs,
     counter: &mut u32,
@@ -79,33 +78,32 @@ pub(super) fn list_prefix(
             Some(format!("{ch}{after}"))
         }
         Some("NumberedList") => {
-            // Decide whether to reset the counter on entry:
-            //   1. Explicit `NumberingStartAt` always wins — the
-            //      counter jumps to (start - 1) so the increment
-            //      below lands on `start`.
-            //   2. Otherwise, if the previous paragraph wasn't
-            //      numbered AND this paragraph isn't carrying
-            //      `NumberingContinue="true"`, reset to 0 so the
-            //      increment lands at 1 (a fresh sequence).
-            //   3. Otherwise carry the count forward.
-            if let Some(start) = p.numbering_start_at {
-                // Negative IDML values clamp to 0 (renders as "0" /
-                // whatever the format yields for n=0; matches
-                // InDesign's UI which disallows entries < 1 but the
-                // schema permits them).
-                *counter = (start - 1).max(0) as u32;
-            } else if let Some(prior) = cross_story_seed {
-                // W1.22 — a ContinueNumbersAcrossStories list. Seed
-                // from the document-level ledger and DON'T apply the
-                // per-story implicit reset: the first numbered
-                // paragraph of this list in a later story must
-                // continue, not restart. `prev_was_numbered` is local
-                // to this story's emitter, so at story start it is
-                // false (no neighbour) — exactly the case the legacy
-                // branch would have reset; the ledger seed overrides it.
+            // Where the count restarts, measured on `list-overrides`
+            // (InDesign 20.0.1, 2026-10-01):
+            //   - `NumberingContinue="false"` restarts at
+            //     `NumberingStartAt` (default 1), wherever it stands (o09,
+            //     o11);
+            //   - so does the paragraph that STARTS a list, whatever
+            //     `NumberingContinue` says (o10, o18, o20);
+            //   - mid-list, `NumberingStartAt` is ignored (o21: "2.", not
+            //     "10."), so a style that declares `NumberingStartAt="1"
+            //     NumberingContinue="true"` — InDesign's own
+            //     `[No paragraph style]`, in every package it writes —
+            //     still counts 1, 2, 3 (o19).
+            // A list "starts" where no numbered paragraph precedes it,
+            // except that `NumberingContinue="true"` resumes a count a
+            // non-list paragraph interrupted, and a ContinueNumbersAcrossStories
+            // list (W1.22) resumes the document-level ledger.
+            let restart_at = || (p.numbering_start_at.unwrap_or(1) - 1).max(0) as u32;
+            if p.numbering_continue == Some(false) {
+                *counter = restart_at();
+            } else if let Some(prior) = cross_story_seed.filter(|&n| n > 0) {
+                // `prev_was_numbered` is local to this story's emitter, so
+                // at a story start it is false although the list goes on;
+                // the ledger seed overrides that implicit reset.
                 *counter = prior;
-            } else if !*prev_was_numbered && p.numbering_continue != Some(true) {
-                *counter = 0;
+            } else if !*prev_was_numbered && (p.numbering_continue != Some(true) || *counter == 0) {
+                *counter = restart_at();
             }
             *counter = counter.checked_add(1).unwrap_or(1);
             *prev_was_numbered = true;

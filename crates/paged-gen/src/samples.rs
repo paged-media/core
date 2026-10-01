@@ -34,6 +34,7 @@ pub mod layout;
 pub mod links_broken;
 pub mod links_ok;
 pub mod list_markers;
+pub mod list_overrides;
 pub mod markers;
 pub mod masters;
 pub mod navigation;
@@ -113,6 +114,7 @@ pub const SAMPLES: &[&str] = &[
     "forced-line-break",
     "list-markers",
     "tab-breaks",
+    "list-overrides",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -164,6 +166,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "forced-line-break" => forced_line_break::build(),
         "list-markers" => list_markers::build(),
         "tab-breaks" => tab_breaks::build(),
+        "list-overrides" => list_overrides::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -199,7 +202,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            46,
+            47,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

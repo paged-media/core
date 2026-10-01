@@ -32,7 +32,7 @@ kurbo = "0.11.3"
 flo_curves = "0.8"
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "b490080765aeaced1a59ed1d25a40aee1db60002" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "f0da0e04f0e766ede9d286ac9b6fc09794365c3c" }
 paged-renderer = { path = "../paged-renderer" }
 paged-compose = { path = "../paged-compose" }
 bytes = { workspace = true }

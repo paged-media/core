@@ -373,6 +373,14 @@
       "rationale": "Added 2026-10-01 to ask InDesign where the text after a list marker starts. Fourteen cases on one page, two paragraphs each: BulletsTextAfter undeclared / ^t / a space; NumberingExpression ^#.^t / ^#.; no indent, left indent only, hanging indents (one narrower than the number), explicit tab stops before, beyond and under the marker, and a plain tab in a hanging paragraph with no list. The reference is InDesign 20.0.1's own export, and the x of the text after every marker matches it within 0.5 pt (pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs). Worst page measured: mean 0.873 / p99 33.344 / ssim 0.9096; sized at worst * 1.20 and worst_ssim - 0.005. The residue is not the markers: fourteen 0.25 pt frame strokes the CPU rasteriser paints lighter than InDesign, plus glyph-edge antialiasing (before the fix the page measured mean 1.114 / p99 53.7 / ssim 0.8958). Body copy is Inter, registered by list-markers.fonts.sh."
     },
     {
+      "name": "list-overrides",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 1.462,
+      "max_p99_de": 75.25,
+      "min_ssim": 0.886,
+      "rationale": "Added 2026-10-01 to ask InDesign how the list attributes behave when set on the paragraph range itself rather than in its style. Twenty-two cases, two paragraphs each: BulletsTextAfter / NumberingExpression as local attributes, as typed <Properties> children, and over a style that says otherwise; NumberingStartAt / NumberingContinue on the first, the second and through a style (including InDesign's own [No paragraph style] pair start 1 + continue true); NumberingFormat as child and as attribute; the marker character styles as children and as attributes. The reference is InDesign 20.0.1's own export; the text after every marker and the marker's width (which tells the counter values apart) match it within 0.5 / 0.1 pt in 20 of the 22 cases, pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs. Worst page measured: mean 1.218 / p99 62.710 / ssim 0.8919; sized at worst * 1.20 and worst_ssim - 0.005. Residue: the same 0.25 pt frame strokes and glyph-edge antialiasing as list-markers, over 22 frames instead of 14, plus o14 / o16, whose marker InDesign sets at its 20 pt character style's size (the engine applies a marker character style's colour only), each about 1.6x a normal frame's difference. Body copy is Inter, registered by list-overrides.fonts.sh."
+    },
+    {
       "name": "span-columns",
       "max_pages_with_pdf": 17,
       "max_mean_de": 0.244,

@@ -163,6 +163,15 @@
       "report": "/tmp/idml-generated-diff/list-markers/report.json"
     },
     {
+      "name": "list-overrides",
+      "idml": "list-overrides.idml",
+      "pdf": "list-overrides.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/list-overrides",
+      "report": "/tmp/idml-generated-diff/list-overrides/report.json"
+    },
+    {
       "name": "markers",
       "idml": "markers.idml",
       "pdf": "markers.pdf",

@@ -13,8 +13,9 @@
  */
 
 //! Where the text after a list marker starts, over the generated
-//! `list-markers.idml`, against InDesign 20.0.1's PDF export of the same
-//! file (`corpus/generated/list-markers.pdf`, 2026-10-01).
+//! `list-markers.idml` and `list-overrides.idml`, against InDesign
+//! 20.0.1's PDF export of the same files (`corpus/generated/*.pdf`,
+//! 2026-10-01).
 //!
 //! The rule InDesign follows (and `paragraph_tab_stops` implements):
 //! an undeclared `BulletsTextAfter` is a tab; a tab goes to the first
@@ -114,4 +115,158 @@ fn text_after_a_list_marker_starts_where_indesign_puts_it() {
         }
     }
     assert!(ok, "\n{}", report.join("\n"));
+}
+
+/// `list-overrides`: per case and paragraph, (the tag's pen x, the word's
+/// pen x, the marker's width), frame-local, read off InDesign's export the
+/// same way as [`INDESIGN`]. The marker width is the marker word's
+/// `xMax - xMin` — it tells "1." from "5." from "I." (Inter's digits are
+/// proportional), which is how the counter cases are checked. `None`
+/// where the marker glues to the tag (no separator) or the word could not
+/// be told apart.
+#[allow(clippy::type_complexity)]
+const INDESIGN_OVERRIDES: [[(Option<f32>, f32, Option<f32>); 2]; 22] = [
+    [
+        (Some(18.000), 39.430, Some(5.630)),
+        (Some(18.000), 39.430, Some(5.630)),
+    ],
+    [
+        (Some(8.438), 27.627, Some(5.630)),
+        (Some(8.438), 27.627, Some(5.630)),
+    ],
+    [(None, 28.168, None), (None, 30.200, None)],
+    [
+        (Some(24.000), 45.300, Some(11.370)),
+        (Some(24.000), 45.300, Some(13.400)),
+    ],
+    [
+        (Some(18.000), 39.580, Some(5.630)),
+        (Some(18.000), 39.580, Some(5.630)),
+    ],
+    [
+        (Some(8.438), 29.488, Some(5.630)),
+        (Some(8.438), 29.488, Some(5.630)),
+    ],
+    [
+        (Some(18.000), 39.320, Some(6.950)),
+        (Some(18.000), 39.320, Some(8.980)),
+    ],
+    [(None, 31.945, None), (None, 33.977, None)],
+    [(None, 33.551, None), (None, 33.551, None)],
+    [
+        (Some(18.000), 39.320, Some(8.540)),
+        (Some(18.000), 39.320, Some(8.740)),
+    ],
+    [
+        (Some(18.000), 36.849, Some(8.540)),
+        (Some(18.000), 36.849, Some(8.740)),
+    ],
+    [
+        (Some(18.000), 34.609, Some(6.950)),
+        (Some(18.000), 34.609, Some(6.950)),
+    ],
+    [
+        (Some(18.000), 36.639, Some(5.565)),
+        (Some(18.000), 36.639, Some(8.255)),
+    ],
+    [
+        (Some(18.000), 36.719, Some(6.950)),
+        (Some(18.000), 36.719, Some(8.980)),
+    ],
+    [
+        (Some(16.875), 35.874, None),
+        (Some(16.875), 35.874, Some(11.260)),
+    ],
+    [
+        (Some(8.438), 26.907, Some(5.630)),
+        (Some(8.438), 26.907, Some(5.630)),
+    ],
+    [
+        (Some(13.897), 32.636, None),
+        (Some(17.959), 36.698, Some(17.960)),
+    ],
+    [(None, 25.147, None), (None, 27.178, None)],
+    [
+        (Some(18.000), 36.729, Some(8.540)),
+        (Some(18.000), 36.729, Some(8.740)),
+    ],
+    [
+        (Some(18.000), 36.739, Some(6.950)),
+        (Some(18.000), 36.739, Some(8.980)),
+    ],
+    [
+        (Some(18.000), 39.220, Some(8.540)),
+        (Some(18.000), 39.220, Some(8.740)),
+    ],
+    [
+        (Some(18.000), 36.980, Some(6.950)),
+        (Some(18.000), 36.980, Some(8.980)),
+    ],
+];
+
+/// Cases InDesign renders with the marker's character style at ITS size
+/// (20 pt): the engine applies a marker character style's colour only,
+/// not its size or face, so these two still differ.
+const MARKER_SIZE_NOT_MODELLED: [&str; 2] = ["o14", "o16"];
+
+/// Marker widths agree to well under the 0.2 pt between "2." and "6.".
+const W_TOLERANCE: f32 = 0.1;
+
+#[test]
+fn local_list_overrides_render_where_indesign_puts_them() {
+    use paged_gen::samples::list_overrides as lo;
+    let bytes = paged_gen::write_idml(&lo::build()).expect("idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let font = inter_font();
+    let opts = PipelineOptions {
+        font: Some(&font),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).expect("build");
+
+    let mut report = Vec::new();
+    let mut ok = true;
+    for (i, case) in lo::cases().iter().enumerate() {
+        let (fx, _) = lo::frame_origin(i as u32);
+        let lines = built.story_layout(&lo::body_story_id(i as u32));
+        assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
+        let gap = MARKER_SIZE_NOT_MODELLED.contains(&case.tag);
+        for (line, want) in lines.iter().zip(INDESIGN_OVERRIDES[i]) {
+            let (start, end) = (line.byte_range.start, line.byte_range.end);
+            let x_at = |byte: u32| {
+                line.clusters
+                    .iter()
+                    .find(|c| c.byte == byte)
+                    .map(|c| c.x_pt - fx)
+                    .unwrap_or(f32::NAN)
+            };
+            let tag = x_at(end - 7);
+            let word = x_at(end - 3);
+            // The marker is everything before the tag; its last byte is
+            // the separator (a tab or a space) whenever it is a word of
+            // its own.
+            let marker_w = x_at(end - 8) - x_at(start);
+            let same = (word - want.1).abs() <= X_TOLERANCE
+                && want.0.is_none_or(|t| (tag - t).abs() <= X_TOLERANCE)
+                && want.2.is_none_or(|w| (marker_w - w).abs() <= W_TOLERANCE);
+            if !gap {
+                ok &= same;
+            }
+            report.push(format!(
+                "{} {:34} {:12} engine ({tag:.3}, {word:.3}, w {marker_w:.3})  indesign ({:?}, {:.3}, w {:?})",
+                case.tag,
+                case.name,
+                match (same, gap) {
+                    (true, _) => "ok",
+                    (false, true) => "known gap",
+                    (false, false) => "DIFFERS",
+                },
+                want.0,
+                want.1,
+                want.2
+            ));
+        }
+    }
+    assert!(ok, "\n{}", report.join("\n"));
+    eprintln!("{}", report.join("\n"));
 }

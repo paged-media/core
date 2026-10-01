@@ -415,6 +415,24 @@ fn list_prefix_bullet_falls_back_to_default_when_codepoint_missing() {
 }
 
 #[test]
+fn list_prefix_a_declared_start_and_continue_count_on() {
+    // InDesign's `[No paragraph style]` carries NumberingStartAt="1"
+    // NumberingContinue="true"; every paragraph inherits both, and the
+    // list still counts 1, 2, 3 (`list-overrides` o19).
+    let mut counter = 0;
+    let mut prev_numbered = false;
+    let mut a = attrs(Some("NumberedList"), None, None);
+    a.numbering_start_at = Some(1);
+    a.numbering_continue = Some(true);
+    for want in ["1.\t", "2.\t", "3.\t"] {
+        assert_eq!(
+            list_prefix(&a, &mut counter, &mut prev_numbered, None).as_deref(),
+            Some(want)
+        );
+    }
+}
+
+#[test]
 fn list_prefix_numbering_start_at_jumps_counter() {
     // StartAt = 5 ⇒ first emission is "5.\t", then 6, 7, ...
     let mut counter = 0;
@@ -440,15 +458,22 @@ fn list_prefix_numbering_start_at_jumps_counter() {
 
 #[test]
 fn list_prefix_numbering_start_at_mid_list_resets() {
-    // After a few numbered paragraphs, a paragraph with
-    // NumberingStartAt = 10 forces the counter to that value.
+    // Mid-list, NumberingStartAt alone is ignored (InDesign 20.0.1,
+    // `list-overrides` o21: "2."); with NumberingContinue="false" it
+    // restarts the count there (o09).
     let mut counter = 0;
     let mut prev_numbered = false;
     let plain = attrs(Some("NumberedList"), None, None);
     list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 1.
     list_prefix(&plain, &mut counter, &mut prev_numbered, None); // 2.
-    let mut jumped = attrs(Some("NumberedList"), None, None);
-    jumped.numbering_start_at = Some(10);
+    let mut ignored = attrs(Some("NumberedList"), None, None);
+    ignored.numbering_start_at = Some(10);
+    assert_eq!(
+        list_prefix(&ignored, &mut counter, &mut prev_numbered, None).as_deref(),
+        Some("3.\t")
+    );
+    let mut jumped = ignored.clone();
+    jumped.numbering_continue = Some(false);
     assert_eq!(
         list_prefix(&jumped, &mut counter, &mut prev_numbered, None).as_deref(),
         Some("10.\t")
@@ -535,9 +560,21 @@ fn list_prefix_cross_story_seed_continues_and_suppresses_reset() {
         "cross-story seed of 2 must continue at 3, not reset to 1",
     );
     assert_eq!(counter, 3, "counter advances off the seed");
-    // NumberingStartAt still wins over the seed (explicit restart).
+    // NumberingContinue="false" still wins over the seed (explicit
+    // restart); a bare NumberingStartAt does not — InDesign's own
+    // `[No paragraph style]` declares `NumberingStartAt="1"` on every
+    // style, and a continued list must not restart on it.
+    let mut declared = attrs(Some("NumberedList"), None, None);
+    declared.numbering_start_at = Some(1);
+    declared.numbering_continue = Some(true);
+    let (mut c, mut prev) = (0, false);
+    assert_eq!(
+        list_prefix(&declared, &mut c, &mut prev, Some(5)).as_deref(),
+        Some("6.\t"),
+    );
     let mut started = attrs(Some("NumberedList"), None, None);
     started.numbering_start_at = Some(10);
+    started.numbering_continue = Some(false);
     let mut counter2 = 0;
     let mut prev2 = false;
     assert_eq!(
