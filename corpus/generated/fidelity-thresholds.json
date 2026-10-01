@@ -347,6 +347,14 @@
       "max_p99_de": 0.3,
       "min_ssim": 0.9739,
       "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.375 / p99 0.000 / SSIM 0.9819 across 2 page(s); sized at worst + ~20%."
+    },
+    {
+      "name": "start-paragraph",
+      "max_pages_with_pdf": 40,
+      "max_mean_de": 0.157,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.983,
+      "rationale": "Added 2026-10-01 with ADR 028 (the break-before rule, StartParagraph). Ten cases, each one story threaded through a four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page; the reference is InDesign 2025's own export, and where each case's rule paragraph lands matches it (also pinned structurally by crates/paged-renderer/tests/start_paragraph_pipeline.rs). Worst page measured: mean 0.130 / p99 0.0 / ssim 0.9884; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by start-paragraph.fonts.sh."
     }
   ]
 }

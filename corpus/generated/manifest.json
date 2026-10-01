@@ -226,6 +226,15 @@
       "report": "/tmp/idml-generated-diff/showcase-base/report.json"
     },
     {
+      "name": "start-paragraph",
+      "idml": "start-paragraph.idml",
+      "pdf": "start-paragraph.pdf",
+      "pages": 40,
+      "passing": 30,
+      "diff_dir": "/tmp/idml-generated-diff/start-paragraph",
+      "report": "/tmp/idml-generated-diff/start-paragraph/report.json"
+    },
+    {
       "name": "strokes-fills",
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",

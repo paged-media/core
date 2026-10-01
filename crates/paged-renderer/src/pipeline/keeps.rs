@@ -174,6 +174,78 @@ pub(super) fn keep_breaks(
     next
 }
 
+/// What a paragraph's `StartParagraph` rule does to its first line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartMove {
+    /// The line stays where the flow puts it.
+    Stay,
+    /// The line opens chain entry (column) `.0`.
+    To(usize),
+    /// No entry satisfies the rule: the rest of the story is overset.
+    Overset,
+}
+
+/// Where the first line of a paragraph with `rule` goes, measured against
+/// InDesign 2025 with the `start-paragraph` paged-gen fixture
+/// (2026-10-01):
+///
+/// - a paragraph that already opens the column, frame or page the rule
+///   asks for stays (`NextFrame` on a paragraph that opens a frame, the
+///   story's first paragraph with `NextPage`, ...);
+/// - `NextOddPage` / `NextEvenPage` also need the page's parity, so they
+///   move a paragraph that opens a page of the wrong parity, the story's
+///   first paragraph included.
+///
+/// `cur` is the chain entry the flow is in, `last_placed` the entry that
+/// holds the story's last placed line, `frames[i]` the id of the frame
+/// entry `i` belongs to (columns of one frame share it) and `pages[i]`
+/// its page index (page number = index + 1).
+pub(super) fn start_target(
+    rule: paged_model::StartParagraph,
+    cur: usize,
+    last_placed: Option<usize>,
+    frames: &[Option<&str>],
+    pages: &[usize],
+) -> StartMove {
+    use paged_model::StartParagraph as R;
+    let n = pages.len();
+    if cur >= n {
+        return StartMove::Stay;
+    }
+    let same_frame = |a: usize, b: usize| match (frames[a], frames[b]) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    };
+    let first = |pred: &dyn Fn(usize) -> bool| (cur + 1..n).find(|&j| pred(j));
+    let moved = |j: Option<usize>| j.map_or(StartMove::Overset, StartMove::To);
+    let page_used = last_placed.is_some_and(|l| pages[l] == pages[cur]);
+    match rule {
+        R::Anywhere => StartMove::Stay,
+        R::NextColumn if last_placed == Some(cur) => moved(first(&|_| true)),
+        R::NextFrame if last_placed.is_some_and(|l| same_frame(l, cur)) => {
+            moved(first(&|j| !same_frame(j, cur)))
+        }
+        R::NextPage if page_used => moved(first(&|j| pages[j] != pages[cur])),
+        R::NextOddPage | R::NextEvenPage => {
+            let odd = rule == R::NextOddPage;
+            let start = if page_used {
+                first(&|j| pages[j] != pages[cur])
+            } else {
+                Some(cur)
+            };
+            let Some(start) = start else {
+                return StartMove::Overset;
+            };
+            let fits = |j: usize| ((pages[j] + 1) % 2 == 1) == odd;
+            match (start..n).find(|&j| fits(j) && (j == start || pages[j] != pages[j - 1])) {
+                Some(j) if j == cur => StartMove::Stay,
+                j => moved(j),
+            }
+        }
+        _ => StartMove::Stay,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +386,45 @@ mod tests {
         spec.with_next = 1;
         let b = keep_breaks(&placements, &[spec, KeepSpec::default()], &HashMap::new());
         assert_eq!(b.get(&0), Some(&2));
+    }
+
+    // ---- StartParagraph (the `start-paragraph` fixture's chain) ----
+    // Entries: A column 1, A column 2, B (page 1), C (page 2), D (page 3).
+    const FRAMES: [Option<&str>; 5] = [Some("A"), Some("A"), Some("B"), Some("C"), Some("D")];
+    const PAGES: [usize; 5] = [0, 0, 0, 1, 2];
+
+    fn start(rule: paged_model::StartParagraph, cur: usize, last: Option<usize>) -> StartMove {
+        start_target(rule, cur, last, &FRAMES, &PAGES)
+    }
+
+    #[test]
+    fn start_paragraph_moves_like_indesign() {
+        use paged_model::StartParagraph as R;
+        // P04 after three lines in A column 1.
+        assert_eq!(start(R::Anywhere, 0, Some(0)), StartMove::Stay);
+        assert_eq!(start(R::NextColumn, 0, Some(0)), StartMove::To(1));
+        assert_eq!(start(R::NextFrame, 0, Some(0)), StartMove::To(2));
+        assert_eq!(start(R::NextPage, 0, Some(0)), StartMove::To(3));
+        assert_eq!(start(R::NextOddPage, 0, Some(0)), StartMove::To(4));
+        assert_eq!(start(R::NextEvenPage, 0, Some(0)), StartMove::To(3));
+    }
+
+    #[test]
+    fn start_paragraph_at_the_top_of_its_unit() {
+        use paged_model::StartParagraph as R;
+        // The story's first paragraph: NextPage stays, parity still moves.
+        assert_eq!(start(R::NextPage, 0, None), StartMove::Stay);
+        assert_eq!(start(R::NextEvenPage, 0, None), StartMove::To(3));
+        assert_eq!(start(R::NextOddPage, 0, None), StartMove::Stay);
+        // Already opening frame B / column two: no skip.
+        assert_eq!(start(R::NextFrame, 2, Some(1)), StartMove::Stay);
+        assert_eq!(start(R::NextColumn, 1, Some(0)), StartMove::Stay);
+    }
+
+    #[test]
+    fn start_paragraph_without_a_target_oversets() {
+        use paged_model::StartParagraph as R;
+        assert_eq!(start(R::NextPage, 4, Some(4)), StartMove::Overset);
+        assert_eq!(start(R::NextEvenPage, 4, Some(4)), StartMove::Overset);
     }
 }

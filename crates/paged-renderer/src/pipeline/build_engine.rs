@@ -3192,6 +3192,8 @@ pub(super) struct StoryEmitter<'a> {
     /// see `auto_size`): every line is treated as not fitting, so the
     /// story oversets in full and reports it once.
     pub(super) force_overset: bool,
+    /// The current top-level paragraph's `StartParagraph` (ADR 028).
+    pub(super) start_rule: paged_model::StartParagraph,
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -3326,6 +3328,7 @@ impl<'a> StoryEmitter<'a> {
             chapter_numbers: &[],
             running_headers: None,
             force_overset: false,
+            start_rule: paged_model::StartParagraph::Anywhere,
         }
     }
 
@@ -3482,6 +3485,7 @@ impl<'a> StoryEmitter<'a> {
         let attrs = self.document.resolved_paragraph_attrs(paragraph);
         self.keep_specs
             .push(super::keeps::KeepSpec::from_attrs(&attrs));
+        self.start_rule = attrs.start_paragraph.unwrap_or_default();
         self.placements.push(Vec::new());
         self.para_line = 0;
         emit_paragraph_into_chain(self, paragraph, pages, total_stats);
@@ -5572,13 +5576,36 @@ pub(super) fn emit_paragraph_into_chain(
         // in this frame; an empty frame gains nothing from a break.
         let keep_break_here = em.forced_breaks.get(&em.paragraph_idx) == Some(&em.para_line)
             && em.last_placed_frame == Some(em.frame_idx);
+        // ADR 028 — the break-before rule moves a paragraph's FIRST line.
+        let mut start_to = None;
+        if em.para_line == 0 && em.start_rule != paged_model::StartParagraph::Anywhere {
+            let frames: Vec<Option<&str>> = em.chain.iter().map(|f| f.self_id.as_deref()).collect();
+            match super::keeps::start_target(
+                em.start_rule,
+                em.frame_idx,
+                em.last_placed_frame,
+                &frames,
+                &em.chain_pages,
+            ) {
+                super::keeps::StartMove::Stay => {}
+                super::keeps::StartMove::To(j) => start_to = Some(j),
+                // No column, frame or page satisfies the rule: InDesign
+                // oversets the rest of the story (and a growing chain adds
+                // pages, ADR 026).
+                super::keeps::StartMove::Overset => {
+                    em.frame_idx = em.chain.len().saturating_sub(1);
+                    em.force_overset = true;
+                }
+            }
+        }
         if (paged_flow::region_overflows(line.baseline_y, text_bottom_64)
             || no_room_here
-            || keep_break_here)
+            || keep_break_here
+            || start_to.is_some())
             && em.frame_idx + 1 < em.chain.len()
         {
             let prev_baseline = line.baseline_y;
-            em.frame_idx += 1;
+            em.frame_idx = start_to.unwrap_or(em.frame_idx + 1);
             // The continuation frame's own first-baseline policy and
             // top inset, with the same real-face ascender as the head.
             let new_baseline = first_baseline_for_frame(

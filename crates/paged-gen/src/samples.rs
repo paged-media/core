@@ -41,6 +41,7 @@ pub mod paste_into;
 pub mod preflight;
 pub mod reflow;
 pub mod showcase_base;
+pub mod start_paragraph;
 pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
@@ -103,6 +104,7 @@ pub const SAMPLES: &[&str] = &[
     "styles-cascade",
     "layout",
     "keeps",
+    "start-paragraph",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -149,6 +151,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "styles-cascade" => styles_cascade::build(),
         "layout" => layout::build(),
         "keeps" => keeps::build(),
+        "start-paragraph" => start_paragraph::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -184,7 +187,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            41,
+            42,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
