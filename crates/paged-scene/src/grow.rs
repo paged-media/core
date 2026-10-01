@@ -24,7 +24,9 @@
 //!   declares no margins, InDesign's default), with the margin grid's
 //!   columns, threaded onto the chain;
 //! - the frame has DEFAULT frame options: no insets, the default first
-//!   baseline, no fill or stroke.
+//!   baseline, no fill or stroke (unless the rule sets
+//!   `copy_frame_options`, as a Word section does: then the chain's insets,
+//!   first baseline and vertical justification carry over).
 //!
 //! Generated pages are derived. [`Document::with_generated_pages`] returns a
 //! COPY of the document with them materialised; the document itself (what
@@ -87,13 +89,19 @@ impl Document {
             {
                 continue;
             }
-            doc.append_generated_pages(story, n);
+            let rule = self
+                .stories
+                .iter()
+                .find(|s| &s.self_id == story)
+                .and_then(|s| s.story.grow.clone())
+                .unwrap_or_default();
+            doc.append_generated_pages(story, n, &rule);
         }
         doc.rebuild_indexes();
         doc
     }
 
-    fn append_generated_pages(&mut self, story: &str, n: u32) {
+    fn append_generated_pages(&mut self, story: &str, n: u32, rule: &paged_model::FlowGrowRule) {
         let Some(last) = self.frame_chain(story).last().map(|f| (*f).clone()) else {
             return;
         };
@@ -164,10 +172,12 @@ impl Document {
             frame.stroke_dash = Vec::new();
             frame.drop_shadow = None;
             frame.stroke_drop_shadow = None;
-            frame.vertical_justification = None;
-            frame.first_baseline_offset = None;
-            frame.minimum_first_baseline_offset = None;
-            frame.inset_spacing = None;
+            if !rule.copy_frame_options {
+                frame.vertical_justification = None;
+                frame.first_baseline_offset = None;
+                frame.minimum_first_baseline_offset = None;
+                frame.inset_spacing = None;
+            }
             frame.auto_sizing = None;
             frame.auto_sizing_reference_point = None;
             frame.minimum_width_for_auto_sizing = None;

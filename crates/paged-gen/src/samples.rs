@@ -19,6 +19,7 @@ pub mod anchored;
 pub mod annual_base;
 pub mod conditions;
 pub mod corners;
+pub mod docx_pagination;
 pub mod effects;
 pub mod footnotes;
 pub mod geometry;
@@ -103,6 +104,7 @@ pub const SAMPLES: &[&str] = &[
     "layout",
     "keeps",
     "reflow",
+    "docx-pagination",
     "nested-groups",
     "paste-into",
     "layers-z",
@@ -148,6 +150,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "layout" => layout::build(),
         "keeps" => keeps::build(),
         "reflow" => reflow::build(),
+        "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
         "paste-into" => paste_into::build(),
         "layers-z" => layers_z::build(),
@@ -181,7 +184,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            40,
+            41,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

@@ -5423,6 +5423,15 @@ pub struct FlowGrowRule {
     /// a frame too small to hold one line). `None` = the renderer's default.
     #[serde(default)]
     pub max_pages: Option<u32>,
+    /// Generated frames take the chain's last frame's text-frame OPTIONS
+    /// (insets, first-baseline offset, vertical justification) instead of
+    /// InDesign's defaults. `false` is InDesign's Smart Text Reflow
+    /// (measured: a new frame gets defaults). A Word section sets `true`:
+    /// Word fits a line only when its whole line box fits, which the engine
+    /// expresses as a `LeadingOffset` first baseline on EVERY page of the
+    /// section (thoughts ADR 029; measured against Word's PDF export).
+    #[serde(default)]
+    pub copy_frame_options: bool,
 }
 
 // ---------------------------------------------------------------------------
