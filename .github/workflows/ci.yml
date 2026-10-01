@@ -369,6 +369,10 @@ jobs:
   # other fixture is a HARD gate. Thresholds are NOT loosened (repo rule:
   # never loosen a fidelity threshold to hide a regression) — draining
   # the advisory list back into the hard set is the tracked follow-up.
+  # PER-FIXTURE BUDGETS (still HARD-gated, sized by measurement): gradients (mean) and
+  #   the three list-* fixtures (mean + SSIM; 0.25 pt frame strokes that
+  #   poppler's stroke adjustment snaps to a full pixel — measured with
+  #   the strokes masked at SSIM 0.998, see min_ssim_for in the script).
   export-diff:
     name: pdf export-diff gate
     needs: toolchain

@@ -15,7 +15,9 @@
 #   3. paged-inspect --render (CPU, 144 dpi) → native-NNN.png.
 #   4. paged-diff per page; fail when mean ΔE > 1.5 or SSIM < 0.93
 #      (text AA differs between poppler and tiny-skia; geometry or
-#      colour bugs blow past these immediately).
+#      colour bugs blow past these immediately). A few fixtures carry
+#      their own measured budget — max_mean_for / min_ssim_for below,
+#      each with its evidence.
 #
 # Usage:
 #   ./corpus/generated/export-diff.sh                # all fixtures
@@ -43,7 +45,43 @@ FALLBACK_FONT="$ROOT/corpus/fonts/Inter.ttf"
 max_mean_for() {
   case "$1" in
     gradients) echo 2.2 ;;
+    # See min_ssim_for below for the evidence and the sizing rule.
+    list-markers) echo 0.82 ;;
+    list-overrides) echo 1.07 ;;
+    list-marker-styles) echo 1.06 ;;
     *) echo "$MAX_MEAN_DE" ;;
+  esac
+}
+
+# Hairline frame strokes: a measurement convention, not an exporter gap.
+# The list fixtures (list-markers / list-overrides / list-marker-styles,
+# 2026-10-01) put 14-22 small text frames on one page, each with a
+# 0.25 pt frame stroke = 0.5 device px at 144 dpi. The CPU renderer
+# paints that at its true coverage (two rows at grey 199); poppler's
+# Splash rasteriser applies stroke adjustment and snaps any stroke
+# thinner than a pixel to ONE full-ink device pixel (grey 30) — it
+# ignores the PDF /SA flag, pdftoppm has no switch for it, and
+# pdftocairo does the same. Measured (GS SWOP profile, same as CI;
+# local numbers equal the CI run 36916496128 to 3 digits):
+#   fixture              as gated          strokes masked out
+#   list-markers         0.687 / 0.9201    0.126 / 0.9985
+#   list-overrides       0.888 / 0.9118    0.178 / 0.9976
+#   list-marker-styles   0.881 / 0.9117    0.172 / 0.9978
+# (mean dE / SSIM; "masked" copies the renderer's pixels over the
+# pdftoppm stroke rows/columns and nothing else). With the strokes out
+# of the picture the exported text matches the renderer better than
+# most fixtures do (typical 0.12 / 0.987), so the exporter places the
+# markers, tabs and marker character styles exactly as the renderer.
+# The same residue is documented for these fixtures in the raster lane
+# (fidelity-thresholds.json: "0.25 pt frame strokes the CPU rasteriser
+# paints lighter"). Sized by that lane's rule: mean = worst * 1.20,
+# SSIM = worst - 0.005. Any other fixture keeps the global budget.
+min_ssim_for() {
+  case "$1" in
+    list-markers) echo 0.915 ;;
+    list-overrides) echo 0.906 ;;
+    list-marker-styles) echo 0.906 ;;
+    *) echo "$MIN_SSIM" ;;
   esac
 }
 
@@ -99,6 +137,7 @@ for idml in "${fixtures[@]}"; do
   pdftoppm -png -r 144 "$dir/$name.pdf" "$dir/pdf"
   "$INSPECT" "${inspect_args[@]}" "$idml" >/dev/null 2>&1
   max_mean="$(max_mean_for "$name")"
+  min_ssim="$(min_ssim_for "$name")"
 
   page=1
   for native in "$dir"/native*.png; do
@@ -120,7 +159,7 @@ for idml in "${fixtures[@]}"; do
     json="$("$DIFF" --json "$native" "$pdfpage" || true)"
     mean=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['mean_de'])")
     ssim=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin)['ssim'])")
-    ok=$(python3 -c "print(int($mean <= $max_mean and $ssim >= $MIN_SSIM))")
+    ok=$(python3 -c "print(int($mean <= $max_mean and $ssim >= $min_ssim))")
     status="ok"
     if [ "$ok" != "1" ]; then status="FAIL"; fail=1; fi
     echo "$name p$page: mean_de=$mean ssim=$ssim [$status]"
