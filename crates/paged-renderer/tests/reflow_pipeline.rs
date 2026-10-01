@@ -165,3 +165,47 @@ fn the_hint_settles_and_is_reused() {
     );
     assert_eq!(hint.borrow().get(&body_story()).copied(), Some(0));
 }
+
+/// ADR 026 — an IDML export writes generated pages as REAL pages, as
+/// InDesign does once it has reflowed. Re-imported WITHOUT any grow rule,
+/// the document keeps its three pages and nothing is overset.
+/// `PAGED_REFLOW_EXPORT=<path>` also writes the exported package, so
+/// InDesign can be asked to open it (tools/indesign-export/reflow-probe.sh
+/// with PAGED_REFLOW_EDIT=none).
+#[test]
+fn an_export_writes_generated_pages_as_real_pages() {
+    let bytes = paged_gen::write_idml(&reflow::build()).expect("write_idml");
+    let doc = growing_document(None);
+    let mut counts = HashMap::new();
+    counts.insert(body_story(), 1u32);
+    let grown = doc.with_generated_pages(&counts);
+    let exported = idml_export::write_idml(&grown, &bytes).expect("export");
+    if let Ok(path) = std::env::var("PAGED_REFLOW_EXPORT") {
+        std::fs::write(&path, &exported).expect("write exported idml");
+    }
+
+    let reimported = idml_import::import_idml_doc(&exported).expect("re-import");
+    assert!(
+        reimported.growing_stories().is_empty(),
+        "IDML carries no grow rule"
+    );
+    let built = build(&reimported, None);
+    assert_eq!(
+        built.pages.len(),
+        3,
+        "the generated page is a real page now"
+    );
+    let overset = built
+        .diagnostics
+        .items
+        .iter()
+        .any(|d| d.code == paged_renderer::diagnostics::DiagnosticCode::OversetTextDropped);
+    assert!(!overset, "the exported chain holds the whole story");
+    let id = body_story();
+    let on_page_3 = built
+        .story_layout(&id)
+        .iter()
+        .filter(|l| l.page_id == built.pages[2].id)
+        .count();
+    assert_eq!(on_page_3, 14);
+}

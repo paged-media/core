@@ -42,7 +42,7 @@ paged-model = { path = "../paged-model" }
 # `paged-mutate` out of this tree, and therefore out of the read-only
 # viewer SDK built on it (the publish workflow's subset audit).
 paged-wire = { path = "../paged-wire", default-features = false }
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "1aad63631bd0a2a52e0ab25e6f6ad4818282d99e" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "d89232dcf53e67f9c14a514c7a5d44fb3d82f4e9" }
 paged-scene = { path = "../paged-scene" }
 paged-flow = { path = "../paged-flow" }
 paged-text = { path = "../paged-text" }
@@ -52,7 +52,7 @@ paged-gpu = { path = "../paged-gpu", default-features = false }
 # W3.B2 — IDML save-back, used by the `paged-inspect --roundtrip`
 # conformance hook. Lightweight (idml-import + paged-scene + zip +
 # quick-xml, all already in the dep graph), no native-only deps.
-idml-export = { git = "https://github.com/paged-media/plugin-publish", rev = "1aad63631bd0a2a52e0ab25e6f6ad4818282d99e" }
+idml-export = { git = "https://github.com/paged-media/plugin-publish", rev = "d89232dcf53e67f9c14a514c7a5d44fb3d82f4e9" }
 # W4.14 — the operation surface, used by the `paged-inspect
 # --mutate-roundtrip` conformance hook (the bin applies one typed
 # Operation, saves, and re-verifies it survived). paged-mutate carries

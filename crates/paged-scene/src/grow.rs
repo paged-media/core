@@ -30,7 +30,8 @@
 //! COPY of the document with them materialised; the document itself (what
 //! is saved, what undo records) never holds them. Their ids are stable, from
 //! the story id and the page's ordinal, so selections and caches survive a
-//! regrow.
+//! regrow, and they are XML names (`u1_grow2_page`), because an IDML export
+//! writes them as `Self` attributes and part file names.
 
 use std::collections::HashMap;
 
@@ -44,17 +45,17 @@ pub const DEFAULT_MARGIN_PT: f32 = 36.0;
 
 /// The id of the `k`-th (1-based) generated page of `story`.
 pub fn generated_page_id(story: &str, k: u32) -> String {
-    format!("{story}~grow{k}~page")
+    format!("{story}_grow{k}_page")
 }
 
 /// The id of the `k`-th (1-based) generated text frame of `story`.
 pub fn generated_frame_id(story: &str, k: u32) -> String {
-    format!("{story}~grow{k}~frame")
+    format!("{story}_grow{k}_frame")
 }
 
 /// The id of the spread holding the `k`-th generated page of `story`.
 pub fn generated_spread_id(story: &str, k: u32) -> String {
-    format!("{story}~grow{k}~spread")
+    format!("{story}_grow{k}_spread")
 }
 
 impl Document {
@@ -222,7 +223,7 @@ mod tests {
 
     #[test]
     fn ids_are_stable_and_distinct() {
-        assert_eq!(generated_page_id("u1", 2), "u1~grow2~page");
+        assert_eq!(generated_page_id("u1", 2), "u1_grow2_page");
         assert_ne!(generated_frame_id("u1", 1), generated_frame_id("u1", 2));
         assert_ne!(generated_spread_id("u1", 1), generated_page_id("u1", 1));
     }

@@ -4348,7 +4348,14 @@ impl CanvasModel {
                     .or_insert(h);
             }
         }
-        let mut scene = self.scene.clone();
+        // ADR 026 — generated pages are derived, so the model never holds
+        // them; the export writes them as REAL pages (InDesign does the
+        // same when it reflows): the counts the last build settled on.
+        let mut scene = if self.scene.growing_stories().is_empty() {
+            self.scene.clone()
+        } else {
+            self.scene.with_generated_pages(&self.grow_hint.borrow())
+        };
         if heights.is_empty() {
             return scene;
         }

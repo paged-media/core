@@ -23,7 +23,7 @@ default = []
 gpu = ["paged-gpu/vello-backend", "dep:paged-gpu", "dep:wasm-bindgen-futures"]
 
 [dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "1aad63631bd0a2a52e0ab25e6f6ad4818282d99e" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "d89232dcf53e67f9c14a514c7a5d44fb3d82f4e9" }
 # default-features = false drops `cpu` (= paged-gpu/cpu = tiny-skia).
 # `build_document` is not cpu-gated, so parse + layout still work; only
 # the legacy CPU rasterizer is excluded.

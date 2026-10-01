@@ -14,7 +14,7 @@
 //
 // Inputs: PAGED_REFLOW_IDML, PAGED_REFLOW_JSON, PAGED_REFLOW_PDF,
 // PAGED_REFLOW_LIMIT ("true" = limit to primary text frames),
-// PAGED_REFLOW_EDIT ("grow" | "shrink"), PAGED_REFLOW_PHASE.
+// PAGED_REFLOW_EDIT ("grow" | "shrink" | "none"), PAGED_REFLOW_PHASE.
 
 (function () {
     function q(s) {
@@ -87,6 +87,13 @@
         }
         var before = report(doc, body, "before");
 
+        // "none": open and measure only (e.g. an engine EXPORT, to see that
+        // InDesign reads its pages and threads as written).
+        if (edit === "none") {
+            app.insertLabel("paged.reflow.before",
+                '"limit_to_master_text_frames":' + limit + ',"edit":' + q(edit) + "," + before);
+            return;
+        }
         var tp = doc.textPreferences;
         tp.smartTextReflow = true;
         tp.addPages = AddPageOptions.END_OF_STORY;
