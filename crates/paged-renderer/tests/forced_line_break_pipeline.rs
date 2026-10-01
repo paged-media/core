@@ -17,12 +17,10 @@
 //! its PDF export of the same file (`corpus/generated/forced-line-break.pdf`,
 //! 2026-10-01).
 //!
-//! The IDML importer folds U+2028 into `\n` (it lives in plugin-publish),
-//! which makes a forced line break indistinguishable from a paragraph
-//! mark. A plugin that inserts U+2028 through `insertText` keeps it, so
-//! the model is put back in that state here: every interior `\n` of a
-//! body story becomes U+2028 again (each fixture paragraph is its own
-//! `<ParagraphStyleRange>`, so an interior break is never a mark).
+//! The IDML importer (plugin-publish `idml-import`) keeps U+2028 in the
+//! run, as InDesign spells it inside `<Content>`, so the fixture goes
+//! through the real import path: no body story may carry a `\n`, which
+//! the engine would read as a paragraph mark.
 
 use paged_gen::samples::forced_line_break::{body_story_id, cases, frame_origin, FRAME_W};
 use paged_renderer::{pipeline, PipelineOptions};
@@ -70,19 +68,24 @@ fn inter_font() -> Vec<u8> {
 fn forced_line_breaks_land_where_indesign_puts_them() {
     let bytes =
         paged_gen::write_idml(&paged_gen::samples::forced_line_break::build()).expect("idml");
-    let mut doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
     let bodies: Vec<String> = (0..cases().len() as u32).map(body_story_id).collect();
-    for s in doc
-        .stories
-        .iter_mut()
-        .filter(|s| bodies.contains(&s.self_id))
-    {
-        for para in &mut s.story.paragraphs {
-            for run in &mut para.runs {
-                run.text = run.text.replace('\n', "\u{2028}");
-            }
+    let mut breaks = 0;
+    for s in doc.stories.iter().filter(|s| bodies.contains(&s.self_id)) {
+        for run in s.story.paragraphs.iter().flat_map(|p| &p.runs) {
+            assert!(
+                !run.text.contains('\n'),
+                "{}: the importer turned a forced line break into a paragraph mark: {:?}",
+                s.self_id,
+                run.text
+            );
+            breaks += run.text.matches('\u{2028}').count();
         }
     }
+    assert!(
+        breaks >= 7,
+        "the fixture's forced line breaks reach the model ({breaks})"
+    );
     let font = inter_font();
     let opts = PipelineOptions {
         font: Some(&font),

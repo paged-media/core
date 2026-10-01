@@ -55,6 +55,15 @@
       "report": "/tmp/idml-generated-diff/footnotes/report.json"
     },
     {
+      "name": "forced-line-break",
+      "idml": "forced-line-break.idml",
+      "pdf": "forced-line-break.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/forced-line-break",
+      "report": "/tmp/idml-generated-diff/forced-line-break/report.json"
+    },
+    {
       "name": "geometry",
       "idml": "geometry.idml",
       "pdf": "geometry.pdf",

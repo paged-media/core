@@ -355,6 +355,14 @@
       "max_p99_de": 0.3,
       "min_ssim": 0.983,
       "rationale": "Added 2026-10-01 with ADR 028 (the break-before rule, StartParagraph). Ten cases, each one story threaded through a four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page; the reference is InDesign 2025's own export, and where each case's rule paragraph lands matches it (also pinned structurally by crates/paged-renderer/tests/start_paragraph_pipeline.rs). Worst page measured: mean 0.130 / p99 0.0 / ssim 0.9884; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by start-paragraph.fonts.sh."
+    },
+    {
+      "name": "forced-line-break",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.709,
+      "max_p99_de": 15.13,
+      "min_ssim": 0.942,
+      "rationale": "Added 2026-10-01 with the forced line break (U+2028, core ab383b1). Seven cases on one page (indent + spacing, bullets, numbers, two breaks in a row, a break that ends the paragraph, justified, a break that starts it); the reference is InDesign 2025's own export, and every line of every case lands where InDesign put it (also pinned structurally by crates/paged-renderer/tests/forced_line_break_pipeline.rs). It could join only once the importer kept U+2028 in the run (plugin-publish 18d0622): while it folded the break into \\n the gate rendered every break as a paragraph mark and measured mean 0.757 / p99 26.6. Worst page measured: mean 0.591 / p99 12.611 / ssim 0.9470; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the forced break: in the bullets and numbers cases the text after the list marker starts at the wrong x (the engine puts a space after an undeclared BulletsTextAfter where InDesign's default is a tab, and the number's tab lands at 108 pt, the next 36 pt default stop, instead of the hanging indent's left indent at 90 pt); with those two frames masked the page measures mean 0.387. Tighten when that is fixed. Body copy is Inter, registered by forced-line-break.fonts.sh."
     }
   ]
 }
