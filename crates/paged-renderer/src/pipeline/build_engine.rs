@@ -5463,6 +5463,56 @@ pub(super) fn emit_paragraph_into_chain(
         }
     }
 
+    // Tabs: let the composer set each tab at its stop while it breaks,
+    // so a line is measured at the width its tabs actually take. The
+    // stops are frame-relative, so it needs every line's start x — the
+    // same shifts applied after layout below. Right / centre aligned
+    // paragraphs keep the old order (break, align, then snap): the
+    // measured rules cover ragged-left and justified text only.
+    if matches!(
+        lopts.alignment,
+        paged_text::Alignment::Left | paged_text::Alignment::Justify
+    ) && styled_runs_ref.iter().any(|r| r.text.contains('\t'))
+    {
+        let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        let left_64 = to_64(left_indent_pt);
+        let first_64 = to_64(resolved_paragraph.first_line_indent.unwrap_or(0.0));
+        let (cap_lines, cap_64) = drop_cap_spec_emit
+            .as_ref()
+            .map(|(_, spec, _, _, _, _, _)| {
+                (
+                    spec.lines as usize,
+                    spec.glyph_advance
+                        .saturating_add(spec.gutter)
+                        .saturating_sub(spec.ink_left),
+                )
+            })
+            .unwrap_or((0, 0));
+        let n = line_x_shifts_64.len().max(cap_lines + 1).max(2);
+        let line_starts_64 = (0..n)
+            .map(|i| {
+                let shift = if line_x_shifts_64.is_empty() {
+                    0
+                } else {
+                    line_x_shifts_64[i.min(line_x_shifts_64.len() - 1)]
+                };
+                left_64
+                    + if i == 0 { first_64 } else { 0 }
+                    + if i < cap_lines { cap_64 } else { 0 }
+                    + shift
+            })
+            .collect();
+        lopts.tabs = Some(paged_text::layout::TabLayout {
+            stops: paragraph_tab_stops(
+                &resolved_paragraph,
+                left_indent_pt,
+                resolved_paragraph.first_line_indent.unwrap_or(0.0),
+            ),
+            default_stop_pt: 36.0,
+            line_starts_64,
+        });
+    }
+
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
     // Optical margin alignment: when the story carries

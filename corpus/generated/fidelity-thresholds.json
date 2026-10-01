@@ -379,6 +379,14 @@
       "max_p99_de": 0.3,
       "min_ssim": 0.978,
       "rationale": "Added 2026-10-01 with span and split columns (SpanColumnType, SpanSplitColumnCount, SpanColumnMinSpaceBefore/After, SplitColumnInsideGutter/OutsideGutter). Seventeen cases, one per page, each one story threaded through two frames (spans in 2- and 3-column frames: at the story's start, mid-story, over 2 of 3 columns with overflow into the third column and frame B, with min space and SpaceBefore/After in both orders, with no room left, centred; splits into 2 and 3 in a 1-column frame and inside one column of a 2-column frame, with default and explicit gutters, min space, a paragraph straddling the split, and a block crossing into frame B). The reference is InDesign 2025's own export, and all 256 lines land where InDesign put them, within 0.13 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.203 / p99 0.210 / ssim 0.9830; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by span-columns.fonts.sh."
+    },
+    {
+      "name": "tab-breaks",
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.484,
+      "max_p99_de": 15.81,
+      "min_ssim": 0.979,
+      "rationale": "Added 2026-10-01 to ask InDesign where a line breaks when a tab decides it (core: the composer measures each tab at the width it takes on its line, paged_text::layout::tab_aware_breaks). Page 1: fourteen cases with a tab near the right edge of a 200 pt frame (a left stop the next word no longer fits after, a stop the word after the tab cannot fit at, default and explicit stops exceeding the measure, right/decimal/center stops near the edge, a tab past the last explicit stop, a stop beyond the frame, justified text with a tab). Page 2: Left/Right/Center/Decimal minimum-width sweeps and edge probes. The reference is InDesign 20.0.1's own export; every asserted word sits on InDesign's line within 0.5 pt (pinned structurally by crates/paged-renderer/tests/tab_breaks_pipeline.rs). Before the change the pages measured mean 0.801 / p99 28.53 / ssim 0.9625 (page 1) and 0.476 / 14.53 / 0.9820 (page 2); after, worst page mean 0.403 / p99 13.177 / ssim 0.9842; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the tab rule: c09's tab-free last line (InDesign sets its spaces at 70 %, below the 80 % minimum, to keep one word the engine wraps) and two edge probes InDesign keeps on the line by squeezing a 0.1 pt overflow. Frames carry no stroke: InDesign insets a frame's text by half a centre-aligned stroke. Body copy is Inter, registered by tab-breaks.fonts.sh."
     }
   ]
 }

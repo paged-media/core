@@ -346,6 +346,7 @@ mod tests {
             alignment: paged_text::Alignment::Left,
             leading_override: None,
             justify_last_line: false,
+            tabs: None,
         };
         layout_paragraph(text, &shaper, &opts)
     }

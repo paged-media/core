@@ -289,6 +289,15 @@
       "report": "/tmp/idml-generated-diff/swatches/report.json"
     },
     {
+      "name": "tab-breaks",
+      "idml": "tab-breaks.idml",
+      "pdf": "tab-breaks.pdf",
+      "pages": 2,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/tab-breaks",
+      "report": "/tmp/idml-generated-diff/tab-breaks/report.json"
+    },
+    {
       "name": "tables",
       "idml": "tables.idml",
       "pdf": "tables.pdf",

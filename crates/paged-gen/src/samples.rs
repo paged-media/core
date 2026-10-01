@@ -48,6 +48,7 @@ pub mod start_paragraph;
 pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
+pub mod tab_breaks;
 pub mod tables;
 pub mod tables_overset;
 pub mod text;
@@ -111,6 +112,7 @@ pub const SAMPLES: &[&str] = &[
     "span-columns",
     "forced-line-break",
     "list-markers",
+    "tab-breaks",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -161,6 +163,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "span-columns" => span_columns::build(),
         "forced-line-break" => forced_line_break::build(),
         "list-markers" => list_markers::build(),
+        "tab-breaks" => tab_breaks::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -196,7 +199,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            45,
+            46,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

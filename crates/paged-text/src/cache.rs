@@ -288,7 +288,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   vertical_scale_pct, skew_deg, fallback-face count (not contents —
 ///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height, first_baseline,
-///   leading_override.
+///   leading_override, justify_last_line, and the tab layout (stops,
+///   default grid, line starts).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce.
@@ -358,6 +359,25 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_optional_i32(options.leading_override);
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
+    match &options.tabs {
+        Some(t) => {
+            h.add_bool(true);
+            h.add_f32(t.default_stop_pt);
+            h.add_u32(t.stops.len() as u32);
+            for stop in &t.stops {
+                h.add_f32(stop.position_pt);
+                h.add_u32(stop.alignment as u32);
+                h.add_u32(stop.alignment_character as u32);
+                // Leaders are drawn after composing; they never move a
+                // break, so they stay out of the key.
+            }
+            h.add_u32(t.line_starts_64.len() as u32);
+            for x in &t.line_starts_64 {
+                h.add_i32(*x);
+            }
+        }
+        None => h.add_bool(false),
+    }
     fold_compose_options(h, &options.compose);
 }
 
