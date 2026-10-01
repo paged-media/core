@@ -112,11 +112,12 @@ jobs:
         run: bash scripts/regen-fixtures.sh
 
       - name: nextest (workspace) → JUnit
-        # Red results must still publish (the state matrix wants the ✗),
-        # so don't let a test failure abort before the JUnit emits.
         # nextest writes target/nextest/ci/junit.xml when [profile.ci]
-        # carries `junit.path` (see .config/nextest.toml).
-        run: cargo nextest run --workspace --profile ci || true
+        # carries `junit.path` (see .config/nextest.toml). A red run must
+        # still publish its ✗ (cockpit reads the `nextest-junit` artifact),
+        # and it does: the upload below runs `if: !cancelled()`. So the job
+        # FAILS on a failing test instead of `|| true` reporting green.
+        run: cargo nextest run --workspace --profile ci --no-fail-fast
 
       - name: upload JUnit artifact
         if: ${{ !cancelled() }}
