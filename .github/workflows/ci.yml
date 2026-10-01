@@ -111,6 +111,13 @@ jobs:
       - name: regenerate fixtures
         run: bash scripts/regen-fixtures.sh
 
+      # …and the same gitignored CMYK profile. Without it
+      # paged-canvas/tests/render_effect_sweep.rs panics reading
+      # corpus/profiles/default_cmyk.icc. That went unseen while this step
+      # ran `|| true`; the `test` job above always fetched it.
+      - name: fetch CMYK profile for the colour tests
+        run: bash scripts/fetch-profiles.sh || echo "::warning title=colour tests degraded::profile fetch failed — colour tests will skip this run"
+
       - name: nextest (workspace) → JUnit
         # nextest writes target/nextest/ci/junit.xml when [profile.ci]
         # carries `junit.path` (see .config/nextest.toml). A red run must
