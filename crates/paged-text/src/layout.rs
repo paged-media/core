@@ -161,6 +161,10 @@ pub struct LayoutOptions<'a> {
     /// (auto leading). Mirrors IDML's explicit `Leading` attribute on
     /// the leading run of a paragraph.
     pub leading_override: Option<i32>,
+    /// Justify the LAST line too, under [`Alignment::Justify`]. InDesign
+    /// does for a line ending in a forced line break (U+2028): it ends
+    /// the line, not the paragraph, so the line keeps full measure.
+    pub justify_last_line: bool,
 }
 
 impl LayoutOptions<'_> {
@@ -176,6 +180,7 @@ impl LayoutOptions<'_> {
             first_baseline,
             leading_override: None,
             alignment: Alignment::Left,
+            justify_last_line: false,
         }
     }
 }
@@ -223,7 +228,7 @@ pub fn layout_paragraph<S: TextShaper>(
             shaped.total_advance,
             options.column_width(),
             options.alignment,
-            is_last,
+            is_last && !options.justify_last_line,
             text.as_bytes(),
         );
         lines.push(LaidOutLine {
@@ -1014,7 +1019,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             natural_width,
             line_column,
             options.alignment,
-            i == last_break,
+            i == last_break && !options.justify_last_line,
             bytes,
         );
         // Per-line line-height: explicit `leading_override` wins
@@ -1660,6 +1665,7 @@ mod tests {
             first_baseline: 15,
             alignment,
             leading_override: None,
+            justify_last_line: false,
         }
     }
 

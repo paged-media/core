@@ -3194,6 +3194,59 @@ pub(super) struct StoryEmitter<'a> {
     pub(super) force_overset: bool,
     /// The current top-level paragraph's `StartParagraph` (ADR 028).
     pub(super) start_rule: paged_model::StartParagraph,
+    /// The split segment of the current paragraph being emitted.
+    pub(super) segment: SegmentState,
+}
+
+/// Where the paragraph piece being emitted sits in its paragraph (see
+/// [`super::geom::BreakSegment`]). An unsplit paragraph is one segment
+/// that opens and closes it at byte 0, line 0.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SegmentState {
+    /// `false` after a forced line break: no first-line indent, space
+    /// before, rule above or list marker — those belong to the
+    /// paragraph's first line.
+    pub(super) opens_paragraph: bool,
+    /// `false` before a forced line break: no space after or rule below.
+    pub(super) closes_paragraph: bool,
+    /// Added to the segment's line bytes and line indices so its
+    /// `LineLayout`s address the whole paragraph.
+    pub(super) byte_base: u32,
+    pub(super) line_base: u32,
+    /// Lines the segment has laid out so far (the next segment's base).
+    pub(super) lines: u32,
+}
+
+impl Default for SegmentState {
+    fn default() -> Self {
+        Self {
+            opens_paragraph: true,
+            closes_paragraph: true,
+            byte_base: 0,
+            line_base: 0,
+            lines: 0,
+        }
+    }
+}
+
+impl SegmentState {
+    /// Drop the paragraph-boundary attributes a segment inside a
+    /// paragraph doesn't own.
+    fn mask(
+        &self,
+        mut attrs: paged_scene::ResolvedParagraphAttrs,
+    ) -> paged_scene::ResolvedParagraphAttrs {
+        if !self.opens_paragraph {
+            attrs.first_line_indent = None;
+            attrs.space_before = None;
+            attrs.rule_above.on = Some(false);
+        }
+        if !self.closes_paragraph {
+            attrs.space_after = None;
+            attrs.rule_below.on = Some(false);
+        }
+        attrs
+    }
 }
 
 impl<'a> StoryEmitter<'a> {
@@ -3329,6 +3382,7 @@ impl<'a> StoryEmitter<'a> {
             running_headers: None,
             force_overset: false,
             start_rule: paged_model::StartParagraph::Anywhere,
+            segment: SegmentState::default(),
         }
     }
 
@@ -4168,10 +4222,29 @@ pub(super) fn emit_paragraph_into_chain(
     // required. Sub-paragraphs inherit the parent's style; only
     // SpaceBefore is suppressed for the second-and-later segments
     // so consecutive bullet rows don't accumulate extra leading.
-    if paragraph.runs.iter().any(|r| r.text.contains('\n')) {
-        for sub in split_paragraph_at_breaks(paragraph) {
-            emit_paragraph_into_chain(em, &sub, pages, total_stats);
+    //
+    // A forced line break (U+2028) splits the same way, but its pieces
+    // stay lines of ONE paragraph: `SegmentState` withholds what only
+    // the paragraph's first / last line carries, and keeps the lines'
+    // bytes and indices paragraph-wide.
+    if paragraph
+        .runs
+        .iter()
+        .any(|r| r.text.contains(['\n', super::geom::FORCED_LINE_BREAK]))
+    {
+        let mut line_base = 0;
+        for seg in split_paragraph_into_segments(paragraph) {
+            em.segment = SegmentState {
+                opens_paragraph: seg.opens_paragraph,
+                closes_paragraph: seg.closes_paragraph,
+                byte_base: seg.byte_base,
+                line_base,
+                lines: 0,
+            };
+            emit_paragraph_into_chain(em, &seg.paragraph, pages, total_stats);
+            line_base += em.segment.lines;
         }
+        em.segment = SegmentState::default();
         return;
     }
 
@@ -4220,7 +4293,9 @@ pub(super) fn emit_paragraph_into_chain(
         .iter()
         .any(|r| !r.text.is_empty() && r.text != "\n");
     if !runs_have_text {
-        let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+        let resolved_paragraph = em
+            .segment
+            .mask(em.document.resolved_paragraph_attrs(paragraph));
         // Prefer the synthetic zero-text run's resolved PointSize when
         // present (the split function plants it on every empty
         // sub-paragraph so the leading reflects the surrounding text
@@ -4281,7 +4356,9 @@ pub(super) fn emit_paragraph_into_chain(
                 para_pt,
                 (para_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_metrics,
-                None,
+                // A `LeadingOffset` frame sets its first baseline one
+                // leading down, empty line or not.
+                Some(line_height_64),
             );
         }
         em.y_cursor += space_before_64.round() as i32;
@@ -4312,7 +4389,9 @@ pub(super) fn emit_paragraph_into_chain(
         .iter()
         .map(|r| em.document.resolved_run_attrs(paragraph, r))
         .collect();
-    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+    let resolved_paragraph = em
+        .segment
+        .mask(em.document.resolved_paragraph_attrs(paragraph));
 
     // Resolve every run's font bytes up front so the borrows for
     // `Face` construction below all live in the same scope. Any run
@@ -4473,18 +4552,26 @@ pub(super) fn emit_paragraph_into_chain(
         (Some(id), Some(ledger)) => Some(ledger.borrow().get(id).copied().unwrap_or(0)),
         _ => None,
     };
-    let list_first_text: Option<String> = list_prefix(
-        &resolved_paragraph,
-        &mut em.numbered_counter,
-        &mut em.prev_was_numbered,
-        cross_story_seed,
-    )
-    .and_then(|prefix| {
-        paragraph
-            .runs
-            .first()
-            .map(|r| format!("{prefix}{}", r.text))
-    });
+    // The marker belongs to the paragraph's first line only; a line after
+    // a forced break neither shows one nor advances the counter.
+    let list_first_text: Option<String> = em
+        .segment
+        .opens_paragraph
+        .then(|| {
+            list_prefix(
+                &resolved_paragraph,
+                &mut em.numbered_counter,
+                &mut em.prev_was_numbered,
+                cross_story_seed,
+            )
+        })
+        .flatten()
+        .and_then(|prefix| {
+            paragraph
+                .runs
+                .first()
+                .map(|r| format!("{prefix}{}", r.text))
+        });
     // Save the post-increment counter back to the ledger so the next
     // story sharing this list continues from here. Only writes for a
     // numbered paragraph that actually advanced the counter (the
@@ -4750,6 +4837,7 @@ pub(super) fn emit_paragraph_into_chain(
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
+    lopts.justify_last_line = !em.segment.closes_paragraph;
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
@@ -5830,12 +5918,19 @@ pub(super) fn emit_paragraph_into_chain(
             }
 
             let host_page_id = pages[target_page].id.clone();
+            // A split paragraph's segment reports paragraph-wide bytes and
+            // line indices (zero bases for an unsplit paragraph).
+            let seg = em.segment;
+            for c in &mut clusters {
+                c.byte += seg.byte_base;
+            }
+            em.segment.lines = em.segment.lines.max(current_line_idx as u32 + 1);
             pages[target_page].story_layout.push(LineLayout {
                 story_id: em.current_story_id.clone(),
                 page_id: host_page_id,
                 cell: None,
                 paragraph_idx: em.paragraph_idx,
-                line_idx: current_line_idx as u32,
+                line_idx: seg.line_base + current_line_idx as u32,
                 frame_id: frame.self_id.clone(),
                 baseline_y_pt: text_origin_pt.1 + baseline_pt_local,
                 // Phase 3 first cut: line-height heuristic for ascent
@@ -5843,7 +5938,8 @@ pub(super) fn emit_paragraph_into_chain(
                 // main-thread fast composer.
                 ascent_pt: 0.8 * line_h_pt,
                 descent_pt: 0.2 * line_h_pt,
-                byte_range: line.byte_range.start as u32..line.byte_range.end as u32,
+                byte_range: seg.byte_base + line.byte_range.start as u32
+                    ..seg.byte_base + line.byte_range.end as u32,
                 clusters,
             });
         }

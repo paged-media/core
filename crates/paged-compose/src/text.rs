@@ -345,6 +345,7 @@ mod tests {
             first_baseline: 64 * 10,
             alignment: paged_text::Alignment::Left,
             leading_override: None,
+            justify_last_line: false,
         };
         layout_paragraph(text, &shaper, &opts)
     }

@@ -357,6 +357,7 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_i32(options.first_baseline);
     h.add_optional_i32(options.leading_override);
     h.add_u32(alignment_tag(options.alignment));
+    h.add_bool(options.justify_last_line);
     fold_compose_options(h, &options.compose);
 }
 

@@ -554,13 +554,48 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 /// first so consecutive lines in the same logical paragraph don't
 /// accumulate extra leading. `tab_list` and other paragraph
 /// metadata copy through unchanged.
+///
+/// A [`FORCED_LINE_BREAK`] splits the same way; the segments record it
+/// so the emitter can treat the pieces as lines of ONE paragraph.
+#[cfg(test)]
 pub(super) fn split_paragraph_at_breaks(
     paragraph: &paged_model::Paragraph,
 ) -> Vec<paged_model::Paragraph> {
-    // Walk runs in order; for each run, split text at '\n' and
+    split_paragraph_into_segments(paragraph)
+        .into_iter()
+        .map(|s| s.paragraph)
+        .collect()
+}
+
+/// A forced line break: U+2028, InDesign's Shift+Enter, spelled as the
+/// character itself inside IDML `<Content>`. The line ends but the
+/// paragraph goes on.
+pub(super) const FORCED_LINE_BREAK: char = '\u{2028}';
+
+/// One piece of a paragraph split by [`split_paragraph_into_segments`].
+pub(super) struct BreakSegment {
+    pub paragraph: paged_model::Paragraph,
+    /// Byte offset, in the source paragraph's run text, where this
+    /// segment's text begins — so its lines can report paragraph-local
+    /// bytes like an unsplit paragraph's.
+    pub byte_base: u32,
+    /// `false` when a forced line break precedes the segment: it is the
+    /// same paragraph's next line, not a paragraph of its own.
+    pub opens_paragraph: bool,
+    /// `false` when the segment ends at a forced line break.
+    pub closes_paragraph: bool,
+}
+
+/// [`split_paragraph_at_breaks`], keeping where each piece came from and
+/// whether a `\n` (a paragraph boundary) or a [`FORCED_LINE_BREAK`] (a
+/// line boundary inside one paragraph) delimits it.
+pub(super) fn split_paragraph_into_segments(
+    paragraph: &paged_model::Paragraph,
+) -> Vec<BreakSegment> {
+    // Walk runs in order; for each run, split text at each break and
     // emit the leading segment into the in-progress sub-paragraph,
     // then close the sub-paragraph and start a new one.
-    let mut subs: Vec<paged_model::Paragraph> = Vec::new();
+    let mut subs: Vec<BreakSegment> = Vec::new();
     let mut current = paged_model::Paragraph {
         paragraph_style: paragraph.paragraph_style.clone(),
         justification: paragraph.justification,
@@ -619,187 +654,230 @@ pub(super) fn split_paragraph_at_breaks(
         footnotes: paragraph.footnotes.clone(),
         index_markers: paragraph.index_markers.clone(),
     };
+    let is_break = |c: char| c == '\n' || c == FORCED_LINE_BREAK;
+    // Byte offset of the current run within the paragraph's text, and
+    // where/how the in-progress segment began.
+    let mut pos: usize = 0;
+    let mut current_opens = true;
+    let mut current_base: u32 = 0;
     for run in &paragraph.runs {
-        if !run.text.contains('\n') {
+        if !run.text.contains(is_break) {
             current.runs.push(run.clone());
+            pos += run.text.len();
             continue;
         }
-        let segments: Vec<&str> = run.text.split('\n').collect();
-        for (i, seg) in segments.iter().enumerate() {
+        let mut seg_start = 0;
+        for (i, ch) in run.text.char_indices().filter(|(_, c)| is_break(*c)) {
+            let seg = &run.text[seg_start..i];
             if !seg.is_empty() {
                 let mut copy = run.clone();
-                copy.text = (*seg).to_string();
+                copy.text = seg.to_string();
                 current.runs.push(copy);
             }
-            if i + 1 < segments.len() {
-                // If the about-to-be-closed sub-paragraph has no runs
-                // (the previous segment ended with a `\n` and produced
-                // a paragraph terminator straight away), surface the
-                // run's character attributes via a zero-text run so
-                // the empty-paragraph emit branch can read its
-                // PointSize. Without this, an empty paragraph inside
-                // a 24pt `<Br/><Br/>` falls through to the paragraph
-                // style's PointSize (or the default 12pt), collapsing
-                // the leading from 28.8pt to 14.4pt.
-                if current.runs.is_empty() {
-                    let mut hint = run.clone();
-                    hint.text = String::new();
-                    current.runs.push(hint);
-                }
-                // Close the current sub-paragraph and start a new
-                // one. Discard empty sub-paragraphs (consecutive
-                // `\n`s, common at the end of bullet lists).
-                let mut next = paged_model::Paragraph {
-                    paragraph_style: paragraph.paragraph_style.clone(),
-                    justification: paragraph.justification,
-                    first_line_indent: paragraph.first_line_indent,
-                    // W0.2 — whole-paragraph attributes carry to every
-                    // split sub-paragraph (kinsoku convention).
-                    left_indent: paragraph.left_indent,
-                    right_indent: paragraph.right_indent,
-                    hyphenation: paragraph.hyphenation,
-                    hyphenation_zone: paragraph.hyphenation_zone,
-                    hyphenate_after_first: paragraph.hyphenate_after_first,
-                    hyphenate_before_last: paragraph.hyphenate_before_last,
-                    hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
-                    hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
-                    hyphenate_last_word: paragraph.hyphenate_last_word,
-                    hyphenate_across_columns: paragraph.hyphenate_across_columns,
-                    hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
-                    hyphen_weight: paragraph.hyphen_weight,
-                    keep_lines_together: paragraph.keep_lines_together,
-                    keep_with_next: paragraph.keep_with_next,
-                    start_paragraph: paragraph.start_paragraph,
-                    keep_all_lines_together: paragraph.keep_all_lines_together,
-                    keep_first_lines: paragraph.keep_first_lines,
-                    keep_last_lines: paragraph.keep_last_lines,
-                    rule_above: paragraph.rule_above.clone(),
-                    rule_below: paragraph.rule_below.clone(),
-                    space_before: None,
-                    space_after: None,
-                    tab_list: paragraph.tab_list.clone(),
-                    bullets_list_type: paragraph.bullets_list_type.clone(),
-                    bullet_character: paragraph.bullet_character,
-                    numbering_format: paragraph.numbering_format.clone(),
-                    applied_numbering_list: paragraph.applied_numbering_list.clone(),
-                    // Drop cap + anchored frames are first-paragraph-only;
-                    // sub-paragraphs after a `\n` reset to defaults.
-                    drop_cap_characters: 0,
-                    drop_cap_lines: 0,
-                    drop_cap_detail: 0,
-                    overprint_fill: paragraph.overprint_fill,
-                    overprint_stroke: paragraph.overprint_stroke,
-                    // Kinsoku / Mojikumi apply to the whole paragraph.
-                    kinsoku_set: paragraph.kinsoku_set.clone(),
-                    kinsoku_type: paragraph.kinsoku_type.clone(),
-                    mojikumi_table: paragraph.mojikumi_table.clone(),
-                    mojikumi_set: paragraph.mojikumi_set.clone(),
-                    anchored_frames: Vec::new(),
-                    runs: Vec::new(),
-                    table: None,
-                    // Sub-paragraphs after a `\n` reset markers too
-                    // (matches anchored-frame convention above).
-                    footnotes: Vec::new(),
-                    index_markers: Vec::new(),
-                };
-                std::mem::swap(&mut current, &mut next);
-                // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
-                // patterns mean "advance one line of vertical space".
-                // The emitter renders them as a single line-height
-                // step (no glyphs) so the surrounding text keeps its
-                // visual rhythm.
-                subs.push(next);
+            // If the about-to-be-closed sub-paragraph has no runs
+            // (the previous segment ended with a break and produced
+            // a terminator straight away), surface the run's
+            // character attributes via a zero-text run so the
+            // empty-paragraph emit branch can read its PointSize.
+            // Without this, an empty paragraph inside a 24pt
+            // `<Br/><Br/>` falls through to the paragraph style's
+            // PointSize (or the default 12pt), collapsing the leading
+            // from 28.8pt to 14.4pt.
+            if current.runs.is_empty() {
+                let mut hint = run.clone();
+                hint.text = String::new();
+                current.runs.push(hint);
             }
+            // Close the current sub-paragraph and start a new one.
+            let mut next = paged_model::Paragraph {
+                paragraph_style: paragraph.paragraph_style.clone(),
+                justification: paragraph.justification,
+                first_line_indent: paragraph.first_line_indent,
+                // W0.2 — whole-paragraph attributes carry to every
+                // split sub-paragraph (kinsoku convention).
+                left_indent: paragraph.left_indent,
+                right_indent: paragraph.right_indent,
+                hyphenation: paragraph.hyphenation,
+                hyphenation_zone: paragraph.hyphenation_zone,
+                hyphenate_after_first: paragraph.hyphenate_after_first,
+                hyphenate_before_last: paragraph.hyphenate_before_last,
+                hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
+                hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
+                hyphenate_last_word: paragraph.hyphenate_last_word,
+                hyphenate_across_columns: paragraph.hyphenate_across_columns,
+                hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
+                hyphen_weight: paragraph.hyphen_weight,
+                keep_lines_together: paragraph.keep_lines_together,
+                keep_with_next: paragraph.keep_with_next,
+                start_paragraph: paragraph.start_paragraph,
+                keep_all_lines_together: paragraph.keep_all_lines_together,
+                keep_first_lines: paragraph.keep_first_lines,
+                keep_last_lines: paragraph.keep_last_lines,
+                rule_above: paragraph.rule_above.clone(),
+                rule_below: paragraph.rule_below.clone(),
+                space_before: None,
+                space_after: None,
+                tab_list: paragraph.tab_list.clone(),
+                bullets_list_type: paragraph.bullets_list_type.clone(),
+                bullet_character: paragraph.bullet_character,
+                numbering_format: paragraph.numbering_format.clone(),
+                applied_numbering_list: paragraph.applied_numbering_list.clone(),
+                // Drop cap + anchored frames are first-paragraph-only;
+                // sub-paragraphs after a `\n` reset to defaults.
+                drop_cap_characters: 0,
+                drop_cap_lines: 0,
+                drop_cap_detail: 0,
+                overprint_fill: paragraph.overprint_fill,
+                overprint_stroke: paragraph.overprint_stroke,
+                // Kinsoku / Mojikumi apply to the whole paragraph.
+                kinsoku_set: paragraph.kinsoku_set.clone(),
+                kinsoku_type: paragraph.kinsoku_type.clone(),
+                mojikumi_table: paragraph.mojikumi_table.clone(),
+                mojikumi_set: paragraph.mojikumi_set.clone(),
+                anchored_frames: Vec::new(),
+                runs: Vec::new(),
+                table: None,
+                // Sub-paragraphs after a `\n` reset markers too
+                // (matches anchored-frame convention above).
+                footnotes: Vec::new(),
+                index_markers: Vec::new(),
+            };
+            std::mem::swap(&mut current, &mut next);
+            // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
+            // patterns mean "advance one line of vertical space".
+            // The emitter renders them as a single line-height step
+            // (no glyphs) so the surrounding text keeps its rhythm.
+            subs.push(BreakSegment {
+                paragraph: next,
+                byte_base: current_base,
+                opens_paragraph: current_opens,
+                closes_paragraph: ch == '\n',
+            });
+            current_opens = ch == '\n';
+            seg_start = i + ch.len_utf8();
+            current_base = (pos + seg_start) as u32;
+        }
+        let tail = &run.text[seg_start..];
+        if !tail.is_empty() {
+            let mut copy = run.clone();
+            copy.text = tail.to_string();
+            current.runs.push(copy);
+        }
+        pos += run.text.len();
+    }
+    // A forced line break that ends the paragraph still leaves the empty
+    // line after it (the paragraph mark stands on it), so that segment
+    // stays even with no runs.
+    if current.runs.is_empty() && !current_opens {
+        if let Some(run) = paragraph.runs.last() {
+            let mut hint = run.clone();
+            hint.text = String::new();
+            current.runs.push(hint);
         }
     }
     // Flush the trailing sub-paragraph + propagate the original
     // SpaceAfter so the chain's vertical spacing matches.
     if !current.runs.is_empty() {
         current.space_after = paragraph.space_after;
-        subs.push(current);
+        subs.push(BreakSegment {
+            paragraph: current,
+            byte_base: current_base,
+            opens_paragraph: current_opens,
+            closes_paragraph: true,
+        });
     } else if let Some(last) = subs.last_mut() {
-        last.space_after = paragraph.space_after;
+        last.paragraph.space_after = paragraph.space_after;
     }
     // P-25 guard: drop a trailing sub-paragraph whose every run is
     // empty or `\n`-only. The split loop above already discards the
     // `current` working sub when its runs vec is empty, but a
     // pathological run carrying ONLY `\n` characters in its text
-    // would seed a sub with a zero-text hint run (set at line ~5891)
-    // that has no visible glyphs yet still triggers bullet-marker
-    // emission for NumberedList paragraphs. Drop those at the tail
-    // so the numbering counter doesn't double-fire on the visible
-    // line. Stops short of dropping interior empty sub-paragraphs
-    // because consecutive `<Br/>` pairs intentionally render as
-    // empty vertical-leading slots.
+    // would seed a sub with a zero-text hint run that has no visible
+    // glyphs yet still triggers bullet-marker emission for
+    // NumberedList paragraphs. Drop those at the tail so the
+    // numbering counter doesn't double-fire on the visible line.
+    // Stops short of dropping interior empty sub-paragraphs because
+    // consecutive `<Br/>` pairs intentionally render as empty
+    // vertical-leading slots — and never drops the line a trailing
+    // forced line break leaves.
     while subs.len() > 1
         && subs
             .last()
-            .map(|p| {
-                p.runs
-                    .iter()
-                    .all(|r| r.text.is_empty() || r.text.chars().all(|c| c == '\n'))
+            .map(|s| {
+                s.opens_paragraph
+                    && s.paragraph
+                        .runs
+                        .iter()
+                        .all(|r| r.text.is_empty() || r.text.chars().all(|c| c == '\n'))
             })
             .unwrap_or(false)
     {
         // Carry the dropped tail's space_after over to the new last.
         let dropped = subs.pop().expect("len > 1 just checked");
         if let Some(last) = subs.last_mut() {
-            last.space_after = last.space_after.or(dropped.space_after);
+            last.paragraph.space_after =
+                last.paragraph.space_after.or(dropped.paragraph.space_after);
+            last.closes_paragraph = true;
         }
     }
     if subs.is_empty() {
         // Defensive: the original was all `\n`s. Return a single
         // empty paragraph to keep the upstream loop's stat
         // bookkeeping consistent without rendering anything.
-        subs.push(paged_model::Paragraph {
-            paragraph_style: paragraph.paragraph_style.clone(),
-            justification: paragraph.justification,
-            first_line_indent: paragraph.first_line_indent,
-            // W0.2 — whole-paragraph attributes (carry from source).
-            left_indent: paragraph.left_indent,
-            right_indent: paragraph.right_indent,
-            hyphenation: paragraph.hyphenation,
-            hyphenation_zone: paragraph.hyphenation_zone,
-            hyphenate_after_first: paragraph.hyphenate_after_first,
-            hyphenate_before_last: paragraph.hyphenate_before_last,
-            hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
-            hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
-            hyphenate_last_word: paragraph.hyphenate_last_word,
-            hyphenate_across_columns: paragraph.hyphenate_across_columns,
-            hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
-            hyphen_weight: paragraph.hyphen_weight,
-            keep_lines_together: paragraph.keep_lines_together,
-            keep_with_next: paragraph.keep_with_next,
-            start_paragraph: paragraph.start_paragraph,
-            keep_all_lines_together: paragraph.keep_all_lines_together,
-            keep_first_lines: paragraph.keep_first_lines,
-            keep_last_lines: paragraph.keep_last_lines,
-            rule_above: paragraph.rule_above.clone(),
-            rule_below: paragraph.rule_below.clone(),
-            space_before: paragraph.space_before,
-            space_after: paragraph.space_after,
-            tab_list: paragraph.tab_list.clone(),
-            bullets_list_type: paragraph.bullets_list_type.clone(),
-            bullet_character: paragraph.bullet_character,
-            numbering_format: paragraph.numbering_format.clone(),
-            applied_numbering_list: paragraph.applied_numbering_list.clone(),
-            // All-`\n` source paragraph: defensive placeholder.
-            // Drop cap + anchored frames don't apply to a glyph-less
-            // paragraph; default them.
-            drop_cap_characters: 0,
-            drop_cap_lines: 0,
-            drop_cap_detail: 0,
-            overprint_fill: paragraph.overprint_fill,
-            overprint_stroke: paragraph.overprint_stroke,
-            kinsoku_set: paragraph.kinsoku_set.clone(),
-            kinsoku_type: paragraph.kinsoku_type.clone(),
-            mojikumi_table: paragraph.mojikumi_table.clone(),
-            mojikumi_set: paragraph.mojikumi_set.clone(),
-            anchored_frames: Vec::new(),
-            runs: Vec::new(),
-            table: None,
-            footnotes: Vec::new(),
-            index_markers: Vec::new(),
+        subs.push(BreakSegment {
+            byte_base: 0,
+            opens_paragraph: true,
+            closes_paragraph: true,
+            paragraph: paged_model::Paragraph {
+                paragraph_style: paragraph.paragraph_style.clone(),
+                justification: paragraph.justification,
+                first_line_indent: paragraph.first_line_indent,
+                // W0.2 — whole-paragraph attributes (carry from source).
+                left_indent: paragraph.left_indent,
+                right_indent: paragraph.right_indent,
+                hyphenation: paragraph.hyphenation,
+                hyphenation_zone: paragraph.hyphenation_zone,
+                hyphenate_after_first: paragraph.hyphenate_after_first,
+                hyphenate_before_last: paragraph.hyphenate_before_last,
+                hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
+                hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
+                hyphenate_last_word: paragraph.hyphenate_last_word,
+                hyphenate_across_columns: paragraph.hyphenate_across_columns,
+                hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
+                hyphen_weight: paragraph.hyphen_weight,
+                keep_lines_together: paragraph.keep_lines_together,
+                keep_with_next: paragraph.keep_with_next,
+                start_paragraph: paragraph.start_paragraph,
+                keep_all_lines_together: paragraph.keep_all_lines_together,
+                keep_first_lines: paragraph.keep_first_lines,
+                keep_last_lines: paragraph.keep_last_lines,
+                rule_above: paragraph.rule_above.clone(),
+                rule_below: paragraph.rule_below.clone(),
+                space_before: paragraph.space_before,
+                space_after: paragraph.space_after,
+                tab_list: paragraph.tab_list.clone(),
+                bullets_list_type: paragraph.bullets_list_type.clone(),
+                bullet_character: paragraph.bullet_character,
+                numbering_format: paragraph.numbering_format.clone(),
+                applied_numbering_list: paragraph.applied_numbering_list.clone(),
+                // All-`\n` source paragraph: defensive placeholder.
+                // Drop cap + anchored frames don't apply to a glyph-less
+                // paragraph; default them.
+                drop_cap_characters: 0,
+                drop_cap_lines: 0,
+                drop_cap_detail: 0,
+                overprint_fill: paragraph.overprint_fill,
+                overprint_stroke: paragraph.overprint_stroke,
+                kinsoku_set: paragraph.kinsoku_set.clone(),
+                kinsoku_type: paragraph.kinsoku_type.clone(),
+                mojikumi_table: paragraph.mojikumi_table.clone(),
+                mojikumi_set: paragraph.mojikumi_set.clone(),
+                anchored_frames: Vec::new(),
+                runs: Vec::new(),
+                table: None,
+                footnotes: Vec::new(),
+                index_markers: Vec::new(),
+            },
         });
     }
     subs
