@@ -1,0 +1,19 @@
+Correct commit message (the commit was created with another session's message file by mistake):
+
+pipeline: split blocks end where their settings change, as InDesign does
+
+Consecutive SplitColumns paragraphs were merged into one block on the
+first paragraph's count and gutters. Measured with the new paged-gen
+fixture split-boundaries (24 cases, InDesign 2025 DOM + PDF):
+- a new block starts where SpanSplitColumnCount, the inside gutter or the
+  outside gutter changes; min-space-only differences and spelled-out
+  defaults stay one block; the next block starts directly below the
+  deepest sub-column of the last, balanced on its own.
+- spacing at every split-block boundary = max(SpaceAfter + SpaceBefore,
+  ending block's SpanColumnMinSpaceAfter, starting block's
+  SpanColumnMinSpaceBefore).
+- text balanced above a span that holds a split block is set at the least
+  column height at which it all fits, the split filling its sub-columns
+  to that height.
+tests/span_columns_pipeline.rs pins all 306 lines (within 0.12 pt); the
+fixture joins the fidelity gate (24/24 pages, worst mean dE 0.162).
