@@ -68,7 +68,7 @@ pub struct Para {
 
 /// A paragraph's span/split settings: attributes, and the column count
 /// (InDesign reads `SpanSplitColumnCount` only as a typed property).
-type Spec = (
+pub(crate) type Spec = (
     &'static [(&'static str, &'static str)],
     Option<(&'static str, &'static str)>,
 );
@@ -90,7 +90,7 @@ impl Case {
     }
 }
 
-fn para(text: String, spec: Spec) -> Para {
+pub(crate) fn para(text: String, spec: Spec) -> Para {
     Para {
         text,
         attrs: spec.0.to_vec(),
@@ -101,19 +101,19 @@ fn para(text: String, spec: Spec) -> Para {
     }
 }
 
-fn body(range: std::ops::RangeInclusive<u32>, spec: Spec) -> Vec<Para> {
+pub(crate) fn body(range: std::ops::RangeInclusive<u32>, spec: Spec) -> Vec<Para> {
     range.map(|n| para(format!("P{n:02}"), spec)).collect()
 }
 
-fn heading(spec: Spec) -> Para {
+pub(crate) fn heading(spec: Spec) -> Para {
     para(HEADING.to_string(), spec)
 }
 
-const SINGLE: Spec = (&[], None);
+pub(crate) const SINGLE: Spec = (&[], None);
 
-const SPAN: &[(&str, &str)] = &[("SpanColumnType", "SpanColumns")];
+pub(crate) const SPAN: &[(&str, &str)] = &[("SpanColumnType", "SpanColumns")];
 const SPAN2: Spec = (SPAN, Some(("short", "2")));
-const SPAN_ALL: Spec = (SPAN, Some(("enumeration", "All")));
+pub(crate) const SPAN_ALL: Spec = (SPAN, Some(("enumeration", "All")));
 const SPAN_SPACED: Spec = (
     &[
         ("SpanColumnType", "SpanColumns"),
@@ -148,8 +148,8 @@ const SPAN_CENTRED: Spec = (
     ],
     Some(("enumeration", "All")),
 );
-const SPLIT: &[(&str, &str)] = &[("SpanColumnType", "SplitColumns")];
-const SPLIT2: Spec = (SPLIT, Some(("short", "2")));
+pub(crate) const SPLIT: &[(&str, &str)] = &[("SpanColumnType", "SplitColumns")];
+pub(crate) const SPLIT2: Spec = (SPLIT, Some(("short", "2")));
 const SPLIT2_GUTTERS: Spec = (
     &[
         ("SpanColumnType", "SplitColumns"),
@@ -360,37 +360,53 @@ fn paragraph(p: &Para) -> Paragraph {
 
 /// The body story of case `i` (0-based).
 pub fn body_story_id(i: u32) -> String {
-    self_id(SAMPLE, "BodyStory", i)
+    body_story_id_in(SAMPLE, i)
 }
 
 /// Frame `f` ("A" or "B") of case `i`.
 pub fn frame_id(f: &str, i: u32) -> String {
-    self_id(SAMPLE, &format!("Frame{f}"), i)
+    frame_id_in(SAMPLE, f, i)
+}
+
+/// [`body_story_id`] of a sample built by [`build_cases`].
+pub fn body_story_id_in(sample: &str, i: u32) -> String {
+    self_id(sample, "BodyStory", i)
+}
+
+/// [`frame_id`] of a sample built by [`build_cases`].
+pub fn frame_id_in(sample: &str, f: &str, i: u32) -> String {
+    self_id(sample, &format!("Frame{f}"), i)
 }
 
 /// Build the full `Sample` ready for `write_idml`.
 pub fn build() -> Sample {
+    build_cases(SAMPLE, cases())
+}
+
+/// The `span-columns` page layout (one case per page, frames A and B)
+/// over another sample's cases.
+pub fn build_cases(sample: &str, cases: Vec<Case>) -> Sample {
     let mut spreads = Vec::new();
     let mut stories = Vec::new();
     let mut story_refs = Vec::new();
     let mut spread_refs = Vec::new();
 
-    let master_id = self_id(SAMPLE, "MasterSpread", 0);
+    let master_id = self_id(sample, "MasterSpread", 0);
     let master_spreads = vec![(
         master_id.clone(),
         write_master(&Master {
             self_id: format!("MasterSpread/{master_id}"),
-            page_self_id: self_id(SAMPLE, "MasterPage", 0),
+            page_self_id: self_id(sample, "MasterPage", 0),
             page_width_pt: PAGE_W_PT,
             page_height_pt: PAGE_H_PT,
             page_items: Vec::new(),
         }),
     )];
 
-    for (i, case) in cases().into_iter().enumerate() {
+    for (i, case) in cases.into_iter().enumerate() {
         let seq = i as u32;
-        let label_story_id = self_id(SAMPLE, "LabelStory", seq);
-        let body = body_story_id(seq);
+        let label_story_id = self_id(sample, "LabelStory", seq);
+        let body = body_story_id_in(sample, seq);
 
         stories.push((
             label_story_id.clone(),
@@ -411,8 +427,8 @@ pub fn build() -> Sample {
         ));
         story_refs.push(body.clone());
 
-        let a = frame_id("A", seq);
-        let b = frame_id("B", seq);
+        let a = frame_id_in(sample, "A", seq);
+        let b = frame_id_in(sample, "B", seq);
         let columns = case.columns;
         let width = case.frame_width();
         let frame = |id: &str, y: f32, prev: Option<String>, next: Option<String>| -> PageItem {
@@ -446,7 +462,7 @@ pub fn build() -> Sample {
             .into()
         };
         let label: PageItem = Rect {
-            self_id: self_id(SAMPLE, "LabelFrame", seq),
+            self_id: self_id(sample, "LabelFrame", seq),
             width_pt: 460.0,
             height_pt: 24.0,
             item_transform: translate(36.0, 12.0),
@@ -473,12 +489,12 @@ pub fn build() -> Sample {
             frame(&a, FRAME_A_Y, None, Some(b.clone())),
             frame(&b, FRAME_B_Y, Some(a.clone()), None),
         ];
-        let spread_id = self_id(SAMPLE, "Spread", seq);
+        let spread_id = self_id(sample, "Spread", seq);
         spreads.push((
             spread_id.clone(),
             write_spread(&Spread {
                 self_id: spread_id.clone(),
-                page_self_id: self_id(SAMPLE, "Page", seq),
+                page_self_id: self_id(sample, "Page", seq),
                 page_name: (seq + 1).to_string(),
                 applied_master: format!("MasterSpread/{master_id}"),
                 page_width_pt: PAGE_W_PT,

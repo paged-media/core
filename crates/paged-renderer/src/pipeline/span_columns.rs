@@ -36,10 +36,26 @@
 //!   `(column − 2 × outside − (k − 1) × inside) / k` (InDesign's
 //!   defaults: inside 6, outside 0), balanced by line count (5 lines in
 //!   2 → 3 / 2, 7 in 3 → 3 / 3 / 1; a paragraph may straddle two
-//!   sub-columns). The block sits by the same min-space rules, and the
-//!   next paragraph starts below its deepest sub-column. A block that
-//!   does not fit fills its sub-columns to the bottom and continues,
-//!   balanced again, in the next column or frame.
+//!   sub-columns). The next paragraph starts below its deepest
+//!   sub-column. A block that does not fit fills its sub-columns to the
+//!   bottom and continues, balanced again, in the next column or frame.
+//! - **Block boundaries** (the `split-boundaries` fixture, same day). A
+//!   new block starts where the count or either gutter changes (2 → 3,
+//!   inside 6 → 20, outside 0 → 10); paragraphs that differ only in min
+//!   space, or spell the defaults out, stay one block. The next block
+//!   starts directly below the deepest sub-column of the last, and at
+//!   every boundary between a split paragraph and its neighbour (a
+//!   block, or ordinary text) the spacing is
+//!   `max(SpaceAfter + SpaceBefore, the split side's min space)`: the
+//!   ending block's `SpanColumnMinSpaceAfter`, the starting one's
+//!   `SpanColumnMinSpaceBefore` (after 12 / before 6 → 12, after 6 /
+//!   before 12 → 12, space 4 + 3 → 7, space 4 + 3 with min before 10 →
+//!   10). Inside a block paragraphs are spaced as ever.
+//! - **A split above a span.** When the text balanced above a span holds
+//!   a split block, InDesign sets it at the least column height at which
+//!   all of it fits the spanned columns, a split block filling its
+//!   sub-columns to that height rather than balancing them (P01 and a
+//!   split of four over two columns: P01 / P02 | P03, then P04 over P05).
 //!
 //! The plan is made before the emit from measured line pitches, and is
 //! handed to the emitter as an ordinary region chain (one region per
@@ -188,8 +204,12 @@ struct Slot {
     bottom: f32,
     last: Option<f32>,
     region: Option<usize>,
-    /// One of the band's spanned (group) columns.
+    /// One of the band's spanned (group) columns (a sub-column inherits
+    /// its column's).
     band: bool,
+    /// The paragraph this slot's `Anchor` top follows across a block
+    /// boundary: the first line opening it adds that boundary's spacing.
+    follows: Option<usize>,
 }
 
 impl Slot {
@@ -204,6 +224,7 @@ impl Slot {
             last: None,
             region: None,
             band: true,
+            follows: None,
         }
     }
 }
@@ -224,6 +245,8 @@ pub(super) fn plan(
         cur: None,
         pending: VecDeque::new(),
         band_deepest: None,
+        confined: false,
+        overflow: None,
     };
     p.run();
     p.out
@@ -239,6 +262,11 @@ struct Planner<'a> {
     pending: VecDeque<Slot>,
     /// The deepest baseline in the current band's spanned columns.
     band_deepest: Option<f32>,
+    /// A balancing trial: the slots in hand are all there is (no next
+    /// frame), and split blocks fill their sub-columns to the bottom.
+    confined: bool,
+    /// During a trial, the shallowest baseline that did not fit.
+    overflow: Option<f32>,
 }
 
 /// The line cursor: paragraph, line within it.
@@ -256,6 +284,9 @@ impl<'a> Planner<'a> {
         self.open_frame(0);
         let mut at = At { p: 0, i: 0 };
         while at.p < self.paras.len() {
+            if at.i == 0 && self.at_band_start() && self.balance_above_span(&mut at) {
+                continue;
+            }
             let ok = match self.kind_here(at.p) {
                 Kind::Single => self.single(&mut at),
                 Kind::Span(k) => self.span(&mut at, k.unwrap_or(u32::MAX) as usize),
@@ -298,6 +329,10 @@ impl<'a> Planner<'a> {
             self.cur = Some(s);
             return true;
         }
+        if self.confined {
+            self.cur = None;
+            return false;
+        }
         self.next_frame()
     }
 
@@ -319,19 +354,49 @@ impl<'a> Planner<'a> {
         (self.measure)(width).first_offset
     }
 
-    /// The advance from the previous baseline to line `i` of `p`, when
-    /// both share a slot.
+    /// The split block a paragraph belongs to: its count and gutters
+    /// (InDesign starts a new block when any of them changes, not when
+    /// only the min spaces do). `None` for a paragraph in no block.
+    fn block_key(&self, p: usize) -> Option<Kind> {
+        match self.kind_here(p) {
+            k @ Kind::Split { .. } => Some(k),
+            _ => None,
+        }
+    }
+
+    /// The spacing between paragraph `p - 1` and line `i` of `p`. Where
+    /// a split block begins or ends between them it is the larger of
+    /// `SpaceAfter + SpaceBefore` and the split side's min space.
     fn gap(&self, p: usize, i: usize) -> f32 {
-        if i == 0 && p > 0 {
-            self.paras[p - 1].space_after + self.paras[p].space_before
-        } else {
-            0.0
+        if i != 0 || p == 0 {
+            return 0.0;
+        }
+        let (a, b) = (&self.paras[p - 1], &self.paras[p]);
+        let mut g = a.space_after + b.space_before;
+        let (ka, kb) = (self.block_key(p - 1), self.block_key(p));
+        if ka != kb {
+            if ka.is_some() {
+                g = g.max(a.min_after);
+            }
+            if kb.is_some() {
+                g = g.max(b.min_before);
+            }
+        }
+        g
+    }
+
+    /// The top a slot opens with for line (`p`, `i`): an anchor that
+    /// follows a block boundary takes that boundary's spacing.
+    fn opening_top(&self, slot: &Slot, p: usize, i: usize) -> Top {
+        match (slot.top, slot.follows) {
+            (Top::Anchor(y), Some(_)) => Top::Anchor(y + self.gap(p, i)),
+            (t, _) => t,
         }
     }
 
     /// Where line (`p`, `i`) with leading `lead` would sit in `slot`.
     fn baseline_in(&mut self, slot: &Slot, p: usize, i: usize, lead: f32) -> f32 {
-        match (slot.last, slot.top) {
+        match (slot.last, self.opening_top(slot, p, i)) {
             (Some(y), _) => y + self.gap(p, i) + lead,
             (None, Top::Anchor(y)) => y + lead,
             (None, Top::Frame) => {
@@ -352,11 +417,12 @@ impl<'a> Planner<'a> {
         let region = match slot.region {
             Some(r) => r,
             None => {
+                let top = self.opening_top(slot, p, i);
                 self.out.regions.push(Region {
                     frame: slot.frame,
                     x: slot.x,
                     width: slot.width,
-                    top: slot.top,
+                    top,
                     bottom: slot.bottom,
                 });
                 let r = self.out.regions.len() - 1;
@@ -399,6 +465,7 @@ impl<'a> Planner<'a> {
                 self.cur = Some(slot);
                 return true;
             }
+            self.note_overflow(base);
             if !self.next_slot() {
                 return false;
             }
@@ -411,22 +478,6 @@ impl<'a> Planner<'a> {
 
     /// A run of ordinary paragraphs from `at`.
     fn single(&mut self, at: &mut At) -> bool {
-        // Text above a span is balanced over the spanned columns when
-        // it starts at the top of a band and all of it fits.
-        if at.i == 0 && self.at_band_start() {
-            let mut s = at.p;
-            while s < self.paras.len() && self.kind_here(s) == Kind::Single {
-                s += 1;
-            }
-            if s < self.paras.len() {
-                if let Kind::Span(k) = self.kind_here(s) {
-                    if self.balanced_run(at.p, s, k.unwrap_or(u32::MAX) as usize) {
-                        *at = At { p: s, i: 0 };
-                        return true;
-                    }
-                }
-            }
-        }
         let n = {
             let Some(slot) = self.cur.as_ref() else {
                 return false;
@@ -441,6 +492,125 @@ impl<'a> Planner<'a> {
             return false;
         }
         at.i += 1;
+        true
+    }
+
+    fn note_overflow(&mut self, base: f32) {
+        if self.confined {
+            self.overflow = Some(self.overflow.map_or(base, |o| o.min(base)));
+        }
+    }
+
+    /// Text above a span, from the top of a band, is balanced over the
+    /// spanned columns. `true` when it was (and `at` is the span).
+    fn balance_above_span(&mut self, at: &mut At) -> bool {
+        if self.confined {
+            return false;
+        }
+        let mut s = at.p;
+        let mut split = false;
+        while s < self.paras.len() {
+            match self.kind_here(s) {
+                Kind::Single => {}
+                Kind::Split { .. } => split = true,
+                Kind::Span(_) => break,
+            }
+            s += 1;
+        }
+        let Some(Kind::Span(k)) = (s < self.paras.len()).then(|| self.kind_here(s)) else {
+            return false;
+        };
+        let k = k.unwrap_or(u32::MAX) as usize;
+        let done = if split {
+            self.balanced_by_height(at.p, s, k)
+        } else {
+            self.balanced_run(at.p, s, k)
+        };
+        if done {
+            *at = At { p: s, i: 0 };
+        }
+        done
+    }
+
+    /// [`Self::balanced_run`] for text that holds split blocks: InDesign
+    /// sets it at the least column height at which all of it fits the
+    /// spanned columns, a split block filling its sub-columns to that
+    /// height (measured: 1 line + a split of 4 over 2 columns sets
+    /// P01 / P02 | P03 in the first, P04 over P05 in the second).
+    fn balanced_by_height(&mut self, from: usize, to: usize, k: usize) -> bool {
+        let Some(cur) = self.cur.clone() else {
+            return false;
+        };
+        let f = self.frame;
+        let (band, others): (Vec<Slot>, Vec<Slot>) = {
+            let mut band = vec![cur];
+            let mut others = Vec::new();
+            for slot in &self.pending {
+                if slot.band && slot.frame == f && band.len() < k.max(1) {
+                    band.push(slot.clone());
+                } else {
+                    others.push(slot.clone());
+                }
+            }
+            (band, others)
+        };
+        let saved = (self.out.clone(), self.band_deepest, self.pending.clone());
+        let limit = self.frames[f].height;
+        let first = {
+            let lead = self
+                .leads(band[0].width, from)
+                .first()
+                .copied()
+                .unwrap_or(0.0);
+            self.baseline_in(&band[0], from, 0, lead)
+        };
+        let mut bottom = first;
+        self.confined = true;
+        let placed = loop {
+            if bottom > limit + EPS {
+                break false;
+            }
+            self.out = saved.0.clone();
+            self.band_deepest = saved.1;
+            self.overflow = None;
+            let mut slots: VecDeque<Slot> = band
+                .iter()
+                .map(|s| Slot {
+                    bottom: bottom.min(s.bottom),
+                    ..s.clone()
+                })
+                .collect();
+            self.cur = slots.pop_front();
+            self.pending = slots;
+            let mut at = At { p: from, i: 0 };
+            let mut ok = true;
+            while ok && at.p < to {
+                ok = match self.kind_here(at.p) {
+                    Kind::Split { .. } => self.split(&mut at),
+                    _ => self.single(&mut at),
+                };
+            }
+            if ok {
+                break true;
+            }
+            match self.overflow {
+                Some(o) if o > bottom + EPS => bottom = o,
+                _ => break false,
+            }
+        };
+        self.confined = false;
+        self.overflow = None;
+        if !placed {
+            self.out = saved.0;
+            self.band_deepest = saved.1;
+            self.pending = saved.2;
+            self.cur = band.into_iter().next();
+            return false;
+        }
+        // The band's spanned columns are spent; what is left of the frame
+        // is its other columns, after the span.
+        self.pending = others.into();
+        self.cur = None;
         true
     }
 
@@ -562,6 +732,7 @@ impl<'a> Planner<'a> {
                 last: None,
                 region: None,
                 band: false,
+                follows: None,
             };
             while at.i < n {
                 let lead = self.leads(width, at.p)[at.i];
@@ -614,11 +785,12 @@ impl<'a> Planner<'a> {
 
     /// A block of consecutive split paragraphs from `at`.
     fn split(&mut self, at: &mut At) -> bool {
-        let Kind::Split { k, inside, outside } = self.paras[at.p].kind else {
+        let key = self.block_key(at.p);
+        let Some(Kind::Split { k, inside, outside }) = key else {
             return false;
         };
         let mut end = at.p;
-        while end < self.paras.len() && matches!(self.kind_here(end), Kind::Split { .. }) {
+        while end < self.paras.len() && self.block_key(end) == key {
             end += 1;
         }
         loop {
@@ -631,8 +803,11 @@ impl<'a> Planner<'a> {
                 ((container.width - 2.0 * outside - (k as f32 - 1.0) * inside) / k as f32).max(1.0);
             let first = self.paras[at.p];
             let top = match (container.last, container.top) {
-                (Some(y), _) if at.i == 0 => Top::Anchor(y + first.before_block()),
+                (Some(y), _) if at.i == 0 => Top::Anchor(y + self.gap(at.p, 0)),
                 (Some(y), _) => Top::Anchor(y),
+                (None, Top::Anchor(_)) if at.i == 0 && container.follows.is_some() => {
+                    self.opening_top(&container, at.p, 0)
+                }
                 (None, Top::Anchor(y)) if at.i == 0 => Top::Anchor(y + first.before_block()),
                 (None, t) => t,
             };
@@ -646,7 +821,8 @@ impl<'a> Planner<'a> {
                     bottom: container.bottom,
                     last: None,
                     region: None,
-                    band: false,
+                    band: container.band,
+                    follows: None,
                 })
                 .collect();
             let mut lines: Vec<(usize, usize)> = Vec::new();
@@ -661,7 +837,7 @@ impl<'a> Planner<'a> {
                 return true;
             }
             let per = lines.len().div_ceil(k);
-            let balanced = self.fits_in(&subs, &lines, per);
+            let balanced = !self.confined && self.fits_in(&subs, &lines, per);
             // Balanced when the block fits; else each sub-column to the
             // bottom and the rest in the next column or frame.
             let mut li = 0;
@@ -672,6 +848,7 @@ impl<'a> Planner<'a> {
                     let lead = self.leads(sub_w, p)[i];
                     let base = self.baseline_in(slot, p, i, lead);
                     if base > slot.bottom + EPS {
+                        self.note_overflow(base);
                         break;
                     }
                     self.commit(slot, p, i, base);
@@ -686,21 +863,19 @@ impl<'a> Planner<'a> {
                 }
             }
             if li >= lines.len() {
-                let last = &self.paras[end - 1];
+                // What follows starts below the deepest sub-column, by
+                // the boundary's spacing (`gap`).
                 let deepest = subs
                     .iter()
                     .filter_map(|s| s.last)
                     .fold(f32::NEG_INFINITY, f32::max);
-                let below = deepest + last.after_block();
                 let remainder = Slot {
-                    top: Top::Anchor(below),
+                    top: Top::Anchor(deepest),
                     last: None,
                     region: None,
+                    follows: Some(end - 1),
                     ..container
                 };
-                if remainder.band {
-                    self.band_deepest = Some(self.band_deepest.map_or(deepest, |d| d.max(deepest)));
-                }
                 self.cur = Some(remainder);
                 *at = At { p: end, i: 0 };
                 return true;
@@ -861,5 +1036,121 @@ mod tests {
         assert_eq!(s[18], s[21]);
         // P23 below the deeper sub-column (baseline 48 in frame B).
         assert_eq!(plan.regions[s[22]].top, Top::Anchor(48.0));
+    }
+
+    fn split(k: u32, inside: f32) -> ParaSpec {
+        with(Kind::Split {
+            k,
+            inside,
+            outside: 0.0,
+        })
+    }
+
+    #[test]
+    fn a_new_count_starts_a_new_block_below_the_last() {
+        // P01, four split 2, six split 3, P12 (InDesign: 2 / 2, then
+        // 2 / 2 / 2 directly below, then P12).
+        let mut paras = vec![single(); 12];
+        for p in &mut paras[1..5] {
+            *p = split(2, 20.0);
+        }
+        for p in &mut paras[5..11] {
+            *p = split(3, 5.0);
+        }
+        let plan = plan(&[frame(1)], &paras, &mut one_liners(12));
+        let s = starts(&plan, 12);
+        assert_eq!((s[1], s[3]), (s[2], s[4]));
+        assert_ne!(s[1], s[3]);
+        assert_eq!(&s[5..11], &[s[5], s[5], s[7], s[7], s[9], s[9]]);
+        let b2 = &plan.regions[s[5]];
+        assert_eq!((b2.width, b2.top), (30.0, Top::Anchor(36.0)));
+        assert_eq!(plan.regions[s[9]].x, 70.0);
+        assert_eq!(plan.regions[s[11]].top, Top::Anchor(60.0));
+    }
+
+    #[test]
+    fn a_change_of_min_space_alone_keeps_one_block() {
+        let mut paras = vec![single(); 8];
+        for p in &mut paras[1..4] {
+            *p = split(2, 20.0);
+        }
+        for p in &mut paras[4..7] {
+            *p = ParaSpec {
+                min_before: 6.0,
+                min_after: 12.0,
+                ..split(2, 20.0)
+            };
+        }
+        let plan = plan(&[frame(1)], &paras, &mut one_liners(8));
+        let s = starts(&plan, 8);
+        // Six lines, 3 / 3 (rows 24–48); P08 12 below (the last
+        // paragraph's min space after).
+        assert_eq!(&s[1..7], &[s[1], s[1], s[1], s[4], s[4], s[4]]);
+        assert_ne!(s[1], s[4]);
+        assert_eq!(plan.regions[s[7]].top, Top::Anchor(60.0));
+    }
+
+    #[test]
+    fn block_boundary_spacing_is_the_larger_of_space_and_min_space() {
+        let run = |a: ParaSpec, b: ParaSpec| {
+            let mut paras = vec![single(); 12];
+            for p in &mut paras[1..5] {
+                *p = a;
+            }
+            for p in &mut paras[5..11] {
+                *p = b;
+            }
+            let plan = plan(&[frame(1)], &paras, &mut one_liners(12));
+            plan.regions[plan.starts[&5]].top
+        };
+        let a = |space_after, min_after| ParaSpec {
+            space_after,
+            min_after,
+            ..split(2, 20.0)
+        };
+        let b = |space_before, min_before| ParaSpec {
+            space_before,
+            min_before,
+            ..split(3, 5.0)
+        };
+        // Block one's rows sit at 24 and 36 (36 + the inner space after,
+        // where there is one).
+        assert_eq!(run(a(0.0, 12.0), b(0.0, 6.0)), Top::Anchor(48.0));
+        assert_eq!(run(a(0.0, 6.0), b(0.0, 12.0)), Top::Anchor(48.0));
+        assert_eq!(run(a(4.0, 0.0), b(3.0, 0.0)), Top::Anchor(47.0));
+        assert_eq!(run(a(4.0, 0.0), b(3.0, 10.0)), Top::Anchor(50.0));
+    }
+
+    #[test]
+    fn a_split_above_a_span_fills_to_the_least_height_that_fits() {
+        // P01, four split 2, span, P06–P11 in two columns (InDesign:
+        // P01 / P02 | P03, then P04 over P05; the span below 24).
+        let mut paras = vec![single(); 12];
+        for p in &mut paras[1..5] {
+            *p = split(2, 20.0);
+        }
+        paras[5] = with(Kind::Span(None));
+        let plan = plan(&[frame(2)], &paras, &mut one_liners(12));
+        let s = starts(&plan, 12);
+        assert_ne!(s[1], s[2]);
+        assert_eq!(plan.regions[s[2]].x, 60.0);
+        assert_eq!(s[3], s[4], "P04 and P05 share a sub-column");
+        assert_eq!(plan.regions[s[3]].x, 120.0);
+        assert_eq!(plan.regions[s[5]].top, Top::Anchor(24.0));
+    }
+
+    #[test]
+    fn a_split_above_a_span_that_cannot_balance_flows_on() {
+        // Fifty split lines (25 rows) cannot sit in two 10-row columns:
+        // the block fills column one, then column two, then frame B,
+        // and the span follows it there.
+        let mut paras = vec![split(2, 20.0); 51];
+        paras[50] = with(Kind::Span(None));
+        let plan = plan(&[frame(2), frame(2)], &paras, &mut one_liners(51));
+        let s = starts(&plan, 51);
+        let col2 = &plan.regions[s[20]];
+        assert_eq!((col2.frame, col2.x), (0, 120.0));
+        assert_eq!(plan.regions[s[40]].frame, 1);
+        assert_eq!(plan.regions[s[50]].frame, 1);
     }
 }

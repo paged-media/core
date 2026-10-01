@@ -389,6 +389,14 @@
       "rationale": "Added 2026-10-01 with span and split columns (SpanColumnType, SpanSplitColumnCount, SpanColumnMinSpaceBefore/After, SplitColumnInsideGutter/OutsideGutter). Seventeen cases, one per page, each one story threaded through two frames (spans in 2- and 3-column frames: at the story's start, mid-story, over 2 of 3 columns with overflow into the third column and frame B, with min space and SpaceBefore/After in both orders, with no room left, centred; splits into 2 and 3 in a 1-column frame and inside one column of a 2-column frame, with default and explicit gutters, min space, a paragraph straddling the split, and a block crossing into frame B). The reference is InDesign 2025's own export, and all 256 lines land where InDesign put them, within 0.13 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.203 / p99 0.210 / ssim 0.9830; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by span-columns.fonts.sh."
     },
     {
+      "name": "split-boundaries",
+      "max_pages_with_pdf": 24,
+      "max_mean_de": 0.194,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.98,
+      "rationale": "Added 2026-10-01 with split-block boundaries: where one block of SplitColumns paragraphs ends and the next begins. Twenty-four cases in span-columns' page layout (one story through frames A and B, Inter 10/12, numbered one-line paragraphs): consecutive splits with a different count (2 then 3, 3 then 2), inside gutter, outside gutter, min space only, and spelled-out defaults; a split directly before and after a span; block boundaries across a column, across a frame, and at a full frame; and the spacing at a boundary (min space after vs before, SpaceAfter + SpaceBefore, with and without min space, single text either side). The reference is InDesign 2025's own export, and all 306 lines land where InDesign put them, within 0.12 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.162 / p99 0.000 / ssim 0.9858; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by split-boundaries.fonts.sh."
+    },
+    {
       "name": "tab-breaks",
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.484,

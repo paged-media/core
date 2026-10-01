@@ -45,6 +45,7 @@ pub mod preflight;
 pub mod reflow;
 pub mod showcase_base;
 pub mod span_columns;
+pub mod split_boundaries;
 pub mod start_paragraph;
 pub mod strokes_fills;
 pub mod styles_cascade;
@@ -111,6 +112,7 @@ pub const SAMPLES: &[&str] = &[
     "keeps",
     "start-paragraph",
     "span-columns",
+    "split-boundaries",
     "forced-line-break",
     "list-markers",
     "tab-breaks",
@@ -163,6 +165,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
         "span-columns" => span_columns::build(),
+        "split-boundaries" => split_boundaries::build(),
         "forced-line-break" => forced_line_break::build(),
         "list-markers" => list_markers::build(),
         "tab-breaks" => tab_breaks::build(),
@@ -202,7 +205,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            47,
+            48,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

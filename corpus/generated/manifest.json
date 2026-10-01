@@ -262,6 +262,15 @@
       "report": "/tmp/idml-generated-diff/span-columns/report.json"
     },
     {
+      "name": "split-boundaries",
+      "idml": "split-boundaries.idml",
+      "pdf": "split-boundaries.pdf",
+      "pages": 24,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/split-boundaries",
+      "report": "/tmp/idml-generated-diff/split-boundaries/report.json"
+    },
+    {
       "name": "start-paragraph",
       "idml": "start-paragraph.idml",
       "pdf": "start-paragraph.pdf",
