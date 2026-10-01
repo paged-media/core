@@ -570,6 +570,24 @@ pub struct Page {
     pub show_master_items: Option<bool>,
 }
 
+impl Page {
+    /// A plain page: `bounds` in its own coordinates, no master, no
+    /// transform, master items shown. For native document producers (a
+    /// plugin building a document without IDML); set the rest by field.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Page {
+            self_id: Some(self_id.into()),
+            bounds,
+            applied_master: None,
+            item_transform: None,
+            master_page_transform: None,
+            override_list: Vec::new(),
+            name: None,
+            show_master_items: None,
+        }
+    }
+}
+
 /// `<MarginPreference>` — per-page margin box + column grid. All
 /// distances are in points (IDML's native unit on the spread). The
 /// margins inset the page rectangle; the column grid divides the
@@ -816,6 +834,68 @@ pub struct TextFrame {
     /// at every straight-line corner).
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+}
+
+impl TextFrame {
+    /// An empty, visible text frame with InDesign's defaults (no fill or
+    /// stroke, no insets, default first baseline), `bounds` in its own
+    /// coordinates. For native document producers; set the rest by field.
+    /// `TextFrame` deliberately has no `Default`: a defaulted `visible` would
+    /// be `false`, an invisible frame.
+    pub fn new(self_id: impl Into<String>, parent_story: Option<String>, bounds: Bounds) -> Self {
+        TextFrame {
+            self_id: Some(self_id.into()),
+            parent_story,
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            next_text_frame: None,
+            vertical_justification: None,
+            first_baseline_offset: None,
+            minimum_first_baseline_offset: None,
+            inset_spacing: None,
+            auto_sizing: None,
+            auto_sizing_reference_point: None,
+            minimum_width_for_auto_sizing: None,
+            minimum_height_for_auto_sizing: None,
+            use_minimum_height_for_auto_sizing: None,
+            column_count: None,
+            column_gutter: None,
+            column_balance: None,
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            is_anchored: false,
+            opacity: None,
+            blend_mode: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            applied_toc_style: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+        }
+    }
 }
 
 /// Parsed `<ClippingPathSettings>` for a placed image. Carries the
