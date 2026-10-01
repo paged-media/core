@@ -163,6 +163,12 @@ struct Args {
     /// placeholder visible can opt out via this flag.
     #[arg(long)]
     no_missing_image_placeholder: bool,
+    /// Draw every glyph at the sub-pixel phase poppler's `pdftoppm`
+    /// draws it at (see `RasterOptions::snap_glyph_origins`). The
+    /// fidelity gate (`corpus/generated/render-diff.sh`) passes it,
+    /// because its references are `pdftoppm` renders.
+    #[arg(long)]
+    snap_glyph_origins: bool,
     /// A3/A4 — draw editor-style degraded-asset markers: a pink
     /// highlight behind text whose font was substituted (resolver
     /// catch-all / default-font stand-in) and a stroke-only
@@ -538,6 +544,7 @@ fn main() -> Result<()> {
         collect_breaks: args.emit_breaks.is_some(),
         break_story_filter: args.break_story_id.clone(),
         break_page_range,
+        collect_glyph_runs: args.snap_glyph_origins,
         ..PipelineOptions::default()
     };
     // Explicit for clarity; default already matches.
@@ -601,6 +608,7 @@ fn main() -> Result<()> {
         for (i, page) in built.pages.iter().enumerate() {
             let mut raster_opts = paged_gpu::RasterOptions::new(page.width_pt, page.height_pt);
             raster_opts.dpi = args.dpi;
+            raster_opts.snap_glyph_origins = args.snap_glyph_origins;
             let img = rasterize_with_backend(&args.backend, &page.list, &raster_opts);
             let path = if multi {
                 page_output_path(out, i + 1)

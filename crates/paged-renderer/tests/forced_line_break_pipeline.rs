@@ -51,12 +51,15 @@ const INDESIGN: [&[(f32, f32)]; 7] = [
     &[(72.125, 655.045), (72.125, 667.045)],
 ];
 
-/// InDesign's word box top sits this far above the baseline (Inter 10 pt):
-/// the first baseline of a frame at y=72 is 84, its words' tops 73.045.
-const WORD_TOP_TO_BASELINE: f32 = 10.955;
-/// The PDF's word box starts at the ink, the engine's cluster at the pen.
-const X_TOLERANCE: f32 = 0.6;
-const Y_TOLERANCE: f32 = 0.25;
+/// InDesign's word box top sits this far above the baseline (Inter 10 pt;
+/// poppler's box is the font descriptor's ascent): the body frames carry a
+/// 0.25 pt centre stroke, which insets the text area by 0.125 pt
+/// (`stroke-inset`), so the first baseline of a frame at y=72 is 84.125
+/// and its words' tops 73.045. The word box starts at the pen, so the x
+/// values are the pen's too (72.125 at a frame-edge).
+const WORD_TOP_TO_BASELINE: f32 = 11.08;
+const X_TOLERANCE: f32 = 0.05;
+const Y_TOLERANCE: f32 = 0.05;
 
 fn inter_font() -> Vec<u8> {
     let p =
@@ -130,8 +133,9 @@ fn forced_line_breaks_land_where_indesign_puts_them() {
     assert_eq!(indent[1].byte_range.start, 12);
 
     // The justified case: InDesign sets the line before the forced break
-    // to full measure (its last word ends at 511.875 = the frame's right
-    // edge), and the paragraph's real last line ragged.
+    // to full measure (its last word ends at 511.875 = the text area's
+    // right edge, half the stroke inside the frame's), and the
+    // paragraph's real last line ragged.
     let (fx, _) = frame_origin(5);
     let just = built.story_layout(&body_story_id(5));
     let right = |l: &pipeline::LineLayout| {
@@ -141,7 +145,7 @@ fn forced_line_breaks_land_where_indesign_puts_them() {
             .fold(f32::MIN, f32::max)
     };
     assert!(
-        (right(just[0]) - (fx + FRAME_W)).abs() <= 1.0,
+        (right(just[0]) - (fx + FRAME_W - 0.125)).abs() <= X_TOLERANCE,
         "the line before the break is justified: ends at {}",
         right(just[0])
     );

@@ -1043,6 +1043,29 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
     let backdrop_starts = paged_compose::mask::feather_run_starts(list);
     let mut feather_backdrop: Option<FeatherBackdrop> = None;
 
+    let snapped_glyphs: std::collections::HashSet<usize> = match &list.glyph_runs {
+        Some(table) if options.snap_glyph_origins => table
+            .entries
+            .iter()
+            .filter(|e| !e.is_stroke)
+            .map(|e| e.command_index as usize)
+            .collect(),
+        _ => Default::default(),
+    };
+    let snap = |idx: usize, t: &paged_compose::Transform| -> paged_compose::Transform {
+        if !snapped_glyphs.contains(&idx) {
+            return *t;
+        }
+        // Splash's glyph cache: four horizontal sub-pixel phases, none
+        // vertical (measured against this gate's references: floor to
+        // 1/4 px across and 1 px down beats 1/2 or 1 px across and 1/2,
+        // 1/4 or unsnapped down on every text fixture tried).
+        let mut m = t.0;
+        m[4] = (m[4] * scale * 4.0).floor() / (scale * 4.0);
+        m[5] = (m[5] * scale).floor() / scale;
+        paged_compose::Transform(m)
+    };
+
     for (cmd_idx, cmd) in list.commands.iter().enumerate() {
         if let Some(feather_idx) = backdrop_starts.get(&cmd_idx).copied() {
             feather_backdrop = None;
@@ -1084,6 +1107,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 paint,
                 transform,
             } => {
+                let snapped = snap(cmd_idx, transform);
+                let transform = &snapped;
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
@@ -1127,6 +1152,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 transform,
                 blend_mode,
             } => {
+                let snapped = snap(cmd_idx, transform);
+                let transform = &snapped;
                 let Some(path_data) = list.paths.get(*path_id) else {
                     continue;
                 };
@@ -3968,6 +3995,62 @@ mod tests {
 
     fn at(img: &RgbaImage, x: u32, y: u32) -> [u8; 4] {
         img.get_pixel(x, y).0
+    }
+
+    /// A unit-square "glyph" at `origin`, at 3 pt across, filled black.
+    fn glyph_list(origin: (f32, f32), as_glyph: bool) -> DisplayList {
+        use paged_compose::{DisplayCommand as Cmd, PathData, PathSegment, Transform as XF};
+        let mut list = DisplayList::new();
+        let mut p = PathData::default();
+        p.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+        p.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+        p.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+        p.segments.push(PathSegment::Close);
+        let path_id = list.paths.push_anon(p);
+        let transform = XF([3.0, 0.0, 0.0, 3.0, origin.0, origin.1]);
+        let paint = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
+        list.commands.push(Cmd::FillPath {
+            path_id,
+            paint,
+            transform,
+        });
+        if as_glyph {
+            let mut table = paged_compose::GlyphRunTable::default();
+            table.push(paged_compose::GlyphRunEntry {
+                command_index: 0,
+                font_id: 0,
+                glyph_id: 1,
+                font_size: 3.0,
+                transform,
+                paint,
+                unicode: Some('x'),
+                is_stroke: false,
+            });
+            list.glyph_runs = Some(table);
+        }
+        list
+    }
+
+    // `snap_glyph_origins` draws a glyph where poppler's Splash would:
+    // origin floored to a quarter pixel across and a whole pixel down.
+    // At 144 dpi (2 px/pt) an origin of (10.3, 20.6) pt is (20.6, 41.2)
+    // px, drawn at (20.5, 41) px = (10.25, 20.5) pt.
+    #[test]
+    fn snapped_glyphs_land_on_splash_phase() {
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 144.0;
+        opts.snap_glyph_origins = true;
+        let snapped = rasterize(&glyph_list((10.3, 20.6), true), &opts);
+        let mut plain = opts;
+        plain.snap_glyph_origins = false;
+        let expected = rasterize(&glyph_list((10.25, 20.5), true), &plain);
+        assert_eq!(snapped.as_raw(), expected.as_raw());
+        // Off, and for a path that is not a glyph, nothing moves.
+        let unsnapped = rasterize(&glyph_list((10.3, 20.6), true), &plain);
+        assert_ne!(unsnapped.as_raw(), expected.as_raw());
+        let not_glyph = rasterize(&glyph_list((10.3, 20.6), false), &opts);
+        assert_eq!(not_glyph.as_raw(), unsnapped.as_raw());
     }
 
     #[test]

@@ -48,6 +48,7 @@ pub mod showcase_base;
 pub mod span_columns;
 pub mod split_boundaries;
 pub mod start_paragraph;
+pub mod stroke_inset;
 pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
@@ -119,6 +120,7 @@ pub const SAMPLES: &[&str] = &[
     "tab-breaks",
     "list-overrides",
     "list-marker-styles",
+    "stroke-inset",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -173,6 +175,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "tab-breaks" => tab_breaks::build(),
         "list-overrides" => list_overrides::build(),
         "list-marker-styles" => list_marker_styles::build(),
+        "stroke-inset" => stroke_inset::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -208,7 +211,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            49,
+            50,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

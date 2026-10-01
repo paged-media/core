@@ -20,10 +20,10 @@
 //! cases (a block per distinct count and gutters, and the spacing and
 //! balancing at block boundaries).
 //!
-//! Positions are page points. InDesign insets the text area by half the
-//! frames' 0.25 pt stroke, which the engine does not, so every InDesign
-//! coordinate carries +0.125 pt; the tolerances (0.5 pt across, 0.25 pt
-//! down) absorb it.
+//! Positions are page points. The frames carry a 0.25 pt centre stroke,
+//! which insets the text area by 0.125 pt on every side (`stroke-inset`),
+//! so a frame-edge line sits at x + 0.125 and the first baseline 0.125
+//! lower; the engine models it, and every line must land within 0.05 pt.
 
 use paged_renderer::{pipeline, PipelineOptions};
 
@@ -289,6 +289,8 @@ const INDESIGN: &[(usize, &str, f32, f32, char)] = &[
     (16, "P07", 72.125, 132.125, 'A'),
     (16, "P08", 72.125, 144.125, 'A'),
 ];
+
+const TOLERANCE: f32 = 0.05;
 
 fn inter_font() -> Vec<u8> {
     let p =
@@ -660,7 +662,7 @@ fn check(
             } else {
                 '?'
             };
-            let ok = (x - w.2).abs() <= 0.5 && (y - w.3).abs() <= 0.25 && frame == w.4;
+            let ok = (x - w.2).abs() <= TOLERANCE && (y - w.3).abs() <= TOLERANCE && frame == w.4;
             if !ok {
                 failures += 1;
             }

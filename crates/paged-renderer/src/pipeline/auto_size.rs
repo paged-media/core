@@ -152,7 +152,8 @@ impl<'a> Measurer<'a> {
                 let Some(id) = frame.self_id.as_deref() else {
                     continue;
                 };
-                if let Some(fitted) = self.fit_frame(frame, &obstacles) {
+                let frame = super::text_frame::text_area_frame(frame, self.document);
+                if let Some(fitted) = self.fit_frame(&frame, &obstacles) {
                     out.insert(id.to_string(), fitted);
                 }
             }

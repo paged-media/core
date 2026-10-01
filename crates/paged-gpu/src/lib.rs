@@ -127,6 +127,18 @@ pub struct RasterOptions {
     /// Background fill applied to the whole canvas before any
     /// commands run. Linear RGB, as per display-list convention.
     pub background: Color,
+    /// Place every filled glyph the way poppler's Splash rasteriser
+    /// (`pdftoppm`) does: its origin floored to whole device pixels
+    /// vertically and to quarter pixels horizontally, so a glyph is drawn
+    /// at the same sub-pixel phase as in the reference raster. Only the
+    /// fidelity gate wants this — it compares against `pdftoppm` renders
+    /// of InDesign's PDFs, and without it a layout change below a pixel
+    /// (a 0.125 pt stroke inset at 144 dpi) reads as a regression: the
+    /// reference draws that text exactly where it drew it before, the
+    /// candidate re-samples it a quarter pixel off. Needs the display
+    /// list's glyph-run side channel (`collect_glyph_runs`); a list
+    /// without one is drawn unchanged. CPU backend only.
+    pub snap_glyph_origins: bool,
 }
 
 impl RasterOptions {
@@ -136,6 +148,7 @@ impl RasterOptions {
             page_height_pt,
             dpi: 96.0,
             background: Color::WHITE,
+            snap_glyph_origins: false,
         }
     }
 

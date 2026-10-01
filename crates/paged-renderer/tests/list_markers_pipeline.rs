@@ -28,43 +28,51 @@ use paged_gen::samples::list_markers::{body_story_id, cases, frame_origin};
 use paged_renderer::{pipeline, PipelineOptions};
 
 /// Frame-local pen x of (the case's tag, the word after it) in each of
-/// its two paragraphs, read off `pdftotext -bbox`: word xMin minus the
-/// 0.125 pt every word of this export sits right of its pen (the markers
-/// at x=0 come back at 0.125, the frame-edge words at 72.125). `None` where the tag is not a word of its own:
-/// `^#.` puts no gap after the number, so InDesign's word is `1.c09`.
+/// its two paragraphs, read off `pdftotext -bbox` (word xMin minus the
+/// frame's left edge). The body frames carry a 0.25 pt centre stroke,
+/// which insets the text area by 0.125 pt (`stroke-inset`), so every
+/// position is 0.125 right of where the tab rule alone puts it: a marker
+/// at the text area's left edge comes back at 0.125. `None` where the
+/// tag is not a word of its own: `^#.` puts no gap after the number, so
+/// InDesign's word is `1.c09`.
 const INDESIGN: [[(Option<f32>, f32); 2]; 14] = [
     // c00 bullet, BulletsTextAfter undeclared, hanging 18 → a tab, to 18.
-    [(Some(18.0), 39.14), (Some(18.0), 39.14)],
+    [(Some(18.125), 39.265), (Some(18.125), 39.265)],
     // c01 ^t, hanging 18.
-    [(Some(18.0), 36.9), (Some(18.0), 36.9)],
+    [(Some(18.125), 37.025), (Some(18.125), 37.025)],
     // c02 a space: the bullet's advance plus one space.
-    [(Some(8.437), 29.368), (Some(8.437), 29.368)],
+    [(Some(8.562), 29.493), (Some(8.562), 29.493)],
     // c03 ^t, no indent: the first default stop.
-    [(Some(36.0), 57.01), (Some(36.0), 57.01)],
+    [(Some(36.125), 57.135), (Some(36.125), 57.135)],
     // c04 ^t, left indent 18 with no first-line indent: bullet at 18,
     // text at the default stop 36 (frame-relative, not indent + 36).
-    [(Some(36.0), 57.29), (Some(36.0), 57.29)],
+    [(Some(36.125), 57.415), (Some(36.125), 57.415)],
     // c05 ^t, left 50 first -20: bullet at 30, text at the indent.
-    [(Some(50.0), 70.76), (Some(50.0), 70.76)],
+    [(Some(50.125), 70.885), (Some(50.125), 70.885)],
     // c06 ^t, hanging 50, explicit stop 30: the stop before the indent wins.
-    [(Some(30.0), 51.03), (Some(30.0), 51.03)],
+    [(Some(30.125), 51.155), (Some(30.125), 51.155)],
     // c07 ^t, hanging 30, explicit stop 60: the indent comes first.
-    [(Some(30.0), 50.293), (Some(30.0), 50.293)],
+    [(Some(30.125), 50.418), (Some(30.125), 50.418)],
     // c08 ^#.^t, hanging 18.
-    [(Some(18.0), 39.02), (Some(18.0), 39.02)],
+    [(Some(18.125), 39.145), (Some(18.125), 39.145)],
     // c09 ^#. — no tab; "1." / "2." differ in width.
-    [(None, 27.978), (None, 30.01)],
+    [(None, 28.103), (None, 30.135)],
     // c10 ^#.^t, hanging 50, explicit stop 10: the stop wins.
-    [(Some(10.0), 28.566), (Some(10.0), 28.566)],
+    [(Some(10.125), 28.691), (Some(10.125), 28.691)],
     // c11 ^#.^t, hanging 6, number wider than the indent: default 36.
-    [(Some(36.0), 52.326), (Some(36.0), 52.326)],
+    [(Some(36.125), 52.451), (Some(36.125), 52.451)],
     // c12 no list, "Tab\t", hanging 40: a plain tab stops at the indent too.
-    [(Some(40.0), 58.356), (Some(40.0), 58.356)],
+    [(Some(40.125), 58.481), (Some(40.125), 58.481)],
     // c13 ^t, hanging 18, explicit stop 2 under the bullet: skipped, 18.
-    [(Some(18.0), 36.436), (Some(18.0), 36.436)],
+    [(Some(18.125), 36.561), (Some(18.125), 36.561)],
 ];
 
-const X_TOLERANCE: f32 = 0.5;
+const X_TOLERANCE: f32 = 0.05;
+
+/// Where the `list-overrides` and `list-marker-styles` tables are
+/// measured from: their frames' text area, which half the frames' 0.25 pt
+/// centre stroke insets on every side (`stroke-inset`).
+const TEXT_AREA_INSET: f32 = 0.125;
 
 fn inter_font() -> Vec<u8> {
     let p =
@@ -119,7 +127,8 @@ fn text_after_a_list_marker_starts_where_indesign_puts_it() {
 }
 
 /// `list-overrides`: per case and paragraph, (the tag's pen x, the word's
-/// pen x, the marker's width), frame-local, read off InDesign's export the
+/// pen x, the marker's width), measured from the frame's text area
+/// ([`TEXT_AREA_INSET`] inside its edge), read off InDesign's export the
 /// same way as [`INDESIGN`]. The marker width is the marker word's
 /// `xMax - xMin` — it tells "1." from "5." from "I." (Inter's digits are
 /// proportional), which is how the counter cases are checked. `None`
@@ -224,6 +233,7 @@ fn local_list_overrides_render_where_indesign_puts_them() {
     let mut ok = true;
     for (i, case) in lo::cases().iter().enumerate() {
         let (fx, _) = lo::frame_origin(i as u32);
+        let fx = fx + TEXT_AREA_INSET;
         let lines = built.story_layout(&lo::body_story_id(i as u32));
         assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
         // A marker that ends in neither a tab nor a space glues to the
@@ -276,8 +286,8 @@ fn local_list_overrides_render_where_indesign_puts_them() {
 
 /// One line of `list-marker-styles` as InDesign 20.0.1 exported it
 /// (`corpus/generated/list-marker-styles.pdf`, 2026-10-01), frame-local
-/// pt, every value less the 0.125 pt this export sits right of and below
-/// its pen. `marker` lists the marker's visible glyphs as (char, pen x,
+/// pt measured from the TEXT AREA's corner ([`TEXT_AREA_INSET`] inside
+/// the frame's). `marker` lists the marker's visible glyphs as (char, pen x,
 /// point size, baseline y); the separator is a space or a tab and has no
 /// outline.
 struct Line {
@@ -704,6 +714,7 @@ fn list_marker_character_styles_render_as_indesign_does() {
     let mut ok = true;
     for (i, case) in lms::cases().iter().enumerate() {
         let (fx, fy) = lms::frame_origin(i as u32);
+        let (fx, fy) = (fx + TEXT_AREA_INSET, fy + TEXT_AREA_INSET);
         let lines = built.story_layout(&lms::body_story_id(i as u32));
         assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
         for (line, want) in lines.iter().zip(&INDESIGN_MARKER_STYLES[i]) {

@@ -131,7 +131,7 @@
       "idml": "layout.idml",
       "pdf": "layout.pdf",
       "pages": 11,
-      "passing": 2,
+      "passing": 4,
       "diff_dir": "/tmp/idml-generated-diff/layout",
       "report": "/tmp/idml-generated-diff/layout/report.json"
     },
@@ -289,6 +289,15 @@
       "report": "/tmp/idml-generated-diff/start-paragraph/report.json"
     },
     {
+      "name": "stroke-inset",
+      "idml": "stroke-inset.idml",
+      "pdf": "stroke-inset.pdf",
+      "pages": 2,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/stroke-inset",
+      "report": "/tmp/idml-generated-diff/stroke-inset/report.json"
+    },
+    {
       "name": "strokes-fills",
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",
@@ -329,7 +338,7 @@
       "idml": "tables.idml",
       "pdf": "tables.pdf",
       "pages": 13,
-      "passing": 12,
+      "passing": 13,
       "diff_dir": "/tmp/idml-generated-diff/tables",
       "report": "/tmp/idml-generated-diff/tables/report.json"
     },

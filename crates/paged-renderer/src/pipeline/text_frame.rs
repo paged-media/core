@@ -759,6 +759,82 @@ pub(super) fn pages_overlapping_frame(
     out
 }
 
+/// How far a stroke of `weight` on a text frame pushes the frame's text
+/// in, on every side, for its `StrokeAlignment`.
+///
+/// Measured against InDesign 20.0.1 (the `stroke-inset` fixture,
+/// 2026-10-01; every line read off its DOM): a CENTRE stroke insets the
+/// text by half its weight, an INSIDE stroke by all of it, an OUTSIDE
+/// stroke not at all — on all four sides, so the first baseline moves
+/// down and the last line has that much less room too.
+pub(crate) fn stroke_inset_share(alignment: Option<&str>, weight: f32) -> f32 {
+    match alignment {
+        Some("InsideAlignment") => weight,
+        Some("OutsideAlignment") => 0.0,
+        _ => weight * 0.5,
+    }
+}
+
+/// The stroke's share of a text frame's text inset — zero unless the
+/// stroke is one the frame actually paints. A weight with no colour
+/// (`Swatch/None`) moves nothing; InDesign's default text frame has
+/// exactly that, a 1 pt stroke in None.
+///
+/// Resolved the way `emit_text_frame_into` resolves the stroke it
+/// paints (the frame, then its object style), so the text moves exactly
+/// when a stroke is drawn. A text frame's `StrokeAlignment` does not
+/// reach the model today (the importer reads it on rectangles, ovals and
+/// polygons only), so the frame is both painted and inset as centred.
+pub(crate) fn stroke_text_inset(frame: &TextFrame, document: &Document) -> f32 {
+    let mut resolved = ResolvedFrame::from_text_frame(frame);
+    let style = crate::module::resolve_applied_style(&resolved, document);
+    if let Some(s) = &style {
+        crate::module::object_style_cascade(&mut resolved, s);
+    }
+    let weight = resolved.effective_stroke_weight();
+    if !frame_stroke_is_visible(resolved.stroke_color, weight) {
+        return 0.0;
+    }
+    stroke_inset_share(resolved.stroke_alignment, weight)
+}
+
+/// The frame a story composes into: `frame` with its stroke's share
+/// folded into `InsetSpacing`, so every consumer of the text area —
+/// the column geometry, the first baseline, the bottom-fit check, a
+/// shaped frame's eroded outline, the auto-size fit — sees the one
+/// inset InDesign uses. Borrowed unchanged when the stroke moves
+/// nothing.
+///
+/// Fold once, where a frame ENTERS text layout (the story chain, a
+/// master frame's copy, the auto-size fit): a frame this returns still
+/// carries its stroke, so folding it again would inset twice.
+///
+/// RECTANGULAR frames only, for now. InDesign erodes a shaped frame's
+/// outline by the stroke's share too, on top of its inset (measured on
+/// `stroke-inset`'s chamfered frames, and on `text-in-shape`'s donut,
+/// whose bands InDesign sets at exactly [142, 235] / [359, 453] — the
+/// 4 pt inset plus half the 0.75 pt stroke). Folding it there puts the
+/// engine's bands on InDesign's, but the composer then breaks the donut's
+/// paragraph into much shorter lines than InDesign does at the same
+/// measure (it matched before only because the band was a point wider),
+/// so the shaped case waits for that composer gap; see
+/// `tests/stroke_inset_pipeline.rs::a_stroke_erodes_a_shaped_frame`.
+pub(crate) fn text_area_frame<'f>(
+    frame: &'f TextFrame,
+    document: &Document,
+) -> std::borrow::Cow<'f, TextFrame> {
+    if frame_polygon_spread(frame).is_some() || frame_shape_spread(frame).is_some() {
+        return std::borrow::Cow::Borrowed(frame);
+    }
+    let share = stroke_text_inset(frame, document);
+    if share <= 0.0 {
+        return std::borrow::Cow::Borrowed(frame);
+    }
+    let mut folded = frame.clone();
+    folded.inset_spacing = Some(frame.inset_spacing.unwrap_or([0.0; 4]).map(|v| v + share));
+    std::borrow::Cow::Owned(folded)
+}
+
 pub(super) fn emit_text_frame_into(
     page: &mut BuiltPage,
     frame: &TextFrame,

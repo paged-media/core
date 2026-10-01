@@ -107,6 +107,17 @@ if [ "$SAMPLE_DIR" = "$GENERATED_DIR" ]; then
     PLACEHOLDER_FLAG="--no-missing-image-placeholder"
 fi
 
+# The references are `pdftoppm` renders, and poppler's Splash draws a
+# glyph at its origin FLOORED to whole device pixels vertically and to
+# quarter pixels horizontally (on stroke-inset.pdf at 144 dpi, baselines at
+# 72.125, 72.25 and 648 pt rasterise identically). Draw the candidate's
+# glyphs at that phase too, or a layout change below a pixel reads as a
+# regression: the reference does not move, the candidate blurs.
+SNAP_FLAG=""
+if [ "$SAMPLE_DIR" = "$GENERATED_DIR" ]; then
+    SNAP_FLAG="--snap-glyph-origins"
+fi
+
 (cd "$ROOT" && cargo run -q --release -p paged-renderer --bin paged-inspect -- \
     "$IDML" \
     --render "$OUT/cand.png" \
@@ -114,6 +125,7 @@ fi
     "${FONT_FLAGS[@]}" \
     $LINKS_FLAG \
     $PLACEHOLDER_FLAG \
+    $SNAP_FLAG \
     --dpi "$DPI" >/dev/null)
 
 # `paged-inspect --render out.png` indexes its output ONLY when the

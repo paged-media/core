@@ -1084,6 +1084,18 @@ fn stroke_alignment_offset_outside_returns_negative_half_weight() {
     assert!((stroke_alignment_offset(Some("OutsideAlignment"), 2.0) + 1.0).abs() < 1e-6);
 }
 
+// The text inset a text frame's stroke adds, per alignment, as
+// InDesign 20.0.1 measured it on `stroke-inset` (0.25 / 1 / 6 / 12 pt).
+#[test]
+fn stroke_inset_share_is_half_inside_all_outside_none() {
+    for w in [0.25_f32, 1.0, 6.0, 12.0] {
+        assert_eq!(stroke_inset_share(None, w), w / 2.0);
+        assert_eq!(stroke_inset_share(Some("CenterAlignment"), w), w / 2.0);
+        assert_eq!(stroke_inset_share(Some("InsideAlignment"), w), w);
+        assert_eq!(stroke_inset_share(Some("OutsideAlignment"), w), 0.0);
+    }
+}
+
 #[test]
 fn stroke_alignment_offset_center_and_none_return_zero() {
     assert_eq!(stroke_alignment_offset(Some("CenterAlignment"), 2.0), 0.0);

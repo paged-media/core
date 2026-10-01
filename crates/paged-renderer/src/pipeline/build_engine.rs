@@ -385,6 +385,12 @@ pub(super) fn collect_nested_text_clips(document: &Document) -> NestedTextClips 
 /// expansion below lays the columns out, and the auto-size fitter has
 /// to measure against the same bands or it grows the frame to a height
 /// its own columns never use.
+/// The text area's bottom inset — what a line's baseline must stay
+/// above, measured up from the frame's bottom edge.
+pub(super) fn inset_bottom(f: &TextFrame) -> f32 {
+    f.inset_spacing.map_or(0.0, |i| i[2])
+}
+
 pub(super) fn frame_column_geometry(f: &TextFrame) -> paged_flow::RegionGeometry {
     let [_, inset_left, _, inset_right] = f.inset_spacing.unwrap_or([0.0; 4]);
     paged_flow::RegionGeometry {
@@ -449,7 +455,14 @@ fn expand_column_chain(
             // The band already excludes the horizontal insets, so
             // re-applying them would inset each column twice. The
             // vertical pair still applies to every column.
-            col.inset_spacing = Some([inset_top, 0.0, inset_bottom, 0.0]);
+            // A balanced column's bottom is a cut between two baselines,
+            // already a text-area position: the bottom inset is spent.
+            let bottom_inset = if balanced_bottom.is_some() {
+                0.0
+            } else {
+                inset_bottom
+            };
+            col.inset_spacing = Some([inset_top, 0.0, bottom_inset, 0.0]);
             // A column is not itself columnar — clearing these is what
             // stops a re-entrant expansion.
             col.column_count = None;
@@ -508,7 +521,9 @@ fn plan_span_columns(
     let frames: Vec<FrameSpec> = chain
         .iter()
         .map(|f| FrameSpec {
-            height: f.bounds.height(),
+            // Where the text area ends: a line fits while its baseline
+            // is above it, and the regions below are cut to it.
+            height: f.bounds.height() - inset_bottom(f),
             inset_top: f.inset_spacing.map_or(0.0, |i| i[0]),
             columns: frame_column_geometry(f)
                 .column_boxes()
@@ -543,7 +558,7 @@ fn plan_span_columns(
     let mut widths = Vec::with_capacity(plan.regions.len());
     for r in &plan.regions {
         let f = chain[r.frame];
-        let [inset_top, inset_left, inset_bottom, _] = f.inset_spacing.unwrap_or([0.0; 4]);
+        let [inset_top, inset_left, _, _] = f.inset_spacing.unwrap_or([0.0; 4]);
         let mut region = f.clone();
         let left = f.bounds.left + inset_left + r.x;
         let (top, top_inset) = match r.top {
@@ -556,7 +571,8 @@ fn plan_span_columns(
             top,
             bottom: (f.bounds.top + r.bottom).max(top),
         };
-        region.inset_spacing = Some([top_inset, 0.0, inset_bottom, 0.0]);
+        // The planner's bottoms are text-area positions already.
+        region.inset_spacing = Some([top_inset, 0.0, 0.0, 0.0]);
         if let Top::Anchor(_) = r.top {
             // Mid-frame, the first baseline continues the line grid:
             // one leading below the anchor, which already carries the
@@ -745,6 +761,22 @@ pub(super) fn build_document_inner(
         .iter()
         .map(|(id, fitted)| (id.clone(), fitted.bounds))
         .collect();
+    // Every text frame composes into its TEXT AREA: a stroked frame's
+    // clone carries the stroke's share in its insets (`text_area_frame`).
+    // Fitted frames are clones of these, so a fit and the final layout
+    // see the same inset.
+    let layout_frames: HashMap<String, TextFrame> = document
+        .spreads
+        .iter()
+        .flat_map(|parsed| parsed.spread.text_frames.iter())
+        .filter_map(|frame| {
+            let id = frame.self_id.as_deref()?;
+            match text_area_frame(frame, document) {
+                std::borrow::Cow::Owned(folded) => Some((id.to_string(), folded)),
+                std::borrow::Cow::Borrowed(_) => None,
+            }
+        })
+        .collect();
     let fitted_frames: HashMap<String, TextFrame> = document
         .spreads
         .iter()
@@ -752,7 +784,7 @@ pub(super) fn build_document_inner(
         .filter_map(|frame| {
             let id = frame.self_id.as_deref()?;
             let fitted = auto_sized.get(id)?;
-            let mut clone = frame.clone();
+            let mut clone = layout_frames.get(id).unwrap_or(frame).clone();
             clone.bounds = fitted.bounds;
             Some((id.to_string(), clone))
         })
@@ -1109,6 +1141,7 @@ pub(super) fn build_document_inner(
             // when ParentStory is missing is fine — the rectangle was
             // still drawn above.
             if copy.parent_story.is_some() {
+                let copy = text_area_frame(&copy, document).into_owned();
                 master_text_emissions.push((i, copy));
             }
         }
@@ -2495,7 +2528,7 @@ pub(super) fn build_document_inner(
             .map(|f| {
                 f.self_id
                     .as_deref()
-                    .and_then(|id| fitted_frames.get(id))
+                    .and_then(|id| fitted_frames.get(id).or_else(|| layout_frames.get(id)))
                     .unwrap_or(f)
             })
             .collect();
@@ -3761,8 +3794,11 @@ impl<'a> StoryEmitter<'a> {
             if vj == paged_model::VerticalJustification::Top {
                 continue;
             }
-            let frame_height_64 =
-                (frame.bounds.height() * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+            // The text area ends the bottom inset above the frame's edge
+            // (a stroke's share included, see `text_area_frame`).
+            let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
+                * paged_text::shape::ADVANCE_PRECISION)
+                .round() as i32;
             let used_64 = self.frame_max_baseline_64[i];
             // W1.7 — the footnote pool reserves the bottom of the
             // frame, so vertical justification must distribute slack
@@ -5992,7 +6028,13 @@ pub(super) fn emit_paragraph_into_chain(
             paged_text::layout::auto_line_height(&line.glyphs, lopts.auto_leading_from_byte)
                 .unwrap_or(lopts.line_height)
         });
-        let frame_height_64 = (em.chain[em.frame_idx].bounds.height()
+        // A line fits while its baseline is inside the TEXT AREA, which
+        // ends the bottom inset above the frame's edge. Measured on
+        // InDesign 20.0.1 (`stroke-inset`): a 66 pt frame with a 6 pt
+        // bottom inset and a 1 pt centre stroke takes four 12 pt lines,
+        // the fifth's baseline (62.5) being below 66 - 6.5.
+        let frame_height_64 = ((em.chain[em.frame_idx].bounds.height()
+            - inset_bottom(em.chain[em.frame_idx]))
             * paged_text::shape::ADVANCE_PRECISION)
             .round() as i32;
         // W1.7 — the usable text bottom is the frame height minus the

@@ -73,6 +73,7 @@ pub fn render_page<R: RegionRenderer>(
         page_height_pt: page.size[1],
         dpi,
         background,
+        snap_glyph_origins: false,
     };
     Some(rasterize(&list, &opts))
 }

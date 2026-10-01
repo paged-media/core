@@ -111,7 +111,11 @@ fn an_overset_story_grows_one_page_like_indesign() {
         Some("Paragraph 67 of the reflowing story."),
     );
     // The generated frame is the margin box: every line on page 3 starts
-    // 36 pt from the page's left edge, like pages 1 and 2.
+    // ON its left edge, 36 pt from the page's. The authored frames carry a
+    // 0.25 pt stroke, so theirs start half of it further in, and the
+    // generated one takes default options — no stroke. InDesign's own
+    // reflowed export (`reflow-probe.sh`, `pdftotext -bbox`): page 1's
+    // first word at 36.125, page 3's at 36.000.
     let x0 = |page: usize| {
         lines
             .iter()
@@ -119,12 +123,8 @@ fn an_overset_story_grows_one_page_like_indesign() {
             .flat_map(|l| l.clusters.iter().map(|c| c.x_pt))
             .fold(f32::INFINITY, f32::min)
     };
-    assert!(
-        (x0(2) - x0(0)).abs() < 0.01,
-        "page 3 left edge {} vs page 1 {}",
-        x0(2),
-        x0(0)
-    );
+    assert!((x0(2) - 36.0).abs() < 0.01, "page 3 left edge {}", x0(2));
+    assert!((x0(0) - 36.125).abs() < 0.01, "page 1 left edge {}", x0(0));
 }
 
 #[test]

@@ -152,6 +152,7 @@ fn c1_render_a_composition_with_no_idml() {
         page_height_pt: 200.0,
         dpi: 72.0,
         background: Color::WHITE,
+        snap_glyph_origins: false,
     };
     let img = rasterize(&list, &opts);
 
