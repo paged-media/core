@@ -456,6 +456,7 @@ fn host_paragraphs(anchor_frame: Rect) -> Vec<Paragraph> {
         minimum_letter_spacing: None,
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
+        extra_paragraph_props: Vec::new(),
     };
     let p3 = Paragraph::plain(
         "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia \

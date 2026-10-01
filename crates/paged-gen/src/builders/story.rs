@@ -101,6 +101,13 @@ pub struct Paragraph {
     /// `paged-write` carries these through the round-trip untouched, so a
     /// fixture using them reaches the conformance round-trips level.
     pub extra_paragraph_attrs: Vec<(&'static str, &'static str)>,
+    /// Escape hatch for paragraph properties InDesign spells as TYPED
+    /// `<Properties>` children, as `(name, type, value)` — e.g.
+    /// `("SpanSplitColumnCount", "short", "3")`. InDesign ignores
+    /// `SpanSplitColumnCount` as an attribute (measured 2026-10-01: its own
+    /// export writes `<SpanSplitColumnCount type="short">2</…>` or
+    /// `type="enumeration">All`).
+    pub extra_paragraph_props: Vec<(&'static str, &'static str, &'static str)>,
 }
 
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
@@ -342,6 +349,7 @@ impl Paragraph {
             desired_letter_spacing: None,
             maximum_letter_spacing: None,
             extra_paragraph_attrs: Vec::new(),
+            extra_paragraph_props: Vec::new(),
         }
     }
 
@@ -455,8 +463,16 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         // block; the parser walks the children so emitting them in
         // order is enough.
         let has_bullet_char = paragraph.bullet_character.is_some();
-        if has_bullet_char || !paragraph.tab_list.is_empty() {
+        if has_bullet_char
+            || !paragraph.tab_list.is_empty()
+            || !paragraph.extra_paragraph_props.is_empty()
+        {
             b.start("Properties", &[]);
+            for (name, ty, value) in &paragraph.extra_paragraph_props {
+                b.start(name, &[("type", ty)]);
+                b.text(value);
+                b.end(name);
+            }
             if let Some(cp) = paragraph.bullet_character {
                 let cp_str = cp.to_string();
                 b.empty(

@@ -96,6 +96,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 2. First-line indent (positive) — first line shifts right.
@@ -132,6 +133,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 3. Hanging indent — negative first-line indent paired with
@@ -170,6 +172,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 4. Symmetric column narrowing — LeftIndent + RightIndent.
@@ -206,6 +209,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 5. Tab stops with a dotted leader. Left-aligned label,
@@ -262,6 +266,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 },
                 Paragraph {
                     extra_paragraph_attrs: Vec::new(),
@@ -310,6 +315,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 },
                 Paragraph {
                     extra_paragraph_attrs: Vec::new(),
@@ -358,6 +364,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 },
             ],
         },
@@ -398,6 +405,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 })
                 .collect(),
         },
@@ -436,6 +444,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 })
                 .collect(),
         },
@@ -474,6 +483,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                 })
                 .collect(),
         },
@@ -513,6 +523,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 8. Paragraph rules above + below — the escape-hatch attrs
@@ -584,6 +595,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 12. Bidirectional text — a Hebrew (RTL) run mixed with Latin
@@ -645,6 +657,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             }],
         },
         // 15. CJK vertical writing (tategaki) — the whole story flips to
@@ -751,6 +764,7 @@ pub fn build() -> Sample {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
             })
             .collect();
 

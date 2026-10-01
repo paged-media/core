@@ -188,6 +188,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![Run {
                     extra_char_attrs: Vec::new(),
                     text: lorem.to_string(),
@@ -227,6 +228,7 @@ fn variants() -> Vec<Variant> {
                     minimum_letter_spacing: None,
                     desired_letter_spacing: None,
                     maximum_letter_spacing: None,
+                    extra_paragraph_props: Vec::new(),
                     runs: vec![Run {
                         extra_char_attrs: Vec::new(),
                         text: format!("Paragraph {} of three", i + 1),
@@ -266,6 +268,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![
                     Run {
                         extra_char_attrs: Vec::new(),
@@ -328,6 +331,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![Run {
                     extra_char_attrs: Vec::new(),
                     text: "wide-tracked headline".to_string(),
@@ -364,6 +368,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![Run {
                     extra_char_attrs: Vec::new(),
                     text: "underlined run".to_string(),
@@ -400,6 +405,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![
                     Run {
                         extra_char_attrs: Vec::new(),
@@ -453,6 +459,7 @@ fn variants() -> Vec<Variant> {
                 minimum_letter_spacing: None,
                 desired_letter_spacing: None,
                 maximum_letter_spacing: None,
+                extra_paragraph_props: Vec::new(),
                 runs: vec![Run {
                     extra_char_attrs: Vec::new(),
                     text: "italic Open Sans run".to_string(),
@@ -602,6 +609,7 @@ fn one_run(
         minimum_letter_spacing: None,
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
+        extra_paragraph_props: Vec::new(),
         runs: vec![Run {
             extra_char_attrs: Vec::new(),
             text: text.to_string(),
@@ -692,6 +700,7 @@ pub fn build() -> Sample {
                         minimum_letter_spacing: None,
                         desired_letter_spacing: None,
                         maximum_letter_spacing: None,
+                        extra_paragraph_props: Vec::new(),
                         runs: p
                             .runs
                             .iter()

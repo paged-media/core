@@ -99,6 +99,7 @@ fn para(text: &str) -> Paragraph {
         minimum_letter_spacing: None,
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
+        extra_paragraph_props: Vec::new(),
         runs: vec![run(text)],
     }
 }

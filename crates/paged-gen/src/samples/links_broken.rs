@@ -208,6 +208,7 @@ fn label_paragraph(text: &str) -> Paragraph {
         minimum_letter_spacing: None,
         desired_letter_spacing: None,
         maximum_letter_spacing: None,
+        extra_paragraph_props: Vec::new(),
         runs: vec![Run {
             extra_char_attrs: Vec::new(),
             text: text.to_string(),

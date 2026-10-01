@@ -325,6 +325,7 @@ fn variants() -> Vec<Variant> {
                             minimum_letter_spacing: None,
                             desired_letter_spacing: None,
                             maximum_letter_spacing: None,
+                            extra_paragraph_props: Vec::new(),
                             runs: vec![Run {
                                 extra_char_attrs: Vec::new(),
                                 text: s.to_string(),
@@ -703,6 +704,7 @@ pub fn build() -> Sample {
             minimum_letter_spacing: None,
             desired_letter_spacing: None,
             maximum_letter_spacing: None,
+            extra_paragraph_props: Vec::new(),
         };
         stories.push((
             story_id.clone(),
