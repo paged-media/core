@@ -1090,6 +1090,7 @@ impl ResolvedParagraphAttrs {
             keep_last_lines: paragraph.keep_last_lines,
             keep_with_next: paragraph.keep_with_next,
             start_paragraph: paragraph.start_paragraph,
+            span_columns: paragraph.span_columns,
             applied_language: None,
             minimum_word_spacing: None,
             desired_word_spacing: None,
@@ -1190,6 +1191,7 @@ impl ResolvedParagraphAttrs {
         self.keep_last_lines = self.keep_last_lines.or(p.keep_last_lines);
         self.keep_with_next = self.keep_with_next.or(p.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(p.start_paragraph);
+        self.span_columns.inherit(&p.span_columns);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
         }
@@ -1516,6 +1518,8 @@ pub struct ResolvedParagraphAttrs {
     pub keep_last_lines: Option<u32>,
     pub keep_with_next: Option<u32>,
     pub start_paragraph: Option<paged_model::StartParagraph>,
+    /// Span / split columns, direct > style.
+    pub span_columns: paged_model::SpanColumns,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
     pub applied_language: Option<String>,

@@ -125,6 +125,108 @@ impl StartParagraph {
     }
 }
 
+/// IDML `SpanColumnType` — whether a paragraph sits in its column,
+/// spans several columns of a multi-column frame, or splits its column
+/// into sub-columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SpanColumnType {
+    #[default]
+    SingleColumn,
+    SpanColumns,
+    SplitColumns,
+}
+
+impl SpanColumnType {
+    /// Parse an IDML attribute value. Unknown values return `None`.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "SingleColumn" => Some(Self::SingleColumn),
+            "SpanColumns" => Some(Self::SpanColumns),
+            "SplitColumns" => Some(Self::SplitColumns),
+            _ => None,
+        }
+    }
+
+    /// The IDML attribute value.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::SingleColumn => "SingleColumn",
+            Self::SpanColumns => "SpanColumns",
+            Self::SplitColumns => "SplitColumns",
+        }
+    }
+}
+
+/// IDML `SpanSplitColumnCount`: how many columns a span covers, or how
+/// many sub-columns a split makes. InDesign spells it as a TYPED
+/// `<Properties>` child, never as an attribute (its own export,
+/// 2026-10-01): `<SpanSplitColumnCount type="enumeration">All</…>` or
+/// `<SpanSplitColumnCount type="short">2</…>`. The `[No paragraph
+/// style]` default is `All`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpanSplitColumnCount {
+    All,
+    Count(u32),
+}
+
+impl SpanSplitColumnCount {
+    /// Parse the property's text (`All` or a number).
+    pub fn from_idml(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s == "All" {
+            return Some(Self::All);
+        }
+        s.parse::<u32>().ok().filter(|n| *n >= 1).map(Self::Count)
+    }
+
+    /// The property's text.
+    pub fn as_idml(self) -> String {
+        match self {
+            Self::All => "All".to_string(),
+            Self::Count(n) => n.to_string(),
+        }
+    }
+}
+
+/// A paragraph's span / split columns settings (IDML `SpanColumnType`,
+/// `SpanSplitColumnCount`, `SpanColumnMinSpaceBefore` / `After`,
+/// `SplitColumnInsideGutter` / `OutsideGutter`). Every field is `None`
+/// when the paragraph (or style) does not say, and cascades style to
+/// paragraph like the other paragraph attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct SpanColumns {
+    pub column_type: Option<SpanColumnType>,
+    pub count: Option<SpanSplitColumnCount>,
+    /// `SpanColumnMinSpaceBefore` (pt) — the space above a span or split
+    /// block, measured against InDesign as `max(SpaceBefore, this)`.
+    pub min_space_before: Option<f32>,
+    /// `SpanColumnMinSpaceAfter` (pt) — `max(SpaceAfter, this)` below.
+    pub min_space_after: Option<f32>,
+    /// `SplitColumnInsideGutter` (pt) — between sub-columns (default 6).
+    pub inside_gutter: Option<f32>,
+    /// `SplitColumnOutsideGutter` (pt) — either side of the block
+    /// (default 0).
+    pub outside_gutter: Option<f32>,
+}
+
+impl SpanColumns {
+    /// Fill every unset field from `outer` (the style the paragraph
+    /// inherits from).
+    pub fn inherit(&mut self, outer: &SpanColumns) {
+        self.column_type = self.column_type.or(outer.column_type);
+        self.count = self.count.or(outer.count);
+        self.min_space_before = self.min_space_before.or(outer.min_space_before);
+        self.min_space_after = self.min_space_after.or(outer.min_space_after);
+        self.inside_gutter = self.inside_gutter.or(outer.inside_gutter);
+        self.outside_gutter = self.outside_gutter.or(outer.outside_gutter);
+    }
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == SpanColumns::default()
+    }
+}
+
 /// IDML `<TextFramePreference FirstBaselineOffset="...">` values.
 /// Drives where the first line's baseline sits inside the frame's
 /// inset box.
@@ -3692,6 +3794,9 @@ pub struct ParagraphStyleDef {
     pub keep_with_next: Option<u32>,
     /// `StartParagraph` (ADR 028): break before the paragraph.
     pub start_paragraph: Option<StartParagraph>,
+    /// Span / split columns (`SpanColumnType` and its companions).
+    #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
+    pub span_columns: SpanColumns,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
@@ -3976,6 +4081,8 @@ pub struct ResolvedParagraph {
     pub keep_with_next: Option<u32>,
     /// `StartParagraph` (ADR 028): break before the paragraph.
     pub start_paragraph: Option<StartParagraph>,
+    /// Span / split columns (`SpanColumnType` and its companions).
+    pub span_columns: SpanColumns,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -4275,6 +4382,7 @@ impl ResolvedParagraph {
         self.keep_last_lines = self.keep_last_lines.or(def.keep_last_lines);
         self.keep_with_next = self.keep_with_next.or(def.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(def.start_paragraph);
+        self.span_columns.inherit(&def.span_columns);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -4512,6 +4620,9 @@ pub struct Paragraph {
     pub keep_with_next: Option<u32>,
     /// `StartParagraph` (ADR 028): break before the paragraph.
     pub start_paragraph: Option<StartParagraph>,
+    /// Span / split columns (`SpanColumnType` and its companions).
+    #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
+    pub span_columns: SpanColumns,
     /// `KeepAllLinesTogether` (ADR 028) — with `keep_lines_together`
     /// on, true keeps every line together; false applies the
     /// first/last-line counts below.
