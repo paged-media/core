@@ -723,22 +723,27 @@ pub(super) fn build_document_inner(
     // Per-page image diagnostics are aggregated separately at the end.
     let mut emit_diagnostics: Vec<Diagnostic> = Vec::new();
 
-    // W1.18c — the master-text / body-story emit caches are bypassed on
-    // the post-layout (second) pass: their deltas were captured during
-    // the first pass with the PRE-running-header variable text, so a
-    // splice would re-introduce the stale value. The first pass still
-    // populates + reads them as before (the shared RefCell survives), so
-    // gesture-rebuild callers keep their cache hit on the next build.
-    let master_text_emit_cache = if post.is_some() {
-        None
-    } else {
-        options.master_text_emit_cache
-    };
-    let body_story_emit_cache = if post.is_some() {
-        None
-    } else {
-        options.body_story_emit_cache
-    };
+    // W1.18c — the first pass's deltas carry the PRE-running-header
+    // variable text. thoughts ADR 027 plan step 5: the post-layout
+    // (second) pass still uses the caches, keyed so that cannot leak:
+    // - master text: a frame that prints no page context renders the same
+    //   in both passes and may splice the first pass's delta; one that
+    //   prints any re-emits, and the second pass captures nothing;
+    // - body stories: the second pass keeps entries of its own (salted
+    //   key), and a story that prints page context also keys on the
+    //   running-header index it resolves against (`post_key`).
+    let master_text_emit_cache = options.master_text_emit_cache;
+    let body_story_emit_cache = options.body_story_emit_cache;
+    let post_key: Option<u64> = post.map(|p| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for map in [&p.running_headers.first, &p.running_headers.last] {
+            let mut entries: Vec<(&(usize, String), &String)> = map.iter().collect();
+            entries.sort();
+            entries.hash(&mut h);
+        }
+        h.finish()
+    });
 
     // Perf-FontTable — reuse the caller's pre-built table when
     // provided; otherwise build a fresh one for this call. The
@@ -2286,7 +2291,12 @@ pub(super) fn build_document_inner(
             .self_id
             .as_deref()
             .map(|id| (id.to_string(), *page_idx));
-        if let (Some(ref key), Some(rc)) = (&cache_key, master_text_emit_cache) {
+        let master_prints_context = story_prints_page_context(&parsed.story);
+        if let (Some(ref key), Some(rc), false) = (
+            &cache_key,
+            master_text_emit_cache,
+            post.is_some() && master_prints_context,
+        ) {
             // A delta captured under other page numbering printed other
             // page numbers — a footer's "of N" from before a grow pass
             // added pages (thoughts ADR 033). Re-emit it.
@@ -2301,6 +2311,9 @@ pub(super) fn build_document_inner(
             if let Some(delta) = hit {
                 let base = pages[*page_idx].list.commands.len();
                 splice_master_text_delta(&mut pages[*page_idx].list, &delta);
+                pages[*page_idx]
+                    .story_layout
+                    .extend(delta.story_layout.iter().cloned());
                 record_text_block(
                     &mut pending_text,
                     &text_slots,
@@ -2318,6 +2331,8 @@ pub(super) fn build_document_inner(
         let path_base = pages[*page_idx].list.paths.len();
         let pre_fingerprint = pool_print(&pages[*page_idx].list);
         let pre_others = other_pools_print(&pages[*page_idx].list);
+        let layout_base = pages[*page_idx].story_layout.len();
+        let footnote_base = pages[*page_idx].footnotes.len();
         let cmd_base = pages[*page_idx].list.commands.len();
         let grad_base = pages[*page_idx].list.gradients.len();
         let rad_grad_base = pages[*page_idx].list.radial_gradients.len();
@@ -2385,11 +2400,15 @@ pub(super) fn build_document_inner(
             || list.radial_gradients.len() != rad_grad_base
             || list.images.len() != image_base
             || other_pools_print(list) != pre_others
+            || pages[*page_idx].footnotes.len() != footnote_base
             || !anchored_q.is_empty()
             || !new_breaks.is_empty()
             || !new_diags.is_empty();
-        if let (Some(ref key), Some(rc), false) = (&cache_key, master_text_emit_cache, uncacheable)
-        {
+        if let (Some(ref key), Some(rc), false) = (
+            &cache_key,
+            master_text_emit_cache,
+            uncacheable || post.is_some(),
+        ) {
             let new_paths: Vec<paged_compose::PathData> =
                 list.paths.slice(path_base, list.paths.len()).to_vec();
             let mut new_commands: Vec<paged_compose::DisplayCommand> =
@@ -2405,6 +2424,7 @@ pub(super) fn build_document_inner(
                     paths: new_paths,
                     path_keys: list.paths.keys(path_base, list.paths.len()).to_vec(),
                     pre_fingerprint,
+                    story_layout: pages[*page_idx].story_layout[layout_base..].to_vec(),
                     commands: new_commands,
                     numbering: numbering_key,
                 },
@@ -2690,10 +2710,25 @@ pub(super) fn build_document_inner(
             };
             // A story that prints page numbers or variables depends on
             // the page numbering too, which its frames do not capture.
-            let signature = if story_prints_page_context(&parsed.story) {
+            let prints_context = story_prints_page_context(&parsed.story);
+            let signature = if prints_context {
                 signature.rotate_left(17) ^ numbering_key
             } else {
                 signature
+            };
+            // thoughts ADR 027 plan step 5 — the post-layout pass keeps its
+            // own entries; one that prints page context resolved its
+            // running headers against `post_key`.
+            let signature = match post_key {
+                Some(pk) => {
+                    let salted = signature.rotate_left(29) ^ 0x5bd1_e995_2f3a_7c41;
+                    if prints_context {
+                        salted ^ pk.rotate_left(7)
+                    } else {
+                        salted
+                    }
+                }
+                None => signature,
             };
             Some((parsed.self_id.clone(), signature))
         } else {

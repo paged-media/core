@@ -493,6 +493,26 @@ fn variables_stay_equal_to_a_cold_build() {
         &sample(paged_gen::samples::variables::build),
         0,
     );
+    // Typing into every story, headings included: a running header picks
+    // its text up after layout, so the post-layout pass must re-resolve
+    // exactly the frames that print it (ADR 027 plan step 5).
+    let mut g = Gate::new(
+        "variables, every story",
+        &sample(paged_gen::samples::variables::build),
+    );
+    let stories: Vec<String> = g
+        .model
+        .scene()
+        .stories
+        .iter()
+        .map(|s| s.self_id.clone())
+        .collect();
+    for story in &stories {
+        for idx in 0..paragraph_count(&g.model, story).min(3) {
+            g.type_chars(story, idx, 1);
+        }
+    }
+    g.finish();
 }
 
 #[test]

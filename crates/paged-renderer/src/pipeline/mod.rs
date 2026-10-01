@@ -544,6 +544,9 @@ pub struct MasterTextEmitDelta {
     /// The page's path-buffer fingerprint before the emit; a hit is
     /// spliced only into a buffer that has it.
     pub pre_fingerprint: u64,
+    /// The `story_layout` lines the emit appended to the page (caret and
+    /// hit-test geometry), replayed on a hit like the commands.
+    pub story_layout: Vec<LineLayout>,
     /// Commands appended by emit, with path-id fields rebased to
     /// `0..paths.len()`. Replay adds the current path-buffer
     /// size to each id before pushing.
