@@ -10,6 +10,7 @@
  *
  *  @copyright  Copyright (c) And The Next GmbH
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
 
 //! The native-producer constructors keep InDesign's defaults. A frame that
 //! came back invisible (a derived `Default` would give `visible: false`) is
