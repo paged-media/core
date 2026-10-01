@@ -2014,6 +2014,33 @@ pub(super) fn set_paragraph_style_field(
             false,
         )?
         .0),
+        PropertyPath::ParagraphKeepAllLinesTogether => Ok(super::paragraph::set_para_bool_field(
+            path,
+            value,
+            &mut def.keep_all_lines_together,
+            false,
+        )?
+        .0),
+        PropertyPath::ParagraphKeepFirstLines => {
+            Ok(super::paragraph::set_para_opt_u32_length_field(
+                path,
+                value,
+                &mut def.keep_first_lines,
+            )?
+            .0)
+        }
+        PropertyPath::ParagraphKeepLastLines => Ok(
+            super::paragraph::set_para_opt_u32_length_field(path, value, &mut def.keep_last_lines)?
+                .0,
+        ),
+        PropertyPath::ParagraphStartParagraph => {
+            Ok(super::paragraph::set_para_start_paragraph_field(
+                path,
+                value,
+                &mut def.start_paragraph,
+            )?
+            .0)
+        }
         PropertyPath::ParagraphHyphenation => {
             Ok(super::paragraph::set_para_bool_field(path, value, &mut def.hyphenation, true)?.0)
         }

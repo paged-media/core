@@ -356,6 +356,43 @@ pub(super) fn set_para_text_field(
     Ok((Value::Text(prev), Value::Text(new_val.clone())))
 }
 
+/// ADR 028 — set an `Option<StartParagraph>` from a `Value::Text`
+/// carrying the IDML string. The empty string clears the override
+/// (`None`); the captured prior is returned as `Value::Text`
+/// (`None ⇒ ""`) so the inverse round-trips. An unknown string is
+/// refused (`TypeMismatch` naming the accepted values) and the slot is
+/// left untouched — never silently dropped to `None`.
+pub(super) fn set_para_start_paragraph_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<paged_model::StartParagraph>,
+) -> Result<(Value, Value), OperationError> {
+    const EXPECTED: &str =
+        "Text: \"\" | Anywhere | NextColumn | NextFrame | NextPage | NextOddPage | NextEvenPage";
+    let Value::Text(new_val) = value else {
+        return Err(OperationError::TypeMismatch {
+            path,
+            expected: EXPECTED.to_string(),
+        });
+    };
+    let next = if new_val.is_empty() {
+        None
+    } else {
+        match paged_model::StartParagraph::from_idml(new_val) {
+            Some(sp) => Some(sp),
+            None => {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: EXPECTED.to_string(),
+                });
+            }
+        }
+    };
+    let prev = slot.map(|sp| sp.as_idml().to_string()).unwrap_or_default();
+    *slot = next;
+    Ok((Value::Text(prev), Value::Text(new_val.clone())))
+}
+
 /// W0.2 — set the whole `ParagraphRule` struct (`rule_above` /
 /// `rule_below`) from a `Value::ParagraphRule`. `ParagraphRule(None)`
 /// clears the rule to the all-`None` default. The captured prior is
@@ -508,6 +545,20 @@ pub(super) fn apply_paragraph_field(
         }
         PropertyPath::ParagraphKeepLinesTogether => {
             set_para_bool_field(path, value, &mut para.keep_lines_together, false)
+        }
+        // ADR 028 — keep options and the break-before rule. The model
+        // and renderer carried these; this is their setter.
+        PropertyPath::ParagraphKeepAllLinesTogether => {
+            set_para_bool_field(path, value, &mut para.keep_all_lines_together, false)
+        }
+        PropertyPath::ParagraphKeepFirstLines => {
+            set_para_opt_u32_length_field(path, value, &mut para.keep_first_lines)
+        }
+        PropertyPath::ParagraphKeepLastLines => {
+            set_para_opt_u32_length_field(path, value, &mut para.keep_last_lines)
+        }
+        PropertyPath::ParagraphStartParagraph => {
+            set_para_start_paragraph_field(path, value, &mut para.start_paragraph)
         }
         // W0.2 — whole rule structs.
         PropertyPath::ParagraphRuleAbove => set_para_rule_field(path, value, &mut para.rule_above),

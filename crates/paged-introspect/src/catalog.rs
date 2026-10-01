@@ -785,6 +785,10 @@ property_paths! {
         ParagraphHyphenationZone => "paragraphHyphenationZone",
         ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
         ParagraphKeepWithNext => "paragraphKeepWithNext",
+        ParagraphKeepAllLinesTogether => "paragraphKeepAllLinesTogether",
+        ParagraphKeepFirstLines => "paragraphKeepFirstLines",
+        ParagraphKeepLastLines => "paragraphKeepLastLines",
+        ParagraphStartParagraph => "paragraphStartParagraph",
         ParagraphRuleAbove => "paragraphRuleAbove",
         ParagraphRuleBelow => "paragraphRuleBelow",
         ParagraphTabStops => "paragraphTabStops",
@@ -1106,7 +1110,12 @@ mod tests {
         // the PAGE ITEM and carries a layer id as its value, so it is
         // reachable — `every_settable_path_is_addressable` is what
         // tells the two cases apart, and it passes.
-        assert_eq!(cat.settable_paths.len(), 203, "settable path count drifted");
+        //
+        // 203 -> 207: the ADR 028 keep options and break-before rule
+        // (`paragraphKeepAllLinesTogether`, `paragraphKeepFirstLines`,
+        // `paragraphKeepLastLines`, `paragraphStartParagraph`, protocol
+        // 64) — modelled and rendered, but with no setter until now.
+        assert_eq!(cat.settable_paths.len(), 207, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

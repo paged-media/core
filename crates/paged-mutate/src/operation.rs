@@ -691,6 +691,25 @@ pub enum PropertyPath {
     /// override. Reflow-affecting. Addressed against a
     /// `NodeId::StoryRange`.
     ParagraphKeepWithNext,
+    /// ADR 028 — keep-ALL-lines toggle (`KeepAllLinesTogether`).
+    /// `Value::Bool`. With `ParagraphKeepLinesTogether` on, `true` keeps
+    /// every line of the paragraph together; `false` applies the
+    /// first/last-line counts. Reflow-affecting; prior-`None` undoes to
+    /// the IDML default `false`.
+    ParagraphKeepAllLinesTogether,
+    /// ADR 028 — orphan control (`KeepFirstLines`), a line count on the
+    /// wire as `Value::Length(Some(count))`; `Length(None)` clears the
+    /// override (InDesign default 2). Reflow-affecting.
+    ParagraphKeepFirstLines,
+    /// ADR 028 — widow control (`KeepLastLines`), same wire shape as
+    /// `ParagraphKeepFirstLines` (InDesign default 2). Reflow-affecting.
+    ParagraphKeepLastLines,
+    /// ADR 028 — the break-before rule (`StartParagraph`). `Value::Text`
+    /// carrying the IDML string (`Anywhere` / `NextColumn` / `NextFrame`
+    /// / `NextPage` / `NextOddPage` / `NextEvenPage`); the empty string
+    /// clears the override (inherit). An unknown string is refused with
+    /// a `TypeMismatch`, never stored. Reflow-affecting.
+    ParagraphStartParagraph,
     /// W0.2 — whole `RuleAbove*` rule struct, mirroring the
     /// `FrameGradientFeather` whole-struct pattern. Value is
     /// `Value::ParagraphRule(Some(spec))` to set, or
@@ -1365,6 +1384,10 @@ impl PropertyPath {
             PropertyPath::ParagraphHyphenationZone => "paragraph.hyphenationZone",
             PropertyPath::ParagraphKeepLinesTogether => "paragraph.keepLinesTogether",
             PropertyPath::ParagraphKeepWithNext => "paragraph.keepWithNext",
+            PropertyPath::ParagraphKeepAllLinesTogether => "paragraph.keepAllLinesTogether",
+            PropertyPath::ParagraphKeepFirstLines => "paragraph.keepFirstLines",
+            PropertyPath::ParagraphKeepLastLines => "paragraph.keepLastLines",
+            PropertyPath::ParagraphStartParagraph => "paragraph.startParagraph",
             PropertyPath::ParagraphRuleAbove => "paragraph.ruleAbove",
             PropertyPath::ParagraphRuleBelow => "paragraph.ruleBelow",
             PropertyPath::ParagraphTabStops => "paragraph.tabStops",

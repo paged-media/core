@@ -2096,6 +2096,10 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphHyphenationZone
             | PropertyPath::ParagraphKeepLinesTogether
             | PropertyPath::ParagraphKeepWithNext
+            | PropertyPath::ParagraphKeepAllLinesTogether
+            | PropertyPath::ParagraphKeepFirstLines
+            | PropertyPath::ParagraphKeepLastLines
+            | PropertyPath::ParagraphStartParagraph
             | PropertyPath::ParagraphRuleAbove
             | PropertyPath::ParagraphRuleBelow
             | PropertyPath::ParagraphTabStops

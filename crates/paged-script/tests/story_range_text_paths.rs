@@ -87,6 +87,10 @@ const CASES = [
   ['paragraphKeepWithNext', 2],
   ['paragraphHyphenation', false],
   ['paragraphKeepLinesTogether', true],
+  ['paragraphKeepAllLinesTogether', true],
+  ['paragraphKeepFirstLines', 3],
+  ['paragraphKeepLastLines', 3],
+  ['paragraphStartParagraph', 'NextFrame'],
   ['paragraphListType', 'BulletList'],
   // A CHARACTER, not a code point: the apply layer takes the first
   // char of the string, so '8226' would store '8'.
@@ -153,6 +157,11 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphTabStops",
         "paragraphHyphenation",
         "paragraphBulletCharacter",
+        // ADR 028 keep options + break-before (protocol 64).
+        "paragraphKeepAllLinesTogether",
+        "paragraphKeepFirstLines",
+        "paragraphKeepLastLines",
+        "paragraphStartParagraph",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -164,7 +173,7 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        203,
+        207,
         "the advertised roster changed; move the count with the decision"
     );
 }

@@ -4030,6 +4030,8 @@ fn js_value_to_wire(
             | P::ParagraphListType
             | P::ParagraphBulletCharacter
             | P::ParagraphNumberingFormat
+            // ADR 028 — the break-before rule, an IDML enum string.
+            | P::ParagraphStartParagraph
             // W1.22 — applied numbering-list ref + next-style ref.
             | P::ParagraphAppliedNumberingList
             | P::ParagraphStyleNextStyle

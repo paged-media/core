@@ -6019,6 +6019,10 @@ impl CanvasModel {
         let mut hyphenations: Vec<Option<bool>> = Vec::new();
         let mut keep_lines_together: Vec<Option<bool>> = Vec::new();
         let mut keep_with_next: Vec<Option<u32>> = Vec::new();
+        let mut keep_all_lines_together: Vec<Option<bool>> = Vec::new();
+        let mut keep_first_lines: Vec<Option<u32>> = Vec::new();
+        let mut keep_last_lines: Vec<Option<u32>> = Vec::new();
+        let mut start_paragraphs: Vec<Option<paged_model::StartParagraph>> = Vec::new();
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
@@ -6057,6 +6061,10 @@ impl CanvasModel {
                 hyphenations.push(para.hyphenation);
                 keep_lines_together.push(para.keep_lines_together);
                 keep_with_next.push(para.keep_with_next);
+                keep_all_lines_together.push(para.keep_all_lines_together);
+                keep_first_lines.push(para.keep_first_lines);
+                keep_last_lines.push(para.keep_last_lines);
+                start_paragraphs.push(para.start_paragraph);
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
@@ -6252,6 +6260,29 @@ impl CanvasModel {
                 path: PropertyPath::ParagraphKeepWithNext,
                 value: collapse_uniform(&keep_with_next)
                     .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            // ADR 028 — keep options + break-before. Counts surface the
+            // raw `Option<u32>` (None ⇒ inherit); the start rule surfaces
+            // its IDML string (empty ⇒ no override).
+            PropertyEntry {
+                path: PropertyPath::ParagraphKeepAllLinesTogether,
+                value: collapse_uniform(&keep_all_lines_together)
+                    .map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphKeepFirstLines,
+                value: collapse_uniform(&keep_first_lines)
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphKeepLastLines,
+                value: collapse_uniform(&keep_last_lines)
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphStartParagraph,
+                value: collapse_uniform(&start_paragraphs)
+                    .map(|o| Value::Text(o.map(|sp| sp.as_idml().to_string()).unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphListType,

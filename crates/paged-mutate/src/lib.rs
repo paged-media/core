@@ -4827,6 +4827,126 @@ mod tests {
         assert_eq!(story.paragraphs[0].keep_with_next, None);
     }
 
+    fn story_range_op(path: PropertyPath, value: Value) -> Operation {
+        Operation::SetProperty {
+            node: NodeId::StoryRange {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 6,
+            },
+            path,
+            value,
+        }
+    }
+
+    /// ADR 028 — `paragraphKeepAllLinesTogether` is an `Option<bool>`;
+    /// undo over a prior `None` restores the IDML default `false`.
+    #[test]
+    fn paragraph_keep_all_lines_together_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        let applied = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphKeepAllLinesTogether,
+                Value::Bool(true),
+            ))
+            .expect("apply");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].keep_all_lines_together, Some(true));
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let story = &project.document().stories[0].story;
+        assert_eq!(story.paragraphs[0].keep_all_lines_together, Some(false));
+    }
+
+    /// ADR 028 — `paragraphKeepFirstLines` / `paragraphKeepLastLines`
+    /// carry an `Option<u32>` line count; undo restores the prior `None`.
+    #[test]
+    fn paragraph_keep_first_and_last_lines_round_trip() {
+        type Slot = fn(&paged_model::Paragraph) -> Option<u32>;
+        let cases: [(PropertyPath, Slot); 2] = [
+            (PropertyPath::ParagraphKeepFirstLines, |p| {
+                p.keep_first_lines
+            }),
+            (PropertyPath::ParagraphKeepLastLines, |p| p.keep_last_lines),
+        ];
+        for (path, slot) in cases {
+            let mut project = Project::new(document_with_one_story("Story/u1"));
+            let applied = project
+                .apply(story_range_op(path, Value::Length(Some(3.0))))
+                .expect("apply");
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(slot(para), Some(3), "{path:?}");
+
+            crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(slot(para), None, "{path:?} undo");
+        }
+    }
+
+    /// ADR 028 — `paragraphStartParagraph` takes the IDML string; the
+    /// empty string clears it; undo restores the prior value.
+    #[test]
+    fn paragraph_start_paragraph_round_trips() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let applied = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphStartParagraph,
+                Value::Text("NextFrame".into()),
+            ))
+            .expect("apply");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].start_paragraph,
+            Some(paged_model::StartParagraph::NextFrame)
+        );
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].start_paragraph,
+            None
+        );
+
+        project.document_mut().stories[0].story.paragraphs[0].start_paragraph =
+            Some(paged_model::StartParagraph::NextPage);
+        let cleared = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphStartParagraph,
+                Value::Text(String::new()),
+            ))
+            .expect("clear");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].start_paragraph,
+            None
+        );
+        crate::apply(project.document_mut(), &cleared.inverse).expect("undo clear");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].start_paragraph,
+            Some(paged_model::StartParagraph::NextPage)
+        );
+    }
+
+    /// An unknown `StartParagraph` string is refused, never stored or
+    /// silently cleared.
+    #[test]
+    fn paragraph_start_paragraph_refuses_unknown_values() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        project.document_mut().stories[0].story.paragraphs[0].start_paragraph =
+            Some(paged_model::StartParagraph::NextColumn);
+        for bad in [Value::Text("NextSpread".into()), Value::Bool(true)] {
+            let err = project
+                .apply(story_range_op(PropertyPath::ParagraphStartParagraph, bad))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "got {err:?}"
+            );
+        }
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].start_paragraph,
+            Some(paged_model::StartParagraph::NextColumn)
+        );
+    }
+
     /// `paragraphRuleAbove` whole-struct: sets the rule, undo restores
     /// the prior all-`None` default. Proves the new `Value::ParagraphRule`
     /// variant round-trips the rule bytewise.
