@@ -55,6 +55,16 @@ pub fn generated_frame_id(story: &str, k: u32) -> String {
     format!("{story}_grow{k}_frame")
 }
 
+/// `k` when `frame_id` is [`generated_frame_id`]`(story, k)`.
+pub fn generated_frame_ordinal(story: &str, frame_id: &str) -> Option<u32> {
+    frame_id
+        .strip_prefix(story)?
+        .strip_prefix("_grow")?
+        .strip_suffix("_frame")?
+        .parse()
+        .ok()
+}
+
 /// The id of the spread holding the `k`-th generated page of `story`.
 pub fn generated_spread_id(story: &str, k: u32) -> String {
     format!("{story}_grow{k}_spread")
@@ -236,5 +246,14 @@ mod tests {
         assert_eq!(generated_page_id("u1", 2), "u1_grow2_page");
         assert_ne!(generated_frame_id("u1", 1), generated_frame_id("u1", 2));
         assert_ne!(generated_spread_id("u1", 1), generated_page_id("u1", 1));
+        assert_eq!(
+            generated_frame_ordinal("u1", &generated_frame_id("u1", 300)),
+            Some(300)
+        );
+        assert_eq!(generated_frame_ordinal("u1", "u12_grow3_frame"), None);
+        assert_eq!(
+            generated_frame_ordinal("u1", &generated_page_id("u1", 3)),
+            None
+        );
     }
 }

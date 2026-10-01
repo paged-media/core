@@ -124,9 +124,13 @@ pub struct ParsedMasterSpread {
     pub spread: Spread,
 }
 
-/// Cap on the number of frames followed via `NextTextFrame`.
+/// Cap on the number of AUTHORED `NextTextFrame` links followed.
 /// Real chains are 1–10 frames; the cap exists so a malformed
 /// document with a missed cycle can't make the resolver loop.
+/// Generated frames (ADR 026) do not count: they are threaded by
+/// construction and bounded by the grow rule's page cap, and a growing
+/// story longer than the cap must not stop (it would overset and the grow
+/// loop would pad the document with empty pages).
 const MAX_FRAME_CHAIN: usize = 256;
 
 /// The IDML default gutter between text columns, in pt (used when a frame
@@ -264,7 +268,8 @@ impl Document {
     /// chain head (a frame hosting `story_id` whose `Self` id is
     /// not another frame's `NextTextFrame` target) and follows
     /// `NextTextFrame` links until exhaustion. Cycles are bounded
-    /// by `MAX_FRAME_CHAIN` so a malformed document can't hang.
+    /// by `MAX_FRAME_CHAIN` authored links so a malformed document can't
+    /// hang; the story's generated frames ([`grow`]) are not counted.
     /// Returns `Vec<&TextFrame>` borrowing from the document.
     pub fn frame_chain(&self, story_id: &str) -> Vec<&TextFrame> {
         // Collect every frame on this story (typically 1; can be N
@@ -303,14 +308,23 @@ impl Document {
             seen.insert(id.to_string());
         }
         let mut cursor = head.next_text_frame.clone();
-        for _ in 0..MAX_FRAME_CHAIN {
-            let Some(id) = cursor else { break };
+        let mut authored = 0usize;
+        let mut generated = 0u32;
+        while let Some(id) = cursor {
             if seen.contains(&id) {
                 break;
             }
             let Some(next) = self.text_frame(&id) else {
                 break;
             };
+            if grow::generated_frame_ordinal(story_id, &id) == Some(generated + 1) {
+                generated += 1;
+            } else {
+                authored += 1;
+                if authored > MAX_FRAME_CHAIN {
+                    break;
+                }
+            }
             out.push(next);
             seen.insert(id);
             cursor = next.next_text_frame.clone();

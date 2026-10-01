@@ -127,6 +127,53 @@ fn an_overset_story_grows_one_page_like_indesign() {
     assert!((x0(0) - 36.125).abs() < 0.01, "page 1 left edge {}", x0(0));
 }
 
+/// A growing story is bounded by its grow rule, not by the frame-chain
+/// cycle guard (256 authored links). Before the fix the chain stopped at
+/// 257 frames, the story oversetted there, and the grow loop doubled to
+/// the 2 000-page cap: 1 744 empty pages. One paragraph per frame
+/// (`StartParagraph = NextFrame`) makes a 400-page story cheap to lay out.
+#[test]
+fn a_400_page_story_grows_exactly_the_pages_it_needs() {
+    let mut doc = growing_document(Some(1));
+    let id = body_story();
+    let story = doc
+        .stories
+        .iter_mut()
+        .find(|s| s.self_id == id)
+        .expect("body story");
+    let template = story.story.paragraphs[0].clone();
+    story.story.paragraphs = (1..=400)
+        .map(|n| {
+            let mut p = template.clone();
+            p.runs.truncate(1);
+            p.runs[0].text = format!("Paragraph {n} of a long story.");
+            p.start_paragraph = Some(paged_model::StartParagraph::NextFrame);
+            p
+        })
+        .collect();
+
+    let built = build(&doc, None);
+    assert_eq!(built.pages.len(), 400, "one page per paragraph, no padding");
+    let overset = built
+        .diagnostics
+        .items
+        .iter()
+        .any(|d| d.code == paged_renderer::diagnostics::DiagnosticCode::OversetTextDropped);
+    assert!(!overset, "the story fits its grown chain");
+    let lines = built.story_layout(&id);
+    for page in &built.pages {
+        assert!(
+            lines.iter().any(|l| l.page_id == page.id),
+            "page {} holds a line of the story",
+            page.id.0
+        );
+    }
+    assert_eq!(
+        built.pages.last().map(|p| p.id.0.clone()),
+        Some(paged_scene::grow::generated_page_id(&id, 398))
+    );
+}
+
 #[test]
 fn generated_pages_have_stable_ids() {
     let doc = growing_document(None);
