@@ -51,7 +51,11 @@ pub use value::Value;
 /// `styles`) round-trip; the three derived caches below are `#[serde(skip)]`
 /// and rebuilt by [`Document::rebuild_indexes`] after deserialize, so a
 /// `Document` reconstructs from native bytes with no `open_source_archive`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `Default` is the empty document, so a plugin that builds one natively
+/// (paged.pdf's mapper, paged.doc's section skeleton) writes
+/// `Document { stories, spreads, ..Default::default() }` and keeps
+/// compiling when the model grows a field.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Document {
     /// Structured `designmap.xml` manifest — spread/story order, layers,
     /// sections, hyperlinks, doc preferences. Parsed from the source archive at

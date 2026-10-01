@@ -35,6 +35,8 @@ use paged_scene::Document;
 /// document. `paged/core/` is a core-owned namespace.
 pub const DOCUMENT_PGM_PATH: &str = "paged/core/model/document.pgm";
 
+pub mod package;
+
 /// The native `.paged` model format version. **Bump on any change to the
 /// model's serde shape** (e.g. the type renames during the `paged-model`
 /// extraction) so an incompatible part is REJECTED — [`from_bytes`] returns

@@ -2831,6 +2831,7 @@ dependencies = [
  "paged-scene",
  "serde",
  "serde_json",
+ "zip",
 ]
 
 [[package]]
