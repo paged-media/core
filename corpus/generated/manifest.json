@@ -244,6 +244,15 @@
       "report": "/tmp/idml-generated-diff/showcase-base/report.json"
     },
     {
+      "name": "span-columns",
+      "idml": "span-columns.idml",
+      "pdf": "span-columns.pdf",
+      "pages": 17,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/span-columns",
+      "report": "/tmp/idml-generated-diff/span-columns/report.json"
+    },
+    {
       "name": "start-paragraph",
       "idml": "start-paragraph.idml",
       "pdf": "start-paragraph.pdf",

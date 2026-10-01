@@ -65,6 +65,7 @@ mod metrics;
 mod nested_styles;
 mod numbering;
 mod shapes;
+mod span_columns;
 mod stroke_geom;
 mod tables;
 mod text_frame;

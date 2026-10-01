@@ -467,6 +467,155 @@ struct ColumnBalance<'a> {
     story: &'a paged_scene::ParsedStory,
 }
 
+/// What the span / split columns planner hands the emitter: the region
+/// chain, the region each paragraph's first line opens, and each
+/// region's measure.
+struct SpanPlan {
+    regions: Vec<TextFrame>,
+    starts: HashMap<u32, usize>,
+    widths: Vec<f32>,
+}
+
+/// Plan a story whose paragraphs span or split columns (see
+/// `span_columns`); `None` when none does, and the story keeps the
+/// plain column expansion.
+fn plan_span_columns(
+    document: &Document,
+    measurer: &auto_size::Measurer<'_>,
+    story: &paged_scene::ParsedStory,
+    chain: &[&TextFrame],
+) -> Option<SpanPlan> {
+    use super::span_columns::{self, FrameSpec, Kind, Measured, ParaSpec, Top};
+    let head = *chain.first()?;
+    let paras: Vec<ParaSpec> = story
+        .story
+        .paragraphs
+        .iter()
+        .map(|p| ParaSpec::from_attrs(&document.resolved_paragraph_attrs(p)))
+        .collect();
+    let columnar = chain.iter().any(|f| f.column_count.unwrap_or(1) > 1);
+    let wanted = paras.iter().any(|p| match p.kind {
+        Kind::Single => false,
+        Kind::Span(_) => columnar,
+        Kind::Split { .. } => true,
+    });
+    if !wanted {
+        return None;
+    }
+    let leading_offset = |f: &TextFrame| {
+        f.first_baseline_offset == Some(paged_model::FirstBaselineOffset::LeadingOffset)
+    };
+    let frames: Vec<FrameSpec> = chain
+        .iter()
+        .map(|f| FrameSpec {
+            height: f.bounds.height(),
+            inset_top: f.inset_spacing.map_or(0.0, |i| i[0]),
+            columns: frame_column_geometry(f)
+                .column_boxes()
+                .iter()
+                .map(|b| (b.x_pt, b.width_pt))
+                .collect(),
+            leading_offset: leading_offset(f),
+        })
+        .collect();
+    let head_inset_top = frames[0].inset_top;
+    let head_leading_offset = frames[0].leading_offset;
+    let mut cache: HashMap<u32, std::rc::Rc<Measured>> = HashMap::new();
+    let mut measure = |width: f32| -> std::rc::Rc<Measured> {
+        cache
+            .entry(width.to_bits())
+            .or_insert_with(|| {
+                let baselines = measurer.paragraph_baselines(head, story, width);
+                std::rc::Rc::new(line_pitches(
+                    &baselines,
+                    &paras,
+                    head_inset_top,
+                    head_leading_offset,
+                ))
+            })
+            .clone()
+    };
+    let plan = span_columns::plan(&frames, &paras, &mut measure);
+    if plan.regions.is_empty() {
+        return None;
+    }
+    let mut regions = Vec::with_capacity(plan.regions.len());
+    let mut widths = Vec::with_capacity(plan.regions.len());
+    for r in &plan.regions {
+        let f = chain[r.frame];
+        let [inset_top, inset_left, inset_bottom, _] = f.inset_spacing.unwrap_or([0.0; 4]);
+        let mut region = f.clone();
+        let left = f.bounds.left + inset_left + r.x;
+        let (top, top_inset) = match r.top {
+            Top::Frame => (f.bounds.top, inset_top),
+            Top::Anchor(y) => (f.bounds.top + y, 0.0),
+        };
+        region.bounds = paged_model::Bounds {
+            left,
+            right: left + r.width,
+            top,
+            bottom: (f.bounds.top + r.bottom).max(top),
+        };
+        region.inset_spacing = Some([top_inset, 0.0, inset_bottom, 0.0]);
+        if let Top::Anchor(_) = r.top {
+            // Mid-frame, the first baseline continues the line grid:
+            // one leading below the anchor, which already carries the
+            // space above.
+            region.first_baseline_offset = Some(paged_model::FirstBaselineOffset::LeadingOffset);
+            region.minimum_first_baseline_offset = None;
+        }
+        region.column_count = None;
+        region.column_gutter = None;
+        region.column_balance = None;
+        regions.push(region);
+        widths.push(r.width);
+    }
+    Some(SpanPlan {
+        regions,
+        starts: plan.starts,
+        widths,
+    })
+}
+
+/// Line pitches from measured baselines: each line's leading, the
+/// paragraph spacing the emitter put between them taken back out.
+fn line_pitches(
+    baselines: &[Vec<f32>],
+    paras: &[super::span_columns::ParaSpec],
+    inset_top: f32,
+    leading_offset: bool,
+) -> super::span_columns::Measured {
+    let mut leads = Vec::with_capacity(baselines.len());
+    let mut prev: Option<(usize, f32)> = None;
+    let mut first_offset = None;
+    for (p, b) in baselines.iter().enumerate() {
+        let mut l = Vec::with_capacity(b.len());
+        for (i, y) in b.iter().enumerate() {
+            let lead = if i > 0 {
+                y - b[i - 1]
+            } else if let Some((q, last)) = prev {
+                y - last - paras[q].space_after - paras[p].space_before
+            } else if leading_offset || b.len() < 2 {
+                y - inset_top
+            } else {
+                b[1] - b[0]
+            };
+            l.push(lead.max(0.0));
+        }
+        if let (Some(y), None) = (b.first(), first_offset) {
+            first_offset = Some(y - inset_top);
+        }
+        if let Some(last) = b.last() {
+            prev = Some((p, *last));
+        }
+        leads.push(l);
+    }
+    super::span_columns::Measured {
+        leads,
+        first_offset: first_offset.unwrap_or(0.0),
+    }
+}
+
 /// IDML's default gutter when a frame declares a column count and no
 /// `TextColumnGutter`. Mirrors `paged_scene`'s constant of the same
 /// name — both read the same IDML default, and neither owns the other.
@@ -2355,13 +2504,30 @@ pub(super) fn build_document_inner(
         // rects, the emitter's overflow walk — sees columns as the
         // frames they behave like. Empty when nothing is columnar,
         // and then the authored chain is used unchanged.
-        let column_arena = expand_column_chain(
-            &authored_chain,
-            Some(&ColumnBalance {
-                measurer: &measurer,
-                story: parsed,
-            }),
-        );
+        // Span / split columns re-plan the chain as the regions the
+        // story actually uses, with the region each paragraph opens.
+        let span_plan = if authored_chain
+            .first()
+            .is_some_and(|f| f.applied_toc_style.is_none())
+        {
+            plan_span_columns(document, &measurer, parsed, &authored_chain)
+        } else {
+            None
+        };
+        let (column_arena, span_starts, span_widths) = match span_plan {
+            Some(plan) => (plan.regions, plan.starts, plan.widths),
+            None => (
+                expand_column_chain(
+                    &authored_chain,
+                    Some(&ColumnBalance {
+                        measurer: &measurer,
+                        story: parsed,
+                    }),
+                ),
+                HashMap::new(),
+                Vec::new(),
+            ),
+        };
         let chain: Vec<&TextFrame> = if column_arena.is_empty() {
             authored_chain
         } else {
@@ -2595,6 +2761,7 @@ pub(super) fn build_document_inner(
             .with_chapter_numbers(&chapter_numbers)
             .with_footnote_reservation(&reserved_64)
             .with_forced_breaks(&forced_breaks)
+            .with_span_plan(&span_starts, &span_widths)
             .with_all_text_overset(all_text_overset);
             // W1.18c — running-header pickup index on the post-layout pass.
             if let Some(index) = running_header_index {
@@ -3194,6 +3361,11 @@ pub(super) struct StoryEmitter<'a> {
     pub(super) force_overset: bool,
     /// The current top-level paragraph's `StartParagraph` (ADR 028).
     pub(super) start_rule: paged_model::StartParagraph,
+    /// Span / split columns: the chain region each paragraph's first
+    /// line opens (`span_columns`), and each region's measure. Empty for
+    /// every story without spanning or split paragraphs.
+    pub(super) span_starts: HashMap<u32, usize>,
+    pub(super) region_widths: Vec<f32>,
     /// The split segment of the current paragraph being emitted.
     pub(super) segment: SegmentState,
 }
@@ -3382,6 +3554,8 @@ impl<'a> StoryEmitter<'a> {
             running_headers: None,
             force_overset: false,
             start_rule: paged_model::StartParagraph::Anywhere,
+            span_starts: HashMap::new(),
+            region_widths: Vec::new(),
             segment: SegmentState::default(),
         }
     }
@@ -3519,6 +3693,14 @@ impl<'a> StoryEmitter<'a> {
 
     /// ADR 028 — the keep-option breaks this pass must force (from the
     /// previous pass's `keeps::keep_breaks`).
+    /// Span / split columns: where each paragraph starts, and the
+    /// measure of every region in the chain.
+    pub(super) fn with_span_plan(mut self, starts: &HashMap<u32, usize>, widths: &[f32]) -> Self {
+        self.span_starts = starts.clone();
+        self.region_widths = widths.to_vec();
+        self
+    }
+
     pub(super) fn with_forced_breaks(mut self, forced: &HashMap<u32, u32>) -> Self {
         self.forced_breaks = forced.clone();
         self
@@ -3542,6 +3724,15 @@ impl<'a> StoryEmitter<'a> {
         self.start_rule = attrs.start_paragraph.unwrap_or_default();
         self.placements.push(Vec::new());
         self.para_line = 0;
+        // Span / split columns: the paragraph opens the region the plan
+        // gave it, at that region's first baseline.
+        if let Some(&r) = self.span_starts.get(&self.paragraph_idx) {
+            if r != self.frame_idx && r < self.chain.len() {
+                self.frame_idx = r;
+                self.y_cursor = -1;
+                self.prev_line_height_64 = None;
+            }
+        }
         emit_paragraph_into_chain(self, paragraph, pages, total_stats);
         self.paragraph_idx = self.paragraph_idx.saturating_add(1);
     }
@@ -4406,7 +4597,7 @@ pub(super) fn emit_paragraph_into_chain(
                     })
             });
             em.y_cursor = first_baseline_for_frame(
-                em.chain[0],
+                em.chain[em.frame_idx],
                 para_pt,
                 (para_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_metrics,
@@ -4879,7 +5070,12 @@ pub(super) fn emit_paragraph_into_chain(
         };
 
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-    let Some(full_col_pt) = em.column_width_pt else {
+    let Some(full_col_pt) = em
+        .region_widths
+        .get(em.frame_idx)
+        .copied()
+        .or(em.column_width_pt)
+    else {
         return;
     };
     // FINDING #7.2 — LeftIndent / RightIndent narrow the composed
@@ -4939,7 +5135,7 @@ pub(super) fn emit_paragraph_into_chain(
     let frame_first_paragraph = em.y_cursor < 0;
     if em.y_cursor < 0 {
         em.y_cursor = first_baseline_for_frame(
-            em.chain[0],
+            em.chain[em.frame_idx],
             paragraph_size,
             lopts.first_baseline,
             head_font_metrics,

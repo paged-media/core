@@ -105,6 +105,9 @@ struct Trial {
     /// ascending order. `VerticalBalanceColumns` reads this to find
     /// where the k-th line falls before anything is emitted.
     baselines: Vec<f32>,
+    /// Every line's paragraph index and baseline (as `baselines`), in
+    /// story order.
+    paragraph_lines: Vec<(u32, f32)>,
 }
 
 pub(super) struct Measurer<'a> {
@@ -378,6 +381,31 @@ impl<'a> Measurer<'a> {
             .baselines
     }
 
+    /// Every paragraph's line baselines (pt below the frame's spread
+    /// top), composed at `width_pt` with unbounded height — what the span
+    /// and split columns planner reads its line pitches from.
+    pub(super) fn paragraph_baselines(
+        &self,
+        frame: &TextFrame,
+        story: &paged_scene::ParsedStory,
+        width_pt: f32,
+    ) -> Vec<Vec<f32>> {
+        let mut probe = frame.clone();
+        probe.column_count = None;
+        probe.column_gutter = None;
+        if let Some([t, _, b, _]) = probe.inset_spacing {
+            probe.inset_spacing = Some([t, 0.0, b, 0.0]);
+        }
+        let trial = self.trial(&probe, story, frame.bounds, width_pt, UNBOUNDED_PT);
+        let mut out = vec![Vec::new(); story.story.paragraphs.len()];
+        for (p, y) in trial.paragraph_lines {
+            if let Some(v) = out.get_mut(p as usize) {
+                v.push(y);
+            }
+        }
+        out
+    }
+
     /// Compose the frame's story at `w × h` (outer, pt) into a scratch
     /// page and read the emitter's verdict. The clone keeps everything
     /// but its bounds — insets, first-baseline rule, columns, the
@@ -462,6 +490,7 @@ impl<'a> Measurer<'a> {
         let mut last_baseline_rel = 0.0f32;
         let mut widest_right_rel = 0.0f32;
         let mut baselines: Vec<f32> = Vec::new();
+        let mut paragraph_lines: Vec<(u32, f32)> = Vec::new();
         for line in pages[0]
             .story_layout
             .iter()
@@ -470,6 +499,7 @@ impl<'a> Measurer<'a> {
             lines += 1;
             let rel = line.baseline_y_pt - probe_spread.top;
             baselines.push(rel);
+            paragraph_lines.push((line.paragraph_idx, rel));
             last_baseline_rel = last_baseline_rel.max(rel);
             let text = texts.get(line.paragraph_idx as usize).map(|s| s.as_bytes());
             for cluster in &line.clusters {
@@ -490,6 +520,7 @@ impl<'a> Measurer<'a> {
             last_baseline_rel,
             widest_right_rel,
             baselines,
+            paragraph_lines,
         }
     }
 }
