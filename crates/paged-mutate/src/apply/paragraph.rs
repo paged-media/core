@@ -393,6 +393,100 @@ pub(super) fn set_para_start_paragraph_field(
     Ok((Value::Text(prev), Value::Text(new_val.clone())))
 }
 
+/// Set an `Option<SpanColumnType>` from a `Value::Text` carrying the
+/// IDML string, the same contract as [`set_para_start_paragraph_field`]:
+/// `""` clears, an unknown string is refused and the slot untouched, the
+/// prior comes back as `Value::Text` (`None ⇒ ""`).
+pub(super) fn set_para_span_column_type_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<paged_model::SpanColumnType>,
+) -> Result<(Value, Value), OperationError> {
+    const EXPECTED: &str = "Text: \"\" | SingleColumn | SpanColumns | SplitColumns";
+    let refuse = || OperationError::TypeMismatch {
+        path,
+        expected: EXPECTED.to_string(),
+    };
+    let Value::Text(new_val) = value else {
+        return Err(refuse());
+    };
+    let next = if new_val.is_empty() {
+        None
+    } else {
+        Some(paged_model::SpanColumnType::from_idml(new_val).ok_or_else(refuse)?)
+    };
+    let prev = slot.map(|t| t.as_idml().to_string()).unwrap_or_default();
+    *slot = next;
+    Ok((Value::Text(prev), Value::Text(new_val.clone())))
+}
+
+/// Set an `Option<SpanSplitColumnCount>`. The wire shape is
+/// `Value::Text` — `"All"` or a whole number >= 1, `""` clears — since
+/// the count is an enum-or-number no `Length` can carry. A bare count
+/// is also accepted as `Value::Length(Some(n))` (the keep-count
+/// convention; a script's `2` arrives that way) and `Length(None)`
+/// clears. Zero, fractions, negatives and other strings are refused with
+/// the slot untouched. The prior always comes back as `Value::Text`
+/// (`None ⇒ ""`), which this setter accepts, so the inverse round-trips.
+pub(super) fn set_para_span_split_count_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<paged_model::SpanSplitColumnCount>,
+) -> Result<(Value, Value), OperationError> {
+    use paged_model::SpanSplitColumnCount as Count;
+    const EXPECTED: &str = "Text: \"\" | All | a whole number >= 1 (or Length(count))";
+    let refuse = || OperationError::TypeMismatch {
+        path,
+        expected: EXPECTED.to_string(),
+    };
+    let next = match value {
+        Value::Text(t) if t.is_empty() => None,
+        Value::Text(t) => Some(Count::from_idml(t).ok_or_else(refuse)?),
+        Value::Length(None) => None,
+        Value::Length(Some(n)) if n.is_finite() && *n >= 1.0 && n.fract() == 0.0 => {
+            Some(Count::Count(*n as u32))
+        }
+        _ => return Err(refuse()),
+    };
+    let prev = slot.map(Count::as_idml).unwrap_or_default();
+    *slot = next;
+    Ok((
+        Value::Text(prev),
+        Value::Text(next.map(Count::as_idml).unwrap_or_default()),
+    ))
+}
+
+/// Route one of the six span / split columns paths to its field of a
+/// paragraph's (or paragraph style's) `SpanColumns`. `None` for any
+/// other path.
+pub(super) fn set_span_columns_field(
+    path: PropertyPath,
+    value: &Value,
+    span: &mut paged_model::SpanColumns,
+) -> Option<Result<(Value, Value), OperationError>> {
+    Some(match path {
+        PropertyPath::ParagraphSpanColumnType => {
+            set_para_span_column_type_field(path, value, &mut span.column_type)
+        }
+        PropertyPath::ParagraphSpanSplitColumnCount => {
+            set_para_span_split_count_field(path, value, &mut span.count)
+        }
+        PropertyPath::ParagraphSpanColumnMinSpaceBefore => {
+            set_para_length_field(path, value, &mut span.min_space_before)
+        }
+        PropertyPath::ParagraphSpanColumnMinSpaceAfter => {
+            set_para_length_field(path, value, &mut span.min_space_after)
+        }
+        PropertyPath::ParagraphSplitColumnInsideGutter => {
+            set_para_length_field(path, value, &mut span.inside_gutter)
+        }
+        PropertyPath::ParagraphSplitColumnOutsideGutter => {
+            set_para_length_field(path, value, &mut span.outside_gutter)
+        }
+        _ => return None,
+    })
+}
+
 /// W0.2 — set the whole `ParagraphRule` struct (`rule_above` /
 /// `rule_below`) from a `Value::ParagraphRule`. `ParagraphRule(None)`
 /// clears the rule to the all-`None` default. The captured prior is
@@ -559,6 +653,15 @@ pub(super) fn apply_paragraph_field(
         }
         PropertyPath::ParagraphStartParagraph => {
             set_para_start_paragraph_field(path, value, &mut para.start_paragraph)
+        }
+        PropertyPath::ParagraphSpanColumnType
+        | PropertyPath::ParagraphSpanSplitColumnCount
+        | PropertyPath::ParagraphSpanColumnMinSpaceBefore
+        | PropertyPath::ParagraphSpanColumnMinSpaceAfter
+        | PropertyPath::ParagraphSplitColumnInsideGutter
+        | PropertyPath::ParagraphSplitColumnOutsideGutter => {
+            set_span_columns_field(path, value, &mut para.span_columns)
+                .expect("a span / split columns path")
         }
         // W0.2 — whole rule structs.
         PropertyPath::ParagraphRuleAbove => set_para_rule_field(path, value, &mut para.rule_above),

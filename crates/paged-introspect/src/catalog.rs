@@ -789,6 +789,12 @@ property_paths! {
         ParagraphKeepFirstLines => "paragraphKeepFirstLines",
         ParagraphKeepLastLines => "paragraphKeepLastLines",
         ParagraphStartParagraph => "paragraphStartParagraph",
+        ParagraphSpanColumnType => "paragraphSpanColumnType",
+        ParagraphSpanSplitColumnCount => "paragraphSpanSplitColumnCount",
+        ParagraphSpanColumnMinSpaceBefore => "paragraphSpanColumnMinSpaceBefore",
+        ParagraphSpanColumnMinSpaceAfter => "paragraphSpanColumnMinSpaceAfter",
+        ParagraphSplitColumnInsideGutter => "paragraphSplitColumnInsideGutter",
+        ParagraphSplitColumnOutsideGutter => "paragraphSplitColumnOutsideGutter",
         ParagraphRuleAbove => "paragraphRuleAbove",
         ParagraphRuleBelow => "paragraphRuleBelow",
         ParagraphTabStops => "paragraphTabStops",
@@ -1115,7 +1121,13 @@ mod tests {
         // (`paragraphKeepAllLinesTogether`, `paragraphKeepFirstLines`,
         // `paragraphKeepLastLines`, `paragraphStartParagraph`, protocol
         // 64) — modelled and rendered, but with no setter until now.
-        assert_eq!(cat.settable_paths.len(), 207, "settable path count drifted");
+        //
+        // 207 -> 213: span and split columns (`paragraphSpanColumnType`,
+        // `paragraphSpanSplitColumnCount`, `paragraphSpanColumnMinSpace
+        // Before` / `After`, `paragraphSplitColumnInside` / `Outside
+        // Gutter`, protocol 64) — modelled (ef4cb28) and rendered
+        // (a3e5a0c), but with no setter until now.
+        assert_eq!(cat.settable_paths.len(), 213, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

@@ -710,6 +710,33 @@ pub enum PropertyPath {
     /// clears the override (inherit). An unknown string is refused with
     /// a `TypeMismatch`, never stored. Reflow-affecting.
     ParagraphStartParagraph,
+    /// Span / split columns (`SpanColumnType`). `Value::Text` carrying
+    /// the IDML string (`SingleColumn` / `SpanColumns` /
+    /// `SplitColumns`); the empty string clears the override (inherit).
+    /// An unknown string is refused with a `TypeMismatch`, never stored.
+    /// Reflow-affecting.
+    ParagraphSpanColumnType,
+    /// How many columns a span covers or a split makes
+    /// (`SpanSplitColumnCount`). `Value::Text` — `"All"` or a whole
+    /// number >= 1 — because the count is an enum-or-number that no
+    /// `Length` can say; the empty string clears the override. A bare
+    /// count is also accepted as `Value::Length(Some(n))` (the keep-count
+    /// convention, and what a script's `2` becomes), `Length(None)`
+    /// clears. Readback and the inverse are always `Text`. Zero,
+    /// fractions and other strings are refused. Reflow-affecting.
+    ParagraphSpanSplitColumnCount,
+    /// `SpanColumnMinSpaceBefore` (pt) — `Value::Length`, `None` clears.
+    /// Reflow-affecting.
+    ParagraphSpanColumnMinSpaceBefore,
+    /// `SpanColumnMinSpaceAfter` (pt) — `Value::Length`, `None` clears.
+    /// Reflow-affecting.
+    ParagraphSpanColumnMinSpaceAfter,
+    /// `SplitColumnInsideGutter` (pt) — `Value::Length`, `None` clears.
+    /// Reflow-affecting.
+    ParagraphSplitColumnInsideGutter,
+    /// `SplitColumnOutsideGutter` (pt) — `Value::Length`, `None` clears.
+    /// Reflow-affecting.
+    ParagraphSplitColumnOutsideGutter,
     /// W0.2 — whole `RuleAbove*` rule struct, mirroring the
     /// `FrameGradientFeather` whole-struct pattern. Value is
     /// `Value::ParagraphRule(Some(spec))` to set, or
@@ -1388,6 +1415,12 @@ impl PropertyPath {
             PropertyPath::ParagraphKeepFirstLines => "paragraph.keepFirstLines",
             PropertyPath::ParagraphKeepLastLines => "paragraph.keepLastLines",
             PropertyPath::ParagraphStartParagraph => "paragraph.startParagraph",
+            PropertyPath::ParagraphSpanColumnType => "paragraph.spanColumnType",
+            PropertyPath::ParagraphSpanSplitColumnCount => "paragraph.spanSplitColumnCount",
+            PropertyPath::ParagraphSpanColumnMinSpaceBefore => "paragraph.spanColumnMinSpaceBefore",
+            PropertyPath::ParagraphSpanColumnMinSpaceAfter => "paragraph.spanColumnMinSpaceAfter",
+            PropertyPath::ParagraphSplitColumnInsideGutter => "paragraph.splitColumnInsideGutter",
+            PropertyPath::ParagraphSplitColumnOutsideGutter => "paragraph.splitColumnOutsideGutter",
             PropertyPath::ParagraphRuleAbove => "paragraph.ruleAbove",
             PropertyPath::ParagraphRuleBelow => "paragraph.ruleBelow",
             PropertyPath::ParagraphTabStops => "paragraph.tabStops",

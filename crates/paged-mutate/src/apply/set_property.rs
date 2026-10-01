@@ -2100,6 +2100,12 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphKeepFirstLines
             | PropertyPath::ParagraphKeepLastLines
             | PropertyPath::ParagraphStartParagraph
+            | PropertyPath::ParagraphSpanColumnType
+            | PropertyPath::ParagraphSpanSplitColumnCount
+            | PropertyPath::ParagraphSpanColumnMinSpaceBefore
+            | PropertyPath::ParagraphSpanColumnMinSpaceAfter
+            | PropertyPath::ParagraphSplitColumnInsideGutter
+            | PropertyPath::ParagraphSplitColumnOutsideGutter
             | PropertyPath::ParagraphRuleAbove
             | PropertyPath::ParagraphRuleBelow
             | PropertyPath::ParagraphTabStops

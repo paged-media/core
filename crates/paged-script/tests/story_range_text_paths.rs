@@ -91,6 +91,12 @@ const CASES = [
   ['paragraphKeepFirstLines', 3],
   ['paragraphKeepLastLines', 3],
   ['paragraphStartParagraph', 'NextFrame'],
+  ['paragraphSpanColumnType', 'SpanColumns'],
+  ['paragraphSpanSplitColumnCount', '2'],
+  ['paragraphSpanColumnMinSpaceBefore', 6],
+  ['paragraphSpanColumnMinSpaceAfter', 10],
+  ['paragraphSplitColumnInsideGutter', 20],
+  ['paragraphSplitColumnOutsideGutter', 4],
   ['paragraphListType', 'BulletList'],
   // A CHARACTER, not a code point: the apply layer takes the first
   // char of the string, so '8226' would store '8'.
@@ -162,6 +168,13 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphKeepFirstLines",
         "paragraphKeepLastLines",
         "paragraphStartParagraph",
+        // Span / split columns (protocol 64).
+        "paragraphSpanColumnType",
+        "paragraphSpanSplitColumnCount",
+        "paragraphSpanColumnMinSpaceBefore",
+        "paragraphSpanColumnMinSpaceAfter",
+        "paragraphSplitColumnInsideGutter",
+        "paragraphSplitColumnOutsideGutter",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -173,7 +186,7 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        207,
+        213,
         "the advertised roster changed; move the count with the decision"
     );
 }

@@ -2041,6 +2041,16 @@ pub(super) fn set_paragraph_style_field(
             )?
             .0)
         }
+        PropertyPath::ParagraphSpanColumnType
+        | PropertyPath::ParagraphSpanSplitColumnCount
+        | PropertyPath::ParagraphSpanColumnMinSpaceBefore
+        | PropertyPath::ParagraphSpanColumnMinSpaceAfter
+        | PropertyPath::ParagraphSplitColumnInsideGutter
+        | PropertyPath::ParagraphSplitColumnOutsideGutter => Ok(
+            super::paragraph::set_span_columns_field(path, value, &mut def.span_columns)
+                .expect("a span / split columns path")?
+                .0,
+        ),
         PropertyPath::ParagraphHyphenation => {
             Ok(super::paragraph::set_para_bool_field(path, value, &mut def.hyphenation, true)?.0)
         }

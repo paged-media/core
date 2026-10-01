@@ -4947,6 +4947,150 @@ mod tests {
         );
     }
 
+    /// Span / split columns: every path round-trips through apply and
+    /// undo, and invalidates reflow.
+    #[test]
+    fn paragraph_span_columns_paths_round_trip() {
+        use paged_model::{SpanColumnType, SpanColumns, SpanSplitColumnCount};
+        type Slot = fn(&SpanColumns) -> SpanColumns;
+        let cases: [(PropertyPath, Value, Slot); 7] = [
+            (
+                PropertyPath::ParagraphSpanColumnType,
+                Value::Text("SpanColumns".into()),
+                |_| SpanColumns {
+                    column_type: Some(SpanColumnType::SpanColumns),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Text("All".into()),
+                |_| SpanColumns {
+                    count: Some(SpanSplitColumnCount::All),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Length(Some(3.0)),
+                |_| SpanColumns {
+                    count: Some(SpanSplitColumnCount::Count(3)),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSpanColumnMinSpaceBefore,
+                Value::Length(Some(6.0)),
+                |_| SpanColumns {
+                    min_space_before: Some(6.0),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSpanColumnMinSpaceAfter,
+                Value::Length(Some(10.0)),
+                |_| SpanColumns {
+                    min_space_after: Some(10.0),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSplitColumnInsideGutter,
+                Value::Length(Some(20.0)),
+                |_| SpanColumns {
+                    inside_gutter: Some(20.0),
+                    ..SpanColumns::default()
+                },
+            ),
+            (
+                PropertyPath::ParagraphSplitColumnOutsideGutter,
+                Value::Length(Some(4.0)),
+                |_| SpanColumns {
+                    outside_gutter: Some(4.0),
+                    ..SpanColumns::default()
+                },
+            ),
+        ];
+        for (path, value, want) in cases {
+            let mut project = Project::new(document_with_one_story("Story/u1"));
+            register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+            let applied = project
+                .apply(story_range_op(path, value.clone()))
+                .unwrap_or_else(|e| panic!("{path:?} {value:?}: {e:?}"));
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(para.span_columns, want(&para.span_columns), "{path:?}");
+            assert_eq!(applied.invalidation.text_reflow.len(), 1, "{path:?}");
+
+            crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(para.span_columns, SpanColumns::default(), "{path:?} undo");
+        }
+    }
+
+    /// Unknown span types and counts that are not a whole number >= 1
+    /// are refused, never stored or silently cleared.
+    #[test]
+    fn paragraph_span_columns_refuses_unknown_values() {
+        use paged_model::{SpanColumnType, SpanSplitColumnCount};
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        {
+            let span = &mut project.document_mut().stories[0].story.paragraphs[0].span_columns;
+            span.column_type = Some(SpanColumnType::SplitColumns);
+            span.count = Some(SpanSplitColumnCount::Count(2));
+        }
+        let refused = [
+            (
+                PropertyPath::ParagraphSpanColumnType,
+                Value::Text("Span".into()),
+            ),
+            (
+                PropertyPath::ParagraphSpanColumnType,
+                Value::Length(Some(2.0)),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Text("0".into()),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Text("-1".into()),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Text("some".into()),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Length(Some(0.0)),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Length(Some(1.5)),
+            ),
+            (
+                PropertyPath::ParagraphSpanSplitColumnCount,
+                Value::Bool(true),
+            ),
+            (
+                PropertyPath::ParagraphSpanColumnMinSpaceBefore,
+                Value::Text("6".into()),
+            ),
+        ];
+        for (path, bad) in refused {
+            let err = project
+                .apply(story_range_op(path, bad.clone()))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "{path:?} {bad:?}: got {err:?}"
+            );
+        }
+        let span = project.document().stories[0].story.paragraphs[0].span_columns;
+        assert_eq!(span.column_type, Some(SpanColumnType::SplitColumns));
+        assert_eq!(span.count, Some(SpanSplitColumnCount::Count(2)));
+        assert_eq!(span.min_space_before, None);
+    }
+
     /// `paragraphRuleAbove` whole-struct: sets the rule, undo restores
     /// the prior all-`None` default. Proves the new `Value::ParagraphRule`
     /// variant round-trips the rule bytewise.

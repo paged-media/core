@@ -4032,6 +4032,10 @@ fn js_value_to_wire(
             | P::ParagraphNumberingFormat
             // ADR 028 — the break-before rule, an IDML enum string.
             | P::ParagraphStartParagraph
+            // Span / split columns: the IDML enum string, and the
+            // count ("All" or digits; a JS number arrives as a Length).
+            | P::ParagraphSpanColumnType
+            | P::ParagraphSpanSplitColumnCount
             // W1.22 — applied numbering-list ref + next-style ref.
             | P::ParagraphAppliedNumberingList
             | P::ParagraphStyleNextStyle

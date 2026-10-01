@@ -6023,6 +6023,7 @@ impl CanvasModel {
         let mut keep_first_lines: Vec<Option<u32>> = Vec::new();
         let mut keep_last_lines: Vec<Option<u32>> = Vec::new();
         let mut start_paragraphs: Vec<Option<paged_model::StartParagraph>> = Vec::new();
+        let mut span_columns: Vec<paged_model::SpanColumns> = Vec::new();
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
@@ -6065,6 +6066,7 @@ impl CanvasModel {
                 keep_first_lines.push(para.keep_first_lines);
                 keep_last_lines.push(para.keep_last_lines);
                 start_paragraphs.push(para.start_paragraph);
+                span_columns.push(para.span_columns);
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
@@ -6283,6 +6285,64 @@ impl CanvasModel {
                 path: PropertyPath::ParagraphStartParagraph,
                 value: collapse_uniform(&start_paragraphs)
                     .map(|o| Value::Text(o.map(|sp| sp.as_idml().to_string()).unwrap_or_default())),
+            },
+            // Span / split columns: the type and count surface their IDML
+            // strings (empty ⇒ no override), the four lengths their raw
+            // `Option<f32>` (None ⇒ inherit).
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpanColumnType,
+                value: collapse_uniform(
+                    &span_columns
+                        .iter()
+                        .map(|s| s.column_type)
+                        .collect::<Vec<_>>(),
+                )
+                .map(|o| Value::Text(o.map(|t| t.as_idml().to_string()).unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpanSplitColumnCount,
+                value: collapse_uniform(&span_columns.iter().map(|s| s.count).collect::<Vec<_>>())
+                    .map(|o| Value::Text(o.map(|c| c.as_idml()).unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpanColumnMinSpaceBefore,
+                value: collapse_uniform(
+                    &span_columns
+                        .iter()
+                        .map(|s| s.min_space_before)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSpanColumnMinSpaceAfter,
+                value: collapse_uniform(
+                    &span_columns
+                        .iter()
+                        .map(|s| s.min_space_after)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSplitColumnInsideGutter,
+                value: collapse_uniform(
+                    &span_columns
+                        .iter()
+                        .map(|s| s.inside_gutter)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSplitColumnOutsideGutter,
+                value: collapse_uniform(
+                    &span_columns
+                        .iter()
+                        .map(|s| s.outside_gutter)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphListType,
