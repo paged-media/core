@@ -581,6 +581,7 @@ mod tests {
             stroke_gap_color: None,
             stroke_gap_tint: None,
             stroke_dash: Vec::new(),
+            stroke_alignment: None,
             drop_shadow: None,
             stroke_drop_shadow: None,
             next_text_frame: None,

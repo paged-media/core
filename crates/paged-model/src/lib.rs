@@ -778,6 +778,14 @@ pub struct TextFrame {
     pub stroke_gap_tint: Option<f32>,
     /// W1.1 — per-frame dash override; see [`Rectangle::stroke_dash`].
     pub stroke_dash: Vec<f32>,
+    /// `StrokeAlignment` (`CenterAlignment` / `InsideAlignment` /
+    /// `OutsideAlignment`); see [`Rectangle::stroke_alignment`]. On a
+    /// text frame it decides two things: where the stroke paints, as on a
+    /// rectangle, and how far it insets the text — by half its weight
+    /// centred, all of it inside, none outside (InDesign 20.0.1, the
+    /// `stroke-inset` fixture). `None` ⇒ centred, the IDML default.
+    #[serde(default)]
+    pub stroke_alignment: Option<String>,
     /// `<DropShadowSetting>` parsed from `<Properties><TransparencySetting>`.
     /// `None` when absent or `Mode="None"`.
     pub drop_shadow: Option<DropShadowSetting>,
@@ -1002,6 +1010,7 @@ impl TextFrame {
             stroke_gap_color: None,
             stroke_gap_tint: None,
             stroke_dash: Vec::new(),
+            stroke_alignment: None,
             drop_shadow: None,
             stroke_drop_shadow: None,
             next_text_frame: None,
