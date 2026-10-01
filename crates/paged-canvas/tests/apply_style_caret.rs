@@ -269,3 +269,24 @@ fn a_caret_past_the_end_is_refused() {
     let (mut m, story) = story_with("AB");
     assert!(!apply(&mut m, &story, 3, H, StyleScope::Paragraph));
 }
+
+#[test]
+fn a_range_over_a_blank_line_undoes() {
+    // The inverse restores each paragraph at its own range — for the
+    // blank line, a caret. That replay was refused before carets were
+    // addresses, so undo failed.
+    let (mut m, story) = story_with("A\n\nB");
+    let before = styles(&m, &story);
+    m.apply_mutation(&Mutation::ApplyStyle {
+        story_id: story.clone(),
+        start: 0,
+        end: 2,
+        style: H.into(),
+        scope: StyleScope::Paragraph,
+        cell: None,
+    })
+    .expect("range");
+    assert!(styles(&m, &story).iter().all(|p| p.1.as_deref() == Some(H)));
+    m.undo().expect("undo");
+    assert_eq!(styles(&m, &story), before);
+}
