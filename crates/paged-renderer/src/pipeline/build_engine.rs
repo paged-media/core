@@ -4122,6 +4122,60 @@ pub(super) fn build_toc_paragraphs(
     out
 }
 
+/// The stops a paragraph's tabs snap to: its `<TabList>`, plus the
+/// hanging indent's own stop.
+///
+/// When the first line starts left of the left indent (a negative
+/// `FirstLineIndent`), InDesign treats the left indent as a Left stop
+/// for that line, ranked with the explicit stops by position: a tab goes
+/// to whichever comes first past the pen, and only when neither does to
+/// the next 36 pt default stop. Measured on `list-markers` (InDesign
+/// 20.0.1): after a bullet the text starts at the left indent (18, 50,
+/// 30) with no `<TabList>`, with a stop beyond it (60) and with one under
+/// the marker (2); an explicit stop between the marker and the indent
+/// (30 of 50, 10 of 50) wins; a marker wider than the indent (6) goes on
+/// to the 36 pt default; and a plain tab in a hanging paragraph with no
+/// list at all stops at the indent the same way. Later lines start AT
+/// the left indent, so the extra stop can never be ahead of their pen.
+fn paragraph_tab_stops(
+    resolved: &paged_scene::ResolvedParagraphAttrs,
+    left_indent_pt: f32,
+    first_line_indent_pt: f32,
+) -> Vec<paged_text::layout::TabStopSpec> {
+    let mut stops: Vec<paged_text::layout::TabStopSpec> = resolved
+        .tab_list
+        .iter()
+        .map(|t| paged_text::layout::TabStopSpec {
+            position_pt: t.position,
+            alignment: map_tab_alignment(t.alignment.as_deref()),
+            alignment_character: t
+                .alignment_character
+                .as_deref()
+                .and_then(|s| s.chars().next())
+                .unwrap_or('.'),
+            // IDML's `Leader` is a short string (commonly ".",
+            // ". ", or "…"). Empty leaders are treated as absent
+            // so the tab snaps without filling. Trailing
+            // whitespace is significant — ". " produces
+            // space-separated dots — so it's kept verbatim.
+            leader: t.leader.clone().filter(|s| !s.is_empty()),
+        })
+        .collect();
+    if first_line_indent_pt < 0.0
+        && left_indent_pt > 0.0
+        && !stops
+            .iter()
+            .any(|t| (t.position_pt - left_indent_pt).abs() < 0.01)
+    {
+        let at = stops
+            .iter()
+            .position(|t| t.position_pt > left_indent_pt)
+            .unwrap_or(stops.len());
+        stops.insert(at, paged_text::layout::TabStopSpec::left(left_indent_pt));
+    }
+    stops
+}
+
 /// Body of `StoryEmitter::emit_paragraph`. Lives as a free fn so
 /// the long, branching layout/emit pipeline isn't visually
 /// indented under `impl`. The free fn has full mutable access to
@@ -5412,25 +5466,11 @@ pub(super) fn emit_paragraph_into_chain(
     let needs_paragraph_text = paragraph.runs.iter().any(|r| r.text.contains('\t'))
         || list_first_text.as_deref().is_some_and(|t| t.contains('\t'));
     if needs_paragraph_text {
-        let tab_stops: Vec<paged_text::layout::TabStopSpec> = resolved_paragraph
-            .tab_list
-            .iter()
-            .map(|t| paged_text::layout::TabStopSpec {
-                position_pt: t.position,
-                alignment: map_tab_alignment(t.alignment.as_deref()),
-                alignment_character: t
-                    .alignment_character
-                    .as_deref()
-                    .and_then(|s| s.chars().next())
-                    .unwrap_or('.'),
-                // IDML's `Leader` is a short string (commonly ".",
-                // ". ", or "…"). Empty leaders are treated as absent
-                // so the tab snaps without filling. Trailing
-                // whitespace is significant — ". " produces
-                // space-separated dots — so it's kept verbatim.
-                leader: t.leader.clone().filter(|s| !s.is_empty()),
-            })
-            .collect();
+        let tab_stops = paragraph_tab_stops(
+            &resolved_paragraph,
+            left_indent_pt,
+            resolved_paragraph.first_line_indent.unwrap_or(0.0),
+        );
         let paragraph_text: String = paragraph
             .runs
             .iter()

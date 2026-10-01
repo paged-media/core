@@ -33,6 +33,7 @@ pub mod layers_z;
 pub mod layout;
 pub mod links_broken;
 pub mod links_ok;
+pub mod list_markers;
 pub mod markers;
 pub mod masters;
 pub mod navigation;
@@ -107,6 +108,7 @@ pub const SAMPLES: &[&str] = &[
     "keeps",
     "start-paragraph",
     "forced-line-break",
+    "list-markers",
     "reflow",
     "docx-pagination",
     "nested-groups",
@@ -155,6 +157,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
         "forced-line-break" => forced_line_break::build(),
+        "list-markers" => list_markers::build(),
         "reflow" => reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
@@ -190,7 +193,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            43,
+            44,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

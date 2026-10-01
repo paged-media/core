@@ -154,6 +154,15 @@
       "report": "/tmp/idml-generated-diff/links-ok/report.json"
     },
     {
+      "name": "list-markers",
+      "idml": "list-markers.idml",
+      "pdf": "list-markers.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/list-markers",
+      "report": "/tmp/idml-generated-diff/list-markers/report.json"
+    },
+    {
       "name": "markers",
       "idml": "markers.idml",
       "pdf": "markers.pdf",
@@ -194,7 +203,7 @@
       "idml": "numbering.idml",
       "pdf": "numbering.pdf",
       "pages": 2,
-      "passing": 0,
+      "passing": 2,
       "diff_dir": "/tmp/idml-generated-diff/numbering",
       "report": "/tmp/idml-generated-diff/numbering/report.json"
     },

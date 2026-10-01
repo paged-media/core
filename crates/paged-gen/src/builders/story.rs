@@ -382,10 +382,19 @@ pub fn write_story(s: &Story) -> Vec<u8> {
         let min_ls_str: String;
         let desired_ls_str: String;
         let max_ls_str: String;
-        let mut p_attrs: Vec<(&str, &str)> = vec![(
-            "AppliedParagraphStyle",
-            "ParagraphStyle/$ID/[No paragraph style]",
-        )];
+        // An `AppliedParagraphStyle` in the escape hatch REPLACES the
+        // default (a second copy would be a duplicate attribute).
+        let mut p_attrs: Vec<(&str, &str)> = Vec::new();
+        if !paragraph
+            .extra_paragraph_attrs
+            .iter()
+            .any(|(k, _)| *k == "AppliedParagraphStyle")
+        {
+            p_attrs.push((
+                "AppliedParagraphStyle",
+                "ParagraphStyle/$ID/[No paragraph style]",
+            ));
+        }
         if let Some(j) = paragraph.justification {
             p_attrs.push(("Justification", j));
         }

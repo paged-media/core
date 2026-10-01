@@ -199,10 +199,10 @@
     {
       "name": "numbering",
       "max_pages_with_pdf": 2,
-      "max_mean_de": 0.565,
+      "max_mean_de": 0.109,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9731,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%."
+      "min_ssim": 0.992,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 by the list-marker fix (a hanging first line's left indent is a tab stop, so the text after each number now starts at the 18 pt indent where InDesign puts it instead of the 36 pt default stop): worst page now mean 0.091 / p99 0.000 / SSIM 0.9970, both pages inside the §13.2 budget; re-sized at worst * 1.20, p99 at the 0.3 floor, ssim worst - 0.005."
     },
     {
       "name": "paste-into",
@@ -359,10 +359,18 @@
     {
       "name": "forced-line-break",
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.709,
+      "max_mean_de": 0.607,
       "max_p99_de": 15.13,
-      "min_ssim": 0.942,
-      "rationale": "Added 2026-10-01 with the forced line break (U+2028, core ab383b1). Seven cases on one page (indent + spacing, bullets, numbers, two breaks in a row, a break that ends the paragraph, justified, a break that starts it); the reference is InDesign 2025's own export, and every line of every case lands where InDesign put it (also pinned structurally by crates/paged-renderer/tests/forced_line_break_pipeline.rs). It could join only once the importer kept U+2028 in the run (plugin-publish 18d0622): while it folded the break into \\n the gate rendered every break as a paragraph mark and measured mean 0.757 / p99 26.6. Worst page measured: mean 0.591 / p99 12.611 / ssim 0.9470; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the forced break: in the bullets and numbers cases the text after the list marker starts at the wrong x (the engine puts a space after an undeclared BulletsTextAfter where InDesign's default is a tab, and the number's tab lands at 108 pt, the next 36 pt default stop, instead of the hanging indent's left indent at 90 pt); with those two frames masked the page measures mean 0.387. Tighten when that is fixed. Body copy is Inter, registered by forced-line-break.fonts.sh."
+      "min_ssim": 0.946,
+      "rationale": "Added 2026-10-01 with the forced line break (U+2028, core ab383b1). Seven cases on one page (indent + spacing, bullets, numbers, two breaks in a row, a break that ends the paragraph, justified, a break that starts it); the reference is InDesign 2025's own export, and every line of every case lands where InDesign put it (also pinned structurally by crates/paged-renderer/tests/forced_line_break_pipeline.rs). It could join only once the importer kept U+2028 in the run (plugin-publish 18d0622): while it folded the break into \\n the gate rendered every break as a paragraph mark and measured mean 0.757 / p99 26.6. Worst page measured: mean 0.591 / p99 12.611 / ssim 0.9470; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE at the time, not the forced break: in the bullets and numbers cases the text after the list marker started at the wrong x (the engine puts a space after an undeclared BulletsTextAfter where InDesign's default is a tab, and the number's tab lands at 108 pt, the next 36 pt default stop, instead of the hanging indent's left indent at 90 pt); with those two frames masked the page measures mean 0.387. Body copy is Inter, registered by forced-line-break.fonts.sh. TIGHTENED 2026-10-01 once that residue was fixed (core: an undeclared BulletsTextAfter is a tab, and a hanging first line's left indent is a tab stop; measured by the list-markers fixture): the page now measures mean 0.506 / p99 12.611 / ssim 0.9519, re-sized at worst * 1.20 (p99 unchanged at 15.13) and worst_ssim - 0.005. What remains is not the list markers: the 0.25 pt frame strokes and glyph-edge antialiasing (the 0.387 above was with whole frames masked, strokes included)."
+    },
+    {
+      "name": "list-markers",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 1.047,
+      "max_p99_de": 40.01,
+      "min_ssim": 0.904,
+      "rationale": "Added 2026-10-01 to ask InDesign where the text after a list marker starts. Fourteen cases on one page, two paragraphs each: BulletsTextAfter undeclared / ^t / a space; NumberingExpression ^#.^t / ^#.; no indent, left indent only, hanging indents (one narrower than the number), explicit tab stops before, beyond and under the marker, and a plain tab in a hanging paragraph with no list. The reference is InDesign 20.0.1's own export, and the x of the text after every marker matches it within 0.5 pt (pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs). Worst page measured: mean 0.873 / p99 33.344 / ssim 0.9096; sized at worst * 1.20 and worst_ssim - 0.005. The residue is not the markers: fourteen 0.25 pt frame strokes the CPU rasteriser paints lighter than InDesign, plus glyph-edge antialiasing (before the fix the page measured mean 1.114 / p99 53.7 / ssim 0.8958). Body copy is Inter, registered by list-markers.fonts.sh."
     }
   ]
 }

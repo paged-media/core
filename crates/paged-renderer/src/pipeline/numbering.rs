@@ -30,8 +30,9 @@
 ///  - NoList / absent: counter resets to 0; returns `None`.
 ///
 /// `^t` substitutions are snapped to the next tab stop by the
-/// existing `apply_tab_stops` pass; the default 36 pt grid gives a
-/// reasonable hanging indent without explicit `<TabList>`.
+/// existing `apply_tab_stops` pass, where a hanging paragraph's left
+/// indent is a stop of its own (see `paragraph_tab_stops`), so the text
+/// after the marker lands on the hanging indent without a `<TabList>`.
 ///
 /// W1.22 — `cross_story_seed` carries cross-story numbering continuity
 /// (engine gap 22). When `Some(prior)`, the paragraph is bound to a
@@ -64,12 +65,17 @@ pub(super) fn list_prefix(
             // still appear.
             let cp = p.bullet_character.unwrap_or(0x2022);
             let ch = char::from_u32(cp)?;
-            // `^t` in IDML serialises a literal tab in BulletsTextAfter.
+            // `^t` in IDML serialises a literal tab in BulletsTextAfter,
+            // and a tab is also InDesign's default when nothing in the
+            // cascade declares it (measured on `list-markers` c00, InDesign
+            // 20.0.1: the text after an undeclared bullet starts at the
+            // hanging indent, exactly where `^t` puts it, not one space
+            // after the bullet).
             let after = p
                 .bullets_text_after
                 .as_deref()
                 .map(|s| s.replace("^t", "\t"))
-                .unwrap_or_else(|| " ".to_string());
+                .unwrap_or_else(|| "\t".to_string());
             Some(format!("{ch}{after}"))
         }
         Some("NumberedList") => {
@@ -105,9 +111,9 @@ pub(super) fn list_prefix(
             *prev_was_numbered = true;
             let formatted = format_number(*counter, p.numbering_format.as_deref());
             // IDML default expression is `^#.^t` — `<n>` + period +
-            // tab. The tab snaps to a tab stop via `apply_tab_stops`
-            // (default 36 pt grid if no <TabList>), giving a
-            // hanging indent without explicit setup.
+            // tab. The tab snaps via `apply_tab_stops` to the first
+            // stop past the number: an explicit one, the hanging left
+            // indent, else the 36 pt default grid.
             let expr = p.numbering_expression.as_deref().unwrap_or("^#.^t");
             Some(substitute_numbering_expression(expr, &formatted))
         }

@@ -1242,8 +1242,12 @@ pub fn apply_tab_stops_with_leaders(
         if new_advance < original_advance && alignment != TabAlignment::Left {
             new_advance = next_stop_64 - current_x;
         }
+        // A Left stop takes the tab to it however close it is: the tab's
+        // natural advance is no minimum (measured on `list-markers` c10,
+        // InDesign 20.0.1: "2." ends 1.03 pt short of a stop at 10 and
+        // the text starts AT 10, not one tab-glyph width later).
         let delta = new_advance - original_advance;
-        if delta > 0 {
+        if delta > 0 || (delta < 0 && alignment == TabAlignment::Left) {
             for g in &mut line.glyphs[(i + 1)..] {
                 g.x += delta;
             }
