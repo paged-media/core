@@ -1974,6 +1974,89 @@ pub(super) fn set_paragraph_style_field(
             def.next_style = if s.is_empty() { None } else { Some(s.clone()) };
             Ok(prior)
         }
+        // The paragraph paths a style carries, set with the SAME field
+        // helpers the paragraph-level setter uses, so the two levels cannot
+        // disagree on a value kind or an undo default. These were all
+        // refused here, so a Word document's synthesized styles lost their
+        // indents, keeps, tabs and lists (plugin-doc lowers direct
+        // formatting to styles; ADR 029).
+        PropertyPath::ParagraphLeftIndent => {
+            Ok(super::paragraph::set_para_length_field(path, value, &mut def.left_indent)?.0)
+        }
+        PropertyPath::ParagraphRightIndent => {
+            Ok(super::paragraph::set_para_length_field(path, value, &mut def.right_indent)?.0)
+        }
+        PropertyPath::ParagraphHyphenationZone => {
+            Ok(super::paragraph::set_para_length_field(path, value, &mut def.hyphenation_zone)?.0)
+        }
+        PropertyPath::ParagraphKeepWithNext => Ok(super::paragraph::set_para_opt_u32_length_field(
+            path,
+            value,
+            &mut def.keep_with_next,
+        )?
+        .0),
+        PropertyPath::ParagraphKeepLinesTogether => Ok(super::paragraph::set_para_bool_field(
+            path,
+            value,
+            &mut def.keep_lines_together,
+            false,
+        )?
+        .0),
+        PropertyPath::ParagraphHyphenation => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.hyphenation, true)?.0)
+        }
+        PropertyPath::ParagraphListType => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.bullets_list_type)?.0)
+        }
+        PropertyPath::ParagraphNumberingFormat => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.numbering_format)?.0)
+        }
+        PropertyPath::ParagraphAppliedNumberingList => Ok(super::paragraph::set_para_text_field(
+            path,
+            value,
+            &mut def.applied_numbering_list,
+        )?
+        .0),
+        PropertyPath::ParagraphBulletCharacter => {
+            let Value::Text(s) = value else {
+                return Err(type_err());
+            };
+            let prior = def
+                .bullet_character
+                .and_then(char::from_u32)
+                .map(|c| c.to_string())
+                .unwrap_or_default();
+            def.bullet_character = s.chars().next().map(|c| c as u32);
+            Ok(Value::Text(prior))
+        }
+        PropertyPath::ParagraphTabStops => {
+            let Value::TabStops(stops) = value else {
+                return Err(type_err());
+            };
+            let prior = def
+                .tab_list
+                .iter()
+                .map(crate::operation::TabStopSpec::from_parse)
+                .collect();
+            def.tab_list = stops.iter().map(|s| s.to_parse()).collect();
+            Ok(Value::TabStops(prior))
+        }
+        // Run-level fields a paragraph style carries (Word's pStyle rPr).
+        PropertyPath::CharacterCase => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.capitalization)?.0)
+        }
+        PropertyPath::CharacterPosition => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.position)?.0)
+        }
+        PropertyPath::CharacterBaselineShift => {
+            Ok(super::paragraph::set_para_length_field(path, value, &mut def.baseline_shift)?.0)
+        }
+        PropertyPath::CharacterUnderline => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.underline, false)?.0)
+        }
+        PropertyPath::CharacterStrikethru => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.strikethru, false)?.0)
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),
             path,
@@ -2020,6 +2103,22 @@ pub(super) fn set_character_style_field(
         | PropertyPath::CharacterFontStyle
         | PropertyPath::CharacterLeading => {
             Ok(style_type_fields!(def, path, value, type_err).expect("arm matched above"))
+        }
+        // As for paragraph styles: the run setter's field helpers.
+        PropertyPath::CharacterCase => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.capitalization)?.0)
+        }
+        PropertyPath::CharacterPosition => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.position)?.0)
+        }
+        PropertyPath::CharacterBaselineShift => {
+            Ok(super::paragraph::set_para_length_field(path, value, &mut def.baseline_shift)?.0)
+        }
+        PropertyPath::CharacterUnderline => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.underline, false)?.0)
+        }
+        PropertyPath::CharacterStrikethru => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.strikethru, false)?.0)
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),
