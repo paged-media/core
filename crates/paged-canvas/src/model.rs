@@ -1352,6 +1352,17 @@ pub struct CanvasModel {
     /// scene first ([`Self::refresh_font_table`]). Gesture rebuilds
     /// (drags) never set it, so they never pay the walk.
     font_check_owed: bool,
+    /// thoughts ADR 027 plan step 6 — each story's previous emission with a
+    /// mark per paragraph, so an edited story resumes at the edit and stops
+    /// early.
+    story_resume: paged_renderer::StoryResumeStore,
+    /// Story id → the paragraphs the ONE text edit since the last build
+    /// changed. A second edit of the same story before the rebuild drops
+    /// it (and the story's records). Consumed by the rebuild.
+    pending_edit_spans: HashMap<String, paged_renderer::EditSpan>,
+    /// Bumped by every rebuild; a resume record is never read back in the
+    /// build that wrote it.
+    build_generation: u64,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1707,6 +1718,9 @@ impl CanvasModel {
             keep_seeds: Default::default(),
             pending_keep_hints: HashMap::new(),
             font_check_owed: false,
+            story_resume: Default::default(),
+            pending_edit_spans: HashMap::new(),
+            build_generation: 0,
         })
     }
 
@@ -2196,7 +2210,7 @@ impl CanvasModel {
         // W1.24 (audit B18) — time the scene edit; the next rebuild
         // folds it into RebuildStats.op_apply_ms.
         let t_op = phase_now();
-        let edit = crate::mutate::first_changed_paragraph(&text_op, &self.scene);
+        let edit = crate::mutate::edit_span(&text_op, &self.scene);
         let applied = crate::mutate::apply(&mut self.scene, &text_op).map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("text mutation failed: {e}"),
@@ -4117,7 +4131,7 @@ impl CanvasModel {
         let mut invalidation = Invalidation::Everything;
         let affected_story_id = match &rec.kind {
             LoggedMutation::Text { op: _, inverse } => {
-                let edit = crate::mutate::first_changed_paragraph(inverse, &self.scene);
+                let edit = crate::mutate::edit_span(inverse, &self.scene);
                 let _ = crate::mutate::apply(&mut self.scene, inverse).ok()?;
                 invalidation = Invalidation::Text {
                     story: story_id_of_text_op(inverse).to_string(),
@@ -4172,7 +4186,7 @@ impl CanvasModel {
         let mut invalidation = Invalidation::Everything;
         let (new_kind, affected_story_id) = match &rec.kind {
             LoggedMutation::Text { op, inverse: _ } => {
-                let edit = crate::mutate::first_changed_paragraph(op, &self.scene);
+                let edit = crate::mutate::edit_span(op, &self.scene);
                 let applied = crate::mutate::apply(&mut self.scene, op).ok()?;
                 invalidation = Invalidation::Text {
                     story: story_id_of_text_op(op).to_string(),
@@ -8544,6 +8558,9 @@ impl CanvasModel {
                 body_story_emit_cache: Some(&self.body_story_emit_cache),
                 keep_seeds: Some(&self.keep_seeds),
                 keep_seed_hints: Some(&self.pending_keep_hints),
+                story_resume: Some(&self.story_resume),
+                edit_spans: Some(&self.pending_edit_spans),
+                build_generation: self.build_generation,
                 render_scale: self.resource_render_scale,
                 // A5 — live rebuilds keep the degraded-asset markers on
                 // (mirrors the initial load); an export stays faithful.
@@ -8646,6 +8663,8 @@ impl CanvasModel {
                 self.body_story_emit_cache.borrow_mut().clear();
                 self.keep_seeds.borrow_mut().clear();
                 self.pending_keep_hints.clear();
+                self.story_resume.borrow_mut().clear();
+                self.pending_edit_spans.clear();
             }
             Invalidation::Text { story, edit } => {
                 // thoughts ADR 027 plan step 4 — a text edit changes one
@@ -8671,15 +8690,31 @@ impl CanvasModel {
                     self.body_story_emit_cache.borrow_mut().clear();
                 }
                 match edit {
-                    Some((story, paragraph)) => {
-                        let hint = self.pending_keep_hints.entry(story).or_insert(paragraph);
-                        *hint = (*hint).min(paragraph);
+                    Some((story, span)) => {
+                        let hint = self
+                            .pending_keep_hints
+                            .entry(story.clone())
+                            .or_insert(span.first);
+                        *hint = (*hint).min(span.first);
+                        // A span describes ONE edit against the last build;
+                        // two before a rebuild describe nothing usable.
+                        if self.pending_edit_spans.remove(&story).is_some() {
+                            self.story_resume
+                                .borrow_mut()
+                                .retain(|(id, _), _| id != &story);
+                        } else {
+                            self.pending_edit_spans.insert(story, span);
+                        }
                     }
                     // Where the edit landed is unknown: nothing of any
                     // story's breaks may be reused.
                     None => {
                         self.keep_seeds.borrow_mut().clear();
                         self.pending_keep_hints.clear();
+                        self.story_resume
+                            .borrow_mut()
+                            .retain(|(id, _), _| id != &story);
+                        self.pending_edit_spans.remove(&story);
                     }
                 }
             }
@@ -8748,6 +8783,8 @@ impl CanvasModel {
         };
         self.built = built;
         self.pending_keep_hints.clear();
+        self.pending_edit_spans.clear();
+        self.build_generation += 1;
         if self.digest_gate {
             if let Err(e) = self.digest_gate_check() {
                 panic!("ADR 027 digest gate: incremental build != cold build: {e}");
@@ -8803,6 +8840,8 @@ impl CanvasModel {
         options.body_story_emit_cache = None;
         options.keep_seeds = None;
         options.keep_seed_hints = None;
+        options.story_resume = None;
+        options.edit_spans = None;
         let (built, _) =
             paged_text::cache::with_layout_cache(paged_text::LayoutCache::default(), || {
                 pipeline::build_document(&self.scene, &options)
@@ -9265,7 +9304,13 @@ impl CanvasModel {
         }
         for story in &affected {
             self.pending_keep_hints.insert(story.clone(), 0);
+            // ADR 027 plan step 6 — its previous emission was shaped with
+            // other fonts: nothing of it may be resumed from.
+            self.pending_edit_spans.remove(story);
         }
+        self.story_resume
+            .borrow_mut()
+            .retain(|(story, _), _| !affected.contains(story));
         affected.into_iter().collect()
     }
 
@@ -9485,7 +9530,7 @@ enum Invalidation {
     /// paragraph it changed, when that is known (`None` for a cell edit).
     Text {
         story: String,
-        edit: Option<(String, u32)>,
+        edit: Option<(String, paged_renderer::EditSpan)>,
     },
 }
 

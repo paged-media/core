@@ -55,6 +55,7 @@ mod image_convert;
 mod image_decode;
 mod images;
 mod keeps;
+mod resume;
 /// C-26 — the inline-image cache key is shared with `paged-canvas`'s
 /// `placed_asset_bytes` door on purpose. Two copies of this format
 /// string that drift apart is exactly the bug C-26 was: the renderer
@@ -138,6 +139,7 @@ pub use nested_styles::*;
 use numbering::{bullet_marker_character_style, list_prefix, marker_run_attrs};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
+pub use resume::{EditSpan, StoryResume, StoryResumeStore};
 use text_frame::*;
 #[cfg(test)]
 use text_path::polygon_path_from_anchors;
@@ -395,6 +397,18 @@ pub struct PipelineOptions<'a> {
     /// build that wrote [`Self::keep_seeds`]. Paragraphs before it are
     /// unchanged, which is what makes their breaks reusable.
     pub keep_seed_hints: Option<&'a HashMap<String, u32>>,
+    /// thoughts ADR 027 plan step 6 — each story's previous emission with a
+    /// mark per paragraph, so an edited story resumes at the edit and stops
+    /// where its flow rejoins the previous one. Written for the stories
+    /// that can be resumed, read only for a story named in
+    /// [`Self::edit_spans`]. `None` re-emits every edited story whole.
+    pub story_resume: Option<&'a StoryResumeStore>,
+    /// Story id → the paragraphs a single text edit changed since the
+    /// build that wrote [`Self::story_resume`].
+    pub edit_spans: Option<&'a HashMap<String, EditSpan>>,
+    /// A counter the caller bumps per build; a resume record is never read
+    /// back in the build that wrote it.
+    pub build_generation: u64,
     /// W1.18a — the date clock for `CreationDate` / `ModificationDate` /
     /// `OutputDate` text variables. Explicit + injectable so date
     /// variables resolve deterministically (never the wall clock). The
@@ -604,6 +618,9 @@ impl Default for PipelineOptions<'_> {
             body_story_emit_cache: None,
             keep_seeds: None,
             keep_seed_hints: None,
+            story_resume: None,
+            edit_spans: None,
+            build_generation: 0,
             document_clock: DocumentClock::default(),
             scene_layers: None,
             resource_providers: None,
@@ -1044,6 +1061,13 @@ pub struct PipelineStats {
     /// thoughts ADR 027 plan step 4 — body stories spliced from the emit
     /// cache instead of laid out.
     pub body_stories_reused: usize,
+    /// thoughts ADR 027 plan step 6 — chain frames body-story emission
+    /// laid out (not spliced) in this build: every frame of a story that
+    /// re-emitted whole, the frames between the resume and the stop of
+    /// one that resumed. A cached story adds none.
+    pub frames_emitted: usize,
+    /// Edited stories that resumed at the edit and stopped early.
+    pub stories_resumed: usize,
 }
 
 impl PipelineStats {
@@ -1286,6 +1310,8 @@ fn build_document_fixed(
     // The reuse counters describe the whole build, both passes.
     second.stats.keep_seeds_used += first.stats.keep_seeds_used;
     second.stats.body_stories_reused += first.stats.body_stories_reused;
+    second.stats.frames_emitted += first.stats.frames_emitted;
+    second.stats.stories_resumed += first.stats.stories_resumed;
     Ok(second)
 }
 

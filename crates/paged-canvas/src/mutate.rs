@@ -499,10 +499,10 @@ fn locate_para_local(paragraphs: &[paged_model::Paragraph], offset: u32) -> (usi
     }
 }
 
-/// thoughts ADR 027 — the index of the body paragraph a text op at
-/// `offset` starts changing (the paragraph the offset falls in). Every
-/// paragraph before it is untouched by the op.
-pub(crate) fn first_changed_paragraph(op: &TextOp, doc: &Document) -> Option<(String, u32)> {
+/// thoughts ADR 027 plan step 6 — the paragraphs a text op changes, before
+/// and after it (see [`paged_renderer::EditSpan`]). Read on the document
+/// BEFORE the op is applied.
+pub(crate) fn edit_span(op: &TextOp, doc: &Document) -> Option<(String, paged_renderer::EditSpan)> {
     let (story_id, offset, cell) = match op {
         TextOp::InsertText {
             story_id,
@@ -523,11 +523,38 @@ pub(crate) fn first_changed_paragraph(op: &TextOp, doc: &Document) -> Option<(St
         return None;
     }
     let story = doc.stories.iter().find(|s| &s.self_id == story_id)?;
-    if story.story.paragraphs.is_empty() {
-        return Some((story_id.clone(), 0));
+    let paragraphs = &story.story.paragraphs;
+    if paragraphs.is_empty() {
+        let span = paged_renderer::EditSpan {
+            first: 0,
+            old_end: 0,
+            new_end: 0,
+        };
+        return Some((story_id.clone(), span));
     }
-    let (idx, _) = locate_para_local(&story.story.paragraphs, offset);
-    Some((story_id.clone(), idx as u32))
+    let (first, _) = locate_para_local(paragraphs, offset);
+    let first = first as u32;
+    let span = match op {
+        // `k` paragraph breaks split the paragraph into `k + 1`.
+        TextOp::InsertText { text, .. } => {
+            let breaks = text.matches('\n').count() as u32;
+            paged_renderer::EditSpan {
+                first,
+                old_end: first + 1,
+                new_end: first + 1 + breaks,
+            }
+        }
+        // The paragraphs from `start` to `end` merge into one.
+        TextOp::DeleteRange { end, .. } => {
+            let (last, _) = locate_para_local(paragraphs, *end);
+            paged_renderer::EditSpan {
+                first,
+                old_end: (last as u32).max(first) + 1,
+                new_end: first + 1,
+            }
+        }
+    };
+    Some((story_id.clone(), span))
 }
 
 /// Sum of run text bytes that precede `target_run` in `para`'s run

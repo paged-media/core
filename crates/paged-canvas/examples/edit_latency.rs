@@ -144,11 +144,17 @@ fn type_into(name: &str, m: &mut CanvasModel, story: &str, idx: usize, edits: us
         }
     }
     let stats = m.last_rebuild_stats();
+    let built = &m.built().stats;
     println!(
-        "{name}: {} pages, per keystroke wall {:.1} ms, build {:.1} ms (median of {edits})",
+        "{name}: {} pages, per keystroke wall {:.1} ms, build {:.1} ms (median of {edits}; \
+         fastest {:.1} ms); last edit: {} frames laid out, {} stories resumed, {} reused",
         stats.pages,
-        median(wall),
+        median(wall.clone()),
         median(build),
+        wall.iter().copied().fold(f64::INFINITY, f64::min),
+        built.frames_emitted,
+        built.stories_resumed,
+        built.body_stories_reused,
     );
 }
 

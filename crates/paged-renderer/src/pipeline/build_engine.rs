@@ -51,7 +51,7 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// replayed into: the path buffer's fingerprint (the ids it hands out per
 /// intern key) and the other pools (the ids a command can refer to). Two
 /// lists with equal prints resolve a delta's ids alike.
-fn pool_print(list: &paged_compose::DisplayList) -> u64 {
+pub(super) fn pool_print(list: &paged_compose::DisplayList) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     list.paths.fingerprint().hash(&mut h);
@@ -2950,6 +2950,47 @@ pub(super) fn build_document_inner(
         }
         let mut seeded = !forced_breaks.is_empty();
         let mut last_active: Option<u32> = None;
+        // ADR 027 plan step 6 — a story whose emission is a pure function of
+        // the flow state keeps a mark per paragraph; an edited one resumes at
+        // the edit and stops where its flow rejoins the previous emission.
+        let resumable = options.story_resume.is_some()
+            && !is_toc
+            && !is_vertical
+            && cross_story_numbering.is_none()
+            && span_starts.is_empty()
+            && column_arena.is_empty()
+            && !story_prints_page_context(&parsed.story)
+            && resume::eligible(
+                &parsed.story,
+                &chain_for_post,
+                &chain_pages_for_post,
+                options,
+            );
+        let resume_sig = resumable
+            .then(|| body_story_signature(&chain_for_post, &chain_pages_pre, &wrap_rects_per_page));
+        let resume_key = (parsed.self_id.clone(), post.is_some());
+        let resume_guard = options
+            .story_resume
+            .filter(|_| resumable)
+            .map(|store| store.borrow());
+        let mut resume_plan = match (
+            resume_guard.as_ref().and_then(|g| g.get(&resume_key)),
+            options.edit_spans.and_then(|m| m.get(&parsed.self_id)),
+            resume_sig,
+        ) {
+            (Some(rec), Some(span), Some(sig)) => resume::plan(
+                rec,
+                *span,
+                sig,
+                options.build_generation,
+                parsed.story.paragraphs.len(),
+                &forced_breaks,
+                &pages,
+            ),
+            _ => None,
+        };
+        let mut marks: Vec<resume::ParaMark> = Vec::new();
+        let mut resume_end: Option<resume::EmitterEnd> = None;
         let mut converged = false;
         // Passes spent before the cold fixpoint started (1 after a seed
         // that did not hold), so the caps count exactly as a cold build's.
@@ -3017,14 +3058,89 @@ pub(super) fn build_document_inner(
                     emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
                 }
             } else {
-                for paragraph in &parsed.story.paragraphs {
+                // ADR 027 plan step 6 — only the first pass resumes; a keeps
+                // or footnote re-emit lays the story out whole.
+                let plan = if pass == 0 { resume_plan.take() } else { None };
+                marks.clear();
+                let mut start = 0;
+                if let Some(plan) = plan.as_ref() {
+                    resume::splice_prefix(
+                        &mut emitter,
+                        &mut pages,
+                        &pre_snapshot,
+                        plan,
+                        &mut total_stats,
+                    );
+                    start = plan.first();
+                    marks.extend(plan.prefix_marks().iter().cloned());
+                }
+                let mut relaid: Option<usize> = None;
+                for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
+                    if resumable {
+                        let m = resume::mark(
+                            &emitter,
+                            &pages,
+                            &pre_snapshot,
+                            &total_stats,
+                            &pre_total_stats,
+                        );
+                        if let Some(plan) = plan.as_ref().filter(|pl| pl.past_edit(j)) {
+                            relaid = resume::try_stop(
+                                &mut emitter,
+                                &mut pages,
+                                &pre_snapshot,
+                                plan,
+                                j,
+                                &m,
+                                &mut total_stats,
+                                Some(&mut marks),
+                            );
+                            if relaid.is_some() {
+                                break;
+                            }
+                        }
+                        marks.push(m);
+                    }
                     emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
                 }
+                if resumable && relaid.is_none() {
+                    marks.push(resume::mark(
+                        &emitter,
+                        &pages,
+                        &pre_snapshot,
+                        &total_stats,
+                        &pre_total_stats,
+                    ));
+                }
+                total_stats.frames_emitted += match relaid {
+                    Some(frames) => {
+                        total_stats.stories_resumed += 1;
+                        frames
+                    }
+                    None => emitter
+                        .frame_cmd_ranges
+                        .iter()
+                        .skip(plan.as_ref().map_or(0, |pl| pl.resume_frame()))
+                        .filter(|r| r.is_some())
+                        .count(),
+                };
             }
+            let post_pass_counts: Vec<usize> = chain_page_set
+                .iter()
+                .map(|&p| pages[p].list.commands.len())
+                .collect();
             emitter.apply_vertical_justification(&mut pages);
             emitter.apply_polygon_clip(&mut pages);
             emitter.apply_container_clip(&mut pages, &container_clips);
             emitter.apply_blend_groups(&mut pages);
+            // A record replays raw emission, so a story some post-pass
+            // rewrote is not recorded.
+            resume_end = (resumable
+                && chain_page_set
+                    .iter()
+                    .zip(&post_pass_counts)
+                    .all(|(&p, &n)| pages[p].list.commands.len() == n))
+            .then(|| resume::EmitterEnd::of(&emitter, &pre_snapshot));
             // W2 — the per-frame command ranges as they stand after
             // every pass that splices. The fixpoint below may roll this
             // pass back and re-emit, so the LAST pass wins, which is
@@ -3192,7 +3308,19 @@ pub(super) fn build_document_inner(
         // policy as master_text: skip caching when gradient or
         // image entries were added, since the cached splice path
         // only renumbers path-ids.
-        if let (Some(ref key), Some(rc)) = (&cache_key, body_story_emit_cache) {
+        let caching = cache_key.is_some() && body_story_emit_cache.is_some();
+        // ADR 027 plan step 6 — a record is kept for a story that ended
+        // where it can be resumed from: the fixpoint converged, and no
+        // footnote or anchored image rides outside the per-page output.
+        let footnoted = pages
+            .iter()
+            .zip(&pre_snapshot)
+            .any(|(page, snap)| page.footnotes.len() > snap.6);
+        let resume_end = resume_end.filter(|_| converged && !footnoted && new_anchored.is_empty());
+        // The plan borrowed the store; release it before writing.
+        let _ = resume_plan.take();
+        drop(resume_guard);
+        if caching || resume_end.is_some() {
             // Diagnostics (overset) ride along in the delta and are
             // replayed on a hit (thoughts ADR 027 plan step 4).
             let mut uncacheable = false;
@@ -3252,9 +3380,31 @@ pub(super) fn build_document_inner(
                     ));
                 }
             }
-            if !uncacheable {
+            // A story emitted and not recorded loses its old record: the
+            // next edit's span describes content that record never saw.
+            match (resume_end, options.story_resume, resume_sig, uncacheable) {
+                (Some(end), Some(store), Some(sig), false) => {
+                    store.borrow_mut().insert(
+                        resume_key,
+                        resume::record(
+                            end,
+                            sig,
+                            options.build_generation,
+                            per_page.clone(),
+                            std::mem::take(&mut marks),
+                            forced_breaks.clone(),
+                            new_diags.clone(),
+                        ),
+                    );
+                }
+                (_, Some(store), _, _) => {
+                    store.borrow_mut().remove(&resume_key);
+                }
+                _ => {}
+            }
+            if let (Some(key), Some(rc), false) = (cache_key, body_story_emit_cache, uncacheable) {
                 rc.borrow_mut().insert(
-                    key.clone(),
+                    key,
                     BodyStoryEmissionDelta {
                         per_page,
                         anchored: new_anchored,
@@ -3266,6 +3416,8 @@ pub(super) fn build_document_inner(
                     },
                 );
             }
+        } else if let Some(store) = options.story_resume {
+            store.borrow_mut().remove(&resume_key);
         }
     }
 

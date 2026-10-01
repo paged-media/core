@@ -531,6 +531,48 @@ fn a_long_docx_story_stays_equal_to_a_cold_build() {
     let mut g = Gate::new("long docx story", &docx(80));
     let story = main_story(&g.model);
     assert!(g.model.built().pages.len() > 8, "the story grew");
+    // ADR 029 / plan acceptance: typing on page 3 lays out at most two
+    // frames (the story resumes at the edit and stops where the flow
+    // rejoins the previous build's).
+    g.type_chars(&story, 115, 3);
+    let stats = &g.model.built().stats;
+    assert_eq!(stats.stories_resumed, 1, "the edited story resumed");
+    assert!(
+        stats.frames_emitted <= 2,
+        "typing on page 3 laid out {} frames",
+        stats.frames_emitted
+    );
+    // Typing on until the paragraph wraps onto another line, then deleting
+    // it again: the paragraphs after it move by a line, so the early stop
+    // must see the moved flow (not just the same frame and glyphs).
+    // A word at a time, so after the first the page already holds every
+    // glyph typed (the early stop compares path-buffer prints).
+    let lines_before = g.model.built().story_layout(&story).len();
+    let at = caret(&g.model, &story, 116, 1);
+    let mut typed = 0;
+    while g.model.built().story_layout(&story).len() == lines_before && typed < 180 {
+        g.step(Step::Op(
+            "type a word",
+            Box::new(Mutation::InsertText {
+                story_id: story.clone(),
+                offset: at,
+                text: "typing".to_string(),
+                cell: None,
+            }),
+        ));
+        typed += 6;
+    }
+    assert!(typed < 180, "the typing wrapped onto another line");
+    g.step(Step::Op(
+        "delete the typing",
+        Box::new(Mutation::DeleteRange {
+            story_id: story.clone(),
+            start: at,
+            end: at + typed as u32,
+            cell: None,
+        }),
+    ));
+    assert_eq!(lines_before, g.model.built().story_layout(&story).len());
     g.script(&story, 115);
     g.finish();
 }
