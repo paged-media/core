@@ -81,6 +81,50 @@ impl VerticalJustification {
     }
 }
 
+/// IDML `StartParagraph` — where a paragraph starts (thoughts ADR 028).
+/// Measured against InDesign 2025 with the `start-paragraph` paged-gen
+/// fixture: a paragraph that already opens the column, frame or page the
+/// rule asks for stays put, while `NextOddPage` / `NextEvenPage` also move
+/// a paragraph that opens a page of the wrong parity (the first paragraph
+/// of a story included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum StartParagraph {
+    #[default]
+    Anywhere,
+    NextColumn,
+    NextFrame,
+    NextPage,
+    NextOddPage,
+    NextEvenPage,
+}
+
+impl StartParagraph {
+    /// Parse an IDML attribute value. Unknown values return `None`.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "Anywhere" => Some(Self::Anywhere),
+            "NextColumn" => Some(Self::NextColumn),
+            "NextFrame" => Some(Self::NextFrame),
+            "NextPage" => Some(Self::NextPage),
+            "NextOddPage" => Some(Self::NextOddPage),
+            "NextEvenPage" => Some(Self::NextEvenPage),
+            _ => None,
+        }
+    }
+
+    /// The IDML attribute value.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::Anywhere => "Anywhere",
+            Self::NextColumn => "NextColumn",
+            Self::NextFrame => "NextFrame",
+            Self::NextPage => "NextPage",
+            Self::NextOddPage => "NextOddPage",
+            Self::NextEvenPage => "NextEvenPage",
+        }
+    }
+}
+
 /// IDML `<TextFramePreference FirstBaselineOffset="...">` values.
 /// Drives where the first line's baseline sits inside the frame's
 /// inset box.
@@ -3646,6 +3690,8 @@ pub struct ParagraphStyleDef {
     /// a column/frame with this paragraph's last line. InDesign moves
     /// only this paragraph's last line, not the whole paragraph.
     pub keep_with_next: Option<u32>,
+    /// `StartParagraph` (ADR 028): break before the paragraph.
+    pub start_paragraph: Option<StartParagraph>,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
@@ -3928,6 +3974,8 @@ pub struct ResolvedParagraph {
     /// a column/frame with this paragraph's last line. InDesign moves
     /// only this paragraph's last line, not the whole paragraph.
     pub keep_with_next: Option<u32>,
+    /// `StartParagraph` (ADR 028): break before the paragraph.
+    pub start_paragraph: Option<StartParagraph>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -4226,6 +4274,7 @@ impl ResolvedParagraph {
         self.keep_first_lines = self.keep_first_lines.or(def.keep_first_lines);
         self.keep_last_lines = self.keep_last_lines.or(def.keep_last_lines);
         self.keep_with_next = self.keep_with_next.or(def.keep_with_next);
+        self.start_paragraph = self.start_paragraph.or(def.start_paragraph);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -4461,6 +4510,8 @@ pub struct Paragraph {
     /// one (IDML serialises a line count, not a boolean). `None` ⇒
     /// inherit; `Some(0)` is the explicit "off".
     pub keep_with_next: Option<u32>,
+    /// `StartParagraph` (ADR 028): break before the paragraph.
+    pub start_paragraph: Option<StartParagraph>,
     /// `KeepAllLinesTogether` (ADR 028) — with `keep_lines_together`
     /// on, true keeps every line together; false applies the
     /// first/last-line counts below.
