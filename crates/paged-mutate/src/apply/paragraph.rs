@@ -33,6 +33,10 @@ use crate::operation::{
 // range. Paragraph boundaries are NOT split (unlike CharacterRuns) —
 // the apply layer rounds the range to whole paragraphs by treating
 // intersection as the trigger.
+//
+// A zero-length range is a caret: it addresses the paragraph the caret
+// stands in (see `caret_paragraphs`) — the only way to name an EMPTY
+// paragraph, which occupies no characters in this contiguous space.
 
 pub(super) fn apply_paragraph_property(
     doc: &mut Document,
@@ -59,11 +63,11 @@ pub(super) fn apply_paragraph_property_in(
     path: PropertyPath,
     value: &Value,
 ) -> Result<AppliedOperation, OperationError> {
-    if start >= end {
+    if start > end {
         return Err(OperationError::InvalidValue {
             node: node.clone(),
             path,
-            reason: format!("empty range: start={start} >= end={end}"),
+            reason: format!("inverted range: start={start} > end={end}"),
         });
     }
 
@@ -75,26 +79,58 @@ pub(super) fn apply_paragraph_property_in(
 
     let paragraphs = super::cell_paragraphs_mut(&mut doc.stories[story_idx].story, cell)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-    let mut inverse_ops: Vec<Operation> = Vec::new();
-    let mut char_offset: u32 = 0;
 
-    for para in paragraphs.iter_mut() {
+    // Each paragraph's `[start, end)` in the CONTIGUOUS character space
+    // (run text only; the paragraph break is not a character here).
+    let mut spans: Vec<(u32, u32)> = Vec::with_capacity(paragraphs.len());
+    let mut char_offset: u32 = 0;
+    for para in paragraphs.iter() {
         let para_chars: u32 = para
             .runs
             .iter()
             .map(|r| r.text.chars().count() as u32)
             .sum();
-        let para_start = char_offset;
-        let para_end = char_offset + para_chars;
-        char_offset = para_end;
+        spans.push((char_offset, char_offset + para_chars));
+        char_offset += para_chars;
+    }
 
-        // Skip paragraphs entirely outside [start, end).
-        if para_end <= start || para_start >= end {
-            continue;
-        }
+    let targets: Vec<usize> = if start == end {
+        caret_paragraphs(paragraphs, &spans, start)
+    } else {
+        // Every paragraph intersecting `[start, end)`.
+        spans
+            .iter()
+            .enumerate()
+            .filter(|(_, (ps, pe))| !(*pe <= start || *ps >= end))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    if start == end && targets.is_empty() {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path,
+            reason: format!(
+                "caret offset {start} addresses no paragraph (story length {char_offset})"
+            ),
+        });
+    }
 
-        let (prev_value, _new_set) = apply_paragraph_field(para, path, value)?;
-        inverse_ops.push(Operation::SetProperty {
+    // A caret over several empty paragraphs (consecutive blank lines share
+    // one contiguous offset) writes all of them. Its inverse can only
+    // address them together too, so it is exact only when they agree on
+    // the prior value: snapshot first, and refuse rather than record an
+    // undo that would flatten their differences.
+    let snapshots: Vec<paged_model::Paragraph> = if start == end && targets.len() > 1 {
+        targets.iter().map(|&i| paragraphs[i].clone()).collect()
+    } else {
+        Vec::new()
+    };
+
+    let mut inverse_ops: Vec<Operation> = Vec::new();
+    for &i in &targets {
+        let (para_start, para_end) = spans[i];
+        let (prev_value, _new_set) = apply_paragraph_field(&mut paragraphs[i], path, value)?;
+        let restore = Operation::SetProperty {
             node: NodeId::StoryRange {
                 story_id: story_id.to_string(),
                 start: para_start,
@@ -102,7 +138,24 @@ pub(super) fn apply_paragraph_property_in(
             },
             path,
             value: prev_value,
-        });
+        };
+        if !snapshots.is_empty() && inverse_ops.first().is_some_and(|first| *first != restore) {
+            for (&i, snap) in targets.iter().zip(snapshots) {
+                paragraphs[i] = snap;
+            }
+            return Err(OperationError::InvalidValue {
+                node: node.clone(),
+                path,
+                reason: format!(
+                    "caret offset {start} is shared by {} empty paragraphs whose current \
+                     values differ; address them with a range that covers them",
+                    targets.len()
+                ),
+            });
+        }
+        if snapshots.is_empty() || inverse_ops.is_empty() {
+            inverse_ops.push(restore);
+        }
     }
 
     if inverse_ops.is_empty() {
@@ -150,6 +203,40 @@ pub(super) fn apply_paragraph_property_in(
         inverse,
         invalidation,
     })
+}
+
+/// The paragraph(s) a zero-length range — a caret — at contiguous offset
+/// `at` is in, the way InDesign applies a paragraph attribute to the
+/// paragraph holding the insertion point.
+///
+/// An empty paragraph occupies no characters, so in the contiguous space
+/// it sits AT the offset where the next paragraph starts; a caret is the
+/// only range that can name it. So the empty paragraph(s) at `at` win;
+/// otherwise the paragraph with `start <= at < end`; otherwise, at the
+/// very end of the story, the last paragraph. A table's host paragraph
+/// has no runs either but is not a line the caret can stand on, so it is
+/// never a caret target.
+fn caret_paragraphs(
+    paragraphs: &[paged_model::Paragraph],
+    spans: &[(u32, u32)],
+    at: u32,
+) -> Vec<usize> {
+    let empties: Vec<usize> = spans
+        .iter()
+        .enumerate()
+        .filter(|(i, (ps, pe))| ps == pe && *ps == at && paragraphs[*i].table.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    if !empties.is_empty() {
+        return empties;
+    }
+    if let Some(i) = spans.iter().position(|(ps, pe)| *ps <= at && at < *pe) {
+        return vec![i];
+    }
+    match spans.iter().rposition(|(ps, pe)| ps < pe) {
+        Some(i) if spans[i].1 == at => vec![i],
+        _ => Vec::new(),
+    }
 }
 
 /// W0.2 — set one `Option<f32>` field on a `Paragraph` from a
