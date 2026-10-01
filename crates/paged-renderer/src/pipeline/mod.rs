@@ -105,14 +105,15 @@ pub(crate) use blend_shadow::{
 pub use build_engine::build_index_paragraphs;
 use build_engine::*;
 pub(crate) use color_paint::{apply_fill_tint, stroke_for};
+use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{
     build_footnote_paint_picker, build_run_paint_picker_resolved, build_run_stroke_picker,
 };
 pub use color_paint::{
     build_run_paint_picker, build_run_paint_picker_with_cmyk, color_id_to_paint,
     color_id_to_paint_with_list, color_id_to_paint_with_list_dir, gradient_midpoint_paint,
-    resolve_fill, resolve_rect_fill, resolve_rect_stroke, resolve_stroke, ColorCtx, RunPaintPicker,
-    RunStrokePicker,
+    resolve_fill, resolve_rect_fill, resolve_rect_stroke, resolve_stroke, CmykTransformCache,
+    ColorCtx, RunPaintPicker, RunStrokePicker,
 };
 #[cfg(test)]
 use color_paint::{color_lerp, linear_gradient_endpoints, midpoint_blend};
@@ -352,6 +353,11 @@ pub struct PipelineOptions<'a> {
     /// should pre-build once and pass `&self.font_table` here on
     /// every subsequent rebuild. `None` ⇒ build fresh per call.
     pub pre_built_font_table: Option<&'a FontTable>,
+    /// ADR 027 plan step 2 — the CMYK display transform kept across
+    /// builds, keyed by profile bytes, intent and black-point
+    /// compensation. `None` ⇒ build it fresh per call (twice for a
+    /// document with a post-layout pass).
+    pub cmyk_transform_cache: Option<&'a CmykTransformCache>,
     /// Perf-MasterText — per-(master_frame_self_id, page_idx) cache
     /// of the DisplayList delta produced by the master-text pass.
     /// Master stories (page-number footers, running headers) are
@@ -527,6 +533,7 @@ impl Default for PipelineOptions<'_> {
             break_page_range: None,
             image_decode_cache: None,
             pre_built_font_table: None,
+            cmyk_transform_cache: None,
             master_text_emit_cache: None,
             body_story_emit_cache: None,
             document_clock: DocumentClock::default(),

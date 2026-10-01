@@ -287,3 +287,53 @@ fn gradient_detail_resolves_stops_with_refs_and_midpoints() {
     // Unknown id => None.
     assert!(model.gradient_detail("Gradient/nope").is_none());
 }
+
+/// ADR 027 plan step 2 — the model keeps its CMYK transform across
+/// rebuilds, keyed by profile, intent and black-point compensation. A
+/// colour-settings change must still re-key it: every page renders exactly
+/// as a cold build with the same settings and no cache.
+#[test]
+fn the_kept_cmyk_transform_follows_the_colour_settings() {
+    use paged_renderer::pipeline::{self, PipelineOptions};
+    let Some(profile) = find_profile() else {
+        eprintln!("color_settings: no CMYK profile available — skipping");
+        return;
+    };
+    let cold = |intent: paged_color::Intent, bpc: bool| -> Vec<u64> {
+        let doc = idml_import::import_idml_doc(&small_idml()).expect("import");
+        let opts = PipelineOptions {
+            cmyk_icc_profile: Some(&profile),
+            cmyk_intent: intent,
+            cmyk_bpc: bpc,
+            ..PipelineOptions::default()
+        };
+        let built = pipeline::build_document(&doc, &opts).expect("build");
+        built.pages.iter().map(|p| p.list.digest()).collect()
+    };
+    let digests =
+        |m: &CanvasModel| -> Vec<u64> { m.built().pages.iter().map(|p| p.list.digest()).collect() };
+    let opts = CanvasOptions {
+        cmyk_icc_profile: Some(profile.clone()),
+        ..CanvasOptions::default()
+    };
+    let mut model = CanvasModel::load("doc1", &small_idml(), opts).expect("load");
+    let rel_col = cold(paged_color::Intent::RelativeColorimetric, true);
+    assert_eq!(digests(&model), rel_col, "load matches a cold build");
+
+    let set = |m: &mut CanvasModel, intent: &str, bpc: bool| {
+        m.apply_mutation(&Mutation::SetColorSettings {
+            cmyk_profile_name: None,
+            rgb_policy: None,
+            intent: Some(intent.into()),
+            bpc: Some(bpc),
+        })
+        .expect("set colour settings");
+    };
+    set(&mut model, "Perceptual", false);
+    let perceptual = cold(paged_color::Intent::Perceptual, false);
+    assert_ne!(perceptual, rel_col, "the intent changes the render");
+    assert_eq!(digests(&model), perceptual, "the cache re-keyed on intent");
+
+    set(&mut model, "RelativeColorimetric", true);
+    assert_eq!(digests(&model), rel_col, "and back");
+}

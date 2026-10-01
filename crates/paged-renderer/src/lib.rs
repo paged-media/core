@@ -33,8 +33,8 @@ pub use flow::{FlowLine, PlacedLine, TextFlow};
 pub use pipeline::{
     build, build_document, build_run_paint_picker, resolve_fill, resolve_stroke,
     BodyStoryEmissionDelta, BodyStoryPageDelta, BuiltDocument, BuiltPage, CellAddr, CellRect,
-    ClusterPos, DateParts, DocumentClock, FontMetricsOverride, FontTable, LineLayout,
-    MasterTextEmitDelta, PageId, PipelineOptions, PipelineStats, RunPaintPicker,
+    ClusterPos, CmykTransformCache, DateParts, DocumentClock, FontMetricsOverride, FontTable,
+    LineLayout, MasterTextEmitDelta, PageId, PipelineOptions, PipelineStats, RunPaintPicker,
 };
 pub use resource_provider::{
     assemble_resource_tiles, mip_level_for_scale, ImageResourceProvider, ProviderTile,

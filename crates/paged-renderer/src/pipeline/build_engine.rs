@@ -643,38 +643,21 @@ pub(super) fn build_document_inner(
     post: Option<&PostLayoutCtx>,
 ) -> anyhow::Result<BuiltDocument> {
     let palette = &document.palette;
-    // Build the CMYK ICC transform once per render. Failures are
-    // logged + swallowed: if the profile is malformed we silently
-    // fall back to naive math so the render still produces output.
-    let cmyk_xform = options.cmyk_icc_profile.and_then(|bytes| {
-        // Default settings route through the back-compat shim so the
-        // per-target intent defaults (native RelColorimetric+BPC,
-        // wasm Perceptual) stay bit-identical; explicit document
-        // colour settings take the parameterised path.
-        let default_settings = options.cmyk_intent == paged_color::Intent::RelativeColorimetric
-            && options.cmyk_bpc;
-        let built = if default_settings {
-            paged_color::IccTransform::cmyk_to_linear_rgb(bytes)
-        } else {
-            paged_color::IccTransform::cmyk_to_linear_rgb_with(
-                bytes,
-                options.cmyk_intent,
-                options.cmyk_bpc,
-            )
-        };
-        match built {
-            Ok(t) => Some(t),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to build CMYK ICC transform; using naive conversion");
-                None
-            }
-        }
-    });
+    // The CMYK ICC transform: from the caller's cache when it keeps one
+    // across builds, otherwise built once for this render.
+    let cmyk_xform: Option<CmykTransformRef<'_>> =
+        options
+            .cmyk_icc_profile
+            .and_then(|bytes| match options.cmyk_transform_cache {
+                Some(cache) => cache.get(bytes, options.cmyk_intent, options.cmyk_bpc),
+                None => build_cmyk_transform(bytes, options.cmyk_intent, options.cmyk_bpc)
+                    .map(CmykTransformRef::Owned),
+            });
     // One colour-resolution context for the whole build: the transform
     // above plus the ink-manager policy. Every paint resolver takes it,
     // so the page cannot disagree with itself about what a spot is.
     let color_ctx = ColorCtx {
-        icc: cmyk_xform.as_ref(),
+        icc: cmyk_xform.as_deref(),
         standard_lab_for_spots: options.use_standard_lab_for_spots,
     };
     let mut pages: Vec<BuiltPage> = Vec::new();

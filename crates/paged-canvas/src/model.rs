@@ -1278,6 +1278,9 @@ pub struct CanvasModel {
     /// loadDocument boundaries — fresh CanvasModel ⇒ fresh table —
     /// so we never need to invalidate mid-lifetime.
     font_table: paged_renderer::FontTable,
+    /// ADR 027 plan step 2 — the CMYK display transform, rebuilt only
+    /// when the profile, intent or black-point compensation changes.
+    cmyk_transform_cache: paged_renderer::CmykTransformCache,
     /// Perf-MasterText — per-(master_frame_self_id, page_idx) cache
     /// of the DisplayList delta the master-text pass appends to a
     /// page. The COLD build populates this; every gesture-driven
@@ -1561,6 +1564,7 @@ impl CanvasModel {
             ..PipelineOptions::default()
         };
         let font_table = paged_renderer::FontTable::build(&scene, &font_table_options);
+        let cmyk_transform_cache = paged_renderer::CmykTransformCache::new();
         // Perf-MasterText — empty cache; the initial build_document
         // below populates it as each master-text emit runs.
         let master_text_emit_cache: std::cell::RefCell<
@@ -1581,6 +1585,7 @@ impl CanvasModel {
                 image_decode_cache: Some(&image_decode_cache),
                 grow_hint: Some(&grow_hint),
                 pre_built_font_table: Some(&font_table),
+                cmyk_transform_cache: Some(&cmyk_transform_cache),
                 master_text_emit_cache: Some(&master_text_emit_cache),
                 body_story_emit_cache: Some(&body_story_emit_cache),
                 // A5 — interactive canvas builds surface degraded-asset
@@ -1666,6 +1671,7 @@ impl CanvasModel {
             // Perf-FontTable — built once above and reused by every
             // rebuild_after_mutation.
             font_table,
+            cmyk_transform_cache,
             // Perf-MasterText — cache populated by the initial
             // build above; subsequent rebuilds reuse + structural
             // mutations clear it.
@@ -8481,6 +8487,10 @@ impl CanvasModel {
             // Perf-FontTable — reuse the shaping table built at load
             // (saves the ~225ms harvest+resolve walk).
             pre_built_font_table: Some(&self.font_table),
+            // ADR 027 step 2 — the CMYK transform is keyed by profile,
+            // intent and BPC, so a proof (Live) and the working space
+            // (Export) never share a stale entry.
+            cmyk_transform_cache: Some(&self.cmyk_transform_cache),
             // C-1 — plugin scene layers render inside their frames, and a
             // printed/exported sheet includes them (document-grade vector
             // output).

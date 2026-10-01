@@ -54,6 +54,117 @@ impl<'a> ColorCtx<'a> {
     }
 }
 
+/// Build the document's CMYK display transform. Failures are logged and
+/// swallowed: with a malformed profile the render falls back to naive
+/// math and still produces output.
+pub(super) fn build_cmyk_transform(
+    profile: &[u8],
+    intent: paged_color::Intent,
+    bpc: bool,
+) -> Option<paged_color::IccTransform> {
+    // Default settings route through the back-compat shim so the
+    // per-target intent defaults (native RelColorimetric+BPC, wasm
+    // Perceptual) stay bit-identical; explicit document colour settings
+    // take the parameterised path.
+    let built = if intent == paged_color::Intent::RelativeColorimetric && bpc {
+        paged_color::IccTransform::cmyk_to_linear_rgb(profile)
+    } else {
+        paged_color::IccTransform::cmyk_to_linear_rgb_with(profile, intent, bpc)
+    };
+    match built {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to build CMYK ICC transform; using naive conversion");
+            None
+        }
+    }
+}
+
+/// The CMYK display transform kept across builds (ADR 027 plan step 2).
+/// Building it costs tens of milliseconds per build pass on a real
+/// profile, while the inputs (profile bytes, intent, black-point
+/// compensation) change only with the colour settings. A caller that
+/// builds the same document repeatedly (`CanvasModel`) owns one and
+/// passes it as [`PipelineOptions::cmyk_transform_cache`]; the entry is
+/// rebuilt whenever any of the three inputs differs from the cached one,
+/// so a proof or colour-settings change can never be served a stale
+/// transform.
+#[derive(Default)]
+pub struct CmykTransformCache {
+    slot: std::cell::RefCell<Option<CachedCmykTransform>>,
+}
+
+struct CachedCmykTransform {
+    profile: Vec<u8>,
+    intent: paged_color::Intent,
+    bpc: bool,
+    transform: Option<paged_color::IccTransform>,
+}
+
+/// A transform borrowed from a [`CmykTransformCache`], or built for this
+/// build alone when the cache is busy.
+pub(super) enum CmykTransformRef<'a> {
+    Cached(std::cell::Ref<'a, paged_color::IccTransform>),
+    Owned(paged_color::IccTransform),
+}
+
+impl std::ops::Deref for CmykTransformRef<'_> {
+    type Target = paged_color::IccTransform;
+    fn deref(&self) -> &paged_color::IccTransform {
+        match self {
+            CmykTransformRef::Cached(r) => r,
+            CmykTransformRef::Owned(t) => t,
+        }
+    }
+}
+
+impl CmykTransformCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub(super) fn get(
+        &self,
+        profile: &[u8],
+        intent: paged_color::Intent,
+        bpc: bool,
+    ) -> Option<CmykTransformRef<'_>> {
+        let hit = matches!(
+            &*self.slot.borrow(),
+            Some(c) if c.intent == intent && c.bpc == bpc && c.profile == profile
+        );
+        if !hit {
+            let Ok(mut slot) = self.slot.try_borrow_mut() else {
+                // An enclosing build still holds the other entry.
+                return build_cmyk_transform(profile, intent, bpc).map(CmykTransformRef::Owned);
+            };
+            *slot = Some(CachedCmykTransform {
+                profile: profile.to_vec(),
+                intent,
+                bpc,
+                transform: build_cmyk_transform(profile, intent, bpc),
+            });
+        }
+        std::cell::Ref::filter_map(self.slot.borrow(), |s| {
+            s.as_ref().and_then(|c| c.transform.as_ref())
+        })
+        .ok()
+        .map(CmykTransformRef::Cached)
+    }
+}
+
+impl std::fmt::Debug for CmykTransformCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let slot = self.slot.try_borrow().ok();
+        let entry = slot.as_ref().and_then(|s| s.as_ref());
+        f.debug_struct("CmykTransformCache")
+            .field("profile_len", &entry.map(|c| c.profile.len()))
+            .field("intent", &entry.map(|c| c.intent))
+            .field("bpc", &entry.map(|c| c.bpc))
+            .finish()
+    }
+}
+
 /// Pick the paint for a frame from its FillColor attribute.
 pub fn resolve_fill(frame: &TextFrame, palette: &Graphic) -> Option<Paint> {
     color_id_to_paint(frame.fill_color.as_deref()?, palette, ColorCtx::default())
