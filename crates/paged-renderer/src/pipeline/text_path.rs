@@ -531,7 +531,7 @@ pub(super) fn emit_text_path_into(
                 return i;
             }
             face_bytes.push(bytes.clone());
-            face_font_ids.push(fnv_1a_u32(bytes.as_ref()));
+            face_font_ids.push(font_id(bytes));
             face_bytes.len() - 1
         };
 
@@ -578,7 +578,7 @@ pub(super) fn emit_text_path_into(
             // FontTable cache when possible; build on the fly only
             // on a miss (e.g. a run whose bytes resolved through the
             // fallback path that `harvest_face_keys` didn't see).
-            let font_id = fnv_1a_u32(face_bytes_b.as_ref());
+            let font_id = font_id(&face_bytes_b);
             let wght_bits = wght_for_font_style(resolved.font_style.as_deref()).to_bits();
             let owned_face: Option<paged_text::Face> =
                 if font_table.face(font_id, wght_bits).is_none() {

@@ -176,7 +176,7 @@ pub(super) fn compose_footnote_paragraphs(
         let font_ids: Vec<u32> = bytes_pool
             .iter()
             .zip(wghts.iter())
-            .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+            .map(|(b, w)| font_id(b) ^ w.to_bits())
             .collect();
         for (fid, b) in font_ids.iter().zip(bytes_pool.iter()) {
             font_outline_bytes.entry(*fid).or_insert_with(|| b.clone());

@@ -2109,7 +2109,7 @@ fn measure_cell_paragraph(
     let mut shaping_faces: Vec<Option<&paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(font_id).collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
@@ -2150,7 +2150,7 @@ fn measure_cell_paragraph(
     let font_ids: Vec<u32> = bytes_pool
         .iter()
         .zip(wghts.iter())
-        .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+        .map(|(b, w)| font_id(b) ^ w.to_bits())
         .collect();
     let styled_runs: Vec<paged_text::StyledRun> = paragraph
         .runs
@@ -2347,7 +2347,7 @@ pub(super) fn emit_cell_paragraph(
     let mut shaping_faces: Vec<Option<&paged_text::Face>> =
         (0..bytes_pool.len()).map(|_| None).collect();
     let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(|b| fnv_1a_u32(b.as_ref())).collect();
+    let bytes_font_ids: Vec<u32> = bytes_pool.iter().map(font_id).collect();
     for i in 0..bytes_pool.len() {
         if unique_idx[i] != i {
             continue;
@@ -2413,7 +2413,7 @@ pub(super) fn emit_cell_paragraph(
     let font_ids: Vec<u32> = bytes_pool
         .iter()
         .zip(wghts.iter())
-        .map(|(b, w)| fnv_1a_u32(b.as_ref()) ^ w.to_bits())
+        .map(|(b, w)| font_id(b) ^ w.to_bits())
         .collect();
 
     let styled_runs: Vec<paged_text::StyledRun> = paragraph

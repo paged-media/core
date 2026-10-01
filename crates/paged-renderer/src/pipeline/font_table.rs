@@ -222,7 +222,7 @@ impl FontTable {
                             })
                             .or(fallback.as_ref());
                         if let Some(b) = bytes {
-                            let font_id = fnv_1a_u32(b.as_ref());
+                            let font_id = font_id(b);
                             let wght = wght_for_font_style(resolved.font_style.as_deref());
                             face_keys.insert((font_id, wght.to_bits()));
                             id_to_bytes.entry(font_id).or_insert_with(|| b.clone());
@@ -347,7 +347,7 @@ impl FontTable {
                         .iter()
                         .find_map(|((f, _), b)| if f == family { Some(b) } else { None })
                 })
-                .map(|b| fnv_1a_u32(b.as_ref()))
+                .map(font_id)
                 .and_then(|id| metrics.get(&id))
                 .copied()
                 .unwrap_or(FontMetrics {
@@ -489,7 +489,7 @@ impl FontTable {
         if substituted {
             return None;
         }
-        self.metrics.get(&fnv_1a_u32(bytes.as_ref()))
+        self.metrics.get(&font_id(&bytes))
     }
 
     /// Override-aware metrics lookup keyed by IDML family name.
@@ -513,6 +513,45 @@ pub(super) fn parse_font_metrics(bytes: &[u8]) -> Option<FontMetrics> {
         // `hhea.descender` is negative (below the baseline); store the
         // magnitude so the leading-split math reads naturally.
         descender: (face.descender() as f32 / upem).abs(),
+    })
+}
+
+/// The font id of a face buffer: `fnv_1a_u32` of its bytes, computed once
+/// per buffer instead of once per call.
+///
+/// The id is a hash of the WHOLE file, and the pipeline asks for it per
+/// paragraph (several times: shaping faces, outline cache keys, metrics).
+/// With real fonts registered (0.6–1.2 MB each, a CJK face 9 MB) that was
+/// gigabytes of byte-hashing per rebuild: ~17 s of a ~18 s wasm rebuild on the
+/// 134-page annual (thoughts ADR 030). Native benches never saw it because
+/// they ran without registered fonts, so every lookup took the substituted
+/// early return.
+///
+/// Memoised by buffer identity (pointer + length). The map holds a clone of
+/// each `Bytes`, so a buffer cannot be freed (and its address reused by a
+/// different font) while its entry exists. `Bytes` is immutable, so same
+/// pointer and length means the same content, and the id is the same value
+/// `fnv_1a_u32` returns: output is unchanged.
+pub(super) fn font_id(bytes: &Bytes) -> u32 {
+    use std::cell::RefCell;
+    thread_local! {
+        static IDS: RefCell<HashMap<(usize, usize), (Bytes, u32)>> =
+            RefCell::new(HashMap::new());
+    }
+    let key = (bytes.as_ptr() as usize, bytes.len());
+    IDS.with(|ids| {
+        if let Some((_, id)) = ids.borrow().get(&key) {
+            return *id;
+        }
+        let id = fnv_1a_u32(bytes.as_ref());
+        let mut ids = ids.borrow_mut();
+        // Bounded: a long session that loads many documents must not pin
+        // every font buffer it ever saw. Clearing only costs re-hashing.
+        if ids.len() >= 256 {
+            ids.clear();
+        }
+        ids.insert(key, (bytes.clone(), id));
+        id
     })
 }
 
