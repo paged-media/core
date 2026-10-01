@@ -472,6 +472,9 @@ pub struct BodyStoryEmissionDelta {
     pub ledger_out: Option<HashMap<String, u32>>,
     /// What the emit added to the build's [`PipelineStats`].
     pub stats: PipelineStats,
+    /// The overset the emit measured, replayed on a hit like the
+    /// diagnostics so the page-growth loop can still size its next pass.
+    pub(crate) overset: Option<OversetMeasure>,
 }
 
 /// thoughts ADR 027 plan step 3 — one story's settled keep-option breaks,
@@ -887,6 +890,22 @@ pub struct BuiltDocument {
     /// provider was wired (the default) or every claimed image was fully
     /// cached at the chosen level.
     pub resource_tiles_needed: Vec<crate::resource_provider::ResourceTilesNeeded>,
+    /// Per body story that oversets: how much it laid out past its
+    /// chain's last frame. The page-growth loop sizes the next pass from
+    /// it ([`grow_estimate`]).
+    pub(crate) overset: HashMap<String, OversetMeasure>,
+    /// Builds the page-growth loop ran for this result (1 without growth).
+    pub(crate) grow_passes: usize,
+}
+
+/// A body story's overset, measured by the pass that dropped it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OversetMeasure {
+    /// Summed line heights (1/64 pt) of the lines laid out past the
+    /// chain's last frame.
+    pub(crate) dropped_height_64: i64,
+    /// Summed line heights each chain frame took, by frame id.
+    pub(crate) frame_heights_64: HashMap<String, i64>,
 }
 
 impl BuiltDocument {
@@ -1086,16 +1105,20 @@ struct PostLayoutCtx {
 /// Cap on generated pages for a growing story whose rule sets none.
 pub const DEFAULT_MAX_GENERATED_PAGES: u32 = 2000;
 
-/// Cap on build passes the page-growth loop may spend. Doubling reaches
-/// the default page cap in ~11 passes; a hinted rebuild needs one or two.
+/// Cap on build passes the page-growth loop may spend. Growth by estimate
+/// needs one or two; the doubling fallback reaches the default page cap in
+/// ~11.
 const MAX_GROW_PASSES: usize = 24;
 
 /// Build the document. Stories with a grow rule (thoughts ADR 026) get
 /// generated pages until they no longer overset: each pass materialises the
 /// current counts ([`Document::with_generated_pages`]) and builds. A story
-/// that still oversets doubles its count; one that fits drops the trailing
-/// generated frames that received no line. A document without grow rules
-/// is built exactly once, as before.
+/// that still oversets grows by the frames its dropped lines need
+/// ([`grow_estimate`]), or doubles its count when the pass gives no
+/// estimate; one that fits drops the trailing generated frames that
+/// received no line. The counts start from the previous layout's
+/// (`grow_hint`), clamped to each rule's current page cap. A document
+/// without grow rules is built exactly once, as before.
 pub fn build_document(
     document: &Document,
     options: &PipelineOptions,
@@ -1104,16 +1127,6 @@ pub fn build_document(
     if growing.is_empty() {
         return build_document_fixed(document, options);
     }
-    let mut counts: HashMap<String, u32> = growing
-        .iter()
-        .map(|s| {
-            let hinted = options
-                .grow_hint
-                .and_then(|h| h.borrow().get(s).copied())
-                .unwrap_or(0);
-            (s.clone(), hinted)
-        })
-        .collect();
     let caps: HashMap<String, u32> = document
         .stories
         .iter()
@@ -1126,12 +1139,34 @@ pub fn build_document(
             })
         })
         .collect();
+    let cap_of = |story: &str| {
+        caps.get(story)
+            .copied()
+            .unwrap_or(DEFAULT_MAX_GENERATED_PAGES)
+    };
+    // The previous layout's counts, clamped to the CURRENT cap: a rule
+    // whose `max_pages` was lowered must not keep the pages it had.
+    let mut counts: HashMap<String, u32> = growing
+        .iter()
+        .map(|s| {
+            let hinted = options
+                .grow_hint
+                .and_then(|h| h.borrow().get(s).copied())
+                .unwrap_or(0);
+            (s.clone(), hinted.min(cap_of(s)))
+        })
+        .collect();
+    // Overset passes that grew a story by estimate. Past
+    // `MAX_ESTIMATED_GROWS` the story doubles instead, so a story the
+    // estimate cannot size still reaches its cap in a few passes.
+    let mut estimated: HashMap<&str, usize> = HashMap::new();
 
     let mut pass = 0;
     loop {
         let grown = document.with_generated_pages(&counts);
-        let built = build_document_fixed(&grown, options)?;
+        let mut built = build_document_fixed(&grown, options)?;
         pass += 1;
+        built.grow_passes = pass;
         let mut changed = false;
         for story in &growing {
             let count = counts[story];
@@ -1140,11 +1175,15 @@ pub fn build_document(
                     && d.story_id.as_deref() == Some(story.as_str())
             });
             if overset {
-                let cap = caps
-                    .get(story)
-                    .copied()
-                    .unwrap_or(DEFAULT_MAX_GENERATED_PAGES);
-                let next = count.saturating_mul(2).max(1).min(cap);
+                let tries = estimated.entry(story.as_str()).or_insert(0);
+                let grow_by = match grow_estimate(&built, story, count) {
+                    Some(n) if *tries < MAX_ESTIMATED_GROWS => {
+                        *tries += 1;
+                        n
+                    }
+                    _ => count.max(1),
+                };
+                let next = count.saturating_add(grow_by).min(cap_of(story));
                 if next != count {
                     counts.insert(story.clone(), next);
                     changed = true;
@@ -1176,6 +1215,41 @@ pub fn build_document(
             return Ok(built);
         }
     }
+}
+
+/// How many overset passes may size a story's growth by estimate before
+/// the loop falls back to doubling.
+const MAX_ESTIMATED_GROWS: usize = 4;
+
+/// The generated frames an overset story still needs, estimated from the
+/// pass that oversetted: the summed line heights it laid out past its
+/// chain's end, over the line heights a generated frame took in that pass
+/// (before any page was generated: the chain's last frame). Line heights,
+/// not line counts, so text pasted at another leading is sized at its own.
+/// `None` when the pass gives no measure; the caller then doubles.
+fn grow_estimate(built: &BuiltDocument, story: &str, count: u32) -> Option<u32> {
+    let m = built.overset.get(story)?;
+    let (taken, frames) = if count > 0 {
+        let taken: i64 = m
+            .frame_heights_64
+            .iter()
+            .filter(|(id, _)| {
+                paged_scene::grow::generated_frame_ordinal(story, id).is_some_and(|k| k <= count)
+            })
+            .map(|(_, h)| *h)
+            .sum();
+        (taken, i64::from(count))
+    } else {
+        let lines = built.story_layout(story);
+        let last = lines.iter().rev().find_map(|l| l.frame_id.as_deref())?;
+        (m.frame_heights_64.get(last).copied()?, 1)
+    };
+    if taken <= 0 || m.dropped_height_64 <= 0 {
+        return None;
+    }
+    // ceil(dropped / (taken / frames))
+    let need = (m.dropped_height_64 * frames + taken - 1) / taken;
+    u32::try_from(need.max(1)).ok()
 }
 
 /// Build `document` exactly as given (no page growth).

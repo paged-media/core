@@ -4863,3 +4863,73 @@ fn a_paragraph_that_carries_text_and_a_table_composes_both() {
         "text {text_line} above the table {cell_line} above the trailing paragraph {trailing}"
     );
 }
+
+/// ADR 027 plan step 2 — an overset growing story grows by the frames its
+/// dropped lines need, not by doubling. A page-adding edit on a hinted
+/// rebuild is the hinted build plus ONE more (doubling took three: the
+/// hint, twice the hint, and the trim); a cold open is a few builds, not
+/// one per doubling. Either way the pages are the ones the exact count
+/// builds in a single pass.
+#[test]
+fn growth_by_estimate_takes_two_builds() {
+    use std::cell::RefCell;
+    let bytes = paged_gen::write_idml(&paged_gen::samples::reflow::build()).expect("idml");
+    let story_id = paged_gen::ids::self_id("reflow", "BodyStory", 0);
+    let doc_with = |n: usize| {
+        let mut doc = idml_import::import_idml_doc(&bytes).expect("import");
+        let story = doc
+            .stories
+            .iter_mut()
+            .find(|s| s.self_id == story_id)
+            .expect("body story");
+        story.story.grow = Some(paged_model::FlowGrowRule::default());
+        let template = story.story.paragraphs[0].clone();
+        story.story.paragraphs = (1..=n)
+            .map(|k| {
+                let mut p = template.clone();
+                p.runs.truncate(1);
+                p.runs[0].text = format!("Paragraph {k} of the growing story.");
+                p
+            })
+            .collect();
+        doc
+    };
+    let font = inter_font_bytes();
+    let build = |doc: &Document, hint: &RefCell<HashMap<String, u32>>| {
+        let opts = PipelineOptions {
+            font: Some(&font),
+            grow_hint: Some(hint),
+            ..PipelineOptions::default()
+        };
+        build_document(doc, &opts).expect("build")
+    };
+    let digests = |b: &BuiltDocument| -> Vec<(String, u64)> {
+        b.pages
+            .iter()
+            .map(|p| (p.id.0.clone(), p.list.digest()))
+            .collect()
+    };
+
+    let hint = RefCell::new(HashMap::new());
+    let cold = build(&doc_with(400), &hint);
+    assert!(cold.pages.len() > 10, "{} pages", cold.pages.len());
+    assert!(
+        cold.grow_passes <= 3,
+        "cold growth took {} builds",
+        cold.grow_passes
+    );
+    let exact = build(&doc_with(400), &RefCell::new(hint.borrow().clone()));
+    assert_eq!(exact.grow_passes, 1, "the settled count builds once");
+    assert_eq!(digests(&cold), digests(&exact));
+
+    // A page-adding edit: 60 more one-line paragraphs on the settled hint.
+    let grown = build(&doc_with(460), &hint);
+    assert!(grown.pages.len() > cold.pages.len(), "the edit adds pages");
+    assert_eq!(
+        grown.grow_passes, 2,
+        "the hinted build plus one sized build"
+    );
+    let exact = build(&doc_with(460), &RefCell::new(hint.borrow().clone()));
+    assert_eq!(exact.grow_passes, 1);
+    assert_eq!(digests(&grown), digests(&exact));
+}

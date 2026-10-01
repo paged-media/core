@@ -722,6 +722,8 @@ pub(super) fn build_document_inner(
     // (overset) and from page-label computation (section fallback).
     // Per-page image diagnostics are aggregated separately at the end.
     let mut emit_diagnostics: Vec<Diagnostic> = Vec::new();
+    // Lines each overset body story laid out past its chain's end.
+    let mut overset: HashMap<String, OversetMeasure> = HashMap::new();
 
     // W1.18c — the first pass's deltas carry the PRE-running-header
     // variable text. thoughts ADR 027 plan step 5: the post-layout
@@ -2770,6 +2772,9 @@ pub(super) fn build_document_inner(
                     anchored_image_queue.extend(delta.anchored.iter().cloned());
                     breaks.extend(delta.breaks.iter().cloned());
                     emit_diagnostics.extend(delta.diagnostics.iter().cloned());
+                    if let Some(m) = &delta.overset {
+                        overset.insert(parsed.self_id.clone(), m.clone());
+                    }
                     if let (Some(ledger), Some(out)) =
                         (cross_story_numbering.as_ref(), delta.ledger_out.as_ref())
                     {
@@ -2904,6 +2909,7 @@ pub(super) fn build_document_inner(
         let mut new_anchored: Vec<AnchoredImageEmit> = Vec::new();
         let mut new_breaks: Vec<BreakRecord> = Vec::new();
         let mut new_diags: Vec<Diagnostic> = Vec::new();
+        let mut new_overset: Option<OversetMeasure> = None;
 
         // W1.22 — snapshot the cross-story numbering ledger so a
         // footnote-reservation re-emit (pass > 0) restarts this story's
@@ -3046,6 +3052,7 @@ pub(super) fn build_document_inner(
             new_anchored = emitter.take_anchored_image_queue();
             new_breaks = emitter.take_breaks();
             new_diags = emitter.take_diagnostics();
+            new_overset = emitter.overset_measure();
 
             // ADR 028 — the breaks the next pass must force; equal to
             // `forced_breaks` when this pass satisfied every keep option.
@@ -3148,6 +3155,9 @@ pub(super) fn build_document_inner(
 
         anchored_image_queue.extend(new_anchored.iter().cloned());
         breaks.extend(new_breaks.iter().cloned());
+        if let Some(m) = &new_overset {
+            overset.insert(parsed.self_id.clone(), m.clone());
+        }
         emit_diagnostics.extend(new_diags.iter().cloned());
 
         // W2 — cut this story's per-page output into per-frame blocks
@@ -3252,6 +3262,7 @@ pub(super) fn build_document_inner(
                         diagnostics: new_diags,
                         ledger_out: cross_story_numbering.as_ref().map(|l| l.borrow().clone()),
                         stats: total_stats.emitted_since(&pre_total_stats),
+                        overset: new_overset,
                     },
                 );
             }
@@ -3386,6 +3397,8 @@ pub(super) fn build_document_inner(
         breaks,
         diagnostics,
         resource_tiles_needed,
+        overset,
+        grow_passes: 1,
     })
 }
 
@@ -3612,6 +3625,10 @@ pub(super) struct StoryEmitter<'a> {
     pub(super) keep_specs: Vec<super::keeps::KeepSpec>,
     /// Where each laid-out line of each top-level paragraph landed.
     pub(super) placements: Vec<Vec<super::keeps::LinePlace>>,
+    /// Line heights (1/64 pt) placed per chain frame, and laid out past
+    /// the chain's end: the page-growth loop's measure (`OversetMeasure`).
+    placed_height_64: HashMap<usize, i64>,
+    overset_height_64: i64,
     /// Line counter within the current top-level paragraph (split
     /// sub-paragraphs share it).
     pub(super) para_line: u32,
@@ -3823,6 +3840,8 @@ impl<'a> StoryEmitter<'a> {
             forced_breaks: HashMap::new(),
             keep_specs: Vec::new(),
             placements: Vec::new(),
+            placed_height_64: HashMap::new(),
+            overset_height_64: 0,
             para_line: 0,
             last_placed_frame: None,
             frame_cmd_ranges: vec![None; len],
@@ -4006,6 +4025,25 @@ impl<'a> StoryEmitter<'a> {
             .iter()
             .rposition(|k| !k.is_inert())
             .map(|i| i as u32)
+    }
+
+    /// The height of what this pass laid out past the chain's last frame
+    /// (overset), and of what each frame took; `None` when nothing
+    /// oversetted.
+    pub(super) fn overset_measure(&self) -> Option<OversetMeasure> {
+        if self.overset_height_64 <= 0 {
+            return None;
+        }
+        let mut frame_heights_64: HashMap<String, i64> = HashMap::new();
+        for (&idx, &h) in &self.placed_height_64 {
+            if let Some(id) = self.chain.get(idx).and_then(|f| f.self_id.clone()) {
+                *frame_heights_64.entry(id).or_default() += h;
+            }
+        }
+        Some(OversetMeasure {
+            dropped_height_64: self.overset_height_64,
+            frame_heights_64,
+        })
     }
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
@@ -6450,6 +6488,7 @@ pub(super) fn emit_paragraph_into_chain(
             && !last_frame_grows_height
         {
             dropped_overflow_lines += 1;
+            em.overset_height_64 += i64::from(line_h);
             // Report once per story: the count of dropped lines isn't
             // known until the paragraph finishes, but a single signal
             // that this story is overset is the actionable bit.
@@ -6477,6 +6516,7 @@ pub(super) fn emit_paragraph_into_chain(
         }
 
         em.record_line(Some(em.frame_idx));
+        *em.placed_height_64.entry(em.frame_idx).or_default() += i64::from(line_h);
         let target_page = em.chain_pages[em.frame_idx];
         pages[target_page].stats.glyphs += line.glyphs.len();
         pages[target_page].stats.lines += 1;
