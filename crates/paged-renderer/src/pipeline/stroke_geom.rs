@@ -460,19 +460,27 @@ pub(crate) fn sine_polyline(
         total += (dx * dx + dy * dy).sqrt();
         cum.push(total);
     }
-    if total <= 1e-3 {
+    // Non-finite geometry is returned unchanged (ADR 031). A NaN coordinate
+    // makes `total` NaN, which slipped past a bare `total <= 1e-3` and
+    // reached a `partial_cmp().unwrap()`; an infinite one made `n_samples`
+    // saturate to usize::MAX and overflow below. Either aborted the wasm engine.
+    if !total.is_finite() || total <= 1e-3 {
         return Polyline {
             points: pts.clone(),
             closed: false,
         };
     }
     let per_period = samples_per_period.max(2);
-    let n_samples = ((total / period) * per_period as f32).ceil().max(2.0) as usize;
+    // Capped so absurd-but-finite coordinates can't allocate without bound;
+    // real page geometry is orders of magnitude below it.
+    const MAX_SAMPLES: usize = 1 << 20;
+    let n_samples =
+        (((total / period) * per_period as f32).ceil().max(2.0) as usize).min(MAX_SAMPLES);
     let mut out: Vec<(f32, f32)> = Vec::with_capacity(n_samples + 1);
     for i in 0..=n_samples {
         let s = total * (i as f32 / n_samples as f32);
         // Locate the source segment containing arc length `s`.
-        let seg = match cum.binary_search_by(|c| c.partial_cmp(&s).unwrap()) {
+        let seg = match cum.binary_search_by(|c| c.total_cmp(&s)) {
             Ok(idx) => idx.min(pts.len() - 2),
             Err(idx) => idx.saturating_sub(1).min(pts.len() - 2),
         };
@@ -652,6 +660,20 @@ mod tests {
         let corner = off.points[1];
         assert!((corner.0 - 9.0).abs() < 1e-4, "corner x={}", corner.0);
         assert!((corner.1 - 1.0).abs() < 1e-4, "corner y={}", corner.1);
+    }
+
+    /// ADR 031 — a NaN coordinate (Rust's float parser accepts "NaN" from an
+    /// IDML attribute) used to make `total` NaN, slip past the short-path
+    /// guard and panic in `partial_cmp().unwrap()`, aborting the wasm engine.
+    #[test]
+    fn sine_polyline_nan_coordinate_does_not_panic() {
+        for line in [
+            poly(&[(0.0, 0.0), (f32::NAN, 0.0), (40.0, 0.0)], false),
+            poly(&[(f32::NAN, f32::NAN), (40.0, 0.0)], false),
+            poly(&[(0.0, 0.0), (f32::INFINITY, 0.0)], false),
+        ] {
+            let _ = sine_polyline(&line, 5.0, 40.0, 40);
+        }
     }
 
     #[test]

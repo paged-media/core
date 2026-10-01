@@ -325,7 +325,7 @@ pub fn build_arrangement(
     faces.sort_by(|a, b| {
         a.signature
             .cmp(&b.signature)
-            .then_with(|| order_key(a).partial_cmp(&order_key(b)).expect("finite"))
+            .then_with(|| key_cmp(order_key(a), order_key(b)))
     });
     let mut per_signature: BTreeMap<Vec<usize>, usize> = BTreeMap::new();
     for face in faces.iter_mut() {
@@ -386,11 +386,7 @@ pub fn face_at_point(
             None => true,
         })
         .collect();
-    components.sort_by(|a, b| {
-        component_key(&a.0)
-            .partial_cmp(&component_key(&b.0))
-            .expect("finite")
-    });
+    components.sort_by(|a, b| key_cmp(component_key(&a.0), component_key(&b.0)));
     for (slot, (anchors, starts, area, inside)) in components.into_iter().enumerate() {
         let flo_component = idml_path_to_flo(&anchors, &starts);
         if point_inside(&flo_component, p).unwrap_or(false) {
@@ -973,6 +969,16 @@ fn component_key(anchors: &[PathAnchor]) -> (f64, f64) {
 
 fn order_key(face: &PlanarFace) -> (f64, f64) {
     component_key(&face.anchors)
+}
+
+/// Total order over `(f64, f64)` sort keys, so a NaN coordinate cannot panic
+/// the sort (ADR 031). Identical to `partial_cmp` on finite keys: `+ 0.0`
+/// folds `-0.0` into `+0.0` (which `total_cmp` alone would order apart),
+/// so rounded keys keep the face/component ids they had.
+fn key_cmp(a: (f64, f64), b: (f64, f64)) -> std::cmp::Ordering {
+    (a.0 + 0.0)
+        .total_cmp(&(b.0 + 0.0))
+        .then_with(|| (a.1 + 0.0).total_cmp(&(b.1 + 0.0)))
 }
 
 #[cfg(test)]

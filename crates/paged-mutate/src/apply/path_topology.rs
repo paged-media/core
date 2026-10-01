@@ -883,7 +883,7 @@ pub(super) fn apply_join_paths(
     let (_, rev_k, rev_o) = combos
         .iter()
         .copied()
-        .min_by(|a, b| a.0.partial_cmp(&b.0).expect("finite coords"))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
         .expect("four combos");
     if rev_k {
         reverse_contour(&mut k);
