@@ -496,14 +496,14 @@ fn paged_inspect_story_range_returns_character_entries() {
     // (spaceBefore/spaceAfter/firstLineIndent/justification) + 2
     // applied-style paths + W0.2 paragraph formatting paths (13) +
     // ADR 028 keep / start paths (4) + span / split columns paths (6)
-    // = 47 entries.
-    assert!(entries_line.contains("47"), "got: {entries_line}");
+    // + list-marker override paths (6) = 53 entries.
+    assert!(entries_line.contains("53"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 47, "got: {:?}", path_lines);
+    assert_eq!(path_lines.len(), 53, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
@@ -546,6 +546,12 @@ fn paged_inspect_story_range_returns_character_entries() {
         "paragraphSpanColumnMinSpaceAfter",
         "paragraphSplitColumnInsideGutter",
         "paragraphSplitColumnOutsideGutter",
+        "paragraphBulletsTextAfter",
+        "paragraphNumberingExpression",
+        "paragraphNumberingStartAt",
+        "paragraphNumberingContinue",
+        "paragraphBulletsCharacterStyle",
+        "paragraphNumberingCharacterStyle",
         "paragraphRuleAbove",
         "paragraphRuleBelow",
         "paragraphTabStops",

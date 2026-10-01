@@ -801,6 +801,12 @@ property_paths! {
         ParagraphListType => "paragraphListType",
         ParagraphBulletCharacter => "paragraphBulletCharacter",
         ParagraphNumberingFormat => "paragraphNumberingFormat",
+        ParagraphBulletsTextAfter => "paragraphBulletsTextAfter",
+        ParagraphNumberingExpression => "paragraphNumberingExpression",
+        ParagraphNumberingStartAt => "paragraphNumberingStartAt",
+        ParagraphNumberingContinue => "paragraphNumberingContinue",
+        ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle",
+        ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle",
     }
 
     hidden {
@@ -1127,7 +1133,15 @@ mod tests {
         // Before` / `After`, `paragraphSplitColumnInside` / `Outside
         // Gutter`, protocol 64) — modelled (ef4cb28) and rendered
         // (a3e5a0c), but with no setter until now.
-        assert_eq!(cat.settable_paths.len(), 213, "settable path count drifted");
+        //
+        // 213 -> 219: the list-marker attributes set on a paragraph or a
+        // paragraph style (`paragraphBulletsTextAfter`, `paragraph
+        // NumberingExpression`, `paragraphNumberingStartAt`, `paragraph
+        // NumberingContinue`, `paragraphBulletsCharacterStyle`,
+        // `paragraphNumberingCharacterStyle`, protocol 64) — modelled on
+        // the paragraph (d10ffc9) and rendered (6192c72), but with no
+        // setter until now.
+        assert_eq!(cat.settable_paths.len(), 219, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

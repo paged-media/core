@@ -5091,6 +5091,218 @@ mod tests {
         assert_eq!(span.min_space_before, None);
     }
 
+    /// The six list-marker overrides: each path round-trips through
+    /// apply and undo (back to the exact unset slot), and invalidates
+    /// reflow.
+    #[test]
+    fn paragraph_list_marker_paths_round_trip() {
+        type Read = fn(&paged_model::Paragraph) -> String;
+        let cases: [(PropertyPath, Value, Read, &str); 8] = [
+            (
+                PropertyPath::ParagraphBulletsTextAfter,
+                Value::Text("^t".into()),
+                |p| format!("{:?}", p.bullets_text_after),
+                "Some(\"^t\")",
+            ),
+            (
+                PropertyPath::ParagraphBulletsTextAfter,
+                Value::Text(" ".into()),
+                |p| format!("{:?}", p.bullets_text_after),
+                "Some(\" \")",
+            ),
+            (
+                PropertyPath::ParagraphNumberingExpression,
+                Value::Text("(^#)^t".into()),
+                |p| format!("{:?}", p.numbering_expression),
+                "Some(\"(^#)^t\")",
+            ),
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Length(Some(5.0)),
+                |p| format!("{:?}", p.numbering_start_at),
+                "Some(5)",
+            ),
+            (
+                PropertyPath::ParagraphNumberingContinue,
+                Value::Bool(false),
+                |p| format!("{:?}", p.numbering_continue),
+                "Some(false)",
+            ),
+            (
+                PropertyPath::ParagraphNumberingContinue,
+                Value::Bool(true),
+                |p| format!("{:?}", p.numbering_continue),
+                "Some(true)",
+            ),
+            (
+                PropertyPath::ParagraphBulletsCharacterStyle,
+                Value::Text("CharacterStyle/Bullet".into()),
+                |p| format!("{:?}", p.bullets_character_style),
+                "Some(\"CharacterStyle/Bullet\")",
+            ),
+            (
+                PropertyPath::ParagraphNumberingCharacterStyle,
+                Value::Text("CharacterStyle/Digits".into()),
+                |p| format!("{:?}", p.bullets_and_numbering_digits_character_style),
+                "Some(\"CharacterStyle/Digits\")",
+            ),
+        ];
+        for (path, value, read, want) in cases {
+            let mut project = Project::new(document_with_one_story("Story/u1"));
+            register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+            let applied = project
+                .apply(story_range_op(path, value.clone()))
+                .unwrap_or_else(|e| panic!("{path:?} {value:?}: {e:?}"));
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(read(para), want, "{path:?}");
+            assert_eq!(applied.invalidation.text_reflow.len(), 1, "{path:?}");
+
+            // Undo restores the UNSET slot, not a default value — for
+            // NumberingContinue an unset slot and `true` count differently.
+            crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+            let para = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(read(para), "None", "{path:?} undo");
+        }
+    }
+
+    /// The clear forms: an empty string clears the text / style paths
+    /// and NumberingContinue, `Length(None)` clears the start, and undo
+    /// of a clear restores the value it cleared.
+    #[test]
+    fn paragraph_list_marker_paths_clear_and_undo_the_clear() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        {
+            let p = &mut project.document_mut().stories[0].story.paragraphs[0];
+            p.bullets_text_after = Some("^t".into());
+            p.numbering_expression = Some("^#.".into());
+            p.numbering_start_at = Some(3);
+            p.numbering_continue = Some(false);
+            p.bullets_character_style = Some("CharacterStyle/B".into());
+            p.bullets_and_numbering_digits_character_style = Some("CharacterStyle/D".into());
+        }
+        let snapshot = |p: &paged_model::Paragraph| {
+            format!(
+                "{:?} {:?} {:?} {:?} {:?} {:?}",
+                p.bullets_text_after,
+                p.numbering_expression,
+                p.numbering_start_at,
+                p.numbering_continue,
+                p.bullets_character_style,
+                p.bullets_and_numbering_digits_character_style
+            )
+        };
+        let before = snapshot(&project.document().stories[0].story.paragraphs[0]);
+        let clears = [
+            (
+                PropertyPath::ParagraphBulletsTextAfter,
+                Value::Text(String::new()),
+            ),
+            (
+                PropertyPath::ParagraphNumberingExpression,
+                Value::Text(String::new()),
+            ),
+            (PropertyPath::ParagraphNumberingStartAt, Value::Length(None)),
+            (
+                PropertyPath::ParagraphNumberingContinue,
+                Value::Text(String::new()),
+            ),
+            (
+                PropertyPath::ParagraphBulletsCharacterStyle,
+                Value::Text(String::new()),
+            ),
+            (
+                PropertyPath::ParagraphNumberingCharacterStyle,
+                Value::Text(String::new()),
+            ),
+        ];
+        let mut inverses = Vec::new();
+        for (path, value) in clears {
+            let applied = project
+                .apply(story_range_op(path, value))
+                .unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+            inverses.push(applied.inverse);
+        }
+        {
+            let p = &project.document().stories[0].story.paragraphs[0];
+            assert_eq!(p.bullets_text_after, None);
+            assert_eq!(p.numbering_expression, None);
+            assert_eq!(p.numbering_start_at, None);
+            assert_eq!(p.numbering_continue, None);
+            assert_eq!(p.bullets_character_style, None);
+            assert_eq!(p.bullets_and_numbering_digits_character_style, None);
+        }
+        for inverse in inverses.iter().rev() {
+            crate::apply(project.document_mut(), inverse).expect("undo");
+        }
+        assert_eq!(
+            snapshot(&project.document().stories[0].story.paragraphs[0]),
+            before
+        );
+    }
+
+    /// A start that is not a whole number >= 1 is refused, never
+    /// clamped; NumberingContinue takes only a bool or the "" clear.
+    #[test]
+    fn paragraph_list_marker_paths_refuse_bad_values() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        {
+            let p = &mut project.document_mut().stories[0].story.paragraphs[0];
+            p.numbering_start_at = Some(4);
+            p.numbering_continue = Some(true);
+        }
+        let refused = [
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Length(Some(0.0)),
+            ),
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Length(Some(-2.0)),
+            ),
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Length(Some(1.5)),
+            ),
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Length(Some(f32::NAN)),
+            ),
+            (
+                PropertyPath::ParagraphNumberingStartAt,
+                Value::Text("3".into()),
+            ),
+            (
+                PropertyPath::ParagraphNumberingContinue,
+                Value::Text("false".into()),
+            ),
+            (
+                PropertyPath::ParagraphNumberingContinue,
+                Value::Length(Some(0.0)),
+            ),
+            (
+                PropertyPath::ParagraphBulletsTextAfter,
+                Value::Length(Some(1.0)),
+            ),
+            (
+                PropertyPath::ParagraphNumberingCharacterStyle,
+                Value::Bool(true),
+            ),
+        ];
+        for (path, bad) in refused {
+            let err = project
+                .apply(story_range_op(path, bad.clone()))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "{path:?} {bad:?}: got {err:?}"
+            );
+        }
+        let p = &project.document().stories[0].story.paragraphs[0];
+        assert_eq!(p.numbering_start_at, Some(4));
+        assert_eq!(p.numbering_continue, Some(true));
+        assert_eq!(p.bullets_text_after, None);
+    }
+
     /// `paragraphRuleAbove` whole-struct: sets the rule, undo restores
     /// the prior all-`None` default. Proves the new `Value::ParagraphRule`
     /// variant round-trips the rule bytewise.

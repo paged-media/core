@@ -6027,6 +6027,12 @@ impl CanvasModel {
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
+        let mut bullets_text_afters: Vec<Option<String>> = Vec::new();
+        let mut numbering_expressions: Vec<Option<String>> = Vec::new();
+        let mut numbering_start_ats: Vec<Option<i32>> = Vec::new();
+        let mut numbering_continues: Vec<Option<bool>> = Vec::new();
+        let mut bullets_character_styles: Vec<Option<String>> = Vec::new();
+        let mut numbering_character_styles: Vec<Option<String>> = Vec::new();
         let mut rule_aboves: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut rule_belows: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut tab_lists: Vec<Vec<paged_model::TabStop>> = Vec::new();
@@ -6070,6 +6076,13 @@ impl CanvasModel {
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
+                bullets_text_afters.push(para.bullets_text_after.clone());
+                numbering_expressions.push(para.numbering_expression.clone());
+                numbering_start_ats.push(para.numbering_start_at);
+                numbering_continues.push(para.numbering_continue);
+                bullets_character_styles.push(para.bullets_character_style.clone());
+                numbering_character_styles
+                    .push(para.bullets_and_numbering_digits_character_style.clone());
                 rule_aboves.push(para.rule_above.clone());
                 rule_belows.push(para.rule_below.clone());
                 tab_lists.push(para.tab_list.clone());
@@ -6361,6 +6374,40 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::ParagraphNumberingFormat,
                 value: collapse_uniform(&numbering_formats)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            // List-marker overrides: text and style refs surface their
+            // stored string (empty ⇒ no override), the start its count
+            // (None ⇒ inherit), continue its bool or "" when unset — the
+            // same shapes the setter takes, so a readback can be replayed.
+            PropertyEntry {
+                path: PropertyPath::ParagraphBulletsTextAfter,
+                value: collapse_uniform(&bullets_text_afters)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingExpression,
+                value: collapse_uniform(&numbering_expressions)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingStartAt,
+                value: collapse_uniform(&numbering_start_ats)
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingContinue,
+                value: collapse_uniform(&numbering_continues)
+                    .map(|o| o.map(Value::Bool).unwrap_or(Value::Text(String::new()))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphBulletsCharacterStyle,
+                value: collapse_uniform(&bullets_character_styles)
+                    .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingCharacterStyle,
+                value: collapse_uniform(&numbering_character_styles)
                     .map(|o| Value::Text(o.unwrap_or_default())),
             },
             PropertyEntry {

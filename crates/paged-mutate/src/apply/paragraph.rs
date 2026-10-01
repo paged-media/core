@@ -487,6 +487,110 @@ pub(super) fn set_span_columns_field(
     })
 }
 
+/// Set an `Option<i32>` list start (`NumberingStartAt`) from a
+/// `Value::Length` carrying a whole number >= 1. `Length(None)` clears
+/// the override. Zero, negatives, fractions and non-finite values are
+/// refused with the slot untouched — a count that starts at 0 or 2.5 is
+/// not something InDesign can say, and clamping would store a value the
+/// caller never asked for. The prior comes back as
+/// `Value::Length(prev as f32)`, which this setter accepts, so the
+/// inverse round-trips.
+pub(super) fn set_para_numbering_start_at_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<i32>,
+) -> Result<(Value, Value), OperationError> {
+    let refuse = || OperationError::TypeMismatch {
+        path,
+        expected: "Length: a whole number >= 1, or None".to_string(),
+    };
+    let next = match value {
+        Value::Length(None) => None,
+        Value::Length(Some(n))
+            if n.is_finite() && *n >= 1.0 && n.fract() == 0.0 && *n <= i32::MAX as f32 =>
+        {
+            Some(*n as i32)
+        }
+        _ => return Err(refuse()),
+    };
+    let prev = *slot;
+    *slot = next;
+    Ok((
+        Value::Length(prev.map(|n| n as f32)),
+        Value::Length(next.map(|n| n as f32)),
+    ))
+}
+
+/// Set an `Option<bool>` whose unset state means something different
+/// from either value (`NumberingContinue`: an explicit `true` resumes a
+/// count a non-list paragraph interrupted, an inheriting paragraph
+/// restarts). `Value::Bool(b)` stores `Some(b)`; `Value::Text("")`
+/// clears to `None`. The prior comes back as `Bool(b)` or, for `None`,
+/// `Text("")` — so undo restores the slot exactly, unlike
+/// [`set_para_bool_field`], whose `Bool` inverse cannot say "unset".
+pub(super) fn set_para_tristate_bool_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<bool>,
+) -> Result<(Value, Value), OperationError> {
+    let encode = |v: Option<bool>| v.map(Value::Bool).unwrap_or(Value::Text(String::new()));
+    let next = match value {
+        Value::Bool(b) => Some(*b),
+        Value::Text(t) if t.is_empty() => None,
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path,
+                expected: "Bool, or Text(\"\") to clear".to_string(),
+            })
+        }
+    };
+    let prev = *slot;
+    *slot = next;
+    Ok((encode(prev), encode(next)))
+}
+
+/// The six list-marker attributes a paragraph and a paragraph style
+/// share, borrowed from either.
+pub(super) struct ListMarkerSlots<'a> {
+    pub bullets_text_after: &'a mut Option<String>,
+    pub numbering_expression: &'a mut Option<String>,
+    pub numbering_start_at: &'a mut Option<i32>,
+    pub numbering_continue: &'a mut Option<bool>,
+    pub bullets_character_style: &'a mut Option<String>,
+    pub numbering_character_style: &'a mut Option<String>,
+}
+
+/// Route one of the six list-marker paths to its slot, the same helper
+/// at paragraph and style level so the two cannot disagree on a value
+/// kind or an undo. `None` for any other path.
+pub(super) fn set_list_marker_field(
+    path: PropertyPath,
+    value: &Value,
+    slots: ListMarkerSlots<'_>,
+) -> Option<Result<(Value, Value), OperationError>> {
+    Some(match path {
+        PropertyPath::ParagraphBulletsTextAfter => {
+            set_para_text_field(path, value, slots.bullets_text_after)
+        }
+        PropertyPath::ParagraphNumberingExpression => {
+            set_para_text_field(path, value, slots.numbering_expression)
+        }
+        PropertyPath::ParagraphNumberingStartAt => {
+            set_para_numbering_start_at_field(path, value, slots.numbering_start_at)
+        }
+        PropertyPath::ParagraphNumberingContinue => {
+            set_para_tristate_bool_field(path, value, slots.numbering_continue)
+        }
+        PropertyPath::ParagraphBulletsCharacterStyle => {
+            set_para_text_field(path, value, slots.bullets_character_style)
+        }
+        PropertyPath::ParagraphNumberingCharacterStyle => {
+            set_para_text_field(path, value, slots.numbering_character_style)
+        }
+        _ => return None,
+    })
+}
+
 /// W0.2 — set the whole `ParagraphRule` struct (`rule_above` /
 /// `rule_below`) from a `Value::ParagraphRule`. `ParagraphRule(None)`
 /// clears the rule to the all-`None` default. The captured prior is
@@ -721,6 +825,24 @@ pub(super) fn apply_paragraph_field(
         PropertyPath::ParagraphAppliedNumberingList => {
             set_para_text_field(path, value, &mut para.applied_numbering_list)
         }
+        PropertyPath::ParagraphBulletsTextAfter
+        | PropertyPath::ParagraphNumberingExpression
+        | PropertyPath::ParagraphNumberingStartAt
+        | PropertyPath::ParagraphNumberingContinue
+        | PropertyPath::ParagraphBulletsCharacterStyle
+        | PropertyPath::ParagraphNumberingCharacterStyle => set_list_marker_field(
+            path,
+            value,
+            ListMarkerSlots {
+                bullets_text_after: &mut para.bullets_text_after,
+                numbering_expression: &mut para.numbering_expression,
+                numbering_start_at: &mut para.numbering_start_at,
+                numbering_continue: &mut para.numbering_continue,
+                bullets_character_style: &mut para.bullets_character_style,
+                numbering_character_style: &mut para.bullets_and_numbering_digits_character_style,
+            },
+        )
+        .expect("a list-marker path"),
         _ => Err(OperationError::UnsupportedProperty {
             node: NodeId::StoryRange {
                 story_id: String::new(),

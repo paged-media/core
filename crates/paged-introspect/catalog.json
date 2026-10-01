@@ -1246,7 +1246,13 @@
     "paragraphTabStops",
     "paragraphListType",
     "paragraphBulletCharacter",
-    "paragraphNumberingFormat"
+    "paragraphNumberingFormat",
+    "paragraphBulletsTextAfter",
+    "paragraphNumberingExpression",
+    "paragraphNumberingStartAt",
+    "paragraphNumberingContinue",
+    "paragraphBulletsCharacterStyle",
+    "paragraphNumberingCharacterStyle"
   ],
   "constraints": [
     "Scripts run in Boa (pure ECMAScript), NOT Node: no require/import, fetch, fs, setTimeout, or network. Use only paged.* and console.*.",

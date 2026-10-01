@@ -2066,6 +2066,28 @@ pub(super) fn set_paragraph_style_field(
             &mut def.applied_numbering_list,
         )?
         .0),
+        PropertyPath::ParagraphBulletsTextAfter
+        | PropertyPath::ParagraphNumberingExpression
+        | PropertyPath::ParagraphNumberingStartAt
+        | PropertyPath::ParagraphNumberingContinue
+        | PropertyPath::ParagraphBulletsCharacterStyle
+        | PropertyPath::ParagraphNumberingCharacterStyle => {
+            Ok(super::paragraph::set_list_marker_field(
+                path,
+                value,
+                super::paragraph::ListMarkerSlots {
+                    bullets_text_after: &mut def.bullets_text_after,
+                    numbering_expression: &mut def.numbering_expression,
+                    numbering_start_at: &mut def.numbering_start_at,
+                    numbering_continue: &mut def.numbering_continue,
+                    bullets_character_style: &mut def.bullets_character_style,
+                    numbering_character_style: &mut def
+                        .bullets_and_numbering_digits_character_style,
+                },
+            )
+            .expect("a list-marker path")?
+            .0)
+        }
         PropertyPath::ParagraphBulletCharacter => {
             let Value::Text(s) = value else {
                 return Err(type_err());

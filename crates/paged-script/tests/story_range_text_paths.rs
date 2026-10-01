@@ -102,6 +102,12 @@ const CASES = [
   // char of the string, so '8226' would store '8'.
   ['paragraphBulletCharacter', '\u2022'],
   ['paragraphNumberingFormat', '1, 2, 3, 4...'],
+  ['paragraphBulletsTextAfter', '^t'],
+  ['paragraphNumberingExpression', '(^#)^t'],
+  ['paragraphNumberingStartAt', 5],
+  ['paragraphNumberingContinue', false],
+  ['paragraphBulletsCharacterStyle', 'CharacterStyle/Bullet'],
+  ['paragraphNumberingCharacterStyle', 'CharacterStyle/Digits'],
   ['paragraphRuleAbove', { type: 'paragraphRule', value: { on: true, weight: 1 } }],
   ['paragraphRuleBelow', { type: 'paragraphRule', value: { on: true, weight: 2 } }],
   ['paragraphTabStops', { type: 'tabStops', value: [{ position: 36, alignment: 'Left' }] }],
@@ -175,6 +181,13 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphSpanColumnMinSpaceAfter",
         "paragraphSplitColumnInsideGutter",
         "paragraphSplitColumnOutsideGutter",
+        // List-marker overrides (protocol 64).
+        "paragraphBulletsTextAfter",
+        "paragraphNumberingExpression",
+        "paragraphNumberingStartAt",
+        "paragraphNumberingContinue",
+        "paragraphBulletsCharacterStyle",
+        "paragraphNumberingCharacterStyle",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -186,7 +199,7 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        213,
+        219,
         "the advertised roster changed; move the count with the decision"
     );
 }

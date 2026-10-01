@@ -774,6 +774,42 @@ pub enum PropertyPath {
     /// Reflow-affecting (the marker text changes). Addressed against
     /// a `NodeId::StoryRange`.
     ParagraphNumberingFormat,
+    /// `BulletsTextAfter` — what follows a bullet marker, in IDML's
+    /// spelling (`^t` a tab, a literal space, …). `Value::Text`, stored
+    /// verbatim; the empty string clears the override (inherit, which
+    /// InDesign renders as a tab). Reflow-affecting.
+    ParagraphBulletsTextAfter,
+    /// `NumberingExpression` — the numbered marker's template (`^#.^t`,
+    /// `(^#)`, …). `Value::Text`, stored verbatim; the empty string
+    /// clears the override (inherit; the default is `^#.^t`).
+    /// Reflow-affecting.
+    ParagraphNumberingExpression,
+    /// `NumberingStartAt` — where a restarted count begins.
+    /// `Value::Length(Some(n))` carrying a whole number >= 1 (the
+    /// integer-as-Length convention); `Length(None)` clears the override.
+    /// Zero, negatives and fractions are refused (`TypeMismatch`), never
+    /// clamped. Reflow-affecting.
+    ParagraphNumberingStartAt,
+    /// `NumberingContinue` — `false` restarts the count. `Value::Bool`
+    /// sets the override; `Value::Text("")` clears it (inherit). The
+    /// clear form exists because an unset value is NOT `true` here: a
+    /// paragraph that explicitly continues resumes a count a non-list
+    /// paragraph interrupted, an inheriting one restarts, so the inverse
+    /// of a write over an unset slot is `Text("")`, not `Bool(true)`.
+    /// Reflow-affecting.
+    ParagraphNumberingContinue,
+    /// `BulletsCharacterStyle` — the bullet marker's character style, a
+    /// `CharacterStyle/<id>` self id. `Value::Text`, stored verbatim
+    /// (an id that names no style is stored, like
+    /// `appliedNumberingList` and `appliedParagraphStyle`; the cascade
+    /// then finds nothing and the marker takes the text's formatting).
+    /// The empty string clears the override. Reflow-affecting.
+    ParagraphBulletsCharacterStyle,
+    /// IDML `NumberingCharacterStyle` — the number marker's character
+    /// style (`Paragraph::bullets_and_numbering_digits_character_style`).
+    /// Same contract as [`PropertyPath::ParagraphBulletsCharacterStyle`].
+    /// Reflow-affecting.
+    ParagraphNumberingCharacterStyle,
 
     // ---- W0.3 — text-frame prefs --------------------------------
     /// W0.3 — `<TextFramePreference TextColumnCount="...">`. The run
@@ -1427,6 +1463,12 @@ impl PropertyPath {
             PropertyPath::ParagraphListType => "paragraph.listType",
             PropertyPath::ParagraphBulletCharacter => "paragraph.bulletCharacter",
             PropertyPath::ParagraphNumberingFormat => "paragraph.numberingFormat",
+            PropertyPath::ParagraphBulletsTextAfter => "paragraph.bulletsTextAfter",
+            PropertyPath::ParagraphNumberingExpression => "paragraph.numberingExpression",
+            PropertyPath::ParagraphNumberingStartAt => "paragraph.numberingStartAt",
+            PropertyPath::ParagraphNumberingContinue => "paragraph.numberingContinue",
+            PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
+            PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
             // W0.3 — text-frame prefs.
             PropertyPath::TextFrameColumnCount => "textFrame.columnCount",
             PropertyPath::TextFrameColumnGutter => "textFrame.columnGutter",

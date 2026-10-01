@@ -4036,6 +4036,14 @@ fn js_value_to_wire(
             // count ("All" or digits; a JS number arrives as a Length).
             | P::ParagraphSpanColumnType
             | P::ParagraphSpanSplitColumnCount
+            // List-marker overrides: IDML text (`^t`, `^#.^t`) and
+            // character-style ids. `numberingContinue` takes a JS bool;
+            // its string form is only "" (clear), so it is Text too.
+            | P::ParagraphBulletsTextAfter
+            | P::ParagraphNumberingExpression
+            | P::ParagraphNumberingContinue
+            | P::ParagraphBulletsCharacterStyle
+            | P::ParagraphNumberingCharacterStyle
             // W1.22 — applied numbering-list ref + next-style ref.
             | P::ParagraphAppliedNumberingList
             | P::ParagraphStyleNextStyle
