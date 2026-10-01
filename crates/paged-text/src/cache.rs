@@ -30,14 +30,14 @@
 //! scene-level `Document::canonical_hash` uses a different domain
 //! prefix).
 //!
-//! The cache itself is a bounded `HashMap` keyed by digest. There's no
-//! LRU yet — when the entry count exceeds `capacity` the cache clears
-//! itself entirely on the next insert. The simpler policy is good
-//! enough for the first cut because cache size is bounded by the count
-//! of distinct paragraph shapes in the active document (typically
-//! thousands, well below the default 10 000 cap), and a typing session
-//! never grows the working set fast enough to thrash. LRU is queued for
-//! the moment we see real cache pressure on a 500-page corpus.
+//! The cache itself is a bounded `HashMap` keyed by digest. Every hit
+//! and insert stamps the entry with a use tick; when an insert finds the
+//! cache full, the least recently used quarter is evicted in one batch
+//! (an amortised O(1) per insert). Entries the current build touched are
+//! the newest, so crossing the bound mid-build keeps the working set
+//! instead of re-laying out every paragraph (the old policy cleared the
+//! whole map: on a 232-page story a paste that tipped it over cost 4 125
+//! misses).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -49,8 +49,11 @@ use crate::shape::{FigureStyle, KerningMethod};
 /// Bounded per-paragraph layout cache.
 #[derive(Debug)]
 pub struct LayoutCache {
-    entries: HashMap<[u8; 32], LaidOutParagraph>,
+    /// Entry plus the tick of its last use.
+    entries: HashMap<[u8; 32], (LaidOutParagraph, u64)>,
     capacity: usize,
+    /// Monotonic use counter for the LRU stamps.
+    tick: u64,
     hits: u64,
     misses: u64,
 }
@@ -71,6 +74,7 @@ impl LayoutCache {
         Self {
             entries: HashMap::new(),
             capacity,
+            tick: 0,
             hits: 0,
             misses: 0,
         }
@@ -84,7 +88,9 @@ impl LayoutCache {
             self.misses += 1;
             return None;
         }
-        if let Some(p) = self.entries.get(key) {
+        self.tick += 1;
+        if let Some((p, used)) = self.entries.get_mut(key) {
+            *used = self.tick;
             self.hits += 1;
             return Some(p.clone());
         }
@@ -92,16 +98,27 @@ impl LayoutCache {
         None
     }
 
-    /// Insert. If the cache is full, drop everything before adding —
-    /// see module docs on the no-LRU policy.
+    /// Insert. If the cache is full, evict the least recently used
+    /// entries first — see module docs.
     pub fn insert(&mut self, key: [u8; 32], value: LaidOutParagraph) {
         if self.capacity == 0 {
             return;
         }
-        if self.entries.len() >= self.capacity {
-            self.entries.clear();
+        if self.entries.len() >= self.capacity && !self.entries.contains_key(&key) {
+            self.evict_lru();
         }
-        self.entries.insert(key, value);
+        self.tick += 1;
+        self.entries.insert(key, (value, self.tick));
+    }
+
+    /// Drop the least recently used quarter of the entries (at least one),
+    /// keeping the rest.
+    fn evict_lru(&mut self) {
+        let drop = (self.entries.len() / 4).max(1);
+        let mut ticks: Vec<u64> = self.entries.values().map(|(_, t)| *t).collect();
+        let (_, &mut cutoff, _) = ticks.select_nth_unstable(drop - 1);
+        // Ticks are unique, so exactly `drop` entries are at or below it.
+        self.entries.retain(|_, (_, t)| *t > cutoff);
     }
 
     pub fn stats(&self) -> CacheStats {
@@ -486,17 +503,44 @@ mod tests {
         assert_eq!(c.stats().hits, 1);
     }
 
+    fn key(i: u32) -> [u8; 32] {
+        let mut k = [0u8; 32];
+        k[..4].copy_from_slice(&i.to_le_bytes());
+        k
+    }
+
     #[test]
-    fn full_cache_clears_on_overflow() {
-        let mut c = LayoutCache::new(2);
-        for i in 0..3u8 {
-            let mut key = [0u8; 32];
-            key[0] = i;
-            c.insert(key, LaidOutParagraph { lines: Vec::new() });
+    fn crossing_the_bound_keeps_hot_entries() {
+        let mut c = LayoutCache::new(8);
+        for i in 0..8 {
+            c.insert(key(i), LaidOutParagraph { lines: Vec::new() });
         }
-        // After the third insert, the cap was reached, the cache
-        // cleared, and only the third entry remains.
-        assert_eq!(c.stats().len, 1);
+        // Entries 4..8 are touched again (the current build's working
+        // set); 0..4 are cold.
+        for i in 4..8 {
+            assert!(c.get(&key(i)).is_some());
+        }
+        c.insert(key(100), LaidOutParagraph { lines: Vec::new() });
+        assert!(c.stats().len <= 8, "bounded: {}", c.stats().len);
+        for i in 4..8 {
+            assert!(c.get(&key(i)).is_some(), "hot entry {i} survived");
+        }
+        assert!(c.get(&key(100)).is_some(), "the new entry is in");
+        // The evicted ones are the two oldest (a quarter of 8).
+        assert!(c.get(&key(0)).is_none() && c.get(&key(1)).is_none());
+        assert!(c.get(&key(2)).is_some() && c.get(&key(3)).is_some());
+    }
+
+    #[test]
+    fn reinserting_a_present_key_evicts_nothing() {
+        let mut c = LayoutCache::new(2);
+        c.insert(key(0), LaidOutParagraph { lines: Vec::new() });
+        c.insert(key(1), LaidOutParagraph { lines: Vec::new() });
+        c.insert(key(1), LaidOutParagraph { lines: Vec::new() });
+        assert_eq!(c.stats().len, 2);
+        c.insert(key(2), LaidOutParagraph { lines: Vec::new() });
+        assert_eq!(c.stats().len, 2, "one LRU entry made room");
+        assert!(c.get(&key(0)).is_none());
     }
 
     #[test]
