@@ -100,6 +100,15 @@
       "report": "/tmp/idml-generated-diff/images/report.json"
     },
     {
+      "name": "keeps",
+      "idml": "keeps.idml",
+      "pdf": "keeps.pdf",
+      "pages": 8,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/keeps",
+      "report": "/tmp/idml-generated-diff/keeps/report.json"
+    },
+    {
       "name": "layers-z",
       "idml": "layers-z.idml",
       "pdf": "layers-z.pdf",
