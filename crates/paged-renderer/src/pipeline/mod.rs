@@ -409,6 +409,19 @@ pub struct PipelineOptions<'a> {
     /// A counter the caller bumps per build; a resume record is never read
     /// back in the build that wrote it.
     pub build_generation: u64,
+    /// thoughts ADR 027 plan step 7 — a print of each master-text emission
+    /// (frame id, page id, post-layout pass) from the previous build, so a
+    /// master re-emitted with identical output does not mark its page
+    /// fresh ([`BuiltDocument::fresh_pages`]). Read and written per build.
+    pub emission_prints: Option<&'a EmissionPrints>,
+    /// thoughts ADR 027 plan step 7 — the previous build's pages. A page
+    /// this build laid nothing out on afresh (see
+    /// [`BuiltDocument::fresh_pages`]) and that has the same id at the same
+    /// index is the previous page by construction: it is moved in instead,
+    /// and the per-page post-passes (footnote pools, z-slot relocation,
+    /// transparency-group fit) skip it. The caller passes it only for a
+    /// build whose commits leave the frame pass untouched.
+    pub previous_pages: Option<&'a std::cell::RefCell<Vec<BuiltPage>>>,
     /// W1.18a — the date clock for `CreationDate` / `ModificationDate` /
     /// `OutputDate` text variables. Explicit + injectable so date
     /// variables resolve deterministically (never the wall clock). The
@@ -473,7 +486,7 @@ pub struct ResourceProviderEntry<'a> {
 /// their contents are page-indexed and pool-independent.
 #[derive(Debug, Clone)]
 pub struct BodyStoryEmissionDelta {
-    pub per_page: Vec<(usize, BodyStoryPageDelta)>,
+    pub per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
     pub anchored: Vec<AnchoredImageEmit>,
     pub breaks: Vec<BreakRecord>,
     /// thoughts ADR 027 plan step 4 — the diagnostics the emit reported
@@ -510,6 +523,10 @@ pub struct KeepSeed {
     /// Index of the last paragraph whose keep options can force a break.
     pub(crate) last_active: Option<u32>,
 }
+
+/// (frame id, page id, post-layout pass) → print of a master-text
+/// emission (see [`PipelineOptions::emission_prints`]).
+pub type EmissionPrints = std::cell::RefCell<HashMap<(String, String, bool), u64>>;
 
 /// Story id and "is the post-layout pass" → [`KeepSeed`].
 pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
@@ -621,6 +638,8 @@ impl Default for PipelineOptions<'_> {
             story_resume: None,
             edit_spans: None,
             build_generation: 0,
+            emission_prints: None,
+            previous_pages: None,
             document_clock: DocumentClock::default(),
             scene_layers: None,
             resource_providers: None,
@@ -913,6 +932,15 @@ pub struct BuiltDocument {
     pub(crate) overset: HashMap<String, OversetMeasure>,
     /// Builds the page-growth loop ran for this result (1 without growth).
     pub(crate) grow_passes: usize,
+    /// thoughts ADR 027 §7 / plan step 7 — per page, whether this build laid
+    /// any of its content out afresh (rather than splicing it from an emit
+    /// cache) AND that content may differ from the previous build's. A
+    /// spliced page is the previous build's page by construction. Master
+    /// text re-emitted with the same output (checked against
+    /// [`PipelineOptions::emission_prints`]) does not count. Every page is
+    /// fresh in a build without caches. The frame pass is not tracked: a
+    /// caller that changed frames must treat every page as changed.
+    pub fresh_pages: Vec<bool>,
 }
 
 /// A body story's overset, measured by the pass that dropped it.
@@ -1068,6 +1096,9 @@ pub struct PipelineStats {
     pub frames_emitted: usize,
     /// Edited stories that resumed at the edit and stopped early.
     pub stories_resumed: usize,
+    /// thoughts ADR 027 plan step 7 — pages taken over from the previous
+    /// build instead of finished again (see `PipelineOptions::previous_pages`).
+    pub pages_adopted: usize,
 }
 
 impl PipelineStats {
@@ -1149,7 +1180,7 @@ pub fn build_document(
 ) -> anyhow::Result<BuiltDocument> {
     let growing = document.growing_stories();
     if growing.is_empty() {
-        return build_document_fixed(document, options);
+        return build_document_fixed(document, options, true);
     }
     let caps: HashMap<String, u32> = document
         .stories
@@ -1188,7 +1219,9 @@ pub fn build_document(
     let mut pass = 0;
     loop {
         let grown = document.with_generated_pages(&counts);
-        let mut built = build_document_fixed(&grown, options)?;
+        // Only the first pass may adopt the previous build's pages: a later
+        // one would find the first pass's discarded pages there.
+        let mut built = build_document_fixed(&grown, options, pass == 0)?;
         pass += 1;
         built.grow_passes = pass;
         let mut changed = false;
@@ -1280,12 +1313,12 @@ fn grow_estimate(built: &BuiltDocument, story: &str, count: u32) -> Option<u32> 
 fn build_document_fixed(
     document: &Document,
     options: &PipelineOptions,
+    adopt: bool,
 ) -> anyhow::Result<BuiltDocument> {
-    let first = build_document_inner(document, options, None)?;
-
     // Does the document need the post-layout pass? (Same predicate the
     // inner builder uses; cheap to recompute and avoids plumbing a flag
-    // back out.)
+    // back out.) Known up front: only the build that is returned may adopt
+    // the previous build's clean pages (ADR 027 plan step 7).
     let dm = &document.designmap;
     let has_running_header = dm
         .text_variables
@@ -1298,7 +1331,9 @@ fn build_document_fixed(
                 paged_model::HyperlinkDestinationKind::TextAnchor(_)
             )
         });
-    if !has_running_header && !has_text_anchor_dest {
+    let single = !has_running_header && !has_text_anchor_dest;
+    let first = build_document_inner(document, options, None, adopt && single)?;
+    if single {
         return Ok(first);
     }
 
@@ -1306,7 +1341,7 @@ fn build_document_fixed(
     // then re-run with it in hand. Only one re-run ever happens (the
     // inner builder, given a `post`, never asks for another).
     let post = build_post_layout_ctx(document, &first);
-    let mut second = build_document_inner(document, options, Some(&post))?;
+    let mut second = build_document_inner(document, options, Some(&post), adopt)?;
     // The reuse counters describe the whole build, both passes.
     second.stats.keep_seeds_used += first.stats.keep_seeds_used;
     second.stats.body_stories_reused += first.stats.body_stories_reused;

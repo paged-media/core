@@ -147,7 +147,8 @@ fn type_into(name: &str, m: &mut CanvasModel, story: &str, idx: usize, edits: us
     let built = &m.built().stats;
     println!(
         "{name}: {} pages, per keystroke wall {:.1} ms, build {:.1} ms (median of {edits}; \
-         fastest {:.1} ms); last edit: {} frames laid out, {} stories resumed, {} reused",
+         fastest {:.1} ms); last edit: {} frames laid out, {} stories resumed, {} reused, \
+         {} of {} pages changed, {} adopted",
         stats.pages,
         median(wall.clone()),
         median(build),
@@ -155,6 +156,9 @@ fn type_into(name: &str, m: &mut CanvasModel, story: &str, idx: usize, edits: us
         built.frames_emitted,
         built.stories_resumed,
         built.body_stories_reused,
+        m.dirty_page_ids().len(),
+        stats.pages,
+        built.pages_adopted,
     );
 }
 

@@ -184,6 +184,16 @@ struct Gate {
     name: &'static str,
     checked: usize,
     refused: Vec<&'static str>,
+    /// Pages the last op reported as changed.
+    last_reported: usize,
+}
+
+fn page_digests(m: &CanvasModel) -> std::collections::HashMap<String, u64> {
+    m.built()
+        .pages
+        .iter()
+        .map(|p| (p.id.0.clone(), p.list.digest()))
+        .collect()
 }
 
 impl Gate {
@@ -193,6 +203,7 @@ impl Gate {
             name,
             checked: 0,
             refused: Vec::new(),
+            last_reported: 0,
         }
     }
 
@@ -202,18 +213,42 @@ impl Gate {
             Step::Undo => "undo",
             Step::Redo => "redo",
         };
-        let applied = match step {
-            Step::Op(_, op) => self.model.apply_mutation(&op).is_ok(),
-            Step::Undo => self.model.undo().is_some(),
-            Step::Redo => self.model.redo().is_some(),
+        let before = page_digests(&self.model);
+        let reported: Option<Vec<String>> = match step {
+            Step::Op(_, op) => self
+                .model
+                .apply_mutation(&op)
+                .ok()
+                .map(|o| o.page_ids.into_iter().map(|p| p.0).collect()),
+            Step::Undo => self
+                .model
+                .undo()
+                .map(|o| o.page_ids.into_iter().map(|p| p.0).collect()),
+            Step::Redo => self
+                .model
+                .redo()
+                .map(|o| o.page_ids.into_iter().map(|p| p.0).collect()),
         };
-        if !applied {
+        let Some(reported) = reported else {
             self.refused.push(label);
             return;
-        }
+        };
         self.model
             .digest_gate_check()
             .unwrap_or_else(|e| panic!("{}: after `{label}`: {e}", self.name));
+        // ADR 027 §7 — the pages an op reports as changed (what the GPU
+        // re-encodes) must cover every page whose display list changed.
+        for (id, digest) in page_digests(&self.model) {
+            if !reported.contains(&id) {
+                assert_eq!(
+                    before.get(&id),
+                    Some(&digest),
+                    "{}: after `{label}`: page {id} changed but was not reported dirty",
+                    self.name
+                );
+            }
+        }
+        self.last_reported = reported.len();
         self.checked += 1;
     }
 
@@ -542,6 +577,11 @@ fn a_long_docx_story_stays_equal_to_a_cold_build() {
         "typing on page 3 laid out {} frames",
         stats.frames_emitted
     );
+    assert!(
+        g.last_reported <= 2,
+        "typing on page 3 changed {} pages",
+        g.last_reported
+    );
     // Typing on until the paragraph wraps onto another line, then deleting
     // it again: the paragraphs after it move by a line, so the early stop
     // must see the moved flow (not just the same frame and glyphs).
@@ -596,6 +636,7 @@ fn the_annual_stays_equal_to_a_cold_build() {
         name: "annual",
         checked: 0,
         refused: Vec::new(),
+        last_reported: 0,
     };
     // The story on page 3 (the plan's edit), then the longest story.
     let page3 = g.model.built().pages[2].id.clone();

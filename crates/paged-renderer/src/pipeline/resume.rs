@@ -76,7 +76,7 @@ pub(super) struct ParaMark {
     cur_range: Option<(usize, usize)>,
     /// The page of the current frame, and the story's paths, commands and
     /// `story_layout` lines on it so far.
-    page: usize,
+    pub(super) page: usize,
     paths: usize,
     cmds: usize,
     lines: usize,
@@ -117,7 +117,7 @@ pub struct StoryResume {
     /// edit span against content the record already holds).
     generation: u64,
     /// The story's output per page, as the body-story cache captures it.
-    per_page: Vec<(usize, BodyStoryPageDelta)>,
+    per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
     /// One mark per paragraph, at its start, and one for the end.
     marks: Vec<ParaMark>,
     /// The emitter's per-frame command ranges at the end, relative to the
@@ -223,6 +223,11 @@ impl Plan<'_> {
     /// there.
     pub(super) fn past_edit(&self, j: usize) -> bool {
         j >= self.span.new_end as usize
+    }
+
+    /// The page the resume starts on.
+    pub(super) fn resume_page(&self) -> usize {
+        self.rec.marks[self.first()].page
     }
 
     /// The chain frame the resume starts in.
@@ -334,6 +339,7 @@ pub(super) fn splice_prefix(
     pre: &[PreSnapshot],
     plan: &Plan,
     stats: &mut PipelineStats,
+    verbatim: &mut Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
 ) {
     let rec = plan.rec;
     let first = plan.first();
@@ -347,6 +353,8 @@ pub(super) fn splice_prefix(
         let end = if *p == m.page {
             (m.paths, m.cmds, m.lines)
         } else {
+            // The whole page is the record's: its delta is this build's too.
+            verbatim.push((*p, delta.clone()));
             (
                 delta.paths.len(),
                 delta.commands.len(),
@@ -409,6 +417,7 @@ pub(super) fn try_stop(
     now: &ParaMark,
     stats: &mut PipelineStats,
     marks: Option<&mut Vec<ParaMark>>,
+    verbatim: &mut Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
 ) -> Option<usize> {
     let rec = plan.rec;
     let jo = plan.old_index(j);
@@ -443,6 +452,10 @@ pub(super) fn try_stop(
         let tail = if *p == now.page {
             (old.paths, old.cmds, old.lines)
         } else {
+            // A whole page of the record, unshifted, is this build's delta.
+            if para_shift == 0 {
+                verbatim.push((*p, delta.clone()));
+            }
             (0, 0, 0)
         };
         splice_page_tail(&mut pages[*p], delta, &pre[*p], tail, para_shift);
@@ -539,7 +552,7 @@ pub(super) fn record(
     end: EmitterEnd,
     chain_sig: u64,
     generation: u64,
-    per_page: Vec<(usize, BodyStoryPageDelta)>,
+    per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
     marks: Vec<ParaMark>,
     forced: HashMap<u32, u32>,
     diagnostics: Vec<Diagnostic>,

@@ -1363,6 +1363,33 @@ pub struct CanvasModel {
     /// Bumped by every rebuild; a resume record is never read back in the
     /// build that wrote it.
     build_generation: u64,
+    /// thoughts ADR 027 plan step 7 — the previous build's print of each
+    /// master-text emission, so a re-emitted master with the same output
+    /// leaves its page clean.
+    emission_prints: paged_renderer::EmissionPrints,
+    /// What the commits since the last build allow the dirty-page set to
+    /// narrow to (see [`DirtyScope`]).
+    pending_dirty_scope: DirtyScope,
+    /// The pages the last build changed, by index ([`Self::dirty_page_ids`]).
+    last_dirty_pages: Vec<usize>,
+    /// Whether `last_dirty_pages` was narrowed below every page.
+    last_dirty_narrowed: bool,
+}
+
+/// thoughts ADR 027 plan step 7 — how far the pages a build reports as
+/// changed may narrow. Only a build whose every commit was a text edit of
+/// one story with a chain of its own narrows: no other commit is known to
+/// leave the frame pass (frames, masters' items, page geometry) untouched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum DirtyScope {
+    /// No commit since the last build (a gesture or view rebuild): every
+    /// page is reported.
+    #[default]
+    Unset,
+    /// Text edits of this one story only.
+    Story(String),
+    /// Anything else: every page.
+    Everything,
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1721,6 +1748,10 @@ impl CanvasModel {
             story_resume: Default::default(),
             pending_edit_spans: HashMap::new(),
             build_generation: 0,
+            emission_prints: Default::default(),
+            pending_dirty_scope: DirtyScope::Unset,
+            last_dirty_pages: Vec::new(),
+            last_dirty_narrowed: false,
         })
     }
 
@@ -2228,7 +2259,7 @@ impl CanvasModel {
             what: format!("rebuild after mutation: {e}"),
         })?;
         let applied_seq = self.bump_applied_seq();
-        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let page_ids: Vec<PageId> = self.dirty_page_ids();
         // Shift the active selection through the mutation so caret
         // tracking survives the edit (AC-E-9).
         if let Some(sel) = self.current_selection.take() {
@@ -4169,7 +4200,7 @@ impl CanvasModel {
         self.commit_and_rebuild(invalidation).ok()?;
         let undone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
-        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let page_ids: Vec<PageId> = self.dirty_page_ids();
         self.redo_log.push(rec);
         Some(UndoOutcome {
             undone_seq,
@@ -4225,7 +4256,7 @@ impl CanvasModel {
         self.commit_and_rebuild(invalidation).ok()?;
         let redone_seq = rec.applied_seq;
         let applied_seq = self.bump_applied_seq();
-        let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let page_ids: Vec<PageId> = self.dirty_page_ids();
         // W1.24 (B19) — capped push (oldest-evicted). A redo can only
         // re-grow the log up to the cap; the front-eviction here is the
         // same as the forward paths.
@@ -8561,6 +8592,7 @@ impl CanvasModel {
                 story_resume: Some(&self.story_resume),
                 edit_spans: Some(&self.pending_edit_spans),
                 build_generation: self.build_generation,
+                emission_prints: Some(&self.emission_prints),
                 render_scale: self.resource_render_scale,
                 // A5 — live rebuilds keep the degraded-asset markers on
                 // (mirrors the initial load); an export stays faithful.
@@ -8657,6 +8689,25 @@ impl CanvasModel {
         // Any committed edit may change the fonts the document asks for
         // (a run's family, a style's font, a poured story).
         self.font_check_owed = true;
+        let scope = match &invalidation {
+            Invalidation::Text { story, .. }
+                if self
+                    .scene
+                    .frame_chain(story)
+                    .first()
+                    .is_some_and(|f| !f.is_anchored) =>
+            {
+                DirtyScope::Story(story.clone())
+            }
+            _ => DirtyScope::Everything,
+        };
+        self.pending_dirty_scope = match std::mem::take(&mut self.pending_dirty_scope) {
+            DirtyScope::Unset => scope,
+            DirtyScope::Story(prev) if scope == DirtyScope::Story(prev.clone()) => {
+                DirtyScope::Story(prev)
+            }
+            _ => DirtyScope::Everything,
+        };
         match invalidation {
             Invalidation::Everything => {
                 self.master_text_emit_cache.borrow_mut().clear();
@@ -8672,11 +8723,13 @@ impl CanvasModel {
                 // stale: every input another story reads (its own content,
                 // chain geometry, wrap, page numbering, the list ledger in,
                 // the path buffer it replays into) is in its key or checked
-                // on the hit. Master text is cheap and is re-emitted. A
+                // on the hit. Master text reads no body story (page context
+                // is in its key, running headers re-resolve in the
+                // post-layout pass), so it is kept too (plan step 7). A
                 // story laid out inside another story's emission (an
                 // anchored or inline frame) or without a chain of its own
-                // has no entry of its own to drop, so it drops them all.
-                self.master_text_emit_cache.borrow_mut().clear();
+                // (a master's, a path's) has no entry of its own to drop,
+                // so it drops them all.
                 let own_chain = self
                     .scene
                     .frame_chain(&story)
@@ -8687,6 +8740,7 @@ impl CanvasModel {
                         .borrow_mut()
                         .retain(|(id, _), _| id != &story);
                 } else {
+                    self.master_text_emit_cache.borrow_mut().clear();
                     self.body_story_emit_cache.borrow_mut().clear();
                 }
                 match edit {
@@ -8738,18 +8792,38 @@ impl CanvasModel {
         }
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
+        // thoughts ADR 027 plan step 7 — a build whose commits were text
+        // edits of one story (whose frames do not auto-size) leaves the
+        // frame pass as it was: the pipeline may adopt the previous pages it
+        // laid nothing out on afresh.
+        let previous_ids: std::collections::HashSet<PageId> =
+            self.built.pages.iter().map(|p| p.id.clone()).collect();
+        let adopt = match &self.pending_dirty_scope {
+            DirtyScope::Story(story) => !self
+                .scene
+                .frame_chain(story)
+                .iter()
+                .any(|f| f.auto_sizing.is_some()),
+            _ => false,
+        };
+        let previous_pages = std::cell::RefCell::new(if adopt {
+            std::mem::take(&mut self.built.pages)
+        } else {
+            Vec::new()
+        });
         let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
         // C-6 — build the per-frame provider entry map, borrowing the tile
         // store as the shared provider. Built before `options` so it lives
         // through the build.
         let resource_providers = self.resource_tiles.provider_entries();
-        let options = self.pipeline_options(
+        let mut options = self.pipeline_options(
             PipelinePurpose::Live,
             resolver
                 .as_ref()
                 .map(|r| r as &dyn paged_renderer::AssetResolver),
             &resource_providers,
         );
+        options.previous_pages = adopt.then_some(&previous_pages);
         // W1.24 (audit B18) — time just the pipeline build (the
         // dominant cost; op-apply is staged separately by the caller).
         let t_build = phase_now();
@@ -8758,7 +8832,16 @@ impl CanvasModel {
         });
         let build_ms = phase_elapsed_ms(t_build);
         self.layout_cache = cache;
-        let built = build_result.map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
+        let built = match build_result {
+            Ok(built) => built,
+            Err(e) => {
+                // `built` must keep describing a whole document.
+                if adopt {
+                    self.built.pages = previous_pages.into_inner();
+                }
+                return Err(crate::channel::LoadError::Build(e.to_string()));
+            }
+        };
         self.page_index = built
             .pages
             .iter()
@@ -8781,6 +8864,44 @@ impl CanvasModel {
             // reported value is the true post-mutation depth.
             applied_log_len: self.applied_log.len(),
         };
+        // thoughts ADR 027 plan step 7 — the pages this build changed: a
+        // text edit of one story narrows to the pages laid out afresh, the
+        // pages that are new, and the pages of the story's auto-sizing
+        // frames (their bounds follow the text); anything else is every
+        // page.
+        let scope = std::mem::take(&mut self.pending_dirty_scope);
+        let narrowed = match &scope {
+            DirtyScope::Story(story) => {
+                let autosized: Vec<usize> = if self
+                    .scene
+                    .frame_chain(story)
+                    .iter()
+                    .any(|f| f.auto_sizing.is_some())
+                {
+                    built
+                        .pages
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| p.story_layout.iter().any(|l| &l.story_id == story))
+                        .map(|(i, _)| i)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                Some(
+                    (0..built.pages.len())
+                        .filter(|&i| {
+                            built.fresh_pages.get(i).copied().unwrap_or(true)
+                                || !previous_ids.contains(&built.pages[i].id)
+                                || autosized.contains(&i)
+                        })
+                        .collect::<Vec<usize>>(),
+                )
+            }
+            _ => None,
+        };
+        self.last_dirty_narrowed = narrowed.is_some();
+        self.last_dirty_pages = narrowed.unwrap_or_else(|| (0..built.pages.len()).collect());
         self.built = built;
         self.pending_keep_hints.clear();
         self.pending_edit_spans.clear();
@@ -8842,6 +8963,7 @@ impl CanvasModel {
         options.keep_seed_hints = None;
         options.story_resume = None;
         options.edit_spans = None;
+        options.emission_prints = None;
         let (built, _) =
             paged_text::cache::with_layout_cache(paged_text::LayoutCache::default(), || {
                 pipeline::build_document(&self.scene, &options)
@@ -9106,6 +9228,24 @@ impl CanvasModel {
 
     /// Expose the inner built document for tests and the wasm
     /// renderer-on-demand path that needs to read display lists.
+    /// thoughts ADR 027 §7 — the ids of the pages the last build changed:
+    /// after a text edit of one story, only the pages laid out afresh (and
+    /// new ones); otherwise every page.
+    pub fn dirty_page_ids(&self) -> Vec<PageId> {
+        self.last_dirty_pages
+            .iter()
+            .filter_map(|&i| self.built.pages.get(i).map(|p| p.id.clone()))
+            .collect()
+    }
+
+    /// The pages the last build changed, by index, when a text edit let
+    /// them narrow below every page (`None` otherwise). The GPU scene cache
+    /// re-encodes only these.
+    pub fn narrowed_dirty_pages(&self) -> Option<&[usize]> {
+        self.last_dirty_narrowed
+            .then_some(self.last_dirty_pages.as_slice())
+    }
+
     pub fn built(&self) -> &BuiltDocument {
         &self.built
     }

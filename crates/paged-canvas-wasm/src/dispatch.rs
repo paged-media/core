@@ -133,6 +133,14 @@ pub fn story_id_for_mutation(m: &paged_canvas::channel::Mutation) -> Option<Stri
 /// chain) clears the whole cache; otherwise we invalidate just the
 /// pages the story touches. Matches the gpu arms in the old shell.
 fn cache_effect_for_story(model: &CanvasModel, story_id: Option<&str>) -> CacheEffect {
+    // thoughts ADR 027 §7 — after a text edit the model knows the pages
+    // whose display lists changed (the edited story's re-laid pages, and
+    // any other story or master it moved); re-encode exactly those.
+    if story_id.is_some() {
+        if let Some(dirty) = model.narrowed_dirty_pages() {
+            return CacheEffect::InvalidatePages(dirty.to_vec());
+        }
+    }
     match story_id {
         Some(sid) => {
             let dirty = model.page_indices_for_story(sid);

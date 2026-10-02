@@ -51,6 +51,31 @@ use crate::module::geometry::rewrite_tail_for_overprint;
 /// replayed into: the path buffer's fingerprint (the ids it hands out per
 /// intern key) and the other pools (the ids a command can refer to). Two
 /// lists with equal prints resolve a delta's ids alike.
+/// thoughts ADR 027 plan step 7 — a print of the paths and commands an
+/// emission appended to `list` from `path_base` / `cmd_base` on.
+fn range_print(list: &paged_compose::DisplayList, path_base: usize, cmd_base: usize) -> u64 {
+    use std::fmt::Write as _;
+    struct Fnv(u64);
+    impl std::fmt::Write for Fnv {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for b in s.bytes() {
+                self.0 ^= u64::from(b);
+                self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            Ok(())
+        }
+    }
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    for cmd in &list.commands[cmd_base..] {
+        let _ = write!(h, "c{cmd:?}");
+    }
+    for p in list.paths.slice(path_base, list.paths.len()) {
+        let _ = write!(h, "p{p:?}");
+    }
+    let _ = write!(h, "b{path_base}");
+    h.0
+}
+
 pub(super) fn pool_print(list: &paged_compose::DisplayList) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -696,6 +721,7 @@ pub(super) fn build_document_inner(
     document: &Document,
     options: &PipelineOptions,
     post: Option<&PostLayoutCtx>,
+    adopt: bool,
 ) -> anyhow::Result<BuiltDocument> {
     let palette = &document.palette;
     // The CMYK ICC transform: from the caller's cache when it keeps one
@@ -2267,6 +2293,11 @@ pub(super) fn build_document_inner(
     // outlines once up front.
     let container_clips = collect_nested_text_clips(document);
 
+    // thoughts ADR 027 plan step 7 — which pages this pass lays content out
+    // on afresh (see `BuiltDocument::fresh_pages`). Without any cache every
+    // page is.
+    let tracking = master_text_emit_cache.is_some() || body_story_emit_cache.is_some();
+    let mut fresh: Vec<bool> = vec![!tracking; pages.len()];
     for (page_idx, master_frame) in &master_text_emissions {
         let Some(story_id) = master_frame.parent_story.as_deref() else {
             continue;
@@ -2387,6 +2418,23 @@ pub(super) fn build_document_inner(
         let anchored_q = emitter.take_anchored_image_queue();
         let new_breaks = emitter.take_breaks();
         let new_diags = emitter.take_diagnostics();
+        // A master laid out afresh marks its page only when its output is
+        // not what the previous build's was.
+        if let (Some(prints), Some(frame_id)) =
+            (options.emission_prints, master_frame.self_id.as_deref())
+        {
+            let print = range_print(&pages[*page_idx].list, path_base, cmd_base);
+            let key = (
+                frame_id.to_string(),
+                pages[*page_idx].id.0.clone(),
+                post.is_some(),
+            );
+            if prints.borrow_mut().insert(key, print) != Some(print) || !anchored_q.is_empty() {
+                fresh[*page_idx] = true;
+            }
+        } else {
+            fresh[*page_idx] = true;
+        }
         anchored_image_queue.extend(anchored_q.iter().cloned());
         breaks.extend(new_breaks.iter().cloned());
         emit_diagnostics.extend(new_diags.iter().cloned());
@@ -2434,6 +2482,8 @@ pub(super) fn build_document_inner(
         }
     }
 
+    // Text on a path is laid out every build: its pages are fresh.
+    let pre_path_text: Vec<usize> = pages.iter().map(|p| p.list.commands.len()).collect();
     // Text-on-path pass: walk every spread's shapes and emit any
     // attached `<TextPath>` along the host's tessellated curve.
     // Stories that flow only via TextPath have an empty
@@ -2572,6 +2622,12 @@ pub(super) fn build_document_inner(
                     font_table,
                 );
             }
+        }
+    }
+
+    for (i, n) in pre_path_text.iter().enumerate() {
+        if pages[i].list.commands.len() != *n {
+            fresh[i] = true;
         }
     }
 
@@ -2991,6 +3047,13 @@ pub(super) fn build_document_inner(
         };
         let mut marks: Vec<resume::ParaMark> = Vec::new();
         let mut resume_end: Option<resume::EmitterEnd> = None;
+        // ADR 027 plan step 7 — the pages the final pass laid out afresh:
+        // `Some((from, to))` after a resume (to the stop), `None` for all
+        // the pages the story wrote to.
+        let mut fresh_range: Option<(usize, usize)> = None;
+        // Pages the final pass spliced whole from the resume record: their
+        // delta is reused as is by the capture below.
+        let mut verbatim: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)> = Vec::new();
         let mut converged = false;
         // Passes spent before the cold fixpoint started (1 after a seed
         // that did not hold), so the caps count exactly as a cold build's.
@@ -3054,6 +3117,8 @@ pub(super) fn build_document_inner(
             let pre_story_cmd_counts: Vec<usize> =
                 pages.iter().map(|p| p.list.commands.len()).collect();
             if let Some(paragraphs) = toc_paragraphs.as_ref() {
+                fresh_range = None;
+                verbatim.clear();
                 for paragraph in paragraphs {
                     emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
                 }
@@ -3062,6 +3127,8 @@ pub(super) fn build_document_inner(
                 // or footnote re-emit lays the story out whole.
                 let plan = if pass == 0 { resume_plan.take() } else { None };
                 marks.clear();
+                verbatim.clear();
+                fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
                 let mut start = 0;
                 if let Some(plan) = plan.as_ref() {
                     resume::splice_prefix(
@@ -3070,6 +3137,7 @@ pub(super) fn build_document_inner(
                         &pre_snapshot,
                         plan,
                         &mut total_stats,
+                        &mut verbatim,
                     );
                     start = plan.first();
                     marks.extend(plan.prefix_marks().iter().cloned());
@@ -3094,8 +3162,10 @@ pub(super) fn build_document_inner(
                                 &m,
                                 &mut total_stats,
                                 Some(&mut marks),
+                                &mut verbatim,
                             );
                             if relaid.is_some() {
+                                fresh_range = Some((plan.resume_page(), m.page));
                                 break;
                             }
                         }
@@ -3275,6 +3345,22 @@ pub(super) fn build_document_inner(
             overset.insert(parsed.self_id.clone(), m.clone());
         }
         emit_diagnostics.extend(new_diags.iter().cloned());
+        // ADR 027 plan step 7 — the pages this story wrote to afresh. A
+        // resumed story's spliced prefix and suffix are the previous
+        // build's output; an anchored image lands where its host put it.
+        for (page_idx, snap) in pre_snapshot.iter().enumerate() {
+            let wrote = pages[page_idx].list.commands.len() > snap.1
+                || pages[page_idx].story_layout.len() > snap.5
+                || pages[page_idx].footnotes.len() > snap.6;
+            let in_range =
+                fresh_range.map_or(true, |(from, to)| page_idx >= from && page_idx <= to);
+            if wrote && in_range {
+                fresh[page_idx] = true;
+            }
+        }
+        for a in &new_anchored {
+            fresh[a.target_page] = true;
+        }
 
         // W2 — cut this story's per-page output into per-frame blocks
         // and queue each for its frame's z-slot. Computed once here and
@@ -3324,7 +3410,7 @@ pub(super) fn build_document_inner(
             // Diagnostics (overset) ride along in the delta and are
             // replayed on a hit (thoughts ADR 027 plan step 4).
             let mut uncacheable = false;
-            let mut per_page: Vec<(usize, BodyStoryPageDelta)> = Vec::new();
+            let mut per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)> = Vec::new();
             for (page_idx, snap) in pre_snapshot.iter().enumerate() {
                 let page = &pages[page_idx];
                 let list = &page.list;
@@ -3341,6 +3427,10 @@ pub(super) fn build_document_inner(
                 let grew_list = list.paths.len() > snap.0 || list.commands.len() > snap.1;
                 let grew_layout = page.story_layout.len() > snap.5;
                 let grew_footnotes = page.footnotes.len() > snap.6;
+                if let Some((_, d)) = verbatim.iter().find(|(p, _)| *p == page_idx) {
+                    per_page.push((page_idx, d.clone()));
+                    continue;
+                }
                 if grew_list || grew_layout || grew_footnotes {
                     // Output off the story's own chain pages has no print to
                     // replay against.
@@ -3368,7 +3458,7 @@ pub(super) fn build_document_inner(
                         .unwrap_or_default();
                     per_page.push((
                         page_idx,
-                        BodyStoryPageDelta {
+                        std::sync::Arc::new(BodyStoryPageDelta {
                             paths: new_paths,
                             path_keys: list.paths.keys(snap.0, list.paths.len()).to_vec(),
                             pre_fingerprint: pre_print,
@@ -3376,7 +3466,7 @@ pub(super) fn build_document_inner(
                             story_layout: new_story_layout,
                             footnotes: new_footnotes,
                             segments,
-                        },
+                        }),
                     ));
                 }
             }
@@ -3444,6 +3534,20 @@ pub(super) fn build_document_inner(
 
     total_stats.decoded_images = decoded_image_cache.len();
 
+    // ADR 027 plan step 7 — a page nothing was laid out on afresh is the
+    // previous build's final page: take that one, and skip it below.
+    let mut adopted = vec![false; pages.len()];
+    if let (true, Some(previous)) = (adopt, options.previous_pages) {
+        let mut previous = previous.borrow_mut();
+        for (i, page) in pages.iter_mut().enumerate() {
+            if !fresh[i] && previous.get(i).is_some_and(|p| p.id == page.id) {
+                std::mem::swap(page, &mut previous[i]);
+                adopted[i] = true;
+            }
+        }
+    }
+    total_stats.pages_adopted = adopted.iter().filter(|a| **a).count();
+
     // Phase 5 — footnote pool post-pass. For each page that captured
     // footnotes during the story emit, lay out the bodies at the
     // bottom of the host frame's content area. Bodies stack
@@ -3457,6 +3561,7 @@ pub(super) fn build_document_inner(
     let footnote_options = options.clone();
     emit_footnote_pools(
         &mut pages,
+        &adopted,
         font_table,
         &footnote_options,
         document,
@@ -3490,15 +3595,17 @@ pub(super) fn build_document_inner(
     // before the transparency fit below, which must see the final list.
     if options.text_at_frame_z {
         for (page_idx, blocks) in pending_text.iter_mut().enumerate() {
-            if blocks.is_empty() || page_idx >= pages.len() {
+            if blocks.is_empty() || page_idx >= pages.len() || adopted[page_idx] {
                 continue;
             }
             text_slots::relocate_text_blocks(&mut pages[page_idx].list, blocks);
         }
     }
 
-    for page in &mut pages {
-        paged_compose::fit_transparency_group_bounds(&mut page.list);
+    for (page, adopted) in pages.iter_mut().zip(&adopted) {
+        if !adopted {
+            paged_compose::fit_transparency_group_bounds(&mut page.list);
+        }
     }
     // Debug-only: the invariant the pass above establishes, verified by
     // an independent walk of the FINAL list. It is a second O(commands)
@@ -3551,6 +3658,7 @@ pub(super) fn build_document_inner(
         resource_tiles_needed,
         overset,
         grow_passes: 1,
+        fresh_pages: fresh,
     })
 }
 

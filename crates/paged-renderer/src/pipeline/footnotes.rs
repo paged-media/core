@@ -629,6 +629,7 @@ pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPage
 /// `DiagnosticCode::FootnoteOverflow` (below) so it is never silent.
 pub(super) fn emit_footnote_pools(
     pages: &mut [BuiltPage],
+    skip: &[bool],
     font_table: &FontTable,
     options: &PipelineOptions,
     document: &Document,
@@ -649,6 +650,10 @@ pub(super) fn emit_footnote_pools(
         a: 1.0,
     });
     for (page_idx, page) in pages.iter_mut().enumerate() {
+        // An adopted page already carries its pool (ADR 027 plan step 7).
+        if skip.get(page_idx).copied().unwrap_or(false) {
+            continue;
+        }
         if page.footnotes.is_empty() {
             continue;
         }
