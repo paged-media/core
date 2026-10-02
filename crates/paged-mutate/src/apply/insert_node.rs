@@ -147,6 +147,21 @@ pub(super) fn register_frame_ref(
             }
         }
     }
+    // C-74: so do every group's members. They were left out, and an
+    // insert below a grouped item of the same kind re-seated the group
+    // onto its neighbours — the mirror of the removal fault in
+    // `unregister_frame_ref`, and the reason undoing a delete could not
+    // repair what the delete had done.
+    for group in spread.groups.iter_mut() {
+        for fr in group.members.iter_mut() {
+            if fr_same_kind(fr, &template) {
+                let i = fr_index(fr);
+                if i >= vec_pos {
+                    *fr = fr_with_index(fr, i + 1);
+                }
+            }
+        }
+    }
     if spread.frames_in_order.is_empty() {
         // A spread BORN empty — every page an editor session authors
         // from nothing — used to return here, and so never acquired a
@@ -178,47 +193,99 @@ pub(super) fn register_frame_ref(
         .insert(slot, fr_with_index(&template, vec_pos));
 }
 
+/// The list that names a page item, and the item's position in it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum RefHome {
+    /// `Spread::frames_in_order`.
+    Root(usize),
+    /// `Spread::groups[group].members`.
+    Group(usize, usize),
+    /// `Spread::nested_children[host]`.
+    Nested(String, usize),
+}
+
+/// Where `r` is listed, if anywhere. A page item is named by exactly
+/// one list: the spread's z-order, one group's members, or one
+/// container's pasted-in children (a mask item is named by none).
+pub(super) fn ref_home(spread: &Spread, r: FrameRef) -> Option<RefHome> {
+    if let Some(i) = spread.frames_in_order.iter().position(|x| *x == r) {
+        return Some(RefHome::Root(i));
+    }
+    for (gi, g) in spread.groups.iter().enumerate() {
+        if let Some(i) = g.members.iter().position(|x| *x == r) {
+            return Some(RefHome::Group(gi, i));
+        }
+    }
+    // Deterministic across runs: a `HashMap` walk has no stable order,
+    // and an item is listed by at most one host anyway.
+    let mut hosts: Vec<&String> = spread.nested_children.keys().collect();
+    hosts.sort();
+    for host in hosts {
+        if let Some(i) = spread.nested_children[host].iter().position(|x| *x == r) {
+            return Some(RefHome::Nested(host.clone(), i));
+        }
+    }
+    None
+}
+
 /// Unregister a page item removed from `vec_pos` of its kind vec;
 /// returns the z slot it occupied so the `RemoveNode` inverse can
 /// restore the exact stacking position.
+///
+/// The item's ref is dropped from EVERY list that can name it — the
+/// z-table, a group's members, a container's pasted-in children — and
+/// same-kind refs above it step down by one in all three. C-74: the
+/// members were not touched at all, so removing an item re-seated every
+/// group holding a later item of its kind (`r1, group[r2, r3], r4` →
+/// `group[r3, r4], r4`) while the op reported success. A caller that
+/// needs to know WHICH list named the item (to put it back there) asks
+/// [`ref_home`] before it calls this.
 pub(super) fn unregister_frame_ref(
     spread: &mut Spread,
     template: FrameRef,
     vec_pos: usize,
 ) -> Option<usize> {
-    // B-18: shift nested-children refs of the same kind past the
-    // removed vec slot (the removed item itself can't be nested —
-    // `apply_remove_node` rejects that before capture).
-    for children in spread.nested_children.values_mut() {
-        for fr in children.iter_mut() {
-            if fr_same_kind(fr, &template) {
-                let i = fr_index(fr);
-                if i > vec_pos {
-                    *fr = fr_with_index(fr, i - 1);
-                }
-            }
-        }
-    }
-    if spread.frames_in_order.is_empty() {
-        return None;
-    }
     let target = fr_with_index(&template, vec_pos);
-    let slot = spread
-        .frames_in_order
-        .iter()
-        .position(|fr| fr_same_kind(fr, &target) && fr_index(fr) == vec_pos);
-    if let Some(s) = slot {
-        spread.frames_in_order.remove(s);
-    }
-    for fr in spread.frames_in_order.iter_mut() {
+    let step_down = |fr: &mut FrameRef| {
         if fr_same_kind(fr, &template) {
             let i = fr_index(fr);
             if i > vec_pos {
                 *fr = fr_with_index(fr, i - 1);
             }
         }
+    };
+    for children in spread.nested_children.values_mut() {
+        children.retain(|fr| *fr != target);
+        children.iter_mut().for_each(step_down);
     }
+    for group in spread.groups.iter_mut() {
+        group.members.retain(|fr| *fr != target);
+        group.members.iter_mut().for_each(step_down);
+    }
+    if spread.frames_in_order.is_empty() {
+        return None;
+    }
+    let slot = spread.frames_in_order.iter().position(|fr| *fr == target);
+    if let Some(s) = slot {
+        spread.frames_in_order.remove(s);
+    }
+    spread.frames_in_order.iter_mut().for_each(step_down);
     slot
+}
+
+/// Move a just-registered ref out of the z-table and into a group's
+/// members at `slot` (the end when `None`). `InsertNode` with a
+/// `NodeId::Group` parent — what the inverse of removing a member is.
+pub(super) fn seat_in_group(
+    spread: &mut Spread,
+    r: FrameRef,
+    group_idx: usize,
+    slot: Option<usize>,
+) {
+    spread.frames_in_order.retain(|fr| *fr != r);
+    let members = &mut spread.groups[group_idx].members;
+    let at = slot.unwrap_or(members.len()).min(members.len());
+    members.insert(at, r);
 }
 
 pub(super) fn apply_insert_node(
@@ -241,8 +308,28 @@ pub(super) fn apply_insert_node(
     if let NodeSpec::Table { .. } = spec {
         return apply_insert_table(doc, parent, position, spec);
     }
-    let parent_id = match parent {
-        NodeId::Spread(id) => id,
+    // The parent is a spread (the item joins its z-order) or — C-74 — a
+    // GROUP on some spread (the item joins that group's members, with
+    // `z_slot` naming the member slot). The second is what puts a
+    // removed member back where it was; before it the inverse of that
+    // removal could only say "the spread", and the member came back as
+    // a second top-level entry.
+    let (parent_id, group_home): (String, Option<String>) = match parent {
+        NodeId::Spread(id) => (id.clone(), None),
+        NodeId::Group(gid) => {
+            let host = doc
+                .spreads
+                .iter()
+                .find(|p| {
+                    p.spread
+                        .groups
+                        .iter()
+                        .any(|g| g.self_id.as_deref() == Some(gid.as_str()))
+                })
+                .and_then(|p| p.spread.self_id.clone())
+                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+            (host, Some(gid.clone()))
+        }
         _ => {
             return Err(OperationError::InvalidParent {
                 parent: parent.clone(),
@@ -250,6 +337,7 @@ pub(super) fn apply_insert_node(
             });
         }
     };
+    let parent_id = &parent_id;
 
     // Uniqueness across the document — IDML Self IDs must be unique.
     let new_self_id = spec.node_id();
@@ -473,6 +561,29 @@ pub(super) fn apply_insert_node(
             // (a table targets a `NodeId::Story`, not this spread path).
             unreachable!("Table insert routed via the early-return");
         }
+    }
+
+    // C-74 — a group parent: the arms above registered the item in the
+    // z-table like any other insert (which also renumbered every list);
+    // re-seat it in the group's members instead.
+    if let Some(gid) = &group_home {
+        let new_ref = match spec {
+            NodeSpec::TextFrame { .. } => FrameRef::TextFrame(position),
+            NodeSpec::Rectangle { .. } => FrameRef::Rectangle(position),
+            NodeSpec::Oval { .. } => FrameRef::Oval(position),
+            NodeSpec::GraphicLine { .. } => FrameRef::GraphicLine(position),
+            NodeSpec::Polygon { .. } => FrameRef::Polygon(position),
+            NodeSpec::CloneTranslate { .. } | NodeSpec::Table { .. } => {
+                unreachable!("routed via the early-returns")
+            }
+        };
+        let group_idx = spread
+            .spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(gid.as_str()))
+            .expect("resolved above: the group is on this spread");
+        seat_in_group(&mut spread.spread, new_ref, group_idx, z_slot);
     }
 
     let inverse = invert_insert_node(spec);

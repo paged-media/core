@@ -79,7 +79,9 @@ use paged_scene::Document;
 use crate::error::OperationError;
 use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation, PropertyPath};
 
-use super::insert_node::{ensure_frames_in_order, fr_index, fr_same_kind, fr_with_index};
+use super::insert_node::{
+    ensure_frames_in_order, fr_index, ref_home, unregister_frame_ref, RefHome,
+};
 
 /// How many ids a duplicate of `sources` mints: one per page item and
 /// group in the cloned subtrees, and one per story copied.
@@ -150,38 +152,6 @@ fn ref_in_spread(spread: &Spread, node: &NodeId) -> Option<FrameRef> {
         }
         _ => None,
     }
-}
-
-/// The list that names `r`, and `r`'s position in it.
-#[derive(Debug, Clone, PartialEq)]
-enum Home {
-    /// `Spread::frames_in_order`.
-    Root(usize),
-    /// `Spread::groups[group].members`.
-    Group(usize, usize),
-    /// `Spread::nested_children[host]`.
-    Nested(String, usize),
-}
-
-fn home_of(spread: &Spread, r: FrameRef) -> Option<Home> {
-    if let Some(i) = spread.frames_in_order.iter().position(|x| *x == r) {
-        return Some(Home::Root(i));
-    }
-    for (gi, g) in spread.groups.iter().enumerate() {
-        if let Some(i) = g.members.iter().position(|x| *x == r) {
-            return Some(Home::Group(gi, i));
-        }
-    }
-    // Deterministic across runs: a `HashMap` walk has no stable order,
-    // and an item is listed by at most one host anyway.
-    let mut hosts: Vec<&String> = spread.nested_children.keys().collect();
-    hosts.sort();
-    for host in hosts {
-        if let Some(i) = spread.nested_children[host].iter().position(|x| *x == r) {
-            return Some(Home::Nested(host.clone(), i));
-        }
-    }
-    None
 }
 
 fn is_anchored_in_a_story(doc: &Document, id: &str) -> bool {
@@ -352,7 +322,7 @@ fn locate(
     // materialises one (render-neutral) before it looks for the source,
     // so only an item that a COMPLETE table would still not name is a
     // refusal here.
-    let listed = spread.frames_in_order.is_empty() || home_of(spread, r).is_some();
+    let listed = spread.frames_in_order.is_empty() || ref_home(spread, r).is_some();
     if !listed {
         let id = source.self_id();
         if spread.opacity_masks.values().any(|m| m.mask_item == id) {
@@ -685,10 +655,10 @@ pub(super) fn apply_duplicate_nodes(
         // SOURCES never move (clones are appended).
         let r = ref_in_spread(spread, source).expect("validated: the source is on this spread");
         let clone = cloner.clone_ref(spread, stories, r);
-        match home_of(spread, r) {
-            Some(Home::Root(i)) => spread.frames_in_order.insert(i + 1, clone),
-            Some(Home::Group(gi, i)) => spread.groups[gi].members.insert(i + 1, clone),
-            Some(Home::Nested(host, i)) => {
+        match ref_home(spread, r) {
+            Some(RefHome::Root(i)) => spread.frames_in_order.insert(i + 1, clone),
+            Some(RefHome::Group(gi, i)) => spread.groups[gi].members.insert(i + 1, clone),
+            Some(RefHome::Nested(host, i)) => {
                 if let Some(list) = spread.nested_children.get_mut(&host) {
                     list.insert(i + 1, clone);
                 }
@@ -777,19 +747,10 @@ fn subtree_len(spread: &Spread, r: FrameRef) -> usize {
     n
 }
 
-/// Remove the item at `r` from its kind vec and from EVERY list that
-/// can name it, then close the gap: same-kind refs above it step down
-/// by one in the z-table, in every group's members and in every
-/// container's pasted-in children.
+/// Remove the item at `r` from its kind vec and from every list that
+/// can name it, closing the gap in all of them (the shared
+/// `unregister_frame_ref`, which C-74 made complete).
 fn remove_ref_everywhere(spread: &mut Spread, r: FrameRef) {
-    let at = fr_index(&r);
-    spread.frames_in_order.retain(|x| *x != r);
-    for g in spread.groups.iter_mut() {
-        g.members.retain(|x| *x != r);
-    }
-    for list in spread.nested_children.values_mut() {
-        list.retain(|x| *x != r);
-    }
     match r {
         FrameRef::TextFrame(i) => {
             spread.text_frames.remove(i);
@@ -810,18 +771,7 @@ fn remove_ref_everywhere(spread: &mut Spread, r: FrameRef) {
             spread.groups.remove(i);
         }
     }
-    let step_down = |x: &mut FrameRef| {
-        if fr_same_kind(x, &r) && fr_index(x) > at {
-            *x = fr_with_index(x, fr_index(x) - 1);
-        }
-    };
-    spread.frames_in_order.iter_mut().for_each(step_down);
-    for g in spread.groups.iter_mut() {
-        g.members.iter_mut().for_each(step_down);
-    }
-    for list in spread.nested_children.values_mut() {
-        list.iter_mut().for_each(step_down);
-    }
+    unregister_frame_ref(spread, r, fr_index(&r));
 }
 
 pub(super) fn apply_remove_duplicates(

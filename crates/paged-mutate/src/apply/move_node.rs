@@ -42,6 +42,26 @@ pub(super) fn apply_move_node(
         }
     };
 
+    // C-74: a group's member cannot be moved out from under its group.
+    // The forward move would be well-defined (the member leaves the
+    // group), but `MoveNode`'s inverse names a spread and a kind-vec
+    // position and nothing else, so undo would bring the item back as a
+    // top-level entry and the group would stay one member short — the
+    // same reason a pasted-in child and a mask item are refused by
+    // `RemoveNode`. Move the group, or ungroup first.
+    let is_member = doc.spreads.iter().any(|p| {
+        super::nested::leaf_ref_in_spread(&p.spread, node)
+            .is_some_and(|r| p.spread.groups.iter().any(|g| g.members.contains(&r)))
+    });
+    if is_member {
+        return Err(OperationError::InvalidValue {
+            node: node.clone(),
+            path: crate::operation::PropertyPath::FrameTransform,
+            reason: "C-74: the item is a member of a group — move the group, or ungroup it first"
+                .to_string(),
+        });
+    }
+
     // Capture before state by removing, then re-insert at the target.
     // If insertion fails, restore in place so the doc state is intact.
     let (previous_parent, previous_position, captured, previous_z_slot) =

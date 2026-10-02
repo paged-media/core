@@ -75,6 +75,24 @@ pub(super) fn apply_remove_node(
     })
 }
 
+/// Take a just-removed item's ref out of whichever list named it, and
+/// say where it was — as the `(parent, slot)` an `InsertNode` puts it
+/// back with. The spread and its z slot for a top-level item; C-74: the
+/// GROUP and the member slot for a group's member, so undo re-seats it
+/// in its group. (A member of an id-less group cannot be addressed that
+/// way and falls back to the spread, on top.)
+fn release_home(parsed: &mut paged_scene::ParsedSpread, r: FrameRef) -> (NodeId, Option<usize>) {
+    let home = ref_home(&parsed.spread, r);
+    let z_slot = unregister_frame_ref(&mut parsed.spread, r, fr_index(&r));
+    if let Some(RefHome::Group(group_idx, slot)) = home {
+        // The removed item is a leaf, so group indices have not moved.
+        if let Some(gid) = parsed.spread.groups[group_idx].self_id.clone() {
+            return (NodeId::Group(gid), Some(slot));
+        }
+    }
+    (spread_parent_id(parsed), z_slot)
+}
+
 /// Locate `node` in its containing spread, snapshot its current state
 /// into a `NodeSpec`, and remove it (including its `frames_in_order`
 /// entry). Returns `(parent_id, position, spec, z_slot)` for the
@@ -93,9 +111,7 @@ pub(super) fn remove_and_capture(
                     .position(|f| f.self_id.as_deref() == Some(id.as_str()))
                 {
                     let frame = parsed.spread.text_frames.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::TextFrame(0), pos);
-                    let parent = spread_parent_id(parsed);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::TextFrame(pos));
                     let spec = NodeSpec::TextFrame {
                         self_id: id.clone(),
                         bounds: bounds_to_array(frame.bounds),
@@ -121,9 +137,7 @@ pub(super) fn remove_and_capture(
                     .position(|r| r.self_id.as_deref() == Some(id.as_str()))
                 {
                     let rect = parsed.spread.rectangles.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::Rectangle(0), pos);
-                    let parent = spread_parent_id(parsed);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Rectangle(pos));
                     let spec = NodeSpec::Rectangle {
                         self_id: id.clone(),
                         bounds: bounds_to_array(rect.bounds),
@@ -146,8 +160,7 @@ pub(super) fn remove_and_capture(
                     .position(|o| o.self_id.as_deref() == Some(id.as_str()))
                 {
                     let oval = parsed.spread.ovals.remove(pos);
-                    let z_slot = unregister_frame_ref(&mut parsed.spread, FrameRef::Oval(0), pos);
-                    let parent = spread_parent_id(parsed);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Oval(pos));
                     let spec = NodeSpec::Oval {
                         self_id: id.clone(),
                         bounds: bounds_to_array(oval.bounds),
@@ -170,9 +183,7 @@ pub(super) fn remove_and_capture(
                     .position(|l| l.self_id.as_deref() == Some(id.as_str()))
                 {
                     let line = parsed.spread.graphic_lines.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::GraphicLine(0), pos);
-                    let parent = spread_parent_id(parsed);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::GraphicLine(pos));
                     let spec = NodeSpec::GraphicLine {
                         self_id: id.clone(),
                         bounds: bounds_to_array(line.bounds),
@@ -201,9 +212,7 @@ pub(super) fn remove_and_capture(
                     .position(|p| p.self_id.as_deref() == Some(id.as_str()))
                 {
                     let poly = parsed.spread.polygons.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::Polygon(0), pos);
-                    let parent = spread_parent_id(parsed);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Polygon(pos));
                     let spec = NodeSpec::Polygon {
                         self_id: id.clone(),
                         bounds: bounds_to_array(poly.bounds),
