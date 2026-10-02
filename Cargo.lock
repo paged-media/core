@@ -2478,6 +2478,7 @@ dependencies = [
  "paged-composition",
  "paged-export-pdf",
  "paged-gen",
+ "paged-introspect",
  "paged-model",
  "paged-mutate",
  "paged-renderer",

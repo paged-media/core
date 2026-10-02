@@ -513,6 +513,12 @@ export type WorkerToMain = WorkerToMainKind & {
 //     Composer", "HL Single", "HL Composer Optyca", "HL Single Optyca";
 //     "" clears). An unknown name is refused on the wire. An older worker
 //     cannot deserialise the path, hence the bump.
+//   - `RequestStyleProperties { collection, styleId }` → `StyleProperties
+//     { result }`: a style definition's settable properties, in the
+//     setter's shapes — the read a paragraph-style editor needs.
+//   - `StorySummary.growRule: { grow, maxPages, copyFrameOptions } | null`
+//     (the `stories` collection and `paged.stories()`): a story's ADR 026
+//     grow rule, readable at last. Additive on a reply.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(65);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -1008,6 +1014,18 @@ pub enum MainToWorkerKind {
     /// `StoryContentResult` whose `content` is `None` when the story id doesn't
     /// resolve.
     RequestStoryContent { story_id: String },
+    /// v65 — read one style definition's settable properties: every path
+    /// `Mutation::SetStyleProperty` accepts for that collection, with the
+    /// style's OWN value in the shape the setter takes (`""` /
+    /// `Length(None)` when it inherits through `BasedOn`), so a style
+    /// editor can render and write back without re-deriving the schema.
+    /// Pure READ. Reply: `StyleProperties` whose `result` is `None` when
+    /// the style does not exist; object / cell / table styles, which have
+    /// no settable path yet, answer with no entries.
+    RequestStyleProperties {
+        collection: paged_mutate::StyleCollection,
+        style_id: String,
+    },
     /// v42 (C-5 / I-04) — read the ORIGINAL encoded bytes (PSD / JPEG /
     /// PNG file) of the placed image hosted by the frame `element_id`, so
     /// a plugin (paged.image) can ingest a document's placed asset into
@@ -1845,6 +1863,9 @@ pub enum WorkerToMainKind {
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties { result: Option<ElementProperties> },
+    /// v65 — `RequestStyleProperties` reply. `None` when the style does
+    /// not exist.
+    StyleProperties { result: Option<StyleProperties> },
     /// Inspector P1 — `RequestSceneTree` reply.
     SceneTree { roots: Vec<SceneTreeNode> },
     /// Scripting Stage 2 — `ExecuteScript` reply. `output` is the
@@ -2136,6 +2157,23 @@ pub struct ElementProperties {
     /// the underlying type carries one.
     #[serde(default)]
     pub name: Option<String>,
+    pub entries: Vec<PropertyEntry>,
+}
+
+/// v65 — one style definition's settable properties
+/// (`RequestStyleProperties`). `entries` uses the inspector's row shape;
+/// every value is `Some` (a style has one value per field, never "mixed").
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleProperties {
+    pub collection: paged_mutate::StyleCollection,
+    pub style_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The style's `BasedOn` reference, verbatim.
+    #[serde(default)]
+    pub based_on: Option<String>,
     pub entries: Vec<PropertyEntry>,
 }
 
@@ -3093,6 +3131,26 @@ pub struct StorySummary {
     /// older client that ignores it still reads the `overset` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overset_at: Option<OversetAt>,
+    /// v65 (thoughts ADR 026) — the story's grow rule, in the shape
+    /// `Mutation::SetFlowGrowRule` takes (`grow` is always `true` here:
+    /// a cleared rule reads as `None`). `None` = a fixed chain.
+    #[serde(default)]
+    pub grow_rule: Option<StoryGrowRule>,
+}
+
+/// v65 — a story's grow rule on the read side ([`StorySummary::grow_rule`]).
+/// Mirrors the `setFlowGrowRule` payload so a host can show the rule and
+/// send it back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryGrowRule {
+    pub grow: bool,
+    /// Upper bound on generated pages; `None` = the renderer's default.
+    #[serde(default)]
+    pub max_pages: Option<u32>,
+    /// Generated frames copy the chain's last frame's text-frame options.
+    pub copy_frame_options: bool,
 }
 
 /// DOC-03 (v54) — a story's full CONTENT: its paragraphs, each with its runs'

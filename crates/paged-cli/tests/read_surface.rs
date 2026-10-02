@@ -150,6 +150,24 @@ fn the_diagnostic_reads_answer_what_the_document_holds() {
         "gradient: {grad}"
     );
 
+    let style = ok(&[
+        "read",
+        "style-properties",
+        doc,
+        "paragraph",
+        "ParagraphStyle/$ID/[No paragraph style]",
+        "--compact",
+    ]);
+    assert!(
+        style.contains(r#""kind":"styleProperties""#) && style.contains("paragraphComposer"),
+        "style: {style}"
+    );
+    let not_a_collection = refused(&["read", "style-properties", doc, "swatch", "x"]);
+    assert!(
+        not_a_collection.contains("not a style collection"),
+        "{not_a_collection}"
+    );
+
     let props = ok(&[
         "read",
         "element-properties",

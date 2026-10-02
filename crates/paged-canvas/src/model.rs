@@ -1410,6 +1410,189 @@ fn refuse_unauthorable(mutation: &Mutation) -> Result<(), crate::channel::Worker
     }
 }
 
+/// The run-level fields both paragraph and character styles carry, in the
+/// style setters' shapes (`""` / `Length(None)` / the IDML default for a
+/// bool the setter cannot clear).
+macro_rules! style_run_entries {
+    ($d:expr) => {{
+        use paged_mutate::{PropertyPath as P, Value as V};
+        let d = $d;
+        let text = |o: &Option<String>| V::Text(o.clone().unwrap_or_default());
+        vec![
+            (P::CharacterFontFamily, text(&d.font)),
+            (P::CharacterFontStyle, text(&d.font_style)),
+            (P::CharacterFontSize, V::Length(d.point_size)),
+            (P::CharacterLeading, V::Length(d.leading)),
+            (P::CharacterTracking, V::Length(d.tracking)),
+            (P::CharacterFillColor, V::ColorRef(d.fill_color.clone())),
+            (P::CharacterCase, text(&d.capitalization)),
+            (P::CharacterPosition, text(&d.position)),
+            (P::CharacterBaselineShift, V::Length(d.baseline_shift)),
+            (P::CharacterUnderline, V::Bool(d.underline.unwrap_or(false))),
+            (
+                P::CharacterStrikethru,
+                V::Bool(d.strikethru.unwrap_or(false)),
+            ),
+        ]
+    }};
+}
+
+fn into_entries(
+    pairs: Vec<(paged_mutate::PropertyPath, paged_mutate::Value)>,
+) -> Vec<crate::channel::PropertyEntry> {
+    pairs
+        .into_iter()
+        .map(|(path, value)| crate::channel::PropertyEntry {
+            path,
+            value: Some(value),
+        })
+        .collect()
+}
+
+fn character_style_entries(
+    d: &paged_model::CharacterStyleDef,
+) -> Vec<crate::channel::PropertyEntry> {
+    into_entries(style_run_entries!(d))
+}
+
+/// Every path `set_paragraph_style_field` accepts, read off the definition.
+/// `style_properties_cover_every_settable_style_path` (tests/style_properties.rs)
+/// fails when the setter learns a path this list does not read.
+fn paragraph_style_entries(
+    d: &paged_model::ParagraphStyleDef,
+) -> Vec<crate::channel::PropertyEntry> {
+    use paged_mutate::{PropertyPath as P, Value as V};
+    let text = |o: &Option<String>| V::Text(o.clone().unwrap_or_default());
+    let count = |o: Option<u32>| V::Length(o.map(|n| n as f32));
+    let span = &d.span_columns;
+    let mut pairs = style_run_entries!(d);
+    pairs.extend([
+        (
+            P::ParagraphJustification,
+            V::Text(
+                d.justification
+                    .map(|j| j.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (P::ParagraphSpaceBefore, V::Length(d.space_before)),
+        (P::ParagraphSpaceAfter, V::Length(d.space_after)),
+        (P::ParagraphFirstLineIndent, V::Length(d.first_line_indent)),
+        (P::ParagraphLeftIndent, V::Length(d.left_indent)),
+        (P::ParagraphRightIndent, V::Length(d.right_indent)),
+        (P::ParagraphStyleNextStyle, text(&d.next_style)),
+        (
+            P::ParagraphHyphenation,
+            V::Bool(d.hyphenation.unwrap_or(true)),
+        ),
+        (P::ParagraphHyphenationZone, V::Length(d.hyphenation_zone)),
+        (
+            P::ParagraphComposer,
+            V::Text(
+                d.composer
+                    .as_ref()
+                    .map(|c| c.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphKeepLinesTogether,
+            V::Bool(d.keep_lines_together.unwrap_or(false)),
+        ),
+        (
+            P::ParagraphKeepAllLinesTogether,
+            V::Bool(d.keep_all_lines_together.unwrap_or(false)),
+        ),
+        (P::ParagraphKeepFirstLines, count(d.keep_first_lines)),
+        (P::ParagraphKeepLastLines, count(d.keep_last_lines)),
+        (P::ParagraphKeepWithNext, count(d.keep_with_next)),
+        (
+            P::ParagraphStartParagraph,
+            V::Text(
+                d.start_paragraph
+                    .map(|sp| sp.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphSpanColumnType,
+            V::Text(
+                span.column_type
+                    .map(|t| t.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphSpanSplitColumnCount,
+            V::Text(span.count.map(|c| c.as_idml()).unwrap_or_default()),
+        ),
+        (
+            P::ParagraphSpanColumnMinSpaceBefore,
+            V::Length(span.min_space_before),
+        ),
+        (
+            P::ParagraphSpanColumnMinSpaceAfter,
+            V::Length(span.min_space_after),
+        ),
+        (
+            P::ParagraphSplitColumnInsideGutter,
+            V::Length(span.inside_gutter),
+        ),
+        (
+            P::ParagraphSplitColumnOutsideGutter,
+            V::Length(span.outside_gutter),
+        ),
+        (P::ParagraphListType, text(&d.bullets_list_type)),
+        (
+            P::ParagraphBulletCharacter,
+            V::Text(
+                d.bullet_character
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (P::ParagraphNumberingFormat, text(&d.numbering_format)),
+        (
+            P::ParagraphAppliedNumberingList,
+            text(&d.applied_numbering_list),
+        ),
+        (P::ParagraphBulletsTextAfter, text(&d.bullets_text_after)),
+        (
+            P::ParagraphNumberingExpression,
+            text(&d.numbering_expression),
+        ),
+        (
+            P::ParagraphNumberingStartAt,
+            V::Length(d.numbering_start_at.map(|n| n as f32)),
+        ),
+        (
+            P::ParagraphNumberingContinue,
+            d.numbering_continue
+                .map(V::Bool)
+                .unwrap_or(V::Text(String::new())),
+        ),
+        (
+            P::ParagraphBulletsCharacterStyle,
+            text(&d.bullets_character_style),
+        ),
+        (
+            P::ParagraphNumberingCharacterStyle,
+            text(&d.bullets_and_numbering_digits_character_style),
+        ),
+        (
+            P::ParagraphTabStops,
+            V::TabStops(
+                d.tab_list
+                    .iter()
+                    .map(paged_mutate::operation::TabStopSpec::from_parse)
+                    .collect(),
+            ),
+        ),
+    ]);
+    into_entries(pairs)
+}
+
 /// W1.24 (audit B19) — hard cap on the undo log's length.
 ///
 /// `applied_log` is the **undo stack**: each entry pairs a forward op
@@ -4899,6 +5082,61 @@ impl CanvasModel {
         })
     }
 
+    /// v65 — every property a style definition can be SET through
+    /// `SetStyleProperty`, read back in the shapes that setter accepts, so a
+    /// style editor can show a value and write it back unchanged. The values
+    /// are the style's OWN (`""` / `Length(None)` when it inherits through
+    /// `BasedOn`), not the resolved cascade: that is what the setter writes.
+    ///
+    /// Paragraph and character styles carry entries; object, cell and table
+    /// styles have no settable path yet and answer with none. `None` when
+    /// the style does not exist.
+    pub fn style_properties(
+        &self,
+        collection: paged_mutate::StyleCollection,
+        style_id: &str,
+    ) -> Option<crate::channel::StyleProperties> {
+        use paged_mutate::StyleCollection as C;
+        let styles = &self.scene.styles;
+        let (name, based_on, entries) = match collection {
+            C::Paragraph => {
+                let d = styles.paragraph_styles.get(style_id)?;
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    paragraph_style_entries(d),
+                )
+            }
+            C::Character => {
+                let d = styles.character_styles.get(style_id)?;
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    character_style_entries(d),
+                )
+            }
+            C::Object => {
+                let d = styles.object_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+            C::Cell => {
+                let d = styles.cell_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+            C::Table => {
+                let d = styles.table_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+        };
+        Some(crate::channel::StyleProperties {
+            collection,
+            style_id: style_id.to_string(),
+            name,
+            based_on,
+            entries,
+        })
+    }
+
     pub fn element_properties(
         &self,
         id: &crate::element_selection::ElementId,
@@ -7651,6 +7889,15 @@ impl CanvasModel {
                         .map(|c| crate::channel::OversetAt {
                             paragraph: c.paragraph_idx,
                             line: c.line_idx,
+                        }),
+                    grow_rule: s
+                        .story
+                        .grow
+                        .as_ref()
+                        .map(|r| crate::channel::StoryGrowRule {
+                            grow: true,
+                            max_pages: r.max_pages,
+                            copy_frame_options: r.copy_frame_options,
                         }),
                 }
             })

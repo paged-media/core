@@ -89,6 +89,16 @@ pub enum ReadCommand {
         /// Story `Self` id.
         story_id: String,
     },
+    /// Every settable property of one style definition, in the shapes
+    /// `SetStyleProperty` takes.
+    StyleProperties {
+        #[command(flatten)]
+        on: ReadTarget,
+        /// paragraph | character | object | cell | table.
+        collection: String,
+        /// Style `Self` id, e.g. `ParagraphStyle/Body`.
+        style_id: String,
+    },
     /// Plugin placeholder fields the document carries.
     Placeholders {
         #[command(flatten)]
@@ -223,6 +233,7 @@ impl ReadCommand {
             | Self::Collection { on, .. }
             | Self::FrameChain { on, .. }
             | Self::StoryContent { on, .. }
+            | Self::StyleProperties { on, .. }
             | Self::Placeholders { on }
             | Self::ColorPreview { on, .. }
             | Self::ColorCompute { on, .. }
@@ -331,6 +342,26 @@ pub fn run(what: &ReadCommand) -> Result<()> {
         ReadCommand::StoryContent { story_id, .. } => {
             let reply = session.send(MainToWorkerKind::RequestStoryContent {
                 story_id: story_id.clone(),
+            })?;
+            emit(&reply, compact)
+        }
+        ReadCommand::StyleProperties {
+            collection,
+            style_id,
+            ..
+        } => {
+            let collection: paged_mutate::StyleCollection = serde_json::from_value(
+                serde_json::Value::String(collection.clone()),
+            )
+            .map_err(|_| {
+                anyhow!(
+                    "{collection:?} is not a style collection: paragraph | character | \
+                             object | cell | table"
+                )
+            })?;
+            let reply = session.send(MainToWorkerKind::RequestStyleProperties {
+                collection,
+                style_id: style_id.clone(),
             })?;
             emit(&reply, compact)
         }

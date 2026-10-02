@@ -515,6 +515,18 @@ impl WorkerCore {
                 let content = model.story_content(&story_id);
                 WorkerToMainKind::StoryContentResult { content }
             }
+            MainToWorkerKind::RequestStyleProperties {
+                collection,
+                style_id,
+            } => {
+                let Some(model) = self.model.as_ref() else {
+                    reply!(WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    });
+                };
+                let result = model.style_properties(collection, &style_id);
+                WorkerToMainKind::StyleProperties { result }
+            }
             MainToWorkerKind::Undo => {
                 if self.model.is_none() {
                     reply!(WorkerToMainKind::MutationFailed {

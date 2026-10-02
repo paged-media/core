@@ -1550,3 +1550,71 @@ fn a_partial_budget_only_overrides_what_it_names() {
         "{reply}"
     );
 }
+
+/// v65 — `requestStyleProperties` answers a style definition's settable
+/// properties in the setter's shapes: a value written through
+/// `setStyleProperty` comes back as the same JSON, an unknown style is
+/// `result: null`, and nothing is answered without a document.
+#[test]
+fn request_style_properties_reads_back_what_set_style_property_wrote() {
+    let mut empty = WorkerCore::new();
+    let none = roundtrip(
+        &mut empty,
+        &serde_json::json!({
+            "seq": 1, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/x" }
+        }),
+    );
+    assert_eq!(none["kind"], "mutationFailed", "{none}");
+
+    let mut core = loaded_core();
+    let created = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 2, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "createParagraphStyle",
+                         "args": { "selfId": "ParagraphStyle/s", "name": "S" } }
+        }),
+    );
+    assert_eq!(created["kind"], "mutationApplied", "{created}");
+    let composer = serde_json::json!({ "type": "text", "value": "HL Single" });
+    let set = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 3, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "setStyleProperty",
+                         "args": { "collection": "paragraph", "styleId": "ParagraphStyle/s",
+                                   "path": "paragraphComposer", "value": composer } }
+        }),
+    );
+    assert_eq!(set["kind"], "mutationApplied", "{set}");
+
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 4, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/s" }
+        }),
+    );
+    assert_eq!(reply["kind"], "styleProperties", "{reply}");
+    let result = &reply["payload"]["result"];
+    assert_eq!(result["styleId"], "ParagraphStyle/s");
+    assert_eq!(result["name"], "S");
+    let entries = result["entries"].as_array().expect("entries");
+    let entry = entries
+        .iter()
+        .find(|e| e["path"] == "paragraphComposer")
+        .expect("the composer is read");
+    assert_eq!(entry["value"], composer, "{entry}");
+    assert!(entries.len() > 30, "every settable paragraph-style path");
+
+    let unknown = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 5, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/none" }
+        }),
+    );
+    assert_eq!(unknown["kind"], "styleProperties");
+    assert!(unknown["payload"]["result"].is_null(), "{unknown}");
+}

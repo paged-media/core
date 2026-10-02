@@ -74,6 +74,8 @@ web-sys = { version = "0.3", features = ["console"] }
 # bytes are committed. criterion drives the measurements.
 criterion = { workspace = true }
 paged-gen = { path = "../paged-gen" }
+# v65 style-properties coverage gate walks every PropertyPath.
+paged-introspect = { path = "../paged-introspect", default-features = false }
 # S4 overset-wire test builds a small inline overflowing IDML.
 zip = { workspace = true }
 
