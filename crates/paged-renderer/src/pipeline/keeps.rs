@@ -178,40 +178,9 @@ pub(super) fn keep_breaks(
     }
     for (p, lines) in placements.iter().enumerate() {
         let Some(spec) = specs.get(p) else { continue };
-        if spec.is_inert() || lines.is_empty() {
+        let Some(b) = paragraph_want(lines, placements.get(p + 1), spec) else {
             continue;
-        }
-        let n = lines.len();
-        let mut want: Option<usize> = None;
-
-        // Within-paragraph keeps: look at the paragraph's first break.
-        if let Some(k) = (1..n)
-            .find(|&i| matches!((lines[i - 1].frame, lines[i].frame), (Some(a), Some(b)) if a != b))
-        {
-            want = within_paragraph_break(spec, n, k);
-        }
-
-        // Keep with next: the next paragraph's first lines must share the
-        // frame of this paragraph's last line.
-        if spec.with_next > 0 {
-            if let (Some(last_frame), Some(next_lines)) =
-                (lines[n - 1].frame, placements.get(p + 1))
-            {
-                if !next_lines.is_empty() {
-                    let need = (spec.with_next as usize).min(next_lines.len());
-                    let together = next_lines
-                        .iter()
-                        .take_while(|l| l.frame == Some(last_frame))
-                        .count();
-                    if together < need {
-                        let b = with_next_break(spec, n);
-                        want = Some(want.map_or(b, |w| w.min(b)));
-                    }
-                }
-            }
-        }
-
-        let Some(b) = want else { continue };
+        };
         // A line that already opens its frame cannot be helped by a break.
         let (false, Some(frame)) = (lines[b].opens_frame, lines[b].frame) else {
             continue;
@@ -222,15 +191,132 @@ pub(super) fn keep_breaks(
             frame_start: starts.get(&frame).copied(),
             reserve_64: reserved.get(frame).copied().unwrap_or(0),
         };
-        next.entry(p as u32)
-            .and_modify(|e| {
-                if fresh.line < e.line {
-                    *e = fresh;
-                }
-            })
-            .or_insert(fresh);
+        merge(&mut next, p as u32, fresh);
     }
     next
+}
+
+/// Add `fresh` for paragraph `p`: a paragraph keeps the earliest line a
+/// rule asks to break at.
+fn merge(next: &mut ForcedBreaks, p: u32, fresh: ForcedBreak) {
+    next.entry(p)
+        .and_modify(|e| {
+            if fresh.line < e.line {
+                *e = fresh;
+            }
+        })
+        .or_insert(fresh);
+}
+
+/// The line of a paragraph laid out as `lines` (followed by `next`) that
+/// its keep options want to open the next frame, before the "already opens
+/// its frame" guard.
+fn paragraph_want(
+    lines: &[LinePlace],
+    next: Option<&Vec<LinePlace>>,
+    spec: &KeepSpec,
+) -> Option<usize> {
+    if spec.is_inert() || lines.is_empty() {
+        return None;
+    }
+    let n = lines.len();
+    let mut want: Option<usize> = None;
+
+    // Within-paragraph keeps: look at the paragraph's first break.
+    if let Some(k) = (1..n)
+        .find(|&i| matches!((lines[i - 1].frame, lines[i].frame), (Some(a), Some(b)) if a != b))
+    {
+        want = within_paragraph_break(spec, n, k);
+    }
+
+    // Keep with next: the next paragraph's first lines must share the
+    // frame of this paragraph's last line.
+    if spec.with_next > 0 {
+        if let (Some(last_frame), Some(next_lines)) = (lines[n - 1].frame, next) {
+            if !next_lines.is_empty() {
+                let need = (spec.with_next as usize).min(next_lines.len());
+                let together = next_lines
+                    .iter()
+                    .take_while(|l| l.frame == Some(last_frame))
+                    .count();
+                if together < need {
+                    let b = with_next_break(spec, n);
+                    want = Some(want.map_or(b, |w| w.min(b)));
+                }
+            }
+        }
+    }
+    want
+}
+
+/// thoughts ADR 027 / 028 — the keep decision DURING the emit pass.
+///
+/// [`keep_breaks`] judges a whole pass at once, so every page break an
+/// edit moved cost one more pass of the whole story. A story laid out
+/// forward (`resume::eligible`) is instead judged a paragraph at a time,
+/// as soon as the lines the rules read are placed: its own lines, and for
+/// keep with next the next paragraph's. When a rule fails, the emitter
+/// backs up to the paragraph and lays it out again with the break forced
+/// (`rewind`), exactly what the next pass of the fixpoint would do from
+/// the same flow state. The decision is [`keep_breaks`]' own, paragraph by
+/// paragraph and in flow order, so the pass ends on the set the fixpoint
+/// settles on, and [`keep_breaks`] over it finds nothing more to do.
+///
+/// Paragraph `p`'s fresh break, given the placements so far (paragraph `p`
+/// and, when it has keep with next, `p + 1` are placed). The frame a break
+/// is decided in opened at the first line placed in it: the flow of an
+/// eligible story only moves forward, so that line is found walking back
+/// from `p`.
+pub(super) fn paragraph_break(
+    placements: &[Vec<LinePlace>],
+    specs: &[KeepSpec],
+    p: usize,
+    reserved: &[i32],
+) -> Option<ForcedBreak> {
+    let lines = placements.get(p)?;
+    let b = paragraph_want(lines, placements.get(p + 1), specs.get(p)?)?;
+    let (false, Some(frame)) = (lines[b].opens_frame, lines[b].frame) else {
+        return None;
+    };
+    let mut start = None;
+    'walk: for (q, ls) in placements[..=p].iter().enumerate().rev() {
+        for (i, l) in ls.iter().enumerate().rev() {
+            match l.frame {
+                Some(f) if f < frame => break 'walk,
+                Some(f) if f == frame && l.opens_frame => start = Some((q as u32, i as u32)),
+                _ => {}
+            }
+        }
+    }
+    Some(ForcedBreak {
+        line: b as u32,
+        frame,
+        frame_start: start,
+        reserve_64: reserved.get(frame).copied().unwrap_or(0),
+    })
+}
+
+/// Fold paragraph `p`'s fresh break into `forced` the way the next
+/// fixpoint pass would see it: `applied` says whether this layout of `p`
+/// forced its break (one it did not force is stale and dropped). Returns
+/// whether the set changed in a way that changes `p`'s layout.
+pub(super) fn settle_paragraph(
+    forced: &mut ForcedBreaks,
+    p: u32,
+    applied: bool,
+    fresh: Option<ForcedBreak>,
+) -> bool {
+    if !applied {
+        forced.remove(&p);
+    }
+    match fresh {
+        Some(f) => {
+            let before = forced.get(&p).copied();
+            merge(forced, p, f);
+            forced.get(&p).copied() != before
+        }
+        None => false,
+    }
 }
 
 /// The line (`(paragraph, line)`) that opened the latest frame in

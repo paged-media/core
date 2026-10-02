@@ -557,41 +557,48 @@ pub(super) struct BodyStoryPageReset {
 }
 
 pub(super) fn snapshot_body_story_reset(pages: &[BuiltPage]) -> Vec<BodyStoryPageReset> {
-    pages
-        .iter()
-        .map(|p| BodyStoryPageReset {
-            paths: p.list.paths.len(),
-            commands: p.list.commands.len(),
-            gradients: p.list.gradients.len(),
-            radial_gradients: p.list.radial_gradients.len(),
-            images: p.list.images.len(),
-            story_layout: p.story_layout.len(),
-            footnotes: p.footnotes.len(),
-            stats: p.stats,
-        })
-        .collect()
+    pages.iter().map(snapshot_page_reset).collect()
+}
+
+/// One page's sizes, for [`rollback_page`].
+pub(super) fn snapshot_page_reset(p: &BuiltPage) -> BodyStoryPageReset {
+    BodyStoryPageReset {
+        paths: p.list.paths.len(),
+        commands: p.list.commands.len(),
+        gradients: p.list.gradients.len(),
+        radial_gradients: p.list.radial_gradients.len(),
+        images: p.list.images.len(),
+        story_layout: p.story_layout.len(),
+        footnotes: p.footnotes.len(),
+        stats: p.stats,
+    }
 }
 
 pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPageReset]) {
     for (page, s) in pages.iter_mut().zip(snap.iter()) {
-        page.list.paths.truncate_to(s.paths);
-        page.list.commands.truncate(s.commands);
-        page.list.gradients.truncate(s.gradients);
-        page.list.radial_gradients.truncate(s.radial_gradients);
-        page.list.images.truncate(s.images);
-        page.story_layout.truncate(s.story_layout);
-        page.footnotes.truncate(s.footnotes);
-        // The glyph-run side channel indexes commands ABSOLUTELY, so a
-        // rolled-back pass leaves entries pointing past the end of the
-        // list — harmless while nothing renumbered commands, a real
-        // mis-address once W2's relocation remaps them.
-        if let Some(table) = page.list.glyph_runs.as_mut() {
-            table
-                .entries
-                .retain(|e| (e.command_index as usize) < s.commands);
-        }
-        page.stats = s.stats;
+        rollback_page(page, s);
     }
+}
+
+/// Truncate one page's output back to `s`.
+pub(super) fn rollback_page(page: &mut BuiltPage, s: &BodyStoryPageReset) {
+    page.list.paths.truncate_to(s.paths);
+    page.list.commands.truncate(s.commands);
+    page.list.gradients.truncate(s.gradients);
+    page.list.radial_gradients.truncate(s.radial_gradients);
+    page.list.images.truncate(s.images);
+    page.story_layout.truncate(s.story_layout);
+    page.footnotes.truncate(s.footnotes);
+    // The glyph-run side channel indexes commands ABSOLUTELY, so a
+    // rolled-back pass leaves entries pointing past the end of the
+    // list — harmless while nothing renumbered commands, a real
+    // mis-address once W2's relocation remaps them.
+    if let Some(table) = page.list.glyph_runs.as_mut() {
+        table
+            .entries
+            .retain(|e| (e.command_index as usize) < s.commands);
+    }
+    page.stats = s.stats;
 }
 
 /// W1.7/W1.8 — lay out each page's captured footnote pool at the bottom

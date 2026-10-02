@@ -22,7 +22,11 @@
 //! cargo run --release -p paged-canvas --example edit_latency -- long
 //! cargo run --release -p paged-canvas --example edit_latency -- annual PATH.paged
 //! cargo run --release -p paged-canvas --example edit_latency -- reflow|docx|paste
+//! cargo run --release -p paged-canvas --example edit_latency -- widow [COPIES]
 //! ```
+//!
+//! `save-widow PATH [COPIES]` writes the widow story's `.paged` and prints,
+//! per measured page, the paste offset `widow` uses.
 //!
 //! `save-long PATH` writes the long story's `.paged` (for the wasm harness,
 //! which drives the same edit through `handleMessage`) and prints the story
@@ -31,6 +35,12 @@
 //! `long` is the plan's long DOCX-shaped story: `docx-pagination` with 2 000
 //! Word-like paragraphs appended to section 1 (about 232 Letter pages),
 //! typed on page 3. `paste` pastes 60 paragraphs on page 3 of it.
+//!
+//! `widow` is ADR 028's widow-controlled growing story: `keeps-reflow`
+//! repeated `COPIES` times (30 = 241 pages), every page break a keep
+//! decision. It reports the load (the initial growth), typing, and a new
+//! three-line paragraph pasted on pages 8, 117 and 226 (each on a fresh
+//! load).
 
 use paged_canvas::{CanvasModel, CanvasOptions, Mutation};
 
@@ -88,6 +98,28 @@ fn docx(extra: usize) -> Vec<u8> {
         }
     }
     paged_store::package::wrap_document(&doc, "Long.docx", 612.0, 792.0).expect("wrap")
+}
+
+/// `keeps-reflow` with its story repeated `copies` times and growing as
+/// Word's sections do (the digest gate's `widow_story`).
+fn widow_story(copies: usize) -> Vec<u8> {
+    let idml = paged_gen::write_idml(&paged_gen::samples::keeps_reflow::build()).expect("idml");
+    let mut doc = idml_import::import_idml_doc(&idml).expect("import");
+    let id = paged_gen::ids::self_id("keeps-reflow", "BodyStory", 0);
+    let s = doc
+        .stories
+        .iter_mut()
+        .find(|s| s.self_id == id)
+        .expect("body story");
+    s.story.grow = Some(paged_model::FlowGrowRule {
+        copy_frame_options: true,
+        ..Default::default()
+    });
+    let one = s.story.paragraphs.clone();
+    for _ in 1..copies {
+        s.story.paragraphs.extend(one.iter().cloned());
+    }
+    paged_store::package::wrap_document(&doc, "Widow.docx", 172.0, 318.0).expect("wrap")
 }
 
 /// Byte offset of paragraph `idx` of `story` in `InsertText`'s convention.
@@ -231,6 +263,74 @@ fn main() {
                     t.elapsed().as_secs_f64() * 1e3,
                     m.built().pages.len()
                 );
+            }
+        }
+        "widow" => {
+            let copies: usize = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(30);
+            let bytes = widow_story(copies);
+            let id = paged_gen::ids::self_id("keeps-reflow", "BodyStory", 0);
+            for (k, page) in [8usize, 117, 226].into_iter().enumerate() {
+                let t = std::time::Instant::now();
+                let mut m = CanvasModel::load("widow", &bytes, options(false)).expect("load");
+                let pages = m.built().pages.len();
+                if k == 0 {
+                    println!(
+                        "widow story: load (initial growth) {:.0} ms, {pages} pages",
+                        t.elapsed().as_secs_f64() * 1e3
+                    );
+                }
+                let Some(idx) = m
+                    .built()
+                    .pages
+                    .get(page - 1)
+                    .and_then(|p| p.story_layout.first())
+                    .map(|l| l.paragraph_idx as usize + 1)
+                else {
+                    println!("widow story: no page {page}");
+                    continue;
+                };
+                type_into(&format!("widow page {page}"), &mut m, &id, idx, edits);
+                // A new three-line paragraph after paragraph `idx`.
+                let at = text_offset(&m, &id, idx + 1) - 1;
+                let pages = m.built().pages.len();
+                let t = std::time::Instant::now();
+                m.apply_mutation(&Mutation::InsertText {
+                    story_id: id.clone(),
+                    offset: at,
+                    text: "\nNEWlineAmmmm NEWlineBmmmm NEWlineCmmmm".to_string(),
+                    cell: None,
+                })
+                .expect("paste");
+                let ms = t.elapsed().as_secs_f64() * 1e3;
+                let lines = m
+                    .built()
+                    .story_layout(&id)
+                    .iter()
+                    .filter(|l| l.paragraph_idx as usize == idx + 1)
+                    .count();
+                println!(
+                    "widow page {page}: 3-line paragraph pasted after P{idx}: {ms:.0} ms wall, \
+                     build {:.0} ms, {lines} lines, {pages} -> {} pages",
+                    m.last_rebuild_stats().build_ms,
+                    m.built().pages.len()
+                );
+            }
+        }
+        "save-widow" => {
+            let path = args.get(1).expect("save-widow needs an output path");
+            let copies: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(30);
+            let bytes = widow_story(copies);
+            std::fs::write(path, &bytes).expect("write");
+            let m = CanvasModel::load("widow", &bytes, options(false)).expect("load");
+            let id = paged_gen::ids::self_id("keeps-reflow", "BodyStory", 0);
+            for page in [8usize, 117, 226] {
+                if let Some(l) = m.built().pages.get(page - 1).and_then(|p| p.story_layout.first()) {
+                    let idx = l.paragraph_idx as usize + 1;
+                    println!(
+                        "page={page} story={id} paragraph={idx} paste_offset={}",
+                        text_offset(&m, &id, idx + 1) - 1
+                    );
+                }
             }
         }
         "save-long" => {

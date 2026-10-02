@@ -3050,6 +3050,21 @@ pub(super) fn build_document_inner(
                 &chain_pages_for_post,
                 options,
             );
+        // ADR 028 — the same premise lets the emitter back up to a
+        // paragraph inside a pass and decide keeps there (`rewind`).
+        let rewindable = !is_toc
+            && !is_vertical
+            && cross_story_numbering.is_none()
+            && span_starts.is_empty()
+            && column_arena.is_empty()
+            && !story_prints_page_context(&parsed.story)
+            && resume::eligible(
+                &parsed.story,
+                &chain_for_post,
+                &chain_pages_for_post,
+                options,
+            );
+        let seeded = !forced_breaks.is_empty() && !carried;
         let resume_sig = resumable
             .then(|| body_story_signature(&chain_for_post, &chain_pages_pre, &wrap_rects_per_page));
         let resume_key = (parsed.self_id.clone(), post.is_some());
@@ -3171,7 +3186,16 @@ pub(super) fn build_document_inner(
                     marks.extend(plan.prefix_marks().iter().cloned());
                 }
                 let mut relaid: Option<usize> = None;
-                for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
+                // ADR 028 — a story laid out forward decides its keeps in
+                // this pass (`rewind`): a paragraph whose forced break
+                // changed is laid out again from where it began.
+                let mut rewinds: Vec<rewind::Rewind> = Vec::new();
+                let mut rewound = 0usize;
+                let rewind_cap = 8 * parsed.story.paragraphs.len() + 64;
+                let n_paragraphs = parsed.story.paragraphs.len();
+                let mut j = start;
+                while j < n_paragraphs {
+                    let paragraph = &parsed.story.paragraphs[j];
                     if resumable {
                         let m = resume::mark(
                             &emitter,
@@ -3203,7 +3227,26 @@ pub(super) fn build_document_inner(
                         }
                         marks.push(m);
                     }
+                    if rewindable && rewound < rewind_cap {
+                        rewinds.truncate(j - start);
+                        rewinds.push(rewind::Rewind::capture(&emitter, &pages, &total_stats));
+                    }
                     emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
+                    if rewindable && rewound < rewind_cap {
+                        let last = j + 1 == n_paragraphs;
+                        if let Some(p) = rewind::settle_after(&mut emitter, j, start, last) {
+                            let r = &rewinds[p - start];
+                            debug_assert_eq!(r.paragraph(), p);
+                            r.restore(&mut emitter, &mut pages, &pre_reset, &mut total_stats);
+                            if resumable {
+                                marks.truncate(p);
+                            }
+                            rewound += 1;
+                            j = p;
+                            continue;
+                        }
+                    }
+                    j += 1;
                 }
                 if resumable && relaid.is_none() {
                     marks.push(resume::mark(
@@ -3274,8 +3317,10 @@ pub(super) fn build_document_inner(
 
             // ADR 028 — the breaks the next pass must force; equal to
             // `forced_breaks` when this pass satisfied every keep option.
+            // A pass that decided keeps itself compares with the breaks it
+            // ended on: those are what it laid out.
             let next_forced = emitter.keep_breaks();
-            let keeps_changed = next_forced != forced_breaks;
+            let keeps_changed = next_forced != emitter.forced_breaks;
             forced_breaks = next_forced;
 
             // Measure each frame's footnote pool and fold it into the
@@ -3321,7 +3366,7 @@ pub(super) fn build_document_inner(
             // last pass after that (text is then placed, never dropped).
             if footnotes_settled && !keeps_changed {
                 converged = true;
-                if pass == 0 && !forced_breaks.is_empty() && !carried {
+                if pass == 0 && seeded {
                     total_stats.keep_seeds_used += 1;
                 }
                 break;
@@ -3915,8 +3960,8 @@ pub(super) struct StoryEmitter<'a> {
     pub(super) placements: Vec<Vec<super::keeps::LinePlace>>,
     /// Line heights (1/64 pt) placed per chain frame, and laid out past
     /// the chain's end: the page-growth loop's measure (`OversetMeasure`).
-    placed_height_64: HashMap<usize, i64>,
-    overset_height_64: i64,
+    pub(super) placed_height_64: HashMap<usize, i64>,
+    pub(super) overset_height_64: i64,
     /// Line counter within the current top-level paragraph (split
     /// sub-paragraphs share it).
     pub(super) para_line: u32,
