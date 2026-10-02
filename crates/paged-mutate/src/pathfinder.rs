@@ -32,7 +32,9 @@
 use flo_curves::bezier::path::{path_add, path_intersect, path_sub, SimpleBezierPath};
 use paged_model::PathAnchor;
 
-use crate::bezier_conv::{flo_to_idml_path, idml_path_to_flo_on_grid, BOOLEAN_GRID};
+use crate::bezier_conv::{
+    flo_to_idml_path, idml_path_to_flo_on_grid, snap_paths_to_grid, BOOLEAN_GRID,
+};
 
 /// Pathfinder operation kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,29 +132,47 @@ pub fn pathfinder_boolean(
             }
         }
         PathfinderKind::Exclude => {
-            // XOR ≡ (A ∪ B) − (A ∩ B). flo_curves 0.8 doesn't
-            // expose a direct path_xor for SimpleBezierPath, so
-            // compose it from union + intersect + subtract. For
-            // ≥3 inputs the result is `((A ∪ B ∪ ...) − (A ∩ B
-            // ∩ ...))` — that's the n-ary generalization
-            // InDesign uses.
-            let mut union_acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
+            // XOR, folded pairwise: X ⊕ Y = (X − Y) ∪ (Y − X). The two
+            // differences have disjoint interiors, so their contours are
+            // simply listed together — no union, which could pinch two
+            // L shapes that meet at a corner into one contour.
+            //
+            // C-81 — this used to be `(A ∪ B) − (A ∩ B)`, and `path_sub`
+            // can answer that with two whole OVERLAPPING rectangles that
+            // describe the XOR only through opposite windings: fill-
+            // correct by accident of direction, and a result whose
+            // meaning lives in its direction cannot be given one. The
+            // fold answers disjoint regions — what Illustrator answers
+            // (two L shapes for two crossing rectangles, 6800 + 6000
+            // pt²), which can then be oriented like every other result.
+            let mut acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
             for other in &flo_inputs[1..] {
-                union_acc = path_add::<SimpleBezierPath>(&union_acc, other, PATHFINDER_ACCURACY);
+                if acc.is_empty() {
+                    acc = other.clone();
+                    continue;
+                }
+                let mut left = path_sub::<SimpleBezierPath>(&acc, other, PATHFINDER_ACCURACY);
+                let right = path_sub::<SimpleBezierPath>(other, &acc, PATHFINDER_ACCURACY);
+                left.extend(right);
+                // Back onto the boolean grid before the next fold (C-21):
+                // difference outputs carry crossing points off it.
+                snap_paths_to_grid(&mut left, BOOLEAN_GRID);
+                acc = left;
             }
-            let mut isect_acc: Vec<SimpleBezierPath> = flo_inputs[0].clone();
-            for other in &flo_inputs[1..] {
-                isect_acc =
-                    path_intersect::<SimpleBezierPath>(&isect_acc, other, PATHFINDER_ACCURACY);
-            }
-            if isect_acc.is_empty() {
-                union_acc
-            } else {
-                path_sub::<SimpleBezierPath>(&union_acc, &isect_acc, PATHFINDER_ACCURACY)
-            }
+            acc
         }
     };
-    flo_to_idml_path(&result)
+    let (mut anchors, starts) = flo_to_idml_path(&result);
+    // C-81 — every Pathfinder result comes back counter-clockwise on the
+    // page (Illustrator 30.1, all recorded cases), holes the other way.
+    let closed = vec![false; starts.len()];
+    crate::orientation::orient_contours(
+        &mut anchors,
+        &starts,
+        &closed,
+        crate::orientation::Turn::CounterClockwise,
+    );
+    (anchors, starts)
 }
 
 #[cfg(test)]

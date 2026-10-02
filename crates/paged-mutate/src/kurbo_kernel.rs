@@ -283,11 +283,14 @@ pub fn outline_stroke(
     // nonzero fill (paged-gpu fills FillRule::Winding), so we keep
     // the anchors as emitted rather than running a winding-sensitive
     // resolve. (Even-odd consumers would need a cleanup pass.)
-    let (a, s, _o) = bezpath_to_anchors(&outline);
+    let (mut a, s, _o) = bezpath_to_anchors(&outline);
     if a.len() < 2 {
         return None;
     }
     let closed = vec![false; s.len().max(1)];
+    // C-81 — Illustrator's Outline Stroke comes back clockwise on the
+    // page; holes (the inside of a stroked closed path) the other way.
+    crate::orientation::orient_contours(&mut a, &s, &closed, crate::orientation::Turn::Clockwise);
     Some((a, s, closed))
 }
 
@@ -409,6 +412,13 @@ pub fn variable_width_outline_stroke(
     if out.len() < 3 {
         return None;
     }
+    // C-81 — the outline-stroke family's direction (see `outline_stroke`).
+    crate::orientation::orient_contours(
+        &mut out,
+        &[0],
+        &[false],
+        crate::orientation::Turn::Clockwise,
+    );
     Some((out, vec![0], vec![false]))
 }
 
@@ -741,7 +751,16 @@ pub fn offset_closed_path(
             return None;
         }
     }
-    Some((picked.0, vec![0], vec![false]))
+    // C-81 — Illustrator's Offset Path comes back clockwise on the page
+    // whichever way the input ran and whichever sign the offset had.
+    let mut out = picked.0;
+    crate::orientation::orient_contours(
+        &mut out,
+        &[0],
+        &[false],
+        crate::orientation::Turn::Clockwise,
+    );
+    Some((out, vec![0], vec![false]))
 }
 
 /// Nearest on-curve point (B-06): the engine-side answer to the

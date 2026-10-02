@@ -53,6 +53,7 @@ pub mod invert;
 pub mod kurbo_kernel;
 pub mod notify;
 pub mod operation;
+pub mod orientation;
 pub mod path_math;
 pub mod pathfinder;
 pub mod planar;
