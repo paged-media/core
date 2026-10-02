@@ -358,7 +358,12 @@ fn choose(
     if let Some(a) = a.filter(|a| a.forced) {
         return Some(a);
     }
-    let ladder_ok = opts.ladder_limit == 0 || hyphens_in_a_row < opts.ladder_limit;
+    // The ladder limit yields where keeping it would leave nothing that
+    // fits: InDesign sets a compound longer than three lines as
+    // `Donaudampfschiff-` / `fahrtsgesell-` / `schaftskapitaens-` under a
+    // limit of 1 rather than run the word out of the frame (measured,
+    // `soft-hyphens` fixture, 2026-10-02).
+    let ladder_ok = a.is_none() || opts.ladder_limit == 0 || hyphens_in_a_row < opts.ladder_limit;
     let fitting: Vec<&Candidate> = points.iter().filter(|p| p.width - p.shrink <= m).collect();
     if ladder_ok && !fitting.is_empty() {
         let trigger = match a {
@@ -519,15 +524,35 @@ mod tests {
 
     #[test]
     fn the_ladder_limit_stops_a_run_of_hyphens() {
-        // Every line can only end in a hyphen; with a ladder limit of 1
-        // the second line takes its word whole (overflowing) instead.
+        // Line 1 ends "10 20-"; line 2 could end "20 20-" too (54 fits
+        // 54), but a ladder limit of 1 sends it out whole.
+        let items = para(&[&[10], &[20, 20], &[20, 20], &[20, 20]], 0);
+        let mut o = opts(false);
+        o.zone = 0;
+        let b = single_line_breaks(&items, &[54], &[], &o);
+        assert!(items_is_hyphen(&items, b[0].index));
+        assert!(
+            items_is_hyphen(&items, b[1].index),
+            "no limit: two in a row"
+        );
+        o.ladder_limit = 1;
+        let b = single_line_breaks(&items, &[54], &[], &o);
+        assert!(items_is_hyphen(&items, b[0].index));
+        assert!(!items_is_hyphen(&items, b[1].index));
+    }
+
+    #[test]
+    fn the_ladder_limit_yields_when_nothing_else_fits() {
+        // One word four segments long in a measure that holds one: every
+        // line can only end in a hyphen, and InDesign takes them all
+        // rather than run the word out of the frame (`soft-hyphens`).
         let items = para(&[&[30, 30, 30, 30]], 0);
         let mut o = opts(false);
         o.zone = 0;
         o.ladder_limit = 1;
         let b = single_line_breaks(&items, &[40], &[], &o);
-        assert!(items_is_hyphen(&items, b[0].index));
-        assert!(!items_is_hyphen(&items, b[1].index));
+        assert_eq!(b.len(), 4);
+        assert!(b[..3].iter().all(|p| items_is_hyphen(&items, p.index)));
     }
 
     fn items_is_hyphen(items: &[Item<()>], i: usize) -> bool {

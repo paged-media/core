@@ -49,6 +49,7 @@ pub mod preflight;
 pub mod reflow;
 pub mod shaped_bands;
 pub mod showcase_base;
+pub mod soft_hyphens;
 pub mod span_columns;
 pub mod split_boundaries;
 pub mod start_paragraph;
@@ -136,6 +137,7 @@ pub const SAMPLES: &[&str] = &[
     "nested-groups",
     "paste-into",
     "layers-z",
+    "soft-hyphens",
     "showcase-base",
     "annual-base",
 ];
@@ -196,6 +198,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "nested-groups" => nested_groups::build(),
         "paste-into" => paste_into::build(),
         "layers-z" => layers_z::build(),
+        "soft-hyphens" => soft_hyphens::build(),
         "showcase-base" => showcase_base::build(),
         "annual-base" => annual_base::build(),
         _ => return None,
@@ -226,7 +229,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            55,
+            56,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

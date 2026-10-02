@@ -42,7 +42,9 @@ pub use compose::{
     ComposedLine, DropCapComposition, DropCapSpec, HarfrustMeasurer, MonospaceMeasurer, TextShaper,
 };
 pub use frame_shape::{cubic_steps_for_tolerance, flatten_cubic, Contour, FrameShape};
-pub use hyphenate::{HyphenationLimits, Hyphenator, Hyphenators, Language, SOFT_HYPHEN};
+pub use hyphenate::{
+    soft_hyphen_opportunities, HyphenationLimits, Hyphenator, Hyphenators, Language, SOFT_HYPHEN,
+};
 pub use layout::{
     apply_bidi_reorder, layout_paragraph, layout_runs, position_line, Alignment, BidiDirection,
     LaidOutLine, LaidOutParagraph, LayoutOptions, PositionedGlyph, StyledRun,

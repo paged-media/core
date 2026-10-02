@@ -864,14 +864,27 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // words (rare — usually a bold "hold" + italic "ing") fall
         // through to a single Box; they still break at glue boundaries.
         let single_run = run_index_for_word(&flat, w.start as u32, w.end as u32);
-        let breaks: Vec<usize> = match (opts.hyphenator, single_run) {
-            (Some(h), Some(_)) if zone_allows_hyphenation => {
+        // With hyphenation off (no hyphenator) the word still breaks at
+        // its discretionary hyphens, under the same limits and zone —
+        // InDesign's rule, see `soft_hyphen_opportunities`.
+        let breaks: Vec<usize> = match single_run {
+            Some(_) if zone_allows_hyphenation => {
                 let word_text = &paragraph_text[w.start..w.end];
-                h.opportunities_for(word_text, &opts.hyphenation_limits, i + 1 == words.len())
-                    .into_iter()
-                    .filter(|&b| b > 0 && b < word_text.len())
-                    .map(|b| w.start + b)
-                    .collect()
+                let is_last_word = i + 1 == words.len();
+                match opts.hyphenator {
+                    Some(h) => {
+                        h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
+                    }
+                    None => crate::hyphenate::soft_hyphen_opportunities(
+                        word_text,
+                        &opts.hyphenation_limits,
+                        is_last_word,
+                    ),
+                }
+                .into_iter()
+                .filter(|&b| b > 0 && b < word_text.len())
+                .map(|b| w.start + b)
+                .collect()
             }
             _ => Vec::new(),
         };

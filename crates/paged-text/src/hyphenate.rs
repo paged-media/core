@@ -254,7 +254,8 @@ impl Hyphenator {
     ///
     /// A word carrying a SOFT HYPHEN breaks only there — the author
     /// placed a discretionary hyphen, and InDesign takes that as the
-    /// whole answer for the word.
+    /// whole answer for the word (see [`soft_hyphen_opportunities`] for
+    /// which of its soft hyphens the limits still allow).
     pub fn opportunities_for(
         &self,
         word: &str,
@@ -262,12 +263,7 @@ impl Hyphenator {
         is_last_word: bool,
     ) -> Vec<usize> {
         if word.contains(SOFT_HYPHEN) {
-            return word
-                .char_indices()
-                .filter(|(_, c)| *c == SOFT_HYPHEN)
-                .map(|(i, c)| i + c.len_utf8())
-                .filter(|&i| i > 0 && i < word.len())
-                .collect();
+            return soft_hyphen_opportunities(word, limits, is_last_word);
         }
         if is_last_word && !limits.last_word {
             return Vec::new();
@@ -434,6 +430,53 @@ const WORDS_LONGER_THAN: usize = 5;
 /// carries one hyphenates ONLY there: the author has said where the
 /// break belongs, and the dictionary does not get a second opinion.
 pub const SOFT_HYPHEN: char = '\u{00ad}';
+
+/// The breaks a word's discretionary hyphens offer, under the
+/// paragraph's hyphenation settings. Byte offsets just past each usable
+/// U+00AD, so the hyphen-to-be stays on the line before the break.
+///
+/// This is InDesign's rule, and it holds with `Hyphenation="false"` as
+/// much as with `true` — asked 2026-10-02 (`soft-hyphens` fixture,
+/// InDesign 20.0.1): turning hyphenation off stops the DICTIONARY, not
+/// the author's soft hyphens, which still break and still print a
+/// hyphen (Word agrees: its hyphenation is off by default and
+/// `Donaudampf-` / `schifffahrtsgesell-` / `schaft` breaks there). The
+/// rest of the paragraph's settings keep governing them, on or off:
+/// `HyphenateAfterFirst` / `HyphenateBeforeLast` refuse a soft hyphen
+/// too few letters from either end ("ab-solutely" with 6 / 6),
+/// `HyphenateWordsLongerThan` refuses a short word, `HyphenateLastWord
+/// ="false"` protects the last word, and the ladder limit and the zone
+/// count them like any other hyphen (both applied by the composers).
+/// The one exception is `HyphenateCapitalizedWords="false"`: a capital
+/// word still breaks at its soft hyphen ("Ab-solutely"). A soft hyphen
+/// before the first letter therefore offers nothing, which is how an
+/// author keeps a word from hyphenating at all.
+pub fn soft_hyphen_opportunities(
+    word: &str,
+    limits: &HyphenationLimits,
+    is_last_word: bool,
+) -> Vec<usize> {
+    if !word.contains(SOFT_HYPHEN) || (is_last_word && !limits.last_word) {
+        return Vec::new();
+    }
+    let letters = word.chars().filter(|c| c.is_alphabetic()).count();
+    if letters < limits.words_longer_than {
+        return Vec::new();
+    }
+    let mut before = 0usize;
+    let mut out = Vec::new();
+    for (i, c) in word.char_indices() {
+        if c == SOFT_HYPHEN {
+            let after = letters - before;
+            if before >= limits.after_first.max(1) && after >= limits.before_last.max(1) {
+                out.push(i + c.len_utf8());
+            }
+        } else if c.is_alphabetic() {
+            before += 1;
+        }
+    }
+    out
+}
 
 /// A paragraph's hyphenation settings, the seven IDML attributes that
 /// gate where a word may break.
@@ -729,6 +772,50 @@ mod tests {
         assert_eq!(&word[..breaks[0]], "compu\u{00ad}");
         // And it wins even where the automatic patterns would say more.
         assert!(!h.opportunities("computer").is_empty());
+    }
+
+    #[test]
+    fn the_paragraph_limits_govern_soft_hyphens_except_for_capitals() {
+        // InDesign 20.0.1, `soft-hyphens` fixture: the same limits hold
+        // whether the paragraph hyphenates or not.
+        let d = HyphenationLimits::default();
+        let at = |w: &str, l: &HyphenationLimits, last| -> Vec<String> {
+            soft_hyphen_opportunities(w, l, last)
+                .into_iter()
+                .map(|i| w[..i].replace(SOFT_HYPHEN, ""))
+                .collect()
+        };
+        assert_eq!(at("ab\u{ad}solutely", &d, false), ["ab"]);
+        let six = HyphenationLimits {
+            after_first: 6,
+            before_last: 6,
+            ..d
+        };
+        assert!(at("ab\u{ad}solutely", &six, false).is_empty());
+        assert_eq!(
+            at("abso\u{ad}lute\u{ad}ly\u{ad}ness", &six, false),
+            ["absolute"]
+        );
+        let long = HyphenationLimits {
+            words_longer_than: 25,
+            ..d
+        };
+        assert!(at("ab\u{ad}solutely", &long, false).is_empty());
+        let no_last = HyphenationLimits {
+            last_word: false,
+            ..d
+        };
+        assert!(at("in\u{ad}formation", &no_last, true).is_empty());
+        assert_eq!(at("in\u{ad}formation", &no_last, false), ["in"]);
+        // Capitalised words keep their soft hyphens ("Ab-solutely").
+        let no_caps = HyphenationLimits {
+            capitalized_words: false,
+            ..d
+        };
+        assert_eq!(at("Ab\u{ad}solutely", &no_caps, false), ["Ab"]);
+        // A soft hyphen ahead of the first letter guards the word.
+        assert!(at("\u{ad}typesetting", &d, false).is_empty());
+        assert!(at("(\u{ad}typesetting)", &d, false).is_empty());
     }
 
     #[test]

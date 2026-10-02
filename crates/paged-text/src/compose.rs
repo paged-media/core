@@ -30,7 +30,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::hyphenate::Hyphenator;
+use crate::hyphenate::{soft_hyphen_opportunities, Hyphenator, SOFT_HYPHEN};
 use crate::shape::{shape_run, Face, ShapedGlyph, ShapedRun, ADVANCE_PRECISION};
 use paragraph_breaker::{Breakpoint, Item};
 
@@ -661,7 +661,9 @@ pub fn compose_paragraph(
     let space_width = (natural_space as f32 * options.desired_space_ratio.max(0.0)).round() as i32;
     let stretch = (natural_space as f32 * options.stretch_ratio).round() as i32;
     let shrink = (natural_space as f32 * options.shrink_ratio).round() as i32;
-    let hyphen_width = if options.hyphenator.is_some() {
+    // A discretionary hyphen breaks with hyphenation off too, so the
+    // hyphen's width is needed whenever one is in the text.
+    let hyphen_width = if options.hyphenator.is_some() || text.contains(SOFT_HYPHEN) {
         measurer.measure_word("-")
     } else {
         0
@@ -672,7 +674,7 @@ pub fn compose_paragraph(
     // the items in their own contiguous Vec — but every push goes
     // through the helper so the byte_end / is_hyphen side-data can
     // never drift out of sync.
-    let item_capacity = if options.hyphenator.is_some() {
+    let item_capacity = if options.hyphenator.is_some() || text.contains(SOFT_HYPHEN) {
         words.len() * 4 + 2
     } else {
         words.len() * 2 + 2
@@ -716,7 +718,28 @@ pub fn compose_paragraph(
         // opportunities over either path (after the base items are
         // emitted, we walk the word's chars and inject penalty items
         // between any pair where at least one is CJK).
+        // With hyphenation off a word still breaks at its discretionary
+        // hyphens (`soft_hyphen_opportunities`), under the same limits and
+        // zone; route it through the segmenting arm below.
+        let soft = if options.hyphenator.is_none() && zone_allows_hyphenation {
+            soft_hyphen_opportunities(word_text, &options.hyphenation_limits, i + 1 == words.len())
+        } else {
+            Vec::new()
+        };
         match options.hyphenator {
+            None if !soft.is_empty() => {
+                emit_segmented_word(
+                    word_text,
+                    w.start,
+                    &soft,
+                    measurer,
+                    hyphen_width,
+                    options.hyphen_penalty,
+                    &mut items,
+                    &mut meta,
+                    &push,
+                );
+            }
             None if !options.kinsoku_enforce => {
                 push(
                     &mut items,
@@ -758,46 +781,17 @@ pub fn compose_paragraph(
                 );
             }
             Some(h) => {
-                let mut seg_start = 0usize;
                 let is_last_word = i + 1 == words.len();
-                for offset in
-                    h.opportunities_for(word_text, &options.hyphenation_limits, is_last_word)
-                {
-                    if offset <= seg_start || offset >= word_text.len() {
-                        continue;
-                    }
-                    push(
-                        &mut items,
-                        &mut meta,
-                        Item::Box {
-                            width: measurer.measure_word(&word_text[seg_start..offset]),
-                            data: (),
-                        },
-                        w.start + offset,
-                        false,
-                    );
-                    push(
-                        &mut items,
-                        &mut meta,
-                        Item::Penalty {
-                            width: hyphen_width,
-                            penalty: options.hyphen_penalty,
-                            flagged: true,
-                        },
-                        w.start + offset,
-                        true,
-                    );
-                    seg_start = offset;
-                }
-                push(
+                emit_segmented_word(
+                    word_text,
+                    w.start,
+                    &h.opportunities_for(word_text, &options.hyphenation_limits, is_last_word),
+                    measurer,
+                    hyphen_width,
+                    options.hyphen_penalty,
                     &mut items,
                     &mut meta,
-                    Item::Box {
-                        width: measurer.measure_word(&word_text[seg_start..]),
-                        data: (),
-                    },
-                    w.end,
-                    false,
+                    &push,
                 );
                 // Hyphenation + kinsoku can both apply — when both
                 // are on, the kinsoku enforcement adds high-penalty
@@ -951,6 +945,60 @@ pub fn compose_paragraph(
 struct ItemMeta {
     byte_end: usize,
     is_hyphen: bool,
+}
+
+/// Emit one word as Boxes split at `breaks` (byte offsets into
+/// `word_text`), with a flagged hyphen Penalty at each split.
+#[allow(clippy::too_many_arguments)]
+fn emit_segmented_word(
+    word_text: &str,
+    word_start: usize,
+    breaks: &[usize],
+    measurer: &dyn AdvanceMeasurer,
+    hyphen_width: i32,
+    hyphen_penalty: i32,
+    items: &mut Vec<Item<()>>,
+    meta: &mut Vec<ItemMeta>,
+    push: &impl Fn(&mut Vec<Item<()>>, &mut Vec<ItemMeta>, Item<()>, usize, bool),
+) {
+    let mut seg_start = 0usize;
+    for &offset in breaks {
+        if offset <= seg_start || offset >= word_text.len() {
+            continue;
+        }
+        push(
+            items,
+            meta,
+            Item::Box {
+                width: measurer.measure_word(&word_text[seg_start..offset]),
+                data: (),
+            },
+            word_start + offset,
+            false,
+        );
+        push(
+            items,
+            meta,
+            Item::Penalty {
+                width: hyphen_width,
+                penalty: hyphen_penalty,
+                flagged: true,
+            },
+            word_start + offset,
+            true,
+        );
+        seg_start = offset;
+    }
+    push(
+        items,
+        meta,
+        Item::Box {
+            width: measurer.measure_word(&word_text[seg_start..]),
+            data: (),
+        },
+        word_start + word_text.len(),
+        false,
+    );
 }
 
 /// Emit one Knuth-Plass Box per Unicode scalar of `word_text`, with
@@ -1354,6 +1402,32 @@ mod tests {
         for l in &out {
             assert!(!l.ends_with_hyphen, "no hyphenator → no flag");
         }
+    }
+
+    #[test]
+    fn a_soft_hyphen_breaks_with_hyphenation_off() {
+        // InDesign (and Word) break at a discretionary hyphen whatever the
+        // paragraph's Hyphenation switch says (`soft-hyphens` fixture).
+        let m = MonospaceMeasurer::new(10, 10);
+        let text = "ab compu\u{ad}tation";
+        let opts = ComposeOptions {
+            column_width: 100,
+            tolerance: 50.0,
+            ..ComposeOptions::new(0.0)
+        };
+        let out = compose_paragraph(text, &m, &opts);
+        assert!(out[0].ends_with_hyphen, "{out:?}");
+        assert_eq!(&text[out[0].byte_range.clone()], "ab compu\u{ad}");
+        // …under the paragraph's limits: "compu" is short of six letters.
+        let five = ComposeOptions {
+            hyphenation_limits: crate::hyphenate::HyphenationLimits {
+                after_first: 6,
+                ..Default::default()
+            },
+            ..opts.clone()
+        };
+        let out = compose_paragraph(text, &m, &five);
+        assert!(out.iter().all(|l| !l.ends_with_hyphen), "{out:?}");
     }
 
     #[test]

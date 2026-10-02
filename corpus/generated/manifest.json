@@ -289,6 +289,15 @@
       "report": "/tmp/idml-generated-diff/showcase-base/report.json"
     },
     {
+      "name": "soft-hyphens",
+      "idml": "soft-hyphens.idml",
+      "pdf": "soft-hyphens.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/soft-hyphens",
+      "report": "/tmp/idml-generated-diff/soft-hyphens/report.json"
+    },
+    {
       "name": "span-columns",
       "idml": "span-columns.idml",
       "pdf": "span-columns.pdf",
