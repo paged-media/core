@@ -251,7 +251,7 @@ fn local_list_overrides_render_where_indesign_puts_them() {
                     && !v.ends_with(' ')
             });
         for (line, want) in lines.iter().zip(INDESIGN_OVERRIDES[i]) {
-            let (start, end) = (line.byte_range.start, line.byte_range.end);
+            let end = line.byte_range.end;
             let x_at = |byte: u32| {
                 line.clusters
                     .iter()
@@ -264,7 +264,15 @@ fn local_list_overrides_render_where_indesign_puts_them() {
             // The marker is everything before the tag; its last byte is
             // the separator (a tab or a space) whenever it is a word of
             // its own.
-            let marker_w = x_at(if glued { end - 7 } else { end - 8 }) - x_at(start);
+            // its own. The marker's glyphs are not characters of the
+            // line; the line records where the marker starts.
+            let marker_x = line.marker.first().map_or(f32::NAN, |c| c.x_pt - fx);
+            let marker_w = if glued {
+                x_at(end - 7) - marker_x
+            } else {
+                // The separator is the marker's last cluster.
+                line.marker.last().map_or(f32::NAN, |c| c.x_pt - fx) - marker_x
+            };
             let same = (word - want.1).abs() <= X_TOLERANCE
                 && want.0.is_none_or(|t| (tag - t).abs() <= X_TOLERANCE)
                 && want.2.is_none_or(|w| (marker_w - w).abs() <= W_TOLERANCE);
@@ -718,7 +726,7 @@ fn list_marker_character_styles_render_as_indesign_does() {
         let lines = built.story_layout(&lms::body_story_id(i as u32));
         assert_eq!(lines.len(), 2, "{}: one line per paragraph", case.name);
         for (line, want) in lines.iter().zip(&INDESIGN_MARKER_STYLES[i]) {
-            let (start, end) = (line.byte_range.start, line.byte_range.end);
+            let end = line.byte_range.end;
             let x_at = |byte: u32| {
                 line.clusters
                     .iter()
@@ -729,7 +737,7 @@ fn list_marker_character_styles_render_as_indesign_does() {
             let baseline = line.baseline_y_pt - fy;
             let tag = x_at(end - 7);
             let word = x_at(end - 3);
-            let marker_left = x_at(start) + fx;
+            let marker_left = line.marker.first().map_or(f32::NAN, |c| c.x_pt);
             let marker_right = x_at(end - 7) + fx;
             // The marker's visible glyphs: the outlines inside this
             // line's band left of the tag.

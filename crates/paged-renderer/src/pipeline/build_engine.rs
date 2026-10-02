@@ -5337,6 +5337,7 @@ fn emit_paragraph_lines(
                         x_pt,
                         advance_pt: 0.0,
                     }],
+                    marker: Vec::new(),
                 });
             }
         }
@@ -6366,11 +6367,19 @@ fn emit_paragraph_lines(
         }
         v
     };
+    // The list marker leads the shaped text and is not in the model's:
+    // a line's bytes count from the paragraph's own first character.
+    let marker_bytes = list_prefix_text.as_deref().map_or(0, |p| p.len() as u32);
     let model_byte = |b: u32| -> u32 {
+        let b = b.saturating_sub(marker_bytes);
         if placeholder_bytes.is_empty() {
             return b;
         }
-        let before = objects_before + placeholder_bytes.iter().filter(|&&p| p < b).count();
+        let before = objects_before
+            + placeholder_bytes
+                .iter()
+                .filter(|&&p| p.saturating_sub(marker_bytes) < b)
+                .count();
         let len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8() as u32;
         b.saturating_sub(len * before as u32)
     };
@@ -7196,6 +7205,13 @@ fn emit_paragraph_lines(
             // A split paragraph's segment reports paragraph-wide bytes and
             // line indices (zero bases for an unsplit paragraph).
             let seg = em.segment;
+            // The marker's glyphs are not characters the caret can reach.
+            let marker: Vec<ClusterPos> = clusters
+                .iter()
+                .filter(|c| c.byte < marker_bytes)
+                .copied()
+                .collect();
+            clusters.retain(|c| c.byte >= marker_bytes);
             for c in &mut clusters {
                 c.byte = seg.byte_base + model_byte(c.byte);
             }
@@ -7216,6 +7232,7 @@ fn emit_paragraph_lines(
                 byte_range: seg.byte_base + model_byte(line.byte_range.start as u32)
                     ..seg.byte_base + model_byte(line.byte_range.end as u32),
                 clusters,
+                marker,
             });
         }
 

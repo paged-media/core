@@ -132,3 +132,78 @@ fn a_selection_after_blank_lines_starts_on_its_own_line() {
         blank.top_pt
     );
 }
+
+/// A list marker is not a character of the story: the caret before the
+/// first letter of a bulleted paragraph stands after the marker, and the
+/// paragraph after it starts on its own line.
+#[test]
+fn a_list_marker_does_not_shift_the_offsets() {
+    use paged_mutate::operation::StyleScope;
+    use paged_mutate::{PropertyPath, StyleCollection, Value};
+    let (mut m, story) = story_with("Abc\nDef");
+    let style = "ParagraphStyle/bullet";
+    m.apply_mutation(&Mutation::CreateParagraphStyle {
+        self_id: Some(style.into()),
+        name: Some("Bullet".into()),
+        based_on: None,
+    })
+    .expect("style");
+    for (path, value) in [
+        (
+            PropertyPath::ParagraphListType,
+            Value::Text("BulletList".into()),
+        ),
+        (
+            PropertyPath::ParagraphBulletCharacter,
+            Value::Text("\u{2022}".into()),
+        ),
+        (PropertyPath::ParagraphLeftIndent, Value::Length(Some(18.0))),
+        (
+            PropertyPath::ParagraphFirstLineIndent,
+            Value::Length(Some(-18.0)),
+        ),
+    ] {
+        m.apply_mutation(&Mutation::SetStyleProperty {
+            collection: StyleCollection::Paragraph,
+            style_id: style.into(),
+            path,
+            value,
+        })
+        .expect("style property");
+    }
+    let plain_a = selection_geometry(m.built(), &range(&story, 0, 3))[0].clone();
+    m.apply_mutation(&Mutation::ApplyStyle {
+        story_id: story.clone(),
+        start: 0,
+        end: 3,
+        style: style.into(),
+        scope: StyleScope::Paragraph,
+        cell: None,
+    })
+    .expect("bullet on Abc");
+    let built = m.built();
+    let abc = selection_geometry(built, &range(&story, 0, 3));
+    assert_eq!(abc.len(), 1);
+    assert!(
+        (abc[0].width_pt - plain_a.width_pt).abs() < 0.5,
+        "Abc's selection is the three letters, not the marker ({} vs {})",
+        abc[0].width_pt,
+        plain_a.width_pt
+    );
+    assert!(
+        abc[0].left_pt > plain_a.left_pt + 10.0,
+        "and it starts after the marker, at the indent"
+    );
+    let def = selection_geometry(built, &range(&story, 4, 7));
+    assert_eq!(def.len(), 1, "Def is one line: {def:?}");
+    assert!(
+        def[0].top_pt > abc[0].top_pt + 5.0,
+        "Def's selection is on Def's line"
+    );
+    assert!(
+        (def[0].left_pt - plain_a.left_pt).abs() < 0.01,
+        "from its left edge ({} vs {})",
+        def[0].left_pt,
+        plain_a.left_pt
+    );
+}

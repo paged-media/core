@@ -888,8 +888,13 @@ pub struct LineLayout {
     pub byte_range: std::ops::Range<u32>,
     /// Per-glyph-cluster page-local positions, in left-to-right order.
     /// The hit-tester bisects on `x_pt`; the caret rule keys on
-    /// `byte` for an exact-offset lookup.
+    /// `byte` for an exact-offset lookup. A list marker's glyphs are
+    /// not here: they are not characters of the story.
     pub clusters: Vec<ClusterPos>,
+    /// The list marker this line opens with, cluster by cluster
+    /// (`byte` counts within the marker's own text). Empty on a line
+    /// without one.
+    pub marker: Vec<ClusterPos>,
 }
 
 /// One glyph cluster's page-local position. Cluster bytes are

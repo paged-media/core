@@ -2779,6 +2779,7 @@ pub(super) fn emit_cell_paragraph(
                 descent_pt: 0.2 * line_h_pt,
                 byte_range: line.byte_range.start as u32..line.byte_range.end as u32,
                 clusters,
+                marker: Vec::new(),
             });
         }
     }
