@@ -25,6 +25,7 @@ members = [
     "crates/paged-script",
     "crates/paged-run",
     "crates/paged-cli",
+    "crates/paged-perf",
     "spikes/vello-eval",
     "spikes/composer-calibration",
     "spikes/wasm-size",

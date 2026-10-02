@@ -24,6 +24,7 @@ pub mod display_list;
 pub mod extent;
 pub mod glyph;
 pub mod mask;
+pub mod perf;
 pub mod pixel_layer;
 pub mod primitives;
 pub mod scene_layer;

@@ -617,6 +617,7 @@ pub(super) fn font_id(bytes: &Bytes) -> u32 {
             return *id;
         }
         let id = fnv_1a_u32(bytes.as_ref());
+        paged_compose::perf::count(|c| c.font_bytes_hashed += bytes.len() as u64);
         let mut ids = ids.borrow_mut();
         // Bounded: a long session that loads many documents must not pin
         // every font buffer it ever saw. Clearing only costs re-hashing.

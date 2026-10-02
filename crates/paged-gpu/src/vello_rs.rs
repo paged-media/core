@@ -309,6 +309,7 @@ fn cached_image_data(img: &paged_compose::DecodedImage) -> Option<ImageData> {
     if hit.is_some() {
         return hit;
     }
+    paged_compose::perf::count(|c| c.scene_image_decodes += 1);
     let pixels: Box<[u8]> = if eager {
         img.rgba.as_ref().to_vec().into_boxed_slice()
     } else {

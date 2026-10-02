@@ -290,6 +290,7 @@ impl SurfacePresenter {
     /// CPU and GPU paths.
     pub fn build_page_scene(list: &DisplayList, width_pt: f32, height_pt: f32) -> Scene {
         use vello::peniko;
+        paged_compose::perf::count(|c| c.page_scenes_built += 1);
 
         let mut scene = Scene::new();
         // White page body.

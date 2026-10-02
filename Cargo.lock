@@ -2728,6 +2728,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "paged-perf"
+version = "0.0.0"
+dependencies = [
+ "criterion",
+ "image",
+ "paged-canvas",
+ "paged-compose",
+ "paged-gen",
+ "serde_json",
+]
+
+[[package]]
 name = "paged-renderer"
 version = "0.0.0"
 dependencies = [

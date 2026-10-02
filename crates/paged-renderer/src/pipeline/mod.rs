@@ -1231,6 +1231,7 @@ pub fn build_document(
         // one would find the first pass's discarded pages there.
         let mut built = build_document_fixed(&grown, options, pass == 0)?;
         pass += 1;
+        paged_compose::perf::count(|c| c.grow_passes += 1);
         built.grow_passes = pass;
         let mut changed = false;
         for story in &growing {

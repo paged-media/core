@@ -45,6 +45,7 @@ fn is_eps_magic(bytes: &[u8]) -> bool {
 /// streams, which would need a Ghostscript sidecar to rasterise
 /// (deferred, see `docs/plan.md` Phase 4).
 pub(super) fn decode_image_bytes(bytes: &[u8]) -> Option<paged_compose::DecodedImage> {
+    paged_compose::perf::count(|c| c.pipeline_image_decodes += 1);
     // wasm32 has a hard 4 GB address-space cap. Eagerly decoding
     // every embedded image to RGBA8 during `build_document` bloats
     // the heap (envato megapacks ship 50+ MB of images that expand

@@ -3092,6 +3092,7 @@ pub(super) fn build_document_inner(
         let pass_cap = MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES + 2 * chain_for_post.len();
         for pass in 0..pass_cap {
             let p = pass;
+            paged_compose::perf::count(|c| c.story_emits += 1);
             // Re-emit passes start from the pre-story snapshot so the
             // page accumulates exactly one story's worth of commands.
             if pass > 0 {
