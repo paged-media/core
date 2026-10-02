@@ -19,6 +19,9 @@ serde_json = "1"
 
 [dev-dependencies]
 criterion = { workspace = true }
+paged-store = { path = "../paged-store" }
+base64 = { workspace = true }
+zip = { workspace = true }
 
 [[bench]]
 name = "workload"

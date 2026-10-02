@@ -2704,7 +2704,9 @@ dependencies = [
 name = "paged-model"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2731,12 +2733,15 @@ dependencies = [
 name = "paged-perf"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "criterion",
  "image",
  "paged-canvas",
  "paged-compose",
  "paged-gen",
+ "paged-store",
  "serde_json",
+ "zip",
 ]
 
 [[package]]
@@ -2837,8 +2842,10 @@ dependencies = [
 name = "paged-store"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "idml-import",
  "paged-gen",
+ "paged-model",
  "paged-renderer",
  "paged-scene",
  "serde",

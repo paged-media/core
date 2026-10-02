@@ -19,7 +19,7 @@
 //! |----------|-----------------------------------------------------------------|
 //! | `load`   | `annual-base` from IDML; the authored workload from `.paged`    |
 //! | `write`  | one keystroke, a paragraph style, a frame write, a 50-edit batch |
-//! | `export` | `.paged`, IDML, and the whole PDF                               |
+//! | `export` | `.paged` (first save and re-save), IDML, and the whole PDF      |
 //! | `raster` | one photo page through the CPU rasteriser                       |
 //!
 //! Writes run on one long-lived model, as an editing session does.
@@ -163,6 +163,18 @@ fn bench_export(c: &mut Criterion) {
     g.sample_size(10).measurement_time(Duration::from_secs(30));
     g.bench_function("paged", |b| {
         b.iter(|| w.model.export_paged(protocol()).expect("paged"))
+    });
+    // A document that was LOADED from a `.paged` already holds its image
+    // blobs in the source container, so a save carries them through as a
+    // raw zip copy; `paged` above is the first save, which writes them.
+    let reloaded = CanvasModel::load(
+        "bench",
+        &w.model.export_paged(protocol()).expect("paged"),
+        paged_perf::options(),
+    )
+    .expect("reload");
+    g.bench_function("paged_resave", |b| {
+        b.iter(|| reloaded.export_paged(protocol()).expect("paged"))
     });
     g.bench_function("idml", |b| b.iter(|| w.model.export_idml().expect("idml")));
     g.bench_function("pdf", |b| {

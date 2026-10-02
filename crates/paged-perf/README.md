@@ -55,4 +55,8 @@ Two lessons:
 ## Known costs, measured and pinned
 
 - **A frame write re-lays out every story** (52 emits, against 2 for a keystroke): any non-text operation invalidates the body-story emit cache.
-- **`document.pgm` stores image bytes as JSON integer arrays.** The workload's 29 photos make a 211 MB part (67 MB zipped) that every `.paged` load parses and every save writes.
+- **A first save deflates every photo again.** Images are container parts of their own (`paged/core/model/blobs/`), and a re-save of a loaded document carries them through as a raw zip copy (355 ms). The first save writes them through `write_paged`, which deflates every new part: 1.24 s, most of it spent compressing already-compressed JPEG, PNG and WebP. Storing them uncompressed needs a per-part option in plugin-publish.
+
+## Fixed, with the measurement that found it
+
+- **`document.pgm` stored image bytes as JSON integer arrays**, one number per byte: the workload's 29 photos made a 211 MB part (67 MB zipped). Saving took 11.3 s and loading 1.9 s. Now 3.1 MB, 1.24 s (355 ms on a re-save) and 0.9 s.

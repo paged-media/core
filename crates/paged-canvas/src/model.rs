@@ -1536,7 +1536,20 @@ impl CanvasModel {
                 // incompatible (stale/foreign PGM_FORMAT_VERSION → `from_bytes`
                 // returns None) falls back to the IDML import — a stale `.pgm`
                 // is never a hard load error (ADR-022 Q2).
-                Some(pgm) => match paged_store::from_bytes(&pgm) {
+                // The model part names its images; their bytes are the
+                // container's blob parts (a part written before blobs
+                // carries them inline, and needs none).
+                Some(pgm) => match paged_store::from_parts(
+                    &pgm,
+                    container
+                        .entries
+                        .iter()
+                        .filter_map(|(path, bytes)| {
+                            paged_store::blob_name_of(path)
+                                .map(|name| (name.to_string(), bytes.to_vec()))
+                        })
+                        .collect(),
+                ) {
                     // The native part is the model truth (including its
                     // structured designmap); keep the real source archive
                     // (raw carry-through bytes) beside it so the parts door still
@@ -4670,15 +4683,42 @@ impl CanvasModel {
         // (Cloning the overlay to add one part is likewise a transitional
         // simplification; both go away when IDML leaves core.)
         let mut parts = self.paged_parts.clone();
-        if let Ok(pgm) = paged_store::to_bytes(self.scene()) {
+        let mut original = std::borrow::Cow::Borrowed(self.source_idml.as_slice());
+        if let Ok((pgm, blobs)) = paged_store::to_parts(self.scene()) {
             parts.insert(paged_store::DOCUMENT_PGM_PATH.to_string(), pgm);
+            // The model's images are container parts of their own, named by
+            // content hash. One the source container already holds is
+            // carried through byte for byte by `write_paged` (a raw zip
+            // copy), so only NEW images are written here: saving a document
+            // again costs nothing per unchanged photo.
+            let held: std::collections::BTreeSet<&str> = self
+                .source_archive
+                .iter()
+                .flat_map(|source| source.entries.keys())
+                .map(String::as_str)
+                .filter(|path| paged_store::blob_name_of(path).is_some())
+                .collect();
+            // `write_paged` keeps every `paged/` part of the source and has
+            // no way to drop one, so the blob of an image that was replaced
+            // or deleted is taken out of the source first. Rare, and only
+            // then is the source rewritten (a raw copy, no recompression).
+            let stale: Vec<&str> = held
+                .iter()
+                .copied()
+                .filter(|path| !blobs.contains_key(*path))
+                .collect();
+            if !stale.is_empty() {
+                if let Some(stripped) = without_zip_entries(&self.source_idml, &stale) {
+                    original = std::borrow::Cow::Owned(stripped);
+                }
+            }
+            for (path, bytes) in blobs {
+                if !held.contains(path.as_str()) {
+                    parts.insert(path, bytes);
+                }
+            }
         }
-        idml_export::write_paged(
-            &self.export_scene(),
-            &self.source_idml,
-            &parts,
-            paged_protocol,
-        )
+        idml_export::write_paged(&self.export_scene(), &original, &parts, paged_protocol)
     }
 
     /// S7 — the composition (`document.pgd`) **derived** from the current IDML
@@ -10161,6 +10201,22 @@ fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
         }
     }
     out
+}
+
+/// `package` (a zip) without the entries named in `drop`: every other entry
+/// is copied raw, in order, so nothing is recompressed and `mimetype` stays
+/// first. `None` when the bytes are not a readable zip.
+fn without_zip_entries(package: &[u8], drop: &[&str]) -> Option<Vec<u8>> {
+    let mut src = zip::ZipArchive::new(std::io::Cursor::new(package)).ok()?;
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..src.len() {
+        let entry = src.by_index_raw(i).ok()?;
+        if drop.contains(&entry.name()) {
+            continue;
+        }
+        out.raw_copy_file(entry).ok()?;
+    }
+    Some(out.finish().ok()?.into_inner())
 }
 
 /// The highest `u<hex>` id spelled by an entry name of `package`

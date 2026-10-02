@@ -124,7 +124,7 @@ pub fn wrap_document(
     fallback_width_pt: f32,
     fallback_height_pt: f32,
 ) -> Result<Vec<u8>, serde_json::Error> {
-    let pgm = crate::to_bytes(doc)?;
+    let (pgm, blobs) = crate::to_parts(doc)?;
     // InDesign's GeometricBounds order is "y0 x0 y1 x1".
     let bounds = format!("0 0 {fallback_height_pt} {fallback_width_pt}");
 
@@ -161,6 +161,11 @@ pub fn wrap_document(
     put("XML/BackingStory.xml", backing().as_bytes(), false);
     // The native model part: what the load path actually uses.
     put(crate::DOCUMENT_PGM_PATH, &pgm, false);
+    // Its images, one part each. STORED: a JPEG, PNG or WebP is already
+    // compressed, and deflating it again costs time for nothing.
+    for (path, bytes) in &blobs {
+        put(path, bytes, true);
+    }
 
     Ok(zip.finish().expect("zip finish").into_inner())
 }

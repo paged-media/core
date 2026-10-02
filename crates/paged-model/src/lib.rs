@@ -26,6 +26,8 @@
 //! primitive. `paged-parse` re-exports everything moved here, so its dependents
 //! compile unchanged.
 
+pub mod image_bytes;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -1199,6 +1201,7 @@ pub struct Rectangle {
     /// Real-world Envato newspaper / magazine packs do this for the
     /// majority of placed images. `None` for swatch-only Rectangles or
     /// link-only Image elements.
+    #[serde(default, with = "crate::image_bytes")]
     pub image_bytes: Option<Vec<u8>>,
     /// W1.21: `<ClippingPathSettings>` parsed from the nested `<Image>`.
     /// `None` ⇒ no clip (the frame outline is the only crop). When
@@ -1602,6 +1605,7 @@ pub struct Oval {
     /// [`Rectangle::image_item_transform`] (P-16).
     pub image_item_transform: Option<[f32; 6]>,
     /// Q-03: see [`Rectangle::image_bytes`].
+    #[serde(default, with = "crate::image_bytes")]
     pub image_bytes: Option<Vec<u8>>,
     /// W1.21: see [`Rectangle::image_clip`].
     pub image_clip: Option<ClippingPathSettings>,
@@ -2032,6 +2036,7 @@ pub struct Polygon {
     /// See [`Rectangle::image_item_transform`].
     pub image_item_transform: Option<[f32; 6]>,
     /// Q-03: see [`Rectangle::image_bytes`].
+    #[serde(default, with = "crate::image_bytes")]
     pub image_bytes: Option<Vec<u8>>,
     /// W1.21: see [`Rectangle::image_clip`].
     pub image_clip: Option<ClippingPathSettings>,
