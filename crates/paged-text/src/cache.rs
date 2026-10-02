@@ -293,8 +293,33 @@ fn cached<F: FnOnce() -> LaidOutParagraph>(key: [u8; 32], f: F) -> LaidOutParagr
 /// it behaves identically to the plain function. Pipeline call sites
 /// use this so installing a cache is a one-line opt-in at the top.
 pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
+    // thoughts ADR 027 — `layout_runs` only ever ADDS `first_baseline` to
+    // the baselines it steps down from it, so a paragraph's layout is the
+    // same at any height. The entry is keyed and laid out at baseline 0
+    // and moved to `first_baseline` on the way out: a paragraph that only
+    // moved (the lines above it re-wrapped, a paste above it) hits.
+    let origin = options.first_baseline;
     let key = layout_runs_key(runs, options);
-    cached(key, || layout_runs(runs, options))
+    let mut laid = cached(key, || {
+        if origin == 0 {
+            layout_runs(runs, options)
+        } else {
+            let at_zero = LayoutOptions {
+                first_baseline: 0,
+                ..options.clone()
+            };
+            layout_runs(runs, &at_zero)
+        }
+    });
+    if origin != 0 {
+        for line in &mut laid.lines {
+            line.baseline_y += origin;
+            for g in &mut line.glyphs {
+                g.y += origin;
+            }
+        }
+    }
+    laid
 }
 
 /// Fold the inputs of [`layout_runs`] into a 32-byte cache key.
@@ -304,7 +329,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   strikethru, baseline_shift_pt, horizontal_scale_pct,
 ///   vertical_scale_pct, skew_deg, fallback-face count (not contents —
 ///   see module docs), and every OTF shaping-feature toggle.
-/// - LayoutOptions: alignment, line_height, first_baseline,
+/// - LayoutOptions: alignment, line_height (NOT first_baseline: the
+///   cached layout is translated to it),
 ///   leading_override, auto_leading_from_byte, justify_last_line, and the tab layout (stops,
 ///   default grid, line starts).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
@@ -373,7 +399,8 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
 fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.sep();
     h.add_i32(options.line_height);
-    h.add_i32(options.first_baseline);
+    // `first_baseline` is not an input: `layout_runs_cached` lays out at 0
+    // and translates.
     h.add_optional_i32(options.leading_override);
     h.add_u32(options.auto_leading_from_byte);
     h.add_u32(alignment_tag(options.alignment));
