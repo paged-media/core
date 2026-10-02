@@ -364,11 +364,22 @@ impl PathBuffer {
     }
 
     fn store(&mut self, key: Option<u64>, path: PathData) {
-        let prev = self.fingerprint();
-        let mixed = (prev ^ key.unwrap_or(PATH_PRINT_ANON)).wrapping_mul(0x0000_0100_0000_01b3);
+        let print = Self::fingerprint_after(self.fingerprint(), &[key]);
         self.paths.push(path);
         self.keys.push(key);
-        self.prints.push(mixed.rotate_left(17));
+        self.prints.push(print);
+    }
+
+    /// The fingerprint a buffer with fingerprint `print` has after storing
+    /// paths under `keys` (`None` = anonymous), each one new to it: what
+    /// replaying a cached emission's paths does to it, computed without
+    /// the paths (thoughts ADR 027 plan step 7).
+    pub fn fingerprint_after(print: u64, keys: &[Option<u64>]) -> u64 {
+        keys.iter().fold(print, |prev, key| {
+            (prev ^ key.unwrap_or(PATH_PRINT_ANON))
+                .wrapping_mul(0x0000_0100_0000_01b3)
+                .rotate_left(17)
+        })
     }
 
     /// Fingerprint of the keys stored so far, in order (see `prints`).

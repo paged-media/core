@@ -292,6 +292,35 @@ impl Document {
                 }
             }
         }
+        self.chain_of(story_id, &story_frames)
+    }
+
+    /// Every story's [`frame_chain`](Self::frame_chain), keyed by story id,
+    /// in one walk of the spreads (thoughts ADR 027: a build asks for every
+    /// story's chain, and one walk per story is O(stories × frames)).
+    /// Stories with no frame are absent.
+    pub fn frame_chains(&self) -> HashMap<&str, Vec<&TextFrame>> {
+        let mut by_story: HashMap<&str, Vec<&TextFrame>> = HashMap::new();
+        for parsed in &self.spreads {
+            for f in &parsed.spread.text_frames {
+                if let Some(story) = f.parent_story.as_deref() {
+                    by_story.entry(story).or_default().push(f);
+                }
+            }
+        }
+        by_story
+            .into_iter()
+            .map(|(story, frames)| (story, self.chain_of(story, &frames)))
+            .collect()
+    }
+
+    /// The chain through `story_frames` (every frame on `story_id`, in
+    /// spread order).
+    fn chain_of<'s>(
+        &'s self,
+        story_id: &str,
+        story_frames: &[&'s TextFrame],
+    ) -> Vec<&'s TextFrame> {
         if story_frames.is_empty() {
             return Vec::new();
         }

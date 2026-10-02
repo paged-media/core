@@ -1332,7 +1332,7 @@ fn build_document_fixed(
             )
         });
     let single = !has_running_header && !has_text_anchor_dest;
-    let first = build_document_inner(document, options, None, adopt && single)?;
+    let first = build_document_inner(document, options, None, adopt && single, !single)?;
     if single {
         return Ok(first);
     }
@@ -1341,7 +1341,7 @@ fn build_document_fixed(
     // then re-run with it in hand. Only one re-run ever happens (the
     // inner builder, given a `post`, never asks for another).
     let post = build_post_layout_ctx(document, &first);
-    let mut second = build_document_inner(document, options, Some(&post), adopt)?;
+    let mut second = build_document_inner(document, options, Some(&post), adopt, false)?;
     // The reuse counters describe the whole build, both passes.
     second.stats.keep_seeds_used += first.stats.keep_seeds_used;
     second.stats.body_stories_reused += first.stats.body_stories_reused;

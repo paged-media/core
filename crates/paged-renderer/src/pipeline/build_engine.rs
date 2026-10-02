@@ -77,11 +77,121 @@ fn range_print(list: &paged_compose::DisplayList, path_base: usize, cmd_base: us
 }
 
 pub(super) fn pool_print(list: &paged_compose::DisplayList) -> u64 {
+    print_of(list.paths.fingerprint(), other_pools_print(list))
+}
+
+/// [`pool_print`] from its two parts.
+fn print_of(path_print: u64, others: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    list.paths.fingerprint().hash(&mut h);
-    other_pools_print(list).hash(&mut h);
+    path_print.hash(&mut h);
+    others.hash(&mut h);
     h.finish()
+}
+
+/// thoughts ADR 027 plan step 7 — cached body-story output not spliced
+/// into its page yet.
+///
+/// Most of an edit's build splices cached stories into pages that end up
+/// adopted from the previous build (and so are thrown away), and the first
+/// of two passes only needs where the lines landed. A cached story's page
+/// output is queued here instead, with the page's path-buffer print and
+/// command count as they would be after it, so later cache checks and the
+/// z-slot bookkeeping see the page as if it had been spliced. The queue is
+/// replayed in order ([`Self::materialize`]) before anything else writes
+/// to the page: a story that lays out on it (its chain pages), or the end
+/// of a build that keeps the page. An adopted page drops its queue; the
+/// first pass of two only appends the queued lines.
+struct DeferredSplices {
+    on: bool,
+    pending: Vec<Vec<std::sync::Arc<BodyStoryPageDelta>>>,
+    /// The page's path-buffer fingerprint after its queue.
+    path_print: Vec<u64>,
+    /// The commands its queue adds.
+    extra_cmds: Vec<usize>,
+}
+
+impl DeferredSplices {
+    fn new(on: bool, pages: usize) -> Self {
+        Self {
+            on,
+            pending: vec![Vec::new(); if on { pages } else { 0 }],
+            path_print: vec![0; if on { pages } else { 0 }],
+            extra_cmds: vec![0; if on { pages } else { 0 }],
+        }
+    }
+
+    fn queued(&self, p: usize) -> bool {
+        self.pending.get(p).is_some_and(|q| !q.is_empty())
+    }
+
+    /// [`pool_print`] of page `p` as if its queue were spliced.
+    fn print(&self, pages: &[BuiltPage], p: usize) -> u64 {
+        if self.queued(p) {
+            print_of(self.path_print[p], other_pools_print(&pages[p].list))
+        } else {
+            pool_print(&pages[p].list)
+        }
+    }
+
+    /// Page `p`'s command count as if its queue were spliced.
+    fn commands(&self, pages: &[BuiltPage], p: usize) -> usize {
+        pages[p].list.commands.len() + self.extra_cmds.get(p).copied().unwrap_or(0)
+    }
+
+    /// Splice `delta` into page `p`, or queue it.
+    fn splice(
+        &mut self,
+        pages: &mut [BuiltPage],
+        p: usize,
+        delta: &std::sync::Arc<BodyStoryPageDelta>,
+    ) {
+        if !self.on {
+            splice_body_story_page_delta(&mut pages[p], delta);
+            return;
+        }
+        if !self.queued(p) {
+            self.path_print[p] = pages[p].list.paths.fingerprint();
+        }
+        self.path_print[p] =
+            paged_compose::PathBuffer::fingerprint_after(self.path_print[p], &delta.path_keys);
+        self.extra_cmds[p] += delta.commands.len();
+        self.pending[p].push(delta.clone());
+    }
+
+    /// Splice page `p`'s queue.
+    fn materialize(&mut self, pages: &mut [BuiltPage], p: usize) {
+        if !self.queued(p) {
+            return;
+        }
+        for delta in std::mem::take(&mut self.pending[p]) {
+            splice_body_story_page_delta(&mut pages[p], &delta);
+        }
+        self.extra_cmds[p] = 0;
+        debug_assert_eq!(pages[p].list.paths.fingerprint(), self.path_print[p]);
+    }
+
+    /// Append only the lines of page `p`'s queue (the first of two passes
+    /// reads nothing else) and drop it.
+    fn lines_only(&mut self, pages: &mut [BuiltPage], p: usize) {
+        if !self.queued(p) {
+            return;
+        }
+        for delta in std::mem::take(&mut self.pending[p]) {
+            pages[p]
+                .story_layout
+                .extend(delta.story_layout.iter().cloned());
+        }
+        self.extra_cmds[p] = 0;
+    }
+
+    /// Drop page `p`'s queue (the page is adopted).
+    fn discard(&mut self, p: usize) {
+        if self.queued(p) {
+            self.pending[p].clear();
+            self.extra_cmds[p] = 0;
+        }
+    }
 }
 
 /// The non-path pools' part of [`pool_print`]. A delta replays paths and
@@ -722,6 +832,9 @@ pub(super) fn build_document_inner(
     options: &PipelineOptions,
     post: Option<&PostLayoutCtx>,
     adopt: bool,
+    // The first of two passes: only where each line landed is read from
+    // it (`build_post_layout_ctx`), so it is not finished.
+    layout_only: bool,
 ) -> anyhow::Result<BuiltDocument> {
     let palette = &document.palette;
     // The CMYK ICC transform: from the caller's cache when it keeps one
@@ -2293,6 +2406,14 @@ pub(super) fn build_document_inner(
     // outlines once up front.
     let container_clips = collect_nested_text_clips(document);
 
+    // Every story's frame chain, walked once (thoughts ADR 027).
+    let frame_chains = document.frame_chains();
+    // ADR 027 plan step 7 — cached stories queue their output on a page
+    // that may never need it (see `DeferredSplices`).
+    let mut deferred = DeferredSplices::new(
+        layout_only || (adopt && options.previous_pages.is_some()),
+        pages.len(),
+    );
     // thoughts ADR 027 plan step 7 — which pages this pass lays content out
     // on afresh (see `BuiltDocument::fresh_pages`). Without any cache every
     // page is.
@@ -2307,7 +2428,7 @@ pub(super) fn build_document_inner(
         // "Override Master Page Items"). The body-story pass below
         // will emit it — skipping here avoids the doubled header you
         // get when both copies render on top of each other.
-        if !document.frame_chain(story_id).is_empty() {
+        if frame_chains.contains_key(story_id) {
             continue;
         }
         let Some(parsed) = document.stories.iter().find(|s| s.self_id == story_id) else {
@@ -2662,10 +2783,11 @@ pub(super) fn build_document_inner(
         // An auto-sizing frame composes at its FITTED bounds: swap in
         // the clone the fit pass prepared (routing already ran on the
         // authored bounds, so the chain's pages are unchanged).
-        let authored_chain: Vec<&TextFrame> = document
-            .frame_chain(&parsed.self_id)
+        let authored_chain: Vec<&TextFrame> = frame_chains
+            .get(parsed.self_id.as_str())
             .into_iter()
-            .map(|f| {
+            .flatten()
+            .map(|&f| {
                 f.self_id
                     .as_deref()
                     .and_then(|id| fitted_frames.get(id).or_else(|| layout_frames.get(id)))
@@ -2806,12 +2928,12 @@ pub(super) fn build_document_inner(
                 // buffer the delta was captured from: an earlier story on
                 // the page that re-emitted moves the ids it refers to.
                 if delta.per_page.iter().all(|(idx, d)| {
-                    *idx < pages.len() && pool_print(&pages[*idx].list) == d.pre_fingerprint
+                    *idx < pages.len() && deferred.print(&pages, *idx) == d.pre_fingerprint
                 }) {
                     for (page_idx, page_delta) in &delta.per_page {
-                        let base = pages[*page_idx].list.commands.len();
-                        splice_body_story_page_delta(&mut pages[*page_idx], page_delta);
-                        let block_end = pages[*page_idx].list.commands.len();
+                        let base = deferred.commands(&pages, *page_idx);
+                        deferred.splice(&mut pages, *page_idx, page_delta);
+                        let block_end = base + page_delta.commands.len();
                         record_story_blocks(
                             &mut pending_text,
                             &text_slots,
@@ -2840,6 +2962,13 @@ pub(super) fn build_document_inner(
                     total_stats.body_stories_reused += 1;
                     continue;
                 }
+            }
+        }
+        // The story lays out on its chain's pages: they hold everything
+        // queued before it from here on.
+        for &p in &chain_pages_pre {
+            if p < pages.len() {
+                deferred.materialize(&mut pages, p);
             }
         }
         // Snapshot per-page pool sizes BEFORE this story emits so
@@ -3352,6 +3481,9 @@ pub(super) fn build_document_inner(
             let wrote = pages[page_idx].list.commands.len() > snap.1
                 || pages[page_idx].story_layout.len() > snap.5
                 || pages[page_idx].footnotes.len() > snap.6;
+            // A story writes only to its chain's pages, which hold their
+            // queue by now (see `DeferredSplices`).
+            debug_assert!(!(wrote && deferred.queued(page_idx)));
             let in_range =
                 fresh_range.map_or(true, |(from, to)| page_idx >= from && page_idx <= to);
             if wrote && in_range {
@@ -3511,14 +3643,40 @@ pub(super) fn build_document_inner(
         }
     }
 
+    // ADR 027 plan step 7 — a page nothing was laid out on afresh is the
+    // previous build's final page: take that one, and skip it below.
+    let mut adopted = vec![false; pages.len()];
+    if let (true, Some(previous)) = (adopt, options.previous_pages) {
+        let previous = previous.borrow();
+        for (i, page) in pages.iter().enumerate() {
+            adopted[i] = !fresh[i] && previous.get(i).is_some_and(|p| p.id == page.id);
+        }
+    }
+    // Settle the queued splices: an adopted page never needs them, the
+    // first of two passes needs only their lines, any other page is
+    // finished below.
+    for (p, adopted) in adopted.iter().enumerate() {
+        if *adopted {
+            deferred.discard(p);
+        } else if layout_only {
+            deferred.lines_only(&mut pages, p);
+        } else {
+            deferred.materialize(&mut pages, p);
+        }
+    }
+
     // Anchored-rectangle image post-pass. Each entry was captured
     // during the story pass after placement resolution; replay
     // through `emit_rectangle_image` so anchored images share the
     // same per-page ImageId cache + renderer-scoped decoded-image
     // cache as spread-level Rectangles. Drains both master + body
     // captures (master frames currently never carry anchored
-    // images, but the queue is unified for symmetry).
+    // images, but the queue is unified for symmetry). An adopted page
+    // already holds them.
     for entry in anchored_image_queue {
+        if layout_only || adopted[entry.target_page] {
+            continue;
+        }
         emit_anchored_rect_image(
             &mut pages[entry.target_page],
             &entry.af,
@@ -3534,19 +3692,19 @@ pub(super) fn build_document_inner(
 
     total_stats.decoded_images = decoded_image_cache.len();
 
-    // ADR 027 plan step 7 — a page nothing was laid out on afresh is the
-    // previous build's final page: take that one, and skip it below.
-    let mut adopted = vec![false; pages.len()];
     if let (true, Some(previous)) = (adopt, options.previous_pages) {
         let mut previous = previous.borrow_mut();
         for (i, page) in pages.iter_mut().enumerate() {
-            if !fresh[i] && previous.get(i).is_some_and(|p| p.id == page.id) {
+            if adopted[i] {
                 std::mem::swap(page, &mut previous[i]);
-                adopted[i] = true;
             }
         }
     }
     total_stats.pages_adopted = adopted.iter().filter(|a| **a).count();
+    // The first of two passes is not finished: nothing reads its lists.
+    if layout_only {
+        adopted = vec![true; pages.len()];
+    }
 
     // Phase 5 — footnote pool post-pass. For each page that captured
     // footnotes during the story emit, lay out the bodies at the
@@ -3615,6 +3773,10 @@ pub(super) fn build_document_inner(
     // reads. It fires when a bracket is emitted or moved after the fit.
     #[cfg(debug_assertions)]
     for (page_idx, page) in pages.iter().enumerate() {
+        if adopted[page_idx] {
+            // Checked by the build that finished it.
+            continue;
+        }
         if let Some(fit) = paged_compose::transparency_group_overflow(&page.list) {
             panic!(
                 "page {page_idx}: the transparency group opened at command {} paints outside \
