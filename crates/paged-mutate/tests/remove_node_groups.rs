@@ -473,3 +473,25 @@ fn the_groups_bracket_still_wraps_the_same_items_after_a_removal() {
         "the same members paint inside the bracket, where they did"
     );
 }
+
+/// The draw plugin's report: delete an item BELOW a group, then group
+/// something else — the second grouping was refused with "a member
+/// already belongs to another group", because the first group's member
+/// table had slid onto items it never held. With the table renumbered
+/// (C-74) the regroup is accepted and both groups hold what they were
+/// given.
+#[test]
+fn grouping_again_after_deleting_an_item_below_a_group_is_accepted() {
+    let (mut doc, g) = staged();
+    apply(
+        &mut doc,
+        &Operation::RemoveNode {
+            node: NodeId::Rectangle("c74r1".to_string()),
+        },
+    )
+    .expect("delete the item below the group");
+    let r5 = add_rect(&mut doc, "c74r5", 500.0);
+    let second = group(&mut doc, &[NodeId::Rectangle("c74r4".to_string()), r5]);
+    assert_eq!(members(&doc, &g), ["c74r2", "c74r3"]);
+    assert_eq!(members(&doc, &second), ["c74r4", "c74r5"]);
+}
