@@ -519,6 +519,10 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - `StorySummary.growRule: { grow, maxPages, copyFrameOptions } | null`
 //     (the `stories` collection and `paged.stories()`): a story's ADR 026
 //     grow rule, readable at last. Additive on a reply.
+//   - `fontRegistered` / `fontRegistryCleared` report `pageIds` (and
+//     `pageStructureChanged` / `pageSizesPt`): the pages a late font
+//     re-laid out, so the host repaints exactly those. `fontRegistry
+//     Cleared` becomes a struct variant (a payload where there was none).
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(65);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -1616,9 +1620,33 @@ pub enum WorkerToMainKind {
     },
     /// `RegisterFont` reply: the font is now part of the worker's
     /// asset resolver.
-    FontRegistered { family: String },
-    /// `ClearFontRegistry` reply.
-    FontRegistryCleared,
+    ///
+    /// v65 — with a document open, the face re-lays out the stories whose
+    /// runs now resolve to it (core 133f19b), and `page_ids` names the
+    /// pages whose display lists that changed, so the host repaints them
+    /// (empty: nothing changed, or no document). `page_structure_changed`
+    /// / `page_sizes_pt` as on `MutationApplied`: a growing story can gain
+    /// or lose generated pages when its face changes. All three are
+    /// `#[serde(default)]`.
+    FontRegistered {
+        family: String,
+        #[serde(default)]
+        page_ids: Vec<PageId>,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
+    },
+    /// `ClearFontRegistry` reply. v65 — the same page report as
+    /// `FontRegistered`, for the stories that lost a face.
+    FontRegistryCleared {
+        #[serde(default)]
+        page_ids: Vec<PageId>,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
+    },
     /// Concept 2 — `RegisterColorProfile` reply.
     ColorProfileRegistered { name: String },
     /// Phase A — `SetElementSelection` reply. Echoes the post-update

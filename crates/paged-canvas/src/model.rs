@@ -1388,6 +1388,11 @@ enum DirtyScope {
     Unset,
     /// Text edits of this one story only.
     Story(String),
+    /// A font registry change that re-laid out these stories, and nothing
+    /// else since the last build. The scene's frames are untouched, so the
+    /// pages that changed are the ones laid out afresh (plus new pages and
+    /// the pages of these stories' auto-sizing frames).
+    Fonts(std::collections::BTreeSet<String>),
     /// Anything else: every page.
     Everything,
 }
@@ -9147,24 +9152,33 @@ impl CanvasModel {
         // frames (their bounds follow the text); anything else is every
         // page.
         let scope = std::mem::take(&mut self.pending_dirty_scope);
-        let narrowed = match &scope {
-            DirtyScope::Story(story) => {
-                let autosized: Vec<usize> = if self
-                    .scene
-                    .frame_chain(story)
+        let narrowed_stories: Option<Vec<&String>> = match &scope {
+            DirtyScope::Story(story) => Some(vec![story]),
+            DirtyScope::Fonts(stories) => Some(stories.iter().collect()),
+            _ => None,
+        };
+        let narrowed = match narrowed_stories {
+            Some(stories) => {
+                let autosizing: Vec<&String> = stories
+                    .into_iter()
+                    .filter(|story| {
+                        self.scene
+                            .frame_chain(story)
+                            .iter()
+                            .any(|f| f.auto_sizing.is_some())
+                    })
+                    .collect();
+                let autosized: Vec<usize> = built
+                    .pages
                     .iter()
-                    .any(|f| f.auto_sizing.is_some())
-                {
-                    built
-                        .pages
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, p)| p.story_layout.iter().any(|l| &l.story_id == story))
-                        .map(|(i, _)| i)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.story_layout
+                            .iter()
+                            .any(|l| autosizing.contains(&&l.story_id))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
                 Some(
                     (0..built.pages.len())
                         .filter(|&i| {
@@ -9616,6 +9630,12 @@ impl CanvasModel {
     fn relayout_for_registry_change(&mut self) -> Result<Vec<String>, crate::channel::LoadError> {
         let affected = self.refresh_font_table(true);
         if !affected.is_empty() {
+            // Nothing else is pending between builds outside a batch, so the
+            // pages this build changes are the affected stories' alone.
+            self.pending_dirty_scope = match std::mem::take(&mut self.pending_dirty_scope) {
+                DirtyScope::Unset => DirtyScope::Fonts(affected.iter().cloned().collect()),
+                _ => DirtyScope::Everything,
+            };
             self.rebuild_after_mutation()?;
         }
         Ok(affected)

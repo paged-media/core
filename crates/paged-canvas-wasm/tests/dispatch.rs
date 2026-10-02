@@ -854,18 +854,49 @@ fn register_font_reaches_the_open_document() {
         }),
     );
     assert_eq!(reg["kind"], "fontRegistered");
+    // v65 — the reply names the page the relayout changed, and only that
+    // page's GPU scene is re-encoded.
+    let page = core.model.as_ref().unwrap().built().pages[0].id.0.clone();
+    assert_eq!(
+        reg["payload"]["pageIds"],
+        serde_json::json!([page]),
+        "{reg}"
+    );
+    assert_eq!(reg["payload"]["pageStructureChanged"], false);
     assert!(
-        matches!(effect, CacheEffect::ClearAll),
-        "scene cache dropped"
+        matches!(effect, CacheEffect::InvalidatePages(ref p) if p == &[0]),
+        "only the changed page's scene is dropped"
     );
     assert_ne!(advances(&core), fallback, "the run lays out in Lora now");
+
+    // A face nothing asks for changes nothing and reports no page.
+    let (unused, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 9,
+            "protocol": protocol(),
+            "kind": "registerFont",
+            "payload": { "family": "Nobody Uses This", "bytes": std::fs::read(fonts.join("Lora.ttf")).unwrap() }
+        }),
+    );
+    assert_eq!(
+        unused["payload"]["pageIds"],
+        serde_json::json!([]),
+        "{unused}"
+    );
+    assert!(matches!(effect, CacheEffect::None));
 
     let (cleared, effect) = roundtrip_with_effect(
         &mut core,
         &serde_json::json!({ "seq": 3, "protocol": protocol(), "kind": "clearFontRegistry" }),
     );
     assert_eq!(cleared["kind"], "fontRegistryCleared");
-    assert!(matches!(effect, CacheEffect::ClearAll));
+    assert_eq!(
+        cleared["payload"]["pageIds"],
+        serde_json::json!([page]),
+        "{cleared}"
+    );
+    assert!(matches!(effect, CacheEffect::InvalidatePages(ref p) if p == &[0]));
     assert_eq!(advances(&core), fallback, "back to the fallback face");
 }
 

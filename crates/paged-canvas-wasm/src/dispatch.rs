@@ -154,6 +154,55 @@ fn cache_effect_for_story(model: &CanvasModel, story_id: Option<&str>) -> CacheE
     }
 }
 
+/// v65 — what a font registry change re-laid out, for the
+/// `fontRegistered` / `fontRegistryCleared` replies.
+#[derive(Default)]
+struct FontChangeReport {
+    page_ids: Vec<PageId>,
+    page_structure_changed: bool,
+    page_sizes_pt: Option<Vec<(f32, f32)>>,
+}
+
+/// Run a registry change on the live model and report the pages it
+/// changed, with the GPU cache effect: only those pages re-encode, unless
+/// the page list itself moved (a growing story gained or lost pages) or the
+/// relayout failed, which drop the whole cache.
+fn font_change_report(
+    model: &mut CanvasModel,
+    change: impl FnOnce(&mut CanvasModel) -> Result<Vec<String>, paged_canvas::channel::LoadError>,
+) -> (FontChangeReport, CacheEffect) {
+    let pages_before = page_table(model);
+    match change(model) {
+        Ok(affected) if affected.is_empty() => (FontChangeReport::default(), CacheEffect::None),
+        Ok(_) => {
+            let pages_after = page_table(model);
+            let page_structure_changed = pages_before != pages_after;
+            let effect = match model.narrowed_dirty_pages() {
+                Some(dirty) if !page_structure_changed => {
+                    CacheEffect::InvalidatePages(dirty.to_vec())
+                }
+                _ => CacheEffect::ClearAll,
+            };
+            let report = FontChangeReport {
+                page_ids: model.dirty_page_ids(),
+                page_structure_changed,
+                page_sizes_pt: page_structure_changed
+                    .then(|| pages_after.into_iter().map(|p| p.1).collect()),
+            };
+            (report, effect)
+        }
+        // The registry took the change; a failed relayout leaves the
+        // previous build standing, so report every page.
+        Err(_) => (
+            FontChangeReport {
+                page_ids: model.built().pages.iter().map(|p| p.id.clone()).collect(),
+                ..FontChangeReport::default()
+            },
+            CacheEffect::ClearAll,
+        ),
+    }
+}
+
 impl WorkerCore {
     pub fn new() -> Self {
         Self {
@@ -583,26 +632,38 @@ impl WorkerCore {
                 // The worker copy seeds future loads; the LIVE model gets
                 // the face too and re-lays out the stories it changes (it
                 // used to be ignored until the next load).
-                if let Some(model) = self.model.as_mut() {
-                    match model.register_font(entry.clone()) {
-                        Ok(affected) if !affected.is_empty() => effect = CacheEffect::ClearAll,
-                        Ok(_) => {}
-                        // The registry took the face; a failed relayout
-                        // leaves the previous build standing.
-                        Err(_) => effect = CacheEffect::ClearAll,
+                let report = match self.model.as_mut() {
+                    Some(model) => {
+                        let (report, e) =
+                            font_change_report(model, |m| m.register_font(entry.clone()));
+                        effect = e;
+                        report
                     }
-                }
+                    None => FontChangeReport::default(),
+                };
                 self.font_registry.push(entry);
-                WorkerToMainKind::FontRegistered { family }
+                WorkerToMainKind::FontRegistered {
+                    family,
+                    page_ids: report.page_ids,
+                    page_structure_changed: report.page_structure_changed,
+                    page_sizes_pt: report.page_sizes_pt,
+                }
             }
             MainToWorkerKind::ClearFontRegistry => {
                 self.font_registry.clear();
-                if let Some(model) = self.model.as_mut() {
-                    if !matches!(model.clear_font_registry(), Ok(a) if a.is_empty()) {
-                        effect = CacheEffect::ClearAll;
+                let report = match self.model.as_mut() {
+                    Some(model) => {
+                        let (report, e) = font_change_report(model, |m| m.clear_font_registry());
+                        effect = e;
+                        report
                     }
+                    None => FontChangeReport::default(),
+                };
+                WorkerToMainKind::FontRegistryCleared {
+                    page_ids: report.page_ids,
+                    page_structure_changed: report.page_structure_changed,
+                    page_sizes_pt: report.page_sizes_pt,
                 }
-                WorkerToMainKind::FontRegistryCleared
             }
             MainToWorkerKind::RegisterColorProfile { name, bytes } => {
                 let bytes = bytes.into_vec();
