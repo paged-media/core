@@ -240,6 +240,8 @@ fn host_functions() -> Vec<HostFn> {
            "Apply a paragraph/character style to a story range. Scope inferred from the ref prefix (CharacterStyle/… else Paragraph)."),
         f!("paged.createGroup", "([id, ...])", "bool", "author",
            "Group two-or-more elements; <2 valid members returns false."),
+        f!("paged.duplicateElements", "([id, ...], dx, dy)", "string[] (created ids) JSON | null", "author",
+           "Duplicate page items: a whole clone of each (properties, plugin metadata, group members, pasted-in children, a text frame's story), offset by (dx, dy) pt and inserted directly above its source, in one undo step. Selects the clones and returns their kind:id addresses in source order; null when the engine refuses (threaded text frame, anchored object, opacity mask, an element named together with its group)."),
         // --- history ---
         f!("paged.undo", "()", "bool", "history", "Undo the last mutation."),
         f!("paged.redo", "()", "bool", "history", "Redo the last undone mutation."),

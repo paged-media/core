@@ -3142,6 +3142,56 @@ pub enum Operation {
         #[serde(default)]
         restore_slots: Option<Vec<u32>>,
     },
+    /// C-64 — duplicate page items: a translated clone of each of
+    /// `sources`, inserted DIRECTLY ABOVE its source in whichever list
+    /// names the source (the spread's z-order, a group's members, a
+    /// container's pasted-in children). A clone is the whole item: its
+    /// struct verbatim, its label and image-metadata rows, a container's
+    /// pasted-in children, a group's members (recursively), and — for a
+    /// text frame — a copy of its story under a fresh id. `(dx, dy)` is
+    /// the offset in spread space, applied through each clone's
+    /// `ItemTransform`.
+    ///
+    /// Refused, by name and before anything is written: a node that is
+    /// not a page item on a body spread; an object anchored in a story;
+    /// an item serving as or carrying an opacity mask; a threaded text
+    /// frame; a text frame whose story holds a table, an anchored
+    /// object, a footnote or a hyperlink (each carries an id a plain
+    /// copy would duplicate); a source that sits inside another source
+    /// of the same op.
+    ///
+    /// `ids` / `story_ids` are the ids the clones take, in clone order
+    /// (pre-order per source: a group before its members, a container
+    /// before its children). A caller that mints ahead of the apply
+    /// asks [`crate::duplicate_demand`] how many; both empty ⇒ the
+    /// applier mints. The applied op echoes the resolved lists, so redo
+    /// brings the clones back under the same ids. Inverse:
+    /// `RemoveDuplicates`.
+    DuplicateNodes {
+        sources: Vec<NodeId>,
+        dx: f32,
+        dy: f32,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        story_ids: Vec<String>,
+    },
+    /// C-64 — the inverse of `DuplicateNodes`: remove exactly the items
+    /// and stories it minted (`ids`, `story_ids`), with the reference
+    /// fix-up a removal needs in the z-table, in every group's members
+    /// and in every container's children. Not a batch of `RemoveNode`s:
+    /// that op cannot remove a group or a pasted-in child. The other
+    /// fields ride along so ITS inverse is the original duplicate.
+    /// Inverse-only; a wire caller has no use for it.
+    RemoveDuplicates {
+        sources: Vec<NodeId>,
+        dx: f32,
+        dy: f32,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        story_ids: Vec<String>,
+    },
     /// W1.20 (groups v2) — move/scale/rotate a group AS A UNIT. Unlike
     /// the v1 `SetProperty(Group, FrameTransform)` arm (which stores
     /// only the group's own `ItemTransform` and relies on the editor to

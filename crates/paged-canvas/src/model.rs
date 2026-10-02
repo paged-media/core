@@ -254,8 +254,10 @@ pub struct MutationOutcome {
     /// dispatch threads this onto `MutationApplied.reflow`.
     pub reflow: Option<crate::channel::FrameReflowInfo>,
     /// Every element this mutation minted, in mint order, each with the
-    /// C-15 handle that named it. A `Batch` fills it; a single mutation
-    /// leaves it empty, because `created_id` already names its one mint.
+    /// C-15 handle that named it. A `Batch` fills it, and so does a
+    /// `DuplicateElements` (one clone per source); any other single
+    /// mutation leaves it empty, because `created_id` already names its
+    /// one mint.
     /// Threaded onto `MutationApplied::minted` so a caller that authors
     /// through batches can address what it just made.
     pub minted: Vec<crate::channel::MintedElement>,
@@ -327,14 +329,51 @@ fn element_to_member_node_id(
 ///
 /// ORDER is the contract: a caller that sent N creating children reads
 /// them back in the order it wrote them.
-fn created_element_ids(op: &paged_mutate::Operation) -> Vec<crate::element_selection::ElementId> {
+fn created_element_ids(
+    doc: &paged_scene::Document,
+    op: &paged_mutate::Operation,
+) -> Vec<crate::element_selection::ElementId> {
     if let paged_mutate::Operation::Batch { ops } = op {
-        return ops.iter().flat_map(created_element_ids).collect();
+        return ops
+            .iter()
+            .flat_map(|child| created_element_ids(doc, child))
+            .collect();
     }
-    created_element_id(op).into_iter().collect()
+    // C-64 — a duplicate mints one clone PER SOURCE: the one single
+    // (non-batch) mutation that creates more than one element.
+    if matches!(op, paged_mutate::Operation::DuplicateNodes { .. }) {
+        return paged_mutate::duplicate_roots(doc, op)
+            .iter()
+            .filter_map(page_item_element_id)
+            .collect();
+    }
+    created_element_id(doc, op).into_iter().collect()
 }
 
-fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_selection::ElementId> {
+/// `NodeId` → wire `ElementId`, for the page-item kinds.
+fn page_item_element_id(
+    node: &paged_mutate::NodeId,
+) -> Option<crate::element_selection::ElementId> {
+    use crate::element_selection::ElementId;
+    use paged_mutate::NodeId;
+    Some(match node {
+        NodeId::TextFrame(id) => ElementId::TextFrame(id.clone()),
+        NodeId::Rectangle(id) => ElementId::Rectangle(id.clone()),
+        NodeId::Oval(id) => ElementId::Oval(id.clone()),
+        NodeId::GraphicLine(id) => ElementId::GraphicLine(id.clone()),
+        NodeId::Polygon(id) => ElementId::Polygon(id.clone()),
+        NodeId::Group(id) => ElementId::Group(id.clone()),
+        _ => return None,
+    })
+}
+
+/// The element an operation created, or the LAST of them. `doc` is the
+/// document the op was (or is about to be) applied to: a duplicate's
+/// clones are named by walking its SOURCES, which are there either way.
+fn created_element_id(
+    doc: &paged_scene::Document,
+    op: &paged_mutate::Operation,
+) -> Option<crate::element_selection::ElementId> {
     use crate::element_selection::ElementId;
     // B-04 — group creation reports the minted group id.
     if let paged_mutate::Operation::CreateGroup { spec } = op {
@@ -349,7 +388,17 @@ fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_sel
     // the batch-created sentinel resolved to), so insert-with-
     // metadata flows still get a `createdId` to select.
     if let paged_mutate::Operation::Batch { ops } = op {
-        return ops.iter().rev().find_map(created_element_id);
+        return ops
+            .iter()
+            .rev()
+            .find_map(|child| created_element_id(doc, child));
+    }
+    // C-64 — a duplicate's "created" is its last clone, the same rule a
+    // batch follows.
+    if matches!(op, paged_mutate::Operation::DuplicateNodes { .. }) {
+        return paged_mutate::duplicate_roots(doc, op)
+            .last()
+            .and_then(page_item_element_id);
     }
     if let paged_mutate::Operation::InsertNode { parent, node, .. } = op {
         // S-03 — a table's id needs the parent story for the full
@@ -2354,7 +2403,7 @@ impl CanvasModel {
         // convergence folds both into one shape.
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
             let outcome = self.apply_operation(op)?;
-            let created_id = created_element_id(&outcome.applied.op);
+            let created_id = created_element_id(&self.scene, &outcome.applied.op);
             // Perf-Batch — a batch that translates whole still mints one
             // id per creating child, and `created_id` names only the
             // last. Report the list in mint order. The `handle` names
@@ -2362,22 +2411,24 @@ impl CanvasModel {
             // before apply and drops the `bindCreated` children, so the
             // binding is not recoverable from the applied operation —
             // ORDER is the contract a caller reads either way.
-            let minted: Vec<crate::channel::MintedElement> =
-                if matches!(mutation, Mutation::Batch { .. }) {
-                    created_element_ids(&outcome.applied.op)
-                        .into_iter()
-                        .map(|element| {
-                            let story_id = self.story_of_element(&element);
-                            crate::channel::MintedElement {
-                                handle: None,
-                                element,
-                                story_id,
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let minted: Vec<crate::channel::MintedElement> = if matches!(
+                mutation,
+                Mutation::Batch { .. } | Mutation::DuplicateElements { .. }
+            ) {
+                created_element_ids(&self.scene, &outcome.applied.op)
+                    .into_iter()
+                    .map(|element| {
+                        let story_id = self.story_of_element(&element);
+                        crate::channel::MintedElement {
+                            handle: None,
+                            element,
+                            story_id,
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // Page-list mutations (M7 extends this set with ResizePage)
             // require the editor to rebuild its page grid.
             let page_structure_changed = matches!(
@@ -2465,6 +2516,20 @@ impl CanvasModel {
                 recovered: String::new(),
                 cell: cell.clone(),
             },
+            // C-64 — a duplicate that did not translate was REFUSED by
+            // the kernel's validation; say why, in its words, instead of
+            // the generic "not implemented" a missing arm would mean.
+            Mutation::DuplicateElements { element_ids, .. } => {
+                let sources: Vec<paged_mutate::NodeId> =
+                    element_ids.iter().map(element_to_node_id).collect();
+                let why = paged_mutate::duplicate_demand(&self.scene, &sources)
+                    .err()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "the duplicate could not be translated".to_string());
+                return Err(crate::channel::WorkerError::NotImplemented {
+                    what: format!("frame mutation failed: {why}"),
+                });
+            }
             other => {
                 return Err(crate::channel::WorkerError::NotImplemented {
                     what: format!("Mutation::{}", other.discriminant()),
@@ -3533,7 +3598,7 @@ impl CanvasModel {
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
                     let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
-                    if let Some(id) = created_element_id(&op) {
+                    if let Some(id) = created_element_id(&self.scene, &op) {
                         if uses_handles {
                             scope.set_created(Some(crate::batch_handles::BoundHandle {
                                 element: id.clone(),
@@ -4016,6 +4081,37 @@ impl CanvasModel {
                     visible: *visible,
                 })
             }
+            // C-64 — duplicate. Every id the clones take is minted HERE,
+            // from the same two number lines the inserts use, so a batch
+            // that duplicates and then inserts cannot hand one id out
+            // twice (the canvas floor also covers ids that live only in
+            // the source package, which the kernel's own minter cannot
+            // see). How many is the kernel's answer — it is the op's own
+            // validation, run without writing.
+            //
+            // `None` when that validation refuses: the caller reports the
+            // kernel's reason (see `apply_mutation`), and inside a batch
+            // the whole batch falls to the child-by-child lane, where a
+            // source minted by an EARLIER child of the same batch exists
+            // by the time this child is translated.
+            Mutation::DuplicateElements {
+                element_ids,
+                offset,
+            } => {
+                let sources: Vec<NodeId> = element_ids.iter().map(element_to_node_id).collect();
+                let demand = paged_mutate::duplicate_demand(&self.scene, &sources).ok()?;
+                let story_ids = self.mint_story_ids(demand.stories, *mint_offset);
+                let ids = (0..demand.items)
+                    .map(|_| self.mint_page_item_id_with_offset(mint_offset))
+                    .collect();
+                Some(Operation::DuplicateNodes {
+                    sources,
+                    dx: offset.0,
+                    dy: offset.1,
+                    ids,
+                    story_ids,
+                })
+            }
             Mutation::SetFlowGrowRule {
                 story_id,
                 grow,
@@ -4206,6 +4302,24 @@ impl CanvasModel {
             }
         }
         floor
+    }
+
+    /// `count` fresh `Story/u<n>` ids, distinct from every story in the
+    /// document and from each other, starting past what a batch has
+    /// already minted (`offset`, the same counter `insertTextFrame`
+    /// offsets its story id by). The caller then mints at least `count`
+    /// page-item ids, which moves the counter past these too.
+    fn mint_story_ids(&self, count: usize, offset: u64) -> Vec<String> {
+        let mut n = self.story_id_floor() + offset as usize;
+        let mut out = Vec::with_capacity(count);
+        while out.len() < count {
+            let id = format!("Story/u{n}");
+            n += 1;
+            if !self.scene.stories.iter().any(|s| s.self_id == id) {
+                out.push(id);
+            }
+        }
+        out
     }
 
     ///

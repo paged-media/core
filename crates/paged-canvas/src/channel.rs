@@ -523,6 +523,16 @@ export type WorkerToMain = WorkerToMainKind & {
 //     `pageStructureChanged` / `pageSizesPt`): the pages a late font
 //     re-laid out, so the host repaints exactly those. `fontRegistry
 //     Cleared` becomes a struct variant (a payload where there was none).
+// v65 also carries the drawing wave (RFI C-63 / C-24 / C-64), stacked on
+// the same unpublished number:
+//   - the effect paths, `frameOpacity` / `frameBlendMode` and
+//     `frameStrokeAlignment` reach the kinds that draw them (Polygon,
+//     Oval, TextFrame, Group) — no new path, more `(kind, path)` pairs
+//     accepted, and the descriptor reads what it now writes;
+//   - `DuplicateElements { elementIds, offset }`: a whole, translated
+//     clone of each element directly above its source, one undo step,
+//     the new ids in `mutationApplied.minted`. A new op an older worker
+//     cannot apply.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(65);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -562,6 +572,12 @@ pub struct ProtocolVersion(pub u32);
 /// had to either send one mutation per element (paying a full rebuild
 /// each) or re-discover the ids with a scene walk. This is the list it
 /// could not get.
+///
+/// A `DuplicateElements` fills it too (C-64): it is the one single
+/// mutation that mints more than one element — a clone per source, in
+/// the order the sources were named — so `created_id` (its LAST clone)
+/// could not carry the answer. A group's clone is one entry, its group
+/// id; a text frame's clone carries the story copied for it.
 ///
 /// `handle` is the name a C-15 `BindCreated` child gave the element
 /// (`None` when nothing named it); `story_id` is the story the creating

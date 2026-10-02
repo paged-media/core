@@ -1150,6 +1150,30 @@ pub enum Mutation {
     DissolveGroup {
         group_id: String,
     },
+    /// C-64 (rides v65) — duplicate page items. Each of `elementIds`
+    /// gets a clone translated by `offset` (`[dx, dy]`, points, spread
+    /// space), inserted DIRECTLY ABOVE its source — in the spread's
+    /// z-order, or inside the group / container that holds the source —
+    /// all in one undo step. A clone is the whole item: every property,
+    /// its plugin metadata, a container's pasted-in children, a group's
+    /// members (nested groups too), and a text frame's story, copied
+    /// under a fresh id.
+    ///
+    /// The reply's `minted` lists the clones in `elementIds` order (one
+    /// per source — a group's clone is its group id; its members are
+    /// reached through it), and `createdId` is the last of them.
+    ///
+    /// Refused as a whole, by name, when any source cannot be cloned
+    /// completely: not a page item on a body spread; anchored in a
+    /// story; serving as or carrying an opacity mask; a threaded text
+    /// frame; a text frame whose story holds a table, an anchored
+    /// object, a footnote or a hyperlink; an element named together
+    /// with a group or container that holds it. Rides
+    /// `Operation::DuplicateNodes`.
+    DuplicateElements {
+        element_ids: Vec<ElementId>,
+        offset: (f32, f32),
+    },
     /// W1.20 (groups v2, rides v35) — move/scale/rotate a group as a
     /// unit. The engine sets the group's own `ItemTransform` and
     /// rebases every descendant member's effective transform by the
@@ -1740,6 +1764,7 @@ mutation_vocabulary! {
     DetachTextFromPath,
     CreateGroup,
     DissolveGroup,
+    DuplicateElements,
     SetGroupTransform,
     SetPluginMetadata,
     PathPointCurveType,

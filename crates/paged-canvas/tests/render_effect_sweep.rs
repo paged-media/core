@@ -1834,6 +1834,16 @@ fn frame_cases(c: &mut Vec<Case>) {
             element_id: ElementId::Polygon(host),
         }
     }));
+    // C-64 — a duplicate paints its clone: a second copy of the path,
+    // offset, so the page gains an item. The source is a pen path (a
+    // `Polygon`), the kind the old Alt-drag clone could not reach.
+    c.push(paints("DuplicateElements", "geometry", |m| {
+        let id = add_quad(m, 120.0, 120.0, 160.0, 120.0);
+        Mutation::DuplicateElements {
+            element_ids: vec![ElementId::Polygon(id)],
+            offset: (40.0, 40.0),
+        }
+    }));
     c.push(when_used(
         "CreateGroup",
         "geometry",

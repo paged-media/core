@@ -236,6 +236,20 @@ pub(crate) fn apply_inner(
             apply_rename_table_style(doc, style_id, name)
         }
         Operation::DeleteTableStyle { style_id } => apply_delete_table_style(doc, style_id),
+        Operation::DuplicateNodes {
+            sources,
+            dx,
+            dy,
+            ids,
+            story_ids,
+        } => apply_duplicate_nodes(doc, sources, *dx, *dy, ids, story_ids),
+        Operation::RemoveDuplicates {
+            sources,
+            dx,
+            dy,
+            ids,
+            story_ids,
+        } => apply_remove_duplicates(doc, sources, *dx, *dy, ids, story_ids),
         Operation::CreateGroup { spec } => apply_create_group(doc, spec),
         Operation::DissolveGroup {
             group_id,
@@ -811,6 +825,8 @@ mod anchored_frame;
 mod batch_page;
 mod character;
 mod conditions;
+mod duplicate_nodes;
+pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
 mod duplicate_page;
 mod flow;
 mod guides;
@@ -843,6 +859,7 @@ mod text_on_path;
 use batch_page::*;
 use character::*;
 use conditions::*;
+use duplicate_nodes::{apply_duplicate_nodes, apply_remove_duplicates};
 use duplicate_page::*;
 use flow::*;
 use guides::*;

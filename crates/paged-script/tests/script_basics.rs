@@ -965,6 +965,50 @@ fn paged_stage2_authoring_fns_are_registered_and_callable() {
     );
 }
 
+/// C-64 — `paged.duplicateElements([id, ...], dx, dy)`: the clones'
+/// addresses come back as a JSON array in source order, the clones are
+/// selected, one `paged.undo()` removes them, and a refusal (an id that
+/// names nothing) answers `null` rather than throwing.
+#[test]
+fn paged_duplicate_elements_returns_the_clones_and_undoes_as_one_step() {
+    let mut model = load();
+    let page_id = model.page_ids().next().expect("a page").0.clone();
+    let source = format!(
+        r#"
+            const a = paged.insertFrame({page_id:?}, [20, 20, 80, 120]);
+            const b = paged.insertFrame({page_id:?}, [100, 20, 160, 120]);
+            const raw = paged.duplicateElements([a, b], 10, 12);
+            const clones = JSON.parse(raw);
+            console.log("clones", clones.length, clones.every(c => c.startsWith("rectangle:")));
+            console.log("distinct", new Set([a, b, ...clones]).size);
+            console.log("selected", JSON.parse(paged.selection()).length);
+            console.log("inspectable", JSON.parse(paged.inspect(clones[1])) !== null);
+            console.log("undo", paged.undo());
+            console.log("gone", paged.inspect(clones[0]));
+            console.log("refused", paged.duplicateElements(["rectangle:no-such-frame"], 1, 1));
+            console.log("unparseable", paged.duplicateElements([a, "not an address"], 1, 1));
+        "#
+    );
+    let result = execute_script(&mut model, &source);
+    assert!(result.error.is_none(), "{:?}", result.error);
+    for expected in [
+        "[log] clones 2 true",
+        "[log] distinct 4",
+        "[log] selected 2",
+        "[log] inspectable true",
+        "[log] undo true",
+        "[log] gone null",
+        "[log] refused null",
+        "[log] unparseable null",
+    ] {
+        assert!(
+            result.output.iter().any(|l| l.contains(expected)),
+            "expected {expected:?} in {:?}",
+            result.output
+        );
+    }
+}
+
 // ----------------------------------------------------------------- complete
 // mutation-surface host fns: delete / dissolve / tables / style CRUD /
 // selection / shape inserts. One representative per family — a single

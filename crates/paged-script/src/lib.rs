@@ -36,6 +36,7 @@
 //!   paged.placeImage(frameId, uri, fit?) -> bool
 //!   paged.applyStyle(storyId, start, end, styleRef) -> bool
 //!   paged.createGroup([id, ...]) -> bool
+//!   paged.duplicateElements([id, ...], dx, dy) -> address[] JSON | null
 //!   paged.inspect(idStr) -> ElementProperties JSON
 //!   paged.layers() -> LayerSummary[]
 //!   paged.tree() -> SceneTreeNode[]
@@ -497,6 +498,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_place_image), js_string!("placeImage"), 3)
         .function(guarded(paged_apply_style), js_string!("applyStyle"), 4)
         .function(guarded(paged_create_group), js_string!("createGroup"), 1)
+        .function(
+            guarded(paged_duplicate_elements),
+            js_string!("duplicateElements"),
+            3,
+        )
         .function(guarded(paged_undo), js_string!("undo"), 0)
         .function(guarded(paged_redo), js_string!("redo"), 0)
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
@@ -1617,6 +1623,63 @@ fn paged_delete_element(_this: &JsValue, args: &[JsValue], ctx: &mut Context) ->
     Ok(apply_bool(&Mutation::DeleteFrame {
         frame_id: bare_id(&id),
     }))
+}
+
+/// `paged.duplicateElements([id, ...], dx, dy)` — duplicate page items
+/// (`Mutation::DuplicateElements`): a whole clone of each, `(dx, dy)`
+/// points away, directly above its source, in one undo step. Selects
+/// the clones and returns their `kind:id` addresses as a JSON array, in
+/// the order the sources were named; `null` when the engine refuses
+/// (a threaded text frame, an anchored object, …) or an id does not
+/// parse. A missing offset is `0`.
+fn paged_duplicate_elements(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let given = args
+        .get_or_undefined(0)
+        .as_object()
+        .and_then(|o| o.get(js_string!("length"), ctx).ok())
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as usize;
+    let element_ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    // An id that does not parse is a caller error, not something to
+    // drop quietly: duplicating two of three named elements would be a
+    // different operation from the one asked for.
+    if element_ids.is_empty() || element_ids.len() != given {
+        return Ok(JsValue::null());
+    }
+    let coord = |v: &JsValue, ctx: &mut Context| -> JsResult<f32> {
+        if v.is_undefined() || v.is_null() {
+            Ok(0.0)
+        } else {
+            Ok(v.to_number(ctx)? as f32)
+        }
+    };
+    let dx = coord(args.get_or_undefined(1), ctx)?;
+    let dy = coord(args.get_or_undefined(2), ctx)?;
+    let mutation = Mutation::DuplicateElements {
+        element_ids,
+        offset: (dx, dy),
+    };
+    let clones = with_model(|m| match m.apply_mutation(&mutation) {
+        Ok(outcome) => {
+            let ids: Vec<_> = outcome.minted.into_iter().map(|e| e.element).collect();
+            m.element_selection.ids = ids.clone();
+            Some(ids)
+        }
+        Err(_) => None,
+    });
+    Ok(match clones {
+        Some(ids) => {
+            let addresses: Vec<String> = ids.iter().map(element_id_to_address).collect();
+            JsValue::from(js_string!(
+                serde_json::to_string(&addresses).unwrap_or_default()
+            ))
+        }
+        None => JsValue::null(),
+    })
 }
 
 /// `paged.dissolveGroup(groupId)` — ungroup; members return to the
