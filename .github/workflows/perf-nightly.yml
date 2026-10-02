@@ -1,0 +1,68 @@
+# The performance TREND: wall-clock benches on the annual-scale workload
+# (crates/paged-perf), every night, compared with the previous night.
+#
+# Deterministic WORK budgets (crates/paged-perf/tests/perf_budgets.rs) run
+# in the ordinary `cargo test` of ci.yml and gate every push. Wall-clock
+# time is noisy on a shared runner, so here a bench more than 20 % slower
+# than the previous successful run, with confidence intervals that do not
+# overlap, is FLAGGED in the job summary, not failed. Promote it to a gate
+# once a few weeks of history show the noise band.
+#
+# macos-latest: the same runner class as the gpu lane, kept fixed so runs
+# compare like with like.
+
+name: perf-nightly
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  toolchain:
+    name: resolve pinned toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.pin.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pin
+        run: echo "channel=$(bash scripts/rust-channel.sh)" >> "$GITHUB_OUTPUT"
+
+  bench:
+    name: workload benches
+    needs: toolchain
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: previous results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --workflow perf-nightly.yml --status success -L 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$id" ]; then
+            gh run download "$id" -n perf-results -D previous || echo "no previous results"
+          fi
+
+      - name: bench
+        run: cargo bench -p paged-perf --bench workload
+
+      - name: summary
+        run: |
+          python3 scripts/perf/criterion-summary.py perf-results.json previous/perf-results.json >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: perf-results.json
+          retention-days: 90
