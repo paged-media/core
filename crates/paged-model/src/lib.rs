@@ -993,7 +993,10 @@ pub struct TextFrame {
 impl TextFrame {
     /// An empty, visible text frame with InDesign's defaults (no fill or
     /// stroke, no insets, default first baseline), `bounds` in its own
-    /// coordinates. For native document producers; set the rest by field.
+    /// coordinates. For native document producers AND adapters; set the
+    /// rest by field, or name the fields you have and take the rest with
+    /// `..TextFrame::new("", None, bounds)` — see [`Rectangle::new`] for
+    /// why a reader in another repository must not name every field.
     /// `TextFrame` deliberately has no `Default`: a defaulted `visible` would
     /// be `false`, an invisible frame.
     pub fn new(self_id: impl Into<String>, parent_story: Option<String>, bounds: Bounds) -> Self {
@@ -1339,6 +1342,89 @@ pub struct Rectangle {
     pub subpath_open: Vec<bool>,
 }
 
+impl Rectangle {
+    /// An empty, visible rectangle with InDesign's defaults (no fill or
+    /// stroke, no image), `bounds` in its own coordinates. It takes only
+    /// what a page item cannot be without — an id and a box; set the rest
+    /// by field.
+    ///
+    /// **This is THE way for an adapter to build one**, as it is for
+    /// [`TextFrame::new`], [`Oval::new`], [`GraphicLine::new`] and
+    /// [`Polygon::new`]:
+    ///
+    /// ```
+    /// # use paged_model::{Bounds, Rectangle};
+    /// # let (self_id, bounds, fill_color) = (None, Bounds::ZERO, None);
+    /// let rect = Rectangle {
+    ///     self_id, // an `Option`: a source element may carry no `Self`
+    ///     fill_color,
+    ///     ..Rectangle::new("", bounds)
+    /// };
+    /// # assert!(rect.visible);
+    /// ```
+    ///
+    /// A literal that names EVERY field stops compiling the moment the
+    /// model gains one — and the IDML and PDF adapters live in another
+    /// repository, pinned here by revision, so that failure is this
+    /// repository's build breaking on a file it cannot edit. Taking the
+    /// rest from the constructor is what lets a reader survive a new
+    /// field, and lets the field land before the reader learns to fill
+    /// it. There is deliberately no `Default`: a derived one would give
+    /// `visible: false`, an invisible item.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Rectangle {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            applied_object_style: None,
+            text_wrap: None,
+            frame_fitting: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            end_cap: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            item_layer: None,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+            is_anchored: false,
+            opacity: None,
+            blend_mode: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            text_paths: Vec::new(),
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+        }
+    }
+}
+
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
 /// `Bevel`, `Satin`, and `FeatherSetting` blocks on a page item. Each
 /// inner field is `Some(EffectParams)` when the IDML's `Applied="true"`
@@ -1646,6 +1732,56 @@ pub struct Oval {
     pub corners: [CornerSpec; 4],
 }
 
+impl Oval {
+    /// An empty, visible ellipse inscribed in `bounds`, InDesign's
+    /// defaults otherwise. THE way for an adapter to build one — name the
+    /// fields you set and take the rest with `..Oval::new("", bounds)`;
+    /// see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Oval {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+        }
+    }
+}
+
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
 /// `GeometricBounds` rect's top-left and bottom-right corners (IDML
 /// stores the endpoints implicitly via the bounds).
@@ -1747,6 +1883,48 @@ pub struct GraphicLine {
     /// [`Rectangle::corners`] and [`GraphicLine::corner_radius`].
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+}
+
+impl GraphicLine {
+    /// A visible line with InDesign's defaults — no arrowheads (scales
+    /// at 100 %), no anchors, so it draws the diagonal of `bounds` until
+    /// a path is set. THE way for an adapter to build one — name the
+    /// fields you set and take the rest with
+    /// `..GraphicLine::new("", bounds)`; see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        GraphicLine {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_paths: Vec::new(),
+            effects: None,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            start_arrow: ArrowheadType::None,
+            end_arrow: ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+        }
+    }
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -2078,6 +2256,60 @@ pub struct Polygon {
     /// at every straight-line corner of every closed contour.
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+}
+
+impl Polygon {
+    /// A visible polygon with InDesign's defaults and no path: it draws
+    /// `bounds` until `anchors` are set. THE way for an adapter to build
+    /// one — name the fields you set and take the rest with
+    /// `..Polygon::new("", bounds)`; see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Polygon {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            applied_object_style: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            text_paths: Vec::new(),
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
