@@ -507,7 +507,13 @@ export type WorkerToMain = WorkerToMainKind & {
 // options), and drops them when empty. The pages are derived at layout, so
 // the op carries only the rule and its inverse is the prior rule. A new op
 // an older worker cannot apply, hence the bump.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(64);
+// v65 — the paragraph-style editor's reads and writes:
+//   - `paragraphComposer`, a new `PropertyPath` at paragraph and
+//     paragraph-style level (`Value::Text`, the IDML composer name: "HL
+//     Composer", "HL Single", "HL Composer Optyca", "HL Single Optyca";
+//     "" clears). An unknown name is refused on the wire. An older worker
+//     cannot deserialise the path, hence the bump.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(65);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -3762,8 +3768,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v64() {
-        assert_eq!(PROTOCOL_VERSION.0, 64);
+    fn protocol_version_is_v65() {
+        assert_eq!(PROTOCOL_VERSION.0, 65);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

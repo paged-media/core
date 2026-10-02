@@ -2041,6 +2041,9 @@ pub(super) fn set_paragraph_style_field(
             )?
             .0)
         }
+        PropertyPath::ParagraphComposer => {
+            Ok(super::paragraph::set_para_composer_field(path, value, &mut def.composer)?.0)
+        }
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount
         | PropertyPath::ParagraphSpanColumnMinSpaceBefore

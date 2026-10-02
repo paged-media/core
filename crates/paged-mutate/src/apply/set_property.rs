@@ -2118,6 +2118,7 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphNumberingContinue
             | PropertyPath::ParagraphBulletsCharacterStyle
             | PropertyPath::ParagraphNumberingCharacterStyle
+            | PropertyPath::ParagraphComposer
             | PropertyPath::ParagraphAppliedNumberingList,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);

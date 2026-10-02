@@ -1392,6 +1392,24 @@ enum DirtyScope {
     Everything,
 }
 
+/// Run [`paged_mutate::refuse_unauthorable_value`] over every property
+/// write a wire mutation carries, batch children included.
+fn refuse_unauthorable(mutation: &Mutation) -> Result<(), crate::channel::WorkerError> {
+    let refused = |path: paged_mutate::PropertyPath, value: &paged_mutate::Value| {
+        paged_mutate::refuse_unauthorable_value(path, value).map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("property write refused: {e}"),
+            }
+        })
+    };
+    match mutation {
+        Mutation::SetElementProperty { path, value, .. }
+        | Mutation::SetStyleProperty { path, value, .. } => refused(*path, value),
+        Mutation::Batch { ops } => ops.iter().try_for_each(refuse_unauthorable),
+        _ => Ok(()),
+    }
+}
+
 /// W1.24 (audit B19) — hard cap on the undo log's length.
 ///
 /// `applied_log` is the **undo stack**: each entry pairs a forward op
@@ -1895,6 +1913,9 @@ impl CanvasModel {
         &mut self,
         mutation: &Mutation,
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        // A value the operation layer would store but no caller may
+        // author (an unknown composer) is refused before anything runs.
+        refuse_unauthorable(mutation)?;
         // Editor-ops — document defaults are app-level state, not a
         // scene edit: no rebuild, no undo entry, no pixel change. The
         // editor reads the triple back via `DocumentMeta`.
@@ -6106,6 +6127,7 @@ impl CanvasModel {
         let mut numbering_continues: Vec<Option<bool>> = Vec::new();
         let mut bullets_character_styles: Vec<Option<String>> = Vec::new();
         let mut numbering_character_styles: Vec<Option<String>> = Vec::new();
+        let mut composers: Vec<Option<paged_model::Composer>> = Vec::new();
         let mut rule_aboves: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut rule_belows: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut tab_lists: Vec<Vec<paged_model::TabStop>> = Vec::new();
@@ -6156,6 +6178,7 @@ impl CanvasModel {
                 bullets_character_styles.push(para.bullets_character_style.clone());
                 numbering_character_styles
                     .push(para.bullets_and_numbering_digits_character_style.clone());
+                composers.push(para.composer.clone());
                 rule_aboves.push(para.rule_above.clone());
                 rule_belows.push(para.rule_below.clone());
                 tab_lists.push(para.tab_list.clone());
@@ -6482,6 +6505,13 @@ impl CanvasModel {
                 path: PropertyPath::ParagraphNumberingCharacterStyle,
                 value: collapse_uniform(&numbering_character_styles)
                     .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            // The IDML string, "" when the paragraph inherits — the shapes
+            // the setter accepts.
+            PropertyEntry {
+                path: PropertyPath::ParagraphComposer,
+                value: collapse_uniform(&composers)
+                    .map(|o| Value::Text(o.map(|c| c.as_idml().to_string()).unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphRuleAbove,

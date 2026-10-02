@@ -811,6 +811,7 @@ mod move_node;
 mod nested;
 mod opacity_mask;
 mod paragraph;
+pub(crate) use paragraph::COMPOSER_EXPECTED;
 mod path_topology;
 mod place_image;
 mod planar_ops;

@@ -108,6 +108,7 @@ const CASES = [
   ['paragraphNumberingContinue', false],
   ['paragraphBulletsCharacterStyle', 'CharacterStyle/Bullet'],
   ['paragraphNumberingCharacterStyle', 'CharacterStyle/Digits'],
+  ['paragraphComposer', 'HL Single'],
   ['paragraphRuleAbove', { type: 'paragraphRule', value: { on: true, weight: 1 } }],
   ['paragraphRuleBelow', { type: 'paragraphRule', value: { on: true, weight: 2 } }],
   ['paragraphTabStops', { type: 'tabStops', value: [{ position: 36, alignment: 'Left' }] }],
@@ -188,6 +189,8 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphNumberingContinue",
         "paragraphBulletsCharacterStyle",
         "paragraphNumberingCharacterStyle",
+        // The composer (protocol 65).
+        "paragraphComposer",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -199,7 +202,7 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        219,
+        220,
         "the advertised roster changed; move the count with the decision"
     );
 }

@@ -807,6 +807,7 @@ property_paths! {
         ParagraphNumberingContinue => "paragraphNumberingContinue",
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle",
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle",
+        ParagraphComposer => "paragraphComposer",
     }
 
     hidden {
@@ -1141,7 +1142,11 @@ mod tests {
         // `paragraphNumberingCharacterStyle`, protocol 64) — modelled on
         // the paragraph (d10ffc9) and rendered (6192c72), but with no
         // setter until now.
-        assert_eq!(cat.settable_paths.len(), 219, "settable path count drifted");
+        //
+        // 219 -> 220: `paragraphComposer` (protocol 65) — modelled and
+        // laid out since fc2df8a (the Single-line Composer), with no
+        // setter until now.
+        assert_eq!(cat.settable_paths.len(), 220, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

@@ -4044,6 +4044,8 @@ fn js_value_to_wire(
             | P::ParagraphNumberingContinue
             | P::ParagraphBulletsCharacterStyle
             | P::ParagraphNumberingCharacterStyle
+            // The composer's IDML name ("HL Single", ...).
+            | P::ParagraphComposer
             // W1.22 — applied numbering-list ref + next-style ref.
             | P::ParagraphAppliedNumberingList
             | P::ParagraphStyleNextStyle

@@ -810,6 +810,16 @@ pub enum PropertyPath {
     /// Same contract as [`PropertyPath::ParagraphBulletsCharacterStyle`].
     /// Reflow-affecting.
     ParagraphNumberingCharacterStyle,
+    /// `Composer` — which of InDesign's line breakers sets the
+    /// paragraph. `Value::Text` carrying the IDML string: `"HL Composer"`
+    /// (Adobe Paragraph Composer), `"HL Single"` (Single-line Composer),
+    /// `"HL Composer Optyca"` / `"HL Single Optyca"` (their World-Ready
+    /// twins). The empty string clears the override (inherit; absent
+    /// everywhere is the Paragraph Composer). Any other string is refused
+    /// with a `TypeMismatch`, never stored — the model keeps a
+    /// third-party composer it READ verbatim, but nothing may author one.
+    /// Reflow-affecting.
+    ParagraphComposer,
 
     // ---- W0.3 — text-frame prefs --------------------------------
     /// W0.3 — `<TextFramePreference TextColumnCount="...">`. The run
@@ -1469,6 +1479,7 @@ impl PropertyPath {
             PropertyPath::ParagraphNumberingContinue => "paragraph.numberingContinue",
             PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
             PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
+            PropertyPath::ParagraphComposer => "paragraph.composer",
             // W0.3 — text-frame prefs.
             PropertyPath::TextFrameColumnCount => "textFrame.columnCount",
             PropertyPath::TextFrameColumnGutter => "textFrame.columnGutter",

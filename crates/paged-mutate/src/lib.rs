@@ -70,6 +70,33 @@ pub use operation::{
 };
 pub use path_math::fit_polyline_to_anchors;
 
+/// The values the operation layer STORES but an authoring surface may not
+/// SEND. Today one: a `paragraphComposer` that is not one of the four
+/// composers InDesign writes. The model keeps a third-party composer it
+/// read verbatim ([`paged_model::Composer::Other`]), and the inverse of
+/// overwriting one must be able to put it back, so the setter accepts any
+/// string; a caller authoring a composer is refused here instead, with the
+/// accepted values. The canvas runs this on every wire mutation (batch
+/// children included) before translating it.
+pub fn refuse_unauthorable_value(path: PropertyPath, value: &Value) -> Result<(), OperationError> {
+    if path == PropertyPath::ParagraphComposer {
+        if let Value::Text(s) = value {
+            if !s.is_empty()
+                && matches!(
+                    paged_model::Composer::from_idml(s),
+                    paged_model::Composer::Other(_)
+                )
+            {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: apply::COMPOSER_EXPECTED.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Holds a [`Document`] plus the Operation surface, undo/redo
 /// history, and change-notification fan-out around it.
 ///
@@ -4944,6 +4971,100 @@ mod tests {
             project.document().stories[0].story.paragraphs[0].start_paragraph,
             Some(paged_model::StartParagraph::NextPage)
         );
+    }
+
+    /// `paragraphComposer` takes the IDML name; "" clears; undo restores
+    /// the prior value — including a third-party composer the document was
+    /// read with, which only the operation layer may write (the wire
+    /// refuses it, `refuse_unauthorable_value`).
+    #[test]
+    fn paragraph_composer_round_trips_and_undoes_verbatim() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        let applied = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text("HL Single".into()),
+            ))
+            .expect("apply");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(paged_model::Composer::SingleLine)
+        );
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            None
+        );
+
+        let third_party = paged_model::Composer::from_idml("HL Japanese Composer");
+        project.document_mut().stories[0].story.paragraphs[0].composer = Some(third_party.clone());
+        let over = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text("HL Composer".into()),
+            ))
+            .expect("overwrite");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(paged_model::Composer::Paragraph)
+        );
+        crate::apply(project.document_mut(), &over.inverse).expect("undo restores verbatim");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(third_party)
+        );
+
+        let cleared = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text(String::new()),
+            ))
+            .expect("clear");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            None
+        );
+        assert!(project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Bool(true)
+            ))
+            .is_err());
+        crate::apply(project.document_mut(), &cleared.inverse).expect("undo clear");
+    }
+
+    #[test]
+    fn only_the_four_composers_are_authorable() {
+        for ok in [
+            "",
+            "HL Composer",
+            "HL Single",
+            "HL Composer Optyca",
+            "HL Single Optyca",
+        ] {
+            assert!(
+                refuse_unauthorable_value(PropertyPath::ParagraphComposer, &Value::Text(ok.into()))
+                    .is_ok(),
+                "{ok:?}"
+            );
+        }
+        for bad in ["HL single", "Paragraph Composer", "HL Japanese Composer"] {
+            assert!(matches!(
+                refuse_unauthorable_value(
+                    PropertyPath::ParagraphComposer,
+                    &Value::Text(bad.into())
+                ),
+                Err(OperationError::TypeMismatch { .. })
+            ));
+        }
+        // Other paths are not this function's business.
+        assert!(refuse_unauthorable_value(
+            PropertyPath::ParagraphListType,
+            &Value::Text("Anything".into())
+        )
+        .is_ok());
     }
 
     /// An unknown `StartParagraph` string is refused, never stored or
