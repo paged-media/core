@@ -19,7 +19,7 @@ use paged_scene::Document;
 use crate::error::OperationError;
 use crate::invert::invert_remove_node;
 use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec, PropertyPath,
+    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PropertyPath,
 };
 
 // ---------------------------------------------------------------------------
@@ -93,9 +93,43 @@ fn release_home(parsed: &mut paged_scene::ParsedSpread, r: FrameRef) -> (NodeId,
     (spread_parent_id(parsed), z_slot)
 }
 
-/// Locate `node` in its containing spread, snapshot its current state
-/// into a `NodeSpec`, and remove it (including its `frames_in_order`
-/// entry). Returns `(parent_id, position, spec, z_slot)` for the
+/// C-75 — capture a just-removed page item WHOLE, as the
+/// [`NodeSpec::Captured`] its inverse re-inserts.
+///
+/// `item` is the model struct itself, serialised as it stood — not a
+/// list of the fields someone thought to copy, which is what made undo
+/// of a delete restore a bare frame. The rows of the spread's side maps
+/// keyed by the item's id go into the capture too and LEAVE the spread:
+/// they used to stay behind, and since an id is minted as "highest in
+/// the document + 1", the next item created after deleting the newest
+/// one took the same id and with it the deleted item's plugin metadata.
+///
+/// `image_bytes` is carried beside the JSON (the caller has already
+/// taken it out of `item`), so an inline image is not re-encoded as a
+/// number array on every delete.
+fn capture<T: serde::Serialize>(
+    spread: &mut paged_model::Spread,
+    node: &NodeId,
+    item: &T,
+    image_bytes: Option<Vec<u8>>,
+) -> NodeSpec {
+    let id = node.self_id();
+    let json = serde_json::json!({
+        "item": item,
+        "labels": spread.labels.remove(id),
+        "imageMetadata": spread.image_metadata.remove(id),
+    })
+    .to_string();
+    NodeSpec::Captured {
+        node: node.clone(),
+        json,
+        image_bytes,
+    }
+}
+
+/// Locate `node` in its containing spread, capture it whole
+/// ([`capture`]), and remove it (including its entry in whichever list
+/// named it). Returns `(parent_id, position, spec, z_slot)` for the
 /// caller to feed into the inverse.
 pub(super) fn remove_and_capture(
     doc: &mut Document,
@@ -112,17 +146,8 @@ pub(super) fn remove_and_capture(
                 {
                     let frame = parsed.spread.text_frames.remove(pos);
                     let (parent, z_slot) = release_home(parsed, FrameRef::TextFrame(pos));
-                    let spec = NodeSpec::TextFrame {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(frame.bounds),
-                        fill_color: frame.fill_color,
-                        stroke_color: frame.stroke_color,
-                        stroke_weight: frame.stroke_weight,
-                        item_transform: frame.item_transform,
-                        // Captured so undo-of-delete REATTACHES the
-                        // story (the text comes back with the frame).
-                        parent_story: frame.parent_story,
-                    };
+                    let image_bytes = None;
+                    let spec = capture(&mut parsed.spread, node, &frame, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -136,16 +161,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|r| r.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let rect = parsed.spread.rectangles.remove(pos);
+                    let mut rect = parsed.spread.rectangles.remove(pos);
                     let (parent, z_slot) = release_home(parsed, FrameRef::Rectangle(pos));
-                    let spec = NodeSpec::Rectangle {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(rect.bounds),
-                        fill_color: rect.fill_color,
-                        stroke_color: rect.stroke_color,
-                        stroke_weight: rect.stroke_weight,
-                        item_transform: rect.item_transform,
-                    };
+                    let image_bytes = rect.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &rect, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -159,16 +178,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|o| o.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let oval = parsed.spread.ovals.remove(pos);
+                    let mut oval = parsed.spread.ovals.remove(pos);
                     let (parent, z_slot) = release_home(parsed, FrameRef::Oval(pos));
-                    let spec = NodeSpec::Oval {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(oval.bounds),
-                        fill_color: oval.fill_color,
-                        stroke_color: oval.stroke_color,
-                        stroke_weight: oval.stroke_weight,
-                        item_transform: oval.item_transform,
-                    };
+                    let image_bytes = oval.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &oval, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -184,20 +197,8 @@ pub(super) fn remove_and_capture(
                 {
                     let line = parsed.spread.graphic_lines.remove(pos);
                     let (parent, z_slot) = release_home(parsed, FrameRef::GraphicLine(pos));
-                    let spec = NodeSpec::GraphicLine {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(line.bounds),
-                        anchors: line
-                            .anchors
-                            .iter()
-                            .map(PathAnchorSpec::from_parse)
-                            .collect(),
-                        subpath_starts: line.subpath_starts,
-                        subpath_open: line.subpath_open,
-                        stroke_color: line.stroke_color,
-                        stroke_weight: line.stroke_weight,
-                        item_transform: line.item_transform,
-                    };
+                    let image_bytes = None;
+                    let spec = capture(&mut parsed.spread, node, &line, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -211,23 +212,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|p| p.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let poly = parsed.spread.polygons.remove(pos);
+                    let mut poly = parsed.spread.polygons.remove(pos);
                     let (parent, z_slot) = release_home(parsed, FrameRef::Polygon(pos));
-                    let spec = NodeSpec::Polygon {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(poly.bounds),
-                        anchors: poly
-                            .anchors
-                            .iter()
-                            .map(PathAnchorSpec::from_parse)
-                            .collect(),
-                        subpath_starts: poly.subpath_starts,
-                        subpath_open: poly.subpath_open,
-                        fill_color: poly.fill_color,
-                        stroke_color: poly.stroke_color,
-                        stroke_weight: poly.stroke_weight,
-                        item_transform: poly.item_transform,
-                    };
+                    let image_bytes = poly.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &poly, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }

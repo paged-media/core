@@ -99,7 +99,9 @@ fn delete_then_undo_reattaches_the_same_story() {
     apply(&mut doc, &op).expect("insert");
     let sid = frame_story(&doc, "TextFrame/mint-test").expect("minted");
 
-    // Delete the frame; the inverse spec must carry the story id.
+    // Delete the frame; the inverse must carry the story id. Since C-75
+    // it carries the WHOLE frame (`NodeSpec::Captured`), the story
+    // reference being one field of it.
     let removed = apply(
         &mut doc,
         &Operation::RemoveNode {
@@ -109,10 +111,23 @@ fn delete_then_undo_reattaches_the_same_story() {
     .expect("remove");
     match &removed.inverse {
         Operation::InsertNode {
-            node: NodeSpec::TextFrame { parent_story, .. },
+            node:
+                NodeSpec::Captured {
+                    node: NodeId::TextFrame(id),
+                    json,
+                    ..
+                },
             ..
-        } => assert_eq!(parent_story.as_deref(), Some(sid.as_str())),
-        other => panic!("inverse is not an InsertNode TextFrame: {other:?}"),
+        } => {
+            assert_eq!(id, "TextFrame/mint-test");
+            let captured: serde_json::Value = serde_json::from_str(json).expect("capture is JSON");
+            assert_eq!(
+                captured["item"]["parent_story"].as_str(),
+                Some(sid.as_str()),
+                "the captured frame names its story"
+            );
+        }
+        other => panic!("inverse is not an InsertNode of the captured frame: {other:?}"),
     }
 
     // Undo (apply the inverse): the SAME story reattaches — no re-mint.

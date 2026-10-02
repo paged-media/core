@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_model::{FrameRef, Spread};
+use paged_model::{FrameRef, GraphicLine, Oval, Polygon, Rectangle, Spread, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -288,6 +288,222 @@ pub(super) fn seat_in_group(
     members.insert(at, r);
 }
 
+/// Where an insert lands: `(spread id, group id)`. The parent is a
+/// spread (the item joins its z-order) or — C-74 — a GROUP on some
+/// spread (the item joins that group's members, with `z_slot` naming the
+/// member slot). The second is what puts a removed member back where it
+/// was; before it the inverse of that removal could only say "the
+/// spread", and the member came back as a second top-level entry.
+fn resolve_parent(
+    doc: &Document,
+    parent: &NodeId,
+    spec: &NodeSpec,
+) -> Result<(String, Option<String>), OperationError> {
+    match parent {
+        NodeId::Spread(id) => Ok((id.clone(), None)),
+        NodeId::Group(gid) => {
+            let host = doc
+                .spreads
+                .iter()
+                .find(|p| {
+                    p.spread
+                        .groups
+                        .iter()
+                        .any(|g| g.self_id.as_deref() == Some(gid.as_str()))
+                })
+                .and_then(|p| p.spread.self_id.clone())
+                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+            Ok((host, Some(gid.clone())))
+        }
+        _ => Err(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: spec.node_id().kind().to_string(),
+        }),
+    }
+}
+
+/// Make sure the story a text frame names exists, creating the empty
+/// story when it does not (the fresh-insert case, and the redo of an
+/// undone insert). An existing story is left alone — that is how a
+/// re-inserted frame gets its text back.
+fn ensure_story(doc: &mut Document, id: &str) {
+    if doc.stories.iter().any(|s| s.self_id == id) {
+        return;
+    }
+    let mut story = paged_model::Story::default();
+    // One empty paragraph + run — the shape an empty parsed story has;
+    // the text ops' `locate()` needs ≥1 paragraph.
+    story.paragraphs.push(paged_model::Paragraph {
+        runs: vec![paged_model::CharacterRun::default()],
+        ..Default::default()
+    });
+    doc.stories.push(paged_scene::ParsedStory {
+        // No source entry — minted post-parse. The empty src is the
+        // writer's mint signal: `paged-write` (C-8) emits a full
+        // `Stories/Story_<sanitized-id>.xml` part + designmap ref for it
+        // on export.
+        src: String::new(),
+        self_id: id.to_string(),
+        story,
+    });
+}
+
+/// C-75 — re-insert a node `RemoveNode` captured whole
+/// ([`NodeSpec::Captured`]): the model struct goes back verbatim, with
+/// its image bytes and the side-map rows that left the spread with it.
+fn apply_insert_captured(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    z_slot: Option<usize>,
+    spec: &NodeSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeSpec::Captured {
+        node,
+        json,
+        image_bytes,
+    } = spec
+    else {
+        unreachable!("apply_insert_captured called with another spec");
+    };
+    let malformed = |what: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path: crate::operation::PropertyPath::FrameTransform,
+        reason: format!("malformed captured node: {what}"),
+    };
+    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
+    if node_exists(doc, node) {
+        return Err(OperationError::DuplicateNodeId {
+            id: node.self_id().to_string(),
+        });
+    }
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| malformed(e.to_string()))?;
+    let item = envelope
+        .get_mut("item")
+        .map(serde_json::Value::take)
+        .ok_or_else(|| malformed("no item".to_string()))?;
+    // Decode BEFORE touching the document, so a capture that does not
+    // decode leaves it untouched.
+    enum Item {
+        TextFrame(Box<TextFrame>),
+        Rectangle(Box<Rectangle>),
+        Oval(Box<Oval>),
+        GraphicLine(Box<GraphicLine>),
+        Polygon(Box<Polygon>),
+    }
+    let decode = |e: serde_json::Error| malformed(e.to_string());
+    let item = match node {
+        NodeId::TextFrame(_) => Item::TextFrame(serde_json::from_value(item).map_err(decode)?),
+        NodeId::Rectangle(_) => {
+            let mut r: Box<Rectangle> = serde_json::from_value(item).map_err(decode)?;
+            r.image_bytes = image_bytes.clone();
+            Item::Rectangle(r)
+        }
+        NodeId::Oval(_) => {
+            let mut o: Box<Oval> = serde_json::from_value(item).map_err(decode)?;
+            o.image_bytes = image_bytes.clone();
+            Item::Oval(o)
+        }
+        NodeId::GraphicLine(_) => Item::GraphicLine(serde_json::from_value(item).map_err(decode)?),
+        NodeId::Polygon(_) => {
+            let mut p: Box<Polygon> = serde_json::from_value(item).map_err(decode)?;
+            p.image_bytes = image_bytes.clone();
+            Item::Polygon(p)
+        }
+        other => return Err(malformed(format!("{other:?} is not a page item"))),
+    };
+    let labels: Option<Vec<(String, String)>> = envelope
+        .get_mut("labels")
+        .map(serde_json::Value::take)
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(decode)?
+        .flatten();
+    let image_metadata: Option<paged_model::ImageMetadata> = envelope
+        .get_mut("imageMetadata")
+        .map(serde_json::Value::take)
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(decode)?
+        .flatten();
+
+    if let Item::TextFrame(frame) = &item {
+        if let Some(story) = frame.parent_story.clone() {
+            ensure_story(doc, &story);
+        }
+    }
+    let spread = find_spread_mut(doc, &parent_id)
+        .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+    let s = &mut spread.spread;
+    let len = match &item {
+        Item::TextFrame(_) => s.text_frames.len(),
+        Item::Rectangle(_) => s.rectangles.len(),
+        Item::Oval(_) => s.ovals.len(),
+        Item::GraphicLine(_) => s.graphic_lines.len(),
+        Item::Polygon(_) => s.polygons.len(),
+    };
+    if position > len {
+        return Err(OperationError::InvalidPosition {
+            parent: parent.clone(),
+            position,
+            len,
+        });
+    }
+    let new_ref = match item {
+        Item::TextFrame(f) => {
+            s.text_frames.insert(position, *f);
+            FrameRef::TextFrame(position)
+        }
+        Item::Rectangle(r) => {
+            s.rectangles.insert(position, *r);
+            FrameRef::Rectangle(position)
+        }
+        Item::Oval(o) => {
+            s.ovals.insert(position, *o);
+            FrameRef::Oval(position)
+        }
+        Item::GraphicLine(l) => {
+            s.graphic_lines.insert(position, *l);
+            FrameRef::GraphicLine(position)
+        }
+        Item::Polygon(p) => {
+            s.polygons.insert(position, *p);
+            FrameRef::Polygon(position)
+        }
+    };
+    register_frame_ref(s, new_ref, position, z_slot);
+    if let Some(gid) = &group_home {
+        let group_idx = s
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(gid.as_str()))
+            .expect("resolved above: the group is on this spread");
+        seat_in_group(s, new_ref, group_idx, z_slot);
+    }
+    let id = node.self_id().to_string();
+    if let Some(labels) = labels {
+        s.labels.insert(id.clone(), labels);
+    }
+    if let Some(meta) = image_metadata {
+        s.image_metadata.insert(id, meta);
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position,
+            node: spec.clone(),
+            z_slot,
+        },
+        inverse: invert_insert_node(spec),
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
 pub(super) fn apply_insert_node(
     doc: &mut Document,
     parent: &NodeId,
@@ -308,35 +524,11 @@ pub(super) fn apply_insert_node(
     if let NodeSpec::Table { .. } = spec {
         return apply_insert_table(doc, parent, position, spec);
     }
-    // The parent is a spread (the item joins its z-order) or — C-74 — a
-    // GROUP on some spread (the item joins that group's members, with
-    // `z_slot` naming the member slot). The second is what puts a
-    // removed member back where it was; before it the inverse of that
-    // removal could only say "the spread", and the member came back as
-    // a second top-level entry.
-    let (parent_id, group_home): (String, Option<String>) = match parent {
-        NodeId::Spread(id) => (id.clone(), None),
-        NodeId::Group(gid) => {
-            let host = doc
-                .spreads
-                .iter()
-                .find(|p| {
-                    p.spread
-                        .groups
-                        .iter()
-                        .any(|g| g.self_id.as_deref() == Some(gid.as_str()))
-                })
-                .and_then(|p| p.spread.self_id.clone())
-                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
-            (host, Some(gid.clone()))
-        }
-        _ => {
-            return Err(OperationError::InvalidParent {
-                parent: parent.clone(),
-                child_kind: spec.node_id().kind().to_string(),
-            });
-        }
-    };
+    // C-75 — a node captured whole by `RemoveNode` goes back verbatim.
+    if let NodeSpec::Captured { .. } = spec {
+        return apply_insert_captured(doc, parent, position, z_slot, spec);
+    }
+    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
     let parent_id = &parent_id;
 
     // Uniqueness across the document — IDML Self IDs must be unique.
@@ -361,24 +553,7 @@ pub(super) fn apply_insert_node(
             parent_story: Some(id),
             ..
         } => {
-            if !doc.stories.iter().any(|s| s.self_id == *id) {
-                let mut story = paged_model::Story::default();
-                // One empty paragraph + run — the shape an empty parsed
-                // story has; the text ops' `locate()` needs ≥1 paragraph.
-                story.paragraphs.push(paged_model::Paragraph {
-                    runs: vec![paged_model::CharacterRun::default()],
-                    ..Default::default()
-                });
-                doc.stories.push(paged_scene::ParsedStory {
-                    // No source entry — minted post-parse. The empty src
-                    // is the writer's mint signal: `paged-write` (C-8)
-                    // emits a full `Stories/Story_<sanitized-id>.xml`
-                    // part + designmap ref for it on export.
-                    src: String::new(),
-                    self_id: id.clone(),
-                    story,
-                });
-            }
+            ensure_story(doc, id);
             Some(id.clone())
         }
         _ => None,
@@ -561,6 +736,9 @@ pub(super) fn apply_insert_node(
             // (a table targets a `NodeId::Story`, not this spread path).
             unreachable!("Table insert routed via the early-return");
         }
+        NodeSpec::Captured { .. } => {
+            unreachable!("Captured routed via the early-return");
+        }
     }
 
     // C-74 — a group parent: the arms above registered the item in the
@@ -573,7 +751,9 @@ pub(super) fn apply_insert_node(
             NodeSpec::Oval { .. } => FrameRef::Oval(position),
             NodeSpec::GraphicLine { .. } => FrameRef::GraphicLine(position),
             NodeSpec::Polygon { .. } => FrameRef::Polygon(position),
-            NodeSpec::CloneTranslate { .. } | NodeSpec::Table { .. } => {
+            NodeSpec::CloneTranslate { .. }
+            | NodeSpec::Table { .. }
+            | NodeSpec::Captured { .. } => {
                 unreachable!("routed via the early-returns")
             }
         };

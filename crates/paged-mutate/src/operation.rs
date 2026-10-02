@@ -2270,14 +2270,17 @@ pub enum Value {
     Lengths(Vec<f32>),
 }
 
-/// Description of a node about to be inserted. Carries the minimal
-/// Stage-1 supported field set plus `item_transform` — `RemoveNode` →
-/// undo → re-insertion round-trips these reliably. (Without the
-/// transform, undoing a deleteFrame snapped the frame back to the page
-/// origin — the editor-suite AC-E2E-PROVE-3 finding.) Remaining
-/// non-essential fields (drop_shadow, opacity, effects, …) still
-/// default on re-insertion; that residue of the Stage 1 limitation
-/// tightens in later stages.
+/// Description of a node about to be inserted. The per-kind variants
+/// carry what a CREATION names — geometry, the fill/stroke triple, the
+/// path tables, a transform — and everything else takes its default.
+///
+/// They used to double as what `RemoveNode` captured for its inverse,
+/// which is how a delete → undo brought back a bare frame: opacity,
+/// effects, corners, a placed image, every field outside this short
+/// list re-defaulted (RFI C-75; the transform had been added for the
+/// same reason one field at a time). A removed node is now captured
+/// WHOLE, as [`NodeSpec::Captured`], and these variants describe new
+/// nodes only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -2416,6 +2419,30 @@ pub enum NodeSpec {
         #[serde(default)]
         destination_spread_id: Option<String>,
     },
+    /// C-75 — a page item captured WHOLE: what `RemoveNode` (and
+    /// `MoveNode`) hand their inverse, so re-insertion restores the node
+    /// that was removed rather than a re-derivation of it. `node` says
+    /// which kind and id; `json` is that kind's model struct
+    /// (`TextFrame`, `Rectangle`, `Oval`, `GraphicLine`, `Polygon`)
+    /// serialised as it stood, beside the rows of the spread's side maps
+    /// that are keyed by the item's id (its labels — the plugin-metadata
+    /// carrier — and its image metadata), which leave the spread with
+    /// the item and return with it. Because the struct itself is
+    /// captured, a field the model gains later is covered here without
+    /// anyone remembering to list it.
+    ///
+    /// `image_bytes` rides beside the JSON rather than inside it: an
+    /// inline image is megabytes, and as a JSON number array it would be
+    /// four times that, re-encoded on every delete.
+    ///
+    /// Inverse-only. A caller creating a node uses the variants above.
+    Captured {
+        node: NodeId,
+        json: String,
+        #[serde(default)]
+        #[tsify(type = "number[] | null")]
+        image_bytes: Option<Vec<u8>>,
+    },
     /// S-03 — a `<Table>` created inside a story (parent
     /// `NodeId::Story`). Unlike the frame arms there is NO
     /// `item_transform`: a table is in-story content (it hangs off
@@ -2461,6 +2488,7 @@ impl NodeSpec {
             NodeSpec::Oval { self_id, .. } => NodeId::Oval(self_id.clone()),
             NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
             NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
+            NodeSpec::Captured { node, .. } => node.clone(),
             NodeSpec::Table { self_id, .. } => NodeId::Table {
                 story_id: String::new(),
                 table_id: self_id.clone(),

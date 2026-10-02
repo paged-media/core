@@ -13,14 +13,11 @@
  */
 
 use super::*;
-use paged_model::FrameRef;
 use paged_scene::Document;
 
 use crate::error::OperationError;
 use crate::invert::invert_move_node;
-use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec,
-};
+use crate::operation::{AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation};
 
 // ---------------------------------------------------------------------------
 // MoveNode
@@ -71,11 +68,43 @@ pub(super) fn apply_move_node(
     // the potentially-rollback path.
     let target_len = match find_spread(doc, &new_parent_id) {
         Some(dest) => match &captured {
-            NodeSpec::TextFrame { .. } => dest.spread.text_frames.len(),
-            NodeSpec::Rectangle { .. } => dest.spread.rectangles.len(),
-            NodeSpec::Oval { .. } => dest.spread.ovals.len(),
-            NodeSpec::GraphicLine { .. } => dest.spread.graphic_lines.len(),
-            NodeSpec::Polygon { .. } => dest.spread.polygons.len(),
+            NodeSpec::TextFrame { .. }
+            | NodeSpec::Captured {
+                node: NodeId::TextFrame(_),
+                ..
+            } => dest.spread.text_frames.len(),
+            NodeSpec::Rectangle { .. }
+            | NodeSpec::Captured {
+                node: NodeId::Rectangle(_),
+                ..
+            } => dest.spread.rectangles.len(),
+            NodeSpec::Oval { .. }
+            | NodeSpec::Captured {
+                node: NodeId::Oval(_),
+                ..
+            } => dest.spread.ovals.len(),
+            NodeSpec::GraphicLine { .. }
+            | NodeSpec::Captured {
+                node: NodeId::GraphicLine(_),
+                ..
+            } => dest.spread.graphic_lines.len(),
+            NodeSpec::Polygon { .. }
+            | NodeSpec::Captured {
+                node: NodeId::Polygon(_),
+                ..
+            } => dest.spread.polygons.len(),
+            // A capture of anything else cannot exist — `RemoveNode`
+            // captures leaf page items and tables only.
+            NodeSpec::Captured { .. } => {
+                restore_capture(
+                    doc,
+                    &previous_parent,
+                    previous_position,
+                    captured,
+                    previous_z_slot,
+                );
+                return Err(OperationError::NodeNotFound(node.clone()));
+            }
             // CloneTranslate is never captured from the doc — it's
             // an input-only spec for Phase H's Alt-duplicate. Treat
             // as a programmer error if it ever surfaces here.
@@ -161,9 +190,12 @@ pub(super) fn restore_capture(
     spec: NodeSpec,
     z_slot: Option<usize>,
 ) {
-    let _ = insert_captured(doc, parent.self_id(), position, spec, z_slot);
+    let _ = apply_insert_node(doc, parent, position, z_slot, &spec);
 }
 
+/// Insert a captured node into the spread `parent_self_id`. One path
+/// with `InsertNode` — the capture is a [`NodeSpec::Captured`] (the
+/// whole node, C-75), or a `NodeSpec::Table` re-attaching to its story.
 pub(super) fn insert_captured(
     doc: &mut Document,
     parent_self_id: &str,
@@ -171,147 +203,12 @@ pub(super) fn insert_captured(
     spec: NodeSpec,
     z_slot: Option<usize>,
 ) -> Result<(), OperationError> {
-    // S-03 — a table re-attaches to its host STORY, not a spread.
-    // `parent_self_id` is the story id (`NodeId::Story::self_id()`).
-    // Re-create the table paragraph at the story end (same offset rule
-    // as `apply_insert_table`); `position` / `z_slot` are N/A here.
-    if let NodeSpec::Table { .. } = &spec {
-        let _ = (position, z_slot);
-        let si = doc
-            .stories
-            .iter()
-            .position(|s| s.self_id == parent_self_id)
-            .ok_or_else(|| {
-                OperationError::NodeNotFound(NodeId::Story(parent_self_id.to_string()))
-            })?;
-        let table = spec.to_parse_table();
-        doc.stories[si]
-            .story
-            .paragraphs
-            .push(paged_model::Paragraph {
-                table: Some(table),
-                ..Default::default()
-            });
-        return Ok(());
-    }
-    let spread = find_spread_mut(doc, parent_self_id)
-        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Spread(parent_self_id.to_string())))?;
-    match spec {
-        NodeSpec::TextFrame {
-            self_id,
-            bounds,
-            fill_color,
-            stroke_color,
-            stroke_weight,
-            item_transform,
-            parent_story,
-        } => {
-            let mut frame = new_text_frame(self_id, bounds_from_array(bounds), fill_color);
-            frame.parent_story = parent_story;
-            frame.stroke_color = stroke_color;
-            frame.stroke_weight = stroke_weight;
-            frame.item_transform = item_transform;
-            spread.spread.text_frames.insert(position, frame);
-            register_frame_ref(&mut spread.spread, FrameRef::TextFrame(0), position, z_slot);
-        }
-        NodeSpec::Rectangle {
-            self_id,
-            bounds,
-            fill_color,
-            stroke_color,
-            stroke_weight,
-            item_transform,
-        } => {
-            let mut rect = new_rectangle(self_id, bounds_from_array(bounds), fill_color);
-            rect.stroke_color = stroke_color;
-            rect.stroke_weight = stroke_weight;
-            rect.item_transform = item_transform;
-            spread.spread.rectangles.insert(position, rect);
-            register_frame_ref(&mut spread.spread, FrameRef::Rectangle(0), position, z_slot);
-        }
-        NodeSpec::Oval {
-            self_id,
-            bounds,
-            fill_color,
-            stroke_color,
-            stroke_weight,
-            item_transform,
-        } => {
-            let mut oval = new_oval(self_id, bounds_from_array(bounds), fill_color);
-            oval.stroke_color = stroke_color;
-            oval.stroke_weight = stroke_weight;
-            oval.item_transform = item_transform;
-            spread.spread.ovals.insert(position, oval);
-            register_frame_ref(&mut spread.spread, FrameRef::Oval(0), position, z_slot);
-        }
-        NodeSpec::GraphicLine {
-            self_id,
-            bounds,
-            anchors,
-            subpath_starts,
-            subpath_open,
-            stroke_color,
-            stroke_weight,
-            item_transform,
-        } => {
-            let mut line = new_graphic_line(
-                self_id,
-                bounds_from_array(bounds),
-                anchors.iter().map(PathAnchorSpec::to_parse).collect(),
-                subpath_starts,
-                subpath_open,
-                stroke_color,
-                stroke_weight,
-            );
-            line.item_transform = item_transform;
-            spread.spread.graphic_lines.insert(position, line);
-            register_frame_ref(
-                &mut spread.spread,
-                FrameRef::GraphicLine(0),
-                position,
-                z_slot,
-            );
-        }
-        NodeSpec::Polygon {
-            self_id,
-            bounds,
-            anchors,
-            subpath_starts,
-            subpath_open,
-            fill_color,
-            stroke_color,
-            stroke_weight,
-            item_transform,
-        } => {
-            // The path is the truth: its own box, not the one the wire
-            // handed us beside it (see `path_topology::anchors_bounds`).
-            let parsed_anchors: Vec<paged_model::PathAnchor> =
-                anchors.iter().map(PathAnchorSpec::to_parse).collect();
-            let bounds = super::path_topology::anchors_bounds(&parsed_anchors)
-                .unwrap_or_else(|| bounds_from_array(bounds));
-            let mut poly = new_polygon(
-                self_id,
-                bounds,
-                parsed_anchors,
-                subpath_starts,
-                subpath_open,
-                fill_color,
-                stroke_color,
-                stroke_weight,
-            );
-            poly.item_transform = item_transform;
-            spread.spread.polygons.insert(position, poly);
-            register_frame_ref(&mut spread.spread, FrameRef::Polygon(0), position, z_slot);
-        }
-        // Same rationale as in apply_move_node: CloneTranslate is
-        // never re-inserted via this path.
-        NodeSpec::CloneTranslate { source, .. } => {
-            return Err(OperationError::NodeNotFound(source));
-        }
-        // S-03 — handled by the story-re-attach early-return above.
-        NodeSpec::Table { .. } => {
-            unreachable!("Table re-insert routed via the early-return");
-        }
-    }
-    Ok(())
+    apply_insert_node(
+        doc,
+        &NodeId::Spread(parent_self_id.to_string()),
+        position,
+        z_slot,
+        &spec,
+    )
+    .map(|_| ())
 }
