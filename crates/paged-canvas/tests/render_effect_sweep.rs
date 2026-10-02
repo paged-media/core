@@ -1367,7 +1367,72 @@ fn property_cases() -> Vec<Case> {
             value: Value::Text("Multiply".into()),
         },
     ));
+    // ---------------------------------------------------------------
+    // C-24 — stroke alignment on the kinds that draw it
+    //
+    // The renderer has offset a polygon's, an ellipse's and a text
+    // frame's stroked outline by the alignment since W1.5; only a
+    // Rectangle could be told to. Each case strokes the item first (as
+    // SETUP — an unstroked item has nothing to align) and measures the
+    // alignment alone.
+    // ---------------------------------------------------------------
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (Polygon)",
+        "geometry",
+        |m| {
+            let id = ElementId::Polygon(add_quad(m, 120.0, 120.0, 160.0, 120.0));
+            align_inside(m, id)
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (Oval)",
+        "geometry",
+        |m| {
+            let page_id = first_page(m);
+            let id = m
+                .apply_mutation(&Mutation::InsertOval {
+                    page_id,
+                    bounds: (120.0, 120.0, 280.0, 240.0),
+                })
+                .expect("insert oval")
+                .created_id
+                .expect("created id");
+            align_inside(m, id)
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (TextFrame)",
+        "layout",
+        |m| {
+            let id = paged_wire::ElementId::parse(&first_body_text_frame(m))
+                .expect("a parseable frame address");
+            align_inside(m, id)
+        },
+    ));
     c
+}
+
+/// Stroke `id` heavily (setup), then hand back the mutation that aligns
+/// that stroke to the inside of the outline.
+fn align_inside(m: &mut CanvasModel, id: ElementId) -> Mutation {
+    let color = some_color(m);
+    m.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id.clone(),
+        path: PropertyPath::FrameStrokeColor,
+        value: Value::ColorRef(Some(color)),
+    })
+    .expect("stroke colour");
+    m.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id.clone(),
+        path: PropertyPath::FrameStrokeWeight,
+        value: Value::Length(Some(8.0)),
+    })
+    .expect("stroke weight");
+    Mutation::SetElementProperty {
+        element_id: id,
+        path: PropertyPath::FrameStrokeAlignment,
+        value: Value::Text("InsideAlignment".into()),
+    }
 }
 
 /// Turn one frame effect on, on a filled quad minted through

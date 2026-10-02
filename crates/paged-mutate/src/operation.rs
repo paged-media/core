@@ -899,8 +899,11 @@ pub enum PropertyPath {
     FrameStrokeMiterLimit,
     /// W0.3 — `StrokeAlignment` (`"CenterAlignment"`,
     /// `"InsideAlignment"`, `"OutsideAlignment"`). `Value::Text`;
-    /// empty clears. Rectangle-only. Paint-only (the renderer
-    /// inset/outsets by half the weight on rebuild).
+    /// empty clears. Rectangle, Polygon, Oval and TextFrame (C-24 — the
+    /// kinds whose stroked outline the renderer offsets by half the
+    /// weight; on a TextFrame the stroke's share also insets the text,
+    /// so that kind reflows). A `GraphicLine` has no inside and no
+    /// field, and rejects.
     FrameStrokeAlignment,
     /// W0.3 — `GapColor` reference for dashed-stroke gaps.
     /// `Value::ColorRef`. Carried on every stroked page-item kind.

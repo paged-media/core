@@ -5255,6 +5255,17 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeWeight,
                                 value: Some(Value::Length(f.stroke_weight)),
                             },
+                            // C-24 — a text frame's outline is stroked
+                            // inside / centred / outside like any other
+                            // closed shape, and the stroke's share insets
+                            // the text. Read here because it is written
+                            // now.
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    f.stroke_alignment.clone().unwrap_or_default(),
+                                )),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(f.opacity)),
@@ -6208,12 +6219,9 @@ impl CanvasModel {
                         // bind these exact paths — had nothing to show
                         // for an ellipse.
                         //
-                        // `FrameStrokeAlignment` is NOT here on purpose:
-                        // only `NodeId::Rectangle` has that write arm,
-                        // so on an Oval it is neither readable nor
-                        // writable — symmetric, if empty. Reading it
-                        // would be the C-17 mistake the `FrameBounds`
-                        // note above is already about.
+                        // `FrameStrokeAlignment` joined with C-24: the
+                        // ellipse outline has been offset by it since
+                        // W1.5, and the write arm now reaches the kind.
                         let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameTransform,
@@ -6239,6 +6247,12 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeType,
                                 value: Some(Value::Text(
                                     o.stroke_type.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    o.stroke_alignment.clone().unwrap_or_default(),
                                 )),
                             },
                             PropertyEntry {

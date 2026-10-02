@@ -291,21 +291,16 @@ fn is_dispatched(r: Result<impl Sized, paged_canvas::channel::WorkerError>) -> b
 ///
 /// The audit below fails on anything NOT in this list, so a future
 /// read-without-write lands as a test failure naming the exact pair.
-/// * `FrameStrokeAlignment` on a Polygon — a PRE-EXISTING asymmetry this
-///   audit surfaced, not one C-18 introduced (verified against HEAD:
-///   `model.rs` has read rows for Rectangle and Polygon, `set_property.rs`
-///   has a write arm only for `NodeId::Rectangle`). The Polygon
-///   descriptor's own comment claims the alignment mutation is "now
-///   apply-wired for all path kinds", which is false. Recorded rather
-///   than fixed here because closing it means deciding how
-///   `StrokeAlignment` offsets a closed Bezier outline — `W1.5`'s
-///   `stroke_alignment_inward` lane — which is a renderer change, not a
-///   descriptor one.
+///
+/// `FrameStrokeAlignment` on a Polygon used to be listed here: the
+/// descriptor read it and only `NodeId::Rectangle` could write it. That
+/// entry was recorded as "a renderer change" — it was not; W1.5 already
+/// offset the polygon outline by the alignment, and C-24 added the write
+/// arm (Polygon, Oval, TextFrame), so the pair is closed.
 const KNOWN_READ_ONLY: &[(&str, PropertyPath)] = &[
     ("TextFrame", PropertyPath::NextTextFrame),
     ("TextFrame", PropertyPath::PreviousTextFrame),
     ("Group", PropertyPath::FrameBounds),
-    ("Polygon", PropertyPath::FrameStrokeAlignment),
 ];
 
 /// E-1's audit half — read/write pairing across the whole frame-property

@@ -2424,8 +2424,8 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        // Stroke alignment is a Rectangle-only parse field; join /
-        // miter ride v35 across all closed-path kinds (punch-list).
+        // Join / miter ride v35 across all closed-path kinds
+        // (punch-list); stroke alignment follows below.
         (
             NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
             PropertyPath::FrameStrokeJoin,
@@ -2447,20 +2447,38 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeAlignment) => {
+        // C-24 — every kind whose renderer offsets its outline by the
+        // alignment takes the write: Rectangle (the original arm),
+        // Polygon and Oval (W1.5 offsets their closed contours by
+        // ±weight/2) and TextFrame (same offset, and the stroke's share
+        // also insets the TEXT, so that one reflows). The model has
+        // carried the field on all four and the importer has filled it;
+        // only the Rectangle could be written. A `GraphicLine` has no
+        // such field — an open stroke has no inside — and keeps
+        // rejecting.
+        (
+            NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::Oval(_) | NodeId::TextFrame(_),
+            PropertyPath::FrameStrokeAlignment,
+        ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_stroke_alignment_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.stroke_alignment.clone().unwrap_or_default();
-            rect.stroke_alignment = if new_val.is_empty() {
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() {
                 None
             } else {
                 Some(new_val.clone())
+            };
+            let text_reflow = if matches!(node, NodeId::TextFrame(_)) {
+                vec![node.clone()]
+            } else {
+                Vec::new()
             };
             (
                 Value::Text(prev),
                 InvalidationHint {
                     frame_style: vec![node.clone()],
+                    text_reflow,
                     ..Default::default()
                 },
             )

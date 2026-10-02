@@ -340,6 +340,22 @@ pub(super) fn find_end_join_mut<'a>(
     }
 }
 
+/// C-24 — locate the `stroke_alignment: Option<String>` field on the
+/// kinds that carry one, which are exactly the kinds whose renderer
+/// offsets the stroked outline by it. `GraphicLine` has no such field.
+pub(super) fn find_stroke_alignment_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_alignment),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_alignment),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_alignment),
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_alignment),
+        _ => None,
+    }
+}
+
 /// W1.1 — locate the `stroke_dash: Vec<f32>` field (per-frame
 /// `StrokeDashAndGap` override) on any stroked page-item kind.
 pub(super) fn find_stroke_dash_mut<'a>(
