@@ -3712,6 +3712,7 @@ mod tests {
                 frame: "TextFrame/a".into(),
             },
             Mutation::ApplyStyle {
+                paragraph: None,
                 story_id: "Story/u1".into(),
                 start: 0,
                 end: 5,

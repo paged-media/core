@@ -3857,7 +3857,9 @@ impl CanvasModel {
                 width,
                 height,
                 image_uri,
+                paragraph,
             } => Some(Operation::InsertAnchoredFrame {
+                paragraph: *paragraph,
                 story_id: story_id.clone(),
                 offset: *offset,
                 width: *width,
@@ -3908,7 +3910,9 @@ impl CanvasModel {
                 style,
                 scope,
                 cell,
+                paragraph,
             } => Some(Operation::ApplyStyle {
+                paragraph: *paragraph,
                 story_id: story_id.clone(),
                 start: *start,
                 end: *end,

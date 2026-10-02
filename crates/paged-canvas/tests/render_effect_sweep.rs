@@ -1352,6 +1352,7 @@ fn text_cases(c: &mut Vec<Case>) {
             .map(|(id, _)| id.clone())
             .expect("fixture carries a paragraph style with a point size");
         Mutation::ApplyStyle {
+            paragraph: None,
             story_id,
             start: 0,
             end: chars.min(40),
@@ -1371,6 +1372,7 @@ fn text_cases(c: &mut Vec<Case>) {
     c.push(paints("InsertAnchoredFrame", "text", |m| {
         let (story_id, _) = biggest_story(m);
         Mutation::InsertAnchoredFrame {
+            paragraph: None,
             story_id,
             offset: 0,
             width: 60.0,
@@ -2500,6 +2502,7 @@ fn style_cases(c: &mut Vec<Case>) {
             .expect("give the style a fill");
             let (story_id, chars) = biggest_story(m);
             m.apply_mutation(&Mutation::ApplyStyle {
+                paragraph: None,
                 story_id,
                 start: 0,
                 end: chars.min(40),
@@ -2550,6 +2553,7 @@ fn style_cases(c: &mut Vec<Case>) {
             .expect("give the style a fill");
             let (story_id, chars) = biggest_story(m);
             m.apply_mutation(&Mutation::ApplyStyle {
+                paragraph: None,
                 story_id,
                 start: 0,
                 end: chars.min(20),
@@ -2839,6 +2843,7 @@ fn seed_applied_character_style(m: &mut CanvasModel) -> String {
     .expect("give the style a fill");
     let (story_id, chars) = biggest_story(m);
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id,
         start: 0,
         end: chars.min(20),

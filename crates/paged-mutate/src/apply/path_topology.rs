@@ -3269,7 +3269,15 @@ pub(super) fn apply_apply_style(
     style: &str,
     scope: StyleScope,
     cell: Option<&crate::operation::CellAddr>,
+    paragraph: Option<u32>,
 ) -> Result<AppliedOperation, OperationError> {
+    // v65 — a paragraph ADDRESS names exactly one paragraph, empty or not
+    // (RFI C-53); the character range is not consulted.
+    if let Some(index) = paragraph {
+        return super::paragraph::apply_paragraph_style_at(
+            doc, story_id, cell, index, style, scope, start, end,
+        );
+    }
     // Delegate to the existing run/paragraph splitter via the
     // AppliedCharacterStyle / AppliedParagraphStyle property paths. The
     // splitter captures a per-segment inverse Batch. We then rewrap the
@@ -3315,6 +3323,7 @@ pub(super) fn apply_apply_style(
     };
     Ok(AppliedOperation {
         op: Operation::ApplyStyle {
+            paragraph: None,
             story_id: story_id.to_string(),
             start,
             end,
@@ -3352,6 +3361,7 @@ fn cell_addressed_inverse(
             path: PropertyPath::AppliedParagraphStyle | PropertyPath::AppliedCharacterStyle,
             value: Value::Text(style),
         } => Operation::ApplyStyle {
+            paragraph: None,
             story_id,
             start,
             end,

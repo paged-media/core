@@ -173,6 +173,7 @@ fn apply_style_over_the_paragraph_counts_u2028_as_one_character() {
     .expect("indent");
     // Contiguous: "Alpha one" 9 + U+2028 1 + "Bravo two" 9 = [0, 19).
     d.m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id: d.story.clone(),
         start: 0,
         end: 19,

@@ -179,6 +179,7 @@ fn a_list_marker_does_not_shift_the_offsets() {
         style: style.into(),
         scope: StyleScope::Paragraph,
         cell: None,
+        paragraph: None,
     })
     .expect("bullet on Abc");
     let built = m.built();

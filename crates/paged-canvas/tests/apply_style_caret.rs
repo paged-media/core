@@ -91,6 +91,7 @@ fn styles(m: &CanvasModel, story: &str) -> Vec<(String, Option<String>)> {
 
 fn apply(m: &mut CanvasModel, story: &str, at: u32, style: &str, scope: StyleScope) -> bool {
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id: story.into(),
         start: at,
         end: at,
@@ -164,6 +165,7 @@ fn ranges_around_an_empty_paragraph_leave_it_alone() {
     let (mut m, story) = story_with("A\n\nB");
     for (s, e) in [(0, 1), (1, 2)] {
         m.apply_mutation(&Mutation::ApplyStyle {
+            paragraph: None,
             story_id: story.clone(),
             start: s,
             end: e,
@@ -209,6 +211,7 @@ fn blank_lines_that_disagree_refuse_a_caret_rather_than_flatten_undo() {
     .expect("x");
     // Contiguous: "A" [0,1) "x" [1,2) "" [2,2) "B" [2,3).
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id: story.clone(),
         start: 1,
         end: 2,
@@ -278,6 +281,7 @@ fn a_range_over_a_blank_line_undoes() {
     let (mut m, story) = story_with("A\n\nB");
     let before = styles(&m, &story);
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id: story.clone(),
         start: 0,
         end: 2,

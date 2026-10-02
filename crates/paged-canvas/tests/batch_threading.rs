@@ -237,6 +237,7 @@ fn pour(story: &str) -> Mutation {
 
 fn style(story: &str) -> Mutation {
     Mutation::ApplyStyle {
+        paragraph: None,
         story_id: story.into(),
         start: 0,
         end: long_text().chars().count() as u32,

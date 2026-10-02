@@ -83,6 +83,7 @@ fn baseline_after_blank(leading: f32) -> f32 {
     })
     .expect("leading");
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id: story.clone(),
         start: 1,
         end: 1,

@@ -3444,6 +3444,13 @@ pub enum Operation {
         /// Closes the "cell text can only pour at the default formatting" gap.
         #[serde(default)]
         cell: Option<CellAddr>,
+        /// v65 — paragraph address (RFI C-53). `Some(i)` at paragraph scope
+        /// styles exactly paragraph `i` of the stream (body, or `cell`'s own)
+        /// and ignores `[start, end)`. It is the only way to name ONE empty
+        /// paragraph: in the contiguous character space consecutive empty
+        /// paragraphs share an offset.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// W0.5 — insert a field marker (e.g. the auto current-page-number
     /// marker, U+E018) into a story at a character offset. v1 supports
@@ -3483,6 +3490,12 @@ pub enum Operation {
         #[serde(default)]
         image_uri: Option<String>,
         self_id: String,
+        /// v65 — paragraph address (RFI C-53). `Some(i)` anchors the frame
+        /// in paragraph `i` of the story; `offset` stays the story offset
+        /// and is clamped into that paragraph. An empty paragraph (a
+        /// picture alone on its line) has no offset of its own otherwise.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// v52 — inverse-only companion to `InsertAnchoredFrame`: remove the
     /// anchored frame `self_id` from whichever paragraph of `story_id` holds

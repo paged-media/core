@@ -205,6 +205,76 @@ pub(super) fn apply_paragraph_property_in(
     })
 }
 
+/// v65 (RFI C-53) — apply paragraph style `style` to exactly paragraph
+/// `index` of the stream (the story body, or `cell`'s own paragraphs). The
+/// inverse names the same paragraph with its prior style ("" clears), so
+/// undo is exact for an empty paragraph among others at one offset.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_paragraph_style_at(
+    doc: &mut Document,
+    story_id: &str,
+    cell: Option<&crate::operation::CellAddr>,
+    index: u32,
+    style: &str,
+    scope: crate::operation::StyleScope,
+    start: u32,
+    end: u32,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Story(story_id.to_string());
+    let path = PropertyPath::AppliedParagraphStyle;
+    if scope != crate::operation::StyleScope::Paragraph {
+        return Err(OperationError::InvalidValue {
+            node,
+            path,
+            reason: "a paragraph address takes a paragraph style (scope = paragraph)".to_string(),
+        });
+    }
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let paragraphs = super::cell_paragraphs_mut(&mut doc.stories[story_idx].story, cell)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let count = paragraphs.len();
+    let Some(para) = paragraphs.get_mut(index as usize) else {
+        return Err(OperationError::InvalidValue {
+            node,
+            path,
+            reason: format!("paragraph {index} is past the stream's {count} paragraphs"),
+        });
+    };
+    let (prev, _) = apply_paragraph_field(para, path, &Value::Text(style.to_string()))?;
+    let Value::Text(prev) = prev else {
+        unreachable!("the applied paragraph style is text");
+    };
+    let invalidation = match doc
+        .frame_for_story
+        .get(story_id)
+        .and_then(|f| f.self_id.clone())
+    {
+        Some(frame) => InvalidationHint {
+            text_reflow: vec![NodeId::TextFrame(frame)],
+            ..Default::default()
+        },
+        None => InvalidationHint::default(),
+    };
+    let op = |style: String| Operation::ApplyStyle {
+        story_id: story_id.to_string(),
+        start,
+        end,
+        style,
+        scope,
+        cell: cell.cloned(),
+        paragraph: Some(index),
+    };
+    Ok(AppliedOperation {
+        op: op(style.to_string()),
+        inverse: op(prev),
+        invalidation,
+    })
+}
+
 /// The paragraph(s) a zero-length range — a caret — at contiguous offset
 /// `at` is in, the way InDesign applies a paragraph attribute to the
 /// paragraph holding the insertion point.

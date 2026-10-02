@@ -1587,6 +1587,7 @@ mod tests {
                 restore_target: None,
             },
             Operation::ApplyStyle {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 start: 0,
                 end: 5,
@@ -3050,6 +3051,7 @@ mod tests {
         // Offset 3 lands in para1 ("Hello world"); para2 ("!") is untouched.
         let applied = project
             .apply(Operation::InsertAnchoredFrame {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 offset: 3,
                 width: 100.0,
@@ -3089,6 +3091,7 @@ mod tests {
         // An offset in the second paragraph anchors there, paragraph-local.
         project
             .apply(Operation::InsertAnchoredFrame {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 offset: 12,
                 width: 10.0,
@@ -7286,6 +7289,7 @@ mod tests {
             let mut p = Project::new(document_with_one_story("Story/u1"));
             let applied = p
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/u1".to_string(),
                     start: 0,
                     end: 6,
@@ -7312,6 +7316,7 @@ mod tests {
             // [0,6) covers "Hello " exactly (run boundary).
             let applied = p
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/u1".to_string(),
                     start: 0,
                     end: 6,
@@ -7981,6 +7986,7 @@ mod tests {
 
             project
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/t1".to_string(),
                     start: 0,
                     end: 4,
@@ -8011,6 +8017,7 @@ mod tests {
             // An unknown cell address is a clean error, not a panic.
             assert!(project
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/t1".to_string(),
                     start: 0,
                     end: 1,

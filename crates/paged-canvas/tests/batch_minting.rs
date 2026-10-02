@@ -331,6 +331,7 @@ fn table() -> Mutation {
 
 fn anchored(offset: u32) -> Mutation {
     Mutation::InsertAnchoredFrame {
+        paragraph: None,
         story_id: STORY.into(),
         offset,
         width: 40.0,

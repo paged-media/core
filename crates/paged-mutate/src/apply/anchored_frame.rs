@@ -89,10 +89,14 @@ fn locate_anchored_frame(doc: &Document, self_id: &str) -> Option<(usize, usize)
 }
 
 /// v52 — insert an image-bearing anchored Rectangle at the paragraph holding
-/// `offset` in `story_id`.
+/// `offset` in `story_id`. v65: `paragraph` names the paragraph outright
+/// (an empty paragraph has no offset of its own in the contiguous space);
+/// `offset` is still the story offset, clamped into that paragraph.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_insert_anchored_frame(
     doc: &mut Document,
     story_id: &str,
+    paragraph: Option<u32>,
     offset: u32,
     width: f32,
     height: f32,
@@ -110,8 +114,32 @@ pub(super) fn apply_insert_anchored_frame(
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))?;
 
-    let (para_idx, local) = paragraph_for_offset(&doc.stories[story_idx].story, offset)
-        .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))?;
+    let (para_idx, local) = match paragraph {
+        Some(index) => {
+            let story = &doc.stories[story_idx].story;
+            let para = story.paragraphs.get(index as usize).ok_or_else(|| {
+                OperationError::InvalidValue {
+                    node: NodeId::Story(story_id.to_string()),
+                    path: crate::PropertyPath::AnchoredPosition,
+                    reason: format!(
+                        "paragraph {index} is past the story's {} paragraphs",
+                        story.paragraphs.len()
+                    ),
+                }
+            })?;
+            let chars: u32 = para
+                .runs
+                .iter()
+                .map(|r| r.text.chars().count() as u32)
+                .sum();
+            // `offset` stays a STORY offset (what an engine without the
+            // address reads); the address only says which paragraph.
+            let start = paragraph_start(story, index as usize);
+            (index as usize, offset.saturating_sub(start).min(chars))
+        }
+        None => paragraph_for_offset(&doc.stories[story_idx].story, offset)
+            .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))?,
+    };
 
     let para = &mut doc.stories[story_idx].story.paragraphs[para_idx];
     // The frame stands in its line at `offset` (an inline object is a
@@ -149,6 +177,7 @@ pub(super) fn apply_insert_anchored_frame(
     let invalidation = reflow_hint_for_story(doc, story_id);
     Ok(AppliedOperation {
         op: Operation::InsertAnchoredFrame {
+            paragraph,
             story_id: story_id.to_string(),
             offset,
             width,
@@ -196,6 +225,8 @@ pub(super) fn apply_remove_anchored_frame(
             self_id: self_id.to_string(),
         },
         inverse: Operation::InsertAnchoredFrame {
+            // By paragraph: the contiguous offset cannot name an empty one.
+            paragraph: Some(para_idx as u32),
             story_id: story_id.to_string(),
             offset: para_start + local,
             width,

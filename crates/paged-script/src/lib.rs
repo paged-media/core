@@ -1268,6 +1268,7 @@ fn paged_apply_style(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         paged_mutate::operation::StyleScope::Paragraph
     };
     let mutation = Mutation::ApplyStyle {
+        paragraph: None,
         story_id,
         start,
         end,
@@ -2371,6 +2372,7 @@ fn paged_insert_anchored_frame(
     let height = args.get_or_undefined(3).to_number(ctx)? as f32;
     let image_uri = opt_string(args.get_or_undefined(4), ctx);
     Ok(apply_bool(&Mutation::InsertAnchoredFrame {
+        paragraph: None,
         story_id,
         offset,
         width,

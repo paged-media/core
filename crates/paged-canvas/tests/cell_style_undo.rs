@@ -160,6 +160,7 @@ impl Fixture {
     fn style(&mut self, start: u32, end: u32, style: &str, scope: StyleScope) {
         self.m
             .apply_mutation(&Mutation::ApplyStyle {
+                paragraph: None,
                 story_id: self.story.clone(),
                 start,
                 end,

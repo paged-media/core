@@ -659,6 +659,12 @@ pub enum Mutation {
         /// gap where cell text could only carry default formatting.
         #[serde(default)]
         cell: Option<TextCellAddr>,
+        /// v65 — paragraph address (additive). `Some(i)` with paragraph scope
+        /// styles exactly paragraph `i` (0-based, in the body or in `cell`)
+        /// and ignores `start`/`end`: the only way to name one EMPTY
+        /// paragraph among several in a row.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// W0.5 — insert a field marker (page-number etc.) at a story
     /// offset. Routes to `Operation::InsertField`. v43 (D-01): `field`
@@ -684,6 +690,12 @@ pub enum Mutation {
         height: f32,
         #[serde(default)]
         image_uri: Option<String>,
+        /// v65 — paragraph address (additive). `Some(i)` anchors the frame
+        /// in paragraph `i` (0-based) of the story; `offset` stays the story
+        /// offset (so an engine without this field reads the same message)
+        /// and is clamped into that paragraph. Names an empty paragraph.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// v53 — the hyperlink CREATE door: make the story range `[start, end)`
     /// (contiguous char offsets, the `ApplyStyle` address space) a native

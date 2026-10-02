@@ -215,6 +215,7 @@ fn a_paragraph_style_switches_kerning_and_ligatures_off() {
             based_on: None,
         },
         Mutation::ApplyStyle {
+            paragraph: None,
             story_id: story.clone(),
             start: 0,
             end: text.chars().count() as u32,
