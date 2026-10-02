@@ -1662,7 +1662,7 @@ dependencies = [
 [[package]]
 name = "idml-export"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=42632a7b80f77c290c88bcdd98aa99fbf8c1afe7#42632a7b80f77c290c88bcdd98aa99fbf8c1afe7"
+source = "git+https://github.com/paged-media/plugin-publish?rev=a88315de2cd34731bac16598ab0d798e44d40167#a88315de2cd34731bac16598ab0d798e44d40167"
 dependencies = [
  "base64",
  "idml-import",
@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=42632a7b80f77c290c88bcdd98aa99fbf8c1afe7#42632a7b80f77c290c88bcdd98aa99fbf8c1afe7"
+source = "git+https://github.com/paged-media/plugin-publish?rev=a88315de2cd34731bac16598ab0d798e44d40167#a88315de2cd34731bac16598ab0d798e44d40167"
 dependencies = [
  "base64",
  "bytes",
@@ -3850,7 +3850,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",
