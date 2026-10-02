@@ -303,6 +303,13 @@ pub struct NodeSnapshot {
     /// preview can recompute the new point from snapshot + delta on
     /// every update.
     pub(crate) path_anchors: Vec<paged_model::PathAnchor>,
+    /// C-78 — whether the renderer draws this item from its PATH rather
+    /// than from its box (the renderer's own answer, per kind: a line or
+    /// a pen path with anchors, a `<Rectangle>` with more than four, a
+    /// text frame whose path is not a plain box). Such an item cannot be
+    /// translated by moving its `bounds` — nothing painted follows — so
+    /// `Translate` writes its `ItemTransform` instead.
+    pub(crate) drawn_from_path: bool,
 }
 
 /// One active gesture. Lives on `CanvasModel`. Only one gesture is
@@ -780,6 +787,7 @@ impl CanvasModel {
                         item_transform: f.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: paged_renderer::text_frame_drawn_from_path(f),
                     });
                 }
             }
@@ -796,6 +804,7 @@ impl CanvasModel {
                         item_transform: f.item_transform,
                         image_item_transform: f.image_item_transform,
                         path_anchors: Vec::new(),
+                        drawn_from_path: paged_renderer::rectangle_drawn_from_path(f),
                     });
                 }
             }
@@ -812,6 +821,7 @@ impl CanvasModel {
                         item_transform: p.item_transform,
                         image_item_transform: None,
                         path_anchors: p.anchors.clone(),
+                        drawn_from_path: paged_renderer::polygon_drawn_from_path(p),
                     });
                 }
             }
@@ -827,6 +837,7 @@ impl CanvasModel {
                         item_transform: o.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: false,
                     });
                 }
             }
@@ -843,6 +854,7 @@ impl CanvasModel {
                         item_transform: l.item_transform,
                         image_item_transform: None,
                         path_anchors: l.anchors.clone(),
+                        drawn_from_path: paged_renderer::graphic_line_drawn_from_path(l),
                     });
                 }
             }
@@ -866,6 +878,7 @@ impl CanvasModel {
                         item_transform: g.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: false,
                     });
                 }
             }
@@ -1006,8 +1019,9 @@ fn compute_node_mutation(
                 delta
             };
             // Phase D — rotated frames translate through their
-            // ItemTransform's tx/ty; un-rotated stays on the bounds
-            // path so text reflow continues to track the bbox.
+            // ItemTransform's tx/ty; an un-rotated item DRAWN FROM ITS
+            // BOX stays on the bounds path so text reflow continues to
+            // track the bbox.
             // Track L — two new constraints:
             //   * Groups carry no geometric bounds, so a translate
             //     ALWAYS mutates their item_transform.
@@ -1024,7 +1038,15 @@ fn compute_node_mutation(
                 .snapshots
                 .iter()
                 .any(|s| matches!(s.node_id, NodeId::Group(_)));
-            let force_transform_path = is_group || session_targets_group;
+            // C-78 — a third constraint: an item drawn from its PATH.
+            // A line, a pen path, a many-anchored rectangle and a shaped
+            // text frame paint their anchors, which a bounds write does
+            // not touch — the drag committed, the box moved and the
+            // drawing stayed where it was. They translate through the
+            // transform, which moves box and path together and undoes
+            // exactly. (Their anchors and box are left alone, so they
+            // still agree with each other afterwards.)
+            let force_transform_path = is_group || session_targets_group || snap.drawn_from_path;
             if !force_transform_path && is_pure_translate_or_identity(snap.item_transform) {
                 NodeMutation::Bounds(translate_bounds(snap.bounds, d))
             } else {
@@ -1789,24 +1811,75 @@ fn write_mutation_to_scene(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(id.as_str()))
                 {
-                    if let NodeMutation::PathPoint { address, position } = mutation {
-                        if let Some(anchor) = p.anchors.get_mut(address.index) {
-                            match address.role {
-                                paged_mutate::PathPointRole::Anchor => {
-                                    let dx = position[0] - anchor.anchor.0;
-                                    let dy = position[1] - anchor.anchor.1;
-                                    anchor.anchor = (position[0], position[1]);
-                                    anchor.left = (anchor.left.0 + dx, anchor.left.1 + dy);
-                                    anchor.right = (anchor.right.0 + dx, anchor.right.1 + dy);
-                                }
-                                paged_mutate::PathPointRole::Left => {
-                                    anchor.left = (position[0], position[1]);
-                                }
-                                paged_mutate::PathPointRole::Right => {
-                                    anchor.right = (position[0], position[1]);
+                    match mutation {
+                        NodeMutation::PathPoint { address, position } => {
+                            if let Some(anchor) = p.anchors.get_mut(address.index) {
+                                match address.role {
+                                    paged_mutate::PathPointRole::Anchor => {
+                                        let dx = position[0] - anchor.anchor.0;
+                                        let dy = position[1] - anchor.anchor.1;
+                                        anchor.anchor = (position[0], position[1]);
+                                        anchor.left = (anchor.left.0 + dx, anchor.left.1 + dy);
+                                        anchor.right = (anchor.right.0 + dx, anchor.right.1 + dy);
+                                    }
+                                    paged_mutate::PathPointRole::Left => {
+                                        anchor.left = (position[0], position[1]);
+                                    }
+                                    paged_mutate::PathPointRole::Right => {
+                                        anchor.right = (position[0], position[1]);
+                                    }
                                 }
                             }
                         }
+                        // C-78 — a polygon is dragged, rotated and
+                        // scaled like any other item. These two were
+                        // dropped here, so a path never followed the
+                        // pointer: the preview showed nothing until
+                        // (and, for a translate, not even after) the
+                        // commit.
+                        NodeMutation::Bounds(b) => p.bounds = b,
+                        NodeMutation::Transform(m) => p.item_transform = m,
+                        NodeMutation::ImageTransform(_) => {}
+                    }
+                    return;
+                }
+            }
+        }
+        // C-78 — ovals and lines had no arm at all (they fell to the
+        // catch-all below), so neither previewed any gesture.
+        NodeId::Oval(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(o) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|o| o.self_id.as_deref() == Some(id.as_str()))
+                {
+                    match mutation {
+                        NodeMutation::Bounds(b) => o.bounds = b,
+                        NodeMutation::Transform(m) => o.item_transform = m,
+                        // The snapshot does not carry an oval's image
+                        // transform, so the content gestures stay off
+                        // this kind rather than write one it could not
+                        // put back.
+                        NodeMutation::ImageTransform(_) | NodeMutation::PathPoint { .. } => {}
+                    }
+                    return;
+                }
+            }
+        }
+        NodeId::GraphicLine(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(l) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|l| l.self_id.as_deref() == Some(id.as_str()))
+                {
+                    match mutation {
+                        NodeMutation::Bounds(b) => l.bounds = b,
+                        NodeMutation::Transform(m) => l.item_transform = m,
+                        NodeMutation::ImageTransform(_) | NodeMutation::PathPoint { .. } => {}
                     }
                     return;
                 }
@@ -1827,10 +1900,8 @@ fn write_mutation_to_scene(
                 }
             }
         }
-        // Phase D only mutates TextFrame + Rectangle. Other shapes
-        // resolve as ElementNotFound at snapshot time. Phase H added
-        // Polygon for path-point editing (handled above); Track L
-        // added Group above.
+        // Every page-item kind is handled above; what remains (pages,
+        // stories, layers…) is never a gesture target.
         _ => {}
     }
 }
@@ -1894,6 +1965,37 @@ fn restore_snapshot_in_scene(scene: &mut paged_scene::Document, snap: &NodeSnaps
                 }
             }
         }
+        // C-78 — the two kinds the preview now writes must be put back
+        // by the same snapshot, or a cancelled drag would leave them
+        // where the pointer was.
+        NodeId::Oval(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(o) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|o| o.self_id.as_deref() == Some(id.as_str()))
+                {
+                    o.bounds = snap.bounds;
+                    o.item_transform = snap.item_transform;
+                    return;
+                }
+            }
+        }
+        NodeId::GraphicLine(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(l) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|l| l.self_id.as_deref() == Some(id.as_str()))
+                {
+                    l.bounds = snap.bounds;
+                    l.item_transform = snap.item_transform;
+                    return;
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1917,6 +2019,7 @@ pub(crate) fn compute_new_bounds(
         item_transform: None,
         image_item_transform: None,
         path_anchors: Vec::new(),
+        drawn_from_path: false,
     };
     let session = GestureSession {
         handle: GestureHandle(0),
@@ -2421,6 +2524,7 @@ mod tests {
             item_transform: None,
             image_item_transform: Some(IDENTITY),
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let session = GestureSession {
             handle: GestureHandle(0),
@@ -2449,6 +2553,7 @@ mod tests {
             item_transform: None,
             image_item_transform: Some(IDENTITY),
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let op = build_op_from_mutation(&snap, mutation);
         assert!(matches!(

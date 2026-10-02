@@ -456,7 +456,7 @@ pub(super) fn emit_line_into(
     // is in inner coords and `frame_outer_transform` maps inner → page
     // (ItemTransform composed with the page-origin shift) — exactly the
     // mapping the diagonal fallback below gets via `transform_bounds`.
-    if line.anchors.len() >= 2 {
+    if crate::module::frame::graphic_line_drawn_from_path(line) {
         // A GraphicLine is an open path by definition; default any
         // contour the parser didn't explicitly flag to *open* so the
         // builder doesn't synthesise a closing segment back to start.

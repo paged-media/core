@@ -54,6 +54,14 @@ pub use paged_gpu::separations::{
     InkChannel, InkCoverageReport, InkPlate, PlateCoverage, Separation, TAC_BUCKETS, TAC_BUCKET_PCT,
 };
 
+// Which geometry an item is drawn from — its box or its path. The
+// canvas's translate gesture asks, so that what it moves is what is
+// painted (RFI C-78).
+pub use module::frame::{
+    graphic_line_drawn_from_path, polygon_drawn_from_path, rectangle_drawn_from_path,
+    text_frame_drawn_from_path,
+};
+
 // Re-export Document so consumers only need one `use` for the common
 // path: `use paged_renderer::{Document, pipeline, PipelineOptions};`.
 pub use paged_scene::Document;

@@ -558,6 +558,7 @@ mod tests {
             item_transform: None,
             image_item_transform: None,
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         }
     }
 
@@ -848,6 +849,7 @@ mod tests {
             item_transform: None,
             image_item_transform: None,
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let b = NodeSnapshot {
             id: ElementId::TextFrame("b".into()),
@@ -862,6 +864,7 @@ mod tests {
             item_transform: None,
             image_item_transform: None,
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let sess = session(vec![a, b]);
         let pages = vec![

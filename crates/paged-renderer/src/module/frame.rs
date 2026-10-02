@@ -224,6 +224,43 @@ fn text_frame_is_rect_path(
     eq(xs[0], xs[1]) && eq(xs[2], xs[3]) && eq(ys[0], ys[1]) && eq(ys[2], ys[3])
 }
 
+// ---------------------------------------------------------------------------
+// Box or path — which geometry an item is DRAWN from.
+//
+// Every page item carries a box (`bounds`) and may carry a path
+// (`anchors`). The adapters below pick one, per kind, and nothing else
+// in the engine may disagree with their pick: an edit that moves the box
+// of an item drawn from its path moves nothing on the page (RFI C-78 —
+// the translate gesture did exactly that to every line and pen path).
+// These four are that pick, public so the canvas asks the renderer
+// instead of keeping its own idea of it.
+// ---------------------------------------------------------------------------
+
+/// A text frame paints its path when the path is not the ordinary box
+/// the cheap rect emitter reproduces (see [`text_frame_is_rect_path`]).
+pub fn text_frame_drawn_from_path(frame: &TextFrame) -> bool {
+    !text_frame_is_rect_path(&frame.anchors, &frame.subpath_starts, &frame.subpath_open)
+}
+
+/// Q-11 — a `<Rectangle>` with more than four anchors carries a stylised
+/// outline and is drawn as that polygon; four or fewer is the box.
+pub fn rectangle_drawn_from_path(rect: &Rectangle) -> bool {
+    rect.anchors.len() > 4
+}
+
+/// A polygon is drawn from its anchors whenever it has any; an
+/// anchorless one (a synthetic `GeometricBounds`-only polygon) is its
+/// box.
+pub fn polygon_drawn_from_path(poly: &Polygon) -> bool {
+    !poly.anchors.is_empty()
+}
+
+/// A line strokes its anchors when it has at least two; otherwise the
+/// corner-to-corner diagonal of its box.
+pub fn graphic_line_drawn_from_path(line: &GraphicLine) -> bool {
+    line.anchors.len() >= 2
+}
+
 impl<'a> ResolvedFrame<'a> {
     /// Stroke weight with InDesign's per-frame default applied
     /// (`1.0` pt). Modules use this when emitting; the `Option`
@@ -247,11 +284,7 @@ impl<'a> ResolvedFrame<'a> {
         // independently (see `frame_polygon_spread`); this only affects
         // the frame's own paint.
         let bbox = rect_from_bounds(frame.bounds);
-        let geometry = if text_frame_is_rect_path(
-            &frame.anchors,
-            &frame.subpath_starts,
-            &frame.subpath_open,
-        ) {
+        let geometry = if !text_frame_drawn_from_path(frame) {
             Geometry::TextFrameRect { rect: bbox }
         } else {
             Geometry::Polygon {
@@ -305,7 +338,7 @@ impl<'a> ResolvedFrame<'a> {
         // than `<Polygon>`). Mirror `from_polygon`'s adapter so paint
         // modules see the real curve instead of collapsing to the AABB.
         let bbox = rect_from_bounds(rect.bounds);
-        let geometry = if rect.anchors.len() > 4 {
+        let geometry = if rectangle_drawn_from_path(rect) {
             Geometry::Polygon {
                 anchors: &rect.anchors,
                 subpath_starts: &rect.subpath_starts,
@@ -392,7 +425,7 @@ impl<'a> ResolvedFrame<'a> {
         let bbox = rect_from_bounds(poly.bounds);
         // Synthetic IDMLs sometimes omit anchor data; fall back to
         // bbox-as-rect so paint modules never see an empty polygon.
-        let geometry = if poly.anchors.is_empty() {
+        let geometry = if !polygon_drawn_from_path(poly) {
             Geometry::Rect { rect: bbox }
         } else {
             Geometry::Polygon {
