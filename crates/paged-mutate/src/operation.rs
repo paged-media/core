@@ -1948,6 +1948,12 @@ pub struct TableRowSpec {
     pub single_row_height: Option<f32>,
     pub minimum_height: Option<f32>,
     pub maximum_height: Option<f32>,
+    /// `AutoGrow` / `KeepWithNextRow`, so undoing a row delete brings a
+    /// fixed or kept row back as it was.
+    #[serde(default)]
+    pub auto_grow: Option<bool>,
+    #[serde(default)]
+    pub keep_with_next_row: Option<bool>,
 }
 
 impl TableRowSpec {
@@ -1957,6 +1963,8 @@ impl TableRowSpec {
             single_row_height: r.single_row_height,
             minimum_height: r.minimum_height,
             maximum_height: r.maximum_height,
+            auto_grow: r.auto_grow,
+            keep_with_next_row: r.keep_with_next_row,
         }
     }
     pub fn to_parse(&self) -> paged_model::TableRow {
@@ -1965,6 +1973,8 @@ impl TableRowSpec {
             single_row_height: self.single_row_height,
             minimum_height: self.minimum_height,
             maximum_height: self.maximum_height,
+            auto_grow: self.auto_grow,
+            keep_with_next_row: self.keep_with_next_row,
             ..Default::default()
         }
     }

@@ -5121,6 +5121,17 @@ pub struct TableRow {
     /// sentinel (`8640pt`) when omitted; we keep it `None` and treat
     /// missing as infinity at the call site.
     pub maximum_height: Option<f32>,
+    /// `AutoGrow`. `Some(false)` is a fixed row: InDesign keeps it at
+    /// its `SingleRowHeight` whatever its cells hold and oversets the
+    /// lines that do not fit. `None` ⇒ `true`, the IDML default (the row
+    /// grows to its tallest cell).
+    #[serde(default)]
+    pub auto_grow: Option<bool>,
+    /// `KeepWithNextRow`. `Some(true)` keeps this row in the same frame
+    /// as the row after it, so a run of kept rows moves to the next
+    /// frame together. `None` ⇒ `false`, the IDML default.
+    #[serde(default)]
+    pub keep_with_next_row: Option<bool>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
