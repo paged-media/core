@@ -998,7 +998,9 @@ pub enum PropertyPath {
     // the `Option<…Params>` is the enabled bit (the parser drops the
     // whole block when `Applied="false"`), so `true` materialises a
     // default block and `false` clears it. Wired on the effect-bearing
-    // kinds (`TextFrame` / `Rectangle` / `Oval`); other kinds raise
+    // kinds (`TextFrame` / `Rectangle` / `Oval` / `Polygon` — C-63
+    // added the last; a `GraphicLine` carries the bag but no renderer
+    // reads it, so it stays out); other kinds raise
     // `UnsupportedProperty`. All paint-only → `frame_style` (the
     // rasterizer's effect compositor reads them on the next rebuild;
     // none reflow). The `*Enabled` toggle is lossy on a customised
@@ -1142,7 +1144,8 @@ pub enum PropertyPath {
     /// `"Overlay"`, …); empty clears the override (`blend_mode = None`).
     /// Carried on every page-item kind with a `blend_mode` field
     /// (TextFrame / Rectangle / Polygon / Oval — C-20 added the last
-    /// two so a baked appearance stack can blend per layer;
+    /// two so a baked appearance stack can blend per layer — and Group,
+    /// whose slot is `transparency.blend_mode`, C-63;
     /// `GraphicLine` has no such field). The rasterizer doesn't yet honour
     /// non-Normal modes; the field is wired for authoring + round-trip.
     /// Paint-only (`frame_style`). The companion `FrameOpacity` path
@@ -2644,6 +2647,17 @@ pub struct GroupSpec {
     /// a fresh top-level create never has). `None` ⇒ identity.
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
+    /// C-63 inverse-only — the group's own `<BlendingSetting Opacity>`
+    /// to restore on re-creation. Group opacity became settable
+    /// (`FrameOpacity` on a `NodeId::Group`), and ungrouping drops the
+    /// wrapper that carried it; without this an undo of that ungroup
+    /// brought the group back fully opaque. A fresh create omits it.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// C-63 inverse-only — the group's own `<BlendingSetting
+    /// BlendMode>`; see [`GroupSpec::opacity`].
+    #[serde(default)]
+    pub blend_mode: Option<String>,
 }
 
 /// W1.20 — `(parent_group_id, index_within_parent_members)` carried by

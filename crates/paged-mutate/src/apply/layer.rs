@@ -804,7 +804,7 @@ pub(super) fn apply_create_group(
         spread.groups.push(paged_model::Group {
             self_id: Some(self_id.clone()),
             members: members_in_order.clone(),
-            transparency: Default::default(),
+            transparency: restored_transparency(spec),
             item_transform: spec.item_transform,
             // C-18: a scene-created group has no IDML corner attributes
             // to carry (and a group never renders them anyway).
@@ -851,7 +851,7 @@ pub(super) fn apply_create_group(
         spread.groups.push(paged_model::Group {
             self_id: Some(self_id.clone()),
             members: members_doc_order.clone(),
-            transparency: Default::default(),
+            transparency: restored_transparency(spec),
             item_transform: spec.item_transform,
             // C-18: a scene-created group has no IDML corner attributes
             // to carry (and a group never renders them anyway).
@@ -887,6 +887,21 @@ pub(super) fn apply_create_group(
             ..Default::default()
         },
     })
+}
+
+/// C-63 — the `<BlendingSetting>` half of a re-created group. A fresh
+/// create carries neither field, which is the default block.
+///
+/// The group's `drop_shadow` is not restored: nothing can set it (no
+/// write arm) and nothing paints it, so it only ever arrives from a
+/// file — the same standing as the corner attributes, which an
+/// ungroup-then-undo has never restored either.
+fn restored_transparency(spec: &GroupSpec) -> paged_model::GroupTransparency {
+    paged_model::GroupTransparency {
+        opacity: spec.opacity,
+        blend_mode: spec.blend_mode.clone(),
+        drop_shadow: None,
+    }
 }
 
 /// B-04 / W1.20 — dissolve a group; members are spliced back at the
@@ -1072,6 +1087,10 @@ pub(super) fn apply_dissolve_group(
                 members: member_nodes,
                 parent: parent_link,
                 item_transform: group.item_transform,
+                // C-63 — the wrapper's own opacity / blend go with it;
+                // carry them so undo re-creates the group as it was.
+                opacity: group.transparency.opacity,
+                blend_mode: group.transparency.blend_mode.clone(),
             },
         },
         invalidation: InvalidationHint {

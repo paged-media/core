@@ -832,13 +832,32 @@ fn decompose_flip_v(m: Option<[f32; 6]>) -> bool {
     paged_mutate::operation::decompose_transform(m).flip_v
 }
 
+/// The whole-struct gradient-feather row (`FrameGradientFeather`), for
+/// the kinds whose descriptor does not already spell it inline. `None`
+/// when the item carries no gradient feather — the same value the
+/// mutation takes to clear one.
+fn gradient_feather_entry(
+    effects: Option<&paged_model::FrameEffects>,
+) -> crate::channel::PropertyEntry {
+    crate::channel::PropertyEntry {
+        path: paged_mutate::PropertyPath::FrameGradientFeather,
+        value: Some(paged_mutate::Value::GradientFeather(
+            effects
+                .and_then(|e| e.gradient_feather.as_ref())
+                .map(paged_mutate::operation::GradientFeatherSpec::from_parse),
+        )),
+    }
+}
+
 /// W0.4 — read-side mirror of the transparency-effect per-field paths
 /// (gap 18). Emits one `PropertyEntry` per effect field, sourcing each
 /// from the parsed `effects: Option<FrameEffects>` block (a `None`
 /// effect surfaces the field's "empty" value: `false` for the
 /// `*Enabled` toggle, `Length(None)` / `ColorRef(None)` / `Text("")`
-/// for the rest). Shared by the TextFrame and Rectangle property
-/// blocks so the inventory stays in lockstep across kinds. The
+/// for the rest). Shared by the TextFrame, Rectangle, Oval and Polygon
+/// property blocks so the inventory stays in lockstep across kinds —
+/// exactly the kinds `paged_mutate`'s `find_frame_effects_mut` writes
+/// (C-63). The
 /// object-level `frame.blendMode` path reads the page item's own
 /// `blend_mode` slot (the `<BlendingSetting>` Opacity half is already
 /// surfaced as `FrameOpacity`).
@@ -3371,6 +3390,8 @@ impl CanvasModel {
                         .collect::<Option<Vec<_>>>()?,
                     parent: None,
                     item_transform: None,
+                    opacity: None,
+                    blend_mode: None,
                 },
             }),
             Mutation::SetGroupTransform {
@@ -5901,6 +5922,23 @@ impl CanvasModel {
                                 path: PropertyPath::FrameTransform,
                                 value: Some(Value::Transform(g.item_transform)),
                             },
+                            // C-63 — the group's own transparency: the
+                            // values `group_pass` composites the members
+                            // with, as one object. Paired with the Group
+                            // write arms; the group's `drop_shadow` is
+                            // NOT here because nothing paints it (the
+                            // bracket opens for it and emits no shadow)
+                            // and it has no write arm either.
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Some(Value::Length(g.transparency.opacity)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameBlendMode,
+                                value: Some(Value::Text(
+                                    g.transparency.blend_mode.clone().unwrap_or_default(),
+                                )),
+                            },
                         ];
                         // C-18 / E-1 — a `<Group>` carries the corner
                         // vocabulary on disk (37 corpus groups do, 11
@@ -6001,18 +6039,6 @@ impl CanvasModel {
                                     p.item_layer.clone().unwrap_or_default(),
                                 )),
                             },
-                            // C-20 — the object-level blend mode now has
-                            // a Polygon write arm, so surface the read
-                            // half too (tint + opacity were already
-                            // here). The full effects inventory stays
-                            // TextFrame/Rectangle-only: `paged_model::
-                            // Polygon` carries no `effects` bag.
-                            PropertyEntry {
-                                path: PropertyPath::FrameBlendMode,
-                                value: Some(Value::Text(
-                                    p.blend_mode.clone().unwrap_or_default(),
-                                )),
-                            },
                             // C-25 — both overprints were writable and
                             // unread. Same one-sided debt as the Oval
                             // paint set above, two rows wide.
@@ -6025,6 +6051,17 @@ impl CanvasModel {
                                 value: Some(Value::Bool(p.overprint_stroke)),
                             },
                         ];
+                        // C-63 — the effects inventory. A polygon has
+                        // carried the `effects` bag since Q-04 and the
+                        // renderer paints it; the write arms reach it
+                        // now, so the read half is here to pair with
+                        // them. The object-level blend mode (C-20) rides
+                        // the same builder, as it does for a rectangle.
+                        entries.push(gradient_feather_entry(p.effects.as_ref()));
+                        entries.extend(effect_property_entries(
+                            p.effects.as_ref(),
+                            p.blend_mode.as_deref(),
+                        ));
                         // B-23 / E-1 — the polygon corner slots the
                         // kernel has applied since B-23 finally have a
                         // read half, so an editor panel has something to
@@ -6221,12 +6258,6 @@ impl CanvasModel {
                                 value: Some(Value::Length(o.opacity)),
                             },
                             PropertyEntry {
-                                path: PropertyPath::FrameBlendMode,
-                                value: Some(Value::Text(
-                                    o.blend_mode.clone().unwrap_or_default(),
-                                )),
-                            },
-                            PropertyEntry {
                                 path: PropertyPath::FrameOverprintFill,
                                 value: Some(Value::Bool(o.overprint_fill)),
                             },
@@ -6247,6 +6278,16 @@ impl CanvasModel {
                                 )),
                             },
                         ];
+                        // C-63 — the effects inventory. Every one of
+                        // these has had a `NodeId::Oval` write arm since
+                        // W0.4 and none was readable, so an ellipse's
+                        // glow could be set and never shown. The blend
+                        // mode row (C-25) moves into the shared builder.
+                        entries.push(gradient_feather_entry(o.effects.as_ref()));
+                        entries.extend(effect_property_entries(
+                            o.effects.as_ref(),
+                            o.blend_mode.as_deref(),
+                        ));
                         // Stored + mutable, never rendered — an ellipse
                         // has no corner. See
                         // `paged_model::Oval::corner_radius`.

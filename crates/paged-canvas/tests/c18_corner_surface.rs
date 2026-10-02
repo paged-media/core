@@ -393,7 +393,7 @@ fn e1_write_without_read_audit_across_kinds() {
     // explicitly rather than scraped from `paged-introspect`'s catalog:
     // an audit should state what it probed, and paged-canvas does not
     // otherwise depend on that crate.
-    let probes: [PropertyPath; 18] = [
+    let probes: [PropertyPath; 26] = [
         PropertyPath::FrameFillColor,
         PropertyPath::FrameFillTint,
         PropertyPath::FrameStrokeColor,
@@ -412,6 +412,18 @@ fn e1_write_without_read_audit_across_kinds() {
         PropertyPath::FrameOverprintStroke,
         PropertyPath::FrameNonprinting,
         PropertyPath::AppliedObjectStyle,
+        // C-63 — the effect lane. One row per effect block (its enable
+        // flag) plus the whole-struct gradient feather: an Oval accepted
+        // all of these from W0.4 on and read none of them, and nothing
+        // here was looking.
+        PropertyPath::FrameInnerShadowEnabled,
+        PropertyPath::FrameOuterGlowEnabled,
+        PropertyPath::FrameInnerGlowEnabled,
+        PropertyPath::FrameBevelEnabled,
+        PropertyPath::FrameSatinEnabled,
+        PropertyPath::FrameFeatherEnabled,
+        PropertyPath::FrameDirectionalFeatherEnabled,
+        PropertyPath::FrameGradientFeather,
     ];
 
     let mut write_only: Vec<(String, PropertyPath)> = Vec::new();

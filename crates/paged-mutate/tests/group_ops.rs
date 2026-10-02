@@ -137,6 +137,8 @@ fn create_group_is_z_order_neutral_and_round_trips() {
                 members: members.clone(),
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )
@@ -243,6 +245,8 @@ fn scattered_members_collect_deterministically_and_undo_is_exact() {
                 members: members.clone(),
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )
@@ -344,6 +348,8 @@ fn atomic_rejections_leave_the_document_untouched() {
                 members: vec![members[0].clone(), NodeId::Rectangle("uNOPE".into())],
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     );
@@ -359,6 +365,8 @@ fn atomic_rejections_leave_the_document_untouched() {
                 members: vec![members[0].clone(), members[0].clone()],
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     );
@@ -375,6 +383,8 @@ fn atomic_rejections_leave_the_document_untouched() {
                 members: vec![members[0].clone(), NodeId::Group("uNOGROUP".into())],
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     );
@@ -391,6 +401,8 @@ fn atomic_rejections_leave_the_document_untouched() {
                 members: members.clone(),
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )
@@ -403,6 +415,8 @@ fn atomic_rejections_leave_the_document_untouched() {
                 members: vec![members[0].clone()],
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     );
@@ -496,6 +510,8 @@ fn nested_create_round_trips_and_restores_prior_structure() {
                 members: vec![NodeId::Group(g1_id.clone()), leaf.clone()],
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )
@@ -592,6 +608,8 @@ fn group_transform_moves_members_hit_and_render_agree_and_undo_restores() {
                 members: members.clone(),
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )
@@ -918,6 +936,8 @@ fn create_group_on_empty_frames_in_order_materialises_and_succeeds() {
                 members: members.clone(),
                 parent: None,
                 item_transform: None,
+                opacity: None,
+                blend_mode: None,
             },
         },
     )

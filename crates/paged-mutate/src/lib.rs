@@ -7004,8 +7004,11 @@ mod tests {
 
     #[test]
     fn w04_effect_unsupported_on_graphic_line() {
-        // Effects are fill-based; GraphicLine carries no effects bag, so
-        // the per-field + toggle paths reject it.
+        // Effects are fill-based. A GraphicLine does carry the `effects`
+        // bag (the importer fills it) but `emit_line_into` never reads
+        // it — a line has no fill path to composite against — so the
+        // per-field + toggle paths reject rather than write a value no
+        // renderer consults (C-63 extended the lane to Polygon only).
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         p.apply(Operation::InsertNode {
             parent: NodeId::Spread("Spread/u_main".to_string()),

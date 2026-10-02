@@ -1301,7 +1301,99 @@ fn property_cases() -> Vec<Case> {
             })),
         }
     }));
+    // ---------------------------------------------------------------
+    // C-63 — the same effects on a PEN PATH, and transparency on a group
+    //
+    // Every case above hangs its effect on a Rectangle, which is why the
+    // sweep stayed green while a Polygon could not take one at all: the
+    // model carried the bag, the importer filled it, the renderer painted
+    // it, and `find_frame_effects_mut` never reached the kind. The path
+    // here is minted the way the pen mints it (`insertPath`), so what is
+    // measured is the thing a user draws.
+    // ---------------------------------------------------------------
+    c.push(paints(
+        "SetProperty frameInnerShadowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameInnerShadowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameOuterGlowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameOuterGlowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameInnerGlowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameInnerGlowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameBevelEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameBevelEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameSatinEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameSatinEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameFeatherEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameFeatherEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameDirectionalFeatherEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameDirectionalFeatherEnabled),
+    ));
+    // A group fades and blends as ONE object: the renderer brackets its
+    // members in a single blend group, which is not what setting each
+    // member's own opacity paints where two members overlap.
+    c.push(paints(
+        "SetProperty frameOpacity (Group)",
+        "geometry",
+        |m| Mutation::SetElementProperty {
+            element_id: ElementId::Group(overlapping_group(m)),
+            path: PropertyPath::FrameOpacity,
+            value: Value::Length(Some(40.0)),
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameBlendMode (Group)",
+        "geometry",
+        |m| Mutation::SetElementProperty {
+            element_id: ElementId::Group(overlapping_group(m)),
+            path: PropertyPath::FrameBlendMode,
+            value: Value::Text("Multiply".into()),
+        },
+    ));
     c
+}
+
+/// Turn one frame effect on, on a filled quad minted through
+/// `insertPath` — a `Polygon`, exactly what the pen tool draws.
+fn enable_polygon_effect(m: &mut CanvasModel, path: PropertyPath) -> Mutation {
+    let id = add_quad(m, 120.0, 120.0, 160.0, 120.0);
+    Mutation::SetElementProperty {
+        element_id: ElementId::Polygon(id),
+        path,
+        value: Value::Bool(true),
+    }
+}
+
+/// Two overlapping filled rectangles in one group; returns the group id.
+fn overlapping_group(m: &mut CanvasModel) -> String {
+    let a = add_rect(m, (100.0, 100.0, 300.0, 300.0));
+    let b = add_rect(m, (150.0, 150.0, 350.0, 350.0));
+    let out = m
+        .apply_mutation(&Mutation::CreateGroup {
+            member_ids: vec![ElementId::Rectangle(a), ElementId::Rectangle(b)],
+        })
+        .expect("group");
+    match out.created_id.expect("created id") {
+        ElementId::Group(id) => id,
+        other => panic!("expected a Group, got {other:?}"),
+    }
 }
 
 /// Turn one frame effect on, on the fixture's first rectangle.
