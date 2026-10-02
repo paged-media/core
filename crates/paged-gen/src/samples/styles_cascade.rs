@@ -201,6 +201,7 @@ fn table_cascade_story(story_id: &str) -> Vec<u8> {
         applied_table_style: Some(TABLE_DERIVED.to_string()),
         row_heights_pt: vec![40.0, 40.0],
         column_widths_pt: vec![120.0, 120.0],
+        extra_row_attrs: Vec::new(),
         cells,
     };
     let story = Story {

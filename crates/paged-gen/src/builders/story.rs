@@ -147,6 +147,10 @@ pub struct Table {
     /// Cells in column-major order. Length must equal
     /// `column_count * total_rows`.
     pub cells: Vec<Cell>,
+    /// `(row, attribute, value)` written onto that `<Row>`, replacing a
+    /// default of the same name — e.g. `(2, "AutoGrow", "false")` for a
+    /// fixed-height row, or `KeepWithNextRow`.
+    pub extra_row_attrs: Vec<(u32, &'static str, String)>,
 }
 
 pub struct Cell {
@@ -194,6 +198,9 @@ pub struct Cell {
     pub bottom_edge_stroke_tint: Option<f32>,
     pub left_edge_stroke_tint: Option<f32>,
     pub right_edge_stroke_tint: Option<f32>,
+    /// Attributes written onto the `<Cell>`, replacing a default of the
+    /// same name — e.g. `("TextTopInset", "10")`.
+    pub extra_cell_attrs: Vec<(&'static str, String)>,
 }
 
 /// Generator-side mirror of IDML's per-cell diagonal stroke
@@ -233,6 +240,7 @@ impl Cell {
             bottom_edge_stroke_tint: None,
             left_edge_stroke_tint: None,
             right_edge_stroke_tint: None,
+            extra_cell_attrs: Vec::new(),
         }
     }
 
@@ -380,6 +388,18 @@ pub fn write_story(s: &Story) -> Vec<u8> {
     b.start("Story", &story_attrs);
     let paragraph_count = s.paragraphs.len();
     for (para_idx, paragraph) in s.paragraphs.iter().enumerate() {
+        write_paragraph(&mut b, paragraph, para_idx + 1 == paragraph_count);
+    }
+    b.end("Story");
+    b.end("idPkg:Story");
+    b.into_bytes()
+}
+
+/// One `<ParagraphStyleRange>` with its runs, and the paragraph MARK
+/// (`<Br/>`) unless `last` — the shape InDesign writes for a story's
+/// paragraphs AND a cell's, so both go through here.
+fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
+    {
         let space_before_str: String;
         let space_after_str: String;
         let first_line_indent_str: String;
@@ -536,10 +556,10 @@ pub fn write_story(s: &Story) -> Vec<u8> {
                     "CharacterStyle/$ID/[No character style]",
                 )],
             );
-            write_table(&mut b, t);
+            write_table(b, t);
             b.end("CharacterStyleRange");
             b.end("ParagraphStyleRange");
-            continue;
+            return;
         }
         for (idx, run) in paragraph.runs.iter().enumerate() {
             let point_size_str: String;
@@ -613,9 +633,9 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             // Rectangle) plus an `<AnchoredObjectSetting>` child if
             // configured.
             if let Some(frame) = &run.anchored_frame {
-                frame.write(&mut b);
+                frame.write(b);
             }
-            write_run_content(&mut b, &run.text);
+            write_run_content(b, &run.text);
             // The paragraph MARK. In IDML a paragraph boundary is the
             // `<Br/>` character, not the `<ParagraphStyleRange>`
             // boundary — InDesign's own export puts two paragraphs in
@@ -626,16 +646,13 @@ pub fn write_story(s: &Story) -> Vec<u8> {
             // treated each range as a paragraph and showed three.
             // The story's LAST paragraph carries no mark, exactly as
             // InDesign writes it.
-            if idx + 1 == paragraph.runs.len() && para_idx + 1 < paragraph_count {
+            if idx + 1 == paragraph.runs.len() && !last {
                 b.empty("Br", &[]);
             }
             b.end("CharacterStyleRange");
         }
         b.end("ParagraphStyleRange");
     }
-    b.end("Story");
-    b.end("idPkg:Story");
-    b.into_bytes()
 }
 
 /// Emit a run's text body. Tabs (`\t`) become `<Tab/>` empty elements
@@ -720,16 +737,21 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
         //
         // `idml-export` already writes all three — this is the second
         // writer, and fixing one was never fixing both.
-        b.empty(
-            "Row",
-            &[
-                ("Self", row_self.as_str()),
-                ("Name", r_str.as_str()),
-                ("SingleRowHeight", h_str.as_str()),
-                ("MinimumHeight", h_str.as_str()),
-                ("AutoGrow", "true"),
-            ],
-        );
+        let mut row_attrs: Vec<(&str, String)> = vec![
+            ("Self", row_self),
+            ("Name", r_str),
+            ("SingleRowHeight", h_str.clone()),
+            ("MinimumHeight", h_str),
+            ("AutoGrow", "true".to_string()),
+        ];
+        for (row, k, v) in &t.extra_row_attrs {
+            if *row == r {
+                row_attrs.retain(|(key, _)| key != k);
+                row_attrs.push((k, v.clone()));
+            }
+        }
+        let refs: Vec<(&str, &str)> = row_attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        b.empty("Row", &refs);
     }
     for c in 0..t.column_count {
         let c_str = c.to_string();
@@ -865,6 +887,10 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             if let Some(v) = d.diagonal_in_front {
                 a.push(("DiagonalLineInFront", v.to_string()));
             }
+            for (k, v) in &cell.extra_cell_attrs {
+                a.retain(|(key, _)| key != k);
+                a.push((k, v.clone()));
+            }
             // Every inset spelled, as InDesign's own files do: an absent
             // inset is InDesign's 4 pt default, and both readers agree
             // only when the number is on the element.
@@ -880,71 +906,18 @@ fn write_table(b: &mut XmlBuilder, t: &Table) {
             }
             let attr_refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             b.start("Cell", &attr_refs);
-            for p in &cell.paragraphs {
-                write_cell_paragraph(b, p);
+            // A cell's paragraphs are separated by paragraph MARKS, as a
+            // story's are. Without the `<Br/>` InDesign read "Line 1" +
+            // "Line 2" as one paragraph "Line 1Line 2" (the `tables`
+            // reference, 2026-10-02) while our reader saw two — and the
+            // cell writer dropped every spacing / leading attribute, so
+            // no fixture could ask how a row grows to its paragraphs.
+            let n = cell.paragraphs.len();
+            for (i, p) in cell.paragraphs.iter().enumerate() {
+                write_paragraph(b, p, i + 1 == n);
             }
             b.end("Cell");
         }
     }
     b.end("Table");
-}
-
-/// Cell-content paragraph emitter — same shape as the top-level
-/// loop in `write_story` but inlined so the table path stays
-/// self-contained.
-fn write_cell_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph) {
-    let mut p_attrs: Vec<(&str, &str)> = vec![(
-        "AppliedParagraphStyle",
-        "ParagraphStyle/$ID/[No paragraph style]",
-    )];
-    if let Some(j) = paragraph.justification {
-        p_attrs.push(("Justification", j));
-    }
-    b.start("ParagraphStyleRange", &p_attrs);
-    // A cell paragraph can itself host a table — the nested-table shape.
-    if let Some(t) = &paragraph.table {
-        b.start(
-            "CharacterStyleRange",
-            &[(
-                "AppliedCharacterStyle",
-                "CharacterStyle/$ID/[No character style]",
-            )],
-        );
-        write_table(b, t);
-        b.end("CharacterStyleRange");
-        b.end("ParagraphStyleRange");
-        return;
-    }
-    for run in &paragraph.runs {
-        let point_size_str: String;
-        let mut r_attrs: Vec<(&str, &str)> = vec![(
-            "AppliedCharacterStyle",
-            "CharacterStyle/$ID/[No character style]",
-        )];
-        if let Some(size) = run.point_size {
-            point_size_str = crate::xml::format_f32(size);
-            r_attrs.push(("PointSize", point_size_str.as_str()));
-        }
-        if let Some(fill) = &run.fill_color {
-            r_attrs.push(("FillColor", fill.as_str()));
-        }
-        if let Some(style) = run.font_style {
-            r_attrs.push(("FontStyle", style));
-        } else if run.applied_font.is_some() {
-            // Same rule as the main run writer: a pinned font spells
-            // its face.
-            r_attrs.push(("FontStyle", "Regular"));
-        }
-        b.start("CharacterStyleRange", &r_attrs);
-        if let Some(font) = run.applied_font {
-            b.start("Properties", &[]);
-            b.start("AppliedFont", &[("type", "string")]);
-            b.text(font);
-            b.end("AppliedFont");
-            b.end("Properties");
-        }
-        write_run_content(b, &run.text);
-        b.end("CharacterStyleRange");
-    }
-    b.end("ParagraphStyleRange");
 }

@@ -79,6 +79,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 2,
                 row_heights_pt: vec![ROW_H_PT; 2],
                 column_widths_pt: vec![COL_W_PT; 2],
+                extra_row_attrs: Vec::new(),
                 cells: vec![
                     Cell::plain("A1"),
                     Cell::plain("A2"),
@@ -102,6 +103,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 2,
                 row_heights_pt: vec![ROW_H_PT * 2.0],
                 column_widths_pt: vec![COL_W_PT; 2],
+                extra_row_attrs: Vec::new(),
                 cells: vec![Cell::plain("outer"), {
                     let mut c = Cell::plain("");
                     c.paragraphs = vec![Paragraph::plain("").with_table(Table {
@@ -113,6 +115,7 @@ fn variants() -> Vec<Variant> {
                         column_count: 1,
                         row_heights_pt: vec![ROW_H_PT; 2],
                         column_widths_pt: vec![COL_W_PT],
+                        extra_row_attrs: Vec::new(),
                         cells: vec![Cell::plain("inner1"), Cell::plain("inner2")],
                     })];
                     c
@@ -130,6 +133,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 // column-major: col 0 then col 1 then col 2
                 cells: {
                     let mut v = Vec::new();
@@ -162,6 +166,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let mut v = Vec::new();
                     for c in 0..3 {
@@ -189,6 +194,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let mut v = Vec::new();
                     for c in 0..3 {
@@ -231,6 +237,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     // Col 0: row 0 spans 2 cols (occupies col 0..1
                     // row 0); rows 1, 2 plain. Cells are listed
@@ -271,6 +278,7 @@ fn variants() -> Vec<Variant> {
                 // Tall rows so two paragraphs fit comfortably.
                 row_heights_pt: vec![60.0, 60.0],
                 column_widths_pt: vec![COL_W_PT * 1.5; 2],
+                extra_row_attrs: Vec::new(),
                 cells: vec![
                     // col 0 row 0: two paragraphs in one cell
                     Cell {
@@ -304,6 +312,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 2,
                 row_heights_pt: vec![ROW_H_PT; 2],
                 column_widths_pt: vec![COL_W_PT * 1.5; 2],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let right_aligned = |s: &str| Cell {
                         paragraphs: vec![Paragraph {
@@ -367,6 +376,7 @@ fn variants() -> Vec<Variant> {
                 // upright when displayed at 90°.
                 row_heights_pt: vec![60.0, ROW_H_PT, ROW_H_PT],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let mut v = Vec::new();
                     for c in 0..3 {
@@ -406,6 +416,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let mut v = Vec::new();
                     for c in 0..3 {
@@ -430,6 +441,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 3,
                 row_heights_pt: vec![ROW_H_PT; 3],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let mut v = Vec::new();
                     for c in 0..3 {
@@ -464,6 +476,7 @@ fn variants() -> Vec<Variant> {
                 // Tall rows so vertical-justify has slack to distribute.
                 row_heights_pt: vec![ROW_H_PT, ROW_H_PT * 2.0, ROW_H_PT * 2.0, ROW_H_PT],
                 column_widths_pt: vec![COL_W_PT; 3],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     // Column-major, with spans omitting covered slots.
                     // Header row 0: a single cell spanning all 3 columns.
@@ -547,6 +560,7 @@ fn variants() -> Vec<Variant> {
                 column_count: 2,
                 row_heights_pt: vec![ROW_H_PT * 1.5; 2],
                 column_widths_pt: vec![COL_W_PT; 2],
+                extra_row_attrs: Vec::new(),
                 cells: {
                     let left = CellDiagonal {
                         left_line_drawn: Some(true),

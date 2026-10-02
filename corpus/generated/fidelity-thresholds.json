@@ -258,7 +258,7 @@
       "max_mean_de": 0.215,
       "max_p99_de": 3.0,
       "min_ssim": 0.982,
-      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above."
+      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay."
     },
     {
       "name": "tables-overset",
@@ -267,6 +267,14 @@
       "max_p99_de": 0.3,
       "min_ssim": 0.991,
       "rationale": "New 2026-09-07. Six pages isolating what InDesign draws when a table does not fit its frame - all rows fit, two of four fit, none fit, the header alone is taller than the frame, the header fits but no body row does - plus a 4pt-border page so the outer-border inset is measured at two weights rather than one. InDesign's export has ZERO ink on the three overset pages where the renderer drew one row. Worst page mean 0.100 / p99 0.000 / SSIM 0.9966 (p6). TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.027 / p99 0.000 / ssim 0.9996 (was 0.100 / 0.000 / 0.9966); re-sized by the rule above."
+    },
+    {
+      "name": "tables-rows",
+      "max_pages_with_pdf": 9,
+      "max_mean_de": 0.19,
+      "max_p99_de": 3.8,
+      "min_ssim": 0.994,
+      "rationale": "New 2026-10-02. Eleven pages asking InDesign how a row's height comes from its cells: 1-3 paragraphs per cell, space before/after, fixed / tight leading and mixed sizes, insets (incl. 0 under 1 pt and 4 pt edges), MinimumHeight / MaximumHeight, vertical justification, a table breaking across two threaded frames with its header repeating, and a row taller than every frame. Pages 10-11 (AutoGrow=\"false\" fixed rows, KeepWithNextRow) are NOT gated: the IDML reader does not carry either attribute yet. Before the fix the gated pages measured worst mean 1.597 / p99 84.1 / SSIM 0.919 (p8: every multi-paragraph row short, its later lines overlapping the next row); after, worst page mean 0.158 / p99 3.147 / SSIM 0.9956 (p8, glyph sub-pixel phase); sized by the rule above."
     },
     {
       "name": "text",

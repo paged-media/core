@@ -161,6 +161,7 @@ fn table_for(variant: &Variant, id: &str) -> Table {
         column_count: COLUMNS as u32,
         row_heights_pt: vec![ROW_H_PT; rows],
         column_widths_pt: vec![COL_W_PT; COLUMNS],
+        extra_row_attrs: Vec::new(),
         cells,
     }
 }

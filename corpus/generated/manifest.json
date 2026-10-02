@@ -361,6 +361,15 @@
       "report": "/tmp/idml-generated-diff/tables-overset/report.json"
     },
     {
+      "name": "tables-rows",
+      "idml": "tables-rows.idml",
+      "pdf": "tables-rows.pdf",
+      "pages": 11,
+      "passing": 8,
+      "diff_dir": "/tmp/idml-generated-diff/tables-rows",
+      "report": "/tmp/idml-generated-diff/tables-rows/report.json"
+    },
+    {
       "name": "text",
       "idml": "text.idml",
       "pdf": "text.pdf",

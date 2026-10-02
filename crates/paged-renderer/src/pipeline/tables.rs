@@ -85,8 +85,9 @@ impl<'a> AlternatingFillAxis<'a> {
 /// * Cells with content overflow grow their row up to
 ///   `MaximumHeight` — a top-down pre-measure pass computes per-row
 ///   required heights, then `row_heights[r] =
-///   max(SingleRowHeight, MinimumHeight, max_cell_required) ` clamped
-///   to `MaximumHeight`. For RowSpan > 1 cells the constraint is
+///   max(SingleRowHeight, MinimumHeight, max_cell_required)`, where a
+///   cell under a cap requires only the lines that fit it (see
+///   `plan_cell_block`). For RowSpan > 1 cells the constraint is
 ///   applied to the LAST spanned row only (simpler heuristic; the
 ///   common case has spans inside header rows that don't grow).
 /// * Header rows duplicate at the top of every continuation frame
@@ -133,17 +134,16 @@ pub(super) fn emit_table_into_chain(
     let total_rows = table.rows.len();
     let total_cols = col_widths.len();
 
-    // Content-driven row growth. For each row, find the tallest
-    // required cell height (sum of per-paragraph consumed heights
-    // + top/bottom insets). For span > 1 cells, only the LAST row
-    // of the span enforces the shortfall — earlier rows in the
-    // span are left at their declared height. This is the simpler
-    // heuristic the plan calls out; a smarter distributor would
-    // share the slack across the span proportionally.
-    //
-    // Final height per row =
-    //   max(SingleRowHeight, MinimumHeight, content_required)
-    // clamped to MaximumHeight (when set; unbounded otherwise).
+    // Content-driven row growth, by InDesign's rules (`plan_cell_block`):
+    // a cell needs its top inset + its last baseline + its bottom inset,
+    // and a row is as tall as its tallest cell, never under its floor
+    // `max(SingleRowHeight, MinimumHeight)`. Under a `MaximumHeight` a
+    // cell keeps the lines that fit and the row is as tall as THEY need:
+    // InDesign made a capped row 20.826 pt, not its 30 pt cap, when the
+    // second line would have needed 35.2 (2026-10-02, `tables-rows`
+    // page 6). For RowSpan > 1 cells only the LAST spanned row grows to
+    // cover the shortfall, which keeps a span from blowing up every row
+    // it crosses.
     let mut row_heights: Vec<f32> = table
         .rows
         .iter()
@@ -153,83 +153,6 @@ pub(super) fn emit_table_into_chain(
                 .max(r.minimum_height.unwrap_or(0.0))
         })
         .collect();
-    // Per-cell pre-measured content height, keyed by the cell's
-    // starting (col, row) — independent of where the cell lands
-    // geometrically. Used both for the row-growth pass and to skip
-    // re-laying-out the same cell during emission.
-    let mut cell_required: std::collections::HashMap<(u32, u32), f32> =
-        std::collections::HashMap::with_capacity(table.cells.len());
-    for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
-            continue;
-        };
-        if covered.contains(&(c, r)) {
-            continue;
-        }
-        let (cu, ru) = (c as usize, r as usize);
-        if cu >= col_widths.len() || ru >= total_rows {
-            continue;
-        }
-        let span_cols = cell.column_span.max(1) as usize;
-        let last_c = (cu + span_cols).min(col_widths.len());
-        let inner_w =
-            (col_x[last_c] - col_x[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let mut paragraph_y = 0.0f32;
-        for paragraph in &cell.paragraphs {
-            if paragraph.runs.is_empty() {
-                if let Some(inner_t) = paragraph.table.as_ref() {
-                    // Phase 5 — measure a nested table's height by
-                    // summing its row heights (with the same
-                    // SingleRowHeight / MinimumHeight default the
-                    // emit pass uses, plus content-driven growth
-                    // from inner cell paragraphs).
-                    paragraph_y += measure_nested_table_height(em, inner_t, inner_w);
-                }
-                continue;
-            }
-            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
-        }
-        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
-        cell_required.insert((c, r), required);
-    }
-    // Walk rows top-to-bottom; for each row grow it to fit cells
-    // that *end* in this row (span_rows + start_row - 1 == r).
-    // We iterate by ending-row, look at all cells with that ending,
-    // and bump `row_heights[r]` to cover any shortfall remaining
-    // after the prior rows of the span. This way RowSpan > 1
-    // cells don't blow up multiple rows.
-    for r in 0..total_rows {
-        let mut required = row_heights[r];
-        for cell in &table.cells {
-            let Some((c, sr)) = cell.coords() else {
-                continue;
-            };
-            let span = cell.row_span.max(1) as usize;
-            let (cu, sru) = (c as usize, sr as usize);
-            if sru + span - 1 != r {
-                continue;
-            }
-            if cu >= col_widths.len() {
-                continue;
-            }
-            let Some(cell_h) = cell_required.get(&(c, sr)).copied() else {
-                continue;
-            };
-            // Heights already grown for the prior rows of the span.
-            let prior: f32 = (sru..r).map(|i| row_heights[i]).sum();
-            let shortfall = cell_h - prior;
-            if shortfall > required {
-                required = shortfall;
-            }
-        }
-        let max_h = table
-            .rows
-            .get(r)
-            .and_then(|tr| tr.maximum_height)
-            .unwrap_or(f32::INFINITY);
-        row_heights[r] = required.min(max_h);
-    }
-
     let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
         if r < header_count {
             return resolved_table.header_region_cell_style.as_deref();
@@ -249,6 +172,64 @@ pub(super) fn emit_table_into_chain(
         }
         resolved_table.body_region_cell_style.as_deref()
     };
+
+    // Per-cell measured content and effective (top, bottom) insets,
+    // keyed by the cell's starting (col, row). The emit pass draws from
+    // the same block, so a row is sized from exactly what it draws.
+    let mut cell_blocks: std::collections::HashMap<(u32, u32), (CellBlock, CellInsets)> =
+        std::collections::HashMap::with_capacity(table.cells.len());
+    for cell in &table.cells {
+        let Some((c, r)) = cell.coords() else {
+            continue;
+        };
+        if covered.contains(&(c, r)) {
+            continue;
+        }
+        let (cu, ru) = (c as usize, r as usize);
+        if cu >= col_widths.len() || ru >= total_rows {
+            continue;
+        }
+        let span_cols = cell.column_span.max(1) as usize;
+        let last_c = (cu + span_cols).min(col_widths.len());
+        let resolved_cell = cell
+            .applied_cell_style
+            .as_deref()
+            .filter(|id| !is_none_style_id(id))
+            .or_else(|| region_cell_style_for(cu, ru))
+            .map(|id| em.document.styles.resolve_cell(id))
+            .unwrap_or_default();
+        let insets = effective_cell_insets(cell, &resolved_cell);
+        let inner_w = (col_x[last_c] - col_x[cu] - insets.left - insets.right).max(0.0);
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        cell_blocks.insert((c, r), (block, insets));
+    }
+    for r in 0..total_rows {
+        let max_h = table
+            .rows
+            .get(r)
+            .and_then(|tr| tr.maximum_height)
+            .unwrap_or(f32::INFINITY);
+        let mut required = row_heights[r];
+        for cell in &table.cells {
+            let Some((c, sr)) = cell.coords() else {
+                continue;
+            };
+            let span = cell.row_span.max(1) as usize;
+            let sru = sr as usize;
+            if sru + span - 1 != r {
+                continue;
+            }
+            let Some((block, insets)) = cell_blocks.get(&(c, sr)) else {
+                continue;
+            };
+            let (top, bottom) = (insets.top, insets.bottom);
+            // Heights already grown for the prior rows of the span.
+            let prior: f32 = (sru..r).map(|i| row_heights[i]).sum();
+            let (fit_bottom, _) = block.fitted(prior + max_h - top - bottom);
+            required = required.max(top + fit_bottom + bottom - prior);
+        }
+        row_heights[r] = required.min(max_h);
+    }
 
     // Repeating-header / repeating-footer flags. IDML defaults
     // both to true (the attribute is absent in the common case
@@ -407,22 +388,31 @@ pub(super) fn emit_table_into_chain(
     let mut body_placed_in_frame = 0usize;
     for r in body_range.clone() {
         let h = row_heights[r];
-        let need_extra_for_split = footer_reserved_h;
-        let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
-        // In the LAST frame there is nowhere to advance to, so a row
-        // that does not fit is overset — even the first one. The
-        // `placed_in_frame > 0` guard that used to sit here belongs to
-        // the frame-ADVANCE branch below, where it stops an empty frame
-        // from looping forever; carrying it here made a frame too short
-        // for even its first row draw that row anyway. InDesign draws
-        // nothing (measured 2026-09-07 on `tables-overset`: 4 rows of
-        // 28 pt in a 20 pt frame is zero ink in InDesign's own export,
-        // and was one row here).
-        if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
-            overset_at = Some(r);
-            break;
-        }
-        if would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0 {
+        // A row never splits: one that does not fit moves to the next
+        // frame, and one that fits no frame is overset with everything
+        // after it (InDesign, 2026-10-02, `tables-rows` page 9: a 179 pt
+        // row between two 150 pt frames leaves the second frame empty).
+        // The fit is re-tested in every frame the row moves to — it
+        // used to be placed in the next frame unconditionally.
+        loop {
+            let need_extra_for_split = footer_reserved_h;
+            let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
+            // In the LAST frame there is nowhere to advance to, so a row
+            // that does not fit is overset — even the first one. The
+            // `placed_in_frame > 0` guard that used to sit here belongs to
+            // the frame-ADVANCE branch below, where it stops an empty frame
+            // from looping forever; carrying it here made a frame too short
+            // for even its first row draw that row anyway. InDesign draws
+            // nothing (measured 2026-09-07 on `tables-overset`: 4 rows of
+            // 28 pt in a 20 pt frame is zero ink in InDesign's own export,
+            // and was one row here).
+            if would_overflow && chain_idx + 1 >= em.chain.len() && !last_frame_grows_height {
+                overset_at = Some(r);
+                break;
+            }
+            if !(would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0) {
+                break;
+            }
             body_placed_in_frame = 0;
             // Append replayed footers at the bottom of this frame.
             if repeating_footer {
@@ -481,6 +471,9 @@ pub(super) fn emit_table_into_chain(
             }
             // current_frame_last_bottom updates when the next body
             // row pushes below; no need to maintain it here.
+        }
+        if overset_at.is_some() {
+            break;
         }
         physical_rows.push(PhysicalRow {
             template_idx: r,
@@ -678,6 +671,8 @@ pub(super) fn emit_table_into_chain(
             cell_by_origin.insert(coords, cell);
         }
     }
+    // Whether any cell held more text than its row has room for.
+    let mut cell_overset = false;
     for prow_i in 0..physical_rows.len() {
         let prow = physical_rows[prow_i];
         let r = prow.template_idx;
@@ -745,10 +740,13 @@ pub(super) fn emit_table_into_chain(
                 });
             }
 
-            let inner_left = cell_x_pt + cell.text_left_inset;
-            let inner_top = cell_y_pt + cell.text_top_inset;
-            let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
-            let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
+            let Some((block, insets)) = cell_blocks.get(&(c as u32, r as u32)) else {
+                continue;
+            };
+            let inner_left = cell_x_pt + insets.left;
+            let inner_top = cell_y_pt + insets.top;
+            let inner_w = (cell_w_pt - insets.left - insets.right).max(0.0);
+            let inner_h = (cell_h_pt - insets.top - insets.bottom).max(0.0);
 
             // Resolve the cell's CellStyle. Per-cell AppliedCellStyle
             // wins; fall through to the table-style region default
@@ -962,10 +960,6 @@ pub(super) fn emit_table_into_chain(
                 emit_diagonals(em, pages);
             }
 
-            // Lay out the cell paragraphs into a working buffer first
-            // so we know their total height; then apply vertical
-            // justification by shifting all of them by a uniform dy.
-            //
             // W1.13 — only ADDRESSABLE tables (those with a `<Table
             // Self>`) get a cell qualifier for caret/text editing; this
             // matches the `cell_rects` hit-test surface exactly (built
@@ -981,114 +975,85 @@ pub(super) fn emit_table_into_chain(
                 row: r as u32,
                 col: c as u32,
             });
-            let mut paragraph_y = 0.0f32;
+            // W1.11a — cell vertical justification, decided BEFORE drawing
+            // from the measured block, so glyphs and caret lines land
+            // together. Precedence mirrors every other per-cell knob: an
+            // INLINE `<Cell VerticalJustification="…">` wins over the
+            // cascaded CellStyle value. The block InDesign moves runs from
+            // the first line's ascent to the last baseline — the last
+            // paragraph's space after left out (2026-10-02, `tables-rows`
+            // page 7):
+            //   * CenterAlign → centre the block in the slack,
+            //   * BottomAlign → push it to the bottom inset,
+            //   * JustifyAlign → distribute the slack BETWEEN items (not
+            //     inside a paragraph — that would distort leading); with
+            //     fewer than two there is nothing to distribute: Top.
+            //   * TopAlign / absent → no shift.
+            let (used_h, overset) = block.fitted(inner_h);
+            if overset {
+                cell_overset = true;
+            }
+            let fitting_items = block.fitting_items(inner_h);
+            let cell_vjust = cell
+                .vertical_justification
+                .as_deref()
+                .or(resolved_cell.vertical_justification.as_deref());
+            let slack = if used_h > 0.0 {
+                (inner_h - used_h).max(0.0)
+            } else {
+                0.0
+            };
+            let (dy, gap) = match cell_vjust {
+                Some("CenterAlign") => (slack * 0.5, 0.0),
+                Some("BottomAlign") => (slack, 0.0),
+                Some("JustifyAlign") if fitting_items >= 2 => {
+                    (0.0, slack / (fitting_items - 1) as f32)
+                }
+                _ => (0.0, 0.0),
+            };
             let mut emitted_extents: Vec<(usize, usize)> = Vec::new();
-            for (cell_para_idx, paragraph) in cell.paragraphs.iter().enumerate() {
-                if paragraph.runs.is_empty() {
-                    // Phase 5 — nested table inside a cell paragraph.
-                    // Lay it out at the current cell-paragraph cursor
-                    // and advance by its consumed height. Inner content
-                    // (further nested tables, cell paragraphs) recurses
+            for (k, item) in block.items.iter().take(fitting_items).enumerate() {
+                let shift = dy + gap * k as f32;
+                let cmd_start = pages[target_page].list.commands.len();
+                match item {
+                    CellItem::Text {
+                        paragraph,
+                        index,
+                        origin,
+                        by_leading,
+                        ..
+                    } => emit_cell_paragraph(
+                        em,
+                        paragraph,
+                        target_page,
+                        (inner_left, inner_top),
+                        inner_w,
+                        origin + shift,
+                        pages,
+                        total_stats,
+                        cell_addr_base.as_ref().map(|addr| (addr, *index as u32)),
+                        *by_leading,
+                        inner_h - origin,
+                    ),
+                    // Phase 5 — nested table inside a cell paragraph, laid
+                    // out at its measured top; further nesting recurses
                     // through emit_nested_table_inline.
-                    if let Some(inner_t) = paragraph.table.as_ref() {
-                        let cmd_start = pages[target_page].list.commands.len();
-                        let consumed = emit_nested_table_inline(
+                    CellItem::Table { table, top, .. } => {
+                        emit_nested_table_inline(
                             em,
-                            inner_t,
+                            table,
                             inner_left,
-                            inner_top + paragraph_y,
+                            inner_top + top + shift,
                             inner_w,
                             target_page,
                             pages,
                             total_stats,
                         );
-                        let cmd_end = pages[target_page].list.commands.len();
-                        if cmd_end > cmd_start {
-                            emitted_extents.push((cmd_start, cmd_end));
-                        }
-                        paragraph_y += consumed;
-                        if paragraph_y >= inner_h {
-                            break;
-                        }
                     }
-                    continue;
                 }
-                let cmd_start = pages[target_page].list.commands.len();
-                let consumed = emit_cell_paragraph(
-                    em,
-                    paragraph,
-                    target_page,
-                    (inner_left, inner_top),
-                    inner_w,
-                    paragraph_y,
-                    pages,
-                    total_stats,
-                    cell_addr_base
-                        .as_ref()
-                        .map(|addr| (addr, cell_para_idx as u32)),
-                );
                 let cmd_end = pages[target_page].list.commands.len();
                 if cmd_end > cmd_start {
                     emitted_extents.push((cmd_start, cmd_end));
-                }
-                paragraph_y += consumed;
-                if paragraph_y >= inner_h {
-                    break;
-                }
-            }
-            // W1.11a — apply cell vertical justification by shifting the
-            // glyph commands we emitted in this cell. Precedence mirrors
-            // every other per-cell knob (fill / edge strokes): an INLINE
-            // `<Cell VerticalJustification="…">` wins over the cascaded
-            // CellStyle value. Mirrors the frame-level
-            // `apply_vertical_justification` pass:
-            //   * CenterAlign → centre the content block in the slack,
-            //   * BottomAlign → push it to the bottom inset,
-            //   * JustifyAlign → distribute the slack as extra space
-            //     BETWEEN cell paragraphs (not inside a paragraph — that
-            //     would distort leading), exactly like the frame's
-            //     inter-paragraph distribute. With < 2 emitted paragraphs
-            //     there is nothing to distribute, so it falls back to Top.
-            //   * TopAlign / absent → no shift.
-            let used_h = paragraph_y;
-            let cell_vjust = cell
-                .vertical_justification
-                .as_deref()
-                .or(resolved_cell.vertical_justification.as_deref());
-            if used_h > 0.0 && used_h < inner_h {
-                let slack = inner_h - used_h;
-                match cell_vjust {
-                    Some("JustifyAlign") if emitted_extents.len() >= 2 => {
-                        let gaps = (emitted_extents.len() - 1) as f32;
-                        let gap = slack / gaps;
-                        if gap > 0.0 {
-                            for (idx, (s, e)) in emitted_extents.iter().enumerate() {
-                                let dy = gap * idx as f32;
-                                if dy == 0.0 {
-                                    continue;
-                                }
-                                for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                                    cmd.transform_mut().0[5] += dy;
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        let dy = match cell_vjust {
-                            Some("CenterAlign") => Some(slack * 0.5),
-                            Some("BottomAlign") => Some(slack),
-                            // JustifyAlign with a single paragraph has no
-                            // inter-paragraph gap to grow → behaves as Top.
-                            _ => None,
-                        };
-                        if let Some(dy) = dy {
-                            for (s, e) in &emitted_extents {
-                                for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                                    cmd.transform_mut().0[5] += dy;
-                                }
-                            }
-                        }
-                    }
                 }
             }
             // Cell RotationAngle: rotate the (already vertically-justified)
@@ -1118,6 +1083,20 @@ pub(super) fn emit_table_into_chain(
             }
         } // close inner `for c in 0..col_widths.len()`
     } // close outer `for prow_i in 0..physical_rows.len()`
+      // A cell whose text does not fit its row — a `MaximumHeight` cap —
+      // draws the lines that fit and none of the rest, as InDesign does;
+      // say so rather than drop them silently.
+    if cell_overset {
+        let mut d = crate::diagnostics::Diagnostic::new(
+            crate::diagnostics::DiagnosticCode::OversetTextDropped,
+            "table cell text overflows its row; the lines that do not fit are not drawn (overset cell)",
+        )
+        .with_page(target_page);
+        if !em.current_story_id.is_empty() {
+            d = d.with_story(em.current_story_id.clone());
+        }
+        em.diagnostics.push(d);
+    }
 
     // Resolve effective outer-border attributes. Direct `<Table>`
     // attributes (e.g. `LeftBorderStrokeColor` on the `<Table>`
@@ -1840,46 +1819,28 @@ fn emit_nested_table_inline(
         .collect();
     // Pre-measure every cell so row heights can grow to fit content.
     // Spans are clamped to 1 here — proper span layout is a follow-up.
+    let mut blocks: Vec<Option<CellBlock>> = Vec::with_capacity(table.cells.len());
     for cell in &table.cells {
         let Some((c, r)) = cell.coords() else {
+            blocks.push(None);
             continue;
         };
         let (cu, ru) = (c as usize, r as usize);
         if cu >= col_widths.len() || ru >= total_rows {
+            blocks.push(None);
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let mut paragraph_y = 0.0f32;
-        for paragraph in &cell.paragraphs {
-            // Nested table inside the nested table's cell — recurse.
-            if paragraph.runs.is_empty() && paragraph.table.is_some() {
-                // Approximate the nested-nested table's height as
-                // sum-of-row-heights to avoid pre-emit recursion.
-                if let Some(inner_t) = paragraph.table.as_ref() {
-                    paragraph_y += inner_t
-                        .rows
-                        .iter()
-                        .map(|r| {
-                            r.single_row_height
-                                .unwrap_or(0.0)
-                                .max(r.minimum_height.unwrap_or(0.0))
-                        })
-                        .sum::<f32>();
-                }
-                continue;
-            }
-            if paragraph.runs.is_empty() {
-                continue;
-            }
-            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
-        }
-        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table
             .rows
             .get(ru)
             .and_then(|tr| tr.maximum_height)
             .unwrap_or(f32::INFINITY);
+        let required = block.fitted(clamp - insets).0 + insets;
         row_heights[ru] = row_heights[ru].max(required).min(clamp);
+        blocks.push(Some(block));
     }
     let mut row_y: Vec<f32> = Vec::with_capacity(total_rows + 1);
     let mut yacc = 0.0f32;
@@ -1930,14 +1891,11 @@ fn emit_nested_table_inline(
     }
 
     // Emit cell content.
-    for cell in &table.cells {
-        let Some((c, r)) = cell.coords() else {
+    for (cell, block) in table.cells.iter().zip(&blocks) {
+        let (Some((c, r)), Some(block)) = (cell.coords(), block.as_ref()) else {
             continue;
         };
         let (cu, ru) = (c as usize, r as usize);
-        if cu >= col_widths.len() || ru >= total_rows {
-            continue;
-        }
         let cell_x_pt = origin_x + col_x[cu];
         let cell_y_pt = origin_y + row_y[ru];
         let cell_w_pt = col_widths[cu];
@@ -1946,45 +1904,45 @@ fn emit_nested_table_inline(
         let inner_top = cell_y_pt + cell.text_top_inset;
         let inner_w = (cell_w_pt - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let inner_h = (cell_h_pt - cell.text_top_inset - cell.text_bottom_inset).max(0.0);
-        let mut paragraph_y = 0.0f32;
-        for paragraph in &cell.paragraphs {
-            if paragraph.runs.is_empty() {
+        for item in block.items.iter().take(block.fitting_items(inner_h)) {
+            match item {
                 // Double-nested table — recurse.
-                if let Some(inner_t) = paragraph.table.as_ref() {
-                    let consumed = emit_nested_table_inline(
+                CellItem::Table { table, top, .. } => {
+                    emit_nested_table_inline(
                         em,
-                        inner_t,
+                        table,
                         inner_left,
-                        inner_top + paragraph_y,
+                        inner_top + top,
                         inner_w,
                         target_page,
                         pages,
                         total_stats,
                     );
-                    paragraph_y += consumed;
                 }
-                continue;
-            }
-            // W1.13 defer — nested-table cells pass `None`: text inside
-            // a table that is itself nested in a cell is laid out and
-            // rendered, but not separately caret-addressable. The wire
-            // address only reaches top-level tables (`cell_rects` are
-            // likewise only built for the outer table). Dated defer:
-            // 2026-06-07 — nested-cell text editing.
-            let consumed = emit_cell_paragraph(
-                em,
-                paragraph,
-                target_page,
-                (inner_left, inner_top),
-                inner_w,
-                paragraph_y,
-                pages,
-                total_stats,
-                None,
-            );
-            paragraph_y += consumed;
-            if paragraph_y >= inner_h {
-                break;
+                // W1.13 defer — nested-table cells pass `None`: text inside
+                // a table that is itself nested in a cell is laid out and
+                // rendered, but not separately caret-addressable. The wire
+                // address only reaches top-level tables (`cell_rects` are
+                // likewise only built for the outer table). Dated defer:
+                // 2026-06-07 — nested-cell text editing.
+                CellItem::Text {
+                    paragraph,
+                    origin,
+                    by_leading,
+                    ..
+                } => emit_cell_paragraph(
+                    em,
+                    paragraph,
+                    target_page,
+                    (inner_left, inner_top),
+                    inner_w,
+                    *origin,
+                    pages,
+                    total_stats,
+                    None,
+                    *by_leading,
+                    inner_h - origin,
+                ),
             }
         }
     }
@@ -2043,37 +2001,293 @@ fn measure_nested_table_height(
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let mut paragraph_y = 0.0f32;
-        for paragraph in &cell.paragraphs {
-            if paragraph.runs.is_empty() {
-                if let Some(inner_t) = paragraph.table.as_ref() {
-                    paragraph_y += measure_nested_table_height(em, inner_t, inner_w);
-                }
-                continue;
-            }
-            paragraph_y += measure_cell_paragraph(em, paragraph, inner_w);
-        }
-        let required = paragraph_y + cell.text_top_inset + cell.text_bottom_inset;
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table
             .rows
             .get(ru)
             .and_then(|tr| tr.maximum_height)
             .unwrap_or(f32::INFINITY);
+        let required = block.fitted(clamp - insets).0 + insets;
         row_heights[ru] = row_heights[ru].max(required).min(clamp);
     }
     row_heights.iter().sum()
 }
 
-/// Returns `0.0` when the paragraph is empty or the font assets
-/// don't resolve — callers compare against `SingleRowHeight` /
-/// `MinimumHeight` so a 0 is safely absorbed.
+/// Slack allowed when deciding whether a cell line fits: a line flush
+/// with the bottom inset is in, and the layout's 1/64 pt rounding must
+/// not push it out.
+const CELL_FIT_EPSILON_PT: f32 = 0.01;
+
+/// One item of a cell's content, placed by InDesign's rules (measured
+/// 2026-10-02 on `tables-rows`; the rules are written out in
+/// `tests/tables_rows_pipeline.rs`). Positions are points below the
+/// cell's inner top — its top inset.
+enum CellItem<'t> {
+    Text {
+        paragraph: &'t paged_model::Paragraph,
+        /// Index into the cell's paragraphs: the caret address.
+        index: usize,
+        /// Where the paragraph is laid out from.
+        origin: f32,
+        /// Its first line one leading below `origin` (every paragraph
+        /// after the first) rather than one ascent (the first).
+        by_leading: bool,
+        /// Every line's baseline.
+        baselines: Vec<f32>,
+    },
+    Table {
+        table: &'t paged_model::Table,
+        top: f32,
+        height: f32,
+    },
+}
+
+/// A cell's content, measured before it is drawn so the row can be
+/// sized from it and the same positions drawn.
+struct CellBlock<'t> {
+    items: Vec<CellItem<'t>>,
+}
+
+impl CellBlock<'_> {
+    /// How deep the content that fits in `avail` reaches, and whether
+    /// any was left over (overset). Lines fit in order; the first that
+    /// does not ends the cell.
+    ///
+    /// The content reaches its last baseline. Nothing below it counts —
+    /// no descent, no half-leading: InDesign makes a cell of one 12 pt
+    /// Open Sans line `4 + 12.826 + 4` = 20.826 pt tall, and two lines at
+    /// 24 pt leading `4 + 12.826 + 24 + 4`.
+    fn fitted(&self, avail: f32) -> (f32, bool) {
+        let mut bottom = 0.0f32;
+        for item in &self.items {
+            match item {
+                CellItem::Text { baselines, .. } => {
+                    for &b in baselines {
+                        if b > avail + CELL_FIT_EPSILON_PT {
+                            return (bottom, true);
+                        }
+                        bottom = b;
+                    }
+                }
+                CellItem::Table { top, height, .. } => {
+                    if top + height > avail + CELL_FIT_EPSILON_PT {
+                        return (bottom, true);
+                    }
+                    bottom = top + height;
+                }
+            }
+        }
+        (bottom, false)
+    }
+
+    /// The items whose first line (or whole table) fits in `avail`.
+    fn fitting_items(&self, avail: f32) -> usize {
+        self.items
+            .iter()
+            .take_while(|item| match item {
+                CellItem::Text { baselines, .. } => baselines
+                    .first()
+                    .is_some_and(|b| *b <= avail + CELL_FIT_EPSILON_PT),
+                CellItem::Table { top, height, .. } => top + height <= avail + CELL_FIT_EPSILON_PT,
+            })
+            .count()
+    }
+}
+
+/// Measure a cell's paragraphs into a [`CellBlock`].
+///
+/// The first line sits its ascent below the inset; every later line one
+/// leading below the one before, across paragraphs too, with the earlier
+/// paragraph's space after and the later one's space before between
+/// them. The first paragraph's space before and the last one's space
+/// after count for nothing: InDesign set "space before 10" on a cell's
+/// only paragraph at the same baseline as its neighbours, and a last
+/// paragraph's "space after 9 / 12" left its row as tall as without.
+fn plan_cell_block<'t>(
+    em: &StoryEmitter,
+    paragraphs: &'t [paged_model::Paragraph],
+    inner_w: f32,
+) -> CellBlock<'t> {
+    let mut items = Vec::new();
+    // The previous paragraph's last baseline and space after, while the
+    // previous item is text.
+    let mut prev_text: Option<(f32, f32)> = None;
+    let mut cursor = 0.0f32;
+    for (index, paragraph) in paragraphs.iter().enumerate() {
+        if paragraph.runs.is_empty() {
+            if let Some(table) = paragraph.table.as_ref() {
+                let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
+                let height = measure_nested_table_height(em, table, inner_w);
+                items.push(CellItem::Table { table, top, height });
+                cursor = top + height;
+                prev_text = None;
+            }
+            continue;
+        }
+        let attrs = em.document.resolved_paragraph_attrs(paragraph);
+        let (origin, by_leading) = match prev_text {
+            Some((last, after)) => (
+                last + after + attrs.space_before.unwrap_or(0.0).max(0.0),
+                true,
+            ),
+            None => (cursor, false),
+        };
+        let lines = measure_cell_paragraph(em, paragraph, inner_w, by_leading);
+        let Some(&last) = lines.last() else {
+            continue;
+        };
+        items.push(CellItem::Text {
+            paragraph,
+            index,
+            origin,
+            by_leading,
+            baselines: lines.iter().map(|b| origin + b).collect(),
+        });
+        prev_text = Some((origin + last, attrs.space_after.unwrap_or(0.0).max(0.0)));
+    }
+    CellBlock { items }
+}
+
+/// A cell's text insets as InDesign applies them — `CellInsets` in
+/// top, left, bottom, right order: never less than half the cell's own
+/// edge stroke on that side.
+///
+/// Measured 2026-10-02 (`tables-rows` pages 4-5): a 0 pt top inset
+/// under the default 1 pt edge sets the first baseline 0.5 pt below the
+/// row top, under a 4 pt edge 2 pt; insets of 1 and 3 under 4 pt give 2
+/// and 3; the bottom inset grows the row the same way, and a 0 pt left
+/// inset starts the line 0.5 pt in from a 1 pt edge. The text stays
+/// clear of the half of the stroke that lies inside the cell.
+fn effective_cell_insets(
+    cell: &paged_model::TableCell,
+    resolved_cell: &paged_model::ResolvedCell,
+) -> CellInsets {
+    let drawn = |inline_color: Option<&String>,
+                 inline_weight: Option<f32>,
+                 style_color: Option<&String>,
+                 style_weight: Option<f32>|
+     -> f32 {
+        let color = inline_color
+            .map(String::as_str)
+            .filter(|c| !is_none_swatch_id(c))
+            .or(style_color.map(String::as_str));
+        let (color_id, weight) = cell_edge_stroke(color, inline_weight.or(style_weight));
+        if is_none_swatch_id(color_id) {
+            0.0
+        } else {
+            weight.max(0.0) * 0.5
+        }
+    };
+    let rc = resolved_cell;
+    CellInsets {
+        top: cell.text_top_inset.max(drawn(
+            cell.top_edge_stroke_color.as_ref(),
+            cell.top_edge_stroke_weight,
+            rc.top_edge_stroke_color.as_ref(),
+            rc.top_edge_stroke_weight,
+        )),
+        left: cell.text_left_inset.max(drawn(
+            cell.left_edge_stroke_color.as_ref(),
+            cell.left_edge_stroke_weight,
+            rc.left_edge_stroke_color.as_ref(),
+            rc.left_edge_stroke_weight,
+        )),
+        bottom: cell.text_bottom_inset.max(drawn(
+            cell.bottom_edge_stroke_color.as_ref(),
+            cell.bottom_edge_stroke_weight,
+            rc.bottom_edge_stroke_color.as_ref(),
+            rc.bottom_edge_stroke_weight,
+        )),
+        right: cell.text_right_inset.max(drawn(
+            cell.right_edge_stroke_color.as_ref(),
+            cell.right_edge_stroke_weight,
+            rc.right_edge_stroke_color.as_ref(),
+            rc.right_edge_stroke_weight,
+        )),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CellInsets {
+    top: f32,
+    left: f32,
+    bottom: f32,
+    right: f32,
+}
+
+/// Where a cell paragraph's first line sits below its origin, and the
+/// leading of its lines.
+///
+/// The cell's FIRST line follows the same rule as a frame's: the real
+/// face's ascender under the default "Ascent" policy (measured
+/// 2026-09-06 — a top-aligned cell's first line sits at `row_top +
+/// top_inset + ascender`). A substituted face keeps the `0.8 × pt`
+/// heuristic, as frames do: a stand-in's ascender says nothing about
+/// where InDesign, which had the real one, put the baseline.
+///
+/// Every LATER paragraph's first line sits one leading — its own —
+/// below the previous paragraph's last baseline plus the spacing
+/// between them (`by_leading`, the origin then being that baseline plus
+/// the spacing): InDesign set "18 pt" then "8 pt" 9.6 apart and "8 pt"
+/// then "18 pt" 21.6 apart (2026-10-02, `tables-rows` page 3). Laying
+/// every paragraph out from the ascender, as cells did, stacked them
+/// `ascent + 0.4 × leading` apart — 18.59 pt for 12 pt Open Sans where
+/// InDesign puts 14.4, so multi-paragraph cells overflowed their rows.
+fn set_cell_first_baseline(
+    lopts: &mut paged_text::LayoutOptions,
+    resolved_runs: &[paged_scene::ResolvedRunAttrs],
+    paragraph_size: f32,
+    head_metrics: Option<&FontMetrics>,
+    by_leading: bool,
+) {
+    let leading_pt = cell_paragraph_leading_pt(resolved_runs, paragraph_size);
+    // Cascaded `Leading` governs a cell's line spacing exactly as it
+    // governs a frame's; the cells used 1.2 × pt regardless.
+    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
+        if leading_pt > 0.0 {
+            lopts.leading_override =
+                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+        }
+    }
+    lopts.first_baseline = if by_leading {
+        (leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32
+    } else {
+        super::text_frame::first_baseline_offset_64(
+            Some(paged_model::FirstBaselineOffset::AscentOffset),
+            None,
+            paragraph_size,
+            ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+            head_metrics,
+            None,
+        )
+    };
+}
+
+/// A cell paragraph's leading: its first run's cascaded `Leading`, or
+/// auto (120 % of the size).
+fn cell_paragraph_leading_pt(
+    resolved_runs: &[paged_scene::ResolvedRunAttrs],
+    paragraph_size: f32,
+) -> f32 {
+    resolved_runs
+        .first()
+        .and_then(|r| r.leading)
+        .filter(|l| *l > 0.0)
+        .unwrap_or(paragraph_size * 1.2)
+}
+
+/// Every line's baseline, in points below the paragraph's origin, as
+/// [`emit_cell_paragraph`] will set them with the same `by_leading`.
+/// Empty when the paragraph is empty or its fonts do not resolve.
 fn measure_cell_paragraph(
     em: &StoryEmitter,
     paragraph: &paged_model::Paragraph,
     column_width_pt: f32,
-) -> f32 {
+    by_leading: bool,
+) -> Vec<f32> {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
-        return 0.0;
+        return Vec::new();
     }
     let resolved_runs: Vec<paged_scene::ResolvedRunAttrs> = paragraph
         .runs
@@ -2084,7 +2298,7 @@ fn measure_cell_paragraph(
     // (family, style) doesn't resolve — keeps height-measurement
     // honest even when one cell run references an absent font.
     let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
-        return 0.0;
+        return Vec::new();
     };
     let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
         resolved_fonts.into_iter().unzip();
@@ -2121,7 +2335,7 @@ fn measure_cell_paragraph(
         {
             let bytes_ref = bytes_pool[i].as_ref();
             let Some(mut rf) = paged_text::Face::from_slice(bytes_ref, 0) else {
-                return 0.0;
+                return Vec::new();
             };
             let has_wght_axis = rf
                 .variation_axes()
@@ -2202,74 +2416,22 @@ fn measure_cell_paragraph(
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
-    // W4 — a cell's first baseline follows the SAME rule as a frame's:
-    // the real face's ascender under the default "Ascent" policy
-    // (measured 2026-09-06 — a top-aligned cell's first line sits at
-    // `row_top + top_inset + ascender`). Cells kept a `0.8 × pt`
-    // heuristic long after frames were fixed, which put every table's
-    // text a point or more too high. A substituted face keeps the
-    // heuristic, as frames do: a stand-in's ascender says nothing about
-    // where InDesign, which had the real one, put the baseline.
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
-    lopts.first_baseline = super::text_frame::first_baseline_offset_64(
-        Some(paged_model::FirstBaselineOffset::AscentOffset),
-        None,
+    set_cell_first_baseline(
+        &mut lopts,
+        &resolved_runs,
         paragraph_size,
-        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
         head_metrics,
-        None,
+        by_leading,
     );
-    // Cascaded `Leading` governs a cell's line spacing exactly as it
-    // governs a frame's; the cells used 1.2 × pt regardless.
-    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
-        if leading_pt > 0.0 {
-            lopts.leading_override =
-                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
-        }
-    }
     let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
-    if laid_out.lines.is_empty() {
-        return 0.0;
-    }
-    let leading_pt = resolved_runs
-        .first()
-        .and_then(|r| r.leading)
-        .filter(|l| *l > 0.0)
-        .unwrap_or(paragraph_size * 1.2);
-    let max_baseline_pt = laid_out
+    laid_out
         .lines
         .iter()
         .map(|l| l.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION)
-        .fold(0.0f32, f32::max);
-    // What sits BELOW the last baseline is the HALF-LEADING, not a
-    // flat fraction of the leading.
-    //
-    // Measured in InDesign 20.0.1 on 2026-09-06, on the annual's
-    // preflight table: a two-line cell at 8 pt / 13 pt leading in
-    // Source Serif 4 (ascent 8.288, descent 2.68) resolved to a row
-    // 22.288 pt tall. That is `ascent + leading + (leading − ascent −
-    // descent) / 2` = 22.304 — the leading's slack split evenly above
-    // and below the type, with the half below the last baseline. The
-    // old `leading × 0.4` gave 26.488, so every auto-growing row in
-    // every table stood about a fifth too tall and the annual's
-    // page-123 rules drifted 60 px against InDesign's 50.5.
-    //
-    // Clamped at zero: leading tighter than the face's own
-    // ascent + descent leaves nothing below the last line.
-    let half_leading_pt = match head_metrics {
-        Some(m) => {
-            let asc = m.ascender * paragraph_size;
-            let desc = m.descender * paragraph_size;
-            ((leading_pt - asc - desc) * 0.5).max(0.0)
-        }
-        // A substituted face keeps the old heuristic for the same
-        // reason its first baseline does: a stand-in's metrics say
-        // nothing about the block InDesign measured.
-        None => leading_pt * 0.4,
-    };
-    max_baseline_pt + half_leading_pt
+        .collect()
 }
 
 /// Lay out and emit a single cell paragraph at `(origin_pt.0,
@@ -2297,9 +2459,16 @@ pub(super) fn emit_cell_paragraph(
     // `None` for paths that don't participate in caret addressing
     // (nested-table cells — see defer note at the call site).
     cell_addr: Option<(&CellAddr, u32)>,
-) -> f32 {
+    // Lay the first line out one leading below the origin rather than
+    // one ascent (see `set_cell_first_baseline`).
+    by_leading: bool,
+    // The lowest baseline (below the origin) the cell has room for: a
+    // line below it is overset and not drawn, as InDesign draws none of
+    // a cell's overset text.
+    max_baseline_pt: f32,
+) {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
-        return 0.0;
+        return;
     }
     let resolved_runs: Vec<paged_scene::ResolvedRunAttrs> = paragraph
         .runs
@@ -2310,7 +2479,7 @@ pub(super) fn emit_cell_paragraph(
     // emit path). A single unresolvable run no longer takes the
     // whole cell paragraph down with it.
     let Some(resolved_fonts) = em.font_table.resolve_paragraph_bytes(&resolved_runs) else {
-        return 0.0;
+        return;
     };
     let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
         resolved_fonts.into_iter().unzip();
@@ -2355,7 +2524,7 @@ pub(super) fn emit_cell_paragraph(
         }
         let bytes_ref = bytes_pool[i].as_ref();
         let Ok(mut of) = ttf_parser::Face::parse(bytes_ref, 0) else {
-            return 0.0;
+            return;
         };
         let has_wght_axis = of
             .variation_axes()
@@ -2386,7 +2555,7 @@ pub(super) fn emit_cell_paragraph(
             .is_none()
         {
             let Some(mut rf) = paged_text::Face::from_slice(bytes_ref, 0) else {
-                return 0.0;
+                return;
             };
             if has_wght_axis {
                 rf.set_variations(&[paged_text::Variation {
@@ -2467,37 +2636,30 @@ pub(super) fn emit_cell_paragraph(
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
-    // W4 — a cell's first baseline follows the SAME rule as a frame's:
-    // the real face's ascender under the default "Ascent" policy
-    // (measured 2026-09-06 — a top-aligned cell's first line sits at
-    // `row_top + top_inset + ascender`). Cells kept a `0.8 × pt`
-    // heuristic long after frames were fixed, which put every table's
-    // text a point or more too high. A substituted face keeps the
-    // heuristic, as frames do: a stand-in's ascender says nothing about
-    // where InDesign, which had the real one, put the baseline.
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
-    lopts.first_baseline = super::text_frame::first_baseline_offset_64(
-        Some(paged_model::FirstBaselineOffset::AscentOffset),
-        None,
+    set_cell_first_baseline(
+        &mut lopts,
+        &resolved_runs,
         paragraph_size,
-        ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
         head_metrics,
-        None,
+        by_leading,
     );
-    // Cascaded `Leading` governs a cell's line spacing exactly as it
-    // governs a frame's; the cells used 1.2 × pt regardless.
-    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
-        if leading_pt > 0.0 {
-            lopts.leading_override =
-                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
-        }
-    }
 
     let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
-    if laid_out.lines.is_empty() {
-        return 0.0;
+    // Only the lines the cell has room for: the rest are overset.
+    let fitting = laid_out
+        .lines
+        .iter()
+        .take_while(|l| {
+            l.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION
+                <= max_baseline_pt + CELL_FIT_EPSILON_PT
+        })
+        .count();
+    let lines = &laid_out.lines[..fitting];
+    if lines.is_empty() {
+        return;
     }
 
     let picker = build_run_paint_picker_resolved(
@@ -2511,11 +2673,7 @@ pub(super) fn emit_cell_paragraph(
     let stroke_picker =
         build_run_stroke_picker(paragraph, &resolved_runs, em.palette, em.color_ctx, 0);
     let any_text_stroke = stroke_picker.any_visible();
-    let leading_pt = resolved_runs
-        .first()
-        .and_then(|r| r.leading)
-        .filter(|l| *l > 0.0)
-        .unwrap_or(paragraph_size * 1.2);
+    let leading_pt = cell_paragraph_leading_pt(&resolved_runs, paragraph_size);
     let cell_origin = (origin_pt.0, origin_pt.1 + paragraph_y);
 
     // Cycle-5 Track 4: emit BreakRecords for table-cell paragraphs so
@@ -2532,7 +2690,7 @@ pub(super) fn emit_cell_paragraph(
         for r in &styled_runs {
             paragraph_text.push_str(r.text);
         }
-        for (line_idx, line) in laid_out.lines.iter().enumerate() {
+        for (line_idx, line) in lines.iter().enumerate() {
             let start = line.byte_range.start.min(paragraph_text.len());
             let end = line.byte_range.end.min(paragraph_text.len());
             let source_text = paragraph_text.get(start..end).unwrap_or("").to_string();
@@ -2569,7 +2727,7 @@ pub(super) fn emit_cell_paragraph(
             Some((addr, para_idx)) => (Some(addr.clone()), para_idx),
             None => (None, em.paragraph_idx),
         };
-        for (line_idx, line) in laid_out.lines.iter().enumerate() {
+        for (line_idx, line) in lines.iter().enumerate() {
             let baseline_pt_local = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
             let line_h_pt = leading_pt; // cell paragraphs use 1.2 × point size
             let mut clusters: Vec<ClusterPos> = Vec::with_capacity(line.glyphs.len());
@@ -2607,12 +2765,7 @@ pub(super) fn emit_cell_paragraph(
     }
 
     let list = &mut pages[target_page].list;
-    let mut max_baseline_pt = 0.0f32;
-    for line in &laid_out.lines {
-        let baseline_pt = line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
-        if baseline_pt > max_baseline_pt {
-            max_baseline_pt = baseline_pt;
-        }
+    for line in lines {
         let mut start = 0;
         while start < line.glyphs.len() {
             let fid = line.glyphs[start].font_id;
@@ -2662,14 +2815,13 @@ pub(super) fn emit_cell_paragraph(
             start = end;
         }
     }
-    let glyph_count: usize = laid_out.lines.iter().map(|l| l.glyphs.len()).sum();
+    let glyph_count: usize = lines.iter().map(|l| l.glyphs.len()).sum();
     total_stats.paragraphs += 1;
     total_stats.runs += paragraph.runs.len();
     total_stats.glyphs += glyph_count;
-    total_stats.lines += laid_out.lines.len();
+    total_stats.lines += lines.len();
     pages[target_page].stats.paragraphs += 1;
     pages[target_page].stats.runs += paragraph.runs.len();
     pages[target_page].stats.glyphs += glyph_count;
-    pages[target_page].stats.lines += laid_out.lines.len();
-    max_baseline_pt + leading_pt * 0.4
+    pages[target_page].stats.lines += lines.len();
 }

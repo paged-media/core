@@ -738,14 +738,24 @@ fn generated_tables_v2_justify_cell_distributes_paragraphs() {
         }
     }
 
-    // Find the cell with exactly three paragraphs (0,1,2) — the
-    // JustifyAlign multi-paragraph cell.
-    let justify_cell = by_cell.values().find(|lines| {
-        let mut paras: Vec<u32> = lines.iter().map(|(p, _)| *p).collect();
-        paras.sort_unstable();
-        paras.dedup();
-        paras == vec![0, 1, 2]
-    });
+    // Two cells carry exactly three paragraphs (0,1,2): the top-aligned
+    // one on the multi-paragraph page, stacked one leading apart, and the
+    // JustifyAlign v2 cell — the one spread wider. (Before cell
+    // paragraphs were stacked by leading, the top-aligned cell spread
+    // past 30 pt on its own, and this test found it first.)
+    let span_of = |lines: &Vec<(u32, f32)>| {
+        let ys = lines.iter().map(|(_, y)| *y);
+        ys.clone().fold(f32::MIN, f32::max) - ys.fold(f32::MAX, f32::min)
+    };
+    let justify_cell = by_cell
+        .values()
+        .filter(|lines| {
+            let mut paras: Vec<u32> = lines.iter().map(|(p, _)| *p).collect();
+            paras.sort_unstable();
+            paras.dedup();
+            paras == vec![0, 1, 2]
+        })
+        .max_by(|a, b| span_of(a).total_cmp(&span_of(b)));
     let lines = justify_cell.expect("a 3-paragraph cell (the JustifyAlign v2 cell)");
 
     let baselines: Vec<f32> = {
