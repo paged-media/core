@@ -183,6 +183,31 @@ mod wasm {
             }
         }
 
+        /// The engine's work counters (`paged_compose::perf`) since the
+        /// worker started: font bytes hashed, images decoded by the build
+        /// and materialised into page scenes, page scenes built, grow
+        /// passes, story emits. A harness reads it before and after an
+        /// action to see how much work that action did — the same counts
+        /// core's `perf_budgets` tests assert natively, plus the scene
+        /// counts that exist only on this target.
+        #[wasm_bindgen(js_name = perfCounters)]
+        pub fn perf_counters(&self) -> js_sys::Object {
+            let c = paged_compose::perf::snapshot();
+            let obj = js_sys::Object::new();
+            for (k, v) in [
+                ("fontBytesHashed", c.font_bytes_hashed),
+                ("pipelineImageDecodes", c.pipeline_image_decodes),
+                ("sceneImageDecodes", c.scene_image_decodes),
+                ("pageScenesBuilt", c.page_scenes_built),
+                ("growPasses", c.grow_passes),
+                ("storyEmits", c.story_emits),
+            ] {
+                // Reflect::set on a fresh Object cannot fail.
+                let _ = js_sys::Reflect::set(&obj, &k.into(), &JsValue::from_f64(v as f64));
+            }
+            obj
+        }
+
         /// Number of cached page scenes currently resident. Surfaced
         /// for the HUD / DevTools — a developer-facing memory probe.
         #[cfg(feature = "gpu")]

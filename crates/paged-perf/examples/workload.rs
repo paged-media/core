@@ -16,14 +16,20 @@
 //! one write on it costs.
 //!
 //! ```text
-//! cargo run --release -p paged-perf --example workload -- [PHOTO_PX]
+//! cargo run --release -p paged-perf --example workload -- [PHOTO_PX] [--save PATH.paged]
 //! ```
+//!
+//! `--save` writes the authored workload as a `.paged` container: the
+//! input for the in-browser lane, which loads it into the real worker and
+//! reads `perfCounters()` around each action.
 
 fn main() {
-    let px: u32 = std::env::args()
-        .nth(1)
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(1600);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let px: u32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(1600);
+    let save = args
+        .iter()
+        .position(|a| a == "--save")
+        .and_then(|i| args.get(i + 1));
     let t = std::time::Instant::now();
     let mut w = paged_perf::build(px);
     let built = w.model.built();
@@ -38,6 +44,14 @@ fn main() {
         w.table_stories.len(),
         w.body_len,
     );
+    if let Some(path) = save {
+        let bytes = w
+            .model
+            .export_paged(paged_canvas::channel::PROTOCOL_VERSION.0)
+            .expect("export .paged");
+        std::fs::write(path, &bytes).expect("write .paged");
+        println!("saved {path} ({} bytes)", bytes.len());
+    }
     let story = w.body_story.clone();
     for _ in 0..3 {
         let t = std::time::Instant::now();
