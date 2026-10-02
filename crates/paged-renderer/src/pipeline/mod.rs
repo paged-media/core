@@ -938,6 +938,12 @@ pub struct BuiltDocument {
     pub(crate) overset: HashMap<String, OversetMeasure>,
     /// Builds the page-growth loop ran for this result (1 without growth).
     pub(crate) grow_passes: usize,
+    /// Per story, the byte offset each BODY paragraph starts at in the
+    /// story's text (run bytes, one separator between paragraphs): the
+    /// space `LineLayout::byte_range` is local to. From the model, not
+    /// from the lines: a line's range leaves out trailing spaces, and a
+    /// paragraph past the last frame has no line at all.
+    pub(crate) paragraph_starts: HashMap<String, Vec<u32>>,
     /// thoughts ADR 027 §7 / plan step 7 — per page, whether this build laid
     /// any of its content out afresh (rather than splicing it from an emit
     /// cache) AND that content may differ from the previous build's. A
@@ -960,6 +966,15 @@ pub(crate) struct OversetMeasure {
 }
 
 impl BuiltDocument {
+    /// The story byte offset body paragraph `paragraph_idx` of `story_id`
+    /// starts at; a line's `byte_range` counts from there.
+    pub fn paragraph_start(&self, story_id: &str, paragraph_idx: u32) -> Option<u32> {
+        self.paragraph_starts
+            .get(story_id)?
+            .get(paragraph_idx as usize)
+            .copied()
+    }
+
     /// Look up a page by stable id. Linear scan — `pages` typically
     /// fits in cache, and the canvas worker calls this once per
     /// viewport-visible page per dirty event. If a future profile

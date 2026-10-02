@@ -207,3 +207,35 @@ fn a_list_marker_does_not_shift_the_offsets() {
         plain_a.left_pt
     );
 }
+
+/// A line's recorded bytes leave out its trailing spaces, so a paragraph
+/// that ends in spaces (or holds nothing else) used to shorten every
+/// offset after it. And a paragraph of nothing but spaces laid out no
+/// line and took no room: it is a blank line.
+#[test]
+fn trailing_spaces_do_not_shift_the_offsets() {
+    // "Abc  ", "  ", "Def": D is at 5 + 1 + 2 + 1 = 9.
+    let (m, story) = story_with("Abc  \n  \nDef");
+    let built = m.built();
+    let def = selection_geometry(built, &range(&story, 9, 12));
+    let abc = selection_geometry(built, &range(&story, 0, 3));
+    assert_eq!(def.len(), 1, "Def is one line: {def:?}");
+    // The paragraph of two spaces is a line of its own.
+    assert!(
+        def[0].top_pt > abc[0].top_pt + 20.0,
+        "Def sits two lines below Abc ({} vs {})",
+        def[0].top_pt,
+        abc[0].top_pt
+    );
+    assert!(
+        (def[0].left_pt - abc[0].left_pt).abs() < 0.01,
+        "Def's selection starts at the line's left edge ({} vs {})",
+        def[0].left_pt,
+        abc[0].left_pt
+    );
+    let d_only = selection_geometry(built, &range(&story, 9, 10));
+    assert!(
+        def[0].width_pt > d_only[0].width_pt * 2.0,
+        "and covers its three letters"
+    );
+}

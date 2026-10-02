@@ -469,6 +469,14 @@
       "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh."
     },
     {
+      "name": "blank-paragraphs",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.006,
+      "max_p99_de": 0.01,
+      "min_ssim": 0.9948,
+      "rationale": "Added 2026-10-02 (RFI C-56): a paragraph with no word still takes a line. Six frames of A / something / B in Inter 10/12; the reference is InDesign 20.0.1's export. A paragraph of spaces is a line at its own leading (it laid out no line and took no room before); crates/paged-renderer/tests/blank_paragraphs_pipeline.rs pins all six distances, the truly empty paragraph as a named known difference (the IDML importer drops its range's leading, RFI C-57: 2.4 pt). Measured mean 0.0047 / p99 0.000 / ssim 0.99984; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+    },
+    {
       "name": "hard-hyphen",
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.156,

@@ -17,6 +17,7 @@
 
 pub mod anchored;
 pub mod annual_base;
+pub mod blank_paragraphs;
 pub mod composer;
 pub mod conditions;
 pub mod corners;
@@ -120,6 +121,7 @@ pub const SAMPLES: &[&str] = &[
     "navigation",
     "styles-cascade",
     "layout",
+    "blank-paragraphs",
     "hard-hyphen",
     "keeps",
     "start-paragraph",
@@ -182,6 +184,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "navigation" => navigation::build(),
         "styles-cascade" => styles_cascade::build(),
         "layout" => layout::build(),
+        "blank-paragraphs" => blank_paragraphs::build(),
         "hard-hyphen" => hard_hyphen::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
@@ -232,7 +235,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            57,
+            58,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

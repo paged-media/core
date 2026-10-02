@@ -91,6 +91,15 @@
       "report": "/tmp/idml-generated-diff/gradients/report.json"
     },
     {
+      "name": "blank-paragraphs",
+      "idml": "blank-paragraphs.idml",
+      "pdf": "blank-paragraphs.pdf",
+      "pages": 1,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/blank-paragraphs",
+      "report": "/tmp/idml-generated-diff/blank-paragraphs/report.json"
+    },
+    {
       "name": "hard-hyphen",
       "idml": "hard-hyphen.idml",
       "pdf": "hard-hyphen.pdf",

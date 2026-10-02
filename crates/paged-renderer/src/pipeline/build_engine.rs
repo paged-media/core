@@ -3670,6 +3670,25 @@ pub(super) fn build_document_inner(
         .flat_map(|p| p.resource_tiles_needed.iter().cloned())
         .collect();
 
+    let paragraph_starts = document
+        .stories
+        .iter()
+        .map(|s| {
+            let mut at = 0u32;
+            let starts = s
+                .story
+                .paragraphs
+                .iter()
+                .map(|p| {
+                    let start = at;
+                    at += p.runs.iter().map(|r| r.text.len() as u32).sum::<u32>() + 1;
+                    start
+                })
+                .collect();
+            (s.self_id.clone(), starts)
+        })
+        .collect();
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
@@ -3677,6 +3696,7 @@ pub(super) fn build_document_inner(
         diagnostics,
         resource_tiles_needed,
         overset,
+        paragraph_starts,
         grow_passes: 1,
         fresh_pages: fresh,
     })
@@ -5217,10 +5237,13 @@ fn emit_paragraph_lines(
     // similar patterns. Advance the baseline cursor by one line of
     // auto-leading at the paragraph style's resolved point size so
     // the visible vertical rhythm matches InDesign. No glyphs emit.
+    // A paragraph of nothing but spaces is a blank line too: the composer
+    // finds no word in it and lays out no line, so without this it took
+    // no room at all and the next paragraph moved up a line.
     let runs_have_text = paragraph
         .runs
         .iter()
-        .any(|r| !r.text.is_empty() && r.text != "\n");
+        .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
     if !runs_have_text {
         let resolved_paragraph = em
             .segment

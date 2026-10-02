@@ -876,6 +876,9 @@ pub(crate) fn paragraph_byte_offset(
     story_id: &str,
     paragraph_idx: u32,
 ) -> u32 {
+    if let Some(start) = built.paragraph_start(story_id, paragraph_idx) {
+        return start;
+    }
     paragraph_byte_offset_from_lines(
         built
             .story_layout(story_id)
