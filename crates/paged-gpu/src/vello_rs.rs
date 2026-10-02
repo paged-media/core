@@ -246,6 +246,104 @@ fn decode_image_for_render(bytes: &[u8], expected_w: u32, expected_h: u32) -> Op
     Some(raw.into_raw())
 }
 
+/// Decoded image pixels kept across scene builds, keyed by the identity
+/// of the image's buffer.
+///
+/// A page scene is rebuilt whenever the scene cache drops it — after
+/// every write that is not a text edit — and the wasm32 lazy path used to
+/// decode each visible image from its encoded bytes on every rebuild:
+/// on the 134-page annual that was ~310 ms of JPEG/WebP decoding after
+/// each write, ahead of the next request. The key is the buffer's
+/// address and length (plus the target size), which is stable because
+/// the pipeline's own decode cache hands out clones of the same `Bytes`
+/// on every rebuild; each entry holds a clone of the image, so its
+/// buffer stays alive and the address cannot be reused by another
+/// image while the entry exists. Bounded by [`DECODED_IMAGE_BUDGET`]
+/// (least recently used first), so peak heap stays capped.
+struct DecodedImageCache {
+    entries: std::collections::HashMap<
+        (usize, usize, u32, u32),
+        (paged_compose::DecodedImage, ImageData),
+    >,
+    order: std::collections::VecDeque<(usize, usize, u32, u32)>,
+    bytes: usize,
+}
+
+/// Decoded RGBA held across scene builds. 256 MiB is ~16 full-page
+/// 2000×2000 photos — the visible pages plus their neighbours.
+const DECODED_IMAGE_BUDGET: usize = 256 * 1024 * 1024;
+
+thread_local! {
+    static DECODED_IMAGES: RefCell<DecodedImageCache> = RefCell::new(DecodedImageCache {
+        entries: std::collections::HashMap::new(),
+        order: std::collections::VecDeque::new(),
+        bytes: 0,
+    });
+}
+
+/// The image's pixels as a peniko `ImageData`, decoded at most once per
+/// image while it stays within the budget. `None` when the image has
+/// neither usable RGBA nor decodable encoded bytes.
+fn cached_image_data(img: &paged_compose::DecodedImage) -> Option<ImageData> {
+    let expected_len = img.width as usize * img.height as usize * 4;
+    let eager = img.rgba.len() == expected_len;
+    let source: &[u8] = if eager { &img.rgba } else { &img.encoded };
+    if !eager && source.is_empty() {
+        return None;
+    }
+    let key = (
+        source.as_ptr() as usize,
+        source.len(),
+        img.width,
+        img.height,
+    );
+    let hit = DECODED_IMAGES.with(|c| {
+        let mut c = c.borrow_mut();
+        let data = c.entries.get(&key).map(|(_, d)| d.clone())?;
+        if let Some(at) = c.order.iter().position(|k| *k == key) {
+            c.order.remove(at);
+        }
+        c.order.push_back(key);
+        Some(data)
+    });
+    if hit.is_some() {
+        return hit;
+    }
+    let pixels: Box<[u8]> = if eager {
+        img.rgba.as_ref().to_vec().into_boxed_slice()
+    } else {
+        decode_image_for_render(&img.encoded, img.width, img.height)?.into_boxed_slice()
+    };
+    let size = pixels.len();
+    let data = ImageData {
+        data: Blob::new(Arc::new(pixels)),
+        format: ImageFormat::Rgba8,
+        // The display list's RGBA buffer is straight (un-premultiplied)
+        // alpha — pipeline decoders emit straight RGBA8. Mark it so
+        // peniko's sampler does the right multiply at draw time.
+        alpha_type: ImageAlphaType::Alpha,
+        width: img.width,
+        height: img.height,
+    };
+    if size <= DECODED_IMAGE_BUDGET {
+        DECODED_IMAGES.with(|c| {
+            let mut c = c.borrow_mut();
+            while c.bytes + size > DECODED_IMAGE_BUDGET {
+                let Some(old) = c.order.pop_front() else {
+                    break;
+                };
+                if let Some((_, d)) = c.entries.remove(&old) {
+                    c.bytes -= d.data.data().len();
+                }
+            }
+            c.bytes += size;
+            c.order.push_back(key);
+            c.entries.insert(key, (img.clone(), data.clone()));
+        });
+    }
+    Some(data)
+}
+
 fn count_overprints(list: &DisplayList) -> usize {
     list.commands
         .iter()
@@ -914,38 +1012,12 @@ fn build_scene_with_transform_filtered(
                 }
                 // Two paths: eager (rgba pre-decoded; native build)
                 // and lazy (rgba empty; wasm32 build defers decode
-                // to here to keep peak heap bounded). The lazy buf
-                // is owned + dropped after the scene closes.
-                let expected_len = img.width as usize * img.height as usize * 4;
-                let lazy: Option<Vec<u8>> = if img.rgba.len() == expected_len {
-                    None
-                } else if !img.encoded.is_empty() {
-                    match decode_image_for_render(&img.encoded, img.width, img.height) {
-                        Some(buf) => Some(buf),
-                        None => continue,
-                    }
-                } else {
+                // to here to keep peak heap bounded). Either way the
+                // pixels come from `cached_image_data`, which decodes a
+                // lazy image once and hands back the SAME blob on every
+                // later scene build (no re-decode, no re-upload).
+                let Some(image_data) = cached_image_data(img) else {
                     continue;
-                };
-                // peniko 0.6+ replaced `Image::new(...)` with
-                // `ImageData { ... }` + `ImageBrush::new(data)`. We
-                // hand the decoded RGBA8 buffer over via a peniko
-                // Blob (boxed into an Arc).
-                let bytes: Box<[u8]> = match lazy {
-                    Some(v) => v.into_boxed_slice(),
-                    None => img.rgba.as_ref().to_vec().into_boxed_slice(),
-                };
-                let blob = Blob::new(Arc::new(bytes));
-                let image_data = ImageData {
-                    data: blob,
-                    format: ImageFormat::Rgba8,
-                    // The display list's RGBA buffer is straight
-                    // (un-premultiplied) alpha — pipeline decoders
-                    // emit straight RGBA8. Mark it so peniko's
-                    // sampler does the right multiply at draw time.
-                    alpha_type: ImageAlphaType::Alpha,
-                    width: img.width,
-                    height: img.height,
                 };
                 let brush = ImageBrush::new(image_data);
                 // Compose the placement transform: the display-list
@@ -2800,6 +2872,50 @@ pub(crate) fn linear_to_peniko(c: ComposeColor) -> PenikoColor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lazily decoded image is decoded ONCE: a second scene build gets
+    /// the same blob back (no re-decode, and the same image id for the
+    /// GPU), while a different image never shares an entry.
+    #[test]
+    fn a_lazy_image_is_decoded_once_across_scene_builds() {
+        fn png(rgba: [u8; 4]) -> Vec<u8> {
+            let img = image::RgbaImage::from_pixel(2, 2, image::Rgba(rgba));
+            let mut out = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut out, image::ImageFormat::Png)
+                .expect("encode");
+            out.into_inner()
+        }
+        let lazy = |bytes: Vec<u8>| paged_compose::DecodedImage {
+            width: 2,
+            height: 2,
+            encoded: bytes.into(),
+            rgba: Vec::new().into(),
+            icc: None,
+        };
+        let red = lazy(png([255, 0, 0, 255]));
+        let blue = lazy(png([0, 0, 255, 255]));
+
+        let first = super::cached_image_data(&red).expect("decodes");
+        let again = super::cached_image_data(&red).expect("cached");
+        assert_eq!(first.data.id(), again.data.id(), "same image, same blob");
+        assert_eq!(&first.data.data()[..4], &[255, 0, 0, 255]);
+
+        let other = super::cached_image_data(&blue).expect("decodes");
+        assert_ne!(
+            other.data.id(),
+            first.data.id(),
+            "different images never share"
+        );
+        assert_eq!(&other.data.data()[..4], &[0, 0, 255, 255]);
+
+        // A clone of the image (what the pipeline's decode cache hands out
+        // on the next rebuild) shares the buffer, so it hits too.
+        let rebuilt = red.clone();
+        assert_eq!(
+            super::cached_image_data(&rebuilt).unwrap().data.id(),
+            first.data.id()
+        );
+    }
 
     #[test]
     fn rasterizer_constructs_without_panicking() {
