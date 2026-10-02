@@ -469,6 +469,123 @@ fn docx_pagination_stays_equal_to_a_cold_build() {
 }
 
 #[test]
+fn widow_control_on_a_growing_chain_stays_equal_to_a_cold_build() {
+    // ADR 028 — Word's widow control on every paragraph, growing. Typing in
+    // the last paragraph reuses every break settled before it.
+    let mut g = Gate::new(
+        "keeps-reflow",
+        &sample(paged_gen::samples::keeps_reflow::build),
+    );
+    let story = main_story(&g.model);
+    g.grow_toggle(&story);
+    g.type_chars(&story, 43, 2);
+    assert_eq!(
+        g.model.built().stats.keep_seeds_used,
+        1,
+        "typing in the last paragraph starts from the breaks before it"
+    );
+    g.script(&story, 21);
+    g.type_chars(&story, 5, 3);
+    g.grow_toggle(&story);
+    g.finish();
+}
+
+/// `keeps-reflow` (Word's widow control on every paragraph) with its
+/// story repeated `copies` times and growing as Word's sections do.
+fn widow_story(copies: usize) -> Vec<u8> {
+    let idml = sample(paged_gen::samples::keeps_reflow::build);
+    let mut doc = idml_import::import_idml_doc(&idml).expect("import");
+    let id = paged_gen::ids::self_id("keeps-reflow", "BodyStory", 0);
+    let s = doc
+        .stories
+        .iter_mut()
+        .find(|s| s.self_id == id)
+        .expect("body story");
+    s.story.grow = Some(paged_model::FlowGrowRule {
+        copy_frame_options: true,
+        ..Default::default()
+    });
+    let one = s.story.paragraphs.clone();
+    for _ in 1..copies {
+        s.story.paragraphs.extend(one.iter().cloned());
+    }
+    paged_store::package::wrap_document(&doc, "Widow.docx", 172.0, 318.0).expect("wrap")
+}
+
+#[test]
+fn a_long_widow_controlled_story_stays_equal_to_a_cold_build() {
+    // ADR 028 — every page break of this story is a keep decision, so an
+    // edit moves breaks after it. About 40 pages.
+    let mut g = Gate::new("long widow-controlled story", &widow_story(5));
+    let story = main_story(&g.model);
+    assert!(g.model.built().pages.len() > 30, "the story grew");
+    // Typing that keeps its line count resumes at the edit and stops at
+    // the next paragraph, taking the previous build's breaks after it.
+    g.type_chars(&story, 30, 2);
+    let stats = &g.model.built().stats;
+    assert_eq!(stats.stories_resumed, 1, "the edited story resumed");
+    assert!(
+        stats.frames_emitted <= 2,
+        "typing on page 4 laid out {} frames",
+        stats.frames_emitted
+    );
+    // A word at a time until the paragraph gains a line: every page break
+    // after it moves and is decided again.
+    let lines_before = g.model.built().story_layout(&story).len();
+    let at = caret(&g.model, &story, 31, 1);
+    let mut typed = 0;
+    while g.model.built().story_layout(&story).len() == lines_before && typed < 60 {
+        g.step(Step::Op(
+            "type a word",
+            Box::new(Mutation::InsertText {
+                story_id: story.clone(),
+                offset: at,
+                text: " typing".to_string(),
+                cell: None,
+            }),
+        ));
+        typed += 7;
+    }
+    assert!(typed < 60, "the typing wrapped onto another line");
+    g.step(Step::Op(
+        "delete the typing",
+        Box::new(Mutation::DeleteRange {
+            story_id: story.clone(),
+            start: at,
+            end: at + typed,
+            cell: None,
+        }),
+    ));
+    // A one-line paragraph at the foot of page 4, whose keeps left three
+    // lines free: page 5 still opens with the heading P22, one paragraph
+    // later, so the flow rejoins and the previous build's breaks are taken
+    // over shifted by a paragraph.
+    let end_of_p21 = text_offset(&g.model, &story, 21) - 1;
+    g.step(Step::Op(
+        "new paragraph",
+        Box::new(Mutation::InsertText {
+            story_id: story.clone(),
+            offset: end_of_p21,
+            text: "\nNew".to_string(),
+            cell: None,
+        }),
+    ));
+    let stats = &g.model.built().stats;
+    assert_eq!(stats.stories_resumed, 1, "the new paragraph resumed");
+    assert!(
+        stats.frames_emitted <= 2,
+        "a paragraph absorbed by page 4 laid out {} frames",
+        stats.frames_emitted
+    );
+    g.type_chars(&story, 60, 2);
+    g.step(Step::Undo);
+    g.step(Step::Undo);
+    g.script(&story, 12);
+    g.type_chars(&story, 150, 3);
+    g.finish();
+}
+
+#[test]
 fn keeps_stays_equal_to_a_cold_build() {
     run_sample("keeps", &sample(paged_gen::samples::keeps::build), 2);
 }

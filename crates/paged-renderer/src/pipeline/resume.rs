@@ -43,7 +43,7 @@ use std::collections::HashMap;
 
 use paged_model::TextFrame;
 
-use super::keeps::{KeepSpec, LinePlace};
+use super::keeps::{ForcedBreak, ForcedBreaks, KeepSpec, LinePlace};
 use super::{pool_print, BodyStoryPageDelta, BuiltPage, Diagnostic, PipelineStats, StoryEmitter};
 
 /// The paragraphs one text edit changed, by index: `[first, new_end)` now,
@@ -126,7 +126,7 @@ pub struct StoryResume {
     frame_max_baseline_64: Vec<i32>,
     placements: Vec<Vec<LinePlace>>,
     keep_specs: Vec<KeepSpec>,
-    forced: HashMap<u32, u32>,
+    forced: ForcedBreaks,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -225,6 +225,12 @@ impl Plan<'_> {
         j >= self.span.new_end as usize
     }
 
+    /// The edit added or removed paragraphs, so every paragraph after it
+    /// has a new index (and every line a stop splices, a new address).
+    pub(super) fn shifts(&self) -> bool {
+        self.span.new_end != self.span.old_end
+    }
+
     /// The page the resume starts on.
     pub(super) fn resume_page(&self) -> usize {
         self.rec.marks[self.first()].page
@@ -243,6 +249,34 @@ impl Plan<'_> {
     fn old_index(&self, j: usize) -> usize {
         j + self.span.old_end as usize - self.span.new_end as usize
     }
+
+    /// Paragraph `p` of the previous emission, in this one's indices:
+    /// `None` inside the edit.
+    fn new_index(&self, p: u32) -> Option<u32> {
+        let (first, old_end, new_end) = (self.span.first, self.span.old_end, self.span.new_end);
+        if p < first {
+            Some(p)
+        } else if p >= old_end {
+            Some(p + new_end - old_end)
+        } else {
+            None
+        }
+    }
+
+    /// The previous emission's keep breaks from its paragraph `jo` on, in
+    /// this emission's indices; `None` when one was decided in a frame
+    /// that began inside the edit.
+    fn breaks_from(&self, jo: usize) -> Option<ForcedBreaks> {
+        let mut out = ForcedBreaks::new();
+        for (&p, b) in self.rec.forced.iter().filter(|(p, _)| **p as usize >= jo) {
+            let frame_start = match b.frame_start {
+                Some((sp, sl)) => Some((self.new_index(sp)?, sl)),
+                None => None,
+            };
+            out.insert(self.new_index(p)?, ForcedBreak { frame_start, ..*b });
+        }
+        Some(out)
+    }
 }
 
 /// Decide whether `rec` lets this pass resume at the edit. `forced` is the
@@ -254,7 +288,7 @@ pub(super) fn plan<'r>(
     chain_sig: u64,
     generation: u64,
     paragraphs: usize,
-    forced: &HashMap<u32, u32>,
+    forced: &ForcedBreaks,
     pages: &[BuiltPage],
 ) -> Option<Plan<'r>> {
     let (first, old_end, new_end) = (
@@ -275,13 +309,13 @@ pub(super) fn plan<'r>(
     }
     // The paragraphs before the edit were laid out with the same forced
     // breaks, or their output is not this pass's.
-    let before = |m: &HashMap<u32, u32>| -> Vec<(u32, u32)> {
-        let mut v: Vec<(u32, u32)> = m
+    let before = |m: &ForcedBreaks| -> Vec<(u32, ForcedBreak)> {
+        let mut v: Vec<(u32, ForcedBreak)> = m
             .iter()
             .filter(|(p, _)| (**p as usize) < first)
-            .map(|(p, l)| (*p, *l))
+            .map(|(p, b)| (*p, *b))
             .collect();
-        v.sort_unstable();
+        v.sort_unstable_by_key(|(p, _)| *p);
         v
     };
     if before(forced) != before(&rec.forced) {
@@ -397,6 +431,16 @@ pub(super) fn splice_prefix(
     em.paragraph_idx = first as u32;
     em.placements = rec.placements[..first].to_vec();
     em.keep_specs = rec.keep_specs[..first].to_vec();
+    // ADR 028 — the record is a converged emission, so it applied every
+    // break it was laid out with, and `plan` checked that those before the
+    // edit are this pass's.
+    em.applied_breaks = em
+        .forced_breaks
+        .keys()
+        .copied()
+        .filter(|&p| (p as usize) < first)
+        .collect();
+    em.frame_first_line = super::keeps::last_frame_opener(&em.placements);
     em.diagnostics = rec.diagnostics[..m.diags].to_vec();
     stats.add_emitted(&m.stats);
 }
@@ -425,12 +469,28 @@ pub(super) fn try_stop(
     if !now.same_flow(old) {
         return None;
     }
-    // The paragraphs from here on were laid out under the same forced
-    // breaks (none, when a resume was planned past every keep).
-    if em.forced_breaks.keys().any(|p| *p as usize >= j)
-        || rec.forced.keys().any(|p| *p as usize >= jo)
-    {
+    // ADR 028 — the paragraphs from here on were laid out under the
+    // record's keep breaks. This pass forces the same ones, or none from
+    // here on yet: the record's are then what laying out the rest from
+    // this state finds, and they are taken over as applied. The frame the
+    // flow is in must have opened at the same line, which is where its
+    // breaks were decided.
+    let theirs = plan.breaks_from(jo)?;
+    let ours: ForcedBreaks = em
+        .forced_breaks
+        .iter()
+        .filter(|(p, _)| **p as usize >= j)
+        .map(|(&p, &b)| (p, b))
+        .collect();
+    if !ours.is_empty() && ours != theirs {
         return None;
+    }
+    if !theirs.is_empty() {
+        let opened = super::keeps::last_frame_opener(&rec.placements[..jo])
+            .and_then(|(p, l)| Some((plan.new_index(p)?, l)));
+        if opened != em.frame_first_line {
+            return None;
+        }
     }
     // Every later page the previous output lands on holds its pools.
     if !rec
@@ -488,6 +548,11 @@ pub(super) fn try_stop(
     em.paragraph_idx = (rec.placements.len() as i64 + para_shift) as u32;
     em.placements.truncate(j);
     em.placements.extend(rec.placements[jo..].iter().cloned());
+    em.frame_first_line = super::keeps::last_frame_opener(&em.placements);
+    for (p, b) in theirs {
+        em.forced_breaks.insert(p, b);
+        em.applied_breaks.insert(p);
+    }
     em.keep_specs.truncate(j);
     em.keep_specs.extend(rec.keep_specs[jo..].iter().copied());
     em.diagnostics
@@ -554,7 +619,7 @@ pub(super) fn record(
     generation: u64,
     per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
     marks: Vec<ParaMark>,
-    forced: HashMap<u32, u32>,
+    forced: ForcedBreaks,
     diagnostics: Vec<Diagnostic>,
 ) -> StoryResume {
     StoryResume {

@@ -34,8 +34,36 @@
 //!
 //! A break is never forced onto a line that already opens its frame (that
 //! cannot help), and only where a next frame exists (the emitter checks).
+//!
+//! **A break holds only where it was decided.** Each break records the
+//! frame its line sat in and the line that opened that frame
+//! ([`ForcedBreak`]). A frame's content is fixed by where it starts, so
+//! while both match, the measured violation is still there and the break
+//! applies. When an earlier break has moved the text (a heading pulled to
+//! the next page drags its paragraph along; growth or an edit shifted
+//! everything after it), the break is STALE: the emitter does not force it
+//! and the next pass drops it, so the paragraph is laid where the flow now
+//! puts it and judged again. Carrying stale breaks over was the
+//! `keeps-reflow` anomaly (a page holding a lone heading, or two lines, and
+//! then empty space), because a break decided for a paragraph straddling
+//! page 4 stayed forced after the paragraph had moved to the top of page 5.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// One forced break: line `line` of a paragraph opens the frame after
+/// `frame`, decided while `frame` began with line `frame_start`
+/// (`(paragraph, line)`) and held back `reserve_64` (1/64 pt) for its
+/// footnotes. It applies only while all three still hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ForcedBreak {
+    pub line: u32,
+    pub frame: usize,
+    pub frame_start: Option<(u32, u32)>,
+    pub reserve_64: i32,
+}
+
+/// Top-level paragraph index → its forced break.
+pub(crate) type ForcedBreaks = HashMap<u32, ForcedBreak>;
 
 /// A paragraph's resolved keep options.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -116,18 +144,38 @@ fn with_next_break(spec: &KeepSpec, n: usize) -> usize {
     }
 }
 
-/// Forced breaks for the next pass: top-level paragraph index → index of the
-/// line (within that paragraph) that must open the next frame.
+/// Forced breaks for the next pass: top-level paragraph index → the line
+/// (within that paragraph) that must open the next frame, with where that
+/// was decided.
 ///
-/// `prev` is the set the measured pass was emitted with. It carries over:
-/// a break that resolved a violation must stay, or the violation returns.
-/// Returns `prev` unchanged when the pass satisfied every rule (fixpoint).
+/// `prev` is the set the measured pass was emitted with and `applied` the
+/// paragraphs whose break the pass actually forced. An applied break
+/// carries over: it resolved a violation that returns without it. One the
+/// pass did not apply (stale, see the module doc) is dropped. Returns
+/// `prev` unchanged when the pass applied every break and satisfied every
+/// rule (fixpoint). `reserved[f]` is the footnote space frame `f` held back
+/// in the pass.
 pub(super) fn keep_breaks(
     placements: &[Vec<LinePlace>],
     specs: &[KeepSpec],
-    prev: &HashMap<u32, u32>,
-) -> HashMap<u32, u32> {
-    let mut next = prev.clone();
+    prev: &ForcedBreaks,
+    applied: &HashSet<u32>,
+    reserved: &[i32],
+) -> ForcedBreaks {
+    let mut next: ForcedBreaks = prev
+        .iter()
+        .filter(|(p, _)| applied.contains(p))
+        .map(|(&p, &b)| (p, b))
+        .collect();
+    // The line that opened each frame in this pass.
+    let mut starts: HashMap<usize, (u32, u32)> = HashMap::new();
+    for (p, lines) in placements.iter().enumerate() {
+        for (i, l) in lines.iter().enumerate() {
+            if let (true, Some(f)) = (l.opens_frame, l.frame) {
+                starts.entry(f).or_insert((p as u32, i as u32));
+            }
+        }
+    }
     for (p, lines) in placements.iter().enumerate() {
         let Some(spec) = specs.get(p) else { continue };
         if spec.is_inert() || lines.is_empty() {
@@ -165,13 +213,35 @@ pub(super) fn keep_breaks(
 
         let Some(b) = want else { continue };
         // A line that already opens its frame cannot be helped by a break.
-        if lines[b].opens_frame || lines[b].frame.is_none() {
+        let (false, Some(frame)) = (lines[b].opens_frame, lines[b].frame) else {
             continue;
-        }
-        let entry = next.entry(p as u32).or_insert(b as u32);
-        *entry = (*entry).min(b as u32);
+        };
+        let fresh = ForcedBreak {
+            line: b as u32,
+            frame,
+            frame_start: starts.get(&frame).copied(),
+            reserve_64: reserved.get(frame).copied().unwrap_or(0),
+        };
+        next.entry(p as u32)
+            .and_modify(|e| {
+                if fresh.line < e.line {
+                    *e = fresh;
+                }
+            })
+            .or_insert(fresh);
     }
     next
+}
+
+/// The line (`(paragraph, line)`) that opened the latest frame in
+/// `placements`: what the emitter's `frame_first_line` is after them.
+pub(super) fn last_frame_opener(placements: &[Vec<LinePlace>]) -> Option<(u32, u32)> {
+    placements.iter().enumerate().rev().find_map(|(p, lines)| {
+        lines
+            .iter()
+            .rposition(|l| l.opens_frame)
+            .map(|i| (p as u32, i as u32))
+    })
 }
 
 /// What a paragraph's `StartParagraph` rule does to its first line.
@@ -271,6 +341,21 @@ mod tests {
             .collect()
     }
 
+    /// The breaks a pass from no forced breaks asks for, as paragraph →
+    /// line.
+    fn brk(placements: &[Vec<LinePlace>], specs: &[KeepSpec]) -> HashMap<u32, u32> {
+        keep_breaks(
+            placements,
+            specs,
+            &ForcedBreaks::new(),
+            &HashSet::new(),
+            &[],
+        )
+        .into_iter()
+        .map(|(p, b)| (p, b.line))
+        .collect()
+    }
+
     fn keeps(all: bool, first: u32, last: u32) -> KeepSpec {
         KeepSpec {
             together: true,
@@ -294,7 +379,7 @@ mod tests {
             },
             KeepSpec::default(),
         ];
-        let b = keep_breaks(&placements, &specs, &HashMap::new());
+        let b = brk(&placements, &specs);
         assert_eq!(b.get(&0), Some(&0));
     }
 
@@ -309,27 +394,27 @@ mod tests {
             },
             KeepSpec::default(),
         ];
-        let b = keep_breaks(&placements, &specs, &HashMap::new());
+        let b = brk(&placements, &specs);
         assert_eq!(b.get(&0), Some(&2));
     }
 
     #[test]
     fn keep_all_lines_together_moves_the_whole_paragraph() {
-        let b = keep_breaks(&[split(4, 2)], &[keeps(true, 2, 2)], &HashMap::new());
+        let b = brk(&[split(4, 2)], &[keeps(true, 2, 2)]);
         assert_eq!(b.get(&0), Some(&0));
     }
 
     #[test]
     fn too_few_first_lines_move_the_whole_paragraph() {
         // 1 | 3 with KeepFirstLines=2.
-        let b = keep_breaks(&[split(4, 1)], &[keeps(false, 2, 2)], &HashMap::new());
+        let b = brk(&[split(4, 1)], &[keeps(false, 2, 2)]);
         assert_eq!(b.get(&0), Some(&0));
     }
 
     #[test]
     fn too_few_last_lines_pull_lines_over() {
         // 3 | 1 with KeepLastLines=2 becomes 2 | 2.
-        let b = keep_breaks(&[split(4, 3)], &[keeps(false, 2, 2)], &HashMap::new());
+        let b = brk(&[split(4, 3)], &[keeps(false, 2, 2)]);
         assert_eq!(b.get(&0), Some(&2));
     }
 
@@ -338,13 +423,13 @@ mod tests {
     #[test]
     fn a_satisfied_split_forces_nothing() {
         // 2 | 2 satisfies first=2 / last=2.
-        let b = keep_breaks(&[split(4, 2)], &[keeps(false, 2, 2)], &HashMap::new());
+        let b = brk(&[split(4, 2)], &[keeps(false, 2, 2)]);
         assert!(b.is_empty());
     }
 
     #[test]
     fn no_keeps_no_breaks() {
-        let b = keep_breaks(&[split(4, 1)], &[KeepSpec::default()], &HashMap::new());
+        let b = brk(&[split(4, 1)], &[KeepSpec::default()]);
         assert!(b.is_empty());
     }
 
@@ -359,14 +444,21 @@ mod tests {
             },
             KeepSpec::default(),
         ];
-        assert!(keep_breaks(&placements, &specs, &HashMap::new()).is_empty());
+        assert!(brk(&placements, &specs).is_empty());
     }
 
-    #[test]
-    fn a_resolved_break_carries_over_to_the_fixpoint() {
-        // After the forced break the pass satisfies the rule; the break stays.
-        let mut prev = HashMap::new();
-        prev.insert(0u32, 0u32);
+    fn held_heading() -> (Vec<Vec<LinePlace>>, Vec<KeepSpec>, ForcedBreaks) {
+        // After the forced break the pass satisfies the rule.
+        let mut prev = ForcedBreaks::new();
+        prev.insert(
+            0,
+            ForcedBreak {
+                line: 0,
+                frame: 0,
+                frame_start: Some((0, 0)),
+                reserve_64: 0,
+            },
+        );
         let placements = vec![within(1, 1, true), within(6, 1, false)];
         let specs = vec![
             KeepSpec {
@@ -375,7 +467,61 @@ mod tests {
             },
             KeepSpec::default(),
         ];
-        assert_eq!(keep_breaks(&placements, &specs, &prev), prev);
+        (placements, specs, prev)
+    }
+
+    #[test]
+    fn a_resolved_break_carries_over_to_the_fixpoint() {
+        // The pass forced the break and the rule holds: the break stays.
+        let (placements, specs, prev) = held_heading();
+        let applied: HashSet<u32> = [0].into_iter().collect();
+        assert_eq!(keep_breaks(&placements, &specs, &prev, &applied, &[]), prev);
+    }
+
+    #[test]
+    fn a_break_the_pass_did_not_apply_is_dropped() {
+        // The text moved: the frame the break was decided in no longer
+        // starts where it did, the emitter left the break alone, and the
+        // pass satisfies every rule without it.
+        let (placements, specs, prev) = held_heading();
+        assert!(keep_breaks(&placements, &specs, &prev, &HashSet::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_break_records_where_it_was_decided() {
+        // Frame 1 opens with paragraph 0's line 2; paragraph 1's 3 | 1
+        // split in frame 1 (lines 0-2) pulls line 2 over.
+        let placements = vec![
+            (0..4)
+                .map(|i| LinePlace {
+                    frame: Some(if i < 2 { 0 } else { 1 }),
+                    opens_frame: i == 0 || i == 2,
+                })
+                .collect(),
+            (0..4)
+                .map(|i| LinePlace {
+                    frame: Some(if i < 3 { 1 } else { 2 }),
+                    opens_frame: i == 3,
+                })
+                .collect(),
+        ];
+        let specs = vec![keeps(false, 2, 2), keeps(false, 2, 2)];
+        let b = keep_breaks(
+            &placements,
+            &specs,
+            &ForcedBreaks::new(),
+            &HashSet::new(),
+            &[],
+        );
+        assert_eq!(
+            b.get(&1),
+            Some(&ForcedBreak {
+                line: 2,
+                frame: 1,
+                frame_start: Some((0, 2)),
+                reserve_64: 0,
+            })
+        );
     }
 
     #[test]
@@ -384,7 +530,7 @@ mod tests {
         let placements = vec![within(4, 0, false), within(6, 1, true)];
         let mut spec = keeps(false, 2, 2);
         spec.with_next = 1;
-        let b = keep_breaks(&placements, &[spec, KeepSpec::default()], &HashMap::new());
+        let b = brk(&placements, &[spec, KeepSpec::default()]);
         assert_eq!(b.get(&0), Some(&2));
     }
 

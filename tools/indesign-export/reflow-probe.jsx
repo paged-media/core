@@ -10,11 +10,14 @@
 //
 // Report: every page (name, applied master, bounds) and every text frame on
 // it (bounds, story, first/last paragraph, line count), plus the story's
-// overset state, in points.
+// overset state, in points. Each frame also names its first and last LINE
+// (`first_line` / `last_line`), which is where a keep option shows.
 //
 // Inputs: PAGED_REFLOW_IDML, PAGED_REFLOW_JSON, PAGED_REFLOW_PDF,
 // PAGED_REFLOW_LIMIT ("true" = limit to primary text frames),
-// PAGED_REFLOW_EDIT ("grow" | "shrink" | "none"), PAGED_REFLOW_PHASE.
+// PAGED_REFLOW_EDIT ("grow" | "shrink" | "thread" | "none"), PAGED_REFLOW_PHASE,
+// PAGED_REFLOW_STORY_PREFIX (how the body story's text starts; default
+// "Paragraph 01").
 
 (function () {
     function q(s) {
@@ -31,11 +34,16 @@
         if (ps.length === 0) return '"first":null,"last":null,"lines":0';
         var first = String(ps[0].contents).substr(0, 24);
         var last = String(ps[ps.length - 1].contents).substr(0, 24);
-        return '"first":' + q(first) + ',"last":' + q(last) + ',"lines":' + frame.lines.length;
+        var ls = frame.lines;
+        var firstLine = ls.length ? String(ls[0].contents).substr(0, 24) : "";
+        var lastLine = ls.length ? String(ls[ls.length - 1].contents).substr(0, 24) : "";
+        return '"first":' + q(first) + ',"last":' + q(last) + ',"lines":' + ls.length +
+            ',"first_line":' + q(firstLine) + ',"last_line":' + q(lastLine);
     }
     function bodyStory(doc) {
+        var prefix = String($.global.PAGED_REFLOW_STORY_PREFIX || "Paragraph 01");
         for (var s = 0; s < doc.stories.length; s++) {
-            if (String(doc.stories[s].contents).indexOf("Paragraph 01") === 0) return doc.stories[s];
+            if (String(doc.stories[s].contents).indexOf(prefix) === 0) return doc.stories[s];
         }
         return null;
     }
@@ -101,7 +109,31 @@
         tp.deleteEmptyPages = true;
         tp.preserveFacingPageSpreads = false;
 
-        if (edit === "shrink") {
+        // "thread": what the reflow does, done by the script itself, for a
+        // host where the idle task does not run (a locked screen gives
+        // InDesign no idle time; the document then comes back unchanged).
+        // Pages are added after the chain's last page, with that page's
+        // master, each with a frame on the margin box in DEFAULT frame
+        // options threaded from the last frame, until the story fits:
+        // what Smart Text Reflow was measured to do (thoughts ADR 026).
+        // The line placement is then InDesign's own composition of the
+        // story over that chain.
+        if (edit === "thread") {
+            var guard = 0;
+            while (body.overflows && guard++ < 200) {
+                var frames = body.textContainers;
+                var lastFrame = frames[frames.length - 1];
+                var lastPage = lastFrame.parentPage;
+                var page = doc.pages.add(LocationOptions.AT_END);
+                page.appliedMaster = lastPage.appliedMaster;
+                var m = page.marginPreferences;
+                var b = page.bounds;
+                var frame = page.textFrames.add({
+                    geometricBounds: [b[0] + m.top, b[1] + m.left, b[2] - m.bottom, b[3] - m.right]
+                });
+                lastFrame.nextTextFrame = frame;
+            }
+        } else if (edit === "shrink") {
             var n = body.paragraphs.length;
             body.paragraphs.itemByRange(n - 50, n - 1).remove();
         } else {
@@ -132,6 +164,10 @@
 
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
     app.scriptPreferences.measurementUnit = MeasurementUnits.POINTS;
+    // The reflow is recomposition on idle time, and with screen redraw off
+    // (an app-wide setting another script may have left behind) it never
+    // ran: the document came back unchanged and still overset.
+    app.scriptPreferences.enableRedraw = true;
     try {
         if (String($.global.PAGED_REFLOW_PHASE) === "report") reportPhase();
         else prepare();

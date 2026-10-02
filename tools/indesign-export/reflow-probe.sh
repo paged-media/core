@@ -5,6 +5,7 @@
 #
 #   bash tools/indesign-export/reflow-probe.sh corpus/generated/reflow.idml
 #   PAGED_REFLOW_LIMIT=true PAGED_REFLOW_EDIT=shrink bash tools/indesign-export/reflow-probe.sh <idml>
+#   PAGED_REFLOW_STORY_PREFIX=P01 bash tools/indesign-export/reflow-probe.sh corpus/generated/keeps-reflow.idml
 set -euo pipefail
 IDML="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 STEM="${IDML%.idml}"
@@ -25,6 +26,7 @@ var PAGED_REFLOW_LIMIT = "${PAGED_REFLOW_LIMIT:-false}";
 var PAGED_REFLOW_EDIT = "${PAGED_REFLOW_EDIT:-grow}";
 var PAGED_REFLOW_VARIANT = "${PAGED_REFLOW_VARIANT:-}";
 var PAGED_REFLOW_PHASE = "$1";
+var PAGED_REFLOW_STORY_PREFIX = "${PAGED_REFLOW_STORY_PREFIX:-Paragraph 01}";
 \$.evalFile(File("$JSX"));
 JSX
     # `do script` by its raw event code: see run-export.sh (it compiles

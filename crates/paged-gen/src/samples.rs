@@ -31,6 +31,7 @@ pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
 pub mod keeps;
+pub mod keeps_reflow;
 pub mod layers_z;
 pub mod layout;
 pub mod links_broken;
@@ -130,6 +131,7 @@ pub const SAMPLES: &[&str] = &[
     "stroke-inset",
     "shaped-bands",
     "reflow",
+    "keeps-reflow",
     "docx-pagination",
     "nested-groups",
     "paste-into",
@@ -189,6 +191,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "stroke-inset" => stroke_inset::build(),
         "shaped-bands" => shaped_bands::build(),
         "reflow" => reflow::build(),
+        "keeps-reflow" => keeps_reflow::build(),
         "docx-pagination" => docx_pagination::build(),
         "nested-groups" => nested_groups::build(),
         "paste-into" => paste_into::build(),

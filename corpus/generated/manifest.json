@@ -127,6 +127,15 @@
       "report": "/tmp/idml-generated-diff/keeps/report.json"
     },
     {
+      "name": "keeps-reflow",
+      "idml": "keeps-reflow.idml",
+      "pdf": "keeps-reflow.pdf",
+      "pages": 9,
+      "passing": 1,
+      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/90730297-cc1b-4798-ad9c-623f3d1e6b0e/scratchpad/widow/gate1/keeps-reflow",
+      "report": "/private/tmp/claude-501/-Users-drietsch-paged/90730297-cc1b-4798-ad9c-623f3d1e6b0e/scratchpad/widow/gate1/keeps-reflow/report.json"
+    },
+    {
       "name": "layers-z",
       "idml": "layers-z.idml",
       "pdf": "layers-z.pdf",

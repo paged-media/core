@@ -20,9 +20,12 @@ use super::*;
 use std::collections::HashMap;
 
 /// ADR 028 — re-emit passes a story may spend on keep options beyond the
-/// footnote ones. Each pass can only add or move breaks earlier, so chains
-/// (a heading kept with a heading kept with text) settle in a few passes;
-/// the cap bounds a pathological oscillation.
+/// footnote ones, on top of two per chain frame. A break holds only where
+/// it was decided (`keeps` module doc), so a break that moves text
+/// invalidates the ones decided after it, and the fixpoint settles the
+/// frame boundaries in flow order: at least one per pass, a few for a
+/// chain of keeps at one boundary (a heading kept with a heading kept
+/// with text). The cap bounds a pathological oscillation.
 const MAX_KEEP_PASSES: usize = 4;
 
 use paged_compose::{
@@ -2977,11 +2980,11 @@ pub(super) fn build_document_inner(
         // ADR 028 — keep options re-emit the story with forced frame breaks
         // until the set stops changing. A story without keeps never asks
         // for an extra pass, so its passes are exactly the footnote ones.
-        let mut forced_breaks: HashMap<u32, u32> = HashMap::new();
+        let mut forced_breaks = super::keeps::ForcedBreaks::new();
         let mut footnotes_settled = false;
         // ADR 027 plan step 3 — start from the breaks the previous build
-        // settled on when they provably carry over (see `KeepSeed`). A story
-        // that reads variables (a page count, a running header) can lay out
+        // settled on before the edit (see `KeepSeed`). A story that reads
+        // variables (a page count, a running header) can lay out
         // differently before the edit too, and is never seeded.
         let seed_key = (parsed.self_id.clone(), post.is_some());
         let reads_variables = toc_paragraphs.is_some()
@@ -2997,15 +3000,40 @@ pub(super) fn build_document_inner(
             .keep_seed_hints
             .and_then(|h| h.get(&parsed.self_id).copied())
             .filter(|_| !reads_variables);
+        // Only a break decided wholly before the edit is reused: its
+        // paragraph and the next one (keep with next reads it) end before
+        // the edited paragraph, so the text and the layout it was decided
+        // on are unchanged. Every break holds only where it was decided
+        // (`keeps` module doc), so the fixpoint from this start settles on
+        // what it settles on from nothing.
         if let (Some(store), Some(e), Some(sig)) = (options.keep_seeds, seed_edit, seed_sig) {
             if let Some(seed) = store.borrow().get(&seed_key) {
-                if seed.chain_sig == sig && seed.last_active.is_some_and(|a| a + 1 < e) {
-                    forced_breaks = seed.forced.clone();
+                if seed.chain_sig == sig {
+                    forced_breaks = seed
+                        .forced
+                        .iter()
+                        .filter(|(&p, _)| p + 1 < e)
+                        .map(|(&p, &b)| (p, b))
+                        .collect();
                 }
             }
         }
-        let mut seeded = !forced_breaks.is_empty();
-        let mut last_active: Option<u32> = None;
+        // ADR 028 — the builds of one `build_document` call lay out the same
+        // text over a chain that only grows at its end, so the breaks the
+        // previous grow build settled on are a valid start: each one holds
+        // only where it was decided (`keeps` module doc), and the fixpoint
+        // drops the rest. A long story otherwise re-settled every break
+        // from nothing on each grow build.
+        let mut carried = false;
+        if forced_breaks.is_empty() && !reads_variables {
+            if let Some(seed) = options
+                .keep_carry
+                .and_then(|c| c.borrow().get(&seed_key).cloned())
+            {
+                forced_breaks = seed.forced;
+                carried = !forced_breaks.is_empty();
+            }
+        }
         // ADR 027 plan step 6 — a story whose emission is a pure function of
         // the flow state keeps a mark per paragraph; an edited one resumes at
         // the edit and stops where its flow rejoins the previous emission.
@@ -3029,9 +3057,15 @@ pub(super) fn build_document_inner(
             .story_resume
             .filter(|_| resumable)
             .map(|store| store.borrow());
-        let mut resume_plan = match (
-            resume_guard.as_ref().and_then(|g| g.get(&resume_key)),
-            options.edit_spans.and_then(|m| m.get(&parsed.self_id)),
+        let resume_rec = resume_guard.as_ref().and_then(|g| g.get(&resume_key));
+        let resume_span = options.edit_spans.and_then(|m| m.get(&parsed.self_id));
+        // A pass may resume when its forced breaks before the edit are the
+        // record's (`resume::plan`), the keeps fixpoint's re-emits included:
+        // each break holds only where it was decided, so a re-emit is the
+        // same function of its breaks as the first pass.
+        let plan_for = |forced: &super::keeps::ForcedBreaks, pages: &[BuiltPage]| match (
+            resume_rec,
+            resume_span,
             resume_sig,
         ) {
             (Some(rec), Some(span), Some(sig)) => resume::plan(
@@ -3040,8 +3074,8 @@ pub(super) fn build_document_inner(
                 sig,
                 options.build_generation,
                 parsed.story.paragraphs.len(),
-                &forced_breaks,
-                &pages,
+                forced,
+                pages,
             ),
             _ => None,
         };
@@ -3055,15 +3089,9 @@ pub(super) fn build_document_inner(
         // delta is reused as is by the capture below.
         let mut verbatim: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)> = Vec::new();
         let mut converged = false;
-        // Passes spent before the cold fixpoint started (1 after a seed
-        // that did not hold), so the caps count exactly as a cold build's.
-        let mut pass_base = 0;
-        let pass_cap = MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES;
-        for pass in 0..pass_cap + 1 {
-            let p = pass - pass_base;
-            if p >= pass_cap {
-                break;
-            }
+        let pass_cap = MAX_FOOTNOTE_RESERVE_PASSES + MAX_KEEP_PASSES + 2 * chain_for_post.len();
+        for pass in 0..pass_cap {
+            let p = pass;
             // Re-emit passes start from the pre-story snapshot so the
             // page accumulates exactly one story's worth of commands.
             if pass > 0 {
@@ -3123,9 +3151,9 @@ pub(super) fn build_document_inner(
                     emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
                 }
             } else {
-                // ADR 027 plan step 6 — only the first pass resumes; a keeps
-                // or footnote re-emit lays the story out whole.
-                let plan = if pass == 0 { resume_plan.take() } else { None };
+                // ADR 027 plan step 6 — a resumable story carries no
+                // footnotes, so every pass is a keeps pass and may resume.
+                let plan = plan_for(&forced_breaks, &pages);
                 marks.clear();
                 verbatim.clear();
                 fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
@@ -3165,7 +3193,11 @@ pub(super) fn build_document_inner(
                                 &mut verbatim,
                             );
                             if relaid.is_some() {
-                                fresh_range = Some((plan.resume_page(), m.page));
+                                // The record's later pages are this
+                                // build's, unless their lines moved to
+                                // other paragraph indices.
+                                let to = if plan.shifts() { usize::MAX } else { m.page };
+                                fresh_range = Some((plan.resume_page(), to));
                                 break;
                             }
                         }
@@ -3245,7 +3277,6 @@ pub(super) fn build_document_inner(
             let next_forced = emitter.keep_breaks();
             let keeps_changed = next_forced != forced_breaks;
             forced_breaks = next_forced;
-            last_active = emitter.last_active_keep();
 
             // Measure each frame's footnote pool and fold it into the
             // reservation. Vertical-writing stories lay the pool out in
@@ -3288,27 +3319,9 @@ pub(super) fn build_document_inner(
             // Done when the footnote reservation and the keep breaks both
             // hold. A keep change re-emits until its own cap, accepting the
             // last pass after that (text is then placed, never dropped).
-            // A seeded pass is kept only when it is what the cold fixpoint
-            // ends on: the seed held, no keep option can act from the edit
-            // on, and the story reserved no footnote space. Otherwise run
-            // the cold fixpoint from no forced breaks.
-            if seeded {
-                seeded = false;
-                let holds = !keeps_changed
-                    && footnotes_settled
-                    && reserved_64.iter().all(|r| *r == 0)
-                    && seed_edit.is_some_and(|e| last_active.map_or(true, |a| a + 1 < e));
-                if !holds {
-                    forced_breaks = HashMap::new();
-                    reserved_64 = vec![0; chain_for_post.len()];
-                    footnotes_settled = false;
-                    pass_base = pass + 1;
-                    continue;
-                }
-            }
             if footnotes_settled && !keeps_changed {
                 converged = true;
-                if pass == 0 && !forced_breaks.is_empty() {
+                if pass == 0 && !forced_breaks.is_empty() && !carried {
                     total_stats.keep_seeds_used += 1;
                 }
                 break;
@@ -3320,18 +3333,30 @@ pub(super) fn build_document_inner(
         // Keep the settled breaks for the next build's seed. A story that
         // reads variables or carries footnotes is never seeded, so it is
         // not stored either.
+        let footnoted = pages
+            .iter()
+            .zip(&pre_snapshot)
+            .any(|(page, snap)| page.footnotes.len() > snap.6);
+        if let Some(carry) = options.keep_carry {
+            if converged && !reads_variables && !footnoted {
+                carry.borrow_mut().insert(
+                    seed_key.clone(),
+                    KeepSeed {
+                        forced: forced_breaks.clone(),
+                        chain_sig: 0,
+                    },
+                );
+            } else {
+                carry.borrow_mut().remove(&seed_key);
+            }
+        }
         if let (Some(store), Some(sig)) = (options.keep_seeds, seed_sig) {
-            let footnoted = pages
-                .iter()
-                .zip(&pre_snapshot)
-                .any(|(page, snap)| page.footnotes.len() > snap.6);
             if converged && !reads_variables && !footnoted {
                 store.borrow_mut().insert(
                     seed_key,
                     KeepSeed {
                         forced: forced_breaks.clone(),
                         chain_sig: sig,
-                        last_active,
                     },
                 );
             } else {
@@ -3398,13 +3423,8 @@ pub(super) fn build_document_inner(
         // ADR 027 plan step 6 — a record is kept for a story that ended
         // where it can be resumed from: the fixpoint converged, and no
         // footnote or anchored image rides outside the per-page output.
-        let footnoted = pages
-            .iter()
-            .zip(&pre_snapshot)
-            .any(|(page, snap)| page.footnotes.len() > snap.6);
         let resume_end = resume_end.filter(|_| converged && !footnoted && new_anchored.is_empty());
         // The plan borrowed the store; release it before writing.
-        let _ = resume_plan.take();
         drop(resume_guard);
         if caching || resume_end.is_some() {
             // Diagnostics (overset) ride along in the delta and are
@@ -3883,7 +3903,12 @@ pub(super) struct StoryEmitter<'a> {
     /// ADR 028 — keep options. Breaks this pass must force: top-level
     /// paragraph index → the line (within it) that opens the next frame.
     /// Decided from the previous pass by `keeps::keep_breaks`.
-    pub(super) forced_breaks: HashMap<u32, u32>,
+    pub(super) forced_breaks: super::keeps::ForcedBreaks,
+    /// The paragraphs whose forced break this pass applied; the others
+    /// were stale (`keeps` module doc) and are dropped.
+    pub(super) applied_breaks: std::collections::HashSet<u32>,
+    /// The line (`(paragraph, line)`) that opened the current frame.
+    pub(super) frame_first_line: Option<(u32, u32)>,
     /// Resolved keep options per top-level paragraph, this pass.
     pub(super) keep_specs: Vec<super::keeps::KeepSpec>,
     /// Where each laid-out line of each top-level paragraph landed.
@@ -4100,7 +4125,9 @@ impl<'a> StoryEmitter<'a> {
             frame_idx: 0,
             y_cursor: -1,
             prev_line_height_64: None,
-            forced_breaks: HashMap::new(),
+            forced_breaks: super::keeps::ForcedBreaks::new(),
+            applied_breaks: std::collections::HashSet::new(),
+            frame_first_line: None,
             keep_specs: Vec::new(),
             placements: Vec::new(),
             placed_height_64: HashMap::new(),
@@ -4278,17 +4305,9 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
-    pub(super) fn with_forced_breaks(mut self, forced: &HashMap<u32, u32>) -> Self {
+    pub(super) fn with_forced_breaks(mut self, forced: &super::keeps::ForcedBreaks) -> Self {
         self.forced_breaks = forced.clone();
         self
-    }
-
-    /// Index of the last paragraph whose keep options can force a break.
-    pub(super) fn last_active_keep(&self) -> Option<u32> {
-        self.keep_specs
-            .iter()
-            .rposition(|k| !k.is_inert())
-            .map(|i| i as u32)
     }
 
     /// The height of what this pass laid out past the chain's last frame
@@ -4312,8 +4331,14 @@ impl<'a> StoryEmitter<'a> {
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
     /// options to hold (`forced` itself when every rule held).
-    pub(super) fn keep_breaks(&self) -> HashMap<u32, u32> {
-        super::keeps::keep_breaks(&self.placements, &self.keep_specs, &self.forced_breaks)
+    pub(super) fn keep_breaks(&self) -> super::keeps::ForcedBreaks {
+        super::keeps::keep_breaks(
+            &self.placements,
+            &self.keep_specs,
+            &self.forced_breaks,
+            &self.applied_breaks,
+            &self.reserved_footnote_64,
+        )
     }
 
     pub(super) fn emit_paragraph(
@@ -4341,12 +4366,39 @@ impl<'a> StoryEmitter<'a> {
         self.paragraph_idx = self.paragraph_idx.saturating_add(1);
     }
 
+    /// ADR 028 — whether the line about to be placed must open the next
+    /// frame for a keep option, recording the break as applied. Only when
+    /// something already sits in this frame (an empty frame gains nothing
+    /// from a break), and only in the frame the break was decided in, while
+    /// that frame starts where it did and holds back the same footnote
+    /// space: otherwise the text has moved and the break is stale (`keeps`
+    /// module doc).
+    fn take_forced_break(&mut self) -> bool {
+        let here = self.last_placed_frame == Some(self.frame_idx)
+            && self
+                .forced_breaks
+                .get(&self.paragraph_idx)
+                .is_some_and(|b| {
+                    b.line == self.para_line
+                        && b.frame == self.frame_idx
+                        && b.frame_start == self.frame_first_line
+                        && Some(&b.reserve_64) == self.reserved_footnote_64.get(self.frame_idx)
+                });
+        if here {
+            self.applied_breaks.insert(self.paragraph_idx);
+        }
+        here
+    }
+
     /// Record where the current top-level paragraph's next line landed
     /// (`None` = dropped as overset).
     fn record_line(&mut self, frame: Option<usize>) {
         let opens_frame = frame.is_some() && self.last_placed_frame != frame;
         if frame.is_some() {
             self.last_placed_frame = frame;
+        }
+        if opens_frame {
+            self.frame_first_line = Some((self.paragraph_idx, self.para_line));
         }
         if let Some(lines) = self.placements.last_mut() {
             lines.push(super::keeps::LinePlace { frame, opens_frame });
@@ -6819,10 +6871,8 @@ fn emit_paragraph_lines(
         // room even when its baseline is inside the bounding box.
         let no_room_here = plan_no_room.get(current_line_idx).copied().unwrap_or(false);
         // ADR 028 — a keep option decided (from the previous pass) that
-        // this line opens the next frame. Only when something already sits
-        // in this frame; an empty frame gains nothing from a break.
-        let keep_break_here = em.forced_breaks.get(&em.paragraph_idx) == Some(&em.para_line)
-            && em.last_placed_frame == Some(em.frame_idx);
+        // this line opens the next frame.
+        let keep_break_here = em.take_forced_break();
         // ADR 028 — the break-before rule moves a paragraph's FIRST line.
         let mut start_to = None;
         if em.para_line == 0 && em.start_rule != paged_model::StartParagraph::Anywhere {

@@ -422,6 +422,10 @@ pub struct PipelineOptions<'a> {
     /// transparency-group fit) skip it. The caller passes it only for a
     /// build whose commits leave the frame pass untouched.
     pub previous_pages: Option<&'a std::cell::RefCell<Vec<BuiltPage>>>,
+    /// ADR 028 — the keep breaks carried from one grow build to the next
+    /// WITHIN a [`build_document`] call (the same text over a chain that
+    /// grew at its end). `build_document` sets it; callers leave it `None`.
+    pub keep_carry: Option<&'a KeepSeedStore>,
     /// W1.18a — the date clock for `CreationDate` / `ModificationDate` /
     /// `OutputDate` text variables. Explicit + injectable so date
     /// variables resolve deterministically (never the wall clock). The
@@ -507,21 +511,17 @@ pub struct BodyStoryEmissionDelta {
 /// thoughts ADR 027 plan step 3 — one story's settled keep-option breaks,
 /// kept from one build to the next.
 ///
-/// The keeps fixpoint (ADR 028) starts from no forced breaks and adds the
-/// breaks each pass's placement asks for, carrying earlier ones over, so
-/// its result depends on the passes it went through. A seed is therefore
-/// reused only where that history cannot differ: every paragraph with an
-/// active keep option ends before the edited one (paragraph `e`), so the
-/// breaks before it evolve exactly as they did, and nothing after it can
-/// ever force one. The pipeline checks that on the seeded pass too and
-/// falls back to the cold fixpoint when it does not hold.
+/// Every forced break records the frame it was decided in and the line
+/// that opened that frame, and holds only while both match (ADR 028; the
+/// `keeps` module doc), so the keeps fixpoint settles on the same breaks
+/// from any start whose breaks were decided on the same text. The seed is
+/// the breaks decided wholly before the edited paragraph (`e`): their
+/// paragraph and the next end before it. The rest are settled again.
 #[derive(Debug, Clone, Default)]
 pub struct KeepSeed {
-    pub(crate) forced: HashMap<u32, u32>,
+    pub(crate) forced: keeps::ForcedBreaks,
     /// `body_story_signature` of the chain the breaks were settled on.
     pub(crate) chain_sig: u64,
-    /// Index of the last paragraph whose keep options can force a break.
-    pub(crate) last_active: Option<u32>,
 }
 
 /// (frame id, page id, post-layout pass) → print of a master-text
@@ -640,6 +640,7 @@ impl Default for PipelineOptions<'_> {
             build_generation: 0,
             emission_prints: None,
             previous_pages: None,
+            keep_carry: None,
             document_clock: DocumentClock::default(),
             scene_layers: None,
             resource_providers: None,
@@ -1215,6 +1216,13 @@ pub fn build_document(
     // `MAX_ESTIMATED_GROWS` the story doubles instead, so a story the
     // estimate cannot size still reaches its cap in a few passes.
     let mut estimated: HashMap<&str, usize> = HashMap::new();
+
+    let carry = KeepSeedStore::default();
+    let mut carrying = options.clone();
+    if carrying.keep_carry.is_none() {
+        carrying.keep_carry = Some(&carry);
+    }
+    let options = &carrying;
 
     let mut pass = 0;
     loop {

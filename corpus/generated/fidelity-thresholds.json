@@ -165,6 +165,14 @@
       "rationale": "Added 2026-10-01 with ADR 026 (page growth). The reference is InDesign 2025's export AFTER Smart Text Reflow grew the two-page fixture to three (tools/indesign-export/reflow-probe.sh); reflow.fonts.sh passes --grow-story so the engine grows the same story. Page 3 is GENERATED on both sides (margin-box frame, default frame options). Worst page measured: mean 0.885 / p99 24.736 / ssim 0.948 (page 3: 0.835 / 24.736 / 0.948); sized at worst * 1.20 and worst_ssim - 0.005. Pages 1-2 scored mean 7.9 before the LeadingOffset first-baseline fix in the same change. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.552 / p99 15.169 / ssim 0.9563 (was 0.885 / 24.736 / 0.9476); re-sized by the rule above."
     },
     {
+      "name": "keeps-reflow",
+      "max_pages_with_pdf": 9,
+      "max_mean_de": 1.374,
+      "max_p99_de": 47.6,
+      "min_ssim": 0.961,
+      "rationale": "Added 2026-10-02 with the ADR 028 keeps-on-a-growing-chain fix. Word's widow control (KeepLinesTogether 2/2 on every paragraph, KeepWithNext 1 on the headings) over a two-page threaded chain that grows to nine pages; the reference is InDesign 2025's export after the story was reflowed over generated pages (reflow-probe.sh, PAGED_REFLOW_EDIT=thread: Smart Text Reflow's idle task did not run on the host, and the scripted reflow reproduced the reflow fixture's pages and line positions exactly); keeps-reflow.fonts.sh passes --grow-story. The page map (every page's first and last line) is pinned structurally by crates/paged-renderer/tests/keeps_reflow_pipeline.rs; before the fix the engine laid ten pages, page 5 a lone heading and page 9 two lines. Worst page measured: mean 1.145 / p99 39.661 / ssim 0.9661 (page 1; the two AUTHORED pages measure ~1.1, the generated ones 0.21-0.26: the authored pages' ink sits 0.3 px lower in the render although every word's position matches InDesign's to 0.04 pt, a rasterisation phase on the whole-point LeadingOffset baselines, not layout). Sized at worst * 1.20 and worst_ssim - 0.005."
+    },
+    {
       "name": "links-broken",
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.52,
