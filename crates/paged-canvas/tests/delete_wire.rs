@@ -419,3 +419,63 @@ fn delete_then_undo_restores_every_settable_property_of_every_kind() {
         );
     }
 }
+
+// ── §12 (RFI C-76): a container takes its pasted-in content along ───
+
+fn nested(m: &CanvasModel, host: &ElementId) -> Vec<String> {
+    let spread = &m.scene().spreads[0].spread;
+    spread
+        .nested_children
+        .get(host.raw_id())
+        .map(|refs| {
+            refs.iter()
+                .map(|r| match r {
+                    paged_model::FrameRef::Rectangle(i) => {
+                        spread.rectangles[*i].self_id.clone().unwrap_or_default()
+                    }
+                    other => format!("{other:?}"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn deleting_a_container_takes_its_pasted_in_child_and_undo_renests_it() {
+    let mut m = model();
+    let host = frame(&mut m, 100.0);
+    let child = frame(&mut m, 110.0);
+    m.apply_mutation(&Mutation::PasteInto {
+        container_id: host.clone(),
+        child_id: child.clone(),
+    })
+    .expect("paste into");
+    assert_eq!(nested(&m, &host), vec![raw(&child)]);
+
+    m.apply_mutation(&Mutation::DeleteFrame {
+        frame_id: raw(&host),
+    })
+    .expect("delete the container");
+    assert!(m.element_properties(&host).is_none());
+    assert!(
+        m.element_properties(&child).is_none(),
+        "the pasted-in child goes with its container, not to the top level"
+    );
+    assert!(
+        tree(&m, &[&child]).is_empty(),
+        "…and the tree does not list it"
+    );
+
+    assert!(m.undo().is_some());
+    assert_eq!(
+        nested(&m, &host),
+        vec![raw(&child)],
+        "undo puts the child back INSIDE the container"
+    );
+    assert!(
+        tree(&m, &[&child]).is_empty(),
+        "…not as a free top-level item"
+    );
+    assert!(m.redo().is_some());
+    assert!(m.element_properties(&child).is_none());
+}

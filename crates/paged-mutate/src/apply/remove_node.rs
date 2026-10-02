@@ -63,6 +63,40 @@ pub(super) fn apply_remove_node(
                 .to_string(),
         });
     }
+    // C-76: a CONTAINER takes what was pasted into it along, the way
+    // InDesign deletes a frame's pasted-in content with the frame. It
+    // used to leave the children in their kind vecs under a
+    // `nested_children` entry whose host was gone — the editor saw them
+    // come back as free top-level items, and undo restored the
+    // container beside them with the nesting lost.
+    //
+    // Done as the batch the user could have sent: each child released
+    // and removed (last first, so each release captures the index its
+    // undo pastes it back at), then the container. The batch's inverse
+    // re-inserts the container, then each child and pastes it back in,
+    // in order — the nesting and every z slot come back exactly. A
+    // child that is itself a container recurses through this same arm.
+    let pasted_in = pasted_in_children(doc, node);
+    if !pasted_in.is_empty() {
+        let mut ops = Vec::with_capacity(2 * pasted_in.len() + 1);
+        for child in pasted_in.into_iter().rev() {
+            ops.push(Operation::ReleaseFrom {
+                child: child.clone(),
+                restore_slot: None,
+            });
+            ops.push(Operation::RemoveNode { node: child });
+        }
+        ops.push(Operation::RemoveNode { node: node.clone() });
+        let applied = super::apply_inner(doc, &Operation::Batch { ops })?;
+        return Ok(AppliedOperation {
+            op: Operation::RemoveNode { node: node.clone() },
+            inverse: applied.inverse,
+            invalidation: InvalidationHint {
+                structural: true,
+                ..Default::default()
+            },
+        });
+    }
     let (parent, position, captured, z_slot) = remove_and_capture(doc, node)?;
     let inverse = invert_remove_node(parent, position, captured, z_slot);
     Ok(AppliedOperation {
@@ -73,6 +107,28 @@ pub(super) fn apply_remove_node(
             ..Default::default()
         },
     })
+}
+
+/// The items pasted into `node` (B-18), in their stored order; empty
+/// when it hosts none.
+fn pasted_in_children(doc: &Document, node: &NodeId) -> Vec<NodeId> {
+    let id = node.self_id();
+    for parsed in &doc.spreads {
+        let spread = &parsed.spread;
+        if super::nested::leaf_ref_in_spread(spread, node).is_none() {
+            continue;
+        }
+        return spread
+            .nested_children
+            .get(id)
+            .map(|refs| {
+                refs.iter()
+                    .filter_map(|r| super::layer::node_for_frame_ref(spread, *r))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    Vec::new()
 }
 
 /// Take a just-removed item's ref out of whichever list named it, and
