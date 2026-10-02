@@ -621,3 +621,59 @@ fn every_row_is_as_tall_as_indesign_makes_it() {
     }
     assert!(report.is_empty(), "\n{}", report.join("\n"));
 }
+
+/// Page 12: a paragraph with no word in a cell is a line. Where InDesign
+/// put the top of each cell paragraph's first word, as distances below
+/// `A1 · p1` (`pdftotext -bbox` on its PDF export, 2026-10-02; Open Sans
+/// 12 pt, so a leading is 14.4): `(col, row, paragraph, distance)`.
+///
+/// * a blank paragraph between two others: the later one sits two
+///   leadings below the earlier (A1, and A3 where it is three spaces);
+/// * a blank FIRST paragraph takes the cell's first line (B1 · p2 is one
+///   leading down);
+/// * two blank paragraphs in a row: three leadings (C3 · p4);
+/// * the rows are as tall as their tallest cell, blank lines counted
+///   (`next row` 49.626 and `last row` 64.026 below their row's first
+///   line: a three-line and a four-line cell).
+const BLANK_PARAGRAPH_LINES: &[(u32, u32, u32, f32)] = &[
+    (0, 0, 0, 0.0),
+    (0, 0, 2, 28.8),
+    (1, 0, 1, 14.4),
+    (2, 0, 0, 0.0),
+    (0, 1, 0, 49.626),
+    (0, 2, 0, 70.452),
+    (0, 2, 2, 99.252),
+    (2, 2, 0, 70.452),
+    (2, 2, 3, 113.652),
+    (0, 3, 0, 134.478),
+];
+
+#[test]
+fn a_blank_paragraph_in_a_cell_is_a_line_as_in_indesign() {
+    const PAGE: u32 = 11;
+    let built = build();
+    let baseline = |col: u32, row: u32, paragraph: u32| {
+        let addr = CellAddr {
+            table_id: table_id(PAGE),
+            row,
+            col,
+        };
+        built
+            .cell_layout(&body_story_id(PAGE), &addr)
+            .iter()
+            .find(|l| l.paragraph_idx == paragraph)
+            .map(|l| l.baseline_y_pt)
+    };
+    let origin = baseline(0, 0, 0).expect("A1 · p1");
+    let mut wrong = Vec::new();
+    for &(col, row, paragraph, want) in BLANK_PARAGRAPH_LINES {
+        match baseline(col, row, paragraph) {
+            Some(b) if (b - origin - want).abs() <= TOLERANCE => {}
+            got => wrong.push(format!(
+                "col {col} row {row} paragraph {paragraph}: {:?} below A1 · p1, InDesign {want}",
+                got.map(|b| b - origin)
+            )),
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}

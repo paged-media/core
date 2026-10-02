@@ -2134,14 +2134,16 @@ fn plan_cell_block<'t>(
     let mut prev_text: Option<(f32, f32)> = None;
     let mut cursor = 0.0f32;
     for (index, paragraph) in paragraphs.iter().enumerate() {
-        if paragraph.runs.is_empty() {
-            if let Some(table) = paragraph.table.as_ref() {
-                let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
-                let height = measure_nested_table_height(em, table, inner_w);
-                items.push(CellItem::Table { table, top, height });
-                cursor = top + height;
-                prev_text = None;
-            }
+        if let Some(table) = paragraph
+            .table
+            .as_ref()
+            .filter(|_| paragraph.runs.is_empty())
+        {
+            let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
+            let height = measure_nested_table_height(em, table, inner_w);
+            items.push(CellItem::Table { table, top, height });
+            cursor = top + height;
+            prev_text = None;
             continue;
         }
         let attrs = em.document.resolved_paragraph_attrs(paragraph);
@@ -2152,7 +2154,29 @@ fn plan_cell_block<'t>(
             ),
             None => (cursor, false),
         };
-        let lines = measure_cell_paragraph(em, paragraph, inner_w, by_leading);
+        // A paragraph with no word (empty, or nothing but spaces) is a
+        // line all the same: InDesign sets the next paragraph one leading
+        // further down, and a blank first paragraph takes the cell's
+        // first line (measured, `tables-rows` page 12). The composer finds
+        // no line in it, so measure a one-letter stand-in with the same
+        // formatting; nothing is drawn for it.
+        let blank = !paragraph
+            .runs
+            .iter()
+            .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
+        let stand_in;
+        let measured = if blank {
+            let mut run = paragraph.runs.first().cloned().unwrap_or_default();
+            run.text = "x".to_string();
+            stand_in = paged_model::Paragraph {
+                runs: vec![run],
+                ..paragraph.clone()
+            };
+            &stand_in
+        } else {
+            paragraph
+        };
+        let lines = measure_cell_paragraph(em, measured, inner_w, by_leading);
         let Some(&last) = lines.last() else {
             continue;
         };
