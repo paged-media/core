@@ -1438,6 +1438,11 @@ macro_rules! style_run_entries {
                 P::CharacterStrikethru,
                 V::Bool(d.strikethru.unwrap_or(false)),
             ),
+            (
+                P::CharacterLigatures,
+                V::Bool(d.ligatures_on.unwrap_or(true)),
+            ),
+            (P::CharacterKerningMethod, text(&d.kerning_method)),
         ]
     }};
 }
