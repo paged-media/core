@@ -102,34 +102,53 @@ fn a_keystroke_does_only_layout_work() {
     );
 }
 
-/// A frame property write touches no text and no image bytes.
+/// A frame property write touches no text and no image bytes: a write
+/// that only repaints a page item keeps every story's emission
+/// (`Invalidation::PageItemPaint`). It used to clear them all and lay out
+/// all 52 stories again, 3x the cost of a keystroke.
 #[test]
 fn a_frame_write_does_no_text_or_image_work() {
     let mut w = paged_perf::build(320);
     let frame = w.image_frames[0].clone();
-    let (c, rebuilds) = work(&mut w, |w| {
+    let fill = |w: &mut Workload, color: &str| {
         w.model
-            .apply_mutation(&wire(serde_json::json!({ "op": "setElementProperty", "args": {
+            .apply_mutation(&wire(
+                serde_json::json!({ "op": "setElementProperty", "args": {
                 "elementId": { "kind": "rectangle", "id": frame },
-                "path": "frameFillColor", "value": { "type": "colorRef", "value": "Color/Black" } } })))
+                "path": "frameFillColor", "value": { "type": "colorRef", "value": color } } }),
+            ))
             .expect("frame write");
-    });
+    };
+    // The first fill on an unfilled frame adds a path to its page, so the
+    // one story on that page is laid out again (the pool check on the
+    // cache hit): 2 emits, not 52.
+    let (first, rebuilds) = work(&mut w, |w| fill(w, "Color/Black"));
     assert_eq!(rebuilds, 1);
+    assert!(
+        first.story_emits <= 2,
+        "the first fill laid out {} stories: {first:?}",
+        first.story_emits
+    );
+    // A colour change after that touches no story at all.
+    let (c, rebuilds) = work(&mut w, |w| fill(w, "Color/Paper"));
+    assert_eq!(rebuilds, 1);
+    assert_eq!(c.story_emits, 0, "a colour change laid stories out: {c:?}");
     assert_eq!(c.font_bytes_hashed, 0, "{c:?}");
     assert_eq!(
         c.pipeline_image_decodes, 0,
         "a frame write re-decoded images: {c:?}"
     );
-    // KNOWN COST, pinned so it can only go down: a write that changes no
-    // text re-emits every story (52 here, vs 2 for a keystroke) — the
-    // body-story emit cache is invalidated by any non-text operation.
-    // Narrowing that is the next layout optimisation; lower this budget
-    // when it lands.
-    assert!(
-        c.story_emits <= 52,
-        "a frame write laid out {} stories: {c:?}",
-        c.story_emits
+    // …and so does taking it back.
+    let (undo, _) = work(&mut w, |w| {
+        w.model.undo().expect("undo");
+    });
+    assert_eq!(
+        undo.story_emits, 0,
+        "undoing a colour change laid stories out: {undo:?}"
     );
+    w.model
+        .digest_gate_check()
+        .expect("the kept caches equal a cold build");
 }
 
 /// A batch of edits settles ONE rebuild, however many children it has.

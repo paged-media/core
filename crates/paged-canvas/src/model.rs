@@ -4117,6 +4117,75 @@ impl CanvasModel {
         None
     }
 
+    /// Does `op` change only how a page item that carries no text paints?
+    ///
+    /// True for a paint property ([`is_paint_path`]) or a replaced image on
+    /// a rectangle, oval, polygon or line that sits directly on a spread
+    /// and that no story lays out or flows through: not anchored (an
+    /// anchored object is emitted inside its story), no text on its path,
+    /// and neither holding nor being pasted-into content. A batch
+    /// qualifies when every child does. Anything else — and any item this
+    /// cannot find on a spread — is not, and clears the caches as before.
+    fn paints_a_plain_page_item(&self, op: &paged_mutate::Operation) -> bool {
+        use paged_mutate::Operation;
+        match op {
+            Operation::SetProperty { node, path, .. } => {
+                is_paint_path(path) && self.is_plain_page_item(node)
+            }
+            Operation::ReplaceImageBytes { frame, .. } => self.is_plain_page_item(frame),
+            Operation::Batch { ops } => {
+                !ops.is_empty() && ops.iter().all(|op| self.paints_a_plain_page_item(op))
+            }
+            _ => false,
+        }
+    }
+
+    /// See [`Self::paints_a_plain_page_item`].
+    fn is_plain_page_item(&self, node: &paged_mutate::NodeId) -> bool {
+        use paged_model::FrameRef;
+        use paged_mutate::NodeId;
+        let id = match node {
+            NodeId::Rectangle(id)
+            | NodeId::Oval(id)
+            | NodeId::Polygon(id)
+            | NodeId::GraphicLine(id) => id.as_str(),
+            _ => return false,
+        };
+        let is = |self_id: &Option<String>| self_id.as_deref() == Some(id);
+        self.scene.spreads.iter().any(|parsed| {
+            let s = &parsed.spread;
+            // The item's slot on this spread, when it is a plain one.
+            let slot = match node {
+                NodeId::Rectangle(_) => s
+                    .rectangles
+                    .iter()
+                    .position(|f| is(&f.self_id) && !f.is_anchored && f.text_paths.is_empty())
+                    .map(FrameRef::Rectangle),
+                NodeId::Oval(_) => s
+                    .ovals
+                    .iter()
+                    .position(|f| is(&f.self_id))
+                    .map(FrameRef::Oval),
+                NodeId::Polygon(_) => s
+                    .polygons
+                    .iter()
+                    .position(|f| is(&f.self_id) && f.text_paths.is_empty())
+                    .map(FrameRef::Polygon),
+                NodeId::GraphicLine(_) => s
+                    .graphic_lines
+                    .iter()
+                    .position(|f| is(&f.self_id) && f.text_paths.is_empty())
+                    .map(FrameRef::GraphicLine),
+                _ => None,
+            };
+            // Pasted-into content rides inside its container's emission.
+            slot.is_some_and(|slot| {
+                !s.nested_children.contains_key(id)
+                    && !s.nested_children.values().flatten().any(|r| *r == slot)
+            })
+        })
+    }
+
     /// Phase B — apply a canonical `paged_mutate::Operation` (frame
     /// mutation, fill, etc.), rebuild, push to the unified undo log.
     /// The bridge from `Mutation::MoveFrame` / `ResizeFrame` (channel
@@ -4131,6 +4200,13 @@ impl CanvasModel {
         // W1.24 (audit B18) — time the scene edit; the rebuild folds it
         // into RebuildStats.op_apply_ms.
         let t_op = phase_now();
+        // Classified against the scene the op is about to change: a paint
+        // property cannot move an item into or out of a story.
+        let invalidation = if self.paints_a_plain_page_item(&op) {
+            Invalidation::PageItemPaint
+        } else {
+            Invalidation::Everything
+        };
         let applied = paged_mutate::apply(&mut self.scene, &op).map_err(|e| {
             crate::channel::WorkerError::NotImplemented {
                 what: format!("frame mutation failed: {e}"),
@@ -4147,10 +4223,17 @@ impl CanvasModel {
         // re-pins. Gesture-driven update_gesture mutates the
         // scene directly without going through apply_operation,
         // so the cache survives the whole drag.
-        self.commit_and_rebuild(Invalidation::Everything)
-            .map_err(|e| crate::channel::WorkerError::NotImplemented {
+        //
+        // The exception is a write that only repaints one page item
+        // carrying no text (`Invalidation::PageItemPaint`): clearing the
+        // caches for it re-emitted EVERY story (52 on the annual-scale
+        // workload, against 2 for a keystroke), and the pool-state risk
+        // above is what the per-page print on each hit now checks.
+        self.commit_and_rebuild(invalidation).map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
                 what: format!("rebuild after frame mutation: {e}"),
-            })?;
+            }
+        })?;
         let applied_seq = self.bump_applied_seq();
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
         // W1.24 (B19) — capped push (oldest-evicted).
@@ -4184,6 +4267,10 @@ impl CanvasModel {
                 Some(story_id_of_text_op(inverse).to_string())
             }
             LoggedMutation::Frame(applied) => {
+                // Undoing a repaint is a repaint: see `apply_operation`.
+                if self.paints_a_plain_page_item(&applied.inverse) {
+                    invalidation = Invalidation::PageItemPaint;
+                }
                 let _ = paged_mutate::apply(&mut self.scene, &applied.inverse).ok()?;
                 None
             }
@@ -4246,6 +4333,9 @@ impl CanvasModel {
                 )
             }
             LoggedMutation::Frame(prev_applied) => {
+                if self.paints_a_plain_page_item(&prev_applied.op) {
+                    invalidation = Invalidation::PageItemPaint;
+                }
                 let applied = paged_mutate::apply(&mut self.scene, &prev_applied.op).ok()?;
                 (LoggedMutation::Frame(applied), None)
             }
@@ -8757,6 +8847,9 @@ impl CanvasModel {
                 self.story_resume.borrow_mut().clear();
                 self.pending_edit_spans.clear();
             }
+            // No story reads what changed: every delta stays, and each is
+            // still checked against its key and its pages' pools on the hit.
+            Invalidation::PageItemPaint => {}
             Invalidation::Text { story, edit } => {
                 // thoughts ADR 027 plan step 4 — a text edit changes one
                 // story's content, so only that story's body emission is
@@ -9712,6 +9805,118 @@ enum Invalidation {
         story: String,
         edit: Option<(String, paged_renderer::EditSpan)>,
     },
+    /// Only how one page item that carries no text PAINTS changed (see
+    /// [`CanvasModel::paints_a_plain_page_item`]): no story reads it, so
+    /// every master-text and body-story delta is kept. A delta that the
+    /// change does reach is still caught on the hit — its key holds the
+    /// wrap shapes on the story's pages, and a hit requires each page's
+    /// pools (paths, gradient and image counts, spot inks) to be the ones
+    /// it was captured against.
+    PageItemPaint,
+}
+
+/// A property that changes how a page item paints and nothing a story
+/// lays out against: fill and stroke PAINT, transparency, effects, the
+/// placed image's fit. Geometry, text wrap, stroke weight, visibility and
+/// layer are deliberately not here, although the body-story key would
+/// catch most of them: the list is what was reasoned through and swept
+/// under the digest gate, not everything that might be safe.
+fn is_paint_path(path: &paged_mutate::PropertyPath) -> bool {
+    use paged_mutate::PropertyPath as P;
+    matches!(
+        path,
+        P::FrameFillColor
+            | P::FrameFillTint
+            | P::FrameStrokeColor
+            | P::FrameStrokeGapColor
+            | P::FrameStrokeGapTint
+            | P::FrameStrokeType
+            | P::FrameStrokeJoin
+            | P::FrameStrokeMiterLimit
+            | P::FrameStrokeDashArray
+            | P::FrameStrokeEndCap
+            | P::FrameStrokeStartArrowhead
+            | P::FrameStrokeEndArrowhead
+            | P::FrameOpacity
+            | P::FrameBlendMode
+            | P::FrameOverprintFill
+            | P::FrameOverprintStroke
+            | P::FrameGradientFillAngle
+            | P::FrameGradientFillLength
+            | P::FrameGradientStrokeAngle
+            | P::FrameGradientStrokeLength
+            | P::ImageContentTransform
+            | P::FrameFittingCrops
+            | P::FrameFittingType
+            | P::FrameFittingReferencePoint
+            | P::FrameAutoFit
+            | P::FrameDropShadow
+            | P::FrameDropShadowMode
+            | P::FrameDropShadowXOffset
+            | P::FrameDropShadowYOffset
+            | P::FrameDropShadowSize
+            | P::FrameDropShadowOpacity
+            | P::FrameDropShadowColor
+            | P::FrameInnerShadowEnabled
+            | P::FrameInnerShadowBlendMode
+            | P::FrameInnerShadowColor
+            | P::FrameInnerShadowOpacity
+            | P::FrameInnerShadowAngle
+            | P::FrameInnerShadowDistance
+            | P::FrameInnerShadowSize
+            | P::FrameInnerShadowChoke
+            | P::FrameInnerShadowNoise
+            | P::FrameOuterGlowEnabled
+            | P::FrameOuterGlowBlendMode
+            | P::FrameOuterGlowColor
+            | P::FrameOuterGlowOpacity
+            | P::FrameOuterGlowSpread
+            | P::FrameOuterGlowSize
+            | P::FrameOuterGlowNoise
+            | P::FrameInnerGlowEnabled
+            | P::FrameInnerGlowBlendMode
+            | P::FrameInnerGlowColor
+            | P::FrameInnerGlowOpacity
+            | P::FrameInnerGlowChoke
+            | P::FrameInnerGlowSize
+            | P::FrameInnerGlowSource
+            | P::FrameInnerGlowNoise
+            | P::FrameBevelEnabled
+            | P::FrameBevelStyle
+            | P::FrameBevelTechnique
+            | P::FrameBevelDepth
+            | P::FrameBevelDirection
+            | P::FrameBevelSize
+            | P::FrameBevelSoften
+            | P::FrameBevelAngle
+            | P::FrameBevelAltitude
+            | P::FrameBevelHighlightColor
+            | P::FrameBevelShadowColor
+            | P::FrameBevelHighlightOpacity
+            | P::FrameBevelShadowOpacity
+            | P::FrameSatinEnabled
+            | P::FrameSatinBlendMode
+            | P::FrameSatinColor
+            | P::FrameSatinOpacity
+            | P::FrameSatinAngle
+            | P::FrameSatinDistance
+            | P::FrameSatinSize
+            | P::FrameSatinInvert
+            | P::FrameFeatherEnabled
+            | P::FrameFeatherWidth
+            | P::FrameFeatherCornerType
+            | P::FrameFeatherNoise
+            | P::FrameFeatherChoke
+            | P::FrameDirectionalFeatherEnabled
+            | P::FrameDirectionalFeatherLeftWidth
+            | P::FrameDirectionalFeatherRightWidth
+            | P::FrameDirectionalFeatherTopWidth
+            | P::FrameDirectionalFeatherBottomWidth
+            | P::FrameDirectionalFeatherAngle
+            | P::FrameDirectionalFeatherNoise
+            | P::FrameDirectionalFeatherChoke
+            | P::FrameGradientFeather
+    )
 }
 
 /// What a model build is for (thoughts ADR 027 §5).

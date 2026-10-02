@@ -54,9 +54,11 @@ Two lessons:
 
 ## Known costs, measured and pinned
 
-- **A frame write re-lays out every story** (52 emits, against 2 for a keystroke): any non-text operation invalidates the body-story emit cache.
+- **Only PAINT writes keep the text caches.** A write that moves, resizes, wraps, hides or re-layers a page item, and every style, swatch or structural operation, still clears them and lays out every story (52 here). The body-story key already holds chain geometry and wrap shapes, so geometry writes are the next candidates; each needs the same digest-gate sweep before it joins the list.
 - **A first save deflates every photo again.** Images are container parts of their own (`paged/core/model/blobs/`), and a re-save of a loaded document carries them through as a raw zip copy (355 ms). The first save writes them through `write_paged`, which deflates every new part: 1.24 s, most of it spent compressing already-compressed JPEG, PNG and WebP. Storing them uncompressed needs a per-part option in plugin-publish.
 
 ## Fixed, with the measurement that found it
+
+- **A frame write re-laid out every story** (52 emits, against 2 for a keystroke), because any non-text operation cleared the body-story emit cache. A write that only repaints a plain page item now keeps it (`Invalidation::PageItemPaint`, `crates/paged-canvas/tests/paint_invalidation.rs`): 0 emits, and the write costs about what a keystroke does.
 
 - **`document.pgm` stored image bytes as JSON integer arrays**, one number per byte: the workload's 29 photos made a 211 MB part (67 MB zipped). Saving took 11.3 s and loading 1.9 s. Now 3.1 MB, 1.24 s (355 ms on a re-save) and 0.9 s.
