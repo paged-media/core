@@ -871,7 +871,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             Some(_) if zone_allows_hyphenation => {
                 let word_text = &paragraph_text[w.start..w.end];
                 let is_last_word = i + 1 == words.len();
-                match opts.hyphenator {
+                let points = match opts.hyphenator {
                     Some(h) => {
                         h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
                     }
@@ -880,7 +880,13 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         &opts.hyphenation_limits,
                         is_last_word,
                     ),
-                }
+                };
+                // A hyphen the word already has is a break too (InDesign
+                // and Word: `two-` / `way`), hyphenation on or off.
+                crate::hyphenate::merge_opportunities(
+                    points,
+                    crate::hyphenate::hard_hyphen_opportunities(word_text),
+                )
                 .into_iter()
                 .filter(|&b| b > 0 && b < word_text.len())
                 .map(|b| w.start + b)
@@ -903,13 +909,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             });
             byte_ends.push(*offset);
             is_hyphen.push(false);
+            // After a hyphen the text already has, the line gains no
+            // hyphen glyph and no width.
+            let hard = crate::hyphenate::breaks_after_hard_hyphen(&paragraph_text, *offset);
             items.push(Item::Penalty {
-                width: hyphen_width,
+                width: if hard { 0 } else { hyphen_width },
                 penalty: opts.hyphen_penalty,
                 flagged: true,
             });
             byte_ends.push(*offset);
-            is_hyphen.push(true);
+            is_hyphen.push(!hard);
             seg_start = *offset;
         }
         let final_width = sum_advances_in(&flat, seg_start as u32..w.end as u32);

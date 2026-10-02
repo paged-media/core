@@ -27,6 +27,7 @@ pub mod forced_line_break;
 pub mod geometry;
 pub mod geometry_groups;
 pub mod gradients;
+pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
@@ -119,6 +120,7 @@ pub const SAMPLES: &[&str] = &[
     "navigation",
     "styles-cascade",
     "layout",
+    "hard-hyphen",
     "keeps",
     "start-paragraph",
     "span-columns",
@@ -180,6 +182,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "navigation" => navigation::build(),
         "styles-cascade" => styles_cascade::build(),
         "layout" => layout::build(),
+        "hard-hyphen" => hard_hyphen::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
         "span-columns" => span_columns::build(),
@@ -229,7 +232,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            56,
+            57,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

@@ -467,6 +467,14 @@
       "max_p99_de": 14.87,
       "min_ssim": 0.9861,
       "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh."
+    },
+    {
+      "name": "hard-hyphen",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.156,
+      "max_p99_de": 1.78,
+      "min_ssim": 0.9896,
+      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005."
     }
   ]
 }
