@@ -17,11 +17,12 @@
 //! for `inline-objects.idml` (every line's baseline and every object's
 //! visible box, read through its DOM; tolerance 0.25 pt).
 //!
-//! The IDML importer does not record where in its paragraph an anchored
-//! object sits yet, so the test supplies the anchors the way the
-//! importer will: `paged-gen` writes each object at the start of the run
-//! that carries it, and the run after an object starts with the space
-//! that separates it from the next word.
+//! The anchors are the IDML reader's own: it records each object's
+//! character offset in its paragraph (`anchored_frame_offsets`), and
+//! [`the_reader_anchors_each_object_where_it_was_written`] holds it to
+//! where `paged-gen` wrote them — at the start of the run that carries
+//! each object, the run after an object starting with the space that
+//! separates it from the next word.
 
 use std::path::PathBuf;
 
@@ -37,47 +38,83 @@ fn read_font(name: &str) -> Vec<u8> {
     std::fs::read(&p).unwrap_or_else(|e| panic!("read font fixture {}: {e}", p.display()))
 }
 
-/// Anchor each paragraph's objects where `paged-gen` wrote them (see the
-/// module docs): at the start of every run after the first that opens
-/// with a space or is empty, and at the start of a paragraph whose first
-/// run opens with a space.
-fn anchor_as_written(document: &mut paged_scene::Document) {
-    for story in &mut document.stories {
-        for para in &mut story.story.paragraphs {
-            if para.anchored_frames.is_empty() {
-                continue;
-            }
-            let mut offsets = Vec::new();
-            let mut at = 0u32;
-            for run in &para.runs {
-                if run.text.is_empty() || run.text.starts_with(' ') {
-                    offsets.push(at);
-                }
-                at += run.text.chars().count() as u32;
-            }
-            // An object closing the paragraph rides an empty run, which the
-            // reader may drop.
-            while offsets.len() < para.anchored_frames.len() {
-                offsets.push(at);
-            }
-            offsets.truncate(para.anchored_frames.len());
-            para.anchored_frame_offsets = offsets;
+/// Where `paged-gen` wrote a paragraph's objects (see the module docs):
+/// at the start of every run after the first that opens with a space or
+/// is empty, and at the start of a paragraph whose first run opens with
+/// a space.
+fn as_written(para: &paged_model::Paragraph) -> Vec<u32> {
+    let mut offsets = Vec::new();
+    let mut at = 0u32;
+    for run in &para.runs {
+        if run.text.is_empty() || run.text.starts_with(' ') {
+            offsets.push(at);
         }
+        at += run.text.chars().count() as u32;
     }
+    // An object closing the paragraph rides an empty run, which the
+    // reader drops.
+    while offsets.len() < para.anchored_frames.len() {
+        offsets.push(at);
+    }
+    offsets.truncate(para.anchored_frames.len());
+    offsets
 }
 
-fn build() -> pipeline::BuiltDocument {
+fn import() -> paged_scene::Document {
     let sample = paged_gen::samples::inline_objects::build();
     let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let mut document = idml_import::import_idml_doc(&bytes).expect("open");
-    anchor_as_written(&mut document);
+    idml_import::import_idml_doc(&bytes).expect("open")
+}
+
+fn build_from(document: &paged_scene::Document) -> pipeline::BuiltDocument {
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
     let opts = PipelineOptions {
         assets: Some(&resolver),
         ..PipelineOptions::default()
     };
-    pipeline::build_document(&document, &opts).expect("build_document")
+    pipeline::build_document(document, &opts).expect("build_document")
+}
+
+fn build() -> pipeline::BuiltDocument {
+    build_from(&import())
+}
+
+#[test]
+fn the_reader_anchors_each_object_where_it_was_written() {
+    let document = import();
+    let mut objects = 0;
+    let mut mid_line = 0;
+    for story in &document.stories {
+        for para in &story.story.paragraphs {
+            if para.anchored_frames.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                para.anchored_frame_offsets,
+                as_written(para),
+                "story {}: {:?}",
+                story.self_id,
+                para.runs
+                    .iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>()
+            );
+            let len: u32 = para
+                .runs
+                .iter()
+                .map(|r| r.text.chars().count() as u32)
+                .sum();
+            objects += para.anchored_frames.len();
+            mid_line += para
+                .anchored_frame_offsets
+                .iter()
+                .filter(|&&o| o > 0 && o < len)
+                .count();
+        }
+    }
+    assert_eq!(objects, 21, "every object of the fixture's seven pages");
+    assert_eq!(mid_line, 11, "the mid-line anchors are there: {mid_line}");
 }
 
 /// The body lines' baselines on `page`, top to bottom, page-local pt
@@ -257,20 +294,18 @@ fn inline_and_above_line_objects_take_room_as_indesign_sets_them() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Without a recorded anchor (what the IDML reader gives today) an
-/// object anchors at its paragraph's start — and still takes its room.
+/// Without a recorded anchor (a model written before anchors were
+/// recorded) an object anchors at its paragraph's start — and still
+/// takes its room.
 #[test]
 fn an_unrecorded_anchor_sits_at_the_paragraph_start() {
-    let sample = paged_gen::samples::inline_objects::build();
-    let bytes = paged_gen::write_idml(&sample).expect("write_idml");
-    let document = idml_import::import_idml_doc(&bytes).expect("open");
-    let mut resolver = BytesResolver::new();
-    resolver.add_font("Inter", None, read_font("Inter.ttf"));
-    let opts = PipelineOptions {
-        assets: Some(&resolver),
-        ..PipelineOptions::default()
-    };
-    let built = pipeline::build_document(&document, &opts).expect("build_document");
+    let mut document = import();
+    for story in &mut document.stories {
+        for para in &mut story.story.paragraphs {
+            para.anchored_frame_offsets.clear();
+        }
+    }
+    let built = build_from(&document);
     // Page 1, paragraph b: its 24.5 pt box moves from mid-line to the
     // line's start, and the line still grows to 26.5 pt.
     let boxes = stroked_boxes(&built, 0);
@@ -333,7 +368,6 @@ fn a_picture_alone_in_its_paragraph_is_a_line_of_its_height() {
         ..Default::default()
     });
     paras.push(last);
-    anchor_as_written(&mut document);
 
     // The picture's character has no run to take a face from: the
     // document's default face sets it.
@@ -364,4 +398,72 @@ fn a_picture_alone_in_its_paragraph_is_a_line_of_its_height() {
         (lines[9] - picture_line - 12.0).abs() < TOL,
         "the next paragraph a line's pitch below: {lines:?}"
     );
+}
+
+/// InDesign writes consecutive paragraphs of one style as ONE range with
+/// `<Br/>` marks between them, which the model keeps as one paragraph
+/// whose text carries the `\n`s. Each object then stands in the
+/// paragraph its anchor falls in — the same lines and boxes as when every
+/// paragraph is a paragraph of its own — not at the end of the first.
+#[test]
+fn objects_after_a_paragraph_mark_stand_in_their_own_paragraph() {
+    let mut document = import();
+    let mut merged = 0;
+    for story in &mut document.stories {
+        let paras = &story.story.paragraphs;
+        if paras.len() < 2
+            || paras.iter().all(|p| p.anchored_frames.is_empty())
+            || paras
+                .iter()
+                .any(|p| p.paragraph_style != paras[0].paragraph_style)
+        {
+            continue;
+        }
+        let mut one = paged_model::Paragraph {
+            runs: Vec::new(),
+            anchored_frames: Vec::new(),
+            anchored_frame_offsets: Vec::new(),
+            ..paras[0].clone()
+        };
+        let mut at = 0u32;
+        let n = paras.len();
+        for (i, p) in paras.iter().enumerate() {
+            for (f, o) in p.anchored_frames.iter().zip(&p.anchored_frame_offsets) {
+                one.anchored_frames.push(f.clone());
+                one.anchored_frame_offsets.push(at + o);
+            }
+            let mut runs = p.runs.clone();
+            if i + 1 < n {
+                runs.last_mut().expect("a text paragraph").text.push('\n');
+            }
+            at += runs
+                .iter()
+                .map(|r| r.text.chars().count() as u32)
+                .sum::<u32>();
+            one.runs.extend(runs);
+        }
+        one.space_after = paras[n - 1].space_after;
+        story.story.paragraphs = vec![one];
+        merged += 1;
+    }
+    assert_eq!(
+        merged, 10,
+        "the fixture's multi-paragraph stories: {merged}"
+    );
+    let separate = build();
+    let together = build_from(&document);
+    for e in EXPECTED {
+        assert_eq!(
+            baselines(&together, e.page),
+            baselines(&separate, e.page),
+            "page {}",
+            e.page + 1
+        );
+        assert_eq!(
+            stroked_boxes(&together, e.page),
+            stroked_boxes(&separate, e.page),
+            "page {}",
+            e.page + 1
+        );
+    }
 }

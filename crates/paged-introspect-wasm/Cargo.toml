@@ -21,7 +21,7 @@ default = ["render"]
 render = ["paged-introspect/render"]
 
 [dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "96cfb6c4d945b4d009b9974db797e24732d86c29" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "dee397a951d3ecfa398c1420e659563db0001e91" }
 paged-scene = { path = "../paged-scene" }
 paged-introspect = { path = "../paged-introspect", default-features = false }
 paged-mutate = { path = "../paged-mutate" }

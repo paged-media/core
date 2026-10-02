@@ -4879,9 +4879,10 @@ pub struct Paragraph {
     /// offset of its anchor character in the paragraph's text (Unicode
     /// scalars, counted contiguously over `runs`), index-aligned with
     /// `anchored_frames`. An inline (or above-line) object stands in the
-    /// line at that character, as InDesign sets it. A frame with no entry
-    /// anchors at the paragraph's start (the IDML importer does not
-    /// record the anchor yet); an offset past the text, at its end.
+    /// line at that character, as InDesign sets it. The IDML importer
+    /// records it from the object's place in its run's content; a frame
+    /// with no entry anchors at the paragraph's start, and an offset past
+    /// the text at its end.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub anchored_frame_offsets: Vec<u32>,
     /// `<Table>` nested inside the paragraph's CharacterStyleRange.
