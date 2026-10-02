@@ -13,7 +13,7 @@
  */
 
 //! `variables.idml` — text variables and page-number markers, written in
-//! the vocabulary InDesign itself writes (thoughts ADR 033, RFI C-37).
+//! the vocabulary InDesign itself writes (ADR 033, RFI C-37).
 //!
 //! The previous version of this sample used `RunningHeaderType`,
 //! `<TextVariablePreference>` and a section numbering that InDesign never

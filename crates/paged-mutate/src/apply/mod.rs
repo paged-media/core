@@ -39,7 +39,7 @@
 //! for why the whole-index rebuild is the right shape here and what it
 //! measures.
 //!
-//! Stage 1 limitations (flagged in `docs/paged/scripting-layer.md`'s
+//! Stage 1 limitations (flagged in the original scripting-layer design's
 //! Stage-1 deliverables):
 //!   - `InsertNode`/`RemoveNode`/`MoveNode` support TextFrame and
 //!     Rectangle children under a Spread parent. Group nesting,

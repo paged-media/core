@@ -239,7 +239,7 @@ jobs:
             exit 1
           fi
 
-  # W0.9 tag-on-bump nudge (protocol-governance §4): a protocol bump on
+  # W0.9 tag-on-bump nudge (`docs/reference/protocol-governance.md`, Release coupling): a protocol bump on
   # main without a matching `v0.<P>.*` tag is an unpublished engine — the
   # editor can't pin it. This greps the canonical PROTOCOL_VERSION const
   # and warn-annotates (never fails) when no tag exists for that protocol

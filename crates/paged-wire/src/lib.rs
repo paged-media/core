@@ -94,7 +94,7 @@ impl std::fmt::Display for PageId {
 /// text-side caret + range live in `ContentSelection`); the
 /// variant exists so the apply layer can be reached via the
 /// existing `Mutation::SetElementProperty` wire shape — see
-/// `docs/paged/sdk-implementation-plan.md` §3c.1 ADR.
+/// the editor's client-SDK implementation plan §3c.1 (not published).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]
@@ -1490,7 +1490,7 @@ pub enum Mutation {
         condition: String,
         visible: bool,
     },
-    /// thoughts ADR 026 — let a story's frame chain GROW (`grow: true`):
+    /// ADR 026 — let a story's frame chain GROW (`grow: true`):
     /// generated pages are added after its last frame's page while it
     /// oversets, the way InDesign's Smart Text Reflow adds them, and dropped
     /// when they end up empty. `grow: false` clears the rule. `maxPages`

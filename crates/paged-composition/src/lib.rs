@@ -13,7 +13,7 @@
  */
 
 //! The Paged-native **composition model** (`document.pgd`) — the core-owned
-//! *arrangement* of a `.paged` document (ADR-021; `thoughts/docs/paged/core/
+//! *arrangement* of a `.paged` document (ADR-021; `docs/reference/
 //! composition-format.md`).
 //!
 //! **Not to be confused with `paged-compose`** (the display-list / `SceneLayer`
@@ -26,7 +26,7 @@
 //!
 //! It is deliberately dependency-light — `paged-flow` + `serde`, **no IDML**
 //! (`paged-parse`/`paged-scene`) — so a composition can be hand-built and
-//! serialized with no IDML involved (the `renderer.md` §C1 discipline at the
+//! serialized with no IDML involved (the renderer brief's §C1 discipline, not published, at the
 //! model layer). The flow protocol ([`paged_flow`]) is *part of* the
 //! composition: [`Composition::flow_chain`] projects a flow's regions into a
 //! [`paged_flow::RegionChain`] the driver consumes — the native analogue of
@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 /// The canonical container path of the composition part inside a `.paged`
 /// document (container-format-v2 §3.1). A [`Composition`] serialized as JSON
 /// lives here; `paged/core/` is a core-owned namespace. See S7 in
-/// `thoughts/docs/paged/core/flow-implementation-plan.md`.
+/// an internal flow implementation plan (not published).
 pub const DOCUMENT_PGD_PATH: &str = "paged/core/composition/document.pgd";
 
 fn default_format() -> String {

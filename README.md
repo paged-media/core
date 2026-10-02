@@ -13,6 +13,18 @@ across a package boundary, never as a source dependency.
 
 The engine is format-agnostic in design; IDML is the first input format.
 
+## Documentation
+
+How the engine is designed and built is in [`docs/`](./docs/README.md):
+
+- [`docs/concept.md`](./docs/concept.md): what the engine is for and what it will never do.
+- [`docs/architecture.md`](./docs/architecture.md): the crates by role, the pipeline from document to pixels, mutation, the surfaces, the container, the test gates.
+- [`docs/status.md`](./docs/status.md): what ships today and what does not.
+- [`docs/adr/`](./docs/adr/README.md): the architecture decisions, one per file.
+- [`docs/design/`](./docs/design/) and [`docs/reference/`](./docs/reference/): design notes, the `.paged` file and composition formats, protocol governance, the release flow.
+
+`docs/architecture.md` is current where the sections below are older (crate counts, the shaping library, the colour path on wasm).
+
 ## License
 
 Dual-licensed: **MPL-2.0 OR the Paged Media Enterprise License (PMEL)**

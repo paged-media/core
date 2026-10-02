@@ -16,7 +16,7 @@
 //!
 //! Hosts a Boa JS context inside the canvas worker so user scripts
 //! can mutate the document through the same Operation channel the
-//! Inspector + REPL already use. Per `docs/paged/scripting-layer.md`
+//! Inspector + REPL already use. Per the original scripting-layer design (not published; see `docs/adr/001-boa-over-quickjs.md`)
 //! every write goes through `paged_mutate::apply`; the host functions
 //! installed here are the only path JS can take to reach it.
 //!
@@ -3128,7 +3128,7 @@ fn paged_set_condition_visible(
 }
 
 /// `paged.setFlowGrowRule(storyId, grow, maxPages?, copyFrameOptions?)`
-/// (`Mutation::SetFlowGrowRule`, thoughts ADR 026).
+/// (`Mutation::SetFlowGrowRule`, ADR 026).
 fn paged_set_flow_grow_rule(
     _this: &JsValue,
     args: &[JsValue],

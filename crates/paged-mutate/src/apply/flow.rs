@@ -18,7 +18,7 @@ use crate::error::OperationError;
 use crate::operation::{AppliedOperation, InvalidationHint, Operation};
 
 // ---------------------------------------------------------------------------
-// thoughts ADR 026 — growing frame chains
+// ADR 026 — growing frame chains
 // ---------------------------------------------------------------------------
 
 /// Set (or clear, `None`) a story's grow rule. The pages it generates are

@@ -15,7 +15,7 @@
 //! A text offset inside a multi-byte UTF-8 character is refused, not a
 //! panic. insertText / deleteRange address bytes; `String::insert_str` and
 //! `replace_range` panic off a character boundary, so a stale or hostile
-//! offset aborted the engine (thoughts ADR 031: untrusted input never
+//! offset aborted the engine (ADR 031: untrusted input never
 //! aborts the engine). Found by the ADR 027 digest-gate harness.
 
 use paged_canvas::{CanvasModel, CanvasOptions, ElementId, Mutation, PageId};

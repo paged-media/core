@@ -665,7 +665,7 @@ fn collapse_uniform<T: Clone + PartialEq>(values: &[T]) -> Option<T> {
 /// `None` — never `Some(0.0)` — when the swatch has no ink
 /// decomposition: RGB and Lab process colours separate at the RIP
 /// against the output intent, and mixed-ink swatches need the spectral
-/// model this engine does not ship (see `deep-defer-records.md`
+/// model this engine does not ship (see `docs/reference/deferred-scope.md`, formerly `deep-defer-records.md`,
 /// §mixed-ink). Reporting 0% for those would read as "adds no ink".
 ///
 /// Exact and resolution-free — no render involved — so it catches an
@@ -1266,7 +1266,7 @@ pub struct CanvasModel {
     /// in the current test harness; this stays as forward-looking
     /// infra for when asset resolvers wire up.
     image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>>,
-    /// thoughts ADR 026 — generated-page counts per growing story, carried
+    /// ADR 026 — generated-page counts per growing story, carried
     /// from one build to the next so an edit starts from the pages it had
     /// (usually one build) instead of growing from zero.
     grow_hint: std::cell::RefCell<HashMap<String, u32>>,
@@ -1336,11 +1336,11 @@ pub struct CanvasModel {
     /// build the batch executor runs when its children are done. A batch
     /// whose children changed nothing owes nothing and builds nothing.
     rebuild_owed: bool,
-    /// thoughts ADR 027 §4 — when set, every rebuild is checked against a
+    /// ADR 027 §4 — when set, every rebuild is checked against a
     /// cold build ([`Self::digest_gate_check`]) and a difference panics.
     /// Seeded from `PAGED_DIGEST_GATE=1`; a CI / debug lane only.
     digest_gate: bool,
-    /// thoughts ADR 027 plan step 3 — each story's settled keep-option
+    /// ADR 027 plan step 3 — each story's settled keep-option
     /// breaks, seeding the next build's keeps fixpoint.
     keep_seeds: paged_renderer::KeepSeedStore,
     /// Story id → first paragraph a text edit changed since the last
@@ -1352,7 +1352,7 @@ pub struct CanvasModel {
     /// scene first ([`Self::refresh_font_table`]). Gesture rebuilds
     /// (drags) never set it, so they never pay the walk.
     font_check_owed: bool,
-    /// thoughts ADR 027 plan step 6 — each story's previous emission with a
+    /// ADR 027 plan step 6 — each story's previous emission with a
     /// mark per paragraph, so an edited story resumes at the edit and stops
     /// early.
     story_resume: paged_renderer::StoryResumeStore,
@@ -1363,7 +1363,7 @@ pub struct CanvasModel {
     /// Bumped by every rebuild; a resume record is never read back in the
     /// build that wrote it.
     build_generation: u64,
-    /// thoughts ADR 027 plan step 7 — the previous build's print of each
+    /// ADR 027 plan step 7 — the previous build's print of each
     /// master-text emission, so a re-emitted master with the same output
     /// leaves its page clean.
     emission_prints: paged_renderer::EmissionPrints,
@@ -1376,7 +1376,7 @@ pub struct CanvasModel {
     last_dirty_narrowed: bool,
 }
 
-/// thoughts ADR 027 plan step 7 — how far the pages a build reports as
+/// ADR 027 plan step 7 — how far the pages a build reports as
 /// changed may narrow. Only a build whose every commit was a text edit of
 /// one story with a chain of its own narrows: no other commit is known to
 /// leave the frame pass (frames, masters' items, page geometry) untouched.
@@ -8521,7 +8521,7 @@ impl CanvasModel {
             .collect()
     }
 
-    /// thoughts ADR 027 §5 — the ONE place the model turns its state into
+    /// ADR 027 §5 — the ONE place the model turns its state into
     /// [`PipelineOptions`]. The live rebuild, the export build and the
     /// digest gate's cold build all start here, so they cannot drift apart.
     fn pipeline_options<'a>(
@@ -8678,7 +8678,7 @@ impl CanvasModel {
         &self.scene.palette
     }
 
-    /// thoughts ADR 027 §5 — the ONE commit path: drop what `invalidation`
+    /// ADR 027 §5 — the ONE commit path: drop what `invalidation`
     /// names from the cross-build emit caches, then rebuild. Every
     /// committed edit (a text op, an operation, undo, redo) comes through
     /// here, so invalidation has one place to live.
@@ -8718,7 +8718,7 @@ impl CanvasModel {
                 self.pending_edit_spans.clear();
             }
             Invalidation::Text { story, edit } => {
-                // thoughts ADR 027 plan step 4 — a text edit changes one
+                // ADR 027 plan step 4 — a text edit changes one
                 // story's content, so only that story's body emission is
                 // stale: every input another story reads (its own content,
                 // chain geometry, wrap, page numbering, the list ledger in,
@@ -8792,7 +8792,7 @@ impl CanvasModel {
         }
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
-        // thoughts ADR 027 plan step 7 — a build whose commits were text
+        // ADR 027 plan step 7 — a build whose commits were text
         // edits of one story (whose frames do not auto-size) leaves the
         // frame pass as it was: the pipeline may adopt the previous pages it
         // laid nothing out on afresh.
@@ -8864,7 +8864,7 @@ impl CanvasModel {
             // reported value is the true post-mutation depth.
             applied_log_len: self.applied_log.len(),
         };
-        // thoughts ADR 027 plan step 7 — the pages this build changed: a
+        // ADR 027 plan step 7 — the pages this build changed: a
         // text edit of one story narrows to the pages laid out afresh, the
         // pages that are new, and the pages of the story's auto-sizing
         // frames (their bounds follow the text); anything else is every
@@ -8914,7 +8914,7 @@ impl CanvasModel {
         Ok(())
     }
 
-    /// thoughts ADR 027 §4 — the digest gate. Builds the scene COLD (fresh
+    /// ADR 027 §4 — the digest gate. Builds the scene COLD (fresh
     /// layout cache, no emit caches, no grow hint) and compares it with the
     /// incremental `built`: page count, page ids, every page's
     /// [`paged_compose::DisplayList::digest`], every page's `story_layout`
@@ -9228,7 +9228,7 @@ impl CanvasModel {
 
     /// Expose the inner built document for tests and the wasm
     /// renderer-on-demand path that needs to read display lists.
-    /// thoughts ADR 027 §7 — the ids of the pages the last build changed:
+    /// ADR 027 §7 — the ids of the pages the last build changed:
     /// after a text edit of one story, only the pages laid out afresh (and
     /// new ones); otherwise every page.
     pub fn dirty_page_ids(&self) -> Vec<PageId> {
@@ -9659,7 +9659,7 @@ fn rgb_to_hex(rgb: [f32; 3]) -> String {
 }
 
 /// What a committed edit invalidates in the cross-build emit caches
-/// (thoughts ADR 027 §5). [`CanvasModel::commit_and_rebuild`] is its one
+/// (ADR 027 §5). [`CanvasModel::commit_and_rebuild`] is its one
 /// consumer.
 #[derive(Clone, Debug)]
 enum Invalidation {
@@ -9674,7 +9674,7 @@ enum Invalidation {
     },
 }
 
-/// What a model build is for (thoughts ADR 027 §5).
+/// What a model build is for (ADR 027 §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelinePurpose {
     /// The interactive canvas build: emit caches on, proof condition,
@@ -9684,7 +9684,7 @@ enum PipelinePurpose {
     Export,
 }
 
-/// thoughts ADR 027 §4 — compare an incremental build with a cold one.
+/// ADR 027 §4 — compare an incremental build with a cold one.
 /// `Err` names the first difference.
 fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(), String> {
     let ids = |b: &BuiltDocument| b.pages.iter().map(|p| p.id.0.clone()).collect::<Vec<_>>();

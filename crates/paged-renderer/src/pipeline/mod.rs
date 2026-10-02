@@ -317,7 +317,7 @@ pub struct PipelineOptions<'a> {
     /// rasterise it). Default `false` so exports and the fidelity gate
     /// stay pixel-identical; the canvas enables it for live builds only.
     pub degraded_asset_markers: bool,
-    /// thoughts ADR 026 — generated-page counts per growing story, carried
+    /// ADR 026 — generated-page counts per growing story, carried
     /// between builds. Read as the starting point (so an edit usually
     /// settles in one build) and written with the counts the build settled
     /// on. `None` starts every growing story from zero.
@@ -387,7 +387,7 @@ pub struct PipelineOptions<'a> {
     /// any given gesture, so the win ratio is high.
     pub body_story_emit_cache:
         Option<&'a std::cell::RefCell<HashMap<(String, u64), BodyStoryEmissionDelta>>>,
-    /// thoughts ADR 027 plan step 3 — each story's settled keep-option
+    /// ADR 027 plan step 3 — each story's settled keep-option
     /// breaks from the previous build, read as the keeps fixpoint's
     /// starting point and written with the breaks the build settled on.
     /// Only a story named in [`Self::keep_seed_hints`] is seeded. `None`
@@ -397,7 +397,7 @@ pub struct PipelineOptions<'a> {
     /// build that wrote [`Self::keep_seeds`]. Paragraphs before it are
     /// unchanged, which is what makes their breaks reusable.
     pub keep_seed_hints: Option<&'a HashMap<String, u32>>,
-    /// thoughts ADR 027 plan step 6 — each story's previous emission with a
+    /// ADR 027 plan step 6 — each story's previous emission with a
     /// mark per paragraph, so an edited story resumes at the edit and stops
     /// where its flow rejoins the previous one. Written for the stories
     /// that can be resumed, read only for a story named in
@@ -409,12 +409,12 @@ pub struct PipelineOptions<'a> {
     /// A counter the caller bumps per build; a resume record is never read
     /// back in the build that wrote it.
     pub build_generation: u64,
-    /// thoughts ADR 027 plan step 7 — a print of each master-text emission
+    /// ADR 027 plan step 7 — a print of each master-text emission
     /// (frame id, page id, post-layout pass) from the previous build, so a
     /// master re-emitted with identical output does not mark its page
     /// fresh ([`BuiltDocument::fresh_pages`]). Read and written per build.
     pub emission_prints: Option<&'a EmissionPrints>,
-    /// thoughts ADR 027 plan step 7 — the previous build's pages. A page
+    /// ADR 027 plan step 7 — the previous build's pages. A page
     /// this build laid nothing out on afresh (see
     /// [`BuiltDocument::fresh_pages`]) and that has the same id at the same
     /// index is the previous page by construction: it is moved in instead,
@@ -493,7 +493,7 @@ pub struct BodyStoryEmissionDelta {
     pub per_page: Vec<(usize, std::sync::Arc<BodyStoryPageDelta>)>,
     pub anchored: Vec<AnchoredImageEmit>,
     pub breaks: Vec<BreakRecord>,
-    /// thoughts ADR 027 plan step 4 — the diagnostics the emit reported
+    /// ADR 027 plan step 4 — the diagnostics the emit reported
     /// (overset, ...), replayed on a hit, so a story that reports one is
     /// cacheable too.
     pub diagnostics: Vec<Diagnostic>,
@@ -508,7 +508,7 @@ pub struct BodyStoryEmissionDelta {
     pub(crate) overset: Option<OversetMeasure>,
 }
 
-/// thoughts ADR 027 plan step 3 — one story's settled keep-option breaks,
+/// ADR 027 plan step 3 — one story's settled keep-option breaks,
 /// kept from one build to the next.
 ///
 /// Every forced break records the frame it was decided in and the line
@@ -540,7 +540,7 @@ pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
 pub struct BodyStoryPageDelta {
     pub paths: Vec<paged_compose::PathData>,
     /// The intern key of each of `paths` (`None` = anonymous), so the
-    /// replay registers them as the emit did (thoughts ADR 027).
+    /// replay registers them as the emit did (ADR 027).
     pub path_keys: Vec<Option<u64>>,
     /// The page's path-buffer fingerprint before the story emitted: a
     /// hit is spliced only into a buffer that has it, which is what makes
@@ -573,7 +573,7 @@ pub struct MasterTextEmitDelta {
     /// stay sequential and the relative offsets in `commands`
     /// resolve correctly.
     pub paths: Vec<paged_compose::PathData>,
-    /// The intern key of each of `paths` (thoughts ADR 027).
+    /// The intern key of each of `paths` (ADR 027).
     pub path_keys: Vec<Option<u64>>,
     /// The page's path-buffer fingerprint before the emit; a hit is
     /// spliced only into a buffer that has it.
@@ -944,7 +944,7 @@ pub struct BuiltDocument {
     /// from the lines: a line's range leaves out trailing spaces, and a
     /// paragraph past the last frame has no line at all.
     pub(crate) paragraph_starts: HashMap<String, Vec<u32>>,
-    /// thoughts ADR 027 §7 / plan step 7 — per page, whether this build laid
+    /// ADR 027 §7 / plan step 7 — per page, whether this build laid
     /// any of its content out afresh (rather than splicing it from an emit
     /// cache) AND that content may differ from the previous build's. A
     /// spliced page is the previous build's page by construction. Master
@@ -987,7 +987,7 @@ impl BuiltDocument {
     /// Convenience for the canvas Tier 4: hand back just the slice
     /// of render commands for one page. Mirrors the
     /// `display_list_for_page(page_id)` accessor named in the
-    /// canvas concept (docs/paged/canvas.md §4.4).
+    /// canvas concept (`docs/design/canvas.md` §4.4).
     pub fn display_list_for_page(&self, id: &PageId) -> Option<&DisplayList> {
         self.page(id).map(|p| &p.list)
     }
@@ -1103,27 +1103,27 @@ pub struct PipelineStats {
     /// Surfaced for diagnostics; non-zero means a story didn't fit
     /// its declared frame chain (P-13).
     pub dropped_overflow_lines: usize,
-    /// thoughts ADR 027 plan step 3 — stories whose keeps fixpoint
+    /// ADR 027 plan step 3 — stories whose keeps fixpoint
     /// started from the previous build's settled breaks and kept them,
     /// one emit pass instead of two.
     pub keep_seeds_used: usize,
-    /// thoughts ADR 027 plan step 4 — body stories spliced from the emit
+    /// ADR 027 plan step 4 — body stories spliced from the emit
     /// cache instead of laid out.
     pub body_stories_reused: usize,
-    /// thoughts ADR 027 plan step 6 — chain frames body-story emission
+    /// ADR 027 plan step 6 — chain frames body-story emission
     /// laid out (not spliced) in this build: every frame of a story that
     /// re-emitted whole, the frames between the resume and the stop of
     /// one that resumed. A cached story adds none.
     pub frames_emitted: usize,
     /// Edited stories that resumed at the edit and stopped early.
     pub stories_resumed: usize,
-    /// thoughts ADR 027 plan step 7 — pages taken over from the previous
+    /// ADR 027 plan step 7 — pages taken over from the previous
     /// build instead of finished again (see `PipelineOptions::previous_pages`).
     pub pages_adopted: usize,
 }
 
 impl PipelineStats {
-    /// The emit counters a story added since `before` (thoughts ADR 027:
+    /// The emit counters a story added since `before` (ADR 027:
     /// a cached story replays them). `keep_seeds_used` is not replayed:
     /// a hit runs no fixpoint.
     pub(crate) fn emitted_since(&self, before: &Self) -> Self {
@@ -1186,7 +1186,7 @@ pub const DEFAULT_MAX_GENERATED_PAGES: u32 = 2000;
 /// ~11.
 const MAX_GROW_PASSES: usize = 24;
 
-/// Build the document. Stories with a grow rule (thoughts ADR 026) get
+/// Build the document. Stories with a grow rule (ADR 026) get
 /// generated pages until they no longer overset: each pass materialises the
 /// current counts ([`Document::with_generated_pages`]) and builds. A story
 /// that still oversets grows by the frames its dropped lines need

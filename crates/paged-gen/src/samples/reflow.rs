@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! `reflow.idml` — page growth (thoughts ADR 026), the case InDesign's
+//! `reflow.idml` — page growth (ADR 026), the case InDesign's
 //! Smart Text Reflow answers.
 //!
 //! Two pages, one text frame each, THREADED (Smart Text Reflow only grows a

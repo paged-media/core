@@ -995,7 +995,7 @@ pub(crate) fn stroke_for(
                 // cap/join + dash). They intentionally render as a solid
                 // stroke of the declared width — a reasonable footprint —
                 // until a dedicated multi-line / sine stroke capability
-                // lands in the rasterizer (tracked in renderer-gaps.md).
+                // lands in the rasterizer (tracked in the internal renderer gap list).
                 // Returning here also stops the built-in name table below
                 // from mis-mapping a same-named custom style.
                 K::Striped | K::Wavy => return s,
@@ -1031,7 +1031,7 @@ pub(crate) fn stroke_for(
         // Built-in Striped ("Thick - Thin", "Triple", …) and "Wavy"
         // names land here → no dash → a solid stroke of the declared
         // width. True multi-line / sine rendering needs a new rasterizer
-        // capability (deferred; see renderer-gaps.md).
+        // capability (deferred; see the internal renderer gap list).
         _ => None,
     };
     if let Some(p) = pattern {

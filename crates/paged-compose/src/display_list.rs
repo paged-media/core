@@ -330,7 +330,7 @@ pub struct PathBuffer {
     /// The intern key each path was stored under (`None` for an
     /// anonymous push), parallel to `paths`. A cached emission records
     /// these so its replay re-registers the keys, exactly as the emit it
-    /// stands in for would have (thoughts ADR 027).
+    /// stands in for would have (ADR 027).
     keys: Vec<Option<u64>>,
     /// Running fingerprint of `keys` after each path, parallel to
     /// `paths`. Two buffers with equal fingerprints hand out the same

@@ -13,7 +13,7 @@
  */
 
 //! `start-paragraph.idml` — the break-before rule (`StartParagraph`,
-//! thoughts ADR 028) against InDesign.
+//! ADR 028) against InDesign.
 //!
 //! Every case is one story threaded through a four-page chain:
 //!

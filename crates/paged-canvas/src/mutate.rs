@@ -581,7 +581,7 @@ fn locate_para_local(paragraphs: &[paged_model::Paragraph], offset: u32) -> (usi
     }
 }
 
-/// thoughts ADR 027 plan step 6 — the paragraphs a text op changes, before
+/// ADR 027 plan step 6 — the paragraphs a text op changes, before
 /// and after it (see [`paged_renderer::EditSpan`]). Read on the document
 /// BEFORE the op is applied.
 pub(crate) fn edit_span(op: &TextOp, doc: &Document) -> Option<(String, paged_renderer::EditSpan)> {

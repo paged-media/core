@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 027 §4 — the digest gate lane. Every scripted edit is
+//! ADR 027 §4 — the digest gate lane. Every scripted edit is
 //! applied to a live model (caches, grow hint, every incremental path), and
 //! after EVERY op the model is compared with a cold build of the same scene:
 //! page set, every page's display-list digest, `story_layout` and the
