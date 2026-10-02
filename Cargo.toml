@@ -98,3 +98,9 @@ paged-composition = { path = "crates/paged-composition" }
 # build that does not carry this patch.
 [patch.crates-io]
 flo_curves = { git = "https://github.com/drietsch/flo_curves", rev = "6196f18" }
+
+# Bench builds keep line tables, so `samply` / Instruments name the
+# engine's functions (crates/paged-perf/README.md). Optimisation is
+# release's; only debug info is added, and only to benches.
+[profile.bench]
+debug = 1
