@@ -17,6 +17,7 @@
 
 pub mod anchored;
 pub mod annual_base;
+pub mod composer;
 pub mod conditions;
 pub mod corners;
 pub mod docx_pagination;
@@ -119,6 +120,7 @@ pub const SAMPLES: &[&str] = &[
     "span-columns",
     "split-boundaries",
     "forced-line-break",
+    "composer",
     "list-markers",
     "tab-breaks",
     "list-overrides",
@@ -176,6 +178,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "span-columns" => span_columns::build(),
         "split-boundaries" => split_boundaries::build(),
         "forced-line-break" => forced_line_break::build(),
+        "composer" => composer::build(),
         "list-markers" => list_markers::build(),
         "tab-breaks" => tab_breaks::build(),
         "list-overrides" => list_overrides::build(),
@@ -217,7 +220,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            52,
+            53,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
