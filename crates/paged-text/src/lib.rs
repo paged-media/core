@@ -33,6 +33,7 @@ pub mod layout;
 pub mod libhyphen;
 pub(crate) mod ragged;
 pub mod shape;
+pub mod single_line;
 
 pub use cache::{CacheStats, LayoutCache, LayoutKeyHasher};
 pub use compose::{
@@ -51,3 +52,4 @@ pub use shape::{
     shape_run_with_features, Face, FigureStyle, KerningMethod, MarginSide, ShapedGlyph, ShapedRun,
     ShapingFeatures, SmallCaps, Variation,
 };
+pub use single_line::SingleLineOptions;

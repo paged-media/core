@@ -265,6 +265,11 @@ pub struct ComposeOptions<'a> {
     /// frame. To InDesign that row is ONE line, so with
     /// `minimum_raggedness` no word is hyphenated across the gap.
     pub joined_lines: Option<Vec<bool>>,
+    /// Set the paragraph with InDesign's Single-line Composer
+    /// (`Composer="HL Single"`) instead of the Paragraph Composer: one
+    /// line at a time, as Word does (`single_line.rs`). `None` is the
+    /// Paragraph Composer.
+    pub single_line: Option<crate::single_line::SingleLineOptions>,
 }
 
 impl ComposeOptions<'_> {
@@ -307,6 +312,7 @@ impl ComposeOptions<'_> {
             minimum_raggedness: false,
             visible_lines: None,
             joined_lines: None,
+            single_line: None,
         }
     }
 }
@@ -885,8 +891,17 @@ pub fn compose_paragraph(
     // Mirror layout_runs' fallback: when the configured tolerance
     // can't fit the paragraph, retry progressively looser so a long
     // paragraph isn't dropped entirely.
-    let mut breaks: Vec<Breakpoint> =
-        paragraph_breaker::total_fit(&items, lengths, options.tolerance, options.looseness);
+    let mut breaks: Vec<Breakpoint> = match &options.single_line {
+        // The single-run path has no alignment of its own; it composes
+        // as justified text does, compressing to fit.
+        Some(sl) => crate::single_line::single_line_breaks(
+            &items,
+            lengths,
+            &[],
+            &crate::single_line::SingleLineParams::new(sl, true, 0.0, natural_space),
+        ),
+        None => paragraph_breaker::total_fit(&items, lengths, options.tolerance, options.looseness),
+    };
     if breaks.is_empty() && !items.is_empty() {
         for fallback_tol in [options.tolerance * 4.0, options.tolerance * 16.0, 1000.0] {
             breaks = paragraph_breaker::total_fit(&items, lengths, fallback_tol, options.looseness);

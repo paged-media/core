@@ -140,7 +140,36 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     let ls_min = resolved.minimum_letter_spacing.unwrap_or(0.0);
     let ls_desired = resolved.desired_letter_spacing.unwrap_or(0.0);
     let ls_max = resolved.maximum_letter_spacing.unwrap_or(0.0);
-    if ls_min != 0.0 || ls_desired != 0.0 || ls_max != 0.0 {
+    // The Single-line Composer (`Composer="HL Single"`) sets one line at
+    // a time (paged-text `single_line.rs`). It carries the letter-spacing
+    // band itself, per character, so the approximation below — which
+    // folds that band into the word spaces — stays out of its glue.
+    let single_line = resolved
+        .composer
+        .as_ref()
+        .is_some_and(paged_model::Composer::is_single_line);
+    if single_line {
+        // InDesign's own defaults where the cascade is silent: a 36 pt
+        // hyphenation zone and three hyphens in a row (both read off
+        // InDesign 20.0.1's `[No paragraph style]`).
+        let d = paged_text::SingleLineOptions::default();
+        let desired_ws = resolved.desired_word_spacing.unwrap_or(100.0);
+        lopts.compose.single_line = Some(paged_text::SingleLineOptions {
+            zone: resolved
+                .hyphenation_zone
+                .map(|z| (z.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+                .unwrap_or(d.zone),
+            ladder_limit: resolved
+                .hyphenate_ladder_limit
+                .map(|n| n as usize)
+                .unwrap_or(d.ladder_limit),
+            letter_shrink_ratio: ((ls_desired - ls_min) / 100.0).max(0.0),
+            max_stretch_ratio: ((resolved.maximum_word_spacing.unwrap_or(133.0) - desired_ws)
+                / 100.0)
+                .max(0.0),
+        });
+    }
+    if !single_line && (ls_min != 0.0 || ls_desired != 0.0 || ls_max != 0.0) {
         // Cycle-6 Track 3: bounded mapping from LS budget (pt) to
         // stretch_add / shrink_add. The cycle-5 formula
         // `(ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width`

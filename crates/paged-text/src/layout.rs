@@ -271,6 +271,7 @@ pub fn layout_paragraph<S: TextShaper>(
             is_last && !options.justify_last_line,
             text.as_bytes(),
             false,
+            options.compose.single_line.is_some(),
         );
         lines.push(LaidOutLine {
             byte_range: line.byte_range.clone(),
@@ -342,11 +343,19 @@ fn apply_alignment(
     is_last_line: bool,
     paragraph_bytes: &[u8],
     squeeze_ragged: bool,
+    squeeze_justified: bool,
 ) {
     if glyphs.is_empty() || column_width <= 0 {
         return;
     }
     let mut extra = column_width - natural_width;
+    // A justified line the Single-line Composer set over its measure was
+    // chosen for its compressed spacing: squeeze its spaces onto it, the
+    // last line too (`single_line.rs`).
+    if squeeze_justified && alignment == Alignment::Justify && extra < 0 {
+        spread_spaces(glyphs, extra, paragraph_bytes);
+        return;
+    }
     // A ragged line the minimum-raggedness breaker chose to set over its
     // measure has its word spaces squeezed onto it (`ragged.rs`).
     if squeeze_ragged && alignment != Alignment::Justify && extra < 0 {
@@ -747,6 +756,17 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         0
     };
 
+    // The Single-line Composer resolved for this paragraph, and — when
+    // its letters may compress — how many characters precede each item.
+    let single_line = opts.single_line.as_ref().map(|o| {
+        crate::single_line::SingleLineParams::new(
+            o,
+            options.alignment == Alignment::Justify,
+            runs[0].point_size,
+            natural_space,
+        )
+    });
+
     // Hyphenation-zone gate (W1.17). A word whose start falls within
     // `zone` of the right margin is kept whole rather than hyphenated,
     // trading a more ragged right edge for fewer hyphens — InDesign's
@@ -766,7 +786,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // fit, exactly as InDesign's justified composer does. (W1.3 landed
     // the ragged gate in `compose_paragraph`; W1.17 extends it to the
     // renderer path and pins the justified no-op.)
-    let zone = if options.alignment == Alignment::Justify {
+    let zone = if options.alignment == Alignment::Justify || single_line.is_some() {
         0
     } else {
         opts.hyphenation_zone.max(0)
@@ -907,6 +927,26 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     byte_ends.push(paragraph_text.len());
     is_hyphen.push(false);
 
+    let char_counts: Vec<u32> = match &single_line {
+        Some(p) if p.letter_shrink > 0 => {
+            let mut at_byte = vec![0u32; paragraph_text.len() + 1];
+            let mut n = 0u32;
+            for (b, c) in paragraph_text.char_indices() {
+                at_byte[b] = n;
+                n += 1;
+                for k in 1..c.len_utf8() {
+                    at_byte[b + k] = n;
+                }
+            }
+            at_byte[paragraph_text.len()] = n;
+            byte_ends
+                .iter()
+                .map(|&e| at_byte[e.min(paragraph_text.len())])
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let single = single_line.as_ref().map(|p| (p, char_counts.as_slice()));
     let single_width = [opts.column_width];
     let lengths: &[i32] = opts
         .column_widths
@@ -931,14 +971,35 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 Some((k, glue)) => {
                     let mut pinned = items.clone();
                     pinned[k] = glue;
-                    knuth_plass_breaks(&pinned, lengths, opts, options.alignment, ragged_stretch)
+                    knuth_plass_breaks(
+                        &pinned,
+                        lengths,
+                        opts,
+                        options.alignment,
+                        ragged_stretch,
+                        single,
+                    )
                 }
                 None => tab_aware_breaks(&input, |items, lengths| {
-                    knuth_plass_breaks(items, lengths, opts, options.alignment, ragged_stretch)
+                    knuth_plass_breaks(
+                        items,
+                        lengths,
+                        opts,
+                        options.alignment,
+                        ragged_stretch,
+                        single,
+                    )
                 }),
             }
         }
-        None => knuth_plass_breaks(&items, lengths, opts, options.alignment, ragged_stretch),
+        None => knuth_plass_breaks(
+            &items,
+            lengths,
+            opts,
+            options.alignment,
+            ragged_stretch,
+            single,
+        ),
     };
 
     // 4. For each chosen line, walk `flat` in cluster order and pull
@@ -1061,6 +1122,25 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             natural_width = snapped.width;
             glyphs = snapped.glyphs;
         }
+        // The Single-line Composer measured each word space at its
+        // DESIRED width (`DesiredWordSpacing`); set it there too, or a
+        // ragged line at 80 % runs its spaces' 20 % past the measure.
+        if single_line.is_some() && space_width != natural_space {
+            let first = glyphs
+                .iter()
+                .rposition(|g| bytes.get(g.cluster as usize) == Some(&b'\t'))
+                .map_or(1, |t| t + 1);
+            let gaps = glyphs
+                .iter()
+                .skip(first)
+                .filter(|g| is_ws_at(bytes, g.cluster as usize))
+                .count() as i32;
+            let delta = (space_width - natural_space) * gaps;
+            if delta != 0 {
+                spread_spaces(&mut glyphs, delta, bytes);
+                natural_width += delta;
+            }
+        }
         // When `column_widths` is configured, use the matching slot
         // for this line's alignment column (clamping at the slice
         // tail mirrors paragraph-breaker's own fallback). Right /
@@ -1078,6 +1158,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             i == last_break && !options.justify_last_line,
             bytes,
             opts.minimum_raggedness,
+            single_line.is_some(),
         );
         // Per-line line-height: explicit `leading_override` wins
         // (mirrors IDML's `Leading` attribute), otherwise the largest
@@ -1130,7 +1211,14 @@ fn knuth_plass_breaks(
     opts: &ComposeOptions,
     alignment: Alignment,
     ragged_stretch: i32,
+    single: Option<(&crate::single_line::SingleLineParams, &[u32])>,
 ) -> Vec<Breakpoint> {
+    if let Some((params, chars)) = single {
+        // A tab pass hands in a suffix of the paragraph's items; the
+        // character counts run over the whole paragraph.
+        let chars = &chars[chars.len().saturating_sub(items.len()).min(chars.len())..];
+        return crate::single_line::single_line_breaks(items, lengths, chars, params);
+    }
     if opts.minimum_raggedness && alignment != Alignment::Justify {
         let breaks = crate::ragged::min_ragged_breaks(
             items,
@@ -2048,6 +2136,7 @@ mod tests {
                 minimum_raggedness: false,
                 visible_lines: None,
                 joined_lines: None,
+                single_line: None,
             },
             line_height: 20,
             first_baseline: 15,

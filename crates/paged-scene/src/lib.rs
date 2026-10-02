@@ -1194,6 +1194,7 @@ impl ResolvedParagraphAttrs {
             hyphenate_across_columns: paragraph.hyphenate_across_columns,
             hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
             hyphen_weight: paragraph.hyphen_weight,
+            composer: paragraph.composer.clone(),
             keep_lines_together: paragraph.keep_lines_together,
             keep_all_lines_together: paragraph.keep_all_lines_together,
             keep_first_lines: paragraph.keep_first_lines,
@@ -1295,6 +1296,9 @@ impl ResolvedParagraphAttrs {
             self.hyphenate_across_columns.or(p.hyphenate_across_columns);
         self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(p.hyphenate_ladder_limit);
         self.hyphen_weight = self.hyphen_weight.or(p.hyphen_weight);
+        if self.composer.is_none() {
+            self.composer = p.composer.clone();
+        }
         self.keep_lines_together = self.keep_lines_together.or(p.keep_lines_together);
         self.keep_all_lines_together = self.keep_all_lines_together.or(p.keep_all_lines_together);
         self.keep_first_lines = self.keep_first_lines.or(p.keep_first_lines);
@@ -1620,6 +1624,9 @@ pub struct ResolvedParagraphAttrs {
     pub hyphenate_across_columns: Option<bool>,
     pub hyphenate_ladder_limit: Option<u32>,
     pub hyphen_weight: Option<u32>,
+    /// Cascaded `Composer`, direct > style. See
+    /// [`paged_model::Composer`].
+    pub composer: Option<paged_model::Composer>,
     pub hyphenation_zone: Option<f32>,
     /// Keep options (ADR 028), direct > style.
     pub keep_lines_together: Option<bool>,

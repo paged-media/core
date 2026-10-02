@@ -336,7 +336,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
-///   minimum_raggedness, visible_lines, joined_lines.
+///   minimum_raggedness, visible_lines, joined_lines, the hyphenation
+///   limits, and the Single-line Composer's settings (`single_line`).
 ///
 /// **Caching contract assumption.** `font_id` is treated as a stable
 /// per-font identifier within a render. If the caller maps different
@@ -470,6 +471,23 @@ fn fold_compose_options(h: &mut LayoutKeyHasher, options: &ComposeOptions) {
             for j in js {
                 h.add_bool(*j);
             }
+        }
+        None => h.add_bool(false),
+    }
+    let l = &options.hyphenation_limits;
+    h.add_u32(l.after_first as u32);
+    h.add_u32(l.before_last as u32);
+    h.add_u32(l.words_longer_than as u32);
+    h.add_bool(l.capitalized_words);
+    h.add_bool(l.last_word);
+    h.add_u32(l.ladder_limit as u32);
+    match &options.single_line {
+        Some(sl) => {
+            h.add_bool(true);
+            h.add_i32(sl.zone);
+            h.add_u32(sl.ladder_limit as u32);
+            h.add_f32(sl.letter_shrink_ratio);
+            h.add_f32(sl.max_stretch_ratio);
         }
         None => h.add_bool(false),
     }

@@ -343,6 +343,7 @@ mod tests {
                 minimum_raggedness: false,
                 visible_lines: None,
                 joined_lines: None,
+                single_line: None,
             },
             line_height: 64 * 14,
             first_baseline: 64 * 10,

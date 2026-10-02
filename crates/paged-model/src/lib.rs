@@ -3120,6 +3120,73 @@ impl<'de> Deserialize<'de> for Justification {
             .ok_or_else(|| serde::de::Error::custom(format!("unknown Justification value: {s:?}")))
     }
 }
+/// InDesign's paragraph composers, as IDML spells them in a paragraph's
+/// `Composer` attribute (measured on InDesign 20.0.1: setting a
+/// paragraph to each composer and exporting IDML writes exactly these
+/// four strings).
+///
+/// The Paragraph Composer weighs every break of the paragraph at once
+/// (Knuth–Plass); the Single-line Composer sets one line at a time, the
+/// way Word does. The World-Ready ("Optyca") variants compose the same
+/// way for Latin text and add shaping for complex scripts. A value
+/// InDesign did not write (a third-party composer) is kept verbatim so
+/// an unedited save writes it back.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Composer {
+    /// `"HL Composer"` — the Adobe Paragraph Composer.
+    Paragraph,
+    /// `"HL Single"` — the Adobe Single-line Composer.
+    SingleLine,
+    /// `"HL Composer Optyca"` — the Adobe World-Ready Paragraph Composer.
+    WorldReadyParagraph,
+    /// `"HL Single Optyca"` — the Adobe World-Ready Single-line Composer.
+    WorldReadySingleLine,
+    /// Any other value, verbatim.
+    Other(String),
+}
+
+impl Composer {
+    /// Parse an IDML `Composer` value. Never fails: an unknown value is
+    /// [`Composer::Other`].
+    pub fn from_idml(s: &str) -> Self {
+        match s {
+            "HL Composer" => Self::Paragraph,
+            "HL Single" => Self::SingleLine,
+            "HL Composer Optyca" => Self::WorldReadyParagraph,
+            "HL Single Optyca" => Self::WorldReadySingleLine,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    /// The IDML attribute value.
+    pub fn as_idml(&self) -> &str {
+        match self {
+            Self::Paragraph => "HL Composer",
+            Self::SingleLine => "HL Single",
+            Self::WorldReadyParagraph => "HL Composer Optyca",
+            Self::WorldReadySingleLine => "HL Single Optyca",
+            Self::Other(s) => s,
+        }
+    }
+
+    /// Whether this composer sets one line at a time. A composer we do
+    /// not know composes as the Paragraph Composer.
+    pub fn is_single_line(&self) -> bool {
+        matches!(self, Self::SingleLine | Self::WorldReadySingleLine)
+    }
+}
+
+impl Serialize for Composer {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(self.as_idml())
+    }
+}
+impl<'de> Deserialize<'de> for Composer {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let s = <std::borrow::Cow<'de, str>>::deserialize(de)?;
+        Ok(Self::from_idml(&s))
+    }
+}
 /// One stop in a paragraph's `<TabList>`. Position is in pt from
 /// the column's left edge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3847,6 +3914,12 @@ pub struct ParagraphStyleDef {
     /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
+    /// `Composer` — which of InDesign's line breakers sets the
+    /// paragraph: the Paragraph Composer (`"HL Composer"`, the default)
+    /// or the Single-line Composer (`"HL Single"`), or their World-Ready
+    /// twins. `None` inherits; an absent value everywhere is the
+    /// Paragraph Composer.
+    pub composer: Option<Composer>,
     /// Keep options (ADR 028). `KeepLinesTogether` switches them ON;
     /// `KeepAllLinesTogether` then picks "all lines" over the
     /// first/last-line counts (`KeepFirstLines` / `KeepLastLines`,
@@ -4134,6 +4207,12 @@ pub struct ResolvedParagraph {
     /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
+    /// `Composer` — which of InDesign's line breakers sets the
+    /// paragraph: the Paragraph Composer (`"HL Composer"`, the default)
+    /// or the Single-line Composer (`"HL Single"`), or their World-Ready
+    /// twins. `None` inherits; an absent value everywhere is the
+    /// Paragraph Composer.
+    pub composer: Option<Composer>,
     /// Keep options (ADR 028). `KeepLinesTogether` switches them ON;
     /// `KeepAllLinesTogether` then picks "all lines" over the
     /// first/last-line counts (`KeepFirstLines` / `KeepLastLines`,
@@ -4449,6 +4528,9 @@ impl ResolvedParagraph {
             .or(def.hyphenate_across_columns);
         self.hyphenate_ladder_limit = self.hyphenate_ladder_limit.or(def.hyphenate_ladder_limit);
         self.hyphen_weight = self.hyphen_weight.or(def.hyphen_weight);
+        if self.composer.is_none() {
+            self.composer = def.composer.clone();
+        }
         self.keep_lines_together = self.keep_lines_together.or(def.keep_lines_together);
         self.keep_all_lines_together = self.keep_all_lines_together.or(def.keep_all_lines_together);
         self.keep_first_lines = self.keep_first_lines.or(def.keep_first_lines);
@@ -4709,6 +4791,12 @@ pub struct Paragraph {
     /// `HyphenWeight` — 0..10, InDesign's "better spacing / fewer
     /// hyphens" slider. Maps onto the breaker's hyphen penalty.
     pub hyphen_weight: Option<u32>,
+    /// `Composer` — which of InDesign's line breakers sets the
+    /// paragraph: the Paragraph Composer (`"HL Composer"`, the default)
+    /// or the Single-line Composer (`"HL Single"`), or their World-Ready
+    /// twins. `None` inherits; an absent value everywhere is the
+    /// Paragraph Composer.
+    pub composer: Option<Composer>,
     /// `KeepLinesTogether` boolean — when `true`, InDesign tries to
     /// switch keep options on for this paragraph (ADR 028); WHICH lines
     /// stay together is `keep_all_lines_together` / `keep_first_lines` /
