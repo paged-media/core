@@ -1141,6 +1141,10 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(p.tracking);
         self.underline = self.underline.or(p.underline);
         self.strikethru = self.strikethru.or(p.strikethru);
+        self.ligatures_on = self.ligatures_on.or(p.ligatures_on);
+        if self.kerning_method.is_none() {
+            self.kerning_method = p.kerning_method.clone();
+        }
         self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }

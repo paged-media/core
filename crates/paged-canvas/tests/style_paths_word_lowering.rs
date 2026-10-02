@@ -163,3 +163,100 @@ fn a_style_refuses_an_unknown_justification_and_keeps_its_own() {
         "and the style keeps the alignment it had"
     );
 }
+
+/// Kerning and ligatures set on a PARAGRAPH style reach its runs. Word sets
+/// text without kerning or ligatures by default, and plugin-doc states
+/// that on the document's base paragraph style; the model carried both
+/// only on character styles, so a paragraph style could not say it.
+#[test]
+fn a_paragraph_style_switches_kerning_and_ligatures_off() {
+    let idml = paged_canvas::blank::blank_idml(612.0, 792.0);
+    let inter = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
+    )
+    .expect("read Inter.ttf");
+    let opts = CanvasOptions {
+        fonts: vec![inter],
+        ..CanvasOptions::default()
+    };
+    let mut m = CanvasModel::load("doc", &idml, opts).expect("load");
+    let page = m.scene().spreads[0].spread.pages[0]
+        .self_id
+        .clone()
+        .expect("page");
+    let out = m
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: paged_canvas::PageId(page),
+            bounds: (36.0, 36.0, 576.0, 756.0),
+        })
+        .expect("frame");
+    let Some(paged_canvas::ElementId::TextFrame(frame)) = out.created_id else {
+        panic!("text frame");
+    };
+    let story = m.scene().spreads[0]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(frame.as_str()))
+        .and_then(|f| f.parent_story.clone())
+        .expect("story");
+    // Pairs Inter kerns: AV, To, WA, Ty.
+    let text = "AVAVAVAV Tomorrow WAVE Type AVATAR";
+    for mutation in [
+        Mutation::InsertText {
+            story_id: story.clone(),
+            offset: 0,
+            text: text.into(),
+            cell: None,
+        },
+        Mutation::CreateParagraphStyle {
+            self_id: Some("ParagraphStyle/k".into()),
+            name: Some("K".into()),
+            based_on: None,
+        },
+        Mutation::ApplyStyle {
+            story_id: story.clone(),
+            start: 0,
+            end: text.chars().count() as u32,
+            style: "ParagraphStyle/k".into(),
+            scope: paged_mutate::operation::StyleScope::Paragraph,
+            cell: None,
+        },
+    ] {
+        m.apply_mutation(&mutation).expect("setup");
+    }
+    let line_end = |m: &CanvasModel| -> f32 {
+        let lines = m.built().story_layout(&story);
+        let c = lines[0].clusters.last().expect("clusters");
+        c.x_pt + c.advance_pt
+    };
+    let kerned = line_end(&m);
+    set(
+        &mut m,
+        StyleCollection::Paragraph,
+        "ParagraphStyle/k",
+        P::CharacterKerningMethod,
+        V::Text("None".into()),
+    );
+    let unkerned = line_end(&m);
+    assert!(
+        unkerned > kerned + 1.0,
+        "without kerning the line is wider: {kerned} -> {unkerned}"
+    );
+    set(
+        &mut m,
+        StyleCollection::Paragraph,
+        "ParagraphStyle/k",
+        P::CharacterLigatures,
+        V::Bool(false),
+    );
+    let def = &m.scene().styles.paragraph_styles["ParagraphStyle/k"];
+    assert_eq!(def.kerning_method.as_deref(), Some("None"));
+    assert_eq!(def.ligatures_on, Some(false));
+    m.undo().expect("undo ligatures");
+    m.undo().expect("undo kerning");
+    assert!(
+        (line_end(&m) - kerned).abs() < 0.001,
+        "undo restores kerning"
+    );
+}

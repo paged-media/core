@@ -2128,6 +2128,14 @@ pub(super) fn set_paragraph_style_field(
         PropertyPath::CharacterStrikethru => {
             Ok(super::paragraph::set_para_bool_field(path, value, &mut def.strikethru, false)?.0)
         }
+        // Ligatures default ON and kerning to the font's metrics; a style
+        // may switch either off (Word's own default is neither).
+        PropertyPath::CharacterLigatures => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.ligatures_on, true)?.0)
+        }
+        PropertyPath::CharacterKerningMethod => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.kerning_method)?.0)
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),
             path,
@@ -2190,6 +2198,14 @@ pub(super) fn set_character_style_field(
         }
         PropertyPath::CharacterStrikethru => {
             Ok(super::paragraph::set_para_bool_field(path, value, &mut def.strikethru, false)?.0)
+        }
+        // Ligatures default ON and kerning to the font's metrics; a style
+        // may switch either off (Word's own default is neither).
+        PropertyPath::CharacterLigatures => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.ligatures_on, true)?.0)
+        }
+        PropertyPath::CharacterKerningMethod => {
+            Ok(super::paragraph::set_para_text_field(path, value, &mut def.kerning_method)?.0)
         }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),

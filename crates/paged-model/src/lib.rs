@@ -3797,6 +3797,16 @@ pub struct ParagraphStyleDef {
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `Ligatures` on the paragraph style (InDesign writes run formatting
+    /// on paragraph styles too). `None` inherits; see
+    /// [`CharacterStyleDef::ligatures_on`].
+    #[serde(default)]
+    pub ligatures_on: Option<bool>,
+    /// `KerningMethod` on the paragraph style (`Metrics` / `Optical` /
+    /// `None`); see [`CharacterStyleDef::kerning_method`]. Word sets text
+    /// without kerning unless a document asks for it.
+    #[serde(default)]
+    pub kerning_method: Option<String>,
     /// `<TabList>` parsed from the style. Empty means "no
     /// declaration" — the cascade may inherit from `BasedOn`.
     pub tab_list: Vec<TabStop>,
@@ -4152,6 +4162,8 @@ pub struct ResolvedParagraph {
     pub space_after: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    pub ligatures_on: Option<bool>,
+    pub kerning_method: Option<String>,
     /// `<TabList>` from the cascade. Empty means inherited / none.
     pub tab_list: Vec<TabStop>,
     pub bullets_list_type: Option<String>,
@@ -4481,6 +4493,10 @@ impl ResolvedParagraph {
         self.space_after = self.space_after.or(def.space_after);
         self.underline = self.underline.or(def.underline);
         self.strikethru = self.strikethru.or(def.strikethru);
+        self.ligatures_on = self.ligatures_on.or(def.ligatures_on);
+        if self.kerning_method.is_none() {
+            self.kerning_method = def.kerning_method.clone();
+        }
         if self.tab_list.is_empty() && !def.tab_list.is_empty() {
             self.tab_list = def.tab_list.clone();
         }
