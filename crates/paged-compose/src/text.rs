@@ -349,6 +349,7 @@ mod tests {
             first_baseline: 64 * 10,
             alignment: paged_text::Alignment::Left,
             leading_override: None,
+            run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             justify_last_line: false,
             tabs: None,

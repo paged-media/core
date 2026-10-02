@@ -244,6 +244,15 @@
       "report": "/tmp/idml-generated-diff/masters/report.json"
     },
     {
+      "name": "mixed-leading",
+      "idml": "mixed-leading.idml",
+      "pdf": "mixed-leading.pdf",
+      "pages": 1,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/mixed-leading",
+      "report": "/tmp/idml-generated-diff/mixed-leading/report.json"
+    },
+    {
       "name": "navigation",
       "idml": "navigation.idml",
       "pdf": "navigation.pdf",

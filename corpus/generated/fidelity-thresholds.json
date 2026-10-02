@@ -477,6 +477,14 @@
       "rationale": "Added 2026-10-02 (RFI C-56): a paragraph with no word still takes a line. Six frames of A / something / B in Inter 10/12; the reference is InDesign 20.0.1's export. A paragraph of spaces is a line at its own leading (it laid out no line and took no room before); crates/paged-renderer/tests/blank_paragraphs_pipeline.rs pins all six distances, the truly empty paragraph as a named known difference (the IDML importer drops its range's leading, RFI C-57: 2.4 pt). Measured mean 0.0047 / p99 0.000 / ssim 0.99984; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
     },
     {
+      "name": "mixed-leading",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.043,
+      "max_p99_de": 0.01,
+      "min_ssim": 0.9933,
+      "rationale": "Added 2026-10-02 (RFI C-59): a line takes the largest leading among its characters, and sits its OWN leading below the line before it. Six frames, Inter 10 pt, lines fixed by forced line breaks; the reference is InDesign 20.0.1's export. The engine gave every line the paragraph's first run's leading and stepped by the previous line's. crates/paged-renderer/tests/mixed_leading_pipeline.rs pins every step; one frame is a named known difference (the forced break ending a line counts for that line in InDesign). Measured mean 0.0351 / p99 0.000 / ssim 0.9983; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+    },
+    {
       "name": "hard-hyphen",
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.156,

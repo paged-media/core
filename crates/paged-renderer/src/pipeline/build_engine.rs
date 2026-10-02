@@ -5931,6 +5931,31 @@ fn emit_paragraph_lines(
                 Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
         }
     }
+    // Runs that ask for DIFFERENT leadings: each line takes the largest
+    // among its characters (`paged_text::layout::line_leading`). When
+    // they all agree, the override above (or auto leading) says it all.
+    {
+        let explicit = |r: &paged_scene::ResolvedRunAttrs| {
+            r.leading
+                .filter(|l| *l > 0.0)
+                .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+        };
+        let leadings: Vec<Option<i32>> = resolved_runs.iter().map(explicit).collect();
+        if leadings.windows(2).any(|w| w[0] != w[1]) {
+            let mut at = 0u32;
+            let mut out = Vec::with_capacity(styled_runs.len());
+            for (k, run) in styled_runs.iter().enumerate() {
+                // A marker shaped as its own run leads the text; its
+                // glyphs never count (`auto_leading_from_byte`).
+                let leading = k
+                    .checked_sub(head_run)
+                    .and_then(|i| leadings.get(i).copied().flatten());
+                out.push((at, leading));
+                at += run.text.len() as u32;
+            }
+            lopts.run_leadings = out;
+        }
+    }
 
     // First-baseline metrics for this paragraph's head run. A
     // family-keyed override (`--font-metrics`) wins, so a documented
@@ -6409,6 +6434,27 @@ fn emit_paragraph_lines(
 
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
+    // The paragraph's first line was placed one leading below the line
+    // before it, by the leading its head run asks for (above). The line
+    // takes the LARGEST leading among its characters: when that is another
+    // one, the whole paragraph moves by the difference. (A paragraph that
+    // opens its frame is placed by the frame's first-baseline rule.)
+    if !frame_first_paragraph {
+        if let Some(first) = laid_out.lines.first() {
+            let assumed = lopts.leading_override.unwrap_or(lopts.line_height);
+            let own = paged_text::layout::line_leading(&first.glyphs, &lopts).unwrap_or(assumed);
+            let delta = own - assumed;
+            if delta != 0 {
+                for line in &mut laid_out.lines {
+                    line.baseline_y += delta;
+                    for g in &mut line.glyphs {
+                        g.y += delta;
+                    }
+                }
+            }
+        }
+    }
+
     // Optical margin alignment: when the story carries
     // `<StoryPreference OpticalMarginAlignment="true" />`, nudge the
     // leftmost / rightmost glyph of each line outward per
@@ -6835,10 +6881,7 @@ fn emit_paragraph_lines(
     // In-line objects: which composed line holds each one, and how far
     // that line moves down for it (`anchored::line_object_shift`).
     let line_leading_64 = |glyphs: &[paged_text::layout::PositionedGlyph]| {
-        lopts.leading_override.unwrap_or_else(|| {
-            paged_text::layout::auto_line_height(glyphs, lopts.auto_leading_from_byte)
-                .unwrap_or(lopts.line_height)
-        })
+        paged_text::layout::line_leading(glyphs, &lopts).unwrap_or(lopts.line_height)
     };
     let mut line_objects: Vec<Vec<anchored::LineObject>> = Vec::new();
     if !segment_objects.is_empty() {
@@ -6907,10 +6950,8 @@ fn emit_paragraph_lines(
         // style stepped 10.2 pt to the next (the annual's code block,
         // 30 lines in a frame that holds 28 at 13 pt — measured
         // 2026-09-06 against InDesign, which oversets it).
-        let line_h = lopts.leading_override.unwrap_or_else(|| {
-            paged_text::layout::auto_line_height(&line.glyphs, lopts.auto_leading_from_byte)
-                .unwrap_or(lopts.line_height)
-        });
+        let line_h =
+            paged_text::layout::line_leading(&line.glyphs, &lopts).unwrap_or(lopts.line_height);
         // A line fits while its baseline is inside the TEXT AREA, which
         // ends the bottom inset above the frame's edge. Measured on
         // InDesign 20.0.1 (`stroke-inset`): a 66 pt frame with a 6 pt

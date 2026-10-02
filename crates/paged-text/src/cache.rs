@@ -403,6 +403,11 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     // `first_baseline` is not an input: `layout_runs_cached` lays out at 0
     // and translates.
     h.add_optional_i32(options.leading_override);
+    h.add_u32(options.run_leadings.len() as u32);
+    for (start, leading) in &options.run_leadings {
+        h.add_u32(*start);
+        h.add_optional_i32(*leading);
+    }
     h.add_u32(options.auto_leading_from_byte);
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
