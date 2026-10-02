@@ -24,11 +24,12 @@
 //!   - [`simplify_path`] — anchor reduction at a max-deviation
 //!     tolerance (kurbo's `simplify_bezpath`).
 //!   - [`offset_closed_path`] — parametric inset/outset for CLOSED
-//!     contours: stroke the boundary at `2·|delta|`, then
-//!     union (outset) / subtract (inset) against the original via
-//!     the existing flo_curves boolean kernel. Robust where naive
-//!     per-segment offsetting self-intersects; open-path offset is
-//!     deliberately deferred (engine validates closed-only).
+//!     contours, with the join the caller asked for on the corners the
+//!     offset opens (bevel from exact per-segment parallels, miter and
+//!     round from the stroker's two sides at `2·|delta|`), every
+//!     candidate resolved through the flo_curves boolean kernel.
+//!     Open-path offset is deliberately deferred (engine validates
+//!     closed-only).
 //!   - [`nearest_point_on_path`] — closest point on the path's
 //!     cubics (B-06): collapses the third TS copy of `closestTOnCubic`
 //!     once exposed as a worker query.
@@ -308,6 +309,20 @@ pub fn outline_stroke(
 /// are accepted now so the op signature is stable). Returns `None` on
 /// degenerate input (< 2 anchors, no width stops, zero-length path, or a
 /// multi-subpath input).
+///
+/// What "no joins" means here, so the unused parameters read as a
+/// decision: each side is ONE vertex per centreline vertex, pushed
+/// `half_width` along the normal of the chord between its neighbours.
+/// On a flattened curve the turn per vertex is tiny and that is the
+/// parallel curve. At a real CORNER of the centreline (turn angle φ) the
+/// two parallel edges would meet `half_width / cos(φ/2)` out; this
+/// places the vertex at `half_width`, so the outline is pinched to
+/// `cos(φ/2)` of its width there — neither a miter, a round nor a bevel.
+/// [`offset_closed_path`] used to ignore the same pair and no longer
+/// does; this function still does, because a join here needs the
+/// per-vertex construction replaced, not a parameter passed through
+/// (kurbo's stroker, which draws the joins elsewhere in this module,
+/// has no variable width).
 pub fn variable_width_outline_stroke(
     anchors: &[PathAnchor],
     subpath_starts: &[usize],
@@ -523,25 +538,43 @@ pub fn simplify_path(
 /// Offset Path (§13.3) for a SINGLE closed contour. `delta > 0`
 /// outsets, `delta < 0` insets.
 ///
-/// Construction: EXACT per-segment parallel curves (flo's
-/// least-mean-squares `offset`), consecutive offset runs joined with
-/// straight connectors, then one nonzero-winding resolve
-/// (`path_remove_interior_points`) to trim the crossings that
-/// connectors create at corners. Because the parser's contour
-/// winding is not normalized, BOTH ±delta candidates are built and
-/// selected by enclosed area: the inset is the candidate smaller
-/// than the original, the outset the larger one. An inset past the
-/// medial axis resolves to nothing → None. Corner style is
-/// miter-like on the trimmed side and bevel on the gap side (round/
-/// miter joins are a follow-up); multi-subpath (holes) and open
-/// inputs are deferred in v1.
+/// An offset has two kinds of corner. Where the two offset edges CROSS
+/// (the reflex corners of an outset, the convex ones of an inset) they
+/// are trimmed at the crossing, and there is nothing to choose. Where
+/// they part and leave a GAP (the convex corners of an outset, the
+/// reflex ones of an inset) the gap is filled by the JOIN:
+///
+///   * `Bevel` — a straight connector across the gap;
+///   * `Miter` — both edges extended to their intersection, unless the
+///     miter ratio `1 / sin(θ/2)` exceeds `miter_limit`, in which case
+///     that corner bevels;
+///   * `Round` — an arc of radius `|delta|` about the source vertex.
+///
+/// Construction: two candidate contours, one on each side of the path,
+/// each resolved with one nonzero-winding pass
+/// (`path_remove_interior_points`) that trims the crossings. Because
+/// the parser's contour winding is not normalized, the side is chosen
+/// by enclosed area: the inset is the candidate smaller than the
+/// original, the outset the larger one. An inset past the medial axis
+/// resolves to nothing → None.
+///
+/// Where the candidates come from depends on the join. `Bevel` builds
+/// them from EXACT per-segment parallel curves (flo's least-mean-squares
+/// `offset`) joined by straight connectors — the connector IS the bevel.
+/// `Miter` and `Round` take them from kurbo's stroker, the two sides of
+/// the path stroked at `2·|delta|`: that is where this crate's joins
+/// already come from ([`outline_stroke`], through [`kurbo_join`]), so
+/// the miter limit and the round arc mean here exactly what they mean
+/// on a stroke, and there is one implementation of a join, not two.
+///
+/// Multi-subpath (holes) and open inputs are deferred in v1.
 pub fn offset_closed_path(
     anchors: &[PathAnchor],
     subpath_starts: &[usize],
     subpath_open: &[bool],
     delta: f32,
-    _join: StrokeJoin,
-    _miter_limit: f32,
+    join: StrokeJoin,
+    miter_limit: f32,
 ) -> Option<(Vec<PathAnchor>, Vec<usize>, Vec<bool>)> {
     use flo_curves::bezier::path::{path_remove_interior_points, SimpleBezierPath};
     use flo_curves::bezier::{offset, BezierCurveFactory, Curve};
@@ -561,9 +594,43 @@ pub fn offset_closed_path(
         .area()
         .abs();
 
-    // Build one signed candidate: offset every segment, connect the
-    // runs, resolve crossings, return the largest resolved contour
-    // with its area.
+    // Resolve one raw candidate contour: trim its crossings and return
+    // the largest resolved contour with its area.
+    let resolve = |raw: SimpleBezierPath| -> Option<(Vec<PathAnchor>, f64)> {
+        // C-21: `path_remove_interior_points` ends in `exterior_paths`
+        // like every other flo_curves boolean, so its input has to be on
+        // the boolean grid or the point sort can abort the process. These
+        // coordinates come out of curve OFFSETTING, so they are arbitrary
+        // reals and can cluster arbitrarily tightly in x — exactly the
+        // shape of input that trips it. The 1/64 pt snap sits well inside
+        // this module's own 0.05 pt TOLERANCE.
+        let mut raw: Vec<SimpleBezierPath> = vec![raw];
+        crate::bezier_conv::snap_paths_to_grid(&mut raw, crate::bezier_conv::BOOLEAN_GRID);
+        let resolved: Vec<SimpleBezierPath> =
+            path_remove_interior_points(&raw, crate::bezier_conv::BOOLEAN_GRID);
+        if resolved.is_empty() {
+            return None;
+        }
+        let (ra, rs) = crate::bezier_conv::flo_to_idml_path(&resolved);
+        // Largest resolved contour is the candidate boundary.
+        let n = ra.len();
+        let mut best: Option<(f64, usize, usize)> = None;
+        for (si, &cs) in rs.iter().enumerate() {
+            let ce = rs.get(si + 1).copied().unwrap_or(n);
+            if ce - cs < 3 {
+                continue;
+            }
+            let area = anchors_to_bezpath(&ra[cs..ce], &[0], &[false]).area().abs();
+            if best.map(|(ba, ..)| area > ba).unwrap_or(true) {
+                best = Some((area, cs, ce));
+            }
+        }
+        let (area, cs, ce) = best?;
+        Some((ra[cs..ce].to_vec(), area))
+    };
+
+    // BEVEL — one signed candidate: offset every segment, connect the
+    // runs with straight connectors (the bevel), resolve.
     let candidate = |d: f64| -> Option<(Vec<PathAnchor>, f64)> {
         let mut segs: Vec<(Coord2, Coord2, Coord2)> = Vec::new();
         let mut start: Option<Coord2> = None;
@@ -613,43 +680,40 @@ pub fn offset_closed_path(
             prev.1 + (start.1 - prev.1) * 2.0 / 3.0,
         );
         segs.push((l1, l2, start));
-        // C-21: `path_remove_interior_points` ends in `exterior_paths`
-        // like every other flo_curves boolean, so its input has to be on
-        // the boolean grid or the point sort can abort the process. These
-        // coordinates come out of curve OFFSETTING, so they are arbitrary
-        // reals and can cluster arbitrarily tightly in x — exactly the
-        // shape of input that trips it. The 1/64 pt snap sits well inside
-        // this module's own 0.05 pt TOLERANCE.
-        let mut raw: Vec<SimpleBezierPath> = vec![(start, segs)];
-        crate::bezier_conv::snap_paths_to_grid(&mut raw, crate::bezier_conv::BOOLEAN_GRID);
-        let resolved: Vec<SimpleBezierPath> =
-            path_remove_interior_points(&raw, crate::bezier_conv::BOOLEAN_GRID);
-        if resolved.is_empty() {
-            return None;
-        }
-        let (ra, rs) = crate::bezier_conv::flo_to_idml_path(&resolved);
-        // Largest resolved contour is the candidate boundary.
-        let n = ra.len();
-        let mut best: Option<(f64, usize, usize)> = None;
-        for (si, &cs) in rs.iter().enumerate() {
-            let ce = rs.get(si + 1).copied().unwrap_or(n);
-            if ce - cs < 3 {
-                continue;
-            }
-            let area = anchors_to_bezpath(&ra[cs..ce], &[0], &[false]).area().abs();
-            if best.map(|(ba, ..)| area > ba).unwrap_or(true) {
-                best = Some((area, cs, ce));
-            }
-        }
-        let (area, cs, ce) = best?;
-        Some((ra[cs..ce].to_vec(), area))
+        resolve((start, segs))
+    };
+
+    // MITER / ROUND — the two sides of the path stroked at 2·|delta|.
+    // kurbo emits one closed contour per side of a closed path; each is
+    // a candidate exactly as the two signed bevel offsets are, with the
+    // join already drawn on the corners that side opens and a
+    // conservative loop on the ones it closes, which `resolve` trims.
+    let stroked_candidates = |d: f64| -> Vec<(Vec<PathAnchor>, f64)> {
+        let path = anchors_to_bezpath(anchors, subpath_starts, subpath_open);
+        let mut style = KurboStroke::new(2.0 * d);
+        style.join = kurbo_join(join);
+        style.miter_limit = f64::from(miter_limit.max(1.0));
+        let outline = kurbo::stroke(path, &style, &StrokeOpts::default(), TOLERANCE);
+        let (oa, os, _) = bezpath_to_anchors(&outline);
+        let n = oa.len();
+        os.iter()
+            .enumerate()
+            .filter_map(|(si, &cs)| {
+                let ce = os.get(si + 1).copied().unwrap_or(n);
+                let raw = crate::bezier_conv::idml_subpath_to_flo(&oa[cs..ce])?;
+                resolve(raw)
+            })
+            .collect()
     };
 
     let d = f64::from(delta.abs());
-    let mut options: Vec<(Vec<PathAnchor>, f64)> = [candidate(d), candidate(-d)]
-        .into_iter()
-        .flatten()
-        .collect();
+    let mut options: Vec<(Vec<PathAnchor>, f64)> = match join {
+        StrokeJoin::Bevel => [candidate(d), candidate(-d)]
+            .into_iter()
+            .flatten()
+            .collect(),
+        StrokeJoin::Miter | StrokeJoin::Round => stroked_candidates(d),
+    };
     let picked = if delta > 0.0 {
         options.retain(|(_, area)| *area > original_area + 1e-3);
         options.sort_by(|x, y| x.1.total_cmp(&y.1));
