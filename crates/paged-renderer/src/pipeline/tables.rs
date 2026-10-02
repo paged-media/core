@@ -141,18 +141,12 @@ pub(super) fn emit_table_into_chain(
     // cell keeps the lines that fit and the row is as tall as THEY need:
     // InDesign made a capped row 20.826 pt, not its 30 pt cap, when the
     // second line would have needed 35.2 (2026-10-02, `tables-rows`
-    // page 6). For RowSpan > 1 cells only the LAST spanned row grows to
-    // cover the shortfall, which keeps a span from blowing up every row
-    // it crosses.
-    let mut row_heights: Vec<f32> = table
-        .rows
-        .iter()
-        .map(|r| {
-            r.single_row_height
-                .unwrap_or(0.0)
-                .max(r.minimum_height.unwrap_or(0.0))
-        })
-        .collect();
+    // page 6). A fixed row (`AutoGrow="false"`) is capped at its floor,
+    // so it stays exactly that tall and its cells keep the lines that
+    // fit (`row_cap_pt`). For RowSpan > 1 cells only the LAST spanned
+    // row grows to cover the shortfall, which keeps a span from blowing
+    // up every row it crosses.
+    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
     let region_cell_style_for = |c: usize, r: usize| -> Option<&str> {
         if r < header_count {
             return resolved_table.header_region_cell_style.as_deref();
@@ -204,11 +198,7 @@ pub(super) fn emit_table_into_chain(
         cell_blocks.insert((c, r), (block, insets));
     }
     for r in 0..total_rows {
-        let max_h = table
-            .rows
-            .get(r)
-            .and_then(|tr| tr.maximum_height)
-            .unwrap_or(f32::INFINITY);
+        let max_h = table.rows.get(r).map_or(f32::INFINITY, row_cap_pt);
         let mut required = row_heights[r];
         for cell in &table.cells {
             let Some((c, sr)) = cell.coords() else {
@@ -388,6 +378,27 @@ pub(super) fn emit_table_into_chain(
     let mut body_placed_in_frame = 0usize;
     for r in body_range.clone() {
         let h = row_heights[r];
+        // `KeepWithNextRow`: a row that starts a run of kept rows (it
+        // keeps with the next, and the row before it does not keep with
+        // it) needs room for the whole run, or the run moves to the next
+        // frame together. InDesign moved rows 3-7 of a table whose rows
+        // 3-6 keep with the next one to the continuation frame, where
+        // without the keeps it breaks after row 5 (2026-10-02,
+        // `tables-rows` page 11 vs page 8). The run asks this only of a
+        // frame that already holds body rows: one taller than a whole
+        // frame is placed row by row from the top of the next, instead of
+        // walking every frame of the chain. Not measured: how InDesign
+        // places a run that does not fit the LAST frame — here its rows
+        // are placed one by one and the first that does not fit oversets.
+        let run_h: f32 = if r > body_range.start && keeps_with_next(table.rows.get(r - 1)) {
+            h
+        } else {
+            let mut end = r;
+            while end + 1 < body_range.end && keeps_with_next(table.rows.get(end)) {
+                end += 1;
+            }
+            row_heights[r..=end].iter().sum()
+        };
         // A row never splits: one that does not fit moves to the next
         // frame, and one that fits no frame is overset with everything
         // after it (InDesign, 2026-10-02, `tables-rows` page 9: a 179 pt
@@ -397,6 +408,8 @@ pub(super) fn emit_table_into_chain(
         loop {
             let need_extra_for_split = footer_reserved_h;
             let would_overflow = row_top_y_in_frame + h + need_extra_for_split > frame_height;
+            let run_overflows = body_placed_in_frame > 0
+                && row_top_y_in_frame + run_h + need_extra_for_split > frame_height;
             // In the LAST frame there is nowhere to advance to, so a row
             // that does not fit is overset — even the first one. The
             // `placed_in_frame > 0` guard that used to sit here belongs to
@@ -410,7 +423,10 @@ pub(super) fn emit_table_into_chain(
                 overset_at = Some(r);
                 break;
             }
-            if !(would_overflow && chain_idx + 1 < em.chain.len() && placed_in_frame > 0) {
+            if !((would_overflow || run_overflows)
+                && chain_idx + 1 < em.chain.len()
+                && placed_in_frame > 0)
+            {
                 break;
             }
             body_placed_in_frame = 0;
@@ -1808,15 +1824,7 @@ fn emit_nested_table_inline(
     // Initial row heights from the IDML's row attributes (the same
     // max-of-SingleRowHeight-MinimumHeight default as the chain
     // emitter uses).
-    let mut row_heights: Vec<f32> = table
-        .rows
-        .iter()
-        .map(|r| {
-            r.single_row_height
-                .unwrap_or(0.0)
-                .max(r.minimum_height.unwrap_or(0.0))
-        })
-        .collect();
+    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
     // Pre-measure every cell so row heights can grow to fit content.
     // Spans are clamped to 1 here — proper span layout is a follow-up.
     let mut blocks: Vec<Option<CellBlock>> = Vec::with_capacity(table.cells.len());
@@ -1833,11 +1841,7 @@ fn emit_nested_table_inline(
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let block = plan_cell_block(em, &cell.paragraphs, inner_w);
         let insets = cell.text_top_inset + cell.text_bottom_inset;
-        let clamp = table
-            .rows
-            .get(ru)
-            .and_then(|tr| tr.maximum_height)
-            .unwrap_or(f32::INFINITY);
+        let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
         row_heights[ru] = row_heights[ru].max(required).min(clamp);
         blocks.push(Some(block));
@@ -1983,15 +1987,7 @@ fn measure_nested_table_height(
         declared_widths
     };
     let total_rows = table.rows.len();
-    let mut row_heights: Vec<f32> = table
-        .rows
-        .iter()
-        .map(|r| {
-            r.single_row_height
-                .unwrap_or(0.0)
-                .max(r.minimum_height.unwrap_or(0.0))
-        })
-        .collect();
+    let mut row_heights: Vec<f32> = table.rows.iter().map(row_floor_pt).collect();
     for cell in &table.cells {
         let Some((c, r)) = cell.coords() else {
             continue;
@@ -2003,15 +1999,38 @@ fn measure_nested_table_height(
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
         let block = plan_cell_block(em, &cell.paragraphs, inner_w);
         let insets = cell.text_top_inset + cell.text_bottom_inset;
-        let clamp = table
-            .rows
-            .get(ru)
-            .and_then(|tr| tr.maximum_height)
-            .unwrap_or(f32::INFINITY);
+        let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
         row_heights[ru] = row_heights[ru].max(required).min(clamp);
     }
     row_heights.iter().sum()
+}
+
+/// The height a row never goes under: `max(SingleRowHeight,
+/// MinimumHeight)`.
+fn row_floor_pt(row: &paged_model::TableRow) -> f32 {
+    row.single_row_height
+        .unwrap_or(0.0)
+        .max(row.minimum_height.unwrap_or(0.0))
+}
+
+/// The height a row never goes over. A fixed row (`AutoGrow="false"`)
+/// is held at its floor whatever its cells hold: InDesign kept a 20 pt
+/// and a 40 pt fixed row at exactly 20 and 40, drew the lines that fit
+/// in them and overset the rest — none of a 20.826 pt line in the 20 pt
+/// row (2026-10-02, `tables-rows` page 10). A growing row stops at its
+/// `MaximumHeight`, unbounded when it has none.
+fn row_cap_pt(row: &paged_model::TableRow) -> f32 {
+    if row.auto_grow == Some(false) {
+        row_floor_pt(row)
+    } else {
+        row.maximum_height.unwrap_or(f32::INFINITY)
+    }
+}
+
+/// Whether `row` keeps with the row after it (`KeepWithNextRow`).
+fn keeps_with_next(row: Option<&paged_model::TableRow>) -> bool {
+    row.and_then(|r| r.keep_with_next_row) == Some(true)
 }
 
 /// Slack allowed when deciding whether a cell line fits: a line flush

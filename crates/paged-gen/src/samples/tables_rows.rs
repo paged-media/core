@@ -56,9 +56,10 @@ const FRAME_W_PT: f32 = 400.0;
 /// row. InDesign's own smallest row is a few points.
 const LOW_FLOOR_PT: f32 = 3.0;
 
-/// How many leading pages the fidelity gate covers: the rest depend on
-/// row attributes the IDML reader does not carry yet (see `variants`).
-pub const GATED_PAGES: usize = 9;
+/// How many leading pages the fidelity gate covers: all eleven. Pages
+/// 10-11 (`AutoGrow`, `KeepWithNextRow`) joined once the IDML reader
+/// carried both attributes (plugin-publish 96cfb6c).
+pub const GATED_PAGES: usize = 11;
 
 /// The story holding page `page`'s table (0-based page).
 pub fn body_story_id(page: u32) -> String {
@@ -516,9 +517,9 @@ fn variants() -> Vec<Variant> {
     });
 
     // The two pages whose rows depend on `AutoGrow` / `KeepWithNextRow`
-    // go LAST: the IDML reader does not carry either attribute yet, so
-    // the gate covers the pages before them (`max_pages_with_pdf`) and
-    // these two stand as InDesign's recorded answer until it does.
+    // go LAST. They were held out of the gate until the IDML reader
+    // carried both attributes; they are gated now, and stay last because
+    // InDesign's reference PDF has its pages in this order.
     let (mut gated, ungated): (Vec<_>, Vec<_>) = out
         .into_iter()
         .partition(|v| !(v.name.contains("AutoGrow") || v.name.contains("KeepWithNextRow")));

@@ -44,10 +44,14 @@
 //! * A row never splits: one that does not fit moves to the next frame,
 //!   whose header rows repeat; one taller than every frame is overset with
 //!   everything after it.
-//! * NOT YET (pages 10-11, outside the gate): `AutoGrow="false"` rows keep
-//!   their height and overset what does not fit; `KeepWithNextRow` moves a
-//!   run of rows to the next frame together. The IDML reader does not carry
-//!   either attribute.
+//! * A fixed row (`AutoGrow="false"`, page 10) is exactly its
+//!   `SingleRowHeight`: its cells keep the lines that fit (top inset +
+//!   baseline + bottom inset within it) and the rest is overset — a 20 pt
+//!   row holds none of a 20.826 pt line, a 40 pt row two of four.
+//! * `KeepWithNextRow` (page 11, rows 3-6): a run of kept rows moves to
+//!   the next frame together — rows 3-7 open the continuation frame,
+//!   under its repeated header, where without the keeps (page 8) the
+//!   table breaks after row 5; rows 8-10 no longer fit and are overset.
 
 use paged_gen::samples::tables_rows::{body_story_id, table_id, GATED_PAGES};
 use paged_renderer::pipeline::{self, CellAddr};
@@ -471,11 +475,23 @@ const ROWS: &[(usize, u32, f32)] = &[
     (10, 10, 3.000),
 ];
 
+/// Rows InDesign oversets (page, row): not drawn at all. Named rather
+/// than inferred from `PLACED`: page 10's fixed 20 pt row places no line
+/// in any cell, yet the row is drawn and the next row starts 20 pt below
+/// it.
+const OVERSET_ROWS: &[(usize, u32)] = &[(8, 1), (8, 2), (10, 8), (10, 9), (10, 10)];
+
 /// Header rows InDesign repeats at the top of the continuation frame
 /// on the break page: the DOM reports a cell's lines once, the PDF
 /// export draws the replay 274 pt to the right at the same baseline.
-const HEADER_REPLAYS: &[(usize, u32, u32, f32, f32)] =
-    &[(7, 0, 0, 314.5, 137.326), (7, 1, 0, 434.5, 137.326)];
+/// Page 11's replays were read off the PDF export (`pdftotext -bbox`:
+/// "header" at x 314.5 / 434.5, the same box as page 8's).
+const HEADER_REPLAYS: &[(usize, u32, u32, f32, f32)] = &[
+    (7, 0, 0, 314.5, 137.326),
+    (7, 1, 0, 434.5, 137.326),
+    (10, 0, 0, 314.5, 137.326),
+    (10, 1, 0, 434.5, 137.326),
+];
 
 fn open_sans() -> Vec<u8> {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -589,10 +605,7 @@ fn every_row_is_as_tall_as_indesign_makes_it() {
             .map(|r| r.rect[3])
             .collect();
         // A row InDesign oversets is not drawn: it has no rect.
-        let overset = PLACED
-            .iter()
-            .filter(|c| (c.0, c.2) == (page, row))
-            .all(|c| c.3 == 0);
+        let overset = OVERSET_ROWS.contains(&(page, row));
         let ok = if overset {
             rects.is_empty()
         } else {
