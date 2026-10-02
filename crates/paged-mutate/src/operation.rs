@@ -4119,7 +4119,11 @@ pub enum PathfinderRegionVerb {
     /// Fills become strokes: the arrangement's EDGES (split at every
     /// crossing) become open line elements.
     Outline,
-    /// The BACKMOST object minus every object in front of it.
+    /// Illustrator's Minus Back: the FRONTMOST object minus every
+    /// object behind it, keeping the front object's paint (C-80). One
+    /// result, carried by the front input; the inputs behind it are
+    /// consumed. (Until C-80 this kept the BACKMOST object minus the
+    /// ones in front — Illustrator's Minus Front.)
     MinusBack,
 }
 

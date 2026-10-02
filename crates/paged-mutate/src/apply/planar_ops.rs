@@ -280,14 +280,21 @@ fn region_plan(
             }
         }
         PathfinderRegionVerb::MinusBack => {
-            // The BACKMOST object minus everything in front of it: the
-            // faces covered by it alone.
-            let back = n - 1;
+            // C-80 — the FRONTMOST object minus everything behind it:
+            // the faces covered by it alone, in its own paint. This
+            // used to keep the BACKMOST object instead, which is
+            // Illustrator's Minus FRONT: on the oracle's two rectangles
+            // it answered 6000 pt² in the back object's red where
+            // Illustrator 30.1 answers 6800 pt² in the front object's
+            // blue, and passing the ids in reverse reproduced
+            // Illustrator exactly. `elements` is top-to-bottom, so the
+            // front is index 0.
+            let front = 0;
             let mine: Vec<&PlanarFace> = faces
                 .iter()
-                .filter(|f| f.signature.as_slice() == [back])
+                .filter(|f| f.signature.as_slice() == [front])
                 .collect();
-            if let Some(region) = united(back, &mine) {
+            if let Some(region) = united(front, &mine) {
                 results.push(region);
             }
         }

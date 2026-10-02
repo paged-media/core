@@ -1348,7 +1348,9 @@ pub enum Mutation {
     PathfinderOutline {
         element_ids: Vec<ElementId>,
     },
-    /// The BACKMOST object minus every object in front of it.
+    /// Illustrator's Minus Back: the FRONTMOST element (the first of
+    /// `elementIds`, which is top-to-bottom) minus every element behind
+    /// it, in the front element's paint; the others are consumed.
     PathfinderMinusBack {
         element_ids: Vec<ElementId>,
     },

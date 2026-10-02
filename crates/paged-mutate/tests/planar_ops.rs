@@ -408,12 +408,13 @@ fn crop_keeps_only_what_falls_inside_the_topmost_object() {
 }
 
 #[test]
-fn minus_back_subtracts_everything_in_front_from_the_backmost() {
+fn minus_back_subtracts_everything_behind_from_the_frontmost() {
     let (mut doc, elements) = two_squares();
-    let back_id = match &elements[1] {
+    let front_id = match &elements[0] {
         NodeId::Rectangle(id) => id.clone(),
         other => panic!("expected a rectangle, got {other:?}"),
     };
+    let front_fill = doc.spreads[0].spread.rectangles[0].fill_color.clone();
     let after = assert_one_undo_restores(
         &mut doc,
         Operation::PathfinderRegion {
@@ -421,14 +422,16 @@ fn minus_back_subtracts_everything_in_front_from_the_backmost() {
             verb: PathfinderRegionVerb::MinusBack,
         },
     );
-    assert_eq!(after.rectangles.len(), 1, "only the backmost survives");
-    assert_eq!(after.rectangles[0].id, back_id);
-    // B minus A: the L-shape, six corners, 300 pt², spanning B's box.
+    // C-80: Illustrator's Minus Back keeps the FRONT object. A minus B:
+    // the L-shape, six corners, 300 pt², spanning A's box, in A's fill.
+    assert_eq!(after.rectangles.len(), 1, "only the frontmost survives");
+    assert_eq!(after.rectangles[0].id, front_id);
+    assert_eq!(after.rectangles[0].fill, front_fill);
     assert_eq!(after.rectangles[0].anchors.len(), 6);
     assert!((polygon_area(&after.rectangles[0]) - 300.0).abs() < 0.01);
     assert_eq!(
         anchor_bbox(&after.rectangles[0].anchors),
-        (10.0, 10.0, 30.0, 30.0)
+        (0.0, 0.0, 20.0, 20.0)
     );
 }
 
