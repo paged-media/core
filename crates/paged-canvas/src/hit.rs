@@ -901,6 +901,11 @@ pub(crate) fn cell_paragraph_byte_offset(
 /// Shared accumulator: the byte offset at which `paragraph_idx` starts,
 /// given a set of lines already restricted to ONE paragraph stream
 /// (body or a single cell).
+///
+/// EVERY paragraph before it counts, lines or not: a paragraph that laid
+/// out no line still owns its separator. Summing only the paragraphs
+/// with lines put every selection after a blank paragraph one character
+/// early per blank paragraph.
 fn paragraph_byte_offset_from_lines<'a>(
     lines: impl Iterator<Item = &'a LineLayout>,
     paragraph_idx: u32,
@@ -908,7 +913,6 @@ fn paragraph_byte_offset_from_lines<'a>(
     if paragraph_idx == 0 {
         return 0;
     }
-    let mut total: u32 = 0;
     let mut max_end: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
     for line in lines {
         if line.paragraph_idx >= paragraph_idx {
@@ -919,10 +923,8 @@ fn paragraph_byte_offset_from_lines<'a>(
             *entry = line.byte_range.end;
         }
     }
-    for (_, end) in max_end {
-        total += end + 1; // +1 for the synthetic inter-paragraph \n
-    }
-    total
+    // One synthetic inter-paragraph `\n` per paragraph before this one.
+    max_end.values().sum::<u32>() + paragraph_idx
 }
 
 /// W1.13 — map a page-local click inside a table cell to the cell-local

@@ -5303,6 +5303,43 @@ fn emit_paragraph_lines(
         let prev_lh = em.prev_line_height_64.unwrap_or(line_height_64);
         em.y_cursor = em.y_cursor - prev_lh + line_height_64 + line_height_64;
         em.prev_line_height_64 = Some(line_height_64);
+        // The blank line is a line: the caret can stand on it, a click
+        // on it lands in it, and a selection across it shows it. Its one
+        // cluster is a zero-width stop at the line's left edge.
+        if em.segment.opens_paragraph {
+            if let Some(&target_page) = em.chain_pages.get(em.frame_idx) {
+                let frame = em.chain[em.frame_idx];
+                let (ox, oy) = pages[target_page].spread_origin;
+                let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+                let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+                let x_pt = sx - ox
+                    + frame_insets[1]
+                    + em.column_x_shift_pt
+                    + resolved_paragraph.left_indent.unwrap_or(0.0);
+                let line_h_pt = line_height_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
+                let baseline_pt_local =
+                    (em.y_cursor - line_height_64) as f32 / paged_text::shape::ADVANCE_PRECISION;
+                let byte = em.segment.byte_base;
+                let host_page_id = pages[target_page].id.clone();
+                pages[target_page].story_layout.push(LineLayout {
+                    story_id: em.current_story_id.clone(),
+                    page_id: host_page_id,
+                    cell: None,
+                    paragraph_idx: em.paragraph_idx,
+                    line_idx: em.segment.line_base,
+                    frame_id: frame.self_id.clone(),
+                    baseline_y_pt: sy - oy + baseline_pt_local,
+                    ascent_pt: 0.8 * line_h_pt,
+                    descent_pt: 0.2 * line_h_pt,
+                    byte_range: byte..byte,
+                    clusters: vec![ClusterPos {
+                        byte,
+                        x_pt,
+                        advance_pt: 0.0,
+                    }],
+                });
+            }
+        }
         let space_after_64 =
             resolved_paragraph.space_after.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
         em.y_cursor += space_after_64.round() as i32;
