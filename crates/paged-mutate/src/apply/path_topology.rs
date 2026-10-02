@@ -3304,6 +3304,15 @@ pub(super) fn apply_apply_style(
             &value,
         )?,
     };
+    // The splitter's restorations address a `StoryRange`, which has no
+    // cell: replayed as they are they land on the story's BODY paragraphs
+    // at the cell-local offsets, and the cell keeps the new style. Spell
+    // each one as the cell-addressed `ApplyStyle` it undoes instead; an
+    // empty style clears, so the prior "no style" restores too.
+    let inverse = match cell {
+        Some(cell) => cell_addressed_inverse(applied.inverse, scope, cell),
+        None => applied.inverse,
+    };
     Ok(AppliedOperation {
         op: Operation::ApplyStyle {
             story_id: story_id.to_string(),
@@ -3313,9 +3322,45 @@ pub(super) fn apply_apply_style(
             scope,
             cell: cell.cloned(),
         },
-        inverse: applied.inverse,
+        inverse,
         invalidation: applied.invalidation,
     })
+}
+
+/// Rewrite the style splitter's `SetProperty { StoryRange }` restorations
+/// as `ApplyStyle`s into `cell`'s own paragraph stream (same cell-local
+/// offsets, same splitter on replay).
+fn cell_addressed_inverse(
+    inverse: Operation,
+    scope: StyleScope,
+    cell: &crate::operation::CellAddr,
+) -> Operation {
+    match inverse {
+        Operation::Batch { ops } => Operation::Batch {
+            ops: ops
+                .into_iter()
+                .map(|op| cell_addressed_inverse(op, scope, cell))
+                .collect(),
+        },
+        Operation::SetProperty {
+            node:
+                NodeId::StoryRange {
+                    story_id,
+                    start,
+                    end,
+                },
+            path: PropertyPath::AppliedParagraphStyle | PropertyPath::AppliedCharacterStyle,
+            value: Value::Text(style),
+        } => Operation::ApplyStyle {
+            story_id,
+            start,
+            end,
+            style,
+            scope,
+            cell: Some(cell.clone()),
+        },
+        other => other,
+    }
 }
 
 pub(super) fn apply_insert_field(
