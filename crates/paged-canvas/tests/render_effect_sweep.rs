@@ -847,38 +847,6 @@ the fidelity gap and left this op with nothing to toggle. Re-reddening it \
 would mean re-introducing a swatch InDesign does not produce.",
     },
     Known {
-        op: "InsertAnchoredFrame",
-        kind: Kind::Defect,
-        diagnosis: "\
-The minted-invisible-object class, the same shape as `InsertTable` — NOT the \
-invalidation defect this entry claimed until the two builds were compared \
-command by command. The op emits ZERO draw commands, in the cold build and \
-the live one alike, and page 0's command stream is byte-identical across it: \
-`apply_insert_anchored_frame` mints an `AnchoredFrame` with \
-`fill_color: None`, `stroke_color: None` and — for the `image_uri: None` \
-shape — no image, and `emit_anchored_rect_via_pipeline` hands that to the \
-same `emit_rectangle_into` a spread Rectangle uses, where `fill_paint_module` \
-returns early on a transparent fill and the stroke module on a zero weight. \
-Nor does the text move around it: the engine places anchored frames at the \
-paragraph origin and gives them no inline advance at all (the standing \
-`TODO(anchored-position)` in `anchored.rs` — the composer surfaces no \
-anchor-character position, and an IDML anchored object IS a character \
-position), so the InDesign behaviour that makes an empty anchored box \
-visible — it displaces the text it sits in — is a larger engine gap this \
-door cannot close on its own. What made the row read `MovedColdOnly` was an \
-oracle artefact, now fixed: `emit_rectangle_into` interned the UNIT_RECT path \
-unconditionally for its effects stamp, so an invisible rect grew the page's \
-path pool, which `DisplayList::digest` folds — while the LIVE build happened \
-to hold that pool entry already (the A5 substituted-font highlight is a \
-rect), so only the cold print moved. With the intern made conditional the row \
-reads honestly: applied cleanly, rendered nothing. Two ways out, both a \
-decision rather than a bug fix: give the composer real inline \
-anchored-object metrics, or reclassify the row `PaintsWhenUsed` — which \
-needs a third fix first, because `find_rectangle_mut` scans only the spreads, \
-so the `createdId` this op hands back cannot be given a fill by any \
-`setElementProperty` on the wire.",
-    },
-    Known {
         op: "PlaceImage",
         kind: Kind::HarnessLimit,
         diagnosis: "\

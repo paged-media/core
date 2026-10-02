@@ -3865,6 +3865,9 @@ pub(super) struct StoryEmitter<'a> {
     /// clone) tuples here lets the post-pass run with the caches in
     /// hand without re-doing placement.
     pub(super) anchored_image_queue: Vec<AnchoredImageEmit>,
+    /// The inline and above-line objects of the paragraph being emitted,
+    /// set while its lines are composed (see [`anchored::InlineObjects`]).
+    pub(super) inline_objects: Option<anchored::InlineObjects>,
     /// Track 2: per-line records collected when
     /// `options.collect_breaks` is set. Drained by `take_breaks` once
     /// the story finishes emitting.
@@ -4115,6 +4118,7 @@ impl<'a> StoryEmitter<'a> {
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
             anchored_image_queue: Vec::new(),
+            inline_objects: None,
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
@@ -4975,6 +4979,31 @@ fn paragraph_tab_stops(
 /// indented under `impl`. The free fn has full mutable access to
 /// the emitter state via `&mut StoryEmitter`.
 pub(super) fn emit_paragraph_into_chain(
+    em: &mut StoryEmitter,
+    paragraph: &paged_model::Paragraph,
+    pages: &mut [BuiltPage],
+    total_stats: &mut PipelineStats,
+) {
+    // An inline or above-line anchored object is a character of its
+    // line, as InDesign sets it: the paragraph composes with one
+    // placeholder character per object at its anchor, and the objects
+    // are drawn where those characters landed, once every segment of
+    // the paragraph is laid out. The segments and a table paragraph's
+    // text re-enter here while `inline_objects` is set.
+    if em.inline_objects.is_none() && paragraph.table.is_none() {
+        if let Some((with_objects, objects)) = anchored::with_object_placeholders(paragraph) {
+            em.inline_objects = Some(objects);
+            emit_paragraph_lines(em, &with_objects, pages, total_stats);
+            if let Some(objects) = em.inline_objects.take() {
+                anchored::emit_inline_objects(em, paragraph, &objects, pages);
+            }
+            return;
+        }
+    }
+    emit_paragraph_lines(em, paragraph, pages, total_stats);
+}
+
+fn emit_paragraph_lines(
     em: &mut StoryEmitter,
     paragraph: &paged_model::Paragraph,
     pages: &mut [BuiltPage],
@@ -6199,6 +6228,64 @@ pub(super) fn emit_paragraph_into_chain(
         });
     }
 
+    // The in-line objects this segment's placeholders stand for, in text
+    // order: an inline object is as wide as its visible box, an
+    // above-line one takes no width.
+    let (segment_objects, objects_before): (Vec<usize>, usize) = match em.inline_objects.as_mut() {
+        Some(objs) => {
+            let count: usize = styled_runs_ref
+                .iter()
+                .map(|r| {
+                    r.text
+                        .matches(paged_text::layout::OBJECT_REPLACEMENT)
+                        .count()
+                })
+                .sum();
+            let before = objs.next;
+            let ids: Vec<usize> = (before..(before + count).min(objs.objects.len())).collect();
+            objs.next += ids.len();
+            lopts.object_advances = ids
+                .iter()
+                .map(|&i| {
+                    let o = &objs.objects[i];
+                    if o.above_line {
+                        0
+                    } else {
+                        (o.width * paged_text::shape::ADVANCE_PRECISION).round() as i32
+                    }
+                })
+                .collect();
+            (ids, before)
+        }
+        None => (Vec::new(), 0),
+    };
+
+    // A placeholder is not a character of the story: positions handed
+    // out (caret clusters, line ranges) skip its three bytes.
+    let placeholder_bytes: Vec<u32> = if segment_objects.is_empty() {
+        Vec::new()
+    } else {
+        let mut at = 0u32;
+        let mut v = Vec::new();
+        for r in styled_runs_ref {
+            for (b, ch) in r.text.char_indices() {
+                if ch == paged_text::layout::OBJECT_REPLACEMENT {
+                    v.push(at + b as u32);
+                }
+            }
+            at += r.text.len() as u32;
+        }
+        v
+    };
+    let model_byte = |b: u32| -> u32 {
+        if placeholder_bytes.is_empty() {
+            return b;
+        }
+        let before = objects_before + placeholder_bytes.iter().filter(|&&p| p < b).count();
+        let len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8() as u32;
+        b.saturating_sub(len * before as u32)
+    };
+
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
     // Optical margin alignment: when the story carries
@@ -6624,6 +6711,65 @@ pub(super) fn emit_paragraph_into_chain(
     // Carrying the shift forward is what makes the continuation
     // continuous: the next line lands at `new_baseline + line_h`,
     // because `shift == new_baseline - prev_baseline`.
+    // In-line objects: which composed line holds each one, and how far
+    // that line moves down for it (`anchored::line_object_shift`).
+    let line_leading_64 = |glyphs: &[paged_text::layout::PositionedGlyph]| {
+        lopts.leading_override.unwrap_or_else(|| {
+            paged_text::layout::auto_line_height(glyphs, lopts.auto_leading_from_byte)
+                .unwrap_or(lopts.line_height)
+        })
+    };
+    let mut line_objects: Vec<Vec<anchored::LineObject>> = Vec::new();
+    if !segment_objects.is_empty() {
+        let mut ids = segment_objects.iter().copied();
+        for line in &laid_out.lines {
+            let mut on_line = Vec::new();
+            let mut last_cluster = None;
+            for g in &line.glyphs {
+                if g.ch == Some(paged_text::layout::OBJECT_REPLACEMENT)
+                    && last_cluster != Some(g.cluster)
+                {
+                    last_cluster = Some(g.cluster);
+                    if let Some(object) = ids.next() {
+                        on_line.push(anchored::LineObject {
+                            object,
+                            cluster: g.cluster,
+                            point_size: g.point_size,
+                        });
+                    }
+                }
+            }
+            line_objects.push(on_line);
+        }
+    }
+    let mut line_object_shifts_64: Vec<i32> = vec![0; line_objects.len()];
+    if let Some(objs) = em.inline_objects.as_ref() {
+        let top_inset_64 = em.chain[em.frame_idx].inset_spacing.map_or(0, |i| {
+            (i[0] * paged_text::shape::ADVANCE_PRECISION).round() as i32
+        });
+        let mut shift_64 = 0;
+        for (k, line) in laid_out.lines.iter_mut().enumerate() {
+            if let Some(on_line) = line_objects.get(k).filter(|v| !v.is_empty()) {
+                let first = (k == 0 && frame_first_paragraph)
+                    .then_some((line.baseline_y + shift_64, top_inset_64));
+                let d = anchored::line_object_shift(
+                    objs,
+                    on_line,
+                    lopts.leading_override.is_none(),
+                    line_leading_64(&line.glyphs),
+                    first,
+                );
+                line_object_shifts_64[k] = d;
+                shift_64 += d;
+            }
+            if shift_64 != 0 {
+                line.baseline_y += shift_64;
+                for g in &mut line.glyphs {
+                    g.y += shift_64;
+                }
+            }
+        }
+    }
     let mut chain_shift_64: i32 = 0;
     for mut line in laid_out.lines.into_iter() {
         if chain_shift_64 != 0 {
@@ -6709,13 +6855,29 @@ pub(super) fn emit_paragraph_into_chain(
             em.frame_idx = start_to.unwrap_or(em.frame_idx + 1);
             // The continuation frame's own first-baseline policy and
             // top inset, with the same real-face ascender as the head.
-            let new_baseline = first_baseline_for_frame(
+            let mut new_baseline = first_baseline_for_frame(
                 em.chain[em.frame_idx],
                 paragraph_size,
                 (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_font_metrics,
                 Some(line_h),
             );
+            // The frame's first line obeys the first-line object rule.
+            if let (Some(objs), Some(on_line)) = (
+                em.inline_objects.as_ref(),
+                line_objects.get(current_line_idx).filter(|v| !v.is_empty()),
+            ) {
+                let top_64 = em.chain[em.frame_idx].inset_spacing.map_or(0, |i| {
+                    (i[0] * paged_text::shape::ADVANCE_PRECISION).round() as i32
+                });
+                new_baseline += anchored::line_object_shift(
+                    objs,
+                    on_line,
+                    lopts.leading_override.is_none(),
+                    line_h,
+                    Some((new_baseline, top_64)),
+                );
+            }
             let dy = new_baseline - prev_baseline;
             chain_shift_64 += dy;
             for g in &mut line.glyphs {
@@ -6748,7 +6910,13 @@ pub(super) fn emit_paragraph_into_chain(
             && !last_frame_grows_height
         {
             dropped_overflow_lines += 1;
-            em.overset_height_64 += i64::from(line_h);
+            em.overset_height_64 += i64::from(line_h)
+                + i64::from(
+                    line_object_shifts_64
+                        .get(current_line_idx)
+                        .copied()
+                        .unwrap_or(0),
+                );
             // Report once per story: the count of dropped lines isn't
             // known until the paragraph finishes, but a single signal
             // that this story is overset is the actionable bit.
@@ -6776,7 +6944,12 @@ pub(super) fn emit_paragraph_into_chain(
         }
 
         em.record_line(Some(em.frame_idx));
-        *em.placed_height_64.entry(em.frame_idx).or_default() += i64::from(line_h);
+        let object_room_64 = line_object_shifts_64
+            .get(current_line_idx)
+            .copied()
+            .unwrap_or(0);
+        *em.placed_height_64.entry(em.frame_idx).or_default() +=
+            i64::from(line_h) + i64::from(object_room_64);
         let target_page = em.chain_pages[em.frame_idx];
         pages[target_page].stats.glyphs += line.glyphs.len();
         pages[target_page].stats.lines += 1;
@@ -6937,7 +7110,7 @@ pub(super) fn emit_paragraph_into_chain(
             // line indices (zero bases for an unsplit paragraph).
             let seg = em.segment;
             for c in &mut clusters {
-                c.byte += seg.byte_base;
+                c.byte = seg.byte_base + model_byte(c.byte);
             }
             em.segment.lines = em.segment.lines.max(current_line_idx as u32 + 1);
             pages[target_page].story_layout.push(LineLayout {
@@ -6953,10 +7126,36 @@ pub(super) fn emit_paragraph_into_chain(
                 // main-thread fast composer.
                 ascent_pt: 0.8 * line_h_pt,
                 descent_pt: 0.2 * line_h_pt,
-                byte_range: seg.byte_base + line.byte_range.start as u32
-                    ..seg.byte_base + line.byte_range.end as u32,
+                byte_range: seg.byte_base + model_byte(line.byte_range.start as u32)
+                    ..seg.byte_base + model_byte(line.byte_range.end as u32),
                 clusters,
             });
+        }
+
+        // Where this line's in-line objects landed; their placeholder
+        // characters paint nothing.
+        if let Some(on_line) = line_objects.get(current_line_idx).filter(|v| !v.is_empty()) {
+            let cap_height = head_font_metrics.and_then(|m| m.cap_height).unwrap_or(0.7);
+            let to_pt = |v: i32| v as f32 / paged_text::shape::ADVANCE_PRECISION;
+            if let Some(objs) = em.inline_objects.as_mut() {
+                for lo in on_line {
+                    let Some(g) = line.glyphs.iter().find(|g| g.cluster == lo.cluster) else {
+                        continue;
+                    };
+                    if let Some(slot) = objs.placed.get_mut(lo.object) {
+                        *slot = Some(anchored::PlacedObject {
+                            page: target_page,
+                            x: text_origin_pt.0 + to_pt(g.x),
+                            baseline: text_origin_pt.1 + to_pt(line.baseline_y),
+                            column: (text_origin_pt.0, text_origin_pt.0 + full_col_pt),
+                            point_size: lo.point_size,
+                            cap_height,
+                        });
+                    }
+                }
+            }
+            line.glyphs
+                .retain(|g| !on_line.iter().any(|lo| lo.cluster == g.cluster));
         }
 
         // Pull just the rotation/scale 2×2 from the frame's
@@ -7460,7 +7659,11 @@ pub(super) fn emit_paragraph_into_chain(
     // shallow — the parser provides bounds + setting + a story ref
     // for TextFrames; richer recursion (nested transparency, full
     // fill cascade) lands when the corpus needs it.
-    if !paragraph.anchored_frames.is_empty() {
+    if paragraph
+        .anchored_frames
+        .iter()
+        .any(|af| !anchored::sits_in_line(af))
+    {
         // Resolve the anchor line's vertical metrics (x-height /
         // cap-height / leading-top) for the `Line*` vertical reference
         // points. Source the metrics the same way as the rest of the

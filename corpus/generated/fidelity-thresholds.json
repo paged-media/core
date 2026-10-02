@@ -31,10 +31,18 @@
     {
       "name": "anchored",
       "max_pages_with_pdf": 12,
-      "max_mean_de": 1.12,
-      "max_p99_de": 37.86,
-      "min_ssim": 0.9443,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.841 / p99 32.919 / ssim 0.9493 (was 0.934 / 38.784 / 0.9457); re-sized by the rule above."
+      "max_mean_de": 0.445,
+      "max_p99_de": 8.88,
+      "min_ssim": 0.9773,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.841 / p99 32.919 / ssim 0.9493 (was 0.934 / 38.784 / 0.9457); re-sized by the rule above. TIGHTENED 2026-10-02 (inline-objects: an inline anchored object is a character of its line — it takes its width and raises the line, where it used to hang over the text at the paragraph origin): worst page now mean 0.371 / p99 7.396 / ssim 0.9823 (was 0.841 / 32.919 / 0.9493, measured on the same tree without the change); mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+    },
+    {
+      "name": "inline-objects",
+      "max_pages_with_pdf": 7,
+      "max_mean_de": 2.43,
+      "max_p99_de": 100.0,
+      "min_ssim": 0.8555,
+      "rationale": "Gated 2026-10-02 from its first InDesign measurement (InDesign 20.0.1, Inter 10 pt). Worst page mean 2.026 / p99 84.14 / SSIM 0.8796 (page 1; page 2 1.707 / 73.93 / 0.9182; pages 3-7 at most 0.401 / 10.39 / 0.9844); mean and SSIM sized at worst + ~20%, p99 at the scale's ceiling. LOOSE ON PURPOSE AND ONLY ON PAGES 1-2: their objects sit mid-line and at a paragraph's end, and the IDML reader (plugin-publish idml-import at the pinned rev) does not record where in its paragraph an anchored object sits, so this render anchors them at the paragraph start. The exact geometry — every baseline and object box within 0.25 pt of InDesign's — is pinned by crates/paged-renderer/tests/inline_objects_pipeline.rs, which supplies the anchors. Tighten when the reader records Paragraph::anchored_frame_offsets."
     },
     {
       "name": "annual-base",

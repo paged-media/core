@@ -176,7 +176,16 @@ pub struct LayoutOptions<'a> {
     /// measures a tab as its glyph's own advance and leaves the snapping
     /// to a later [`apply_tab_stops`] pass.
     pub tabs: Option<TabLayout>,
+    /// The advance (1/64 pt) of each [`OBJECT_REPLACEMENT`] character in
+    /// the paragraph's text, in text order: the width an inline anchored
+    /// object takes in its line, where InDesign sets it like a glyph.
+    /// Replacement characters past the list keep their shaped advance.
+    pub object_advances: Vec<i32>,
 }
+
+/// U+FFFC OBJECT REPLACEMENT CHARACTER: the character an inline anchored
+/// object occupies in its line ([`LayoutOptions::object_advances`]).
+pub const OBJECT_REPLACEMENT: char = '\u{FFFC}';
 
 /// What the composer needs to set a tab where it will actually land:
 /// the stops, the default-stop grid, and where each line starts.
@@ -221,6 +230,7 @@ impl LayoutOptions<'_> {
             alignment: Alignment::Left,
             justify_last_line: false,
             tabs: None,
+            object_advances: Vec::new(),
         }
     }
 }
@@ -690,15 +700,40 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // grouped by word; rendering needs the original glyph data
     // sliced by line. Both pull off this single source of truth.
     let mut flat: Vec<FlatGlyph> = Vec::new();
+    let mut objects = options.object_advances.iter();
+    let mut object_cluster: Option<u32> = None;
     for (run_i, shape) in run_shapes.iter().enumerate() {
         let base = run_starts[run_i] as u32;
         for g in &shape.glyphs {
+            let cluster = base + g.cluster;
+            let object = !options.object_advances.is_empty()
+                && paragraph_text
+                    .get(cluster as usize..)
+                    .is_some_and(|t| t.starts_with(OBJECT_REPLACEMENT));
+            // One advance per character: a second glyph of the same
+            // cluster takes none.
+            let object_advance = match (object, object_cluster == Some(cluster)) {
+                (false, _) => None,
+                (true, true) => Some(0),
+                (true, false) => {
+                    object_cluster = Some(cluster);
+                    objects.next().copied()
+                }
+            };
             flat.push(FlatGlyph {
-                cluster: base + g.cluster,
+                cluster,
                 run_idx: run_i,
-                x_advance: g.x_advance,
-                x_offset: g.x_offset,
-                y_offset: g.y_offset,
+                x_advance: object_advance.unwrap_or(g.x_advance),
+                x_offset: if object_advance.is_some() {
+                    0
+                } else {
+                    g.x_offset
+                },
+                y_offset: if object_advance.is_some() {
+                    0
+                } else {
+                    g.y_offset
+                },
                 glyph_id: g.glyph_id,
             });
         }
@@ -871,7 +906,19 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         });
         byte_ends.push(w.end);
         is_hyphen.push(false);
-        if i + 1 < words.len() {
+        // A zero-width object (an above-line anchor) stays on the line of
+        // the word before it: InDesign hangs it, and the space before
+        // it, at the end of a full line rather than breaking ahead of it
+        // (measured, `inline-objects` page 6: the anchor after a line's
+        // last word sits at the frame's right edge on that line). No
+        // glue between the two, so no break and no width for the space.
+        let next_is_zero_object = words.get(i + 1).is_some_and(|n| {
+            paragraph_text[n.start..n.end]
+                .chars()
+                .all(|c| c == OBJECT_REPLACEMENT)
+                && sum_advances_in(&flat, n.start as u32..n.end as u32) == 0
+        });
+        if i + 1 < words.len() && !next_is_zero_object {
             // When a ragged zone is active we widen every inter-word
             // glue's stretch to at least `zone` so the breaker can end a
             // line short — by up to the zone — without that line becoming
@@ -2145,6 +2192,7 @@ mod tests {
             auto_leading_from_byte: 0,
             justify_last_line: false,
             tabs: None,
+            object_advances: Vec::new(),
         }
     }
 

@@ -352,6 +352,7 @@ mod tests {
             auto_leading_from_byte: 0,
             justify_last_line: false,
             tabs: None,
+            object_advances: Vec::new(),
         };
         layout_paragraph(text, &shaper, &opts)
     }

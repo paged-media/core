@@ -598,7 +598,16 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
                 r_attrs.push(("Underline", "true"));
             }
             // Escape-hatch character attributes (VerticalScale, ruby, …).
+            // `Leading` is not one of them: InDesign IGNORES a `Leading`
+            // attribute on a CharacterStyleRange (measured 2026-10-02 on
+            // `inline-objects`: every line came back auto-leaded), so it
+            // is written as the `<Properties>` child below.
+            let mut run_leading: Option<&str> = None;
             for (k, v) in &run.extra_char_attrs {
+                if *k == "Leading" {
+                    run_leading = Some(*v);
+                    continue;
+                }
                 r_attrs.push((*k, *v));
             }
             b.start("CharacterStyleRange", &r_attrs);
@@ -609,14 +618,18 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
             // both forms) but the child-element form is canonical and
             // round-trips cleanly through InDesign's IDML reader.
             let want_leading = idx == 0 && paragraph.leading.is_some();
-            if run.applied_font.is_some() || want_leading {
+            if run.applied_font.is_some() || want_leading || run_leading.is_some() {
                 b.start("Properties", &[]);
                 if let Some(font) = run.applied_font {
                     b.start("AppliedFont", &[("type", "string")]);
                     b.text(font);
                     b.end("AppliedFont");
                 }
-                if want_leading {
+                if let Some(lead) = run_leading {
+                    b.start("Leading", &[("type", "unit")]);
+                    b.text(lead);
+                    b.end("Leading");
+                } else if want_leading {
                     if let Some(lead) = paragraph.leading {
                         let s = crate::xml::format_f32(lead);
                         b.start("Leading", &[("type", "unit")]);

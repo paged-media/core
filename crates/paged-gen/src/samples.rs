@@ -29,6 +29,7 @@ pub mod geometry_groups;
 pub mod gradients;
 pub mod image_clipping;
 pub mod images;
+pub mod inline_objects;
 pub mod keeps;
 pub mod layers_z;
 pub mod layout;
@@ -101,6 +102,7 @@ pub const SAMPLES: &[&str] = &[
     "images",
     "image-clipping",
     "anchored",
+    "inline-objects",
     "transparency",
     "markers",
     "masters",
@@ -159,6 +161,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "images" => images::build(),
         "image-clipping" => image_clipping::build(),
         "anchored" => anchored::build(),
+        "inline-objects" => inline_objects::build(),
         "transparency" => transparency::build(),
         "markers" => markers::build(),
         "masters" => masters::build(),
@@ -220,7 +223,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            53,
+            54,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

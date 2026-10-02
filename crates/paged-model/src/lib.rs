@@ -4875,6 +4875,15 @@ pub struct Paragraph {
     /// nested transparency / image links inside an anchored frame
     /// (trivial follow-up once the renderer needs it).
     pub anchored_frames: Vec<AnchoredFrame>,
+    /// Where each of [`Self::anchored_frames`] is anchored: the character
+    /// offset of its anchor character in the paragraph's text (Unicode
+    /// scalars, counted contiguously over `runs`), index-aligned with
+    /// `anchored_frames`. An inline (or above-line) object stands in the
+    /// line at that character, as InDesign sets it. A frame with no entry
+    /// anchors at the paragraph's start (the IDML importer does not
+    /// record the anchor yet); an offset past the text, at its end.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchored_frame_offsets: Vec<u32>,
     /// `<Table>` nested inside the paragraph's CharacterStyleRange.
     /// When present, the paragraph is rendered as a table at the
     /// current y_cursor; `runs` is typically empty for these.
@@ -4901,6 +4910,46 @@ pub struct Paragraph {
     /// The renderer's index pass collects these across all
     /// paragraphs and emits an alphabetized index story.
     pub index_markers: Vec<IndexMarker>,
+}
+impl Paragraph {
+    /// Keep the anchors of [`Self::anchored_frame_offsets`] on their
+    /// characters across a text edit at character `at`: `delta`
+    /// characters inserted (positive; text typed at an anchor goes before
+    /// it) or removed (negative; an anchor inside the removed range moves
+    /// to its start).
+    pub fn shift_anchors(&mut self, at: u32, delta: i64) {
+        for offset in &mut self.anchored_frame_offsets {
+            if delta >= 0 {
+                if *offset >= at {
+                    *offset = offset.saturating_add(delta as u32);
+                }
+            } else {
+                let end = at.saturating_add(delta.unsigned_abs() as u32);
+                if *offset >= end {
+                    *offset -= delta.unsigned_abs() as u32;
+                } else if *offset > at {
+                    *offset = at;
+                }
+            }
+        }
+    }
+
+    /// The character offset of byte `byte` of the paragraph's text
+    /// (its runs' text, concatenated).
+    pub fn char_offset_of_byte(&self, byte: usize) -> u32 {
+        let mut at = 0usize;
+        let mut chars = 0u32;
+        for run in &self.runs {
+            let len = run.text.len();
+            if byte < at + len {
+                let k = byte - at;
+                return chars + run.text.char_indices().take_while(|(b, _)| *b < k).count() as u32;
+            }
+            at += len;
+            chars += run.text.chars().count() as u32;
+        }
+        chars
+    }
 }
 /// IDML `<Footnote>` — a self-contained paragraph stream anchored at
 /// a point inside a host paragraph. The renderer places footnotes in
@@ -6006,4 +6055,41 @@ pub fn is_page_marker(ch: char) -> bool {
             | PREVIOUS_PAGE_NUMBER_MARKER
             | SECTION_MARKER
     )
+}
+
+#[cfg(test)]
+mod anchor_offset_tests {
+    use super::*;
+
+    fn para(texts: &[&str], offsets: &[u32]) -> Paragraph {
+        Paragraph {
+            runs: texts
+                .iter()
+                .map(|t| CharacterRun {
+                    text: (*t).to_string(),
+                    ..Default::default()
+                })
+                .collect(),
+            anchored_frame_offsets: offsets.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn char_offsets_count_scalars_across_runs() {
+        let p = para(&["añb", "cd"], &[]);
+        assert_eq!(p.char_offset_of_byte(0), 0);
+        assert_eq!(p.char_offset_of_byte(3), 2); // after "añ" (3 bytes)
+        assert_eq!(p.char_offset_of_byte(4), 3); // start of the second run
+        assert_eq!(p.char_offset_of_byte(99), 5);
+    }
+
+    #[test]
+    fn anchors_follow_their_characters() {
+        let mut p = para(&["abcdef"], &[0, 2, 5]);
+        p.shift_anchors(2, 3); // typed at the second anchor: it moves on
+        assert_eq!(p.anchored_frame_offsets, vec![0, 5, 8]);
+        p.shift_anchors(1, -5); // [1, 6) removed
+        assert_eq!(p.anchored_frame_offsets, vec![0, 1, 3]);
+    }
 }

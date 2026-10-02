@@ -3044,13 +3044,34 @@ mod tests {
             let b = af.bounds.unwrap();
             assert_eq!(b.right - b.left, 100.0);
             assert_eq!(b.bottom - b.top, 80.0);
+            // The frame is a character of its line at offset 3.
+            assert_eq!(story.paragraphs[0].anchored_frame_offsets, vec![3]);
             assert!(story.paragraphs[1].anchored_frames.is_empty());
         }
 
-        crate::apply(project.document_mut(), &applied.inverse).unwrap();
-        assert!(project.document().stories[0].story.paragraphs[0]
-            .anchored_frames
-            .is_empty());
+        let removed = crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        let para = &project.document().stories[0].story.paragraphs[0];
+        assert!(para.anchored_frames.is_empty());
+        assert!(para.anchored_frame_offsets.is_empty());
+        // Undoing the removal puts the frame back on its character.
+        match removed.inverse {
+            Operation::InsertAnchoredFrame { offset, .. } => assert_eq!(offset, 3),
+            other => panic!("expected InsertAnchoredFrame, got {other:?}"),
+        }
+
+        // An offset in the second paragraph anchors there, paragraph-local.
+        project
+            .apply(Operation::InsertAnchoredFrame {
+                story_id: "Story/u1".to_string(),
+                offset: 12,
+                width: 10.0,
+                height: 10.0,
+                image_uri: None,
+                self_id: "Rectangle/img2".to_string(),
+            })
+            .unwrap();
+        let p2 = &project.document().stories[0].story.paragraphs[1];
+        assert_eq!(p2.anchored_frame_offsets, vec![1]);
     }
 
     #[test]

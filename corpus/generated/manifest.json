@@ -109,6 +109,15 @@
       "report": "/tmp/idml-generated-diff/images/report.json"
     },
     {
+      "name": "inline-objects",
+      "idml": "inline-objects.idml",
+      "pdf": "inline-objects.pdf",
+      "pages": 7,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/inline-objects",
+      "report": "/tmp/idml-generated-diff/inline-objects/report.json"
+    },
+    {
       "name": "keeps",
       "idml": "keeps.idml",
       "pdf": "keeps.pdf",

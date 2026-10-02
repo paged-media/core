@@ -294,11 +294,20 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             byte_in_run,
         } => {
             let para = &mut paragraphs[paragraph_idx];
+            let before: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
+            let at = para.char_offset_of_byte(before + byte_in_run);
+            para.shift_anchors(at, seg.chars().count() as i64);
             let run = &mut para.runs[run_idx];
             run.text.insert_str(byte_in_run, seg);
         }
         Locate::EndOfStory { paragraph_idx } => {
             let para = &mut paragraphs[paragraph_idx];
+            let end = para
+                .runs
+                .iter()
+                .map(|r| r.text.chars().count() as u32)
+                .sum();
+            para.shift_anchors(end, seg.chars().count() as i64);
             if let Some(run) = para.runs.last_mut() {
                 run.text.push_str(seg);
             } else {
@@ -314,6 +323,7 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
         } => {
             let next_idx = after_paragraph_idx + 1;
             let next_para = &mut paragraphs[next_idx];
+            next_para.shift_anchors(0, seg.chars().count() as i64);
             if let Some(run) = next_para.runs.first_mut() {
                 run.text.insert_str(0, seg);
             } else {
@@ -357,6 +367,10 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
         }
     };
     let para = &mut paragraphs[paragraph_idx];
+    // Objects anchored at or after the split point move with their text.
+    let before: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
+    let split_char = para.char_offset_of_byte(before + byte_in_run);
+    let (moved_frames, moved_offsets) = take_anchors_from(para, split_char);
     // Tail runs that come AFTER the split point move to the new
     // paragraph. The split-point run itself is split into two halves;
     // the right half becomes the first run of the new paragraph.
@@ -376,9 +390,42 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
     let new_para = paged_model::Paragraph {
         paragraph_style: style,
         runs: tail_runs,
+        anchored_frames: moved_frames,
+        anchored_frame_offsets: moved_offsets,
         ..Default::default()
     };
     paragraphs.insert(paragraph_idx + 1, new_para);
+}
+
+/// Remove from `para` the frames anchored at character `from` or later,
+/// returning them with their offsets rebased to `from`. Frames with no
+/// recorded anchor stay.
+fn take_anchors_from(
+    para: &mut paged_model::Paragraph,
+    from: u32,
+) -> (Vec<paged_model::AnchoredFrame>, Vec<u32>) {
+    let mut moved = (Vec::new(), Vec::new());
+    let mut kept = (Vec::new(), Vec::new());
+    let offsets = std::mem::take(&mut para.anchored_frame_offsets);
+    for (i, frame) in std::mem::take(&mut para.anchored_frames)
+        .into_iter()
+        .enumerate()
+    {
+        match offsets.get(i) {
+            Some(&o) if o >= from => {
+                moved.0.push(frame);
+                moved.1.push(o - from);
+            }
+            Some(&o) => {
+                kept.0.push(frame);
+                kept.1.push(o);
+            }
+            None => kept.0.push(frame),
+        }
+    }
+    para.anchored_frames = kept.0;
+    para.anchored_frame_offsets = kept.1;
+    moved
 }
 
 fn apply_delete_range(
@@ -741,6 +788,9 @@ fn splice_paragraph(
     local_end: usize,
     recovered: &mut String,
 ) {
+    let from = para.char_offset_of_byte(local_start);
+    let to = para.char_offset_of_byte(local_end);
+    para.shift_anchors(from, -i64::from(to.saturating_sub(from)));
     // Walk runs, splice the bytes in [local_start, local_end).
     let mut acc: usize = 0;
     for run in &mut para.runs {

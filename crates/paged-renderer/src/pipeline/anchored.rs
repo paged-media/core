@@ -104,6 +104,304 @@ impl LineRefMetrics {
     }
 }
 
+/// One inline or above-line anchored object of a paragraph, in text
+/// order. It occupies a character of its line: an inline object as a
+/// glyph as wide as its visible box, an above-line one as a zero-width
+/// character whose line it pushes down.
+#[derive(Debug, Clone)]
+pub(super) struct InlineObject {
+    /// Index into the paragraph's `anchored_frames`.
+    pub frame: usize,
+    pub above_line: bool,
+    /// The VISIBLE box, pt: the geometric box grown by half the stroke on
+    /// each side. InDesign sets that box — not the path — on the baseline
+    /// and at the pen (measured, `inline-objects`: a 30 × 24 box with a
+    /// 0.5 pt stroke takes 30.5 pt of its line and rises 24.5 pt).
+    pub width: f32,
+    pub height: f32,
+    /// Half the stroke: the visible box's margin around the geometric one.
+    pub stroke_half: f32,
+    /// `AnchorYoffset`: raises an inline object off the baseline; the
+    /// space after an above-line object.
+    pub y_offset: f32,
+    /// `HorizontalAlignment` of an above-line object.
+    pub alignment: String,
+}
+
+impl InlineObject {
+    /// How far the object reaches above its baseline: the visible
+    /// height raised by the Y offset (an inline object only).
+    pub(super) fn rise(&self) -> f32 {
+        (self.height + self.y_offset).max(0.0)
+    }
+
+    /// The room an above-line object takes above its line: its height
+    /// and the space after it (`AnchorSpaceAbove` is not modelled).
+    pub(super) fn above_room(&self) -> f32 {
+        (self.height + self.y_offset).max(0.0)
+    }
+}
+
+/// Where an object's anchor character landed.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PlacedObject {
+    pub page: usize,
+    /// Page-local pt: the anchor character's x and its line's baseline.
+    pub x: f32,
+    pub baseline: f32,
+    /// The column's left and right edges, page-local pt.
+    pub column: (f32, f32),
+    /// The anchor character's point size and its face's cap height (em).
+    pub point_size: f32,
+    pub cap_height: f32,
+}
+
+/// The in-line objects of the paragraph being emitted: what its lines
+/// compose with, and where each one's character landed.
+#[derive(Debug, Clone, Default)]
+pub(super) struct InlineObjects {
+    pub objects: Vec<InlineObject>,
+    /// The next object a composed segment takes.
+    pub next: usize,
+    pub placed: Vec<Option<PlacedObject>>,
+}
+
+fn anchored_position(af: &paged_model::AnchoredFrame) -> &str {
+    af.setting
+        .as_ref()
+        .and_then(|s| s.anchored_position.as_deref())
+        .unwrap_or("InlinePosition")
+}
+
+/// True for an object that sits in its line — inline or above the line
+/// — rather than one positioned against a reference (`Custom`).
+pub(super) fn sits_in_line(af: &paged_model::AnchoredFrame) -> bool {
+    !matches!(anchored_position(af), "Custom" | "Anchored")
+}
+
+fn inline_object(af: &paged_model::AnchoredFrame, frame: usize) -> InlineObject {
+    let stroked = af
+        .stroke_color
+        .as_deref()
+        .is_some_and(|c| !c.ends_with("/None"));
+    let stroke = if stroked {
+        af.stroke_weight.unwrap_or(1.0).max(0.0)
+    } else {
+        0.0
+    };
+    let (w, h) = af
+        .bounds
+        .map(|b| (b.width(), b.height()))
+        .unwrap_or((0.0, 0.0));
+    InlineObject {
+        frame,
+        above_line: matches!(anchored_position(af), "AboveLine" | "AbovePosition"),
+        width: w + stroke,
+        height: h + stroke,
+        stroke_half: stroke * 0.5,
+        y_offset: af.setting.as_ref().map_or(0.0, |s| s.anchor_y_offset),
+        alignment: af
+            .setting
+            .as_ref()
+            .and_then(|s| s.horizontal_alignment.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// `paragraph` with one [`paged_text::layout::OBJECT_REPLACEMENT`]
+/// character per in-line object at its anchor (a run of its own, with
+/// the attributes of the run it falls in), and the objects in text
+/// order. `None` when the paragraph has no in-line object.
+pub(super) fn with_object_placeholders(
+    paragraph: &paged_model::Paragraph,
+) -> Option<(paged_model::Paragraph, InlineObjects)> {
+    let mut anchors: Vec<(u32, usize)> = paragraph
+        .anchored_frames
+        .iter()
+        .enumerate()
+        .filter(|(_, af)| sits_in_line(af))
+        .map(|(i, _)| {
+            let offset = paragraph
+                .anchored_frame_offsets
+                .get(i)
+                .copied()
+                .unwrap_or(0);
+            (offset, i)
+        })
+        .collect();
+    if anchors.is_empty() {
+        return None;
+    }
+    anchors.sort_unstable();
+    let placeholder = |host: Option<&paged_model::CharacterRun>| paged_model::CharacterRun {
+        text: paged_text::layout::OBJECT_REPLACEMENT.to_string(),
+        hyperlink_source: None,
+        text_variable: None,
+        placeholder: None,
+        ruby_flag: None,
+        ruby_string: None,
+        ..host.cloned().unwrap_or_default()
+    };
+    let mut runs = Vec::with_capacity(paragraph.runs.len() + anchors.len() * 2);
+    let mut pending = anchors.iter().peekable();
+    let mut pos: u32 = 0;
+    for run in &paragraph.runs {
+        let chars = run.text.chars().count() as u32;
+        let mut rest = run.text.as_str();
+        let mut at = pos;
+        while let Some(&&(offset, _)) = pending.peek() {
+            if offset >= pos + chars {
+                break;
+            }
+            let k = (offset.max(at) - at) as usize;
+            let byte = rest.char_indices().nth(k).map_or(rest.len(), |(b, _)| b);
+            if byte > 0 {
+                runs.push(paged_model::CharacterRun {
+                    text: rest[..byte].to_string(),
+                    ..run.clone()
+                });
+            }
+            runs.push(placeholder(Some(run)));
+            rest = &rest[byte..];
+            at = offset.max(at);
+            pending.next();
+        }
+        if !rest.is_empty() || chars == 0 {
+            runs.push(paged_model::CharacterRun {
+                text: rest.to_string(),
+                ..run.clone()
+            });
+        }
+        pos += chars;
+    }
+    // Anchors at (or past) the end of the text.
+    for _ in pending {
+        runs.push(placeholder(paragraph.runs.last()));
+    }
+    let objects: Vec<InlineObject> = anchors
+        .iter()
+        .map(|&(_, i)| inline_object(&paragraph.anchored_frames[i], i))
+        .collect();
+    let placed = vec![None; objects.len()];
+    Some((
+        paged_model::Paragraph {
+            runs,
+            ..paragraph.clone()
+        },
+        InlineObjects {
+            objects,
+            next: 0,
+            placed,
+        },
+    ))
+}
+
+/// The visible box's top-left of a placed object, page-local pt.
+///
+/// Measured on InDesign 20.0.1 (`inline-objects`):
+/// - an INLINE object's visible box stands at its character's x with
+///   its bottom on the baseline, raised by `AnchorYoffset`;
+/// - an ABOVE-LINE object aligns to the column (left / centre / right
+///   edge) with its bottom `pt × (1 + cap height) / 2` above its line's
+///   baseline, plus the space after it — the line is pushed down by the
+///   object, so that is where InDesign leaves it (fitted on Inter, Open
+///   Sans, Lora and Source Serif 4 at 10 pt, Inter at 20 pt, ±0.001 pt).
+pub(super) fn placed_visible_top_left(obj: &InlineObject, at: &PlacedObject) -> (f32, f32) {
+    if obj.above_line {
+        let (left, right) = at.column;
+        let x = match obj.alignment.as_str() {
+            "CenterAlign" => (left + right - obj.width) * 0.5,
+            "RightAlign" | "AwayFromBindingSide" => right - obj.width,
+            _ => left,
+        };
+        let bottom = at.baseline - obj.y_offset - at.point_size * (1.0 + at.cap_height) * 0.5;
+        (x, bottom - obj.height)
+    } else {
+        (at.x, at.baseline - obj.y_offset - obj.height)
+    }
+}
+
+/// An in-line object's character in a composed line: the object, the
+/// glyph's cluster, and the anchor character's point size.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LineObject {
+    pub object: usize,
+    pub cluster: u32,
+    pub point_size: f32,
+}
+
+/// How far a line holding `on_line` moves down, 1/64 pt — the rules
+/// InDesign 20.0.1 measured on `inline-objects`:
+///
+/// - **Inline, auto leading:** the line's leading grows so the object's
+///   top clears the previous baseline by what auto leading puts above a
+///   character, `auto leading − point size` (2 pt at 10/12): the leading
+///   becomes `max(text leading, rise + 0.2 × pt)`, `rise` being the
+///   visible height plus the Y offset. Only the rise counts; an object
+///   lowered below the baseline does not push the next line.
+/// - **Inline, fixed leading:** the leading holds; the object overlaps
+///   the line above.
+/// - **Above line:** the line moves down by the object's height and the
+///   space after it, in either leading mode.
+/// - **First line of a frame** (`first`: the baseline the frame's first-
+///   baseline rule gave it, and the text area's top): an inline object
+///   is a glyph as tall as its rise, so the baseline is at least `top +
+///   rise` (ascent rule, both leading modes); with an above-line object
+///   the line sits a full leading below it, `top + room + leading`.
+pub(super) fn line_object_shift(
+    objects: &InlineObjects,
+    on_line: &[LineObject],
+    auto_leading: bool,
+    leading_64: i32,
+    first: Option<(i32, i32)>,
+) -> i32 {
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let mut above = 0;
+    let mut rise = 0;
+    let mut need = 0;
+    for lo in on_line {
+        let Some(o) = objects.objects.get(lo.object) else {
+            continue;
+        };
+        if o.above_line {
+            above += to_64(o.above_room());
+        } else {
+            rise = rise.max(to_64(o.rise()));
+            need = need.max(to_64(o.rise() + 0.2 * lo.point_size));
+        }
+    }
+    match first {
+        Some((baseline, top)) if above > 0 => top + above + leading_64.max(rise) - baseline,
+        Some((baseline, top)) => (top + rise - baseline).max(0),
+        None if auto_leading => above + (need - leading_64).max(0),
+        None => above,
+    }
+}
+
+/// Draw the paragraph's in-line objects where their characters landed.
+/// An object whose character went overset is not drawn, as in InDesign.
+pub(super) fn emit_inline_objects(
+    em: &mut StoryEmitter,
+    paragraph: &paged_model::Paragraph,
+    objects: &InlineObjects,
+    pages: &mut [BuiltPage],
+) {
+    for (obj, placed) in objects.objects.iter().zip(&objects.placed) {
+        let (Some(at), Some(af)) = (placed, paragraph.anchored_frames.get(obj.frame)) else {
+            continue;
+        };
+        let (vx, vy) = placed_visible_top_left(obj, at);
+        emit_one_anchored_frame(
+            em,
+            af,
+            at.page,
+            vx + obj.stroke_half,
+            vy + obj.stroke_half,
+            pages,
+        );
+    }
+}
+
 /// The host page's margin box, projected into page-local pt. Resolved
 /// from the W0.6 `<MarginPreference>` side map (`Spread::page_margins`,
 /// keyed by the page's `Self` id). `None` when the page declared no
@@ -117,18 +415,14 @@ pub(super) struct PageMarginBox {
     pub bottom: f32,
 }
 
-/// Best-effort emission of the paragraph's anchored frames. Supports
-/// `InlinePosition` (default) by placing the frame at the
-/// paragraph's first-baseline anchor offset by `anchor_x_offset` /
-/// `anchor_y_offset`. `AbovePosition` puts it above the paragraph's
-/// origin; `Custom` honours the offsets verbatim. Unrecognised
-/// positions log a TODO and fall through to InlinePosition placement.
+/// Emit the paragraph's CUSTOM-positioned anchored frames (`Custom` /
+/// `Anchored`), against the references their `AnchoredObjectSetting`
+/// names. Inline and above-line objects sit in their lines instead and
+/// are drawn by [`emit_inline_objects`].
 ///
 /// Anchored TextFrames recurse into their story via the document's
 /// frame_chain lookup; anchored Rectangles emit through
-/// `emit_rectangle_into` if the parser surfaced bounds for them. We
-/// don't yet thread images on anchored rectangles; those land when
-/// the parser surfaces image_link on AnchoredFrame.
+/// `emit_rectangle_into` if the parser surfaced bounds for them.
 pub(super) fn emit_anchored_frames_for_paragraph(
     em: &mut StoryEmitter,
     paragraph: &paged_model::Paragraph,
@@ -154,130 +448,55 @@ pub(super) fn emit_anchored_frames_for_paragraph(
     };
 
     for af in &paragraph.anchored_frames {
+        if sits_in_line(af) {
+            continue;
+        }
         let setting = af.setting.as_ref();
-        let position = setting
-            .and_then(|s| s.anchored_position.as_deref())
-            .unwrap_or("InlinePosition");
         let (offset_x, offset_y) = setting
             .map(|s| (s.anchor_x_offset, s.anchor_y_offset))
             .unwrap_or((0.0, 0.0));
         let frame_w = af.bounds.map(|b| b.width()).unwrap_or(0.0);
         let frame_h = af.bounds.map(|b| b.height()).unwrap_or(0.0);
-        // Anchor reference point on the frame — the corner / edge the
-        // AnchoredObjectSetting offset attaches to (`TopLeftAnchor`,
-        // `TopRightAnchor`, `CenterAnchor`, …). For inline frames
-        // we resolve the *vertical* component of the anchor point
-        // strictly: a Top anchor sits the frame's top on the line
-        // baseline, a Bottom anchor sits the frame's bottom on the
-        // baseline (the legacy default), Center splits the diff.
-        // The horizontal component currently degenerates because we
-        // don't yet thread the per-anchor advance offset out of the
-        // composer — both `BottomLeftAnchor` and `BottomRightAnchor`
-        // place the frame at the column-left edge of the paragraph
-        // (real InDesign would shift `BottomRightAnchor` by the
-        // anchor character's full advance, which equals the frame's
-        // own width when the anchor is the lone character on the
-        // line). Once the composer surfaces the U+FFFC advance
-        // position the horizontal degenerates collapse — see the
-        // TODO below.
+        // The corner / edge of the frame the reference point attaches
+        // to (`TopLeftAnchor`, `TopRightAnchor`, `CenterAnchor`, …).
         let anchor_point = setting
             .and_then(|s| s.anchor_point.as_deref())
             .unwrap_or("BottomLeftAnchor");
-        // Corner-of-frame corrections: how far the frame's top-left
-        // must move so the *named* anchor corner lands on the resolved
-        // anchor point. Both are pure functions of the frame size and
-        // the anchor-point name (see the unit tests in `mod tests`).
-        let vertical_corner_dy = anchor_vertical_corner_offset(anchor_point, frame_h);
-        // TODO(anchored-position): once paragraph_breaker exposes the
-        // anchor character's advance-from-line-start, replace
-        // `para_origin_x` with that advance so `InlinePosition` lands
-        // at the actual inline position. The horizontal anchor-corner
-        // component is deliberately NOT applied to InlinePosition /
-        // AbovePosition: their anchor x is still approximated at the
-        // column origin (not the true advance), so shifting by the
-        // frame's own width would push a Right anchor off the left of
-        // the column. It IS applied to Custom / Anchored, where the
-        // reference rect gives a real span to align against.
-        let (place_x, place_y) = match position {
-            "InlinePosition" => {
-                if frame_w > 0.0 && frame_h > 0.0 {
-                    tracing::debug!(
-                        target: "paged_renderer::pipeline",
-                        anchor_point,
-                        "InlinePosition: anchored at paragraph origin (per-anchor advance offset queued)"
-                    );
-                }
-                // Frame top-left placed so the named anchor corner
-                // sits at (paragraph origin x, baseline y) plus the
-                // anchor offsets. The horizontal anchor-corner
-                // component stays collapsed until paragraph_breaker
-                // exposes the per-anchor advance position; the vertical
-                // component drives Top vs Bottom anchoring. `offset_x`
-                // is honoured verbatim.
-                (
-                    para_origin_x + offset_x,
-                    baseline_y_pt + offset_y - vertical_corner_dy,
-                )
-            }
-            // Both `AbovePosition` and the (newer) `AboveLine` enum
-            // value place the frame above the host line; treat them
-            // identically until line-by-line vertical resolution lands.
-            "AbovePosition" | "AboveLine" => (
-                para_origin_x + offset_x,
-                para_origin_y + offset_y - vertical_corner_dy,
-            ),
-            // `Custom` / `Anchored` — honour HorizontalReferencePoint
-            // and VerticalReferencePoint with their alignments so the
-            // frame anchors against the column / text-frame / page-
-            // edge rectangles the IDML declares. IDML 14+ writes
-            // `Anchored`; older docs write `Custom`. Treat both the
-            // same.
-            "Custom" | "Anchored" => {
-                let ref_x = horizontal_reference_x(
-                    setting,
-                    para_origin_x,
-                    frame,
-                    &pages[target_page],
-                    em.column_x_shift_pt,
-                    margin_box,
-                );
-                let ref_y = vertical_reference_y(
-                    setting,
-                    baseline_y_pt,
-                    frame,
-                    &pages[target_page],
-                    para_origin_y,
-                    line_metrics,
-                    margin_box,
-                );
-                // Custom positioning resolves a real reference span, so
-                // both corner components are meaningful: a `RightAlign`
-                // reference x with a `*RightAnchor` corner snaps the
-                // frame's right edge to the reference's right edge.
-                // `resolve_custom_anchor_pos` is the pure composition
-                // exercised directly by the reference-point unit tests.
-                resolve_custom_anchor_pos(
-                    ref_x,
-                    ref_y,
-                    anchor_point,
-                    frame_w,
-                    frame_h,
-                    offset_x,
-                    offset_y,
-                )
-            }
-            _ => {
-                tracing::debug!(
-                    target: "paged_renderer::pipeline",
-                    position = position,
-                    "unrecognised anchored position; defaulting to InlinePosition"
-                );
-                (
-                    para_origin_x + offset_x,
-                    baseline_y_pt + offset_y - vertical_corner_dy,
-                )
-            }
-        };
+        // `Custom` / `Anchored` — honour HorizontalReferencePoint
+        // and VerticalReferencePoint with their alignments so the
+        // frame anchors against the column / text-frame / page-
+        // edge rectangles the IDML declares. IDML 14+ writes
+        // `Anchored`; older docs write `Custom`.
+        let ref_x = horizontal_reference_x(
+            setting,
+            para_origin_x,
+            frame,
+            &pages[target_page],
+            em.column_x_shift_pt,
+            margin_box,
+        );
+        let ref_y = vertical_reference_y(
+            setting,
+            baseline_y_pt,
+            frame,
+            &pages[target_page],
+            para_origin_y,
+            line_metrics,
+            margin_box,
+        );
+        // A real reference span makes both corner components
+        // meaningful: a `RightAlign` reference x with a `*RightAnchor`
+        // corner snaps the frame's right edge to the reference's right
+        // edge.
+        let (place_x, place_y) = resolve_custom_anchor_pos(
+            ref_x,
+            ref_y,
+            anchor_point,
+            frame_w,
+            frame_h,
+            offset_x,
+            offset_y,
+        );
         emit_one_anchored_frame(em, af, target_page, place_x, place_y, pages);
     }
 }

@@ -655,6 +655,7 @@ pub(super) fn split_paragraph_into_segments(
         mojikumi_table: paragraph.mojikumi_table.clone(),
         mojikumi_set: paragraph.mojikumi_set.clone(),
         anchored_frames: paragraph.anchored_frames.clone(),
+        anchored_frame_offsets: paragraph.anchored_frame_offsets.clone(),
         runs: Vec::new(),
         table: None,
         // Phase 5 — footnotes / index markers ride the FIRST
@@ -755,6 +756,7 @@ pub(super) fn split_paragraph_into_segments(
                 mojikumi_table: paragraph.mojikumi_table.clone(),
                 mojikumi_set: paragraph.mojikumi_set.clone(),
                 anchored_frames: Vec::new(),
+                anchored_frame_offsets: Vec::new(),
                 runs: Vec::new(),
                 table: None,
                 // Sub-paragraphs after a `\n` reset markers too
@@ -903,6 +905,7 @@ pub(super) fn split_paragraph_into_segments(
                 mojikumi_table: paragraph.mojikumi_table.clone(),
                 mojikumi_set: paragraph.mojikumi_set.clone(),
                 anchored_frames: Vec::new(),
+                anchored_frame_offsets: Vec::new(),
                 runs: Vec::new(),
                 table: None,
                 footnotes: Vec::new(),
