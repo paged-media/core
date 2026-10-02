@@ -107,6 +107,27 @@ pub enum TextOpError {
     },
     #[error("delete range start={start} end={end} is invalid (start > end)")]
     InvalidRange { start: u32, end: u32 },
+    /// The byte offset falls INSIDE a multi-byte UTF-8 character. Text
+    /// offsets are byte offsets; splitting a character there used to
+    /// panic in `String::insert_str` / `replace_range` (ADR 031: untrusted
+    /// input never aborts the engine).
+    #[error("offset {offset} in story {story_id} is not on a character boundary")]
+    NotCharBoundary { story_id: String, offset: u32 },
+}
+
+/// True when `offset` (insertText's byte space) lands on a UTF-8 character
+/// boundary of the run it falls in.
+fn on_char_boundary(paragraphs: &[paged_model::Paragraph], offset: u32) -> bool {
+    match locate(paragraphs, offset) {
+        Locate::InRun {
+            paragraph_idx,
+            run_idx,
+            byte_in_run,
+        } => paragraphs[paragraph_idx].runs[run_idx]
+            .text
+            .is_char_boundary(byte_in_run),
+        _ => true,
+    }
 }
 
 /// Apply a `TextOp` to the document. Returns the inverse op + the
@@ -190,6 +211,12 @@ fn apply_insert_text(
             story_id: story_id.into(),
             offset,
             len,
+        });
+    }
+    if !on_char_boundary(paragraphs, offset) {
+        return Err(TextOpError::NotCharBoundary {
+            story_id: story_id.into(),
+            offset,
         });
     }
 
@@ -383,6 +410,14 @@ fn apply_delete_range(
             offset: end,
             len,
         });
+    }
+    for offset in [start, end] {
+        if !on_char_boundary(paragraphs, offset) {
+            return Err(TextOpError::NotCharBoundary {
+                story_id: story_id.into(),
+                offset,
+            });
+        }
     }
 
     // Phase 3 Gap-D — full cross-paragraph delete support.
