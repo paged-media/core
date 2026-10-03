@@ -491,6 +491,14 @@
       "max_p99_de": 1.78,
       "min_ssim": 0.9896,
       "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005."
+    },
+    {
+      "name": "line-ends",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.596,
+      "max_p99_de": 2.34,
+      "min_ssim": 0.9804,
+      "rationale": "Added 2026-10-03 (RFI C-62): a pen path's stroke end cap and line ends. One page, no text: open polygons in the three caps, with line ends (circle/triangle, barbed/simple-wide, square at 150 % + triangle at 50 %), a compound path of two open contours, a closed triangle with line ends set, graphic lines in round/projecting caps, and dashed ellipses in the three caps; the reference is InDesign 20.0.1's export. InDesign agrees on every cap, on line ends for EACH open contour of a compound path, and on none for a closed one. Measured mean 0.497 / p99 1.952 / ssim 0.9854 (the same IDML with the attributes the pre-C-62 reader ignored stripped: 0.710 / 8.739 / 0.981); sized at worst * 1.20 and ssim - 0.005. The residue is named, not C-62's: arrowhead geometry (InDesign trims the stroke under the head and draws Simple/SimpleWide/Barbed/hollow-Square differently) and the dash distribution on a closed path (InDesign spreads dashes evenly)."
     }
   ]
 }
