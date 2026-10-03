@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 028 — the break-before rule (`StartParagraph`) over the
+//! ADR 028 — the break-before rule (`StartParagraph`) over the
 //! generated `start-paragraph.idml`, against where InDesign 2025 put each
 //! paragraph in its PDF export of the same file (2026-10-01; the fixture
 //! is also in the fidelity gate with that PDF as reference).

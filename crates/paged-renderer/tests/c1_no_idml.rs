@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Migration slice **S5 — honour C1 in code** (`renderer.md` §C1: *"construct
+//! Migration slice **S5 — honour C1 in code** (the renderer brief's §C1, not published: *"construct
 //! a scene graph by hand in Rust, with no IDML involved, and render it"*).
 //!
 //! This exercises the **neutral composition pipeline** end to end with **zero

@@ -2372,7 +2372,7 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
     // head: no Chapter Title paragraph exists yet to pick up, and an
     // unmatched running header is empty — InDesign's own export of this
     // fixture prints nothing there (`annual-base.pdf` p17), not the
-    // stored "Chapter" (thoughts ADR 033).
+    // stored "Chapter" (ADR 033).
     let p17 = glyphs(16);
     assert!(
         !p17.contains("CHAPTER"),

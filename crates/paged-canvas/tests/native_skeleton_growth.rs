@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 029 — the DOCX standalone-open path, engine side. A plugin
+//! ADR 029 — the DOCX standalone-open path, engine side. A plugin
 //! produces a native SKELETON (a page per Word section, its margin-box frame,
 //! a story with a grow rule) packaged by `paged_store::package::wrap_document`
 //! and opened like any `.paged`. The grow rule rides inside the native model,

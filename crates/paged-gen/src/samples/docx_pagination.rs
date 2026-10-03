@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! `docx-pagination.idml` — the shape thoughts ADR 029 lowers a Word document
+//! `docx-pagination.idml` — the shape ADR 029 lowers a Word document
 //! to, built to match plugin-doc's `pagination_docx()` fixture, whose
 //! pagination WORD reported (`plugin-doc/scripts/word-pagination-probe.sh`,
 //! Word 16, 2026-10-01):

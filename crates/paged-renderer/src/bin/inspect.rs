@@ -94,7 +94,7 @@ struct Args {
     #[arg(long, value_name = "STORY_ID")]
     story_lines: Option<String>,
 
-    /// thoughts ADR 026 — let this story's frame chain GROW (generated
+    /// ADR 026 — let this story's frame chain GROW (generated
     /// pages until it no longer oversets), as if it carried a grow rule.
     /// IDML never carries one (InDesign does not reflow on open), so this
     /// is how a reflow fixture is rendered against InDesign's reflowed

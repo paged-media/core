@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 027 plan §1 — per-keystroke edit latency, measured the way
+//! ADR 027 plan §1 — per-keystroke edit latency, measured the way
 //! the plan did: `CanvasModel::load` with the corpus font directory
 //! registered and Inter as the default face, then `apply_mutation(InsertText)`
 //! of one character at an advancing caret. Median over `--edits` edits after

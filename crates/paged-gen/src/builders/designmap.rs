@@ -131,7 +131,7 @@ pub struct TextVariableDef {
     /// …). When set it REPLACES the `<TextVariablePreference>` above, a
     /// spelling InDesign never writes and ignores on open (measured,
     /// InDesign 20.0.1: the `variables` reference printed nothing for a
-    /// running header and a date written that way — thoughts ADR 033).
+    /// running header and a date written that way — ADR 033).
     /// `None` keeps the older samples' bytes.
     pub preference: Option<VariablePreference>,
 }

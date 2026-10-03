@@ -14,7 +14,7 @@
 
 //! `Operation` — the single typed primitive every committed mutation
 //! flows through. The five variants match the scripting-layer briefing
-//! (`docs/paged/scripting-layer.md`): `SetProperty`, `InsertNode`,
+//! (the original scripting-layer design, not published): `SetProperty`, `InsertNode`,
 //! `RemoveNode`, `MoveNode`, `Batch`. Extensions require deliberation.
 //!
 //! Every Operation is `Serialize`/`Deserialize` so the same value can
@@ -3732,7 +3732,7 @@ pub enum Operation {
         condition: String,
         visible: bool,
     },
-    /// thoughts ADR 026 — set or clear (`None`) a story's grow rule: the
+    /// ADR 026 — set or clear (`None`) a story's grow rule: the
     /// chain gets generated pages while it oversets. The pages are derived
     /// at layout, so the inverse is simply the prior rule.
     SetFlowGrowRule {

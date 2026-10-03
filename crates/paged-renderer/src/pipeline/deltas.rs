@@ -111,7 +111,7 @@ pub(super) fn body_story_signature(
 
 /// Perf-MasterText — splice a cached delta into a page's display
 /// list. Replays the delta's path entries under their intern keys
-/// (thoughts ADR 027: the caller has checked the page's path buffer
+/// (ADR 027: the caller has checked the page's path buffer
 /// has the fingerprint the emit started from, so every id lines up and
 /// later emits on the page intern exactly as after the real emit), then
 /// pushes the cached commands with their relative path-ids rebased to

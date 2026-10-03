@@ -15,7 +15,7 @@
 //! Direct-manipulation gesture spine.
 //!
 //! A gesture has a four-phase lifecycle that mirrors
-//! `canvas-interaction-plan.md` §2.1: **begin** snapshots the
+//! `docs/design/canvas-interaction.md` §2.1: **begin** snapshots the
 //! committed state, **update** mutates a preview in place and returns
 //! the dirty pages, **commit** reverts the preview and re-applies the
 //! diff through `paged_mutate::apply` so the unified undo log gets a
@@ -29,7 +29,7 @@
 //! mutate `CanvasModel::scene` directly + rebuild on every update.
 //! That's already what `apply_mutation` does for text edits, so the
 //! rebuild path is well-trodden. A future v2 will swap in an
-//! ephemeral overlay (`canvas-interaction-plan.md` §3.4) that the
+//! ephemeral overlay (`docs/design/canvas-interaction.md` §3.4) that the
 //! display-list build composes — only worth the complexity once
 //! per-update rebuild perf hits a wall.
 

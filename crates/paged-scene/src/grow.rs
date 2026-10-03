@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 026 — generated pages for growing stories.
+//! ADR 026 — generated pages for growing stories.
 //!
 //! A story with a [`paged_model::FlowGrowRule`] gets pages appended after
 //! the page of its chain's last frame, the way InDesign 2025's Smart Text

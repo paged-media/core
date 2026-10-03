@@ -28,7 +28,7 @@
 //!
 //! Per-type semantics, as InDesign 20.0.1 resolves them (asked by
 //! building the constructs through its DOM and reading its PDF export;
-//! thoughts ADR 033, and the `variables` paged-gen fixture):
+//! ADR 033, and the `variables` paged-gen fixture):
 //!
 //! | VariableType        | Resolution                                    |
 //! |---------------------|-----------------------------------------------|
@@ -492,7 +492,7 @@ mod tests {
         }
     }
 
-    /// The five-page document of thoughts ADR 033: a section restarting
+    /// The five-page document of ADR 033: a section restarting
     /// at 1 on page 3, so the labels read 1 2 1 2 3.
     fn restart_numbering() -> (Vec<String>, PageNumbering) {
         let labels = ["1", "2", "1", "2", "3"].map(String::from).to_vec();
@@ -551,7 +551,7 @@ mod tests {
         );
     }
 
-    /// Measured (thoughts ADR 033): the last page number is the last page's
+    /// Measured (ADR 033): the last page number is the last page's
     /// LABEL — 3 on a five-page document whose numbering restarts — and in
     /// section scope the last label of the page's own section.
     #[test]

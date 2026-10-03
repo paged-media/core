@@ -19,7 +19,7 @@
 //! is deliberately absent from `corpus/generated/fidelity-thresholds.json`
 //! and must stay that way: the pixel gate's fixtures are one-feature-per-
 //! page mega-files sized against an InDesign-exported reference PDF, and
-//! the archived brief (`thoughts/docs/old/idml-sample-generator.md`)
+//! the archived brief (an internal sample-generator brief, not published)
 //! tells them to "resist the kitchen sink". This sample is the opposite
 //! on purpose — one plausible publication, no reference PDF, no gate.
 //!

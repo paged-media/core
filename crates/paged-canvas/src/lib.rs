@@ -18,7 +18,7 @@
 //! a thin binding layer on top of this crate. Unit-testable via
 //! `cargo test`.
 //!
-//! What this crate owns (per `docs/paged/canvas.md`):
+//! What this crate owns (per `docs/design/canvas.md`):
 //!
 //! - The worker-side `CanvasModel` that wraps a parsed IDML document
 //!   and the four-tier pipeline state (content, layout, resolution,

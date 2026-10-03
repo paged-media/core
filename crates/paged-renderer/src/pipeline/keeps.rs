@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! Paragraph keep options (thoughts ADR 028), as InDesign 2025 applies them.
+//! Paragraph keep options (ADR 028), as InDesign 2025 applies them.
 //!
 //! Every rule reduces to ONE kind of decision: "this line of this paragraph
 //! must open the next frame/column". The story is emitted, the placement of

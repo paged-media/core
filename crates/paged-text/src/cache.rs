@@ -293,7 +293,7 @@ fn cached<F: FnOnce() -> LaidOutParagraph>(key: [u8; 32], f: F) -> LaidOutParagr
 /// it behaves identically to the plain function. Pipeline call sites
 /// use this so installing a cache is a one-line opt-in at the top.
 pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
-    // thoughts ADR 027 — `layout_runs` only ever ADDS `first_baseline` to
+    // ADR 027 — `layout_runs` only ever ADDS `first_baseline` to
     // the baselines it steps down from it, so a paragraph's layout is the
     // same at any height. The entry is keyed and laid out at baseline 0
     // and moved to `first_baseline` on the way out: a paragraph that only

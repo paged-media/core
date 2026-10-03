@@ -500,7 +500,7 @@ export type WorkerToMain = WorkerToMainKind & {
 // The surface is shared now and only the parameter differs. Additive:
 // serde defaults the field, an older worker ignores it and runs the
 // default budget, and every existing caller is unchanged.
-// v64 — `SetFlowGrowRule` (thoughts ADR 026): a story's frame chain may
+// v64 — `SetFlowGrowRule` (ADR 026): a story's frame chain may
 // GROW. The renderer then adds generated pages after the last frame's page
 // while the story oversets, as InDesign's Smart Text Reflow does (measured:
 // end of story, the last page's master, a margin-box frame with default

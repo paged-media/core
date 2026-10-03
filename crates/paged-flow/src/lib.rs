@@ -13,7 +13,7 @@
  */
 
 //! The region-chain **flow protocol** — the first executable seam of the
-//! Paged-native composition model (ADR-021, `thoughts/docs/paged/core/
+//! Paged-native composition model (ADR-021, `docs/reference/
 //! composition-format.md` §5).
 //!
 //! A **flow** names a content sequence in a part that fragments across an
