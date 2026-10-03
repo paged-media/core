@@ -4265,6 +4265,163 @@ mod tests {
         ));
     }
 
+    /// C-62 — a pen path (an open Polygon) takes a cap and line ends
+    /// through the EXISTING paths, and the cap reaches GraphicLine and
+    /// Oval too. Set, undo, the rejected token, and the kind that still
+    /// has no cap (TextFrame).
+    #[test]
+    fn c62_pen_path_cap_and_line_ends_round_trip() {
+        let mut project = Project::new(Document {
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread: paged_model::Spread {
+                    self_id: Some("Spread/u_main".to_string()),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        });
+        let parent = NodeId::Spread("Spread/u_main".to_string());
+        let corner = |x: f32, y: f32| crate::operation::PathAnchorSpec {
+            anchor: [x, y],
+            left: [x, y],
+            right: [x, y],
+        };
+        for node in [
+            NodeSpec::Polygon {
+                self_id: "Polygon/pen".to_string(),
+                bounds: [0.0, 0.0, 50.0, 100.0],
+                anchors: vec![corner(0.0, 0.0), corner(50.0, 50.0), corner(100.0, 0.0)],
+                subpath_starts: vec![0],
+                subpath_open: vec![true],
+                fill_color: None,
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight: Some(4.0),
+                item_transform: None,
+            },
+            NodeSpec::GraphicLine {
+                self_id: "GraphicLine/l".to_string(),
+                bounds: [0.0, 0.0, 100.0, 100.0],
+                anchors: Vec::new(),
+                subpath_starts: Vec::new(),
+                subpath_open: Vec::new(),
+                stroke_color: None,
+                stroke_weight: Some(2.0),
+                item_transform: None,
+            },
+            NodeSpec::Oval {
+                self_id: "Oval/o".to_string(),
+                bounds: [0.0, 0.0, 40.0, 40.0],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+        ] {
+            project
+                .apply(Operation::InsertNode {
+                    z_slot: None,
+                    parent: parent.clone(),
+                    position: 0,
+                    node,
+                })
+                .expect("insert");
+        }
+        let cap = |p: &Project, node: &NodeId| -> Option<String> {
+            let s = &p.document().spreads[0].spread;
+            match node {
+                NodeId::Polygon(_) => s.polygons[0].end_cap.clone(),
+                NodeId::GraphicLine(_) => s.graphic_lines[0].end_cap.clone(),
+                NodeId::Oval(_) => s.ovals[0].end_cap.clone(),
+                _ => unreachable!(),
+            }
+        };
+        for node in [
+            NodeId::Polygon("Polygon/pen".to_string()),
+            NodeId::GraphicLine("GraphicLine/l".to_string()),
+            NodeId::Oval("Oval/o".to_string()),
+        ] {
+            let applied = project
+                .apply(Operation::SetProperty {
+                    node: node.clone(),
+                    path: PropertyPath::FrameStrokeEndCap,
+                    value: Value::Text("RoundEndCap".to_string()),
+                })
+                .unwrap_or_else(|e| panic!("{node:?} takes a cap: {e:?}"));
+            assert_eq!(cap(&project, &node).as_deref(), Some("RoundEndCap"));
+            crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+            assert_eq!(cap(&project, &node), None, "{node:?} undo");
+        }
+
+        // The pen path's line ends.
+        let pen = NodeId::Polygon("Polygon/pen".to_string());
+        let start = project
+            .apply(Operation::SetProperty {
+                node: pen.clone(),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("CircleSolidArrowHead".to_string()),
+            })
+            .expect("start arrowhead");
+        project
+            .apply(Operation::SetProperty {
+                node: pen.clone(),
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect("end arrowhead");
+        let poly = &project.document().spreads[0].spread.polygons[0];
+        assert_eq!(poly.start_arrow, paged_model::ArrowheadType::CircleSolid);
+        assert_eq!(poly.end_arrow, paged_model::ArrowheadType::Triangle);
+        crate::apply(project.document_mut(), &start.inverse).expect("undo start");
+        let poly = &project.document().spreads[0].spread.polygons[0];
+        assert_eq!(poly.start_arrow, paged_model::ArrowheadType::None);
+        assert_eq!(poly.end_arrow, paged_model::ArrowheadType::Triangle);
+        let err = project
+            .apply(Operation::SetProperty {
+                node: pen,
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("FancyMysteryHead".to_string()),
+            })
+            .expect_err("unknown token must be rejected");
+        assert!(matches!(
+            err,
+            crate::OperationError::InvalidValue {
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                ..
+            }
+        ));
+
+        // An ellipse is closed: it has a cap (dash ends) but no line ends.
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Oval("Oval/o".to_string()),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect_err("an oval has no line ends");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty { .. }
+        ));
+    }
+
+    /// C-62 — a text frame's stroke is its box: it still has no cap.
+    #[test]
+    fn c62_a_text_frame_still_has_no_end_cap() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameStrokeEndCap,
+                value: Value::Text("RoundEndCap".to_string()),
+            })
+            .expect_err("a text frame has no cap");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty { .. }
+        ));
+    }
+
     /// SDK Phase 5 (v1 sweep) — TextFrame inset spacing apply +
     /// undo. Wire shape: Value::Bounds([top, left, bottom, right])
     /// in pt. The renderer's text-frame composer reads the field

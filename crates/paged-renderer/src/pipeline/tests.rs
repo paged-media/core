@@ -2893,6 +2893,152 @@ fn graphic_line_arrowhead_emits_fill() {
     );
 }
 
+/// Build one page from `items` (spread XML for its page items) and hand
+/// back the page's display commands.
+fn c62_page_commands(items: &str) -> Vec<paged_compose::DisplayCommand> {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Color Self="Color/Black" Space="CMYK" ColorValue="0 0 0 100"/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 400"/>
+    {items}
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let built = build_document(&doc, &PipelineOptions::default()).expect("build");
+    built.pages[0].list.commands.clone()
+}
+
+/// A polygon whose `<PathGeometry>` holds `contours` — each a list of
+/// straight anchors and whether it is open.
+fn c62_polygon(attrs: &str, contours: &[(&[(f32, f32)], bool)]) -> String {
+    let mut geom = String::new();
+    for (pts, open) in contours {
+        geom.push_str(&format!(
+            r#"<GeometryPathType PathOpen="{open}"><PathPointArray>"#
+        ));
+        for (x, y) in pts.iter() {
+            geom.push_str(&format!(
+                r#"<PathPointType Anchor="{x} {y}" LeftDirection="{x} {y}" RightDirection="{x} {y}"/>"#
+            ));
+        }
+        geom.push_str("</PathPointArray></GeometryPathType>");
+    }
+    format!(
+        r#"<Polygon Self="pen" ItemTransform="1 0 0 1 0 0" FillColor="Swatch/None" StrokeColor="Color/Black" StrokeWeight="4"{attrs}><Properties><PathGeometry>{geom}</PathGeometry></Properties></Polygon>"#
+    )
+}
+
+fn c62_fills(cmds: &[paged_compose::DisplayCommand]) -> usize {
+    cmds.iter()
+        .filter(|c| matches!(c, paged_compose::DisplayCommand::FillPath { .. }))
+        .count()
+}
+
+fn c62_stroke_caps(cmds: &[paged_compose::DisplayCommand]) -> Vec<paged_compose::LineCap> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            paged_compose::DisplayCommand::StrokePath { stroke, .. } => Some(stroke.cap),
+            _ => None,
+        })
+        .collect()
+}
+
+/// C-62 — a pen path (an open `<Polygon>`) draws its line ends the way
+/// a `<GraphicLine>` does: one marker per end per OPEN contour, none on
+/// a closed one.
+#[test]
+fn c62_a_pen_path_draws_its_line_ends_on_open_contours() {
+    const OPEN: &[(f32, f32)] = &[(20.0, 20.0), (100.0, 80.0), (180.0, 20.0)];
+    const OPEN_2: &[(f32, f32)] = &[(20.0, 200.0), (180.0, 200.0)];
+    const ENDS: &str = r#" LeftLineEnd="CircleSolidArrowHead" RightLineEnd="TriangleArrowHead""#;
+    let open_plain = c62_fills(&c62_page_commands(&c62_polygon("", &[(OPEN, true)])));
+    let open_ends = c62_fills(&c62_page_commands(&c62_polygon(ENDS, &[(OPEN, true)])));
+    assert_eq!(open_ends, open_plain + 2, "one marker per end");
+    let one_end = c62_fills(&c62_page_commands(&c62_polygon(
+        r#" RightLineEnd="BarbedArrowHead""#,
+        &[(OPEN, true)],
+    )));
+    assert_eq!(one_end, open_plain + 1);
+    let closed_ends = c62_fills(&c62_page_commands(&c62_polygon(ENDS, &[(OPEN, false)])));
+    let closed_plain = c62_fills(&c62_page_commands(&c62_polygon("", &[(OPEN, false)])));
+    assert_eq!(closed_ends, closed_plain, "a closed contour has no ends");
+    let compound = c62_fills(&c62_page_commands(&c62_polygon(
+        ENDS,
+        &[(OPEN, true), (OPEN_2, true)],
+    )));
+    assert_eq!(compound, open_plain + 4, "each open contour takes both");
+    // An explicit InDesign "None" draws nothing.
+    let none = c62_fills(&c62_page_commands(&c62_polygon(
+        r#" LeftLineEnd="None" RightLineEnd="None""#,
+        &[(OPEN, true)],
+    )));
+    assert_eq!(none, open_plain);
+}
+
+/// C-62 — `EndCap` reaches the stroke on a pen path, a line and an
+/// ellipse (where it shapes the dash ends); absent it is the butt cap.
+#[test]
+fn c62_end_cap_reaches_the_stroke_on_every_path_kind() {
+    use paged_compose::LineCap;
+    const OPEN: &[(f32, f32)] = &[(20.0, 20.0), (100.0, 80.0), (180.0, 20.0)];
+    let caps = |items: String| c62_stroke_caps(&c62_page_commands(&items));
+    assert_eq!(
+        caps(c62_polygon(r#" EndCap="RoundEndCap""#, &[(OPEN, true)])),
+        vec![LineCap::Round]
+    );
+    assert_eq!(
+        caps(c62_polygon(
+            r#" EndCap="ProjectingEndCap""#,
+            &[(OPEN, true)]
+        )),
+        vec![LineCap::Square]
+    );
+    assert_eq!(caps(c62_polygon("", &[(OPEN, true)])), vec![LineCap::Butt]);
+    assert_eq!(
+        caps(
+            r#"<GraphicLine Self="gl" GeometricBounds="20 20 180 180" StrokeColor="Color/Black" StrokeWeight="3" EndCap="RoundEndCap"/>"#
+                .to_string()
+        ),
+        vec![LineCap::Round]
+    );
+    assert_eq!(
+        caps(
+            r#"<Oval Self="ov" ItemTransform="1 0 0 1 0 0" GeometricBounds="20 20 180 180" FillColor="Swatch/None" StrokeColor="Color/Black" StrokeWeight="3" StrokeType="StrokeStyle/$ID/Dashed" EndCap="RoundEndCap"/>"#
+                .to_string()
+        ),
+        vec![LineCap::Round]
+    );
+}
+
 #[test]
 fn corner_rect_path_shapes_per_kind() {
     use paged_compose::PathSegment::{CubicTo, LineTo};
