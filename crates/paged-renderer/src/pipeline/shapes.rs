@@ -399,6 +399,90 @@ fn emit_arrowhead(
     });
 }
 
+/// `LeftLineEnd` / `RightLineEnd` and their scales, as one value — the
+/// same four fields on a `<GraphicLine>` and (C-62) a `<Polygon>`.
+#[derive(Clone, Copy)]
+pub(super) struct LineEnds {
+    start: paged_model::ArrowheadType,
+    end: paged_model::ArrowheadType,
+    start_scale: f32,
+    end_scale: f32,
+}
+
+impl LineEnds {
+    pub(super) fn of_line(line: &GraphicLine) -> Self {
+        Self {
+            start: line.start_arrow,
+            end: line.end_arrow,
+            start_scale: line.start_arrow_scale,
+            end_scale: line.end_arrow_scale,
+        }
+    }
+
+    pub(super) fn of_polygon(poly: &paged_model::Polygon) -> Self {
+        Self {
+            start: poly.start_arrow,
+            end: poly.end_arrow,
+            start_scale: poly.start_arrow_scale,
+            end_scale: poly.end_arrow_scale,
+        }
+    }
+
+    pub(super) fn draws(&self) -> bool {
+        self.start.draws() || self.end.draws()
+    }
+}
+
+/// The line ends of one open run of anchors: `start` at its first
+/// anchor, `end` at its last, each oriented outward along that end's
+/// *Bezier tangent*. Built in the anchors' inner coords and emitted
+/// through `transform`, the stroke's own mapping. On a curved final
+/// segment the chord between the last two anchors points the wrong
+/// way; `path_end_outward_dir` uses the endpoint's own control handle
+/// (the cubic's true tangent there) and only falls back to the chord
+/// when the handle coincides with the anchor (the straight-segment
+/// serialisation). A run of fewer than two anchors has no direction and
+/// draws nothing.
+pub(super) fn emit_path_line_ends(
+    page: &mut BuiltPage,
+    run: &[paged_model::PathAnchor],
+    ends: LineEnds,
+    stroke_width: f32,
+    paint: Paint,
+    transform: Transform,
+) {
+    let n = run.len();
+    if n < 2 {
+        return;
+    }
+    if ends.start.draws() {
+        let a0 = run[0].anchor;
+        emit_arrowhead(
+            page,
+            ends.start,
+            a0,
+            path_end_outward_dir(a0, run[0].right, run[1].anchor),
+            stroke_width,
+            ends.start_scale,
+            paint,
+            transform,
+        );
+    }
+    if ends.end.draws() {
+        let an = run[n - 1].anchor;
+        emit_arrowhead(
+            page,
+            ends.end,
+            an,
+            path_end_outward_dir(an, run[n - 1].left, run[n - 2].anchor),
+            stroke_width,
+            ends.end_scale,
+            paint,
+            transform,
+        );
+    }
+}
+
 pub(super) fn emit_line_into(
     page: &mut BuiltPage,
     line: &GraphicLine,
@@ -477,41 +561,16 @@ pub(super) fn emit_line_into(
             stroke,
             transform: outer,
         });
-        // Arrowheads at the first / last anchor, oriented outward along
-        // each end's *Bezier tangent*. Built in inner coords and emitted
-        // through the same `outer` transform as the stroke. On a curved
-        // final segment the chord between the last two anchors points
-        // the wrong way; `path_end_outward_dir` uses the endpoint's own
-        // control handle (the cubic's true tangent there) and only
-        // falls back to the chord when the handle coincides with the
-        // anchor (the straight-segment serialisation).
-        let n = line.anchors.len();
-        if line.start_arrow.draws() {
-            let a0 = line.anchors[0].anchor;
-            emit_arrowhead(
-                page,
-                line.start_arrow,
-                a0,
-                path_end_outward_dir(a0, line.anchors[0].right, line.anchors[1].anchor),
-                stroke_width,
-                line.start_arrow_scale,
-                stroke_paint,
-                outer,
-            );
-        }
-        if line.end_arrow.draws() {
-            let an = line.anchors[n - 1].anchor;
-            emit_arrowhead(
-                page,
-                line.end_arrow,
-                an,
-                path_end_outward_dir(an, line.anchors[n - 1].left, line.anchors[n - 2].anchor),
-                stroke_width,
-                line.end_arrow_scale,
-                stroke_paint,
-                outer,
-            );
-        }
+        // Arrowheads at the first / last anchor of the whole anchor
+        // list, through the same `outer` transform as the stroke.
+        emit_path_line_ends(
+            page,
+            &line.anchors,
+            LineEnds::of_line(line),
+            stroke_width,
+            stroke_paint,
+            outer,
+        );
         return;
     }
     // Anchorless line (synthetic `GeometricBounds`-only): rasterise the

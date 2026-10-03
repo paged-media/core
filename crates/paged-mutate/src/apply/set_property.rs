@@ -691,17 +691,21 @@ pub(super) fn apply_set_property(
         }
         // ---- SDK Phase 5 (v1 sweep) — stroke end-cap (enum string)
         // Per-frame override. Empty string clears the override.
-        // Only Rectangle / Oval / Polygon / GraphicLine carry the
-        // `end_cap` field in the parse layer — TextFrame's stroke
-        // shape does not (its renderer path uses a simple solid
-        // outline rather than a stroked path with cap/join). Falls
-        // through to UnsupportedProperty for TextFrame.
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeEndCap) => {
+        // Rectangle carried the field from the start; C-62 gave it to
+        // Polygon (a pen path's two ends), GraphicLine and Oval (dash
+        // ends), which the model had read only on `<Rectangle>` — so
+        // until then a pen path could not take a cap at all. TextFrame
+        // has no `end_cap` (its stroke is the frame box) and falls
+        // through to UnsupportedProperty.
+        (
+            NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeEndCap,
+        ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_end_cap_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.end_cap.clone().unwrap_or_default();
-            rect.end_cap = if new_val.is_empty() {
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() {
                 None
             } else {
                 Some(new_val.clone())
@@ -715,9 +719,11 @@ pub(super) fn apply_set_property(
             )
         }
         // ---- v43 batch — stroke line ends (arrowheads) -------------
-        // GraphicLine-only: the kind that parses `LeftLineEnd` /
-        // `RightLineEnd` (InDesign draws line ends on open paths, and
-        // IDML serialises open paths as `<GraphicLine>`). The wire
+        // The kinds that carry `LeftLineEnd` / `RightLineEnd`: the
+        // `<GraphicLine>` (v43), and since C-62 the `<Polygon>` — a pen
+        // or pencil path is a polygon with an OPEN contour, and InDesign
+        // draws line ends on open contours (v43 assumed IDML serialises
+        // every open path as a `<GraphicLine>`; it does not). The wire
         // token is the IDML `ArrowHead` enumeration name; empty string
         // clears (= `"None"`). Unknown tokens are REJECTED rather than
         // stored as `ArrowheadType::Other` — `Other` has no faithful
@@ -725,7 +731,7 @@ pub(super) fn apply_set_property(
         // inverse. A prior `Other` (out-of-vocabulary source token,
         // unreachable from real InDesign exports) inverts to clear.
         (
-            NodeId::GraphicLine(id),
+            NodeId::GraphicLine(_) | NodeId::Polygon(_),
             PropertyPath::FrameStrokeStartArrowhead | PropertyPath::FrameStrokeEndArrowhead,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -743,12 +749,12 @@ pub(super) fn apply_set_property(
                     t => t,
                 }
             };
-            let line = find_graphic_line_mut(doc, id)
+            let (start, end) = find_line_ends_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let slot = if matches!(path, PropertyPath::FrameStrokeStartArrowhead) {
-                &mut line.start_arrow
+                start
             } else {
-                &mut line.end_arrow
+                end
             };
             let prev = match *slot {
                 paged_model::ArrowheadType::None => String::new(),

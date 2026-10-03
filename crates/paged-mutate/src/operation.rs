@@ -521,8 +521,9 @@ pub enum PropertyPath {
     /// SDK Phase 5 (v1 sweep) — frame stroke end-cap. Wire value is
     /// `Value::Text` carrying the IDML enum string
     /// (`"ButtEndCap"`, `"RoundEndCap"`, `"ProjectingEndCap"`).
-    /// Addressed against any page-item kind that carries stroke
-    /// state; the renderer uses the field on next paint. Empty
+    /// Addressed against Rectangle, Polygon, GraphicLine and Oval (the
+    /// last three since C-62 — a pen path is a Polygon); TextFrame has
+    /// no cap. The renderer uses the field on next paint. Empty
     /// string clears the override.
     FrameStrokeEndCap,
     /// SDK Phase 5 (v1 sweep) — `<TextFramePreference InsetSpacing="…">`
@@ -1337,9 +1338,11 @@ pub enum PropertyPath {
     /// `Value::Text` carrying the IDML `ArrowHead` enumeration token
     /// (`"SimpleArrowHead"`, `"TriangleArrowHead"`,
     /// `"CircleSolidArrowHead"`, ... — `ArrowheadType::as_idml`'s
-    /// vocabulary); empty string clears (= `"None"`). GraphicLine-only
-    /// (the kind that parses the attribute; InDesign draws line ends
-    /// on open paths, which IDML serialises as `<GraphicLine>`).
+    /// vocabulary); empty string clears (= `"None"`). GraphicLine and,
+    /// since C-62, Polygon: InDesign draws line ends on open paths, and
+    /// a pen or pencil path is a `<Polygon>` whose contour is open —
+    /// not always a `<GraphicLine>`, as v43 assumed. On a polygon every
+    /// open contour takes them; a closed one draws none.
     /// Unknown tokens raise `InvalidValue`. Paint-only
     /// (`frame_style`). Undo note: a prior out-of-vocabulary token
     /// (`ArrowheadType::Other`, unreachable from real InDesign

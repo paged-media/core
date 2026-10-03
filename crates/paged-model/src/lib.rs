@@ -492,8 +492,11 @@ impl CornerOption {
 /// unrecognised-but-present names become `Other` (drawn as a triangle
 /// and counted as approximated; [`Self::as_idml`] can't reproduce the
 /// source token for it, so writers leave `Other` untouched).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ArrowheadType {
+    /// No line end — InDesign's default, and what a document written
+    /// before a kind carried line ends loads as.
+    #[default]
     None,
     /// Open / simple arrow — drawn as a filled triangle.
     Simple,
@@ -565,6 +568,13 @@ impl ArrowheadType {
     pub fn draws(self) -> bool {
         !matches!(self, Self::None)
     }
+}
+
+/// Serde default for `LeftArrowHeadScale` / `RightArrowHeadScale`:
+/// InDesign's 100 %, which a derived `0.0` would turn into a vanished
+/// arrowhead on every document written before the field existed.
+fn default_arrowhead_scale() -> f32 {
+    100.0
 }
 
 /// Ruler guide on a spread. See [`Spread::guides`].
@@ -1730,6 +1740,12 @@ pub struct Oval {
     /// [`Rectangle::corners`] and [`Oval::corner_radius`].
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. An ellipse is a
+    /// closed contour, so the cap shows only on the ends of a dashed or
+    /// dotted stroke's dashes — which is where IDML carries it (4 corpus
+    /// ovals spell it).
+    #[serde(default)]
+    pub end_cap: Option<String>,
 }
 
 impl Oval {
@@ -1778,6 +1794,7 @@ impl Oval {
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
+            end_cap: None,
         }
     }
 }
@@ -1883,6 +1900,12 @@ pub struct GraphicLine {
     /// [`Rectangle::corners`] and [`GraphicLine::corner_radius`].
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. A line is open, so
+    /// the cap shapes both of its ends (128 corpus lines spell
+    /// `RoundEndCap`). It was read only on `<Rectangle>` until C-62, so
+    /// every one of those lines drew butt ends.
+    #[serde(default)]
+    pub end_cap: Option<String>,
 }
 
 impl GraphicLine {
@@ -1923,6 +1946,7 @@ impl GraphicLine {
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
+            end_cap: None,
         }
     }
 }
@@ -2256,6 +2280,30 @@ pub struct Polygon {
     /// at every straight-line corner of every closed contour.
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. A pen or pencil path
+    /// is a `<Polygon>` whose contour is open, so this is the cap on its
+    /// two ends (109 corpus polygons spell it: 78 `ButtEndCap`, 31
+    /// `RoundEndCap`). A closed contour shows it only on dash ends.
+    #[serde(default)]
+    pub end_cap: Option<String>,
+    /// C-62 — `LeftLineEnd`: the arrowhead at an open contour's first
+    /// anchor. See [`GraphicLine::start_arrow`]; IDML writes the line-end
+    /// vocabulary on every page item (78 corpus polygons spell it), and
+    /// InDesign draws it on a polygon's open contours. Nothing on a
+    /// closed one.
+    #[serde(default)]
+    pub start_arrow: ArrowheadType,
+    /// C-62 — `RightLineEnd`: the arrowhead at an open contour's last
+    /// anchor.
+    #[serde(default)]
+    pub end_arrow: ArrowheadType,
+    /// C-62 — `LeftArrowHeadScale` (percent, default 100); see
+    /// [`GraphicLine::start_arrow_scale`].
+    #[serde(default = "default_arrowhead_scale")]
+    pub start_arrow_scale: f32,
+    /// C-62 — `RightArrowHeadScale` (percent, default 100).
+    #[serde(default = "default_arrowhead_scale")]
+    pub end_arrow_scale: f32,
 }
 
 impl Polygon {
@@ -2308,6 +2356,11 @@ impl Polygon {
             corner_radius: None,
             corner_option: None,
             corners: Default::default(),
+            end_cap: None,
+            start_arrow: ArrowheadType::None,
+            end_arrow: ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
         }
     }
 }

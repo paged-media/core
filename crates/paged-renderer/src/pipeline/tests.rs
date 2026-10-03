@@ -4271,56 +4271,15 @@ fn b23_axis_aligned_quad_matches_the_rect_builder() {
 /// A `paged_model::Polygon` with everything off — the B-23 clip test
 /// only cares about `self_id` / `anchors` / the corner fields.
 fn b23_bare_polygon(self_id: &str) -> paged_model::Polygon {
-    paged_model::Polygon {
-        self_id: Some(self_id.to_string()),
-        bounds: paged_model::Bounds {
+    paged_model::Polygon::new(
+        self_id,
+        paged_model::Bounds {
             top: 0.0,
             left: 0.0,
             bottom: 90.0,
             right: 120.0,
         },
-        item_transform: None,
-        fill_color: None,
-        fill_tint: None,
-        stroke_color: None,
-        stroke_weight: None,
-        stroke_type: None,
-        stroke_alignment: None,
-        end_join: None,
-        miter_limit: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        applied_object_style: None,
-        anchors: Vec::new(),
-        subpath_starts: Vec::new(),
-        subpath_open: Vec::new(),
-        text_wrap: None,
-        item_layer: None,
-        effects: None,
-        gradient_fill_angle: None,
-        gradient_fill_length: None,
-        gradient_stroke_angle: None,
-        gradient_stroke_length: None,
-        opacity: None,
-        blend_mode: None,
-        text_paths: Vec::new(),
-        image_link: None,
-        has_image_element: false,
-        has_inline_pdf: false,
-        has_inline_eps: false,
-        image_item_transform: None,
-        image_bytes: None,
-        image_clip: None,
-        overprint_fill: false,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
-    }
+    )
 }
 
 /// B-18 × B-23 — a polygon container clips its nested children to the

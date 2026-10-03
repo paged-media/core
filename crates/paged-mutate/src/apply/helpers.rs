@@ -340,6 +340,44 @@ pub(super) fn find_end_join_mut<'a>(
     }
 }
 
+/// C-62 — locate the `end_cap: Option<String>` field. Every stroked
+/// path kind carries it: Rectangle (the original), and since C-62
+/// Polygon (a pen path's two ends), GraphicLine and Oval (dash ends on
+/// a closed outline). TextFrame does not — its stroke is the frame box.
+pub(super) fn find_end_cap_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.end_cap),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.end_cap),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.end_cap),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.end_cap),
+        _ => None,
+    }
+}
+
+/// C-62 — locate the `(start_arrow, end_arrow)` line-end pair: the
+/// `<GraphicLine>` (v43) and, since C-62, the `<Polygon>`, whose OPEN
+/// contours draw them (a pen or pencil path).
+pub(super) fn find_line_ends_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<(
+    &'a mut paged_model::ArrowheadType,
+    &'a mut paged_model::ArrowheadType,
+)> {
+    match node {
+        NodeId::GraphicLine(id) => {
+            find_graphic_line_mut(doc, id).map(|l| (&mut l.start_arrow, &mut l.end_arrow))
+        }
+        NodeId::Polygon(id) => {
+            find_polygon_mut(doc, id).map(|p| (&mut p.start_arrow, &mut p.end_arrow))
+        }
+        _ => None,
+    }
+}
+
 /// C-24 — locate the `stroke_alignment: Option<String>` field on the
 /// kinds that carry one, which are exactly the kinds whose renderer
 /// offsets the stroked outline by it. `GraphicLine` has no such field.

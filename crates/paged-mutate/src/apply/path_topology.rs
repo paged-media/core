@@ -1494,40 +1494,16 @@ pub(super) fn new_graphic_line(
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
 ) -> GraphicLine {
+    // The rest at the model's defaults — no arrowheads, no cap, and the
+    // C-18 corner fields stored but never rendered on an open contour
+    // (see `paged_model::GraphicLine::corner_radius`).
     GraphicLine {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         stroke_color,
         stroke_weight,
-        stroke_type: None,
-        end_join: None,
-        miter_limit: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        applied_object_style: None,
-        text_wrap: None,
-        item_layer: None,
         anchors,
         subpath_starts,
         subpath_open,
-        text_paths: Vec::new(),
-        effects: None,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        start_arrow: paged_model::ArrowheadType::None,
-        end_arrow: paged_model::ArrowheadType::None,
-        start_arrow_scale: 100.0,
-        end_arrow_scale: 100.0,
-        // C-18: parsed + round-tripped, never rendered on an open
-        // stroke-only contour — see `paged_model::GraphicLine::
-        // corner_radius`.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..GraphicLine::new(self_id, bounds)
     }
 }
 
@@ -1542,99 +1518,27 @@ pub(super) fn new_polygon(
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
 ) -> Polygon {
+    // The rest at the model's defaults. B-23: a freshly-inserted polygon
+    // starts with square corners; `frameCornerOption*` /
+    // `frameCornerRadius*` writes fill these in afterwards, as the
+    // stroke-end paths do the cap and line ends.
     Polygon {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         fill_color,
-        fill_tint: None,
         stroke_color,
         stroke_weight,
-        stroke_type: None,
-        stroke_alignment: None,
-        end_join: None,
-        miter_limit: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        applied_object_style: None,
         anchors,
         subpath_starts,
         subpath_open,
-        text_wrap: None,
-        item_layer: None,
-        effects: None,
-        gradient_fill_angle: None,
-        gradient_fill_length: None,
-        gradient_stroke_angle: None,
-        gradient_stroke_length: None,
-        opacity: None,
-        blend_mode: None,
-        text_paths: Vec::new(),
-        image_link: None,
-        has_image_element: false,
-        has_inline_pdf: false,
-        has_inline_eps: false,
-        image_item_transform: None,
-        image_bytes: None,
-        image_clip: None,
-        overprint_fill: false,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        // B-23: a freshly-inserted polygon starts with square
-        // corners; `frameCornerOption*` / `frameCornerRadius*` writes
-        // fill these in afterwards.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..Polygon::new(self_id, bounds)
     }
 }
 
 pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Oval {
+    // C-18: the corner fields stay at their defaults — parsed and
+    // round-tripped, never rendered (an ellipse has no corner).
     Oval {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         fill_color,
-        fill_tint: None,
-        stroke_color: None,
-        stroke_weight: None,
-        stroke_type: None,
-        stroke_alignment: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        drop_shadow: None,
-        stroke_drop_shadow: None,
-        applied_object_style: None,
-        text_wrap: None,
-        item_layer: None,
-        effects: None,
-        gradient_fill_angle: None,
-        gradient_fill_length: None,
-        gradient_stroke_angle: None,
-        gradient_stroke_length: None,
-        opacity: None,
-        blend_mode: None,
-        image_link: None,
-        has_image_element: false,
-        has_inline_pdf: false,
-        has_inline_eps: false,
-        image_item_transform: None,
-        image_bytes: None,
-        image_clip: None,
-        overprint_fill: false,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        // C-18: parsed + round-tripped, never rendered — an ellipse
-        // has no corner. See `paged_model::Oval::corner_radius`.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..Oval::new(self_id, bounds)
     }
 }
 

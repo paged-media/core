@@ -286,6 +286,53 @@ pub(super) fn emit_polygon_into(
             resolved.stroke_dash,
         ),
     );
+    // C-62 — line ends on a pen / pencil path: every OPEN contour takes
+    // `LeftLineEnd` at its first anchor and `RightLineEnd` at its last,
+    // the way a `<GraphicLine>` does, painted with the stroke's paint. A
+    // closed contour has no end, so it draws none. Inside the blend
+    // group, so the arrowheads fade with the stroke they finish.
+    let ends = super::shapes::LineEnds::of_polygon(poly);
+    if let Geometry::Polygon {
+        anchors,
+        subpath_starts,
+        subpath_open,
+        bbox,
+    } = &resolved.geometry
+    {
+        let open_runs: Vec<(usize, usize)> = contour_ranges(anchors.len(), subpath_starts)
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| subpath_open.get(*i).copied().unwrap_or(false))
+            .map(|(_, range)| range)
+            .collect();
+        let paint = if ends.draws() && poly_weight > 0.0 && !open_runs.is_empty() {
+            resolved.stroke_color.and_then(|id| {
+                color_id_to_paint_with_list_dir(
+                    id,
+                    palette,
+                    color_ctx,
+                    &mut page.list,
+                    resolved.gradient_stroke_angle,
+                    resolved.gradient_stroke_length,
+                    Some((bbox.w, bbox.h)),
+                )
+            })
+        } else {
+            None
+        };
+        if let Some(paint) = paint {
+            for (lo, hi) in open_runs {
+                super::shapes::emit_path_line_ends(
+                    page,
+                    &anchors[lo..hi],
+                    ends,
+                    poly_weight,
+                    paint,
+                    outer,
+                );
+            }
+        }
+    }
     if needs_group {
         pop_blend_group(page);
     }

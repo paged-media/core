@@ -811,6 +811,16 @@ fn corner_option_idml(v: paged_model::CornerOption) -> &'static str {
     }
 }
 
+/// A line end as the `frame.stroke*Arrowhead` paths spell it: `None` reads
+/// `""` (the cleared spelling the mutation takes), and so does an
+/// out-of-vocabulary `Other`, whose source token was discarded at parse.
+fn arrowhead_text(end: paged_model::ArrowheadType) -> String {
+    match end {
+        paged_model::ArrowheadType::None => String::new(),
+        t => t.as_idml().to_string(),
+    }
+}
+
 /// E-1 — the eight per-corner read rows, in IDML `corners[4]` order
 /// `[top_left, top_right, bottom_right, bottom_left]`.
 ///
@@ -6152,6 +6162,21 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(p.stroke_dash.clone())),
                             },
+                            // C-62 — a pen path's cap and line ends, read
+                            // with the GraphicLine's spelling (`None` and
+                            // an out-of-vocabulary `Other` both read "").
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(p.end_cap.clone().unwrap_or_default())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeStartArrowhead,
+                                value: Some(Value::Text(arrowhead_text(p.start_arrow))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndArrowhead,
+                                value: Some(Value::Text(arrowhead_text(p.end_arrow))),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
@@ -6258,17 +6283,17 @@ impl CanvasModel {
                             // (its source token was discarded at parse).
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeStartArrowhead,
-                                value: Some(Value::Text(match l.start_arrow {
-                                    paged_model::ArrowheadType::None => String::new(),
-                                    t => t.as_idml().to_string(),
-                                })),
+                                value: Some(Value::Text(arrowhead_text(l.start_arrow))),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeEndArrowhead,
-                                value: Some(Value::Text(match l.end_arrow {
-                                    paged_model::ArrowheadType::None => String::new(),
-                                    t => t.as_idml().to_string(),
-                                })),
+                                value: Some(Value::Text(arrowhead_text(l.end_arrow))),
+                            },
+                            // C-62 — the line's cap (read only on a
+                            // rectangle before).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(l.end_cap.clone().unwrap_or_default())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
@@ -6380,6 +6405,11 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(o.stroke_dash.clone())),
+                            },
+                            // C-62 — the cap on a dashed outline's dashes.
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(o.end_cap.clone().unwrap_or_default())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
