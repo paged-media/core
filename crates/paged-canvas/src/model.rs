@@ -595,7 +595,7 @@ fn frame_to_tree_node(
                 kind: "TextFrame".to_string(),
                 label: format!("TextFrame {id}"),
                 children: Vec::new(),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Rectangle(i) => spread.rectangles.get(i).and_then(|f| {
@@ -605,7 +605,7 @@ fn frame_to_tree_node(
                 kind: "Rectangle".to_string(),
                 label: format!("Rectangle {id}"),
                 children: Vec::new(),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Oval(i) => spread.ovals.get(i).and_then(|f| {
@@ -615,7 +615,7 @@ fn frame_to_tree_node(
                 kind: "Oval".to_string(),
                 label: format!("Oval {id}"),
                 children: Vec::new(),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Polygon(i) => spread.polygons.get(i).and_then(|f| {
@@ -625,7 +625,7 @@ fn frame_to_tree_node(
                 kind: "Polygon".to_string(),
                 label: format!("Polygon {id}"),
                 children: Vec::new(),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::GraphicLine(i) => spread.graphic_lines.get(i).and_then(|f| {
@@ -635,7 +635,7 @@ fn frame_to_tree_node(
                 kind: "GraphicLine".to_string(),
                 label: format!("GraphicLine {id}"),
                 children: Vec::new(),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Group(i) => spread.groups.get(i).map(|g| {
@@ -649,7 +649,7 @@ fn frame_to_tree_node(
                 id: Some(ElementId::Group(id.clone())),
                 kind: "Group".to_string(),
                 label: format!("Group {id}"),
-                plugin_metadata: tree_plugin_metadata(spread, &id),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
                 children,
             }
         }),
@@ -8486,14 +8486,14 @@ impl CanvasModel {
                 kind: "Page".to_string(),
                 label,
                 children: frame_nodes,
-                plugin_metadata: Vec::new(),
+                plugin_metadata: None,
             });
             spread_nodes.push(SceneTreeNode {
                 id: None,
                 kind: "Spread".to_string(),
                 label: spread_label,
                 children: page_nodes,
-                plugin_metadata: Vec::new(),
+                plugin_metadata: None,
             });
         }
         spread_nodes
@@ -8821,6 +8821,190 @@ impl CanvasModel {
     /// Rectangles / Ovals declared via `GeometricBounds` only (no
     /// `<PathGeometry>`) come back with an empty `anchors` vector —
     /// callers treat that as "nothing to draw".
+    /// v66 (RFI C-69) — a text frame's composed glyphs as outlines in
+    /// page space, one run per fill colour (see
+    /// [`crate::channel::TextOutlinesResult`]). Built from the export
+    /// build's glyph side-channel: each `GlyphRunEntry` names the exact
+    /// `FillPath` command that draws the glyph, so the outline is that
+    /// command's path through that command's transform — no second font
+    /// pass. A glyph belongs to the frame when its origin lies inside the
+    /// frame's page-space box (a threaded story's other frames, and
+    /// overset text, are excluded by construction).
+    pub fn text_outlines(
+        &self,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::TextOutlinesResult> {
+        use crate::channel::{PathAnchorTriple, TextOutlineRun, TextOutlinesResult};
+        use crate::element_selection::ElementId;
+        use paged_compose::{DisplayCommand, Paint, PathSegment};
+
+        let ElementId::TextFrame(raw) = id else {
+            return None;
+        };
+        let (bounds, item_transform, page_self) =
+            self.scene().spreads.iter().find_map(|parsed| {
+                let f = parsed
+                    .spread
+                    .text_frames
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw.as_str()))?;
+                let aabb = crate::hit::transform_bbox(f.bounds, f.item_transform);
+                let (cx, cy) = (
+                    (aabb.left + aabb.right) * 0.5,
+                    (aabb.top + aabb.bottom) * 0.5,
+                );
+                let page = parsed.spread.pages.iter().find(|p| {
+                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
+                })?;
+                Some((f.bounds, f.item_transform, page.self_id.clone()?))
+            })?;
+        let built = self.build_for_export().ok()?;
+        let bp = built.pages.iter().find(|p| p.id.as_str() == page_self)?;
+        let spread_box = crate::hit::transform_bbox(bounds, item_transform);
+        let (ox, oy) = bp.spread_origin;
+        let slack = 0.5;
+        let (l, t, r, b) = (
+            spread_box.left - ox - slack,
+            spread_box.top - oy - slack,
+            spread_box.right - ox + slack,
+            spread_box.bottom - oy + slack,
+        );
+        let table = bp.list.glyph_runs.as_ref()?;
+        let mut runs: Vec<TextOutlineRun> = Vec::new();
+        let mut skipped = 0u32;
+        for entry in &table.entries {
+            let (gx, gy) = (entry.transform.0[4], entry.transform.0[5]);
+            if !(gx >= l && gx <= r && gy >= t && gy <= b) {
+                continue;
+            }
+            let (rgb, cmyk) = match &entry.paint {
+                Paint::Solid(c) => ([c.r, c.g, c.b], None),
+                Paint::Cmyk {
+                    c, m, y, k, rgb, ..
+                } => ([rgb.r, rgb.g, rgb.b], Some([*c, *m, *y, *k])),
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            if entry.is_stroke {
+                skipped += 1;
+                continue;
+            }
+            let (path_id, xf) = match bp.list.commands.get(entry.command_index as usize) {
+                Some(DisplayCommand::FillPath {
+                    path_id, transform, ..
+                })
+                | Some(DisplayCommand::FillPathBlend {
+                    path_id, transform, ..
+                }) => (*path_id, *transform),
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let Some(path) = bp.list.paths.get(path_id) else {
+                skipped += 1;
+                continue;
+            };
+            let run = match runs.iter_mut().find(|r| r.rgb == rgb && r.cmyk == cmyk) {
+                Some(r) => r,
+                None => {
+                    runs.push(TextOutlineRun {
+                        rgb,
+                        cmyk,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        glyphs: 0,
+                    });
+                    runs.last_mut().expect("just pushed")
+                }
+            };
+            run.glyphs += 1;
+            let p = |x: f32, y: f32| -> [f32; 2] {
+                let (px, py) = xf.apply(x, y);
+                [px, py]
+            };
+            let corner = |q: [f32; 2]| PathAnchorTriple {
+                anchor: q,
+                left: q,
+                right: q,
+            };
+            let mut start = run.anchors.len();
+            for seg in &path.segments {
+                match *seg {
+                    PathSegment::MoveTo { x, y } => {
+                        start = run.anchors.len();
+                        run.subpath_starts.push(start as u32);
+                        run.anchors.push(corner(p(x, y)));
+                    }
+                    PathSegment::LineTo { x, y } => run.anchors.push(corner(p(x, y))),
+                    PathSegment::QuadTo { cx, cy, x, y } => {
+                        // Degree-elevate: c1 = p0 + 2/3 (q - p0), c2 = p + 2/3 (q - p).
+                        let Some(last) = run.anchors.last_mut() else {
+                            continue;
+                        };
+                        let p0 = last.anchor;
+                        let q = p(cx, cy);
+                        let pe = p(x, y);
+                        last.right = [
+                            p0[0] + 2.0 / 3.0 * (q[0] - p0[0]),
+                            p0[1] + 2.0 / 3.0 * (q[1] - p0[1]),
+                        ];
+                        run.anchors.push(PathAnchorTriple {
+                            anchor: pe,
+                            left: [
+                                pe[0] + 2.0 / 3.0 * (q[0] - pe[0]),
+                                pe[1] + 2.0 / 3.0 * (q[1] - pe[1]),
+                            ],
+                            right: pe,
+                        });
+                    }
+                    PathSegment::CubicTo {
+                        cx1,
+                        cy1,
+                        cx2,
+                        cy2,
+                        x,
+                        y,
+                    } => {
+                        let Some(last) = run.anchors.last_mut() else {
+                            continue;
+                        };
+                        last.right = p(cx1, cy1);
+                        let pe = p(x, y);
+                        run.anchors.push(PathAnchorTriple {
+                            anchor: pe,
+                            left: p(cx2, cy2),
+                            right: pe,
+                        });
+                    }
+                    PathSegment::Close => {
+                        // A closing anchor that repeats the start folds
+                        // into it (its incoming handle moves over).
+                        if run.anchors.len() > start + 1 {
+                            let first = run.anchors[start].anchor;
+                            let last = *run.anchors.last().expect("non-empty");
+                            if (last.anchor[0] - first[0]).abs() < 1e-4
+                                && (last.anchor[1] - first[1]).abs() < 1e-4
+                            {
+                                run.anchors.pop();
+                                run.anchors[start].left = last.left;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Some(TextOutlinesResult {
+            id: id.clone(),
+            page_id: bp.id.clone(),
+            runs,
+            skipped_glyphs: skipped,
+        })
+    }
+
     pub fn path_anchors(
         &self,
         id: &crate::element_selection::ElementId,

@@ -719,6 +719,10 @@ impl WorkerCore {
                 let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
                 WorkerToMainKind::PathAnchors { result }
             }
+            MainToWorkerKind::RequestTextOutlines { id } => {
+                let result = self.model.as_ref().and_then(|m| m.text_outlines(&id));
+                WorkerToMainKind::TextOutlines { result }
+            }
             MainToWorkerKind::RequestNearestPathPoint { id, point } => {
                 let result = self
                     .model

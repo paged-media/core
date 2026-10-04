@@ -533,7 +533,13 @@ export type WorkerToMain = WorkerToMainKind & {
 //     clone of each element directly above its source, one undo step,
 //     the new ids in `mutationApplied.minted`. A new op an older worker
 //     cannot apply.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(65);
+// v66 — `RequestTextOutlines { id }` → `TextOutlines { result }` (RFI
+// C-69): a text frame's composed glyphs as path outlines in page space,
+// one run per fill colour — what "Create Outlines" inserts as compound
+// paths. A new message kind an older worker cannot answer, hence the
+// bump. (Unpublished: built and gated on a branch, tag and publish are
+// the owner's.)
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(66);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -971,6 +977,10 @@ pub enum MainToWorkerKind {
     /// declared via `GeometricBounds` only) come back with `anchors`
     /// empty.
     RequestPathAnchors {
+        id: crate::element_selection::ElementId,
+    },
+    /// v66 (RFI C-69) — a text frame's composed glyphs as outlines.
+    RequestTextOutlines {
         id: crate::element_selection::ElementId,
     },
     /// B-06 (protocol v30) — closest on-curve point on the element's
@@ -1690,6 +1700,9 @@ pub enum WorkerToMainKind {
     /// element's anchor list is empty (lets the caller distinguish
     /// "no path data" from "didn't resolve").
     PathAnchors { result: Option<PathAnchorsResult> },
+    /// v66 — `RequestTextOutlines` reply. `None` when the id is not a
+    /// text frame, does not resolve, or sits on no page.
+    TextOutlines { result: Option<TextOutlinesResult> },
     /// B-22 (protocol v57) — `RequestPlanarRegions` reply.
     PlanarRegions { result: PlanarRegionsResult },
     /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
@@ -3279,11 +3292,14 @@ pub struct SceneTreeNode {
     /// `x-paged:` Label entries, the same rows `RequestElementProperties`
     /// reports as `pluginMetadata`), so one tree read answers what used to
     /// take one property read PER LEAF: paged.draw's link discovery cost
-    /// 1 403 round trips on a 1 403-leaf document. Empty and omitted for
-    /// an item that carries none, and for spread / page rows. Additive.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// 1 403 round trips on a 1 403-leaf document. PRESENT on every page
+    /// ITEM row — empty when the item carries none — and omitted only for
+    /// spread / page rows, so a reader can tell "this engine reports
+    /// metadata here and there is none" from "this engine predates the
+    /// field" (an older engine omits it everywhere). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]
-    pub plugin_metadata: Vec<PluginMetadataEntry>,
+    pub plugin_metadata: Option<Vec<PluginMetadataEntry>>,
 }
 
 /// C-65 — one plugin-metadata Label entry on a scene-tree node.
@@ -3328,6 +3344,40 @@ pub struct PathAnchorsResult {
 
 /// B-06 — `RequestNearestPathPoint` reply payload. Coordinates are
 /// in the element's local space (the `PathAnchors` space).
+/// v66 (RFI C-69) — `RequestTextOutlines` reply payload: the frame's
+/// composed glyphs as closed outlines, in PAGE space (the space
+/// `insertPath` takes), grouped into one run per fill colour so each
+/// becomes one compound path. Outlines are exactly the shapes the
+/// renderer fills (the same `FillPath` commands), so what is inserted
+/// looks like what was on screen. Stroked text, gradients on text and
+/// overset text are not included.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOutlinesResult {
+    pub id: crate::element_selection::ElementId,
+    pub page_id: PageId,
+    pub runs: Vec<TextOutlineRun>,
+    /// Glyphs left out (stroked, or a non-solid paint).
+    #[serde(default)]
+    pub skipped_glyphs: u32,
+}
+
+/// One fill colour's glyph outlines (see [`TextOutlinesResult`]).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOutlineRun {
+    /// sRGB, 0..1 — the colour the renderer filled with.
+    pub rgb: [f32; 3],
+    /// The CMYK the paint carried, 0..1, when it was a process colour.
+    #[serde(default)]
+    pub cmyk: Option<[f32; 4]>,
+    pub anchors: Vec<PathAnchorTriple>,
+    pub subpath_starts: Vec<u32>,
+    pub glyphs: u32,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -3889,8 +3939,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v65() {
-        assert_eq!(PROTOCOL_VERSION.0, 65);
+    fn protocol_version_is_v66() {
+        assert_eq!(PROTOCOL_VERSION.0, 66);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

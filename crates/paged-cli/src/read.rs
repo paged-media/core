@@ -163,6 +163,14 @@ pub enum ReadCommand {
         /// `kind:id` address of a path-carrying element.
         id: String,
     },
+    /// A text frame's composed glyphs as outlines in page space, one
+    /// run per fill colour (what "Create Outlines" inserts).
+    TextOutlines {
+        #[command(flatten)]
+        on: ReadTarget,
+        /// `textFrame:<id>` address.
+        id: String,
+    },
     /// The planar arrangement of overlapping paths — the faces the
     /// pathfinder region verbs address.
     PlanarRegions {
@@ -242,6 +250,7 @@ impl ReadCommand {
             | Self::ElementGeometry { on, .. }
             | Self::GroupLeaves { on, .. }
             | Self::PathAnchors { on, .. }
+            | Self::TextOutlines { on, .. }
             | Self::PlanarRegions { on, .. }
             | Self::MeasureText { on, .. }
             | Self::PlacedAsset { on, .. }
@@ -417,6 +426,10 @@ pub fn run(what: &ReadCommand) -> Result<()> {
         }
         ReadCommand::PathAnchors { id, .. } => {
             let reply = session.send(MainToWorkerKind::RequestPathAnchors { id: address(id)? })?;
+            emit(&reply, compact)
+        }
+        ReadCommand::TextOutlines { id, .. } => {
+            let reply = session.send(MainToWorkerKind::RequestTextOutlines { id: address(id)? })?;
             emit(&reply, compact)
         }
         ReadCommand::PlanarRegions { ids, point, .. } => {

@@ -2283,6 +2283,112 @@
           "subcommands": []
         },
         {
+          "about": "A text frame's composed glyphs as outlines in page space, one run per fill colour (what \"Create Outlines\" inserts)",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`textFrame:<id>` address",
+              "long": null,
+              "name": "id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "ID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "text-outlines",
+          "subcommands": []
+        },
+        {
           "about": "The planar arrangement of overlapping paths — the faces the pathfinder region verbs address",
           "args": [
             {
@@ -3613,5 +3719,5 @@
       "subcommands": []
     }
   ],
-  "protocol": 65
+  "protocol": 66
 }
