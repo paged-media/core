@@ -1649,3 +1649,122 @@ fn request_style_properties_reads_back_what_set_style_property_wrote() {
     assert_eq!(unknown["kind"], "styleProperties");
     assert!(unknown["payload"]["result"].is_null(), "{unknown}");
 }
+
+// ---------------------------------------------------------------------
+// C-1 — a vector scene-layer submit re-encodes only the frame's page
+// ---------------------------------------------------------------------
+
+/// Two spreads of one page each: `tf1` on page 0, `tf2` on page 1.
+fn two_page_core() -> WorkerCore {
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Spread src="Spreads/Spread_s2.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+        )
+        .unwrap();
+        for (spread, page, frame) in [("s1", "p1", "tf1"), ("s2", "p2", "tf2")] {
+            zip.start_file(format!("Spreads/Spread_{spread}.xml"), opts)
+                .unwrap();
+            zip.write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="{spread}" PageCount="1">
+<Page Self="{page}" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<Rectangle Self="{frame}" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1, "protocol": protocol(), "kind": "loadDocument",
+            "payload": { "bytes": buf }
+        }),
+    );
+    assert_eq!(reply["kind"], "documentLoaded", "fixture loads: {reply}");
+    core
+}
+
+fn square(rgb: f32) -> serde_json::Value {
+    serde_json::json!({ "items": [ { "kind": "fillPath",
+        "path": [ { "op": "moveTo", "x": 0.0, "y": 0.0 },
+                  { "op": "lineTo", "x": 50.0, "y": 0.0 },
+                  { "op": "lineTo", "x": 50.0, "y": 50.0 },
+                  { "op": "close" } ],
+        "paint": { "r": rgb, "g": 0.0, "b": 0.0, "a": 1.0 } } ] })
+}
+
+fn submit(core: &mut WorkerCore, frame: &str, layer: serde_json::Value) -> CacheEffect {
+    let (reply, effect) = roundtrip_with_effect(
+        core,
+        &serde_json::json!({ "seq": 80, "protocol": protocol(), "kind": "submitSceneLayer",
+            "payload": { "elementId": frame, "layer": layer } }),
+    );
+    assert_eq!(reply["kind"], "sceneLayerApplied", "{reply}");
+    assert!(reply["payload"]["applied"].as_bool().unwrap(), "{reply}");
+    effect
+}
+
+fn clear(core: &mut WorkerCore, frame: &str) -> CacheEffect {
+    let (reply, effect) = roundtrip_with_effect(
+        core,
+        &serde_json::json!({ "seq": 81, "protocol": protocol(), "kind": "clearSceneLayer",
+            "payload": { "elementId": frame } }),
+    );
+    assert!(reply["payload"]["applied"].as_bool().unwrap(), "{reply}");
+    effect
+}
+
+#[test]
+fn a_scene_layer_submit_invalidates_only_its_frames_page() {
+    let mut core = two_page_core();
+    // The ClearAll this used to answer dropped page 2's cached scene too,
+    // so a sheet edit on page 1 re-encoded every page of the document.
+    assert_eq!(
+        submit(&mut core, "tf1", square(1.0)),
+        CacheEffect::InvalidatePages(vec![0]),
+        "a submit on page 1 leaves page 2's cache intact",
+    );
+    assert_eq!(
+        submit(&mut core, "tf2", square(1.0)),
+        CacheEffect::InvalidatePages(vec![1]),
+    );
+    assert_eq!(
+        submit(&mut core, "tf1", square(0.5)),
+        CacheEffect::InvalidatePages(vec![0]),
+        "a replace re-encodes the same page",
+    );
+    // An emptied layer still re-encodes the page that showed the old one.
+    assert_eq!(
+        submit(&mut core, "tf1", serde_json::json!({ "items": [] })),
+        CacheEffect::InvalidatePages(vec![0]),
+    );
+    assert_eq!(
+        clear(&mut core, "tf2"),
+        CacheEffect::InvalidatePages(vec![1])
+    );
+    // Nothing drawn before or after: nothing to re-encode.
+    assert_eq!(clear(&mut core, "tf2"), CacheEffect::None);
+    assert_eq!(
+        submit(&mut core, "no-such-frame", square(1.0)),
+        CacheEffect::None
+    );
+}

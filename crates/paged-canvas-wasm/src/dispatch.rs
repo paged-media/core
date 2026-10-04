@@ -154,6 +154,40 @@ fn cache_effect_for_story(model: &CanvasModel, story_id: Option<&str>) -> CacheE
     }
 }
 
+/// Run a scene-layer change (submit or clear) for `element_id` and scope
+/// the GPU cache effect to the pages that drew the frame's layer before
+/// the change or draw it after: a layer is the frame's own content, so no
+/// other page's display list moves. The whole cache goes only when the
+/// page list itself changed (a pending relayout the rebuild picked up).
+/// Nothing re-encodes for a frame that draws nowhere. Returns whether the
+/// change applied.
+fn scene_layer_change(
+    model: &mut CanvasModel,
+    element_id: &str,
+    change: impl FnOnce(&mut CanvasModel) -> Result<(), paged_canvas::channel::LoadError>,
+) -> (bool, CacheEffect) {
+    let pages_before = page_table(model);
+    let mut pages = model.pages_showing_scene_layer(element_id);
+    if change(model).is_err() {
+        return (false, CacheEffect::None);
+    }
+    if page_table(model) != pages_before {
+        return (true, CacheEffect::ClearAll);
+    }
+    for p in model.pages_showing_scene_layer(element_id) {
+        if !pages.contains(&p) {
+            pages.push(p);
+        }
+    }
+    pages.sort_unstable();
+    let effect = if pages.is_empty() {
+        CacheEffect::None
+    } else {
+        CacheEffect::InvalidatePages(pages)
+    };
+    (true, effect)
+}
+
 /// v65 — what a font registry change re-laid out, for the
 /// `fontRegistered` / `fontRegistryCleared` replies.
 #[derive(Default)]
@@ -860,9 +894,8 @@ impl WorkerCore {
                 caller,
             } => {
                 // v39 (C-1) — store the plugin scene layer + rebuild so the
-                // next snapshot lowers it inside the frame. Invalidate ALL
-                // page caches: the layer's frame may sit on any page and we
-                // don't (yet) scope it.
+                // next snapshot lowers it inside the frame. Re-encode only
+                // the pages that drew the layer before or draw it now.
                 let applied = match self.model.as_mut() {
                     Some(m) => {
                         // A rebuild failure must not poison the worker; the
@@ -871,14 +904,14 @@ impl WorkerCore {
                         // C-34 — the caller-gated door. A foreign replace
                         // of another plugin's in-frame render is refused;
                         // `None` keeps the prior behaviour exactly.
-                        m.set_scene_layer_as(caller.as_deref(), element_id.clone(), layer)
-                            .is_ok()
+                        let (ok, scoped) = scene_layer_change(m, &element_id, |m| {
+                            m.set_scene_layer_as(caller.as_deref(), element_id.clone(), layer)
+                        });
+                        effect = scoped;
+                        ok
                     }
                     None => false,
                 };
-                if applied {
-                    effect = CacheEffect::ClearAll;
-                }
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
@@ -886,12 +919,15 @@ impl WorkerCore {
             }
             MainToWorkerKind::ClearSceneLayer { element_id } => {
                 let applied = match self.model.as_mut() {
-                    Some(m) => m.clear_scene_layer(&element_id).is_ok(),
+                    Some(m) => {
+                        let (ok, scoped) = scene_layer_change(m, &element_id, |m| {
+                            m.clear_scene_layer(&element_id)
+                        });
+                        effect = scoped;
+                        ok
+                    }
                     None => false,
                 };
-                if applied {
-                    effect = CacheEffect::ClearAll;
-                }
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,

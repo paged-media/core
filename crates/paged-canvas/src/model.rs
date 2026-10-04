@@ -9504,6 +9504,20 @@ impl CanvasModel {
         Ok(())
     }
 
+    /// C-1 — the indices of the built pages a frame's scene layer is
+    /// drawn on (each page of the spread the frame reaches into). Empty
+    /// when the frame carries no layer, has no items, or draws
+    /// nowhere. A submit re-encodes the union of this before and after.
+    pub fn pages_showing_scene_layer(&self, element_id: &str) -> Vec<usize> {
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.scene_layer_frames.iter().any(|f| f == element_id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// C-1 — the frame ids that currently carry a plugin scene layer
     /// (test/introspection aid).
     pub fn scene_layer_ids(&self) -> Vec<&str> {
