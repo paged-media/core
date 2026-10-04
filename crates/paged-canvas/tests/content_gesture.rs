@@ -201,6 +201,7 @@ fn anchor_at(p: (f32, f32)) -> GestureAnchor {
     GestureAnchor {
         page_id: paged_renderer::PageId("p1".into()),
         point_in_page: p,
+        pivot_in_page: None,
     }
 }
 

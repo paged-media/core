@@ -272,6 +272,15 @@ pub struct GestureModifiers {
 pub struct GestureAnchor {
     pub page_id: PageId,
     pub point_in_page: (f32, f32),
+    /// C-67 — the point Rotate / Scale / Shear turn about, page-local on
+    /// the same page as `point_in_page`. Absent (every caller before it
+    /// existed) keeps the union centroid of the targets — Illustrator's
+    /// default reference point; a click-to-set pivot, a reference-point
+    /// grid or "about a corner" pass it. Additive (`serde(default)`), so
+    /// it needs no protocol bump.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub pivot_in_page: Option<(f32, f32)>,
 }
 
 /// Pre-gesture snapshot of one node. Captured at `begin_gesture` so
@@ -477,7 +486,21 @@ impl CanvasModel {
             return Err(GestureError::MissingAnchor);
         }
         let pivot_spread = if needs_anchor {
-            Some(union_centroid_in_spread(&snapshots))
+            // C-67 — an explicit pivot wins; else the union centroid.
+            let explicit = match anchor.as_ref() {
+                Some(a) => match a.pivot_in_page {
+                    Some(p) => {
+                        let origin = self
+                            .page(&a.page_id)
+                            .map(|bp| bp.spread_origin)
+                            .ok_or_else(|| GestureError::UnknownAnchorPage(a.page_id.clone()))?;
+                        Some((p.0 + origin.0, p.1 + origin.1))
+                    }
+                    None => None,
+                },
+                None => None,
+            };
+            Some(explicit.unwrap_or_else(|| union_centroid_in_spread(&snapshots)))
         } else {
             None
         };
