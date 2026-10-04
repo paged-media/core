@@ -559,6 +559,27 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> paged_mutate:
 /// scene-tree outline. Recurses through Groups so nested members
 /// appear as children. Returns `None` for empty / unresolvable
 /// references.
+/// C-65 — an item's `x-paged:` Label entries, for its scene-tree node.
+fn tree_plugin_metadata(
+    spread: &paged_model::Spread,
+    id: &str,
+) -> Vec<crate::channel::PluginMetadataEntry> {
+    spread
+        .labels
+        .get(id)
+        .map(|labels| {
+            labels
+                .iter()
+                .filter(|(k, _)| k.starts_with("x-paged:"))
+                .map(|(k, v)| crate::channel::PluginMetadataEntry {
+                    key: k.clone(),
+                    value: v.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn frame_to_tree_node(
     spread: &paged_model::Spread,
     fr: paged_model::FrameRef,
@@ -574,6 +595,7 @@ fn frame_to_tree_node(
                 kind: "TextFrame".to_string(),
                 label: format!("TextFrame {id}"),
                 children: Vec::new(),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
             })
         }),
         FrameRef::Rectangle(i) => spread.rectangles.get(i).and_then(|f| {
@@ -583,6 +605,7 @@ fn frame_to_tree_node(
                 kind: "Rectangle".to_string(),
                 label: format!("Rectangle {id}"),
                 children: Vec::new(),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
             })
         }),
         FrameRef::Oval(i) => spread.ovals.get(i).and_then(|f| {
@@ -592,6 +615,7 @@ fn frame_to_tree_node(
                 kind: "Oval".to_string(),
                 label: format!("Oval {id}"),
                 children: Vec::new(),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
             })
         }),
         FrameRef::Polygon(i) => spread.polygons.get(i).and_then(|f| {
@@ -601,6 +625,7 @@ fn frame_to_tree_node(
                 kind: "Polygon".to_string(),
                 label: format!("Polygon {id}"),
                 children: Vec::new(),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
             })
         }),
         FrameRef::GraphicLine(i) => spread.graphic_lines.get(i).and_then(|f| {
@@ -610,6 +635,7 @@ fn frame_to_tree_node(
                 kind: "GraphicLine".to_string(),
                 label: format!("GraphicLine {id}"),
                 children: Vec::new(),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
             })
         }),
         FrameRef::Group(i) => spread.groups.get(i).map(|g| {
@@ -623,6 +649,7 @@ fn frame_to_tree_node(
                 id: Some(ElementId::Group(id.clone())),
                 kind: "Group".to_string(),
                 label: format!("Group {id}"),
+                plugin_metadata: tree_plugin_metadata(spread, &id),
                 children,
             }
         }),
@@ -8459,12 +8486,14 @@ impl CanvasModel {
                 kind: "Page".to_string(),
                 label,
                 children: frame_nodes,
+                plugin_metadata: Vec::new(),
             });
             spread_nodes.push(SceneTreeNode {
                 id: None,
                 kind: "Spread".to_string(),
                 label: spread_label,
                 children: page_nodes,
+                plugin_metadata: Vec::new(),
             });
         }
         spread_nodes

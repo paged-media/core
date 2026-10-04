@@ -3275,6 +3275,24 @@ pub struct SceneTreeNode {
     pub label: String,
     #[serde(default)]
     pub children: Vec<SceneTreeNode>,
+    /// C-65 — the item's plugin metadata (its reserved-namespace
+    /// `x-paged:` Label entries, the same rows `RequestElementProperties`
+    /// reports as `pluginMetadata`), so one tree read answers what used to
+    /// take one property read PER LEAF: paged.draw's link discovery cost
+    /// 1 403 round trips on a 1 403-leaf document. Empty and omitted for
+    /// an item that carries none, and for spread / page rows. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[tsify(optional)]
+    pub plugin_metadata: Vec<PluginMetadataEntry>,
+}
+
+/// C-65 — one plugin-metadata Label entry on a scene-tree node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMetadataEntry {
+    pub key: String,
+    pub value: String,
 }
 
 /// Step 5 — `RequestPathAnchors` reply payload. `anchors.len()` may
