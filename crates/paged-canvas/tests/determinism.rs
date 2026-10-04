@@ -242,6 +242,7 @@ fn zoom_independence_via_logical_replay() {
             start: 11,
             end: 12,
             recovered: String::new(),
+            unseed: false,
             cell: None,
         },
     )

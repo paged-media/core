@@ -83,6 +83,13 @@ pub enum TextOp {
         /// W1.13 — cell qualifier (see `InsertText::cell`).
         #[serde(default)]
         cell: Option<TextCellAddr>,
+        /// Set on the inverse of an insert that had to SEED the stream's
+        /// first paragraph (a freshly inserted table cell carries none).
+        /// Undoing that insert then leaves the stream empty again instead
+        /// of holding an empty paragraph the document never had — which
+        /// made the undo of a cell pour land on a different state.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unseed: bool,
     },
 }
 
@@ -146,8 +153,9 @@ pub fn apply(doc: &mut Document, op: &TextOp) -> Result<AppliedText, TextOpError
             start,
             end,
             cell,
+            unseed,
             ..
-        } => apply_delete_range(doc, story_id, cell, *start, *end),
+        } => apply_delete_range(doc, story_id, cell, *start, *end, *unseed),
     }
 }
 
@@ -226,7 +234,8 @@ fn apply_insert_text(
     // would then index an empty slice — the `index out of bounds: len is 0
     // but the index is 0` panic the sheet cell-pour hit. Seed one empty
     // paragraph so the first write into a new cell has a stream to land in.
-    if paragraphs.is_empty() {
+    let seeded = paragraphs.is_empty();
+    if seeded {
         paragraphs.push(paged_model::Paragraph::default());
     }
 
@@ -276,6 +285,7 @@ fn apply_insert_text(
             recovered: String::new(),
             // W1.13 — undo must land in the same stream we edited.
             cell: cell.clone(),
+            unseed: seeded,
         },
     })
 }
@@ -434,11 +444,15 @@ fn apply_delete_range(
     cell: &Option<TextCellAddr>,
     start: u32,
     end: u32,
+    unseed: bool,
 ) -> Result<AppliedText, TextOpError> {
     if end < start {
         return Err(TextOpError::InvalidRange { start, end });
     }
     if end == start {
+        if unseed {
+            drop_seeded_paragraph(find_paragraphs_mut(doc, story_id, cell)?);
+        }
         return Ok(AppliedText {
             story_id: story_id.into(),
             inverse: TextOp::InsertText {
@@ -545,6 +559,9 @@ fn apply_delete_range(
     }
 
     merge_adjacent_runs_in_target(paragraphs, start);
+    if unseed {
+        drop_seeded_paragraph(paragraphs);
+    }
     Ok(AppliedText {
         story_id: story_id.into(),
         inverse: TextOp::InsertText {
@@ -554,6 +571,18 @@ fn apply_delete_range(
             cell: cell.clone(),
         },
     })
+}
+
+/// Undo of an insert that seeded an empty stream: the stream is back to
+/// the one paragraph the insert added, now empty — remove it. A stream
+/// that holds anything else (text, a second paragraph, an anchored frame)
+/// is left alone.
+fn drop_seeded_paragraph(paragraphs: &mut Vec<paged_model::Paragraph>) {
+    if let [only] = paragraphs.as_slice() {
+        if only.runs.iter().all(|r| r.text.is_empty()) && only.anchored_frames.is_empty() {
+            paragraphs.clear();
+        }
+    }
 }
 
 /// Convert a stream-local offset to (paragraph_idx, byte-within-paragraph).
@@ -955,6 +984,7 @@ mod tests {
                 start: 5,
                 end: 11,
                 recovered: String::new(),
+                unseed: false,
                 cell: None,
             },
         )
@@ -1070,6 +1100,7 @@ mod tests {
                 start: 3,
                 end: 8,
                 recovered: String::new(),
+                unseed: false,
                 cell: None,
             },
         )
@@ -1207,6 +1238,7 @@ mod tests {
                 start: 1,
                 end: 4,
                 recovered: String::new(),
+                unseed: false,
                 cell: Some(cell_addr(0, 0)),
             },
         )
