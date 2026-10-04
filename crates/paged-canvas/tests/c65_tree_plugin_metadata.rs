@@ -18,7 +18,7 @@
 use std::io::Write;
 
 use paged_canvas::{channel::Mutation, element_selection::ElementId, CanvasModel, CanvasOptions};
-use paged_mutate::{PropertyPath, Value};
+use paged_mutate::PropertyPath;
 
 fn idml() -> Vec<u8> {
     let mut buf = Vec::new();
