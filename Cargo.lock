@@ -2502,6 +2502,7 @@ dependencies = [
 name = "paged-canvas-wasm"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "console_error_panic_hook",
  "getrandom 0.3.4",
  "js-sys",

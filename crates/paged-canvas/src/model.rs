@@ -1247,6 +1247,15 @@ pub struct CanvasModel {
     /// re-seeds from the freshly-loaded container. The `host.parts` SDK
     /// door gates writes to a plugin's own `paged/<plugin-id>/…` namespace.
     paged_parts: std::collections::BTreeMap<String, Vec<u8>>,
+    /// v66 — `paged/` parts DELETED since load (`DeletePagedPart`). A part
+    /// the loaded container carries rides in `source_idml`, so deleting it
+    /// from the overlay alone would resurrect it on the next save; the
+    /// tombstone hides it from read/list and `export_paged` drops it. A
+    /// later write of the same path lifts the tombstone.
+    paged_part_tombstones: std::collections::BTreeSet<String>,
+    /// v66 — tile patches that had to copy a shared scene image
+    /// (`patch_scene_image_as`); a count for budgets and tests.
+    scene_image_copies: u64,
     pub(crate) built: BuiltDocument,
     /// Index from `PageId` to `BuiltDocument::pages` position. Built
     /// once at load and refreshed after every rebuild. Worker callers
@@ -1999,6 +2008,8 @@ impl CanvasModel {
             source_idml: bytes.to_vec(),
             source_id_floor: source_id_floor(bytes),
             paged_parts: std::collections::BTreeMap::new(),
+            paged_part_tombstones: std::collections::BTreeSet::new(),
+            scene_image_copies: 0,
             built,
             page_index,
             scene_layers: HashMap::new(),
@@ -5007,8 +5018,47 @@ impl CanvasModel {
                 ));
             }
         }
+        self.paged_part_tombstones.remove(&path);
         self.paged_parts.insert(path, bytes);
         Ok(())
+    }
+
+    /// v66 — delete a `.paged` part ON BEHALF OF a named plugin: drop it
+    /// from the live overlay and tombstone it so a part the LOADED
+    /// container carries is hidden from read/list and left out of the next
+    /// `export_paged`. Same namespace + caller gate as
+    /// [`Self::set_paged_part_as`]. Returns whether the part existed.
+    /// Not undoable, like the write: parts live outside the mutation
+    /// channel.
+    pub fn delete_paged_part_as(
+        &mut self,
+        caller: Option<&str>,
+        path: &str,
+    ) -> Result<bool, String> {
+        if !path.starts_with(idml_export::PAGED_PREFIX) {
+            return Err(format!(
+                "paged part path must start with `{}` (got {path:?})",
+                idml_export::PAGED_PREFIX
+            ));
+        }
+        if let Some(caller) = caller {
+            let own = format!("{}{caller}/", idml_export::PAGED_PREFIX);
+            if !path.starts_with(&own) {
+                return Err(format!(
+                    "caller {caller:?} may only delete in its own subtree {own:?}, not {path:?}"
+                ));
+            }
+        }
+        let existed = self.get_paged_part(path).is_some();
+        self.paged_parts.remove(path);
+        let in_source = self
+            .source_archive
+            .as_ref()
+            .is_some_and(|s| s.entries.contains_key(path));
+        if in_source {
+            self.paged_part_tombstones.insert(path.to_string());
+        }
+        Ok(existed)
     }
 
     /// Read a `.paged` part — the live overlay first, else the loaded
@@ -5020,6 +5070,9 @@ impl CanvasModel {
         }
         if let Some(b) = self.paged_parts.get(path) {
             return Some(b.clone());
+        }
+        if self.paged_part_tombstones.contains(path) {
+            return None;
         }
         self.source_archive
             .as_ref()
@@ -5033,7 +5086,10 @@ impl CanvasModel {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         if let Some(source) = &self.source_archive {
             for k in source.entries.keys() {
-                if k.starts_with(idml_export::PAGED_PREFIX) && k.starts_with(prefix) {
+                if k.starts_with(idml_export::PAGED_PREFIX)
+                    && k.starts_with(prefix)
+                    && !self.paged_part_tombstones.contains(k)
+                {
                     names.insert(k.clone());
                 }
             }
@@ -5063,12 +5119,16 @@ impl CanvasModel {
         if let Ok(pgm) = paged_store::to_bytes(self.scene()) {
             parts.insert(paged_store::DOCUMENT_PGM_PATH.to_string(), pgm);
         }
-        idml_export::write_paged(
-            &self.export_scene(),
-            &self.source_idml,
-            &parts,
-            paged_protocol,
-        )
+        // v66 — a deleted part the loaded container carries must not ride
+        // the carry-through: hand the writer a source without it.
+        let filtered;
+        let source: &[u8] = if self.paged_part_tombstones.is_empty() {
+            &self.source_idml
+        } else {
+            filtered = zip_without(&self.source_idml, &self.paged_part_tombstones)?;
+            &filtered
+        };
+        idml_export::write_paged(&self.export_scene(), source, &parts, paged_protocol)
     }
 
     /// S7 — the composition (`document.pgd`) **derived** from the current IDML
@@ -6267,6 +6327,14 @@ impl CanvasModel {
                         // slot 0 drives geometry (uniformly, at every
                         // straight-line corner) — see
                         // `paged_model::Polygon::corners`.
+                        // v66 — the image-content transform is writable on
+                        // ovals and polygons too; image-bearing ones read it.
+                        if p.has_image_element {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::ImageContentTransform,
+                                value: Some(Value::Transform(p.image_item_transform)),
+                            });
+                        }
                         entries.extend(corner_entries(&p.corners));
                         entries
                     }),
@@ -6518,6 +6586,14 @@ impl CanvasModel {
                         // Stored + mutable, never rendered — an ellipse
                         // has no corner. See
                         // `paged_model::Oval::corner_radius`.
+                        // v66 — the image-content transform is writable on
+                        // ovals and polygons too; image-bearing ones read it.
+                        if o.has_image_element {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::ImageContentTransform,
+                                value: Some(Value::Transform(o.image_item_transform)),
+                            });
+                        }
                         entries.extend(corner_entries(&o.corners));
                         entries
                     }),
@@ -9819,6 +9895,167 @@ impl CanvasModel {
         self.clear_scene_layer(element_id)
     }
 
+    /// v66 — the binary scene-image door: make the frame's scene layer ONE
+    /// image, taking ownership of `rgba` (the bytes the host transferred;
+    /// no JSON, no per-byte parse). Same caller gate and ephemeral posture
+    /// as [`Self::set_scene_layer_as`]. A malformed buffer is refused here
+    /// rather than stored and silently skipped at lowering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_scene_image_as(
+        &mut self,
+        caller: Option<&str>,
+        element_id: String,
+        rgba: bytes::Bytes,
+        width: u32,
+        height: u32,
+        dest: (f32, f32, f32, f32),
+    ) -> Result<(), crate::channel::LoadError> {
+        let (x, y, w, h) = dest;
+        if width == 0
+            || height == 0
+            || w <= 0.0
+            || h <= 0.0
+            || rgba.len() != (width as usize) * (height as usize) * 4
+        {
+            return Err(crate::channel::LoadError::Scene(format!(
+                "scene image for {element_id:?}: {} bytes for {width}x{height}, dest {w}x{h}",
+                rgba.len()
+            )));
+        }
+        let layer = paged_compose::SceneLayer {
+            items: vec![paged_compose::SceneItem::Image {
+                rgba,
+                width,
+                height,
+                x,
+                y,
+                w,
+                h,
+            }],
+        };
+        self.set_scene_layer_as(caller, element_id, layer)
+    }
+
+    /// v66 — patch rectangles of the frame's retained scene image in place
+    /// (the brush-preview lane: a stroke dirties a window, not the image).
+    ///
+    /// `rects` holds four `u32`s per tile — `x, y, w, h` in IMAGE pixels —
+    /// and `rgba` the tiles' tightly packed pixels back to back, in the
+    /// same order. The whole call is validated before any byte moves, so a
+    /// bad tile leaves the image as it was. The target is the first
+    /// `SceneItem::Image` of the frame's layer (a layer the binary door
+    /// set holds exactly one).
+    ///
+    /// The buffer is patched in place when nothing else holds it; when the
+    /// last build's display list still shares it (the usual case: lowering
+    /// clones the refcount) the patch copies it once inside the engine —
+    /// copy-on-write — and the copy is counted in
+    /// [`Self::scene_image_copies`].
+    pub fn patch_scene_image_as(
+        &mut self,
+        caller: Option<&str>,
+        element_id: &str,
+        rects: &[u32],
+        rgba: &[u8],
+    ) -> Result<(), crate::channel::LoadError> {
+        let fail = |why: String| {
+            Err(crate::channel::LoadError::Scene(format!(
+                "scene image tiles for {element_id:?}: {why}"
+            )))
+        };
+        if let (Some(caller), Some(owner)) = (caller, self.scene_layer_owner.get(element_id)) {
+            if owner != caller {
+                return fail(format!(
+                    "the frame's scene layer is owned by {owner:?}, not {caller:?}"
+                ));
+            }
+        }
+        if rects.len() % 4 != 0 {
+            return fail(format!(
+                "{} rect values is not a multiple of 4",
+                rects.len()
+            ));
+        }
+        let Some(layer) = self.scene_layers.get_mut(element_id) else {
+            return fail("the frame carries no scene layer".into());
+        };
+        let Some(paged_compose::SceneItem::Image {
+            rgba: target,
+            width,
+            height,
+            ..
+        }) = layer
+            .items
+            .iter_mut()
+            .find(|i| matches!(i, paged_compose::SceneItem::Image { .. }))
+        else {
+            return fail("the frame's scene layer holds no image".into());
+        };
+        let (iw, ih) = (*width as u64, *height as u64);
+        let mut need: u64 = 0;
+        for r in rects.chunks_exact(4) {
+            let (x, y, w, h) = (r[0] as u64, r[1] as u64, r[2] as u64, r[3] as u64);
+            if w == 0 || h == 0 || x + w > iw || y + h > ih {
+                return fail(format!("tile {x},{y} {w}x{h} outside the {iw}x{ih} image"));
+            }
+            need += w * h * 4;
+        }
+        if need != rgba.len() as u64 {
+            return fail(format!("tiles need {need} bytes, got {}", rgba.len()));
+        }
+        let shared = std::mem::take(target);
+        let mut buf = match shared.try_into_mut() {
+            Ok(unique) => unique,
+            Err(shared) => {
+                self.scene_image_copies += 1;
+                bytes::BytesMut::from(&shared[..])
+            }
+        };
+        let stride = iw as usize * 4;
+        let mut src = 0usize;
+        for r in rects.chunks_exact(4) {
+            let (x, y, w, h) = (r[0] as usize, r[1] as usize, r[2] as usize, r[3] as usize);
+            let row = w * 4;
+            for j in 0..h {
+                let dst = (y + j) * stride + x * 4;
+                buf[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
+                src += row;
+            }
+        }
+        *target = buf.freeze();
+        self.rebuild_after_mutation()
+    }
+
+    /// v66 — how many times a tile patch had to copy a shared scene image
+    /// (see [`Self::patch_scene_image_as`]). A count for budgets and tests.
+    pub fn scene_image_copies(&self) -> u64 {
+        self.scene_image_copies
+    }
+
+    /// v66 — the built pages whose display list draws the frame's current
+    /// scene image, found by the buffer itself (lowering shares it), so a
+    /// frame on a master page answers every page that shows it. Empty when
+    /// the frame draws nowhere. The GPU cache re-encodes exactly these.
+    pub fn pages_showing_scene_image(&self, element_id: &str) -> Vec<usize> {
+        let Some(ptr) = self.scene_layers.get(element_id).and_then(|l| {
+            l.items.iter().find_map(|i| match i {
+                paged_compose::SceneItem::Image { rgba, .. } if !rgba.is_empty() => {
+                    Some(rgba.as_ptr())
+                }
+                _ => None,
+            })
+        }) else {
+            return Vec::new();
+        };
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.list.images.iter().any(|img| img.rgba.as_ptr() == ptr))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// C-6 — parse the frame `Self` id out of a claim's
     /// `x-paged-image:<frame>` namespace. A bare id (no namespace prefix)
     /// is treated as the frame id itself, so a caller may claim by frame
@@ -10908,6 +11145,24 @@ fn fvar_instances(t: &[u8], name: &dyn Fn(u16) -> Option<String>) -> Vec<FvarIns
         });
     }
     out
+}
+
+/// v66 — `src` re-zipped without the entries named in `drop` (raw copies,
+/// nothing re-compressed). The tombstone half of `DeletePagedPart`.
+fn zip_without(
+    src: &[u8],
+    drop: &std::collections::BTreeSet<String>,
+) -> Result<Vec<u8>, idml_export::WriteError> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(src))?;
+    let mut out = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+    for i in 0..archive.len() {
+        let raw = archive.by_index_raw(i)?;
+        if drop.contains(raw.name()) {
+            continue;
+        }
+        out.raw_copy_file(raw)?;
+    }
+    Ok(out.finish()?.into_inner())
 }
 
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {

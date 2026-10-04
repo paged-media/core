@@ -537,8 +537,24 @@ export type WorkerToMain = WorkerToMainKind & {
 // C-69): a text frame's composed glyphs as path outlines in page space,
 // one run per fill colour — what "Create Outlines" inserts as compound
 // paths. A new message kind an older worker cannot answer, hence the
-// bump. (Unpublished: built and gated on a branch, tag and publish are
-// the owner's.)
+// bump.
+// v66 — the paged.image batch (binary lanes + part deletion):
+//   - `DeletePagedPart { path, caller? }` → `PagedPartDeleted { existed }`:
+//     a part the loaded container carries is tombstoned, so read/list stop
+//     answering it and `ExportPaged` leaves it out. A new kind an older
+//     worker cannot deserialise, hence the bump.
+//   - `SceneItem::Image.rgba` / `PixelTile.rgba` are refcounted
+//     (`bytes::Bytes`): a rebuild hands the display list the refcount, not
+//     a copy. The JSON shape (`number[]`) is unchanged.
+//   - Binary doors on the canvas-wasm surface (no JSON, `Uint8Array` in or
+//     out; replies are the same `WorkerToMain` envelopes): `submitScene
+//     ImageDirect` (a frame's scene layer becomes one image),
+//     `submitSceneImageTilesDirect` (patch rectangles of that image in
+//     place; only the pages showing it re-encode, not the whole cache),
+//     `writePagedPartDirect`, `readPagedPartDirect`,
+//     `placedAssetBytesDirect` and `mutateWithBytesDirect` (a mutation —
+//     a `batch` too — whose first `replaceImageBytes` with empty `bytes`
+//     takes the transferred buffer).
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(66);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -1290,6 +1306,17 @@ pub enum MainToWorkerKind {
     /// v51 — list `.paged` part paths under `prefix` (the `paged/` namespace
     /// only). Reply: `PagedPartList` (or `PagedPartFailed`).
     ListPagedParts { prefix: String },
+    /// v66 — delete a `.paged` part. It leaves the live overlay and, when
+    /// the loaded container carries it, is tombstoned so read/list stop
+    /// answering it and the next `ExportPaged` leaves it out. Same
+    /// `paged/` boundary and C-34 `caller` gate as `WritePagedPart`; not
+    /// undoable, like the write. Reply: `PagedPartDeleted` (or
+    /// `PagedPartFailed`).
+    DeletePagedPart {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
+    },
     /// v51 — serialise the document as a `.paged` container: a valid IDML
     /// package + the plugin `paged/` parts + a refreshed `manifest.json`.
     /// Reply: `PagedExported` / `PagedPartFailed`.
@@ -1782,7 +1809,15 @@ pub enum WorkerToMainKind {
     /// the `element_id`; the page caches are invalidated so the next
     /// snapshot reflects the layer. `applied` is false only when there was
     /// no document loaded.
-    SceneLayerApplied { element_id: String, applied: bool },
+    SceneLayerApplied {
+        element_id: String,
+        applied: bool,
+        /// v66 — the pages whose render the change touched, when the
+        /// engine scoped it (the binary scene-image doors do); absent means
+        /// unscoped, so a host repaints every page. Additive on the reply.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page_ids: Option<Vec<PageId>>,
+    },
     /// v44 (C-6 / I-06) — ack for `ClaimImageResource` /
     /// `ReleaseImageResource` / `SubmitResourceTiles`. Echoes `image_id`;
     /// `applied` is false only when no document was loaded. The page caches
@@ -1908,6 +1943,9 @@ pub enum WorkerToMainKind {
     },
     /// v51 — `ListPagedParts` reply (paths under the requested prefix).
     PagedPartList { paths: Vec<String> },
+    /// v66 — `DeletePagedPart` ack. `existed: false` when there was no
+    /// such part (deleting an absent part is not an error).
+    PagedPartDeleted { existed: bool },
     /// v51 — `ExportPaged` reply: the `.paged` container bytes (mirrors how
     /// `IdmlExported` carries `idml_bytes` as a `number[]` on the wire).
     PagedExported {
@@ -3698,7 +3736,7 @@ mod tests {
     fn v50_pixel_layer_messages_round_trip() {
         let layer = paged_compose::PixelLayer {
             tiles: vec![paged_compose::PixelTile {
-                rgba: vec![255, 0, 0, 255],
+                rgba: vec![255, 0, 0, 255].into(),
                 width: 1,
                 height: 1,
                 x: 2.0,

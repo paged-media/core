@@ -73,7 +73,7 @@ fn set_then_clear_scene_layer_round_trips_through_a_rebuild() {
 fn a_pixel_layer() -> PixelLayer {
     PixelLayer {
         tiles: vec![PixelTile {
-            rgba: vec![255u8; 2 * 2 * 4],
+            rgba: vec![255u8; 2 * 2 * 4].into(),
             width: 2,
             height: 2,
             x: 0.0,

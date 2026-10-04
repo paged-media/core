@@ -28,7 +28,7 @@
 //! whose budget became a wire parameter at v63 instead of a reason to
 //! reach past the dispatcher), taking this to **32 of 62** (33 of 63 with v65's
 //! `paged read style-properties`, 34 of 64 with v66's `paged read
-//! text-outlines`); what
+//! text-outlines`, 35 of 65 with v66's `paged parts delete`); what
 //! remains is almost entirely the first kind.
 //!
 //! **What this gate cannot see.** It counts message KINDS, and
@@ -258,7 +258,7 @@ fn every_reason_is_a_reason() {
 
 /// The headline in the module doc, pinned against the code.
 #[test]
-fn the_cli_reaches_34_of_64() {
-    assert_eq!(kinds_the_cli_sends().len(), 34);
-    assert_eq!(every_kind().len(), 64);
+fn the_cli_reaches_35_of_65() {
+    assert_eq!(kinds_the_cli_sends().len(), 35);
+    assert_eq!(every_kind().len(), 65);
 }
