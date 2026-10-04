@@ -46,7 +46,9 @@
 //!    `Ids` — is replaced with the bound element's raw id, except a
 //!    `storyId` position, which takes the story the insert minted (a
 //!    fresh text frame's `ParentStory`), so `insertTextFrame` +
-//!    `insertText` can ride one batch.
+//!    `insertText` can ride one batch, and a `tableId` / `table_id`
+//!    position, which takes the table's own id, so `insertTable` + a
+//!    cell pour can too.
 //!
 //! Everything else is left byte-identical: a `$h:` inside a `text`
 //! payload is content, not an address, and is never rewritten.
@@ -159,11 +161,19 @@ fn is_reference(s: &str) -> bool {
 /// frames and links them, and the driver had to flush the batch before
 /// every link.
 ///
-/// Naming these three is safe because only a REFERENCE string is ever
+/// The `tableCell` address spells its keys in snake_case
+/// (`{ story_id, table_id, row, col }` — the `ElementId` struct variants
+/// keep Rust field names), so `story_id` / `table_id` are named too:
+/// without them a cell-scoped write could not address a table the same
+/// batch inserted.
+///
+/// Naming these is safe because only a REFERENCE string is ever
 /// rewritten (`is_reference`): `reorderElement`'s `to: "front"` and any
 /// other prose value in a same-named field passes through untouched.
 fn is_address_key(key: &str) -> bool {
-    key.ends_with("Id") || key.ends_with("Ids") || matches!(key, "from" | "to" | "frame")
+    key.ends_with("Id")
+        || key.ends_with("Ids")
+        || matches!(key, "from" | "to" | "frame" | "story_id" | "table_id")
 }
 
 /// Rewrite every handle reference in one batch child. Returns the child
@@ -229,7 +239,25 @@ fn walk(
                 return Ok(());
             };
             let bound = scope.resolve(s)?;
-            let resolved = if key == "storyId" {
+            let resolved = if matches!(key, "tableId" | "table_id") {
+                // A table address needs the TABLE's id. `raw_id` of a
+                // `Table` is its story (the container), so the generic
+                // rule below would address the story as if it were a
+                // table — the reason a placement could not mint a table
+                // and pour its cells in one batch.
+                match &bound.element {
+                    ElementId::Table { table_id, .. } | ElementId::TableCell { table_id, .. } => {
+                        table_id.clone()
+                    }
+                    other => {
+                        return Err(format!(
+                            "{s} names a {} which is not a table — a {key} position needs a \
+                             handle bound to an insertTable",
+                            other.kind_label()
+                        ))
+                    }
+                }
+            } else if matches!(key, "storyId" | "story_id") {
                 bound.story_id.clone().ok_or_else(|| {
                     format!(
                         "{s} names a {} which has no story — a storyId position needs a handle \

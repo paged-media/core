@@ -259,3 +259,85 @@ fn undoing_the_first_pour_into_a_fresh_cell_restores_the_exact_state() {
         model.undo().expect("undo again");
     }
 }
+
+/// The whole placement — frame, table, pour, decor — in ONE batch, the
+/// table addressed by a handle. `tableId` (and the snake_case `table_id`
+/// inside a `tableCell` address) must resolve to the TABLE's id and
+/// `storyId` / `story_id` to its story.
+#[test]
+fn a_whole_placement_rides_one_batch_through_handles() {
+    let mut model = load();
+    let builds_before = model.last_rebuild_stats().rebuilds;
+    let frames_before = model.scene().spreads[0].spread.text_frames.len();
+
+    let out = model
+        .apply_mutation(&mutation(
+            serde_json::json!({ "op": "batch", "args": { "ops": [
+            { "op": "insertTextFrame", "args": { "pageId": "p1",
+                "bounds": [20.0, 20.0, 300.0, 200.0] } },
+            { "op": "bindCreated", "args": { "handle": "f" } },
+            { "op": "insertTable", "args": { "storyId": "$h:f", "rows": 2, "cols": 2 } },
+            { "op": "bindCreated", "args": { "handle": "t" } },
+            { "op": "insertText", "args": { "storyId": "$h:t", "offset": 0, "text": "A1",
+                "cell": { "tableId": "$h:t", "row": 0, "col": 0 } } },
+            { "op": "insertText", "args": { "storyId": "$h:t", "offset": 0, "text": "B2",
+                "cell": { "tableId": "$h:t", "row": 1, "col": 1 } } },
+            { "op": "setCellSpan", "args": { "storyId": "$h:t", "tableId": "$h:t",
+                "row": 0, "col": 0, "rowSpan": 1, "columnSpan": 1 } },
+            { "op": "setElementProperty", "args": {
+                "elementId": { "kind": "tableCell",
+                    "id": { "story_id": "$h:t", "table_id": "$h:t", "row": 1, "col": 1 } },
+                "path": "cellTopEdgeStrokeWeight",
+                "value": { "type": "length", "value": 0.5 } } }
+        ] } }),
+        ))
+        .expect("the one-batch placement applies");
+
+    assert_eq!(model.last_rebuild_stats().rebuilds - builds_before, 1);
+    let (story, table) = out
+        .minted
+        .iter()
+        .find_map(|m| match &m.element {
+            ElementId::Table { story_id, table_id } => Some((story_id.clone(), table_id.clone())),
+            _ => None,
+        })
+        .expect("the reply names the minted table");
+    assert_eq!(cell_text(&model, &story, &table, 0, 0), "A1");
+    assert_eq!(cell_text(&model, &story, &table, 1, 1), "B2");
+
+    model.undo().expect("undo");
+    assert_eq!(
+        model.scene().spreads[0].spread.text_frames.len(),
+        frames_before,
+        "one undo removes the frame too",
+    );
+    assert!(
+        tables(&model, &story).is_empty(),
+        "and the table with its poured cells",
+    );
+    // Not a state-hash comparison: undoing an `insertTextFrame` leaves the
+    // story it minted behind (empty, unthreaded) — true of a lone
+    // insertTextFrame too, so it is not the batch's doing.
+}
+
+/// A `tableId` handle bound to something that is not a table is refused,
+/// never resolved to an id that addresses nothing.
+#[test]
+fn a_table_handle_must_name_a_table() {
+    let mut model = load();
+    let err = model
+        .apply_mutation(&mutation(
+            serde_json::json!({ "op": "batch", "args": { "ops": [
+            { "op": "insertTextFrame", "args": { "pageId": "p1",
+                "bounds": [20.0, 20.0, 300.0, 200.0] } },
+            { "op": "bindCreated", "args": { "handle": "f" } },
+            { "op": "insertText", "args": { "storyId": "$h:f", "offset": 0, "text": "x",
+                "cell": { "tableId": "$h:f", "row": 0, "col": 0 } } }
+        ] } }),
+        ))
+        .expect_err("a frame handle in a tableId position fails");
+    assert!(
+        format!("{err:?}").contains("not a table"),
+        "says why: {err:?}"
+    );
+}
