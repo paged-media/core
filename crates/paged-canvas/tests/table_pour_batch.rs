@@ -341,3 +341,49 @@ fn a_table_handle_must_name_a_table() {
         "says why: {err:?}"
     );
 }
+
+/// `deleteTable` takes a whole table away — the inverse `insertTable`
+/// lacked on the wire — and one undo puts back every cell, at the
+/// paragraph the table occupied.
+#[test]
+fn delete_table_removes_it_and_undo_restores_every_cell_in_place() {
+    let mut model = load();
+    let table = insert_table(&mut model);
+    model.apply_mutation(&content_batch(&table)).expect("pour");
+    // A second table AFTER it, so a re-insert at the story's end (what
+    // the old inverse did) would come back in the wrong place.
+    let second = insert_table(&mut model);
+    let hash_before = model.current_state_hash();
+    let ids =
+        |m: &CanvasModel| -> Vec<String> { tables(m, "story1").into_iter().map(|t| t.0).collect() };
+
+    model
+        .apply_mutation(&mutation(serde_json::json!({ "op": "deleteTable",
+            "args": { "storyId": "story1", "tableId": table } })))
+        .expect("deleteTable");
+    assert_eq!(ids(&model), vec![second.clone()], "only that table is gone");
+    let hash_after = model.current_state_hash();
+
+    model.undo().expect("undo");
+    assert_eq!(
+        model.current_state_hash(),
+        hash_before,
+        "undo restores the table, its cells and its place",
+    );
+    assert_eq!(cell_text(&model, "story1", &table, 1, 1), "1,250");
+    assert_eq!(ids(&model), vec![table.clone(), second]);
+
+    model.redo().expect("redo");
+    assert_eq!(model.current_state_hash(), hash_after);
+}
+
+#[test]
+fn delete_table_of_an_unknown_table_fails_cleanly() {
+    let mut model = load();
+    let hash_before = model.current_state_hash();
+    model
+        .apply_mutation(&mutation(serde_json::json!({ "op": "deleteTable",
+            "args": { "storyId": "story1", "tableId": "no-such-table" } })))
+        .expect_err("nothing to delete");
+    assert_eq!(model.current_state_hash(), hash_before);
+}

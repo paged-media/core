@@ -4195,6 +4195,12 @@ impl CanvasModel {
                 at: *at,
                 restore: None,
             }),
+            Mutation::DeleteTable { story_id, table_id } => Some(Operation::RemoveNode {
+                node: NodeId::Table {
+                    story_id: story_id.clone(),
+                    table_id: table_id.clone(),
+                },
+            }),
             Mutation::DeleteTableRow {
                 story_id,
                 table_id,

@@ -1689,6 +1689,16 @@ pub enum Mutation {
         #[serde(default)]
         row_heights: Vec<f32>,
     },
+    /// Delete a whole `<Table>` — the inverse of `InsertTable`, which
+    /// the wire could create but not take away (a plugin replacing its
+    /// placed table had to leave the old one behind). Routes to
+    /// `Operation::RemoveNode { NodeId::Table }`, which removes the
+    /// table's host paragraph and captures it whole, so undo puts back
+    /// every cell where it was.
+    DeleteTable {
+        story_id: String,
+        table_id: String,
+    },
 }
 
 /// The wire op vocabulary, written once.
@@ -1841,6 +1851,7 @@ mutation_vocabulary! {
     RemoveFooterRow,
     SetCellSpan,
     InsertTable,
+    DeleteTable,
 }
 
 #[cfg(feature = "mutations")]

@@ -421,6 +421,13 @@
       "summary": "Insert an empty body row at index."
     },
     {
+      "name": "paged.deleteTable",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a whole table and its host paragraph; undo restores every cell."
+    },
+    {
       "name": "paged.deleteTableRow",
       "params": "(storyId, tableId, at)",
       "returns": "bool",
@@ -1390,7 +1397,8 @@
     "insertFooterRow",
     "removeFooterRow",
     "setCellSpan",
-    "insertTable"
+    "insertTable",
+    "deleteTable"
   ],
   "elements": [
     {

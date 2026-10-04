@@ -3063,6 +3063,10 @@ fn table_cases(c: &mut Vec<Case>) {
             at: 1,
         }
     }));
+    c.push(paints("DeleteTable", "tables", |m| {
+        let (story_id, table_id) = first_table(m);
+        Mutation::DeleteTable { story_id, table_id }
+    }));
     c.push(paints("DeleteTableRow", "tables", |m| {
         let (story_id, table_id) = first_table(m);
         Mutation::DeleteTableRow {
