@@ -6128,6 +6128,27 @@ impl CanvasModel {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(p.opacity)),
                             },
+                            // C-83b — the gradient axis is WRITABLE on this kind
+                            // (`find_gradient_field_mut`) and exported; it was
+                            // not readable, so a panel or a plugin could set an
+                            // angle it could never show (the InDesign round
+                            // trip found it on a Polygon).
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(p.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(p.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(p.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(p.gradient_stroke_length)),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeType,
                                 value: Some(Value::Text(
@@ -6414,6 +6435,27 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(o.opacity)),
+                            },
+                            // C-83b — the gradient axis is WRITABLE on this kind
+                            // (`find_gradient_field_mut`) and exported; it was
+                            // not readable, so a panel or a plugin could set an
+                            // angle it could never show (the InDesign round
+                            // trip found it on a Polygon).
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(o.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(o.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(o.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(o.gradient_stroke_length)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOverprintFill,
