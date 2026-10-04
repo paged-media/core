@@ -1768,3 +1768,34 @@ fn a_scene_layer_submit_invalidates_only_its_frames_page() {
         CacheEffect::None
     );
 }
+
+// ---------------------------------------------------------------------
+// Element geometry names a text frame's story — even an EMPTY frame's
+// ---------------------------------------------------------------------
+
+#[test]
+fn element_geometry_names_an_empty_text_frames_story() {
+    let mut core = loaded_core();
+    let applied = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 90, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "insertTextFrame",
+                "args": { "pageId": "p1", "bounds": [20.0, 20.0, 120.0, 220.0] } } }),
+    );
+    assert_eq!(applied["kind"], "mutationApplied", "{applied}");
+    let frame = applied["payload"]["createdId"].clone();
+    // hitTest answers storyId: null for this frame (nothing laid out);
+    // the geometry door is where its story is read.
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 91, "protocol": protocol(),
+            "kind": "requestElementGeometry",
+            "payload": { "ids": [frame, { "kind": "textFrame", "id": "tf1" },
+                                 { "kind": "rectangle", "id": "nope" }] } }),
+    );
+    let items = reply["payload"]["items"].as_array().expect("items");
+    let fresh = items[0]["storyId"].as_str().expect("the minted story");
+    assert!(fresh.starts_with("Story/"), "{reply}");
+    assert_eq!(items[1]["storyId"], "story1", "an authored frame too");
+    assert_eq!(items.len(), 2, "an unknown id answers nothing");
+}

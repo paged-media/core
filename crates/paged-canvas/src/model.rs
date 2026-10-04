@@ -8600,6 +8600,7 @@ impl CanvasModel {
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
                             has_image: false,
+                            story_id: None,
                         });
                         break;
                     }
@@ -8609,12 +8610,16 @@ impl CanvasModel {
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;
+                let mut story_id = None;
                 let resolved: Option<(paged_model::Bounds, Option<[f32; 6]>, bool)> = match id {
                     ElementId::TextFrame(_) => spread
                         .text_frames
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, false)),
+                        .map(|f| {
+                            story_id = f.parent_story.clone();
+                            (f.bounds, f.item_transform, false)
+                        }),
                     ElementId::Rectangle(_) => spread
                         .rectangles
                         .iter()
@@ -8714,6 +8719,7 @@ impl CanvasModel {
                     bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
                     item_transform,
                     has_image,
+                    story_id,
                 });
                 break;
             }

@@ -2079,6 +2079,13 @@ pub struct ElementGeometryItem {
     /// of `Translate`.
     #[serde(default)]
     pub has_image: bool,
+    /// The story a TEXT FRAME shows (its `ParentStory`); `None` for every
+    /// other kind. `hitTest` answers `storyId: null` for an EMPTY frame
+    /// (the text hit path needs a laid-out line), so a frame's story was
+    /// discoverable only by diffing the stories collection around its
+    /// insert. Additive: absent from the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_id: Option<String>,
 }
 
 /// Step 5 — one anchor's three control points, in the polygon's
