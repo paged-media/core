@@ -348,6 +348,60 @@ fn ensure_story(doc: &mut Document, id: &str) {
     });
 }
 
+/// Put a table `RemoveNode` captured back: its host paragraph, verbatim,
+/// at the index it was removed from (clamped to the story's end).
+/// `Err(None)` is a capture that does not decode.
+fn insert_captured_table(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    node: &NodeId,
+    story_id: &str,
+    table_id: &str,
+    json: &str,
+) -> Result<AppliedOperation, Option<OperationError>> {
+    if parent != &NodeId::Story(story_id.to_string()) {
+        return Err(Some(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: "Table".to_string(),
+        }));
+    }
+    if find_table_pos(doc, story_id, table_id).is_some() {
+        return Err(Some(OperationError::DuplicateNodeId {
+            id: table_id.to_string(),
+        }));
+    }
+    let mut envelope: serde_json::Value = serde_json::from_str(json).map_err(|_| None)?;
+    let para: paged_model::Paragraph = envelope
+        .get_mut("paragraph")
+        .map(serde_json::Value::take)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .ok_or(None)?;
+    let si = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| Some(OperationError::NodeNotFound(parent.clone())))?;
+    let paragraphs = &mut doc.stories[si].story.paragraphs;
+    let at = position.min(paragraphs.len());
+    paragraphs.insert(at, para);
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position: at,
+            node: NodeSpec::Captured {
+                node: node.clone(),
+                json: json.to_string(),
+                image_bytes: None,
+            },
+            z_slot: None,
+        },
+        inverse: Operation::RemoveNode { node: node.clone() },
+        invalidation,
+    })
+}
+
 /// C-75 — re-insert a node `RemoveNode` captured whole
 /// ([`NodeSpec::Captured`]): the model struct goes back verbatim, with
 /// its image bytes and the side-map rows that left the spread with it.
@@ -371,6 +425,10 @@ fn apply_insert_captured(
         path: crate::operation::PropertyPath::FrameTransform,
         reason: format!("malformed captured node: {what}"),
     };
+    if let NodeId::Table { story_id, table_id } = node {
+        return insert_captured_table(doc, parent, position, node, story_id, table_id, json)
+            .map_err(|e| e.unwrap_or_else(|| malformed("no paragraph".to_string())));
+    }
     let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
     if node_exists(doc, node) {
         return Err(OperationError::DuplicateNodeId {

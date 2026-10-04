@@ -93,6 +93,23 @@ pub(super) fn apply_move_node(
                 node: NodeId::Polygon(_),
                 ..
             } => dest.spread.polygons.len(),
+            // A table is story content, never a page item (as below).
+            NodeSpec::Captured {
+                node: NodeId::Table { .. },
+                ..
+            } => {
+                restore_capture(
+                    doc,
+                    &previous_parent,
+                    previous_position,
+                    captured,
+                    previous_z_slot,
+                );
+                return Err(OperationError::InvalidParent {
+                    parent: new_parent.clone(),
+                    child_kind: "Table".to_string(),
+                });
+            }
             // A capture of anything else cannot exist — `RemoveNode`
             // captures leaf page items and tables only.
             NodeSpec::Captured { .. } => {

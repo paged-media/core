@@ -291,33 +291,20 @@ pub(super) fn remove_and_capture(
             let Some((si, pi)) = find_table_pos(doc, story_id, table_id) else {
                 return Err(OperationError::NodeNotFound(node.clone()));
             };
+            // The host paragraph is captured WHOLE — every cell's text,
+            // styling and spans — so the inverse puts back the table that
+            // was there, at the paragraph it occupied. It used to hand back
+            // a `NodeSpec::Table` of the bare grid, which re-inserted an
+            // empty table at the END of the story: undoing a delete lost
+            // every cell. The parent is the host story; `position` is the
+            // paragraph index; z_slot is N/A for story content.
             let para = doc.stories[si].story.paragraphs.remove(pi);
-            let table = para
-                .table
-                .expect("find_table_pos guarantees the paragraph carries a table");
-            let column_widths: Vec<f32> = table
-                .columns
-                .iter()
-                .map(|c| c.single_column_width.unwrap_or(0.0))
-                .collect();
-            let row_heights: Vec<f32> = table
-                .rows
-                .iter()
-                .map(|r| r.single_row_height.unwrap_or(0.0))
-                .collect();
-            let spec = NodeSpec::Table {
-                self_id: table_id.clone(),
-                rows: table.rows.len() as u32,
-                cols: table.columns.len().max(table.column_count as usize) as u32,
-                header_rows: table.header_row_count,
-                footer_rows: table.footer_row_count,
-                column_widths,
-                row_heights,
+            let json = serde_json::json!({ "paragraph": para }).to_string();
+            let spec = NodeSpec::Captured {
+                node: node.clone(),
+                json,
+                image_bytes: None,
             };
-            // The parent is the host story; position is the dropped
-            // paragraph index (accepted but ignored by re-insert, which
-            // appends — see `apply_insert_table`). z_slot is N/A for a
-            // story-nested node.
             Ok((NodeId::Story(story_id.clone()), pi, spec, None))
         }
         _ => Err(OperationError::UnsupportedProperty {
