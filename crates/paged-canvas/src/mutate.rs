@@ -326,8 +326,12 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             let before: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
             let at = para.char_offset_of_byte(before + byte_in_run);
             para.shift_anchors(at, seg.chars().count() as i64);
-            let run = &mut para.runs[run_idx];
-            run.text.insert_str(byte_in_run, seg);
+            let run_len = para.runs[run_idx].text.len();
+            if is_field_run(&para.runs[run_idx]) && (byte_in_run == 0 || byte_in_run == run_len) {
+                insert_beside_field(para, run_idx, byte_in_run == 0, seg);
+            } else {
+                para.runs[run_idx].text.insert_str(byte_in_run, seg);
+            }
         }
         Locate::EndOfStory { paragraph_idx } => {
             let para = &mut paragraphs[paragraph_idx];
@@ -337,7 +341,10 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
                 .map(|r| r.text.chars().count() as u32)
                 .sum();
             para.shift_anchors(end, seg.chars().count() as i64);
-            if let Some(run) = para.runs.last_mut() {
+            if para.runs.last().is_some_and(is_field_run) {
+                let last = para.runs.len() - 1;
+                insert_beside_field(para, last, false, seg);
+            } else if let Some(run) = para.runs.last_mut() {
                 run.text.push_str(seg);
             } else {
                 let run = CharacterRun {
@@ -353,7 +360,9 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             let next_idx = after_paragraph_idx + 1;
             let next_para = &mut paragraphs[next_idx];
             next_para.shift_anchors(0, seg.chars().count() as i64);
-            if let Some(run) = next_para.runs.first_mut() {
+            if next_para.runs.first().is_some_and(is_field_run) {
+                insert_beside_field(next_para, 0, true, seg);
+            } else if let Some(run) = next_para.runs.first_mut() {
                 run.text.insert_str(0, seg);
             } else {
                 let run = CharacterRun {
@@ -364,6 +373,47 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             }
         }
     }
+}
+
+/// A run that IS a field — a plugin placeholder (v43) or an imported
+/// InDesign text variable instance. Its text is the field's display, owned
+/// by the field: a refresh replaces all of it.
+fn is_field_run(run: &CharacterRun) -> bool {
+    run.placeholder.is_some() || run.text_variable.is_some()
+}
+
+/// v68 — insert `seg` at a field run's edge, OUTSIDE the field. InDesign
+/// treats a text variable as one atomic character: a caret on either side
+/// of it types beside it. The text joins the neighbouring ordinary run when
+/// there is one; otherwise it becomes a run of its own carrying the field's
+/// formatting (the character style at the insertion point) without the
+/// field's identity. The story-offset position of the inserted bytes is the
+/// same as before, so the inverse `DeleteRange` is unchanged.
+fn insert_beside_field(
+    para: &mut paged_model::Paragraph,
+    field_idx: usize,
+    before: bool,
+    seg: &str,
+) {
+    let neighbour = if before {
+        field_idx.checked_sub(1)
+    } else {
+        Some(field_idx + 1).filter(|&i| i < para.runs.len())
+    };
+    if let Some(n) = neighbour.filter(|&n| !is_field_run(&para.runs[n])) {
+        if before {
+            para.runs[n].text.push_str(seg);
+        } else {
+            para.runs[n].text.insert_str(0, seg);
+        }
+        return;
+    }
+    let mut run = para.runs[field_idx].clone();
+    run.placeholder = None;
+    run.text_variable = None;
+    run.text = seg.into();
+    let at = if before { field_idx } else { field_idx + 1 };
+    para.runs.insert(at, run);
 }
 
 /// Split a paragraph at `offset`. The bytes at/after `offset` move
