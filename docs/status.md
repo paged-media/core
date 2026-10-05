@@ -1,7 +1,7 @@
 # Status
 
-What the engine ships and what it does not, read from the code at commit `fcffd2d`
-(`PROTOCOL_VERSION` 66; the newest release tag in its history is `v0.66.0`). This page stays
+What the engine ships and what it does not, read from the code at commit `715e130`
+(`PROTOCOL_VERSION` 67; the newest release tag in its history is `v0.67.0`). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -18,7 +18,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
-  about a given point) and snapping, as message kinds.
+  about a given point) and snapping, as message kinds. Snapping is one engine resolver
+  ([ADR 125](adr/125-snapping-lives-in-the-engine.md)): `requestSnapPoint` and the move, resize
+  and path-edit gestures snap to every visible element's points and outlines, the page, ruler
+  guides, the grid and the lines through those points, under `setSnapSettings`.
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
@@ -54,7 +57,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   cheap, and only a build of text edits in one story reuses previous pages.
 - **Two mutation lanes.** Text edits have no `Operation` form; they use `TextOp` in
   `paged-canvas`. Undo keeps the newest 10,000 entries.
-- **The command line sends 35 of the 65 message kinds.** The rest are listed with a reason
+- **The command line sends 37 of the 67 message kinds.** The rest are listed with a reason
   each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 30) need a pointer or a caret.
 - **The Vello path is not at parity with the CPU path.** Ink separations and coverage are
   CPU only; the `DropShadow` command is skipped and a path shadow is approximated by
