@@ -310,6 +310,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setRowHeight", "(storyId, tableId, row, height?)", "bool", "write", "Set/clear a table row height in pt."),
         f!("paged.setColumnWidth", "(storyId, tableId, col, width?)", "bool", "write", "Set/clear a table column width in pt."),
         f!("paged.insertTableRow", "(storyId, tableId, at)", "bool", "author", "Insert an empty body row at index."),
+        f!("paged.deleteTable", "(storyId, tableId)", "bool", "author", "Delete a whole table and its host paragraph; undo restores every cell."),
         f!("paged.deleteTableRow", "(storyId, tableId, at)", "bool", "author", "Delete the body row at index."),
         f!("paged.insertTableColumn", "(storyId, tableId, at)", "bool", "author", "Insert an empty column at index."),
         f!("paged.deleteTableColumn", "(storyId, tableId, at)", "bool", "author", "Delete the column at index."),

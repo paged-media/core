@@ -751,6 +751,13 @@ pub struct BuiltPage {
     /// frame on this page had a cache miss. Aggregated verbatim into
     /// `BuiltDocument::resource_tiles_needed`.
     pub resource_tiles_needed: Vec<crate::resource_provider::ResourceTilesNeeded>,
+    /// The frames (IDML `Self` ids) whose plugin scene layer (C-1) was
+    /// lowered onto this page, in emit order. A frame that reaches across
+    /// pages of its spread is listed on each page it is emitted onto. The
+    /// canvas reads this to
+    /// re-encode only the pages a scene-layer submit changed instead of
+    /// dropping every cached page.
+    pub scene_layer_frames: Vec<String>,
 }
 
 /// W3.A1 — one table cell's page-local rect plus its addressing keys.
@@ -1692,6 +1699,7 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
         diagnostics: Vec::new(),
         cell_rects: Vec::new(),
         resource_tiles_needed: Vec::new(),
+        scene_layer_frames: Vec::new(),
     })
 }
 

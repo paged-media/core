@@ -1369,6 +1369,9 @@ pub(super) fn emit_frame_scene_layer(
     if layer.items.is_empty() {
         return;
     }
+    if !page.scene_layer_frames.iter().any(|f| f == id) {
+        page.scene_layer_frames.push(id.to_string());
+    }
     let outer = frame_outer_transform(page, item_transform);
     let ins = inset.unwrap_or([0.0; 4]);
     let content_left = bounds.left + ins[1];

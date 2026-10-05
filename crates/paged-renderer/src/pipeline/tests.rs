@@ -226,6 +226,7 @@ fn frame_outer_transform_identity_spread_is_unchanged() {
         diagnostics: Vec::new(),
         cell_rects: Vec::new(),
         resource_tiles_needed: Vec::new(),
+        scene_layer_frames: Vec::new(),
     };
     let outer = frame_outer_transform(&page, Some([1.0, 0.0, 0.0, 1.0, 5.0, 6.0]));
     // translate(-10,-20) ∘ translate(5,6) = translate(-5,-14).
@@ -252,6 +253,7 @@ fn frame_outer_transform_rotated_spread_rotates_about_page_origin() {
         diagnostics: Vec::new(),
         cell_rects: Vec::new(),
         resource_tiles_needed: Vec::new(),
+        scene_layer_frames: Vec::new(),
     };
     // Frame at inner origin translated to (30, 0). Under 90° CW
     // (x' = -y, y' = x), the frame's translation (30,0) maps to

@@ -325,10 +325,12 @@ fn resolve_parent(
 /// Make sure the story a text frame names exists, creating the empty
 /// story when it does not (the fresh-insert case, and the redo of an
 /// undone insert). An existing story is left alone — that is how a
-/// re-inserted frame gets its text back.
-fn ensure_story(doc: &mut Document, id: &str) {
+/// re-inserted frame gets its text back. Returns whether it created the
+/// story: the insert's inverse then removes it again
+/// ([`invert_insert_minting`]).
+fn ensure_story(doc: &mut Document, id: &str) -> bool {
     if doc.stories.iter().any(|s| s.self_id == id) {
-        return;
+        return false;
     }
     let mut story = paged_model::Story::default();
     // One empty paragraph + run — the shape an empty parsed story has;
@@ -346,6 +348,81 @@ fn ensure_story(doc: &mut Document, id: &str) {
         self_id: id.to_string(),
         story,
     });
+    true
+}
+
+/// The inverse of an insert: remove the node, and — when the insert
+/// created the frame's story (`minted`) — that story too. Without the
+/// second step undoing an `insertTextFrame` left an empty, frameless
+/// story behind, which a save wrote out as a `Stories/` part. Only the
+/// INSERT drops the story: removing a frame any other way keeps it, so
+/// the undo of a delete re-attaches the same story, text and all.
+fn invert_insert_minting(spec: &NodeSpec, minted: Option<&str>) -> Operation {
+    match minted {
+        Some(story_id) => Operation::Batch {
+            ops: vec![
+                invert_insert_node(spec),
+                Operation::RemoveStory {
+                    story_id: story_id.to_string(),
+                },
+            ],
+        },
+        None => invert_insert_node(spec),
+    }
+}
+
+/// Put a table `RemoveNode` captured back: its host paragraph, verbatim,
+/// at the index it was removed from (clamped to the story's end).
+/// `Err(None)` is a capture that does not decode.
+fn insert_captured_table(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    node: &NodeId,
+    story_id: &str,
+    table_id: &str,
+    json: &str,
+) -> Result<AppliedOperation, Option<OperationError>> {
+    if parent != &NodeId::Story(story_id.to_string()) {
+        return Err(Some(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: "Table".to_string(),
+        }));
+    }
+    if find_table_pos(doc, story_id, table_id).is_some() {
+        return Err(Some(OperationError::DuplicateNodeId {
+            id: table_id.to_string(),
+        }));
+    }
+    let mut envelope: serde_json::Value = serde_json::from_str(json).map_err(|_| None)?;
+    let para: paged_model::Paragraph = envelope
+        .get_mut("paragraph")
+        .map(serde_json::Value::take)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .ok_or(None)?;
+    let si = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| Some(OperationError::NodeNotFound(parent.clone())))?;
+    let paragraphs = &mut doc.stories[si].story.paragraphs;
+    let at = position.min(paragraphs.len());
+    paragraphs.insert(at, para);
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position: at,
+            node: NodeSpec::Captured {
+                node: node.clone(),
+                json: json.to_string(),
+                image_bytes: None,
+            },
+            z_slot: None,
+        },
+        inverse: Operation::RemoveNode { node: node.clone() },
+        invalidation,
+    })
 }
 
 /// C-75 — re-insert a node `RemoveNode` captured whole
@@ -371,6 +448,10 @@ fn apply_insert_captured(
         path: crate::operation::PropertyPath::FrameTransform,
         reason: format!("malformed captured node: {what}"),
     };
+    if let NodeId::Table { story_id, table_id } = node {
+        return insert_captured_table(doc, parent, position, node, story_id, table_id, json)
+            .map_err(|e| e.unwrap_or_else(|| malformed("no paragraph".to_string())));
+    }
     let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
     if node_exists(doc, node) {
         return Err(OperationError::DuplicateNodeId {
@@ -428,9 +509,12 @@ fn apply_insert_captured(
         .map_err(decode)?
         .flatten();
 
+    let mut minted: Option<String> = None;
     if let Item::TextFrame(frame) = &item {
         if let Some(story) = frame.parent_story.clone() {
-            ensure_story(doc, &story);
+            if ensure_story(doc, &story) {
+                minted = Some(story);
+            }
         }
     }
     let spread = find_spread_mut(doc, &parent_id)
@@ -496,7 +580,7 @@ fn apply_insert_captured(
             node: spec.clone(),
             z_slot,
         },
-        inverse: invert_insert_node(spec),
+        inverse: invert_insert_minting(spec, minted.as_deref()),
         invalidation: InvalidationHint {
             structural: true,
             ..Default::default()
@@ -548,12 +632,30 @@ pub(super) fn apply_insert_node(
     // of an undone insert). `None` attaches nothing — the legacy
     // story-less shape stays byte-identical across remove → undo (the
     // kernel invariant). Runs BEFORE the spread borrow (`doc.stories`).
+    //
+    // The spread and position are checked first, so a refused insert
+    // never leaves a minted story behind.
+    let mut minted: Option<&str> = None;
     let text_frame_story: Option<String> = match spec {
         NodeSpec::TextFrame {
             parent_story: Some(id),
             ..
         } => {
-            ensure_story(doc, id);
+            let len = find_spread_mut(doc, parent_id)
+                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?
+                .spread
+                .text_frames
+                .len();
+            if position > len {
+                return Err(OperationError::InvalidPosition {
+                    parent: parent.clone(),
+                    position,
+                    len,
+                });
+            }
+            if ensure_story(doc, id) {
+                minted = Some(id);
+            }
             Some(id.clone())
         }
         _ => None,
@@ -766,7 +868,7 @@ pub(super) fn apply_insert_node(
         seat_in_group(&mut spread.spread, new_ref, group_idx, z_slot);
     }
 
-    let inverse = invert_insert_node(spec);
+    let inverse = invert_insert_minting(spec, minted);
     Ok(AppliedOperation {
         op: Operation::InsertNode {
             parent: parent.clone(),

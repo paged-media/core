@@ -632,6 +632,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("insertTableRow"),
             3,
         )
+        .function(guarded(paged_delete_table), js_string!("deleteTable"), 2)
         .function(
             guarded(paged_delete_table_row),
             js_string!("deleteTableRow"),
@@ -2572,6 +2573,20 @@ fn paged_insert_table_row(
         table_id,
         at,
     }))
+}
+
+/// `paged.deleteTable(storyId, tableId)` — delete a whole table and the
+/// paragraph that hosts it (`Mutation::DeleteTable`). Undo restores it.
+fn paged_delete_table(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteTable { story_id, table_id }))
 }
 
 /// `paged.deleteTableRow(storyId, tableId, at)` — delete the row at `at`

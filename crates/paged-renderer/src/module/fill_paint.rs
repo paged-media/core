@@ -163,6 +163,7 @@ mod tests {
             diagnostics: Vec::new(),
             cell_rects: Vec::new(),
             resource_tiles_needed: Vec::new(),
+            scene_layer_frames: Vec::new(),
         }
     }
 

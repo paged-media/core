@@ -2562,6 +2562,8 @@ impl CanvasModel {
                 start: *start,
                 end: *end,
                 recovered: String::new(),
+                unseed: false,
+                keep_run: false,
                 cell: cell.clone(),
             },
             // C-64 — a duplicate that did not translate was REFUSED by
@@ -4241,6 +4243,12 @@ impl CanvasModel {
                 table_id: table_id.clone(),
                 at: *at,
                 restore: None,
+            }),
+            Mutation::DeleteTable { story_id, table_id } => Some(Operation::RemoveNode {
+                node: NodeId::Table {
+                    story_id: story_id.clone(),
+                    table_id: table_id.clone(),
+                },
             }),
             Mutation::DeleteTableRow {
                 story_id,
@@ -8770,6 +8778,7 @@ impl CanvasModel {
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
                             has_image: false,
+                            story_id: None,
                         });
                         break;
                     }
@@ -8779,12 +8788,16 @@ impl CanvasModel {
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;
+                let mut story_id = None;
                 let resolved: Option<(paged_model::Bounds, Option<[f32; 6]>, bool)> = match id {
                     ElementId::TextFrame(_) => spread
                         .text_frames
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, false)),
+                        .map(|f| {
+                            story_id = f.parent_story.clone();
+                            (f.bounds, f.item_transform, false)
+                        }),
                     ElementId::Rectangle(_) => spread
                         .rectangles
                         .iter()
@@ -8884,6 +8897,7 @@ impl CanvasModel {
                     bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
                     item_transform,
                     has_image,
+                    story_id,
                 });
                 break;
             }
@@ -9863,6 +9877,20 @@ impl CanvasModel {
             self.rebuild_after_mutation()?;
         }
         Ok(())
+    }
+
+    /// C-1 — the indices of the built pages a frame's scene layer is
+    /// drawn on (each page of the spread the frame reaches into). Empty
+    /// when the frame carries no layer, has no items, or draws
+    /// nowhere. A submit re-encodes the union of this before and after.
+    pub fn pages_showing_scene_layer(&self, element_id: &str) -> Vec<usize> {
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.scene_layer_frames.iter().any(|f| f == element_id))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// C-1 — the frame ids that currently carry a plugin scene layer
@@ -12326,6 +12354,8 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
                     start: 0,
                     end: 0,
                     recovered: String::new(),
+                    unseed: false,
+                    keep_run: false,
                     cell: None,
                 },
             },

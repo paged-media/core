@@ -936,6 +936,7 @@ pub(super) fn build_document_inner(
                 diagnostics: Vec::new(),
                 cell_rects: Vec::new(),
                 resource_tiles_needed: Vec::new(),
+                scene_layer_frames: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -973,6 +974,7 @@ pub(super) fn build_document_inner(
             diagnostics: Vec::new(),
             cell_rects: Vec::new(),
             resource_tiles_needed: Vec::new(),
+            scene_layer_frames: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: paged_model::Bounds {
