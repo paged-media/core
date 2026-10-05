@@ -55,6 +55,7 @@ is not written yet.
 | [124](124-opacity-masks-native.md) | Opacity masks are a native construct; loss is reported on IDML export | Accepted, recorded retroactively 2026-10-02 |
 | [125](125-snapping-lives-in-the-engine.md) | Snapping lives in the engine | Accepted 2026-10-05 |
 | [126](126-scene-text-in-its-own-face.md) | Scene-layer text draws in its own face | Accepted 2026-10-05 |
+| [127](127-fields-and-document-labels-for-data.md) | Field offsets, typing at a field, document labels and delete undo | Accepted 2026-10-05 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
