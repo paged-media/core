@@ -2005,6 +2005,39 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // v66 — the same inner `<Image>` transform on the other two image
+        // frames. The renderer has drawn `image_item_transform` for ovals
+        // and polygons (clipped by their outline) and the IDML writer has
+        // written it back all along; only the setter was missing, so a
+        // commit that changed an image's size could not reach them.
+        (NodeId::Oval(id), PropertyPath::ImageContentTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.image_item_transform;
+            oval.image_item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Polygon(id), PropertyPath::ImageContentTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.image_item_transform;
+            poly.image_item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         (
             NodeId::StoryRange {
                 story_id,

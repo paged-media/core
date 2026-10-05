@@ -40,6 +40,20 @@ use crate::display_list::{
     SweepGradient, Transform,
 };
 
+/// Serde for refcounted RGBA buffers: the same `number[]` JSON shape a
+/// `Vec<u8>` has, so the wire did not change when the storage did.
+pub(crate) mod rgba_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &bytes::Bytes, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(b.iter())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<bytes::Bytes, D::Error> {
+        Vec::<u8>::deserialize(d).map(bytes::Bytes::from)
+    }
+}
+
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
 /// (on the wire) by the host element id of the frame it renders into.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
@@ -86,8 +100,14 @@ pub enum SceneItem {
     /// zero-area image/dest) is skipped, never panicked.
     Image {
         /// Tightly packed RGBA8, row-major. Length must be `width*height*4`.
+        ///
+        /// Refcounted (v66): lowering hands the display list a clone of
+        /// the refcount, not of the pixels, so every rebuild of a page
+        /// carrying a plugin image used to copy the whole buffer and no
+        /// longer does. The JSON wire shape is unchanged (`number[]`).
+        #[serde(with = "rgba_bytes")]
         #[tsify(type = "number[]")]
-        rgba: Vec<u8>,
+        rgba: bytes::Bytes,
         /// Pixel width of the buffer.
         width: u32,
         /// Pixel height of the buffer.
@@ -613,7 +633,7 @@ pub fn emit_scene_layer<T>(
                     width: *width,
                     height: *height,
                     encoded: bytes::Bytes::new(),
-                    rgba: bytes::Bytes::from(rgba.clone()),
+                    rgba: rgba.clone(),
                     icc: None,
                 });
                 // `for_rect_in` maps the image's unit square into `dest`
@@ -1124,7 +1144,7 @@ mod tests {
         ];
         let layer = SceneLayer {
             items: vec![SceneItem::Image {
-                rgba: red2x2.clone(),
+                rgba: red2x2.clone().into(),
                 width: 2,
                 height: 2,
                 x: 10.0,
@@ -1161,12 +1181,67 @@ mod tests {
         );
     }
 
+    /// v66 — lowering shares the plugin's pixels with the display list
+    /// instead of copying them: every rebuild of the page used to clone
+    /// the whole buffer. Reverting `rgba` to a `Vec<u8>` that is copied
+    /// into a fresh `Bytes` fails the pointer check.
+    #[test]
+    fn image_item_lowering_shares_the_buffer_not_a_copy() {
+        let rgba = bytes::Bytes::from(vec![7u8; 64 * 64 * 4]);
+        let layer = SceneLayer {
+            items: vec![SceneItem::Image {
+                rgba: rgba.clone(),
+                width: 64,
+                height: 64,
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            }],
+        };
+        for _ in 0..3 {
+            let mut list = DisplayList::new();
+            emit_scene_layer(
+                &mut list,
+                &layer,
+                Transform::IDENTITY,
+                (10.0, 10.0),
+                |_, _, _| {},
+            );
+            assert_eq!(list.images.len(), 1);
+            assert_eq!(
+                list.images[0].rgba.as_ptr(),
+                rgba.as_ptr(),
+                "the display list must hold the same allocation"
+            );
+        }
+    }
+
+    /// The wire shape did not change with the storage: `rgba` is still a
+    /// JSON number array both ways.
+    #[test]
+    fn image_item_rgba_stays_a_json_number_array() {
+        let item = SceneItem::Image {
+            rgba: bytes::Bytes::from_static(&[1, 2, 3, 4]),
+            width: 1,
+            height: 1,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        let json = serde_json::to_string(&item).expect("serialize");
+        assert!(json.contains("\"rgba\":[1,2,3,4]"), "{json}");
+        let back: SceneItem = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, item);
+    }
+
     #[test]
     fn image_item_with_a_malformed_buffer_is_skipped_not_panicked() {
         let mut list = DisplayList::new();
         let layer = SceneLayer {
             items: vec![SceneItem::Image {
-                rgba: vec![255, 0, 0], // 3 bytes, not 2*2*4 = 16
+                rgba: vec![255, 0, 0].into(), // 3 bytes, not 2*2*4 = 16
                 width: 2,
                 height: 2,
                 x: 0.0,

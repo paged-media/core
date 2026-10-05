@@ -298,6 +298,121 @@ mod wasm {
             serde_json::to_string(&reply).unwrap_or_default()
         }
 
+        /// v66 — binary sibling of `SubmitSceneLayer` for the one-image
+        /// case: the frame's scene layer becomes the RGBA8 image in `rgba`
+        /// (`width*height*4` bytes) drawn at `x, y, w, h` frame-content
+        /// points. Take a `Uint8Array` (transfer it to the worker first);
+        /// no `number[]`, no JSON parse. Returns the `sceneLayerApplied`
+        /// envelope as JSON, like `handleMessage`. Only the pages showing
+        /// the frame lose their cached scene.
+        #[allow(clippy::too_many_arguments)]
+        #[wasm_bindgen(js_name = submitSceneImageDirect)]
+        pub fn submit_scene_image_direct(
+            &mut self,
+            seq: u32,
+            element_id: String,
+            caller: Option<String>,
+            rgba: Vec<u8>,
+            width: u32,
+            height: u32,
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        ) -> String {
+            let (reply, effect) = self.core.submit_scene_image(
+                seq as u64,
+                element_id,
+                caller,
+                rgba,
+                width,
+                height,
+                (x, y, w, h),
+            );
+            self.apply_cache_effect(effect);
+            serde_json::to_string(&reply).unwrap_or_default()
+        }
+
+        /// v66 — patch rectangles of the image `submitSceneImageDirect`
+        /// set: `rects` is a `Uint32Array` of `x, y, w, h` (image pixels)
+        /// per tile, `rgba` the tiles' pixels back to back in that order.
+        /// Validated whole before any byte moves. Returns the
+        /// `sceneLayerApplied` envelope as JSON.
+        #[wasm_bindgen(js_name = submitSceneImageTilesDirect)]
+        pub fn submit_scene_image_tiles_direct(
+            &mut self,
+            seq: u32,
+            element_id: String,
+            caller: Option<String>,
+            rects: &[u32],
+            rgba: &[u8],
+        ) -> String {
+            let (reply, effect) = self
+                .core
+                .submit_scene_image_tiles(seq as u64, element_id, caller, rects, rgba);
+            self.apply_cache_effect(effect);
+            serde_json::to_string(&reply).unwrap_or_default()
+        }
+
+        /// v66 — `WritePagedPart` with a `Uint8Array` body. Returns the
+        /// `pagedPartWritten` / `pagedPartFailed` envelope as JSON.
+        #[wasm_bindgen(js_name = writePagedPartDirect)]
+        pub fn write_paged_part_direct(
+            &mut self,
+            seq: u32,
+            path: String,
+            caller: Option<String>,
+            bytes: Vec<u8>,
+        ) -> String {
+            let (reply, effect) = self
+                .core
+                .write_paged_part_bytes(seq as u64, path, caller, bytes, &now_ms);
+            self.apply_cache_effect(effect);
+            serde_json::to_string(&reply).unwrap_or_default()
+        }
+
+        /// v66 — a `.paged` part's bytes as a `Uint8Array`, or `undefined`
+        /// when the part is absent or no document is loaded.
+        #[wasm_bindgen(js_name = readPagedPartDirect)]
+        pub fn read_paged_part_direct(&self, path: &str) -> Option<Vec<u8>> {
+            self.core.read_paged_part_bytes(path)
+        }
+
+        /// v66 — a frame's placed image as `{ uri, width, height, encoded }`
+        /// with `encoded` a `Uint8Array`, or `undefined` when there is none
+        /// (the cases `placedAssetBytes` answers `found: false`).
+        #[wasm_bindgen(js_name = placedAssetBytesDirect)]
+        pub fn placed_asset_bytes_direct(&self, element_id: &str) -> Option<js_sys::Object> {
+            let (uri, width, height, bytes) = self.core.placed_asset_bytes(element_id)?;
+            let out = js_sys::Object::new();
+            let set = |k: &str, v: JsValue| {
+                let _ = js_sys::Reflect::set(&out, &JsValue::from_str(k), &v);
+            };
+            set("uri", JsValue::from_str(&uri));
+            set("width", JsValue::from_f64(width as f64));
+            set("height", JsValue::from_f64(height as f64));
+            set("encoded", js_sys::Uint8Array::from(bytes.as_slice()).into());
+            Some(out)
+        }
+
+        /// v66 — apply one wire `Mutation` (JSON; a `batch` too) whose
+        /// first `replaceImageBytes` with `bytes: []` takes `bytes` — the
+        /// commit lane for processed pixels without a `number[]`. Returns
+        /// the `Mutate` reply envelope as JSON.
+        #[wasm_bindgen(js_name = mutateWithBytesDirect)]
+        pub fn mutate_with_bytes_direct(
+            &mut self,
+            seq: u32,
+            mutation_json: &str,
+            bytes: Vec<u8>,
+        ) -> String {
+            let (reply, effect) =
+                self.core
+                    .mutate_with_bytes(seq as u64, mutation_json, bytes, &now_ms);
+            self.apply_cache_effect(effect);
+            serde_json::to_string(&reply).unwrap_or_default()
+        }
+
         /// Number of pages in the loaded document, or 0 if no
         /// document is loaded.
         #[wasm_bindgen(js_name = pageCount)]

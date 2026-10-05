@@ -719,6 +719,10 @@ impl WorkerCore {
                 let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
                 WorkerToMainKind::PathAnchors { result }
             }
+            MainToWorkerKind::RequestTextOutlines { id } => {
+                let result = self.model.as_ref().and_then(|m| m.text_outlines(&id));
+                WorkerToMainKind::TextOutlines { result }
+            }
             MainToWorkerKind::RequestNearestPathPoint { id, point } => {
                 let result = self
                     .model
@@ -882,6 +886,7 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
                 }
             }
             MainToWorkerKind::ClearSceneLayer { element_id } => {
@@ -895,6 +900,7 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
                 }
             }
             MainToWorkerKind::SubmitPixelLayer { element_id, layer } => {
@@ -913,6 +919,7 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
                 }
             }
             MainToWorkerKind::ClearPixelLayer { element_id } => {
@@ -926,6 +933,7 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
                 }
             }
             MainToWorkerKind::ClaimImageResource {
@@ -1189,6 +1197,17 @@ impl WorkerCore {
                     error: "no document loaded".into(),
                 },
             },
+            MainToWorkerKind::DeletePagedPart { path, caller } => match self.model.as_mut() {
+                // v66 — the caller-gated delete; a part the loaded container
+                // carries is tombstoned so `ExportPaged` drops it.
+                Some(m) => match m.delete_paged_part_as(caller.as_deref(), &path) {
+                    Ok(existed) => WorkerToMainKind::PagedPartDeleted { existed },
+                    Err(e) => WorkerToMainKind::PagedPartFailed { error: e },
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
             MainToWorkerKind::ListPagedParts { prefix } => match self.model.as_ref() {
                 Some(m) => WorkerToMainKind::PagedPartList {
                     paths: m.list_paged_parts(&prefix),
@@ -1439,5 +1458,250 @@ impl WorkerCore {
             },
             effect,
         )
+    }
+
+    // ---- v66 binary doors -------------------------------------------
+    //
+    // The canvas-wasm shell exposes these as `…Direct` exports taking or
+    // returning `Uint8Array`s, so pixels and part bytes never ride the JSON
+    // channel as `number[]` (8x the bytes, plus a parse per element). They
+    // live here, not in the shell, so they are tested natively; their
+    // replies are the SAME `WorkerToMain` envelopes the JSON kinds produce.
+
+    fn envelope(seq: u64, kind: WorkerToMainKind) -> WorkerToMain {
+        WorkerToMain {
+            seq: Some(seq),
+            protocol: PROTOCOL_VERSION,
+            kind,
+        }
+    }
+
+    /// The GPU cache effect of a scene-image change: exactly the pages that
+    /// showed the frame's image before or show it now. Nothing when neither
+    /// set has a page (the frame draws nowhere).
+    fn scene_image_effect(before: Vec<usize>, after: Vec<usize>) -> CacheEffect {
+        let mut pages = before;
+        for p in after {
+            if !pages.contains(&p) {
+                pages.push(p);
+            }
+        }
+        if pages.is_empty() {
+            CacheEffect::None
+        } else {
+            pages.sort_unstable();
+            CacheEffect::InvalidatePages(pages)
+        }
+    }
+
+    /// The page ids an `InvalidatePages` effect names (none for `None`).
+    fn page_ids_of(&self, effect: &CacheEffect) -> Vec<PageId> {
+        let (Some(m), CacheEffect::InvalidatePages(pages)) = (self.model.as_ref(), effect) else {
+            return Vec::new();
+        };
+        pages
+            .iter()
+            .filter_map(|&i| m.built().pages.get(i).map(|p| p.id.clone()))
+            .collect()
+    }
+
+    /// v66 — `submitSceneImageDirect`: the frame's scene layer becomes ONE
+    /// RGBA8 image, taking ownership of the transferred bytes. Reply:
+    /// `sceneLayerApplied` (`applied: false` for a malformed buffer, a
+    /// foreign owner or no document).
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_scene_image(
+        &mut self,
+        seq: u64,
+        element_id: String,
+        caller: Option<String>,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        dest: (f32, f32, f32, f32),
+    ) -> (WorkerToMain, CacheEffect) {
+        let mut effect = CacheEffect::None;
+        let applied = match self.model.as_mut() {
+            Some(m) => {
+                let before = m.pages_showing_scene_image(&element_id);
+                let ok = m
+                    .set_scene_image_as(
+                        caller.as_deref(),
+                        element_id.clone(),
+                        bytes::Bytes::from(rgba),
+                        width,
+                        height,
+                        dest,
+                    )
+                    .is_ok();
+                if ok {
+                    effect =
+                        Self::scene_image_effect(before, m.pages_showing_scene_image(&element_id));
+                }
+                ok
+            }
+            None => false,
+        };
+        (
+            Self::envelope(
+                seq,
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                    page_ids: Some(self.page_ids_of(&effect)),
+                },
+            ),
+            effect,
+        )
+    }
+
+    /// v66 — `submitSceneImageTilesDirect`: patch rectangles of the frame's
+    /// retained scene image (`rects`: `x, y, w, h` image pixels per tile;
+    /// `rgba`: the tiles' pixels back to back). Only the pages showing the
+    /// frame re-encode. Reply: `sceneLayerApplied`.
+    pub fn submit_scene_image_tiles(
+        &mut self,
+        seq: u64,
+        element_id: String,
+        caller: Option<String>,
+        rects: &[u32],
+        rgba: &[u8],
+    ) -> (WorkerToMain, CacheEffect) {
+        let mut effect = CacheEffect::None;
+        let applied = match self.model.as_mut() {
+            Some(m) => {
+                let before = m.pages_showing_scene_image(&element_id);
+                let ok = m
+                    .patch_scene_image_as(caller.as_deref(), &element_id, rects, rgba)
+                    .is_ok();
+                if ok {
+                    effect =
+                        Self::scene_image_effect(before, m.pages_showing_scene_image(&element_id));
+                }
+                ok
+            }
+            None => false,
+        };
+        (
+            Self::envelope(
+                seq,
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                    page_ids: Some(self.page_ids_of(&effect)),
+                },
+            ),
+            effect,
+        )
+    }
+
+    /// v66 — `writePagedPartDirect`: `WritePagedPart` with the bytes moved
+    /// in, not parsed out of JSON. Reply: `pagedPartWritten` /
+    /// `pagedPartFailed`.
+    pub fn write_paged_part_bytes(
+        &mut self,
+        seq: u64,
+        path: String,
+        caller: Option<String>,
+        bytes: Vec<u8>,
+        clock: &Clock<'_>,
+    ) -> (WorkerToMain, CacheEffect) {
+        self.dispatch(
+            MainToWorker {
+                seq,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::WritePagedPart {
+                    path,
+                    bytes: bytes.into(),
+                    caller,
+                },
+            },
+            clock,
+        )
+    }
+
+    /// v66 — `readPagedPartDirect`: a part's bytes, or `None` when absent
+    /// (or no document). The same read `ReadPagedPart` answers.
+    pub fn read_paged_part_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        self.model.as_ref()?.get_paged_part(path)
+    }
+
+    /// v66 — `placedAssetBytesDirect`: `(uri, width, height, encoded)` of a
+    /// frame's placed image, the same read `RequestPlacedAssetBytes`
+    /// answers.
+    pub fn placed_asset_bytes(&self, element_id: &str) -> Option<(String, u32, u32, Vec<u8>)> {
+        self.model.as_ref()?.placed_asset_bytes(element_id)
+    }
+
+    /// v66 — `mutateWithBytesDirect`: apply `mutation_json` (one wire
+    /// `Mutation`, a `batch` included) after handing `bytes` to its FIRST
+    /// `replaceImageBytes` whose `bytes` is an empty array — the slot the
+    /// caller leaves for the transferred buffer. A mutation with no such
+    /// slot is refused rather than applied without the bytes it was sent
+    /// with. Reply: the `Mutate` reply (`mutationApplied` /
+    /// `mutationFailed`).
+    pub fn mutate_with_bytes(
+        &mut self,
+        seq: u64,
+        mutation_json: &str,
+        bytes: Vec<u8>,
+        clock: &Clock<'_>,
+    ) -> (WorkerToMain, CacheEffect) {
+        let fail = |what: String| {
+            (
+                Self::envelope(
+                    seq,
+                    WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NotImplemented { what },
+                    },
+                ),
+                CacheEffect::None,
+            )
+        };
+        let mut m: paged_canvas::channel::Mutation = match serde_json::from_str(mutation_json) {
+            Ok(m) => m,
+            Err(e) => return fail(format!("malformed mutation: {e}")),
+        };
+        let mut slot = Some(bytes);
+        fill_bytes_slot(&mut m, &mut slot);
+        if slot.is_some() {
+            return fail(
+                "mutateWithBytes: no replaceImageBytes with an empty `bytes` slot to fill".into(),
+            );
+        }
+        self.dispatch(
+            MainToWorker {
+                seq,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::Mutate(m),
+            },
+            clock,
+        )
+    }
+}
+
+/// Hand `slot` to the first `ReplaceImageBytes` (depth-first through
+/// batches) whose bytes are present and empty. Leaves `slot` `Some` when
+/// there is none.
+fn fill_bytes_slot(m: &mut paged_canvas::channel::Mutation, slot: &mut Option<Vec<u8>>) {
+    use paged_canvas::channel::Mutation as M;
+    if slot.is_none() {
+        return;
+    }
+    match m {
+        M::ReplaceImageBytes { bytes: Some(b), .. } if b.as_slice().is_empty() => {
+            if let Some(v) = slot.take() {
+                *b = v.into();
+            }
+        }
+        M::Batch { ops } => {
+            for op in ops {
+                fill_bytes_slot(op, slot);
+                if slot.is_none() {
+                    return;
+                }
+            }
+        }
+        _ => {}
     }
 }

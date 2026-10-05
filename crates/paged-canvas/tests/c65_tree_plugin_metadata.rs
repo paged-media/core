@@ -78,7 +78,10 @@ fn the_tree_carries_plugin_metadata_and_only_the_reserved_namespace() {
     let pen = ElementId::Polygon("pen".into());
     let ov = ElementId::Oval("ov".into());
     let tree = m.scene_tree();
-    assert!(node(&tree, &pen).expect("pen").plugin_metadata.is_empty());
+    assert_eq!(
+        node(&tree, &pen).expect("pen").plugin_metadata,
+        Some(vec![])
+    );
 
     m.apply_mutation(&Mutation::SetPluginMetadata {
         element_id: pen.clone(),
@@ -89,13 +92,17 @@ fn the_tree_carries_plugin_metadata_and_only_the_reserved_namespace() {
     .expect("set metadata");
 
     let tree = m.scene_tree();
-    let entries = &node(&tree, &pen).expect("pen").plugin_metadata;
+    let entries = node(&tree, &pen)
+        .expect("pen")
+        .plugin_metadata
+        .as_deref()
+        .expect("an item row carries the field");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].key, "x-paged:media.paged.draw");
     assert!(entries[0].value.contains("blendStep"));
-    assert!(node(&tree, &ov).expect("ov").plugin_metadata.is_empty());
-    // Spread / page rows never carry any.
-    assert!(tree.iter().all(|s| s.plugin_metadata.is_empty()));
+    assert_eq!(node(&tree, &ov).expect("ov").plugin_metadata, Some(vec![]));
+    // Spread / page rows never carry the field.
+    assert!(tree.iter().all(|s| s.plugin_metadata.is_none()));
 
     // The tree and the per-element read agree.
     let props = m.element_properties(&pen).expect("props");
@@ -106,7 +113,44 @@ fn the_tree_carries_plugin_metadata_and_only_the_reserved_namespace() {
         .count();
     assert_eq!(per_element, entries.len());
 
-    // Omitted from the wire when empty: an old reader sees no new field.
+    // PRESENT and empty on an item that carries none — the field's
+    // presence is how a reader knows the engine reports it. (Spread and
+    // page rows omit it: `plugin_metadata` is None there, asserted above.)
     let json = serde_json::to_string(node(&tree, &ov).unwrap()).unwrap();
-    assert!(!json.contains("pluginMetadata"), "{json}");
+    assert!(json.contains("\"pluginMetadata\":[]"), "{json}");
+}
+
+#[test]
+fn an_undone_metadata_write_leaves_the_tree_too() {
+    let mut m = model();
+    let pen = ElementId::Polygon("pen".into());
+    let entries = |m: &CanvasModel| {
+        let tree = m.scene_tree();
+        node(&tree, &pen).expect("pen").plugin_metadata.clone()
+    };
+    let _ = entries(&m); // a tree read BEFORE the write, as a host makes
+    m.apply_mutation(&Mutation::SetPluginMetadata {
+        element_id: pen.clone(),
+        key: "x-paged:media.paged.draw".into(),
+        value: Some(r#"{"v":1,"data":{"tag":"p1"}}"#.into()),
+        caller: None,
+    })
+    .expect("set");
+    assert_eq!(entries(&m).map(|e| e.len()), Some(1));
+    m.undo().expect("undo");
+    assert_eq!(entries(&m), Some(vec![]), "the undo must leave the tree");
+    m.redo().expect("redo");
+    assert_eq!(entries(&m).map(|e| e.len()), Some(1));
+    m.undo().expect("undo again");
+    assert_eq!(
+        entries(&m),
+        Some(vec![]),
+        "the second undo must leave the tree"
+    );
+    assert!(m
+        .element_properties(&pen)
+        .expect("props")
+        .entries
+        .iter()
+        .all(|e| e.path != PropertyPath::PluginMetadata));
 }
