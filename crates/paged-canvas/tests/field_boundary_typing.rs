@@ -290,3 +290,87 @@ fn a_caret_on_the_paragraph_break_lands_at_the_end_of_the_paragraph() {
     insert_at_caret(&mut m, "story2", 7, "k");
     assert_eq!(story_text(&m, "story2"), "GrüßeX\nStory two body");
 }
+
+// ---- v68: undo of a delete puts the deleted RUNS back, not their text ----
+//
+// A `deleteRange`'s undo re-typed the recovered characters into one run: a
+// placeholder field came back as plain text (no identity — a refresh could
+// no longer find it) and every run's own formatting was lost. Found by the
+// data campaign's re-lower, which clears a story and pours it again: its
+// undo left the document without the field it had before.
+
+#[test]
+fn undoing_a_delete_over_a_field_restores_the_field() {
+    let mut m = model();
+    insert(&mut m, "story1", 6, "name", Some("Ada"));
+    m.apply_mutation(&Mutation::DeleteRange {
+        story_id: "story1".into(),
+        start: 0,
+        end: 12,
+        cell: None,
+    })
+    .unwrap();
+    assert!(m.document_placeholders().is_empty());
+    m.undo().expect("undo");
+    assert_eq!(story_text(&m, "story1"), "Story Adaone body text");
+    let items = m.document_placeholders();
+    assert_eq!(items.len(), 1, "the field is a field again");
+    assert_eq!(
+        (
+            items[0].offset,
+            items[0].key.as_str(),
+            items[0].value.as_deref()
+        ),
+        (6, "name", Some("Ada"))
+    );
+    // Redo deletes it again; a second undo restores it again.
+    m.redo().expect("redo");
+    assert!(m.document_placeholders().is_empty());
+    m.undo().expect("undo again");
+    assert_eq!(m.document_placeholders().len(), 1);
+}
+
+#[test]
+fn undoing_a_delete_restores_each_runs_formatting() {
+    let mut m = model();
+    type_at(&mut m, "story1", 0, "Head\n");
+    // "Head\nStory one body text": size "one" (story chars 11..14) 30 pt.
+    m.apply_mutation(
+        &serde_json::from_value(serde_json::json!({
+            "op": "setElementProperty",
+            "args": {
+                "elementId": { "kind": "storyRange", "id": { "story_id": "story1", "start": 10, "end": 13 } },
+                "path": "characterFontSize", "value": { "type": "length", "value": 30.0 } },
+        }))
+        .unwrap(),
+    )
+    .expect("size a word");
+    let sizes = |m: &CanvasModel| -> Vec<(String, Option<f32>)> {
+        m.scene()
+            .stories
+            .iter()
+            .find(|s| s.self_id == "story1")
+            .unwrap()
+            .story
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter().map(|r| (r.text.clone(), r.point_size)))
+            .collect()
+    };
+    let before = sizes(&m);
+    assert!(
+        before.iter().any(|(t, s)| t == "one" && *s == Some(30.0)),
+        "{before:?}"
+    );
+    // Delete "ad\nStory one bo" (bytes 2..20): across the break and the sized word.
+    m.apply_mutation(&Mutation::DeleteRange {
+        story_id: "story1".into(),
+        start: 2,
+        end: 20,
+        cell: None,
+    })
+    .unwrap();
+    m.undo().expect("undo");
+    assert_eq!(story_text(&m, "story1"), "Head\nStory one body text");
+    assert_eq!(sizes(&m), before, "each run keeps its own size");
+}
