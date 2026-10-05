@@ -676,6 +676,16 @@ pub enum Mutation {
         story_id: String,
         offset: u32,
         field: paged_mutate::operation::FieldKind,
+        /// v68 — the insertion point in the CARET unit instead: UTF-8 bytes
+        /// of the runs plus one synthetic `\n` per paragraph boundary (the
+        /// `ContentSelection` / `insertText` / `host.text.caret()` unit).
+        /// `offset` and every other field operation count characters with no
+        /// paragraph separator; the two agree only inside the first
+        /// paragraph of ASCII text. When present the engine converts this
+        /// against the story at apply time and ignores `offset` (send 0).
+        /// An older engine ignores the field, so gate it on `protocol >= 68`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// v52 — insert an image-bearing anchored Rectangle into a story, anchored
     /// at the paragraph containing character `offset`, sized `width`×`height`

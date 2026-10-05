@@ -581,7 +581,15 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - All fields additive; the bump is for the BEHAVIOUR: a host cannot
 //     tell a worker that draws `family` from one that ignores it by shape,
 //     so it gates per-run faces on `protocol >= 68`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(68);
+// v69 — the paged.data batch.
+//   - `insertField.contentOffset`: place a field at the CARET. The caret
+//     (`ContentSelection`, `host.text.caret()`) counts UTF-8 bytes plus a
+//     synthetic `\n` per paragraph; field ops count chars with no
+//     separator. The engine converts at apply time, so a batch that types
+//     first still lands right. Additive; an older worker ignores it.
+//   - Behaviour: text typed at a field's edge lands beside the field, not
+//     inside its run (a refresh used to overwrite it).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -3904,6 +3912,7 @@ mod tests {
                 story_id: "Story/u1".into(),
                 offset: 2,
                 field: paged_mutate::operation::FieldKind::PageNumber,
+                content_offset: None,
             },
             Mutation::InsertOval {
                 page_id: PageId("Page/u1".into()),

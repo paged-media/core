@@ -702,6 +702,7 @@ fn seed_page_number(m: &mut CanvasModel) {
         story_id,
         offset: 0,
         field: FieldKind::PageNumber,
+        content_offset: None,
     })
     .expect("seed a page-number marker");
 }
@@ -1524,6 +1525,7 @@ fn text_cases(c: &mut Vec<Case>) {
             story_id,
             offset: 0,
             field: FieldKind::PageNumber,
+            content_offset: None,
         }
     }));
     c.push(paints("InsertAnchoredFrame", "text", |m| {
@@ -1566,6 +1568,7 @@ fn text_cases(c: &mut Vec<Case>) {
                 key: "title".into(),
                 value: Some("BEFORE".into()),
             },
+            content_offset: None,
         })
         .expect("seed a placeholder");
         Mutation::SetFieldValue {

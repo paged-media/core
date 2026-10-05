@@ -21,10 +21,7 @@
 
 use std::io::Write;
 
-use paged_canvas::{
-    channel::{MainToWorkerKind, Mutation, PlaceholderItem, WorkerToMainKind},
-    CanvasModel, CanvasOptions,
-};
+use paged_canvas::{channel::Mutation, CanvasModel, CanvasOptions};
 use paged_mutate::operation::FieldKind;
 
 const PLUGIN: &str = "media.paged.data";
@@ -99,6 +96,7 @@ fn insert(m: &mut CanvasModel, story_id: &str, offset: u32, key: &str, value: Op
             key: key.into(),
             value: value.map(str::to_string),
         },
+        content_offset: None,
     })
     .expect("insert placeholder applies");
 }
@@ -197,4 +195,98 @@ fn typing_beside_a_field_undoes_to_the_field_alone() {
         (items[0].offset, items[0].value.as_deref()),
         (0, Some("Ada"))
     );
+}
+
+// ---- v68: a field placed at the CARET (the `contentOffset` unit) ----
+//
+// The caret (`ContentSelection`, `host.text.caret()`) counts UTF-8 bytes plus
+// one synthetic `\n` per paragraph boundary — the `insertText` unit. The field
+// operations count characters with no separator. `insertField.contentOffset`
+// takes the caret unit and the engine converts it.
+
+fn insert_at_caret(m: &mut CanvasModel, story_id: &str, caret: u32, key: &str) {
+    m.apply_mutation(&caret_insert(story_id, caret, key))
+        .expect("insertField at the caret applies");
+}
+
+fn caret_insert(story_id: &str, caret: u32, key: &str) -> Mutation {
+    serde_json::from_value(serde_json::json!({
+        "op": "insertField",
+        "args": {
+            "storyId": story_id,
+            "offset": 0,
+            "contentOffset": caret,
+            "field": { "placeholder": { "plugin": PLUGIN, "key": key, "value": "X" } },
+        },
+    }))
+    .expect("contentOffset is on the wire")
+}
+
+/// "Grüße" is 5 chars but 7 bytes; the caret after "St" in the second
+/// paragraph is byte 7 + 1 (`\n`) + 2 = 10, which is char 5 + 2 = 7.
+fn two_paragraphs_with_umlauts() -> CanvasModel {
+    let mut m = model();
+    type_at(&mut m, "story2", 0, "Grüße\n");
+    assert_eq!(story_text(&m, "story2"), "Grüße\nStory two body");
+    m
+}
+
+#[test]
+fn a_field_placed_at_the_caret_lands_at_the_caret() {
+    let mut m = two_paragraphs_with_umlauts();
+    insert_at_caret(&mut m, "story2", 10, "k");
+    assert_eq!(story_text(&m, "story2"), "Grüße\nStXory two body");
+    assert_eq!(m.document_placeholders()[0].offset, 7, "echoed in chars");
+}
+
+#[test]
+fn the_caret_offset_as_a_char_offset_lands_elsewhere() {
+    // Pins the mismatch `contentOffset` exists for: the same number read
+    // as a char offset is three characters late.
+    let mut m = two_paragraphs_with_umlauts();
+    m.apply_mutation(&Mutation::InsertField {
+        story_id: "story2".into(),
+        offset: 10,
+        field: paged_mutate::operation::FieldKind::Placeholder {
+            plugin: PLUGIN.into(),
+            key: "k".into(),
+            value: Some("X".into()),
+        },
+        content_offset: None,
+    })
+    .unwrap();
+    assert_eq!(story_text(&m, "story2"), "Grüße\nStoryX two body");
+}
+
+#[test]
+fn a_caret_field_in_a_batch_converts_against_the_text_typed_before_it() {
+    let mut m = model();
+    let batch: Mutation = serde_json::from_value(serde_json::json!({
+        "op": "batch",
+        "args": { "ops": [
+            { "op": "insertText", "args": { "storyId": "story2", "offset": 0, "text": "Grüße\n" } },
+            serde_json::to_value(caret_insert("story2", 10, "k")).unwrap(),
+        ] },
+    }))
+    .unwrap();
+    m.apply_mutation(&batch).expect("batch applies");
+    assert_eq!(story_text(&m, "story2"), "Grüße\nStXory two body");
+    m.undo().expect("one undo step");
+    assert_eq!(story_text(&m, "story2"), "Story two body");
+}
+
+#[test]
+fn a_caret_inside_a_character_or_past_the_end_is_refused() {
+    let mut m = two_paragraphs_with_umlauts();
+    // byte 3 is inside "ü"
+    assert!(m.apply_mutation(&caret_insert("story2", 3, "k")).is_err());
+    assert!(m.apply_mutation(&caret_insert("story2", 999, "k")).is_err());
+    assert!(m.document_placeholders().is_empty());
+}
+
+#[test]
+fn a_caret_on_the_paragraph_break_lands_at_the_end_of_the_paragraph() {
+    let mut m = two_paragraphs_with_umlauts();
+    insert_at_caret(&mut m, "story2", 7, "k");
+    assert_eq!(story_text(&m, "story2"), "GrüßeX\nStory two body");
 }

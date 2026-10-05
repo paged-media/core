@@ -4073,10 +4073,12 @@ impl CanvasModel {
                 story_id,
                 offset,
                 field,
+                content_offset,
             } => Some(Operation::InsertField {
                 story_id: story_id.clone(),
                 offset: *offset,
                 field: field.clone(),
+                content_offset: *content_offset,
             }),
             // v43 (D-01) — re-resolve a placeholder's cached display.
             Mutation::SetFieldValue {

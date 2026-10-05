@@ -1601,6 +1601,7 @@ mod tests {
                 story_id: "Story/u1".to_string(),
                 offset: 3,
                 field: crate::operation::FieldKind::PageNumber,
+                content_offset: None,
             },
             Operation::DeleteField {
                 story_id: "Story/u1".to_string(),
@@ -1616,6 +1617,7 @@ mod tests {
                     key: "price".to_string(),
                     value: Some("€ 9,99".to_string()),
                 },
+                content_offset: None,
             },
             Operation::SetFieldValue {
                 story_id: "Story/u1".to_string(),
@@ -7445,6 +7447,7 @@ mod tests {
                     story_id: "Story/u1".to_string(),
                     offset: 0,
                     field: FieldKind::PageNumber,
+                    content_offset: None,
                 })
                 .expect("insert field");
             // The U+E018 marker now leads the first run.

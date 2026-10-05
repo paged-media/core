@@ -3576,6 +3576,15 @@ pub enum Operation {
         story_id: String,
         offset: u32,
         field: FieldKind,
+        /// v68 — the insertion point in the `ContentSelection` unit
+        /// (UTF-8 bytes plus one synthetic `\n` per paragraph boundary —
+        /// the unit `insertText` and the editor's text caret use). When
+        /// present it REPLACES `offset`: the engine converts it against the
+        /// story as it is at apply time (so a batch that typed first still
+        /// lands right) and echoes the resolved char `offset`. Lets a caller
+        /// holding a caret place a field without converting units itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// W0.5 — inverse-only companion to `InsertField`: remove the
     /// single field-marker character at `offset` (for a

@@ -126,6 +126,7 @@ fn insert_op(story_id: &str, offset: u32, key: &str, value: Option<&str>) -> Ope
             key: key.to_string(),
             value: value.map(str::to_string),
         },
+        content_offset: None,
     }
 }
 

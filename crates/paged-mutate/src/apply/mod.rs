@@ -360,7 +360,8 @@ pub(crate) fn apply_inner(
             story_id,
             offset,
             field,
-        } => apply_insert_field(doc, story_id, *offset, field),
+            content_offset,
+        } => apply_insert_field(doc, story_id, *offset, field, *content_offset),
         Operation::DeleteField {
             story_id,
             offset,

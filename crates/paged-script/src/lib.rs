@@ -2361,6 +2361,7 @@ fn paged_insert_field(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
         story_id,
         offset,
         field,
+        content_offset: None,
     }))
 }
 
