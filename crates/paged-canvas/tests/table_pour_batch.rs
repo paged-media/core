@@ -267,6 +267,7 @@ fn undoing_the_first_pour_into_a_fresh_cell_restores_the_exact_state() {
 #[test]
 fn a_whole_placement_rides_one_batch_through_handles() {
     let mut model = load();
+    let hash_before = model.current_state_hash();
     let builds_before = model.last_rebuild_stats().rebuilds;
     let frames_before = model.scene().spreads[0].spread.text_frames.len();
 
@@ -311,13 +312,11 @@ fn a_whole_placement_rides_one_batch_through_handles() {
         frames_before,
         "one undo removes the frame too",
     );
-    assert!(
-        tables(&model, &story).is_empty(),
-        "and the table with its poured cells",
+    assert_eq!(
+        model.current_state_hash(),
+        hash_before,
+        "and its story with the table and the poured cells",
     );
-    // Not a state-hash comparison: undoing an `insertTextFrame` leaves the
-    // story it minted behind (empty, unthreaded) — true of a lone
-    // insertTextFrame too, so it is not the batch's doing.
 }
 
 /// A `tableId` handle bound to something that is not a table is refused,

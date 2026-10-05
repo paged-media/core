@@ -2962,6 +2962,23 @@ pub enum Operation {
     Batch {
         ops: Vec<Operation>,
     },
+    /// Inverse-only (internal; no wire mutation produces it) — remove
+    /// the story `story_id` from the document. The inverse of an
+    /// `InsertNode` text frame whose insert CREATED that story (the
+    /// wire's `insertTextFrame` mints one), so undoing the insert leaves
+    /// no empty, frameless story behind. Captures the story whole; its
+    /// inverse is [`Operation::RestoreStory`].
+    RemoveStory {
+        story_id: String,
+    },
+    /// Inverse-only (internal) — put back a story [`Operation::RemoveStory`]
+    /// captured: `story_json` is the serialized parsed story, re-inserted
+    /// at index `position` of the document's story list (clamped), so
+    /// the redo of an undone insert lands on the exact prior state.
+    RestoreStory {
+        position: usize,
+        story_json: String,
+    },
     /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
     /// immediately after the spread hosting `after_page_id` (or at
     /// the end when `None`). Page size clones the reference page

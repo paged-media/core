@@ -128,6 +128,11 @@ pub(crate) fn apply_inner(
         // already in (see the operation doc).
         Operation::ReorderNode { node, target } => apply_reorder_node(doc, node, *target),
         Operation::Batch { ops } => apply_batch(doc, ops),
+        Operation::RemoveStory { story_id } => apply_remove_story(doc, story_id),
+        Operation::RestoreStory {
+            position,
+            story_json,
+        } => apply_restore_story(doc, *position, story_json),
         Operation::InsertPage {
             after_page_id,
             master_id,
@@ -854,6 +859,7 @@ mod reorder;
 mod replace_image_bytes;
 mod sections;
 mod set_property;
+mod story;
 mod text_on_path;
 
 use batch_page::*;
@@ -876,6 +882,7 @@ use remove_node::*;
 use reorder::*;
 use sections::*;
 use set_property::*;
+use story::*;
 use text_on_path::*;
 
 pub(crate) use path_topology::{new_oval, new_rectangle, new_text_frame};
