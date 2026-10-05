@@ -1,7 +1,7 @@
 # Status
 
-What the engine ships and what it does not, read from the code at commit `9f933f1`
-(`PROTOCOL_VERSION` 64; the newest release tag in its history is `v0.64.0`). This page stays
+What the engine ships and what it does not, read from the code at commit `fcffd2d`
+(`PROTOCOL_VERSION` 66; the newest release tag in its history is `v0.66.0`). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -14,12 +14,14 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 118 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 120 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
-  gestures and snapping, as message kinds.
-- **Read.** Document collections, element properties, the scene tree, layers, frame chains,
-  story content, colour previews and ink coverage as message kinds; most also in `paged read`.
+  gestures (rotate, scale and shear
+  about a given point) and snapping, as message kinds.
+- **Read.** Document collections, element properties, the scene tree (each item with its
+  plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
+  colour previews and ink coverage as message kinds; most also in `paged read`.
 - **Page growth.** A story with a grow rule (`setFlowGrowRule`) gets generated pages until
   it fits or reaches its page cap.
 - **Scripting.** `ExecuteScript` and `paged script` run JavaScript against the document
@@ -27,17 +29,17 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `paged.*` function; `paged.batch` accepts raw operations.
 - **Export.** IDML (with a list of what the format could not carry), `.paged`, and PDF
   through an export session; `paged export --format idml|paged|pdf`.
-- **Container parts and plugin content.** Read, list and write parts under `paged/`
-  (`paged parts`); scene layers, pixel layers and pulled image tiles drawn inside a frame.
+- **Container parts and plugin content.** Read, list, write and delete parts under
+  `paged/` (`paged parts`); scene layers, pixel layers and pulled image tiles drawn inside a frame.
 - **Viewer.** `ViewerSession` (load, layout, present, RGBA readback) and the TypeScript
   wrapper with camera, input and events.
 - **Command line.** `paged` with thirteen top-level subcommands, the line-delimited JSON
   session (`paged session`, `paged-run`), and the binaries `paged-inspect`, `paged-diff`,
   `paged-gen` and `paged-export`.
 - **Capability catalog.** `paged describe`, `describeCatalog()` and the committed
-  `crates/paged-introspect/catalog.json`: 145 host functions, 219 settable paths, 118
+  `crates/paged-introspect/catalog.json`: 147 host functions, 220 settable paths, 120
   operations.
-- **Fidelity tooling.** The fixture generator (59 samples), the image-diff tool, 58
+- **Fidelity tooling.** The fixture generator (60 samples), the image-diff tool, 59
   reference PDFs with thresholds, and the scripts that drive InDesign to export them.
 
 ## Limits of what is shipped
@@ -52,7 +54,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   cheap, and only a build of text edits in one story reuses previous pages.
 - **Two mutation lanes.** Text edits have no `Operation` form; they use `TextOp` in
   `paged-canvas`. Undo keeps the newest 10,000 entries.
-- **The command line sends 32 of the 62 message kinds.** The rest are listed with a reason
+- **The command line sends 35 of the 65 message kinds.** The rest are listed with a reason
   each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 30) need a pointer or a caret.
 - **The Vello path is not at parity with the CPU path.** Ink separations and coverage are
   CPU only; the `DropShadow` command is skipped and a path shadow is approximated by
@@ -60,7 +62,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **The viewer reads IDML parts only.** `ViewerSession::load` calls the IDML importer and
   does not read the native model part of a `.paged` container. It has no write surface.
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which
-  is one JSON document (`crates/paged-canvas/src/model.rs:4668-4671`). A model part with
+  is one JSON document (`crates/paged-canvas/src/model.rs:5122-5125`). A model part with
   another format version is ignored on load, and the IDML parts are parsed instead.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
