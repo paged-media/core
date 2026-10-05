@@ -750,6 +750,13 @@
       "summary": "Write one Label key/value pair on a leaf page item (value null deletes)."
     },
     {
+      "name": "paged.setDocumentMetadata",
+      "params": "(key, value?, caller?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Write one document-scoped Label key/value pair (value null deletes); undoable."
+    },
+    {
       "name": "paged.batch",
       "params": "([mutations])",
       "returns": "bool",
@@ -1326,6 +1333,7 @@
     "duplicateElements",
     "setGroupTransform",
     "setPluginMetadata",
+    "setDocumentMetadata",
     "pathPointCurveType",
     "pathPointSet",
     "batch",

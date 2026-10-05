@@ -1935,6 +1935,17 @@ fn frame_cases(c: &mut Vec<Case>) {
             caller: None,
         },
     ));
+    c.push(inert(
+        "SetDocumentMetadata",
+        "geometry",
+        "one Label KeyValuePair on the DOCUMENT (v68) — plugin state that \
+         belongs to no frame; the renderer never reads Label",
+        |_| Mutation::SetDocumentMetadata {
+            key: "x-paged:sweep".into(),
+            value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
+            caller: None,
+        },
+    ));
     c.push(paints("Batch", "geometry", |m| {
         let id = rect_ids(m)[0].clone();
         let color = some_color(m);

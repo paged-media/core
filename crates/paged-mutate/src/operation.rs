@@ -3830,6 +3830,21 @@ pub enum Operation {
         #[serde(default, deserialize_with = "double_option::deserialize")]
         start_at: Option<Option<u32>>,
     },
+    /// v68 — document-scoped plugin metadata: set / replace / delete
+    /// (`value: None`) one Label `KeyValuePair` on the DOCUMENT
+    /// (`DesignMap::labels`). Same gates as the page-item carrier
+    /// (`PropertyPath::PluginMetadata`): `x-paged:` key namespace, the
+    /// optional `caller` namespace gate, 64 KiB, the JSON envelope. The
+    /// inverse restores the prior value exactly (including "was absent"),
+    /// so a plugin can name the live version of its container parts in a
+    /// label that undo and redo keep true.
+    SetDocumentMetadata {
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
     /// W0.5 — inverse-only companion to `InsertSection`: remove the
     /// section by id. Inverse re-inserts it via `InsertSection` with
     /// the captured fields.

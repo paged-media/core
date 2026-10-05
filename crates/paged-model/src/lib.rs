@@ -6279,6 +6279,14 @@ pub struct FlowGrowRule {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DesignMap {
+    /// v68 — the DOCUMENT's own Label `KeyValuePair`s: document-scoped
+    /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
+    /// `Operation::SetDocumentMetadata` and undone with the rest of the
+    /// document. One entry per key, in write order. Persisted in the native
+    /// `.paged` model part; the IDML adapter does not carry it yet (a
+    /// designmap `<Document>` `Properties/Label` is the IDML home).
+    #[serde(default)]
+    pub labels: Vec<(String, String)>,
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,

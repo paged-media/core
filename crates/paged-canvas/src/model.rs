@@ -3545,6 +3545,13 @@ impl CanvasModel {
                     prev: None,
                 },
             }),
+            Mutation::SetDocumentMetadata { key, value, caller } => {
+                Some(Operation::SetDocumentMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                    caller: caller.clone(),
+                })
+            }
             Mutation::PathPointCurveType {
                 element_id,
                 index,
@@ -8535,6 +8542,17 @@ impl CanvasModel {
             baseline_grid_shown: gp.baseline_grid_shown,
             baseline_grid_relative_to: gp.baseline_grid_relative_option.clone(),
             baseline_grid_color: gp.baseline_color.clone(),
+            plugin_metadata: Some(
+                self.scene
+                    .designmap
+                    .labels
+                    .iter()
+                    .map(|(key, value)| crate::channel::PluginMetadataEntry {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            ),
         }
     }
 

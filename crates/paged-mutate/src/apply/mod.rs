@@ -504,6 +504,9 @@ pub(crate) fn apply_inner(
             *start_at,
         ),
         Operation::DeleteSection { section_id } => apply_delete_section(doc, section_id),
+        Operation::SetDocumentMetadata { key, value, caller } => {
+            layer::apply_document_metadata(doc, key, value, caller)
+        }
         Operation::SetRowHeight {
             story_id,
             table_id,

@@ -1211,6 +1211,20 @@ pub enum Mutation {
         #[serde(default)]
         caller: Option<String>,
     },
+    /// v68 — document-scoped plugin metadata: one Label `KeyValuePair` on
+    /// the DOCUMENT rather than a page item, for state that belongs to no
+    /// frame (a data session, the live version of a plugin's container
+    /// parts). `value: None` deletes. Same gates as `SetPluginMetadata`
+    /// (`x-paged:` namespace, optional `caller` gate, 64 KiB, JSON
+    /// envelope); ONE undoable step that composes in a `batch`. Read back
+    /// through `RequestDocumentMeta` → `DocumentMeta.pluginMetadata`.
+    SetDocumentMetadata {
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
     /// neighbour tangents). UI dispatches from a double-click on
@@ -1789,6 +1803,7 @@ mutation_vocabulary! {
     DuplicateElements,
     SetGroupTransform,
     SetPluginMetadata,
+    SetDocumentMetadata,
     PathPointCurveType,
     PathPointSet,
     Batch,

@@ -840,6 +840,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("setPluginMetadata"),
             4,
         )
+        .function(
+            guarded(paged_set_document_metadata),
+            js_string!("setDocumentMetadata"),
+            3,
+        )
         .function(guarded(paged_batch), js_string!("batch"), 1)
         // selection setters
         .function(
@@ -3672,6 +3677,27 @@ fn paged_set_plugin_metadata(
     let caller = opt_string(args.get_or_undefined(3), ctx);
     Ok(apply_bool(&Mutation::SetPluginMetadata {
         element_id,
+        key,
+        value,
+        caller,
+    }))
+}
+
+/// `paged.setDocumentMetadata(key, value?, caller?)` — write one
+/// document-scoped `Label` key/value pair (`value` null deletes;
+/// `Mutation::SetDocumentMetadata`, v68).
+fn paged_set_document_metadata(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let key = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value = opt_string(args.get_or_undefined(1), ctx);
+    let caller = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::SetDocumentMetadata {
         key,
         value,
         caller,

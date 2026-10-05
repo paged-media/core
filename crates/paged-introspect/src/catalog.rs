@@ -366,6 +366,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setUseStandardLabForSpots", "(enabled)", "bool", "write", "Prefer spots' Lab primary over their CMYK alternate in previews."),
         // --- plugin metadata & batch ---
         f!("paged.setPluginMetadata", "(elemId, key, value?, caller?)", "bool", "write", "Write one Label key/value pair on a leaf page item (value null deletes)."),
+        f!("paged.setDocumentMetadata", "(key, value?, caller?)", "bool", "write", "Write one document-scoped Label key/value pair (value null deletes); undoable."),
         f!("paged.batch", "([mutations])", "bool", "author", "Apply an array of { op, args } mutation objects as ONE undoable step."),
         // --- selection setters (application state, NOT undoable) ---
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),

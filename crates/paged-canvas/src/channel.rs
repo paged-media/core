@@ -589,6 +589,9 @@ export type WorkerToMain = WorkerToMainKind & {
 //     first still lands right. Additive; an older worker ignores it.
 //   - Behaviour: text typed at a field's edge lands beside the field, not
 //     inside its run (a refresh used to overwrite it).
+//   - `setDocumentMetadata`: a document-scoped, UNDOABLE plugin label
+//     (`DesignMap::labels`), read back in `DocumentMeta.pluginMetadata`;
+//     persisted in the `.paged` native model part (not yet in IDML).
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -2587,6 +2590,13 @@ pub struct DocumentMeta {
     /// `BaselineColor` — grid-line colour ref / named colour.
     #[serde(default)]
     pub baseline_grid_color: Option<String>,
+    /// v68 — the document's own plugin metadata (`SetDocumentMetadata`
+    /// entries, write order). PRESENT (possibly empty) from a v68 worker,
+    /// absent from an older one, so a reader can tell "none" from "this
+    /// engine has no document labels".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub plugin_metadata: Option<Vec<PluginMetadataEntry>>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
