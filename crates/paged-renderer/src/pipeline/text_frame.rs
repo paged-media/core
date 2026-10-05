@@ -1352,6 +1352,7 @@ pub(super) fn frame_outer_transform(
 /// so the no-plugin render path is untouched. `inset` is the text-frame
 /// content inset `[top,left,bottom,right]`; pass `None` for shapes (whose
 /// content box is the bounds).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_frame_scene_layer(
     page: &mut BuiltPage,
     self_id: Option<&str>,
@@ -1360,6 +1361,7 @@ pub(super) fn emit_frame_scene_layer(
     item_transform: Option<[f32; 6]>,
     registry: Option<&std::collections::HashMap<String, paged_compose::SceneLayer>>,
     font_bytes: Option<&[u8]>,
+    assets: Option<&dyn crate::AssetResolver>,
 ) {
     let Some(registry) = registry else { return };
     let Some(id) = self_id else { return };
@@ -1380,17 +1382,29 @@ pub(super) fn emit_frame_scene_layer(
     let content_h = (bounds.bottom - bounds.top - ins[0] - ins[2]).max(0.0);
     let content_outer = outer.compose(&Transform::translate(content_left, content_top));
 
-    // C-1.1 — the default-font shaping face + outliner for `SceneItem::Text`,
-    // built once per layer. `None` when the build has no font (text items
-    // are then skipped, like the renderer's own no-font text path). v1
-    // renders every text run in this default face (the run's `family`/
-    // `style` hints are reserved for per-run selection).
-    let text_faces = font_bytes.and_then(|b| {
-        let rb = paged_text::Face::from_slice(b, 0)?;
-        let ttf = ttf_parser::Face::parse(b, 0).ok()?;
-        Some((rb, ttf))
-    });
-    let text_outliner = text_faces.as_ref().map(|(_, ttf)| TtfOutliner::new(ttf));
+    // C-1.1 / v68 — every text run shapes in ITS OWN face: the run's
+    // `family` + effective style resolve through the host's font resolver
+    // (the faces registered for the document). The document default font
+    // draws a run only when its family is absent or does not resolve, and
+    // a named family that falls back is reported once per frame and key.
+    let faces = SceneTextFaces::resolve(layer, assets, font_bytes);
+    for (family, style) in &faces.fallbacks {
+        let label = match style.as_deref() {
+            Some(s) => format!("{family} {s}"),
+            None => family.clone(),
+        };
+        page.diagnostics.push(
+            Diagnostic::new(
+                DiagnosticCode::FontSubstituted,
+                format!(
+                    "scene layer text: font \"{label}\" is not available; the default face was used"
+                ),
+            )
+            .with_frame(id)
+            .with_font(label),
+        );
+    }
+    let built_faces = faces.build();
 
     paged_compose::emit_scene_layer(
         &mut page.list,
@@ -1398,16 +1412,16 @@ pub(super) fn emit_frame_scene_layer(
         content_outer,
         (content_w, content_h),
         |list, t, xf| {
-            // Lower a text run: shape with the default face, position glyphs
-            // at the transformed baseline (`xf.apply(x, y)`), and emit glyph
-            // FillPaths through the standard glyph slice (upright in page
-            // space — full per-glyph affine for rotated frames is a
-            // follow-on, §8.5).
-            let (Some((rb, _)), Some(outliner)) = (text_faces.as_ref(), text_outliner.as_ref())
-            else {
+            // Lower a text run: shape with its resolved face, position
+            // glyphs at the transformed baseline (`xf.apply(x, y)`), and
+            // emit glyph FillPaths through the standard glyph slice
+            // (upright in page space — full per-glyph affine for rotated
+            // frames is a follow-on, §8.5).
+            let Some(face) = built_faces.for_item(t) else {
                 return;
             };
-            let shaped = paged_text::shape_run(rb, &t.text, t.size);
+            let outliner = TtfOutliner::new(&face.outline);
+            let shaped = paged_text::shape_run(&face.shape, &t.text, t.size);
             if shaped.glyphs.is_empty() {
                 return;
             }
@@ -1421,7 +1435,7 @@ pub(super) fn emit_frame_scene_layer(
                     x: cursor + g.x_offset,
                     y: g.y_offset,
                     x_advance: g.x_advance,
-                    font_id: u32::MAX,
+                    font_id: face.font_id,
                     point_size: t.size,
                     underline: false,
                     strikethru: false,
@@ -1437,15 +1451,161 @@ pub(super) fn emit_frame_scene_layer(
             let paint = Paint::Solid(paged_compose::scene_paint_to_color(t.paint));
             emit_glyph_slice(
                 &positioned,
-                u32::MAX,
+                face.font_id,
                 t.size,
                 |_| paint,
                 origin,
-                outliner,
+                &outliner,
                 list,
             );
         },
     );
+}
+
+/// The (family, effective style) a scene text run asks for; `None` family
+/// is the document default font.
+type SceneFaceKey = (Option<String>, Option<String>);
+
+fn scene_face_key(t: &paged_compose::SceneTextItem) -> SceneFaceKey {
+    match t.family.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+        Some(f) => (Some(f.to_string()), t.effective_style()),
+        None => (None, None),
+    }
+}
+
+/// The `wght` a run is drawn at: its numeric `weight`, else the weight its
+/// style name implies (the same table document runs use).
+fn scene_wght(t: &paged_compose::SceneTextItem) -> f32 {
+    t.weight
+        .filter(|w| w.is_finite() && *w > 0.0)
+        .map(|w| w.clamp(1.0, 1000.0))
+        .unwrap_or_else(|| wght_for_font_style(t.effective_style().as_deref()))
+}
+
+/// v68 — the byte buffers a scene layer's text runs shape with, resolved
+/// once per layer emit. Owned here so the faces built from them can borrow.
+struct SceneTextFaces {
+    /// Per distinct key: the bytes it shapes with (its own face, or the
+    /// default font when it fell back). Absent when no font is available.
+    bytes: Vec<(SceneFaceKey, Bytes)>,
+    /// Named families that did not resolve (served by the default font).
+    fallbacks: Vec<(String, Option<String>)>,
+    /// The `wght` values each key is drawn at (one face per pair).
+    wghts: Vec<(SceneFaceKey, u32)>,
+}
+
+impl SceneTextFaces {
+    fn resolve(
+        layer: &paged_compose::SceneLayer,
+        assets: Option<&dyn crate::AssetResolver>,
+        font_bytes: Option<&[u8]>,
+    ) -> Self {
+        let fallback = font_bytes.map(Bytes::copy_from_slice);
+        let mut bytes: Vec<(SceneFaceKey, Bytes)> = Vec::new();
+        let mut fallbacks = Vec::new();
+        let mut wghts: Vec<(SceneFaceKey, u32)> = Vec::new();
+        for item in &layer.items {
+            let paged_compose::SceneItem::Text(t) = item else {
+                continue;
+            };
+            let key = scene_face_key(t);
+            let wght = scene_wght(t).to_bits();
+            if !wghts.iter().any(|(k, w)| *k == key && *w == wght) {
+                wghts.push((key.clone(), wght));
+            }
+            if bytes.iter().any(|(k, _)| *k == key) || fallbacks_contains(&fallbacks, &key) {
+                continue;
+            }
+            let own = match (&key.0, assets) {
+                (Some(family), Some(resolver)) => resolver
+                    .resolve_font_traced(family, key.1.as_deref())
+                    .filter(|rf| !rf.substituted)
+                    .map(|rf| rf.bytes),
+                _ => None,
+            };
+            if own.is_none() {
+                if let Some(family) = &key.0 {
+                    fallbacks.push((family.clone(), key.1.clone()));
+                }
+            }
+            if let Some(b) = own.or_else(|| fallback.clone()) {
+                bytes.push((key, b));
+            }
+        }
+        Self {
+            bytes,
+            fallbacks,
+            wghts,
+        }
+    }
+
+    fn build(&self) -> SceneBuiltFaces<'_> {
+        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+        let mut faces = Vec::new();
+        for (key, wght_bits) in &self.wghts {
+            let Some((_, b)) = self.bytes.iter().find(|(k, _)| k == key) else {
+                continue;
+            };
+            let Some(mut shape) = paged_text::Face::from_slice(b.as_ref(), 0) else {
+                continue;
+            };
+            let Ok(mut outline) = ttf_parser::Face::parse(b.as_ref(), 0) else {
+                continue;
+            };
+            let wght = f32::from_bits(*wght_bits);
+            let has_wght_axis = outline
+                .variation_axes()
+                .into_iter()
+                .any(|axis| axis.tag == wght_tag);
+            if has_wght_axis {
+                let _ = outline.set_variation(wght_tag, wght);
+                shape.set_variations(&[paged_text::Variation {
+                    tag: wght_tag,
+                    value: wght,
+                }]);
+            }
+            faces.push((
+                key.clone(),
+                *wght_bits,
+                SceneFace {
+                    shape,
+                    outline,
+                    // The document text's id scheme: the glyph-outline
+                    // cache is keyed on (font_id, glyph), so a variable
+                    // face at two weights needs two ids.
+                    font_id: font_id(b) ^ wght_bits,
+                },
+            ));
+        }
+        SceneBuiltFaces { faces }
+    }
+}
+
+fn fallbacks_contains(fallbacks: &[(String, Option<String>)], key: &SceneFaceKey) -> bool {
+    key.0
+        .as_ref()
+        .is_some_and(|family| fallbacks.iter().any(|(f, s)| f == family && *s == key.1))
+}
+
+struct SceneFace<'a> {
+    shape: paged_text::Face<'a>,
+    outline: ttf_parser::Face<'a>,
+    font_id: u32,
+}
+
+struct SceneBuiltFaces<'a> {
+    faces: Vec<(SceneFaceKey, u32, SceneFace<'a>)>,
+}
+
+impl SceneBuiltFaces<'_> {
+    fn for_item(&self, t: &paged_compose::SceneTextItem) -> Option<&SceneFace<'_>> {
+        let key = scene_face_key(t);
+        let wght = scene_wght(t).to_bits();
+        self.faces
+            .iter()
+            .find(|(k, w, _)| *k == key && *w == wght)
+            .map(|(_, _, f)| f)
+    }
 }
 
 /// C-6 (I-06) — assemble a claimed image resource's pyramid tiles into a

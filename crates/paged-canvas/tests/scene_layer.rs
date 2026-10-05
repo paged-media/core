@@ -111,3 +111,128 @@ fn set_then_clear_pixel_layer_round_trips_through_a_rebuild() {
     m.clear_pixel_layer("nope")
         .expect("clear absent is a no-op");
 }
+
+// ---------------------------------------------------------------------------
+// v68 — scene-layer text in its own face, through the model the worker drives.
+// ---------------------------------------------------------------------------
+
+fn corpus_font(name: &str) -> Vec<u8> {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/fonts")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+fn text_layer(family: &str, style: Option<&str>) -> SceneLayer {
+    SceneLayer {
+        items: vec![SceneItem::Text(paged_compose::SceneTextItem {
+            x: 4.0,
+            y: 20.0,
+            text: "Faces".to_string(),
+            size: 18.0,
+            paint: ScenePaint {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            family: Some(family.to_string()),
+            style: style.map(str::to_string),
+            weight: None,
+            italic: None,
+        })],
+    }
+}
+
+fn first_text_frame_id(m: &CanvasModel) -> String {
+    m.scene()
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.text_frames.iter())
+        .find_map(|f| f.self_id.clone())
+        .expect("the text sample has a text frame")
+}
+
+#[test]
+fn scene_text_family_resolves_through_the_registered_fonts_and_reports_misses() {
+    let mut m = CanvasModel::load(
+        "d",
+        &doc_bytes(),
+        CanvasOptions {
+            fonts: vec![corpus_font("Inter.ttf")],
+            ..CanvasOptions::default()
+        },
+    )
+    .unwrap();
+    let frame = first_text_frame_id(&m);
+
+    // Submitted before the host registered the face: drawn in the default
+    // font, and the miss is reported for that frame.
+    m.set_scene_layer(frame.clone(), text_layer("Lora", Some("Bold")))
+        .unwrap();
+    assert_eq!(
+        m.scene_layer_font_fallbacks(&frame),
+        vec!["Lora Bold".to_string()]
+    );
+
+    // The host registers the family (the usual async font load): the next
+    // build resolves it and the report clears — no resubmit needed.
+    m.register_font(paged_canvas::FontEntry {
+        family: "Lora".into(),
+        style: None,
+        bytes: corpus_font("Lora.ttf"),
+    })
+    .unwrap();
+    assert!(
+        m.scene_layer_font_fallbacks(&frame).is_empty(),
+        "a registered family is drawn in its own face"
+    );
+
+    // A family nobody registered stays reported, per frame.
+    m.set_scene_layer(frame.clone(), text_layer("Nobody Sans", None))
+        .unwrap();
+    assert_eq!(
+        m.scene_layer_font_fallbacks(&frame),
+        vec!["Nobody Sans".to_string()]
+    );
+    assert!(m.scene_layer_font_fallbacks("some-other-frame").is_empty());
+
+    // Clearing the registry takes the face away again: the frame rebuilds
+    // and reports the fallback, and the clear says which frame it touched.
+    m.set_scene_layer(frame.clone(), text_layer("Lora", None))
+        .unwrap();
+    assert!(m.scene_layer_font_fallbacks(&frame).is_empty());
+    let touched = m.clear_font_registry().unwrap();
+    assert!(
+        touched.contains(&frame),
+        "the frame is reported: {touched:?}"
+    );
+    assert_eq!(
+        m.scene_layer_font_fallbacks(&frame),
+        vec!["Lora".to_string()]
+    );
+}
+
+#[test]
+fn scene_layer_applied_carries_font_fallbacks_additively() {
+    use paged_canvas::channel::WorkerToMainKind;
+    let reply = WorkerToMainKind::SceneLayerApplied {
+        element_id: "f".into(),
+        applied: true,
+        page_ids: None,
+        font_fallbacks: Some(vec!["Lora Bold".into()]),
+    };
+    let json = serde_json::to_value(&reply).unwrap();
+    assert_eq!(json["payload"]["fontFallbacks"][0], "Lora Bold");
+    // An older worker's reply (no field) still decodes.
+    let old: WorkerToMainKind = serde_json::from_str(
+        r#"{"kind":"sceneLayerApplied","payload":{"elementId":"f","applied":true}}"#,
+    )
+    .unwrap();
+    match old {
+        WorkerToMainKind::SceneLayerApplied { font_fallbacks, .. } => {
+            assert!(font_fallbacks.is_none())
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}

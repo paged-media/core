@@ -9902,6 +9902,14 @@ impl CanvasModel {
             .collect()
     }
 
+    /// v68 — the faces a frame's scene-layer text runs named that the
+    /// last build could not resolve (drawn in the default font instead),
+    /// as `"Family Style"` labels. Empty when every named family resolved
+    /// or the frame carries no layer.
+    pub fn scene_layer_font_fallbacks(&self, element_id: &str) -> Vec<String> {
+        self.built.diagnostics.scene_font_fallbacks(element_id)
+    }
+
     /// C-1 — the frame ids that currently carry a plugin scene layer
     /// (test/introspection aid).
     pub fn scene_layer_ids(&self) -> Vec<&str> {
@@ -10384,14 +10392,17 @@ impl CanvasModel {
     ///
     /// Only the stories with a run that now resolves to a different face
     /// are re-laid out; the rest reuse their cached emission. Returns the
-    /// ids of the re-laid-out stories, empty when the font changed nothing
-    /// (no rebuild then).
+    /// ids of the re-laid-out stories, then (v68) the ids of the frames
+    /// whose scene-layer text names this family; empty when the font
+    /// changed nothing (no rebuild then).
     pub fn register_font(
         &mut self,
         entry: FontEntry,
     ) -> Result<Vec<String>, crate::channel::LoadError> {
+        // v68 — scene-layer text naming this family re-resolves too.
+        let scene_frames = self.scene_layer_frames_naming(|family| family == entry.family);
         self.font_registry.push(entry);
-        self.relayout_for_registry_change()
+        self.relayout_for_registry_change(scene_frames)
     }
 
     /// Drop every registered font from the LIVE model (the worker's
@@ -10400,22 +10411,62 @@ impl CanvasModel {
         if self.font_registry.is_empty() {
             return Ok(Vec::new());
         }
+        let registered: std::collections::BTreeSet<String> = self
+            .font_registry
+            .iter()
+            .map(|e| e.family.clone())
+            .collect();
+        let scene_frames = self.scene_layer_frames_naming(|family| registered.contains(family));
         self.font_registry.clear();
-        self.relayout_for_registry_change()
+        self.relayout_for_registry_change(scene_frames)
     }
 
-    fn relayout_for_registry_change(&mut self) -> Result<Vec<String>, crate::channel::LoadError> {
-        let affected = self.refresh_font_table(true);
-        if !affected.is_empty() {
+    /// Rebuild after a registry change, narrowed to the stories whose
+    /// faces moved.
+    ///
+    /// `scene_frames` are the frames whose plugin scene-layer text names a
+    /// family the change touches (v68): their runs re-resolve, so they
+    /// rebuild too and their ids join the returned list after the stories.
+    fn relayout_for_registry_change(
+        &mut self,
+        scene_frames: Vec<String>,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        let mut affected = self.refresh_font_table(true);
+        if !affected.is_empty() || !scene_frames.is_empty() {
             // Nothing else is pending between builds outside a batch, so the
-            // pages this build changes are the affected stories' alone.
+            // pages this build changes are the affected stories' alone —
+            // unless a scene layer re-resolves, whose pages are not a
+            // story's: then every page is reported.
             self.pending_dirty_scope = match std::mem::take(&mut self.pending_dirty_scope) {
-                DirtyScope::Unset => DirtyScope::Fonts(affected.iter().cloned().collect()),
+                DirtyScope::Unset if scene_frames.is_empty() => {
+                    DirtyScope::Fonts(affected.iter().cloned().collect())
+                }
                 _ => DirtyScope::Everything,
             };
             self.rebuild_after_mutation()?;
+            affected.extend(scene_frames);
         }
         Ok(affected)
+    }
+
+    /// v68 — the frames whose scene layer carries a text run naming a
+    /// family `matches` accepts.
+    fn scene_layer_frames_naming(&self, matches: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut frames: Vec<String> = self
+            .scene_layers
+            .iter()
+            .filter(|(_, layer)| {
+                layer.items.iter().any(|item| match item {
+                    paged_compose::SceneItem::Text(t) => {
+                        t.family.as_deref().map(str::trim).is_some_and(&matches)
+                    }
+                    _ => false,
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        frames.sort();
+        frames
     }
 
     /// Bring the font table up to date with the scene and the registry,

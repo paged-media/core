@@ -1,7 +1,8 @@
 # Status
 
 What the engine ships and what it does not, read from the code at commit `715e130`
-(`PROTOCOL_VERSION` 67; the newest release tag in its history is `v0.67.0`). This page stays
+(`PROTOCOL_VERSION` 68 on branch `web/protocol-68`, not yet tagged; the newest release tag in
+its history is `v0.67.0`). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -34,6 +35,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   through an export session; `paged export --format idml|paged|pdf`.
 - **Container parts and plugin content.** Read, list, write and delete parts under
   `paged/` (`paged parts`); scene layers, pixel layers and pulled image tiles drawn inside a frame.
+  A scene layer's text run draws in the face it names, resolved through the registered fonts;
+  a family that does not resolve draws in the default font and is reported per frame
+  ([ADR 126](adr/126-scene-text-in-its-own-face.md), protocol 68).
 - **Viewer.** `ViewerSession` (load, layout, present, RGBA readback) and the TypeScript
   wrapper with camera, input and events.
 - **Command line.** `paged` with thirteen top-level subcommands, the line-delimited JSON

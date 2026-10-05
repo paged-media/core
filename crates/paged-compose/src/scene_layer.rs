@@ -344,11 +344,59 @@ pub struct SceneTextItem {
     /// Point size.
     pub size: f32,
     pub paint: ScenePaint,
-    /// Reserved face hints (v1 renders in the document default font).
+    /// v68 — the run's font family. Resolved through the renderer's font
+    /// resolver (the faces the host registered for the document); the
+    /// document default font draws the run only when the family does not
+    /// resolve, and that fallback is reported (a `FontSubstituted`
+    /// diagnostic carrying the frame id, and `SceneLayerApplied.
+    /// fontFallbacks`). Absent ⇒ the default font, as before v68.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
+    /// v68 — the face within `family`, spelled like IDML's `FontStyle`
+    /// (`"Bold"`, `"Italic"`, `"Bold Italic"`, `"Light"`). When absent it
+    /// is derived from `weight` / `italic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// v68 — numeric weight (CSS scale, `100..=900`). Sets the `wght`
+    /// axis of a variable face; when `style` is absent it also picks the
+    /// style name (`700` ⇒ `"Bold"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+    /// v68 — italic. Only consulted when `style` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+}
+
+impl SceneTextItem {
+    /// The face name this run asks for within its family: `style` when
+    /// given, else derived from `weight` / `italic` the way a type menu
+    /// names faces (`700` + italic ⇒ `"Bold Italic"`, `400` ⇒
+    /// `"Regular"`). `None` when the run names none of the three.
+    pub fn effective_style(&self) -> Option<String> {
+        if let Some(s) = self.style.as_deref().filter(|s| !s.trim().is_empty()) {
+            return Some(s.to_string());
+        }
+        if self.weight.is_none() && self.italic.is_none() {
+            return None;
+        }
+        let w = self.weight.unwrap_or(400.0).round() as i32;
+        let base = match w {
+            i32::MIN..=149 => "Thin",
+            150..=249 => "ExtraLight",
+            250..=349 => "Light",
+            350..=449 => "Regular",
+            450..=549 => "Medium",
+            550..=649 => "SemiBold",
+            650..=749 => "Bold",
+            750..=849 => "ExtraBold",
+            _ => "Black",
+        };
+        Some(match (self.italic.unwrap_or(false), base) {
+            (false, b) => b.to_string(),
+            (true, "Regular") => "Italic".to_string(),
+            (true, b) => format!("{b} Italic"),
+        })
+    }
 }
 
 /// A bezier path segment in frame-content coordinates (points).
@@ -1373,6 +1421,8 @@ mod tests {
                 paint: black(),
                 family: None,
                 style: None,
+                weight: None,
+                italic: None,
             })],
         };
         let mut seen: Vec<(String, (f32, f32))> = Vec::new();
@@ -1397,6 +1447,8 @@ mod tests {
                 paint: black(),
                 family: None,
                 style: None,
+                weight: None,
+                italic: None,
             })],
         };
         let mut called = false;

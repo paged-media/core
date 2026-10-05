@@ -130,6 +130,11 @@ pub struct Diagnostic {
     /// other codes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overset: Option<OversetContinuation>,
+    /// v68 — for a `FontSubstituted` raised by a plugin scene layer's text
+    /// run: the face it asked for (`"Family Style"`). `frame_id` names the
+    /// frame. `None` for document-run substitutions and all other codes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
 }
 
 impl Diagnostic {
@@ -145,6 +150,7 @@ impl Diagnostic {
             story_id: None,
             uri: None,
             overset: None,
+            font: None,
         }
     }
 
@@ -165,6 +171,12 @@ impl Diagnostic {
 
     pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
         self.uri = Some(uri.into());
+        self
+    }
+
+    /// Attach the requested face of a scene-layer font fallback (v68).
+    pub fn with_font(mut self, font: impl Into<String>) -> Self {
+        self.font = Some(font.into());
         self
     }
 
@@ -256,6 +268,25 @@ impl RenderDiagnostics {
     /// `ImageDecodeFailed`). The build draws the grey missing-image
     /// placeholder for these, so they're exactly the links the Links
     /// panel should mark `"missing"` (panels.md gap 2).
+    /// v68 — the faces a frame's plugin scene layer asked for that did
+    /// not resolve (each drawn in the document default font), in report
+    /// order without duplicates. Empty when every named family resolved.
+    pub fn scene_font_fallbacks(&self, frame_id: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for d in &self.items {
+            if d.code != DiagnosticCode::FontSubstituted || d.frame_id.as_deref() != Some(frame_id)
+            {
+                continue;
+            }
+            if let Some(font) = &d.font {
+                if !out.contains(font) {
+                    out.push(font.clone());
+                }
+            }
+        }
+        out
+    }
+
     pub fn missing_image_frame_ids(&self) -> std::collections::BTreeSet<String> {
         self.items
             .iter()

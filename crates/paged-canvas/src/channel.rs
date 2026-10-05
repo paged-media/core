@@ -568,7 +568,20 @@ export type WorkerToMain = WorkerToMainKind & {
 //     text frames and rectangles only), resize snaps the edges it moves,
 //     a path edit snaps the dragged point.
 // Two new message kinds an older worker cannot answer, hence the bump.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(67);
+// v68 — the paged.web batch: scene-layer text in its own face.
+//   - `SceneItem::Text` honours `family` + `style` (reserved since v40 and
+//     ignored — every run drew in the document default font) and gains
+//     `weight` (CSS 100..900; the `wght` of a variable face, and the style
+//     name when `style` is absent) and `italic`. A run resolves through the
+//     faces the host registered; only an unresolvable family draws in the
+//     default font, and that is reported: a `FontSubstituted` diagnostic
+//     carrying the frame id and the face, and `SceneLayerApplied.
+//     fontFallbacks`. Registering or clearing fonts rebuilds the frames
+//     whose scene text names the family.
+//   - All fields additive; the bump is for the BEHAVIOUR: a host cannot
+//     tell a worker that draws `family` from one that ignores it by shape,
+//     so it gates per-run faces on `protocol >= 68`.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(68);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -1849,6 +1862,12 @@ pub enum WorkerToMainKind {
         /// unscoped, so a host repaints every page. Additive on the reply.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         page_ids: Option<Vec<PageId>>,
+        /// v68 — the faces this frame's scene-layer text runs named that
+        /// did not resolve, each drawn in the document default font
+        /// (`"Family Style"`, report order). Absent when every named
+        /// family resolved, on a clear, and from an older worker.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_fallbacks: Option<Vec<String>>,
     },
     /// v44 (C-6 / I-06) — ack for `ClaimImageResource` /
     /// `ReleaseImageResource` / `SubmitResourceTiles`. Echoes `image_id`;
@@ -4016,8 +4035,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v67() {
-        assert_eq!(PROTOCOL_VERSION.0, 67);
+    fn protocol_version_is_v68() {
+        assert_eq!(PROTOCOL_VERSION.0, 68);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

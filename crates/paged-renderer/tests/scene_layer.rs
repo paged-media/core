@@ -177,6 +177,8 @@ fn text_item_emits_glyph_fills_with_a_font() {
                 },
                 family: None,
                 style: None,
+                weight: None,
+                italic: None,
             })],
         },
     );
@@ -329,4 +331,150 @@ fn a_scene_layer_paints_over_the_frames_claimed_tiles() {
         "no page carried both a claimed tile and a scene-layer fill — the \
          test proved nothing"
     );
+}
+
+// ---------------------------------------------------------------------------
+// v68 — scene-layer text in its own face.
+//
+// Before v68 every `SceneItem::Text` run shaped in the document default font
+// whatever `family` it named. These tests compare whole builds pairwise, so
+// they assert the PAIR (what the run asked for vs what was drawn), not either
+// half: an unresolved family must draw exactly what no family draws, and a
+// resolved one must draw something else.
+// ---------------------------------------------------------------------------
+
+fn corpus_font(name: &str) -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/fonts")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+fn text_layer(family: Option<&str>, style: Option<&str>, weight: Option<f32>) -> SceneLayer {
+    SceneLayer {
+        items: vec![SceneItem::Text(SceneTextItem {
+            x: 5.0,
+            y: 30.0,
+            text: "Hamburgefonstiv".to_string(),
+            size: 24.0,
+            paint: ScenePaint {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            },
+            family: family.map(str::to_string),
+            style: style.map(str::to_string),
+            weight,
+            italic: None,
+        })],
+    }
+}
+
+/// Build the sample with `layer` on its first text frame, the document
+/// default font = Inter, and Lora registered with the resolver.
+fn build_with_text_layer(layer: SceneLayer) -> (pipeline::BuiltDocument, String) {
+    let doc = sample_doc();
+    let id = first_text_frame_id(&doc);
+    let inter = corpus_font("Inter.ttf");
+    let mut resolver = paged_renderer::BytesResolver::new();
+    resolver.add_font("Lora", None, corpus_font("Lora.ttf"));
+    let mut reg = HashMap::new();
+    reg.insert(id.clone(), layer);
+    let built = pipeline::build_document(
+        &doc,
+        &PipelineOptions {
+            font: Some(&inter),
+            assets: Some(&resolver),
+            scene_layers: Some(&reg),
+            ..PipelineOptions::default()
+        },
+    )
+    .unwrap();
+    (built, id)
+}
+
+fn digest(built: &pipeline::BuiltDocument) -> Vec<u64> {
+    built.pages.iter().map(|p| p.list.digest()).collect()
+}
+
+#[test]
+fn scene_text_run_shapes_in_the_family_it_names() {
+    let (default_face, id) = build_with_text_layer(text_layer(None, None, None));
+    let (lora, _) = build_with_text_layer(text_layer(Some("Lora"), None, None));
+    assert_ne!(
+        digest(&default_face),
+        digest(&lora),
+        "a run naming a registered family must not draw in the default face"
+    );
+    assert!(
+        lora.diagnostics.scene_font_fallbacks(&id).is_empty(),
+        "a resolved family is not a fallback"
+    );
+}
+
+#[test]
+fn scene_text_unresolved_family_falls_back_to_the_default_face_and_says_so() {
+    let (default_face, id) = build_with_text_layer(text_layer(None, None, None));
+    let (missing, _) = build_with_text_layer(text_layer(Some("No Such Face"), Some("Bold"), None));
+    // The fallback draws in the default face at the run's weight; the
+    // default face is variable, so compare against the default at Bold.
+    let (default_bold, _) = build_with_text_layer(text_layer(None, None, Some(700.0)));
+    assert_eq!(
+        digest(&missing),
+        digest(&default_bold),
+        "an unresolvable family draws exactly what the default face draws"
+    );
+    assert_ne!(digest(&default_face), digest(&default_bold));
+    assert_eq!(
+        missing.diagnostics.scene_font_fallbacks(&id),
+        vec!["No Such Face Bold".to_string()],
+        "the fallback is reported once, with the face that was asked for"
+    );
+    let d = missing
+        .diagnostics
+        .items
+        .iter()
+        .find(|d| d.frame_id.as_deref() == Some(id.as_str()))
+        .expect("a frame-scoped diagnostic");
+    assert_eq!(
+        d.code,
+        paged_renderer::DiagnosticCode::FontSubstituted,
+        "reported with the code document runs use"
+    );
+}
+
+#[test]
+fn scene_text_weight_drives_the_variable_axis() {
+    let (regular, _) = build_with_text_layer(text_layer(Some("Lora"), None, None));
+    let (bold_by_name, _) = build_with_text_layer(text_layer(Some("Lora"), Some("Bold"), None));
+    let (bold_by_weight, _) = build_with_text_layer(text_layer(Some("Lora"), None, Some(700.0)));
+    assert_ne!(
+        digest(&regular),
+        digest(&bold_by_name),
+        "Bold sets wght 700 on the variable face"
+    );
+    assert_eq!(
+        digest(&bold_by_name),
+        digest(&bold_by_weight),
+        "style \"Bold\" and weight 700 name the same face"
+    );
+}
+
+#[test]
+fn scene_text_effective_style_names_faces_like_a_type_menu() {
+    let mut t = match text_layer(None, None, Some(700.0)).items.remove(0) {
+        SceneItem::Text(t) => t,
+        _ => unreachable!(),
+    };
+    assert_eq!(t.effective_style().as_deref(), Some("Bold"));
+    t.italic = Some(true);
+    assert_eq!(t.effective_style().as_deref(), Some("Bold Italic"));
+    t.weight = None;
+    assert_eq!(t.effective_style().as_deref(), Some("Italic"));
+    t.style = Some("Light".into());
+    assert_eq!(t.effective_style().as_deref(), Some("Light"), "style wins");
+    t.style = None;
+    t.italic = None;
+    assert_eq!(t.effective_style(), None);
 }

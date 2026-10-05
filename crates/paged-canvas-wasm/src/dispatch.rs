@@ -945,10 +945,16 @@ impl WorkerCore {
                     }
                     None => false,
                 };
+                let font_fallbacks = self
+                    .model
+                    .as_ref()
+                    .map(|m| m.scene_layer_font_fallbacks(&element_id))
+                    .filter(|f| !f.is_empty());
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
                     page_ids: None,
+                    font_fallbacks,
                 }
             }
             MainToWorkerKind::ClearSceneLayer { element_id } => {
@@ -966,6 +972,7 @@ impl WorkerCore {
                     element_id,
                     applied,
                     page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::SubmitPixelLayer { element_id, layer } => {
@@ -985,6 +992,7 @@ impl WorkerCore {
                     element_id,
                     applied,
                     page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::ClearPixelLayer { element_id } => {
@@ -999,6 +1007,7 @@ impl WorkerCore {
                     element_id,
                     applied,
                     page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::ClaimImageResource {
@@ -1614,6 +1623,7 @@ impl WorkerCore {
                     element_id,
                     applied,
                     page_ids: Some(self.page_ids_of(&effect)),
+                    font_fallbacks: None,
                 },
             ),
             effect,
@@ -1654,6 +1664,7 @@ impl WorkerCore {
                     element_id,
                     applied,
                     page_ids: Some(self.page_ids_of(&effect)),
+                    font_fallbacks: None,
                 },
             ),
             effect,
