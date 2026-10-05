@@ -1038,6 +1038,43 @@ pub(super) fn build_document_inner(
     // the first pass — running headers then keep their baked value.
     let running_header_index: Option<&links::RunningHeaderIndex> = post.map(|p| &p.running_headers);
 
+    // Per-page (URI → ImageId) cache so multiple rectangles on the
+    // same page sharing an image share a single ImageId in the
+    // page's display list.
+    let mut page_image_caches: Vec<HashMap<String, paged_compose::ImageId>> =
+        (0..pages.len()).map(|_| HashMap::new()).collect();
+    // Renderer-scoped (URI → DecodedImage) cache so an image
+    // referenced from multiple pages is decoded once. The cached
+    // DecodedImage is cloned into each page's image pool — the
+    // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
+    // Build a layer-visibility map once: any item whose `ItemLayer`
+    // points at a hidden or non-printable layer is suppressed. Items
+    // without an explicit ItemLayer always render — matches InDesign's
+    // single-layer-by-default behaviour. The same predicate is consumed
+    // by the canvas hit-tester so selection cannot disagree with paint.
+    let layer_renders = paged_scene::build_layer_render_map(&document.designmap);
+    let layer_visible = |layer_ref: Option<&str>| -> bool {
+        paged_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
+    };
+
+    // Perf-S — when the caller supplies a persistent cache, decode
+    // results survive across `build_document` calls; otherwise fall
+    // back to a per-call scratch. The match holds the RefMut alive
+    // for the duration of the build via the `_owned_borrow` binding
+    // — dropping it would invalidate the `&mut HashMap` reference.
+    let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
+    let mut _owned_borrow: Option<
+        std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>,
+    > = None;
+    let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
+        match options.image_decode_cache {
+            Some(rc) => {
+                _owned_borrow = Some(rc.borrow_mut());
+                _owned_borrow.as_mut().unwrap()
+            }
+            None => &mut local_image_cache,
+        };
+
     // Master-spread pass — runs first so master items end up at the
     // bottom of each page's display list (page-level frames overlay on
     // top). Master frames are stamped into every page that references
@@ -1185,142 +1222,182 @@ pub(super) fn build_document_inner(
                 && b.top < target_master.bottom
         };
 
-        for frame in &master.spread.text_frames {
-            let spread_b = transform_bounds(frame.bounds, frame.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
+        // Master items paint in the master spread's own stacking order
+        // (`frames_in_order`, groups expanded to their members), exactly
+        // as body items do. Walking the backing vecs kind by kind put
+        // every polygon above every rectangle, so a full-page background
+        // polygon covered a master's placed picture. Items the walk does
+        // not reach (pasted-in children, mask sources) keep the legacy
+        // kind-by-kind order after it.
+        let master_order = master_paint_order(&master.spread);
+        let mut emit_master = |fr: paged_model::FrameRef| {
+            match fr {
+                paged_model::FrameRef::TextFrame(idx) => {
+                    let Some(frame) = master.spread.text_frames.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(frame.bounds, frame.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if frame
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    // Master items live in master-spread coords. Compose an
+                    // outer translate(dx, dy) into the frame's existing
+                    // ItemTransform so the inner-coord rect ends up in the
+                    // *live* spread coords once frame_outer_transform applies.
+                    // Mutating bounds (inner coords) would be wrong now that
+                    // PathGeometry-derived shapes carry geometry in inner
+                    // space.
+                    let mut copy = frame.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_text_frame_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                        None, // master items don't carry a drop shadow today.
+                        None, // master frames don't auto-size in our model.
+                    );
+                    // Stash a relocated copy so the master-story pass below
+                    // can flow this frame's hosted story (page-number footers,
+                    // running headers, etc.) onto this body page. Skipping it
+                    // when ParentStory is missing is fine — the rectangle was
+                    // still drawn above.
+                    if copy.parent_story.is_some() {
+                        let copy = text_area_frame(&copy, document).into_owned();
+                        master_text_emissions.push((i, copy));
+                    }
+                }
+                paged_model::FrameRef::Rectangle(idx) => {
+                    let Some(rect) = master.spread.rectangles.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(rect.bounds, rect.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if rect
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = rect.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_rectangle_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                        None,
+                    );
+                    // A master's placed picture (a slide-master background
+                    // photo, a logo) paints on every page that applies it.
+                    emit_rectangle_image(
+                        &mut pages[i],
+                        &copy,
+                        options,
+                        &mut page_image_caches[i],
+                        decoded_image_cache,
+                    );
+                }
+                paged_model::FrameRef::Polygon(idx) => {
+                    let Some(poly) = master.spread.polygons.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(poly.bounds, poly.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if poly
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = poly.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_polygon_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                    );
+                }
+                paged_model::FrameRef::Oval(idx) => {
+                    let Some(oval) = master.spread.ovals.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(oval.bounds, oval.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if oval
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = oval.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_oval_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                    );
+                }
+                paged_model::FrameRef::GraphicLine(idx) => {
+                    let Some(line) = master.spread.graphic_lines.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(line.bounds, line.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if line
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = line.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_line_into(&mut pages[i], &copy, document, palette, color_ctx);
+                }
+                paged_model::FrameRef::Group(_) => {}
             }
-            if frame
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            // Master items live in master-spread coords. Compose an
-            // outer translate(dx, dy) into the frame's existing
-            // ItemTransform so the inner-coord rect ends up in the
-            // *live* spread coords once frame_outer_transform applies.
-            // Mutating bounds (inner coords) would be wrong now that
-            // PathGeometry-derived shapes carry geometry in inner
-            // space.
-            let mut copy = frame.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_text_frame_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-                None, // master items don't carry a drop shadow today.
-                None, // master frames don't auto-size in our model.
-            );
-            // Stash a relocated copy so the master-story pass below
-            // can flow this frame's hosted story (page-number footers,
-            // running headers, etc.) onto this body page. Skipping it
-            // when ParentStory is missing is fine — the rectangle was
-            // still drawn above.
-            if copy.parent_story.is_some() {
-                let copy = text_area_frame(&copy, document).into_owned();
-                master_text_emissions.push((i, copy));
-            }
-        }
-        for rect in &master.spread.rectangles {
-            let spread_b = transform_bounds(rect.bounds, rect.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if rect
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = rect.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_rectangle_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-                None,
-            );
-        }
-        // Non-text background shapes (Polygon / Oval / GraphicLine)
-        // routed onto live body pages. The legacy code stopped at
-        // Rectangle, so master-spread page backgrounds drawn as
-        // polygons / ovals (full-bleed brand colours, decorative
-        // bezel strokes) silently disappeared on every body page.
-        for poly in &master.spread.polygons {
-            let spread_b = transform_bounds(poly.bounds, poly.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if poly
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = poly.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_polygon_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-            );
-        }
-        for oval in &master.spread.ovals {
-            let spread_b = transform_bounds(oval.bounds, oval.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if oval
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = oval.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_oval_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-            );
-        }
-        for line in &master.spread.graphic_lines {
-            let spread_b = transform_bounds(line.bounds, line.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if line
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = line.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_line_into(&mut pages[i], &copy, document, palette, color_ctx);
+        };
+        for &fr in &master_order {
+            emit_master(fr);
         }
     }
 
@@ -1331,42 +1408,6 @@ pub(super) fn build_document_inner(
     // can route line emission across pages.
     let mut frame_to_page: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    // Per-page (URI → ImageId) cache so multiple rectangles on the
-    // same page sharing an image share a single ImageId in the
-    // page's display list.
-    let mut page_image_caches: Vec<HashMap<String, paged_compose::ImageId>> =
-        (0..pages.len()).map(|_| HashMap::new()).collect();
-    // Renderer-scoped (URI → DecodedImage) cache so an image
-    // referenced from multiple pages is decoded once. The cached
-    // DecodedImage is cloned into each page's image pool — the
-    // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
-    // Build a layer-visibility map once: any item whose `ItemLayer`
-    // points at a hidden or non-printable layer is suppressed. Items
-    // without an explicit ItemLayer always render — matches InDesign's
-    // single-layer-by-default behaviour. The same predicate is consumed
-    // by the canvas hit-tester so selection cannot disagree with paint.
-    let layer_renders = paged_scene::build_layer_render_map(&document.designmap);
-    let layer_visible = |layer_ref: Option<&str>| -> bool {
-        paged_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
-    };
-
-    // Perf-S — when the caller supplies a persistent cache, decode
-    // results survive across `build_document` calls; otherwise fall
-    // back to a per-call scratch. The match holds the RefMut alive
-    // for the duration of the build via the `_owned_borrow` binding
-    // — dropping it would invalidate the `&mut HashMap` reference.
-    let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
-    let mut _owned_borrow: Option<
-        std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>,
-    > = None;
-    let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
-        match options.image_decode_cache {
-            Some(rc) => {
-                _owned_borrow = Some(rc.borrow_mut());
-                _owned_borrow.as_mut().unwrap()
-            }
-            None => &mut local_image_cache,
-        };
     // Aggregated queue of image-bearing anchored Rectangles captured
     // during the master + body story passes. Drained after both
     // passes complete so `emit_rectangle_image` can route the
@@ -7903,4 +7944,42 @@ fn story_prints_page_context(story: &paged_model::Story) -> bool {
         })
     }
     paragraphs_print(&story.paragraphs)
+}
+
+/// The paint order of a master spread's items: `frames_in_order` with
+/// every group expanded to its members (depth first), followed by any
+/// item of the backing vecs the walk did not reach, in the legacy
+/// kind-by-kind order. A spread without `frames_in_order` yields the
+/// legacy order alone.
+fn master_paint_order(spread: &paged_model::Spread) -> Vec<paged_model::FrameRef> {
+    use paged_model::FrameRef;
+    fn walk(spread: &paged_model::Spread, fr: FrameRef, out: &mut Vec<FrameRef>, depth: usize) {
+        match fr {
+            FrameRef::Group(gi) => {
+                if depth > 64 {
+                    return;
+                }
+                if let Some(g) = spread.groups.get(gi) {
+                    for &m in &g.members {
+                        walk(spread, m, out, depth + 1);
+                    }
+                }
+            }
+            leaf => out.push(leaf),
+        }
+    }
+    let mut order = Vec::new();
+    for &fr in &spread.frames_in_order {
+        walk(spread, fr, &mut order, 0);
+    }
+    let seen = |fr: &FrameRef| order.contains(fr);
+    let legacy = (0..spread.text_frames.len())
+        .map(FrameRef::TextFrame)
+        .chain((0..spread.rectangles.len()).map(FrameRef::Rectangle))
+        .chain((0..spread.polygons.len()).map(FrameRef::Polygon))
+        .chain((0..spread.ovals.len()).map(FrameRef::Oval))
+        .chain((0..spread.graphic_lines.len()).map(FrameRef::GraphicLine));
+    let rest: Vec<FrameRef> = legacy.filter(|fr| !seen(fr)).collect();
+    order.extend(rest);
+    order
 }
