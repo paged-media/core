@@ -2515,6 +2515,7 @@ impl CanvasModel {
                 end: *end,
                 recovered: String::new(),
                 unseed: false,
+                keep_run: false,
                 cell: cell.clone(),
             },
             // C-64 — a duplicate that did not translate was REFUSED by
@@ -11814,6 +11815,7 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
                     end: 0,
                     recovered: String::new(),
                     unseed: false,
+                    keep_run: false,
                     cell: None,
                 },
             },

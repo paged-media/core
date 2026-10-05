@@ -90,6 +90,15 @@ pub enum TextOp {
         /// made the undo of a cell pour land on a different state.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         unseed: bool,
+        /// Set on the inverse of an insert whose paragraph held only
+        /// EMPTY runs (a fresh frame's story is one paragraph with one
+        /// empty run). The insert typed into that run; deleting the text
+        /// would drop the emptied run with it. With this set, a paragraph
+        /// the delete leaves run-less gets that run back, empty and with
+        /// its formatting, so the undo lands on exactly the prior state.
+        /// Internal to the undo log; not a wire field.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_run: bool,
     },
 }
 
@@ -154,8 +163,9 @@ pub fn apply(doc: &mut Document, op: &TextOp) -> Result<AppliedText, TextOpError
             end,
             cell,
             unseed,
+            keep_run,
             ..
-        } => apply_delete_range(doc, story_id, cell, *start, *end, *unseed),
+        } => apply_delete_range(doc, story_id, cell, *start, *end, *unseed, *keep_run),
     }
 }
 
@@ -238,6 +248,14 @@ fn apply_insert_text(
     if seeded {
         paragraphs.push(paged_model::Paragraph::default());
     }
+    // Typing into a paragraph of only empty runs fills one of them; the
+    // inverse must hand that run back once the text is gone again.
+    let keep_run = !seeded && !text.is_empty() && {
+        let (para, _) = locate_para_local(paragraphs, offset);
+        paragraphs
+            .get(para)
+            .is_some_and(|p| !p.runs.is_empty() && p.runs.iter().all(|r| r.text.is_empty()))
+    };
 
     // Phase 3 Gap-D: split text on `\n`. Each segment becomes a
     // contiguous insert within a (possibly new) paragraph. Multiple
@@ -286,6 +304,7 @@ fn apply_insert_text(
             // W1.13 — undo must land in the same stream we edited.
             cell: cell.clone(),
             unseed: seeded,
+            keep_run,
         },
     })
 }
@@ -445,6 +464,7 @@ fn apply_delete_range(
     start: u32,
     end: u32,
     unseed: bool,
+    keep_run: bool,
 ) -> Result<AppliedText, TextOpError> {
     if end < start {
         return Err(TextOpError::InvalidRange { start, end });
@@ -500,6 +520,19 @@ fn apply_delete_range(
     //      d. Drop paragraphs (start_para+1..=end_para).
     let (start_para, start_local) = locate_para_local(paragraphs, start);
     let (end_para, end_local) = locate_para_local(paragraphs, end);
+    // The run the undone insert typed into, emptied — see `keep_run`.
+    let kept_run = keep_run
+        .then(|| {
+            let runs = &paragraphs[start_para].runs;
+            runs.iter()
+                .find(|r| !r.text.is_empty())
+                .or(runs.first())
+                .map(|r| CharacterRun {
+                    text: String::new(),
+                    ..r.clone()
+                })
+        })
+        .flatten();
 
     let mut recovered = String::with_capacity((end - start) as usize);
     if start_para == end_para {
@@ -559,6 +592,11 @@ fn apply_delete_range(
     }
 
     merge_adjacent_runs_in_target(paragraphs, start);
+    if let Some(run) = kept_run {
+        if paragraphs[start_para].runs.is_empty() {
+            paragraphs[start_para].runs.push(run);
+        }
+    }
     if unseed {
         drop_seeded_paragraph(paragraphs);
     }
@@ -985,6 +1023,7 @@ mod tests {
                 end: 11,
                 recovered: String::new(),
                 unseed: false,
+                keep_run: false,
                 cell: None,
             },
         )
@@ -1101,6 +1140,7 @@ mod tests {
                 end: 8,
                 recovered: String::new(),
                 unseed: false,
+                keep_run: false,
                 cell: None,
             },
         )
@@ -1239,6 +1279,7 @@ mod tests {
                 end: 4,
                 recovered: String::new(),
                 unseed: false,
+                keep_run: false,
                 cell: Some(cell_addr(0, 0)),
             },
         )
