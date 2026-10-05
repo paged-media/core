@@ -82,14 +82,54 @@ pub const SNAP_TOLERANCE_PT: f32 = SNAP_TOLERANCE_CSS_PX;
 /// picks the smallest-magnitude adjustment across every
 /// (member, target) pair. Pass-through (delta unchanged, lines empty)
 /// for any other gesture type or for any rotated member.
+#[allow(dead_code)]
 pub(crate) fn compute_snap_adjustment(
     session: &GestureSession,
     raw_delta: (f32, f32),
     pages: &[PageInfo],
     siblings: &[FrameRect],
 ) -> SnapAdjustment {
+    compute_snap_adjustment_with(session, raw_delta, pages, siblings, &SnapEnv::default())
+}
+
+/// v67 — what a gesture's snap pass reads besides the geometry: the
+/// session's settings and the document grid.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SnapEnv {
+    pub settings: crate::snap_point::SnapSettings,
+    /// (horizontal division, vertical division), pt.
+    pub grid: Option<(f32, f32)>,
+}
+
+impl SnapEnv {
+    /// Nearest document gridline to each candidate, when grid snapping is on.
+    fn grid_lines(&self, axis: SnapAxis, candidates: &[f32]) -> Vec<f32> {
+        if !self.settings.grid {
+            return Vec::new();
+        }
+        let Some((h, v)) = self.grid else {
+            return Vec::new();
+        };
+        let step = match axis {
+            SnapAxis::X => v,
+            SnapAxis::Y => h,
+        };
+        candidates
+            .iter()
+            .map(|c| (c / step).round() * step)
+            .collect()
+    }
+}
+
+pub(crate) fn compute_snap_adjustment_with(
+    session: &GestureSession,
+    raw_delta: (f32, f32),
+    pages: &[PageInfo],
+    siblings: &[FrameRect],
+    env: &SnapEnv,
+) -> SnapAdjustment {
     use crate::gesture::GestureType;
-    if !matches!(session.gesture, GestureType::Translate) {
+    if !matches!(session.gesture, GestureType::Translate) || !env.settings.enabled {
         return SnapAdjustment {
             delta: raw_delta,
             lines: Vec::new(),
@@ -112,7 +152,7 @@ pub(crate) fn compute_snap_adjustment(
         }
     }
     let scale = session.camera_scale.unwrap_or(1.0).max(1e-3);
-    let tolerance = SNAP_TOLERANCE_CSS_PX / scale;
+    let tolerance = env.settings.tolerance_px / scale;
     let (dx, dy) = raw_delta;
 
     // Per-member candidates × per-member targets. Each snap line is
@@ -137,8 +177,8 @@ pub(crate) fn compute_snap_adjustment(
             (aabb.top + aabb.bottom) * 0.5 + dy,
             aabb.bottom + dy,
         ];
-        let targets_x = snap_targets_x(&page, siblings, &session.snapshots);
-        let targets_y = snap_targets_y(&page, siblings, &session.snapshots);
+        let targets_x = snap_targets_x(&page, siblings, &session.snapshots, env, &cand_x);
+        let targets_y = snap_targets_y(&page, siblings, &session.snapshots, env, &cand_y);
         if let Some((adj, target)) = snap_axis_match(&cand_x, &targets_x, tolerance) {
             if best_x
                 .as_ref()
@@ -195,8 +235,8 @@ pub(crate) fn compute_snap_adjustment(
             (aabb.top + aabb.bottom) * 0.5 + post_dy,
             aabb.bottom + post_dy,
         ];
-        let targets_x = snap_targets_x(&page, siblings, &session.snapshots);
-        let targets_y = snap_targets_y(&page, siblings, &session.snapshots);
+        let targets_x = snap_targets_x(&page, siblings, &session.snapshots, env, &cand_x);
+        let targets_y = snap_targets_y(&page, siblings, &session.snapshots, env, &cand_y);
         for &cand in &cand_x {
             for &target in &targets_x {
                 if (target - cand).abs() <= SMART_GUIDE_EPSILON_PT {
@@ -236,6 +276,117 @@ pub(crate) fn compute_snap_adjustment(
 
     SnapAdjustment {
         delta: (dx + adj_dx, dy + adj_dy),
+        lines,
+    }
+}
+
+/// v67 (RFI C-68) — resize snapping: the edge (or the two edges, at a
+/// corner) a resize handle moves lands on the same page / sibling /
+/// guide / grid lines a translate aligns with. Each axis snaps on its
+/// own; an axis the handle does not move is left alone. Rotated members
+/// pass through, as they do for translate.
+pub(crate) fn compute_resize_snap(
+    session: &GestureSession,
+    raw_delta: (f32, f32),
+    pages: &[PageInfo],
+    siblings: &[FrameRect],
+    env: &SnapEnv,
+) -> SnapAdjustment {
+    use crate::gesture::GestureType;
+    let pass = SnapAdjustment {
+        delta: raw_delta,
+        lines: Vec::new(),
+    };
+    let GestureType::Resize { handle } = session.gesture else {
+        return pass;
+    };
+    if !env.settings.enabled || session.modifiers.disable_snap {
+        return pass;
+    }
+    if session
+        .snapshots
+        .iter()
+        .any(|s| !is_pure_translate_or_identity(s.item_transform))
+    {
+        return pass;
+    }
+    let scale = session.camera_scale.unwrap_or(1.0).max(1e-3);
+    let tolerance = env.settings.tolerance_px / scale;
+    let (dx, dy) = raw_delta;
+    let mut best_x: Option<SnapMatch> = None;
+    let mut best_y: Option<SnapMatch> = None;
+    for snap in &session.snapshots {
+        let Some(page) = host_page_for_snapshot(snap, pages) else {
+            continue;
+        };
+        let Some(aabb) = snapshot_aabb_in_page(snap, &page) else {
+            continue;
+        };
+        let mut cand_x = Vec::new();
+        if handle.moves_west() {
+            cand_x.push(aabb.left + dx);
+        }
+        if handle.moves_east() {
+            cand_x.push(aabb.right + dx);
+        }
+        let mut cand_y = Vec::new();
+        if handle.moves_north() {
+            cand_y.push(aabb.top + dy);
+        }
+        if handle.moves_south() {
+            cand_y.push(aabb.bottom + dy);
+        }
+        if !cand_x.is_empty() {
+            let targets = snap_targets_x(&page, siblings, &session.snapshots, env, &cand_x);
+            if let Some((adj, target)) = snap_axis_match(&cand_x, &targets, tolerance) {
+                if best_x
+                    .as_ref()
+                    .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                {
+                    best_x = Some(SnapMatch {
+                        adjustment: adj,
+                        target,
+                        page_id: page.page_id.clone(),
+                    });
+                }
+            }
+        }
+        if !cand_y.is_empty() {
+            let targets = snap_targets_y(&page, siblings, &session.snapshots, env, &cand_y);
+            if let Some((adj, target)) = snap_axis_match(&cand_y, &targets, tolerance) {
+                if best_y
+                    .as_ref()
+                    .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                {
+                    best_y = Some(SnapMatch {
+                        adjustment: adj,
+                        target,
+                        page_id: page.page_id.clone(),
+                    });
+                }
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    if let Some(m) = &best_x {
+        lines.push(SnapLine {
+            axis: SnapAxis::X,
+            position: m.target,
+            page_id: m.page_id.clone(),
+        });
+    }
+    if let Some(m) = &best_y {
+        lines.push(SnapLine {
+            axis: SnapAxis::Y,
+            position: m.target,
+            page_id: m.page_id.clone(),
+        });
+    }
+    SnapAdjustment {
+        delta: (
+            dx + best_x.map_or(0.0, |b| b.adjustment),
+            dy + best_y.map_or(0.0, |b| b.adjustment),
+        ),
         lines,
     }
 }
@@ -435,15 +586,22 @@ fn apply(m: [f32; 6], x: f32, y: f32) -> (f32, f32) {
     (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
 }
 
-fn snap_targets_x(
+pub(crate) fn snap_targets_x(
     host_page: &PageInfo,
     siblings: &[FrameRect],
     moving: &[crate::gesture::NodeSnapshot],
+    env: &SnapEnv,
+    candidates: &[f32],
 ) -> Vec<f32> {
     let moving_ids: std::collections::HashSet<&crate::element_selection::ElementId> =
         moving.iter().map(|s| &s.id).collect();
-    let mut out = vec![0.0, host_page.width_pt * 0.5, host_page.width_pt];
-    for f in siblings {
+    let mut out = if env.settings.page {
+        vec![0.0, host_page.width_pt * 0.5, host_page.width_pt]
+    } else {
+        Vec::new()
+    };
+    out.extend(env.grid_lines(SnapAxis::X, candidates));
+    for f in siblings.iter().filter(|_| env.settings.alignment) {
         if f.page_id != host_page.page_id {
             continue;
         }
@@ -456,19 +614,28 @@ fn snap_targets_x(
         out.push((left + right) * 0.5);
     }
     // Plan-2 §8.3 — vertical ruler guides snap on the x axis.
-    out.extend_from_slice(&host_page.vertical_guides);
+    if env.settings.guides {
+        out.extend_from_slice(&host_page.vertical_guides);
+    }
     out
 }
 
-fn snap_targets_y(
+pub(crate) fn snap_targets_y(
     host_page: &PageInfo,
     siblings: &[FrameRect],
     moving: &[crate::gesture::NodeSnapshot],
+    env: &SnapEnv,
+    candidates: &[f32],
 ) -> Vec<f32> {
     let moving_ids: std::collections::HashSet<&crate::element_selection::ElementId> =
         moving.iter().map(|s| &s.id).collect();
-    let mut out = vec![0.0, host_page.height_pt * 0.5, host_page.height_pt];
-    for f in siblings {
+    let mut out = if env.settings.page {
+        vec![0.0, host_page.height_pt * 0.5, host_page.height_pt]
+    } else {
+        Vec::new()
+    };
+    out.extend(env.grid_lines(SnapAxis::Y, candidates));
+    for f in siblings.iter().filter(|_| env.settings.alignment) {
         if f.page_id != host_page.page_id {
             continue;
         }
@@ -481,7 +648,9 @@ fn snap_targets_y(
         out.push((top + bottom) * 0.5);
     }
     // Plan-2 §8.3 — horizontal ruler guides snap on the y axis.
-    out.extend_from_slice(&host_page.horizontal_guides);
+    if env.settings.guides {
+        out.extend_from_slice(&host_page.horizontal_guides);
+    }
     out
 }
 

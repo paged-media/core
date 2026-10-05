@@ -2389,6 +2389,169 @@
           "subcommands": []
         },
         {
+          "about": "Snap a page point to the anchors, alignment lines, guides and outlines around it — what the Pen or a dragged anchor would land on",
+          "args": [
+            {
+              "defaults": [],
+              "help": "IDML or `.paged` document",
+              "long": null,
+              "name": "doc",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DOC"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "One JSON line instead of an indented block",
+              "long": "compact",
+              "name": "compact",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "COMPACT"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Font file or directory to make available, repeatable",
+              "long": "fonts",
+              "name": "fonts",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "DIR|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+              "long": "font-family",
+              "name": "font_family",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME[/STYLE]=PATH"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Fallback face for text no registered family answers for",
+              "long": "font",
+              "name": "font",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+              "long": "cmyk-profile",
+              "name": "cmyk_profile",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "NAME|FILE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "The page's `Self` id",
+              "long": null,
+              "name": "page",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "PAGE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "The point, page-local pt",
+              "long": null,
+              "name": "point",
+              "positional": true,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "X",
+                "Y"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Screen px per pt (the tolerance is 4 screen px). Default 1",
+              "long": "camera-scale",
+              "name": "camera_scale",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "CAMERA_SCALE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "`kind:id` addresses to leave out of the targets",
+              "long": "exclude",
+              "name": "exclude",
+              "positional": false,
+              "repeatable": true,
+              "required": false,
+              "short": null,
+              "takesValues": true,
+              "valueNames": [
+                "EXCLUDE"
+              ]
+            },
+            {
+              "defaults": [],
+              "help": "Also snap to the document grid (off by default, as in InDesign)",
+              "long": "grid",
+              "name": "grid",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "short": null,
+              "takesValues": false,
+              "valueNames": [
+                "GRID"
+              ]
+            }
+          ],
+          "longAbout": null,
+          "name": "snap-point",
+          "subcommands": []
+        },
+        {
           "about": "The planar arrangement of overlapping paths — the faces the pathfinder region verbs address",
           "args": [
             {
@@ -3839,5 +4002,5 @@
       "subcommands": []
     }
   ],
-  "protocol": 66
+  "protocol": 67
 }

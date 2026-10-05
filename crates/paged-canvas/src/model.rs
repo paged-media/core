@@ -1477,6 +1477,13 @@ pub struct CanvasModel {
     /// Bumped by every rebuild; a resume record is never read back in the
     /// build that wrote it.
     build_generation: u64,
+    /// v67 (RFI C-68) — the session's snapping preferences, shared by
+    /// every gesture and by `RequestSnapPoint`.
+    pub(crate) snap_settings: crate::snap_point::SnapSettings,
+    /// v67 — every page's snap targets for one build, rebuilt lazily when
+    /// `build_generation` moves on (and held still for a whole gesture,
+    /// whose preview rebuilds on every tick).
+    pub(crate) snap_index: Option<crate::snap_point::SnapIndex>,
     /// ADR 027 plan step 7 — the previous build's print of each
     /// master-text emission, so a re-emitted master with the same output
     /// leaves its page clean.
@@ -2075,6 +2082,8 @@ impl CanvasModel {
             story_resume: Default::default(),
             pending_edit_spans: HashMap::new(),
             build_generation: 0,
+            snap_settings: Default::default(),
+            snap_index: None,
             emission_prints: Default::default(),
             pending_dirty_scope: DirtyScope::Unset,
             last_dirty_pages: Vec::new(),
@@ -10267,6 +10276,46 @@ impl CanvasModel {
 
     pub fn built(&self) -> &BuiltDocument {
         &self.built
+    }
+
+    /// v67 — the session's snapping preferences.
+    pub fn snap_settings(&self) -> crate::snap_point::SnapSettings {
+        self.snap_settings
+    }
+
+    /// v67 — replace the snapping preferences. Session state: not saved,
+    /// not undoable.
+    pub fn set_snap_settings(&mut self, settings: crate::snap_point::SnapSettings) {
+        self.snap_settings = settings;
+    }
+
+    /// v67 — (re)build the snap index when the document has been rebuilt
+    /// since it was taken. `hold` keeps whatever index exists — a gesture's
+    /// preview rebuilds every tick, and the items it moves are excluded
+    /// from its own targets anyway.
+    pub(crate) fn ensure_snap_index(&mut self, hold: bool) {
+        let fresh = self
+            .snap_index
+            .as_ref()
+            .is_some_and(|i| hold || i.generation == self.build_generation);
+        if !fresh {
+            self.snap_index = Some(crate::snap_point::build_index(
+                &self.scene,
+                &self.built,
+                self.build_generation,
+            ));
+        }
+    }
+
+    /// v67 (RFI C-68) — `RequestSnapPoint`: snap one page-local point to
+    /// the points, alignment lines and outlines around it.
+    pub fn snap_point(
+        &mut self,
+        query: &crate::snap_point::SnapPointQuery,
+    ) -> crate::snap_point::SnapPointResult {
+        self.ensure_snap_index(self.active_gesture.is_some());
+        let index = self.snap_index.as_ref().expect("just ensured");
+        crate::snap_point::resolve(index, &self.snap_settings, query)
     }
 
     pub fn font_bytes(&self) -> Option<&[u8]> {

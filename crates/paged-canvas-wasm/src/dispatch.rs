@@ -94,6 +94,9 @@ pub struct WorkerCore {
     pub export_sessions: std::collections::HashMap<u32, paged_canvas::export::CanvasExportSession>,
     /// Monotone id source for export sessions.
     pub next_export_session: u32,
+    /// v67 — the session's snapping preferences. Kept here as well as on
+    /// the model so they survive `LoadDocument` / `NewBlankDocument`.
+    pub snap_settings: paged_canvas::snap_point::SnapSettings,
 }
 
 impl Default for WorkerCore {
@@ -245,6 +248,7 @@ impl WorkerCore {
             color_profiles: Vec::new(),
             export_sessions: std::collections::HashMap::new(),
             next_export_session: 1,
+            snap_settings: Default::default(),
         }
     }
 
@@ -328,7 +332,8 @@ impl WorkerCore {
                 };
                 let doc_id = format!("doc-{}", msg.seq);
                 match CanvasModel::load(doc_id, bytes.as_slice(), opts) {
-                    Ok(model) => {
+                    Ok(mut model) => {
+                        model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
                         // Export sessions hold a build of the PREVIOUS
@@ -358,7 +363,8 @@ impl WorkerCore {
                 };
                 let doc_id = format!("doc-{}", msg.seq);
                 match CanvasModel::new_blank(doc_id, width_pt, height_pt, opts) {
-                    Ok(model) => {
+                    Ok(mut model) => {
+                        model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
                         self.export_sessions.clear();
@@ -756,6 +762,29 @@ impl WorkerCore {
             MainToWorkerKind::RequestTextOutlines { id } => {
                 let result = self.model.as_ref().and_then(|m| m.text_outlines(&id));
                 WorkerToMainKind::TextOutlines { result }
+            }
+            MainToWorkerKind::RequestSnapPoint { query } => {
+                let result = match self.model.as_mut() {
+                    Some(m) => m.snap_point(&query),
+                    None => paged_canvas::snap_point::SnapPointResult {
+                        point: query.point,
+                        snapped: false,
+                        point_target: None,
+                        x_target: None,
+                        y_target: None,
+                        segment_target: None,
+                        lines: Vec::new(),
+                        tolerance_pt: 0.0,
+                    },
+                };
+                WorkerToMainKind::SnapPoint { result }
+            }
+            MainToWorkerKind::SetSnapSettings { settings } => {
+                self.snap_settings = settings;
+                if let Some(m) = self.model.as_mut() {
+                    m.set_snap_settings(settings);
+                }
+                WorkerToMainKind::SnapSettingsApplied { settings }
             }
             MainToWorkerKind::RequestNearestPathPoint { id, point } => {
                 let result = self

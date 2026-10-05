@@ -60,6 +60,7 @@ pub mod resolve;
 pub mod resource_tiles;
 pub mod selection;
 pub mod snap;
+pub mod snap_point;
 pub mod snapshot;
 
 pub use camera::{Camera, CameraLayout, CameraSabLayout, CAMERA_SAB_BYTES};

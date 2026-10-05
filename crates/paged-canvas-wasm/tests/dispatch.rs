@@ -1799,3 +1799,64 @@ fn element_geometry_names_an_empty_text_frames_story() {
     assert_eq!(items[1]["storyId"], "story1", "an authored frame too");
     assert_eq!(items.len(), 2, "an unknown id answers nothing");
 }
+
+// ---------------------------------------------------------------------
+// v67 — snapping over the wire (RFI C-68)
+// ---------------------------------------------------------------------
+
+fn snap_query(seq: u64, x: f32, y: f32) -> serde_json::Value {
+    serde_json::json!({
+        "seq": seq,
+        "protocol": protocol(),
+        "kind": "requestSnapPoint",
+        "payload": { "query": { "pageId": "p1", "point": [x, y], "cameraScale": 1.0 } }
+    })
+}
+
+#[test]
+fn request_snap_point_lands_on_a_text_frames_corner() {
+    let mut core = loaded_core();
+    let reply = roundtrip(&mut core, &snap_query(2, 102.0, 98.0));
+    assert_eq!(reply["kind"], "snapPoint", "{reply}");
+    let r = &reply["payload"]["result"];
+    assert_eq!(r["snapped"], true);
+    assert_eq!(r["point"], serde_json::json!([100.0, 100.0]));
+    assert_eq!(r["pointTarget"]["source"], "corner");
+    assert_eq!(
+        r["pointTarget"]["element"],
+        serde_json::json!({ "kind": "textFrame", "id": "tf1" })
+    );
+}
+
+#[test]
+fn snap_settings_survive_a_load_and_switch_snapping_off() {
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1,
+            "protocol": protocol(),
+            "kind": "setSnapSettings",
+            "payload": { "settings": { "enabled": false } }
+        }),
+    );
+    assert_eq!(reply["kind"], "snapSettingsApplied", "{reply}");
+    // Unnamed fields take their defaults.
+    assert_eq!(reply["payload"]["settings"]["tolerancePx"], 4.0);
+    let loaded = roundtrip(&mut core, &load_msg(2));
+    assert_eq!(loaded["kind"], "documentLoaded");
+    let r = roundtrip(&mut core, &snap_query(3, 102.0, 98.0));
+    assert_eq!(r["payload"]["result"]["snapped"], false);
+    assert_eq!(
+        r["payload"]["result"]["point"],
+        serde_json::json!([102.0, 98.0])
+    );
+}
+
+#[test]
+fn request_snap_point_without_a_document_answers_the_point() {
+    let mut core = WorkerCore::new();
+    let r = roundtrip(&mut core, &snap_query(1, 10.0, 20.0));
+    assert_eq!(r["kind"], "snapPoint");
+    assert_eq!(r["payload"]["result"]["snapped"], false);
+}

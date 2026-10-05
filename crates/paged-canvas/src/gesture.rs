@@ -219,16 +219,16 @@ pub enum ResizeHandle {
 }
 
 impl ResizeHandle {
-    fn moves_north(self) -> bool {
+    pub(crate) fn moves_north(self) -> bool {
         matches!(self, Self::North | Self::NorthEast | Self::NorthWest)
     }
-    fn moves_south(self) -> bool {
+    pub(crate) fn moves_south(self) -> bool {
         matches!(self, Self::South | Self::SouthEast | Self::SouthWest)
     }
-    fn moves_west(self) -> bool {
+    pub(crate) fn moves_west(self) -> bool {
         matches!(self, Self::West | Self::NorthWest | Self::SouthWest)
     }
-    fn moves_east(self) -> bool {
+    pub(crate) fn moves_east(self) -> bool {
         matches!(self, Self::East | Self::NorthEast | Self::SouthEast)
     }
     fn is_corner(self) -> bool {
@@ -444,6 +444,9 @@ impl CanvasModel {
         if nodes.is_empty() {
             return Err(GestureError::EmptySelection);
         }
+        // v67 — take the snap targets now, before the preview starts
+        // rebuilding; `update_gesture` holds this index to the end.
+        self.ensure_snap_index(false);
         // Track L — when a Group element is in the selection,
         // expand it to (Group itself, every member recursively).
         // The Group's own item_transform mutates alongside each
@@ -529,7 +532,7 @@ impl CanvasModel {
         delta: (f32, f32),
         modifiers: GestureModifiers,
     ) -> Result<GestureUpdateResult, GestureError> {
-        let (session_clone, pages, siblings) = {
+        let (session_clone, pages) = {
             let session = self
                 .active_gesture
                 .as_mut()
@@ -590,15 +593,48 @@ impl CanvasModel {
                     }
                 })
                 .collect::<Vec<_>>();
-            let siblings = collect_sibling_frames(&self.scene, &self.built);
-            (session_clone, pages, siblings)
+            (session_clone, pages)
         };
         // Phase E snap: adjusts the raw pointer delta so the candidate
         // edges land on snap targets within tolerance. The
         // adjusted delta is stored on the session so commit picks up
         // the same value.
-        let adjustment =
-            crate::snap::compute_snap_adjustment(&session_clone, delta, &pages, &siblings);
+        //
+        // v67 (RFI C-68) — the targets come from the snap index taken at
+        // `begin_gesture` (held for the whole gesture: the preview below
+        // rebuilds every tick), so every visible leaf kind is a sibling,
+        // and the session's snap settings and the document grid apply.
+        // Resize snaps its moving edges; a path edit snaps the dragged
+        // point through the same resolver `RequestSnapPoint` answers with.
+        self.ensure_snap_index(true);
+        let index = self.snap_index.as_ref().expect("just ensured");
+        let env = crate::snap::SnapEnv {
+            settings: self.snap_settings,
+            grid: index.grid,
+        };
+        let adjustment = match session_clone.gesture {
+            GestureType::Translate => {
+                let siblings = crate::snap_point::frame_rects(index);
+                crate::snap::compute_snap_adjustment_with(
+                    &session_clone,
+                    delta,
+                    &pages,
+                    &siblings,
+                    &env,
+                )
+            }
+            GestureType::Resize { .. } => {
+                let siblings = crate::snap_point::frame_rects(index);
+                crate::snap::compute_resize_snap(&session_clone, delta, &pages, &siblings, &env)
+            }
+            GestureType::PathEdit { address } => {
+                path_edit_snap(index, &env, &session_clone, delta, &pages, address)
+            }
+            _ => crate::snap::SnapAdjustment {
+                delta,
+                lines: Vec::new(),
+            },
+        };
         let snapped_delta = adjustment.delta;
         {
             let session = self.active_gesture.as_mut().expect("session still present");
@@ -1247,6 +1283,73 @@ fn compute_node_mutation(
 
 const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+/// v67 (RFI C-68) — snap a path-edit drag: the dragged anchor (or
+/// handle), moved by `delta`, goes through the point resolver with
+/// itself left out of the targets (and its element's outline, which the
+/// drag is changing). The returned delta lands it on what it snapped to.
+fn path_edit_snap(
+    index: &crate::snap_point::SnapIndex,
+    env: &crate::snap::SnapEnv,
+    session: &GestureSession,
+    delta: (f32, f32),
+    pages: &[crate::snap::PageInfo],
+    address: paged_mutate::PathPointAddress,
+) -> crate::snap::SnapAdjustment {
+    let pass = crate::snap::SnapAdjustment {
+        delta,
+        lines: Vec::new(),
+    };
+    if !env.settings.enabled || session.modifiers.disable_snap {
+        return pass;
+    }
+    let Some(snap) = session.snapshots.first() else {
+        return pass;
+    };
+    let Some(a) = snap.path_anchors.get(address.index) else {
+        return pass;
+    };
+    let local = match address.role {
+        paged_mutate::PathPointRole::Anchor => a.anchor,
+        paged_mutate::PathPointRole::Left => a.left,
+        paged_mutate::PathPointRole::Right => a.right,
+    };
+    let m = snap.item_transform.unwrap_or(IDENTITY);
+    let world = (
+        m[0] * local.0 + m[2] * local.1 + m[4],
+        m[1] * local.0 + m[3] * local.1 + m[5],
+    );
+    let Some(page) = pages.iter().find(|p| {
+        world.0 >= p.spread_origin.0
+            && world.0 <= p.spread_origin.0 + p.width_pt
+            && world.1 >= p.spread_origin.1
+            && world.1 <= p.spread_origin.1 + p.height_pt
+    }) else {
+        return pass;
+    };
+    let start = (
+        world.0 - page.spread_origin.0,
+        world.1 - page.spread_origin.1,
+    );
+    let query = crate::snap_point::SnapPointQuery {
+        page_id: page.page_id.clone(),
+        point: [start.0 + delta.0, start.1 + delta.1],
+        camera_scale: session.camera_scale,
+        exclude: vec![crate::snap_point::SnapExclude {
+            id: snap.id.clone(),
+            anchors: Some(vec![address.index as u32]),
+        }],
+        extra_points: Vec::new(),
+    };
+    let r = crate::snap_point::resolve(index, &env.settings, &query);
+    if !r.snapped {
+        return pass;
+    }
+    crate::snap::SnapAdjustment {
+        delta: (r.point[0] - start.0, r.point[1] - start.1),
+        lines: r.lines,
+    }
+}
+
 /// Phase E — lock a translate delta to the dominant axis. If
 /// |dx| ≥ |dy|, drop the y component; otherwise drop the x. Equal
 /// magnitudes break toward the x axis (matches industry convention —
@@ -1496,48 +1599,6 @@ pub(crate) fn scale_about_pivot(
     ]
 }
 
-/// Phase E — collect a flat list of every frame's AABB in
-/// page-local coords, tagged by its host page. Used as the snap
-/// target set so the moving items' edges align with sibling frames.
-/// Only text frames + rectangles for v1 (matches the rest of the
-/// gesture support).
-fn collect_sibling_frames(
-    scene: &paged_scene::Document,
-    built: &paged_renderer::BuiltDocument,
-) -> Vec<crate::snap::FrameRect> {
-    let mut out = Vec::new();
-    for parsed in &scene.spreads {
-        let spread = &parsed.spread;
-        for f in &spread.text_frames {
-            let Some(id) = f.self_id.as_deref() else {
-                continue;
-            };
-            let aabb = transformed_aabb(f.bounds, f.item_transform);
-            if let Some((page_id, page_local)) = page_for_aabb(built, aabb) {
-                out.push(crate::snap::FrameRect {
-                    element_id: crate::element_selection::ElementId::TextFrame(id.to_string()),
-                    page_id,
-                    aabb: page_local,
-                });
-            }
-        }
-        for r in &spread.rectangles {
-            let Some(id) = r.self_id.as_deref() else {
-                continue;
-            };
-            let aabb = transformed_aabb(r.bounds, r.item_transform);
-            if let Some((page_id, page_local)) = page_for_aabb(built, aabb) {
-                out.push(crate::snap::FrameRect {
-                    element_id: crate::element_selection::ElementId::Rectangle(id.to_string()),
-                    page_id,
-                    aabb: page_local,
-                });
-            }
-        }
-    }
-    out
-}
-
 /// Track K — does a parsed spread host the frame identified by
 /// `raw_id`? Walks every per-kind vec until one is found. Returns
 /// false for unknown ids.
@@ -1612,29 +1673,6 @@ fn transformed_aabb(b: Bounds, m: Option<[f32; 6]>) -> [f32; 4] {
     }
     // Return [top, left, bottom, right] in SPREAD coords.
     [min_y, min_x, max_y, max_x]
-}
-
-/// Locate the page whose spread-coord rect contains the centroid of
-/// `aabb_spread = [top, left, bottom, right]`, and return the AABB
-/// expressed in that page's page-local pt.
-fn page_for_aabb(
-    built: &paged_renderer::BuiltDocument,
-    aabb_spread: [f32; 4],
-) -> Option<(PageId, [f32; 4])> {
-    let cx = (aabb_spread[1] + aabb_spread[3]) * 0.5;
-    let cy = (aabb_spread[0] + aabb_spread[2]) * 0.5;
-    let p = built.pages.iter().find(|bp| {
-        let (ox, oy) = bp.spread_origin;
-        cx >= ox && cx <= ox + bp.width_pt && cy >= oy && cy <= oy + bp.height_pt
-    })?;
-    let (ox, oy) = p.spread_origin;
-    let page_local = [
-        aabb_spread[0] - oy,
-        aabb_spread[1] - ox,
-        aabb_spread[2] - oy,
-        aabb_spread[3] - ox,
-    ];
-    Some((p.id.clone(), page_local))
 }
 
 /// Phase D — average of every snapshot's transformed centroid in

@@ -171,6 +171,26 @@ pub enum ReadCommand {
         /// `textFrame:<id>` address.
         id: String,
     },
+    /// Snap a page point to the anchors, alignment lines, guides and
+    /// outlines around it — what the Pen or a dragged anchor would land on.
+    SnapPoint {
+        #[command(flatten)]
+        on: ReadTarget,
+        /// The page's `Self` id.
+        page: String,
+        /// The point, page-local pt.
+        #[arg(num_args = 2, value_names = ["X", "Y"], allow_hyphen_values = true)]
+        point: Vec<f32>,
+        /// Screen px per pt (the tolerance is 4 screen px). Default 1.
+        #[arg(long)]
+        camera_scale: Option<f32>,
+        /// `kind:id` addresses to leave out of the targets.
+        #[arg(long)]
+        exclude: Vec<String>,
+        /// Also snap to the document grid (off by default, as in InDesign).
+        #[arg(long)]
+        grid: bool,
+    },
     /// The planar arrangement of overlapping paths — the faces the
     /// pathfinder region verbs address.
     PlanarRegions {
@@ -251,6 +271,7 @@ impl ReadCommand {
             | Self::GroupLeaves { on, .. }
             | Self::PathAnchors { on, .. }
             | Self::TextOutlines { on, .. }
+            | Self::SnapPoint { on, .. }
             | Self::PlanarRegions { on, .. }
             | Self::MeasureText { on, .. }
             | Self::PlacedAsset { on, .. }
@@ -430,6 +451,37 @@ pub fn run(what: &ReadCommand) -> Result<()> {
         }
         ReadCommand::TextOutlines { id, .. } => {
             let reply = session.send(MainToWorkerKind::RequestTextOutlines { id: address(id)? })?;
+            emit(&reply, compact)
+        }
+        ReadCommand::SnapPoint {
+            page,
+            point,
+            camera_scale,
+            exclude,
+            grid,
+            ..
+        } => {
+            if *grid {
+                session.send(MainToWorkerKind::SetSnapSettings {
+                    settings: paged_canvas::snap_point::SnapSettings {
+                        grid: true,
+                        ..Default::default()
+                    },
+                })?;
+            }
+            let exclude = addresses(exclude)?
+                .into_iter()
+                .map(|id| paged_canvas::snap_point::SnapExclude { id, anchors: None })
+                .collect();
+            let reply = session.send(MainToWorkerKind::RequestSnapPoint {
+                query: paged_canvas::snap_point::SnapPointQuery {
+                    page_id: paged_wire::PageId(page.clone()),
+                    point: [point[0], point[1]],
+                    camera_scale: *camera_scale,
+                    exclude,
+                    extra_points: Vec::new(),
+                },
+            })?;
             emit(&reply, compact)
         }
         ReadCommand::PlanarRegions { ids, point, .. } => {

@@ -555,7 +555,20 @@ export type WorkerToMain = WorkerToMainKind & {
 //     `placedAssetBytesDirect` and `mutateWithBytesDirect` (a mutation —
 //     a `batch` too — whose first `replaceImageBytes` with empty `bytes`
 //     takes the transferred buffer).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(66);
+// v67 — snapping moves into the engine (RFI C-68):
+//   - `RequestSnapPoint { query }` → `SnapPoint { result }`: snap one
+//     page-local point to the points (anchors, frame corners, oval
+//     quadrant points, centres, the page), the x / y lines through them,
+//     ruler guides, the document grid and the nearest outline — one
+//     resolver for the Pen, Direct Selection and any plugin tool.
+//   - `SetSnapSettings { settings }` → `SnapSettingsApplied { settings }`:
+//     the session's tolerance and target switches, which the translate,
+//     resize and path-edit gestures obey too.
+//   - Gestures: translate aligns with every visible leaf kind (it saw
+//     text frames and rectangles only), resize snaps the edges it moves,
+//     a path edit snaps the dragged point.
+// Two new message kinds an older worker cannot answer, hence the bump.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(67);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -998,6 +1011,16 @@ pub enum MainToWorkerKind {
     /// v66 (RFI C-69) — a text frame's composed glyphs as outlines.
     RequestTextOutlines {
         id: crate::element_selection::ElementId,
+    },
+    /// v67 (RFI C-68) — snap one page-local point. Reply: `SnapPoint`.
+    RequestSnapPoint {
+        query: crate::snap_point::SnapPointQuery,
+    },
+    /// v67 (RFI C-68) — replace the session's snapping preferences (all
+    /// gestures and `RequestSnapPoint` obey them). Survives document
+    /// loads; not saved, not undoable. Reply: `SnapSettingsApplied`.
+    SetSnapSettings {
+        settings: crate::snap_point::SnapSettings,
     },
     /// B-06 (protocol v30) — closest on-curve point on the element's
     /// path. `point` is in the element's LOCAL coordinate space (the
@@ -1730,6 +1753,15 @@ pub enum WorkerToMainKind {
     /// v66 — `RequestTextOutlines` reply. `None` when the id is not a
     /// text frame, does not resolve, or sits on no page.
     TextOutlines { result: Option<TextOutlinesResult> },
+    /// v67 — `RequestSnapPoint` reply. With no document loaded the point
+    /// comes back unsnapped.
+    SnapPoint {
+        result: crate::snap_point::SnapPointResult,
+    },
+    /// v67 — `SetSnapSettings` reply: the settings now in force.
+    SnapSettingsApplied {
+        settings: crate::snap_point::SnapSettings,
+    },
     /// B-22 (protocol v57) — `RequestPlanarRegions` reply.
     PlanarRegions { result: PlanarRegionsResult },
     /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
@@ -3984,8 +4016,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v66() {
-        assert_eq!(PROTOCOL_VERSION.0, 66);
+    fn protocol_version_is_v67() {
+        assert_eq!(PROTOCOL_VERSION.0, 67);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the
