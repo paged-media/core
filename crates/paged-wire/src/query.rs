@@ -238,7 +238,7 @@ impl<'a> Index<'a> {
             );
             layer_idx.insert(layer.self_id.as_str(), i);
         }
-        for (_, def) in &doc.styles.object_styles {
+        for def in doc.styles.object_styles.values() {
             ix.style_names
                 .insert(def.self_id.as_str(), def.name.as_deref());
         }
@@ -848,13 +848,17 @@ mod tests {
         s.labels
             .insert("p2".into(), vec![label("x-paged:slide", "{}")]);
 
-        let mut ms = Spread::default();
-        ms.text_frames = vec![TextFrame::new("mtf", None, b(0.0, 0.0, 5.0, 5.0))];
-        ms.frames_in_order = vec![FrameRef::TextFrame(0)];
+        let mut ms = Spread {
+            text_frames: vec![TextFrame::new("mtf", None, b(0.0, 0.0, 5.0, 5.0))],
+            frames_in_order: vec![FrameRef::TextFrame(0)],
+            ..Default::default()
+        };
         ms.item_names.insert("mtf".into(), "folio".into());
 
-        let mut cell = TableCell::default();
-        cell.name = Some("1:0".into());
+        let cell = TableCell {
+            name: Some("1:0".into()),
+            ..Default::default()
+        };
         let table = Table {
             self_id: Some("tb1".into()),
             cells: vec![cell],
