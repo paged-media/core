@@ -263,3 +263,20 @@ fn the_cli_reaches_35_of_65() {
     assert_eq!(kinds_the_cli_sends().len(), 37);
     assert_eq!(every_kind().len(), 67);
 }
+
+/// The second axis, started (ADR 132): the CLI's own source names
+/// `Mutation::Set`, so ANY property of any object the catalog's
+/// `propertySchemas` lists is one subcommand away (`paged set` / `paged
+/// get`) — instead of one verb per op. Per-op counting for the other
+/// 127 is the capability matrix's (cockpit), not this file's.
+#[test]
+fn the_cli_sends_the_generic_set() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/object.rs"),
+    )
+    .expect("read src/object.rs");
+    assert!(
+        src.contains("Mutation::Set {"),
+        "`paged set` must send `Mutation::Set`, the one door to every property"
+    );
+}

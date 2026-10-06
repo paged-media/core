@@ -859,6 +859,9 @@ property_paths! {
         ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true),
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle" : reference(RefKind::CharacterStyle),
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle" : reference(RefKind::CharacterStyle),
+        // ADR 131/132 — the IDML `Name` of a page item; also the `name`
+        // virtual path on frame / group targets.
+        ItemName => "itemName" : text(),
         ParagraphComposer => "paragraphComposer" : enum_open(COMPOSERS),
     }
 
@@ -1247,7 +1250,13 @@ mod tests {
         // 219 -> 220: `paragraphComposer` (protocol 65) — modelled and
         // laid out since fc2df8a (the Single-line Composer), with no
         // setter until now.
-        assert_eq!(cat.settable_paths.len(), 220, "settable path count drifted");
+        //
+        // 220 -> 221: `itemName` (ADR 131/132) — the IDML `Name` of a page
+        // item, the stable handle a stored selector points at. The paths
+        // ADR 132 closed on other kinds (page margins, document setup,
+        // text variables, style definitions) are not element paths: they
+        // are `propertySchemas` rows on their own address kinds.
+        assert_eq!(cat.settable_paths.len(), 221, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

@@ -2532,6 +2532,7 @@ dependencies = [
  "paged-color",
  "paged-fidelity",
  "paged-gen",
+ "paged-introspect",
  "paged-mutate",
  "paged-script",
  "paged-wire",

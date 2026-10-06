@@ -728,6 +728,72 @@ pub fn coerce(schema: &PropertySchema, input: Input<'_>) -> Result<Value, String
     }
 }
 
+/// Coerce a JSON value (what a CLI argument, a binding expression or a
+/// script holds) for a path with this schema. Scalars go through
+/// [`coerce`]; a `{ type, value }` object is a wire value, checked by
+/// [`validate`]; an array takes the schema's natural list form (lengths,
+/// bounds, a transform, gradient or tab stops, a space-separated
+/// reference list).
+pub fn from_json(schema: &PropertySchema, json: &serde_json::Value) -> Result<Value, String> {
+    use serde_json::Value as J;
+    match json {
+        J::Null => coerce(schema, Input::Null),
+        J::Bool(b) => coerce(schema, Input::Bool(*b)),
+        J::Number(n) => coerce(
+            schema,
+            Input::Number(n.as_f64().ok_or("a number out of range")?),
+        ),
+        J::String(s) => coerce(schema, Input::Text(s)),
+        J::Object(o) if o.contains_key("type") && o.contains_key("value") => {
+            let wire: Value = serde_json::from_value(json.clone())
+                .map_err(|e| format!("not a wire value: {e}"))?;
+            validate(schema, &wire)
+        }
+        J::Array(items) => {
+            let floats = || -> Result<Vec<f32>, String> {
+                items
+                    .iter()
+                    .map(|n| {
+                        n.as_f64()
+                            .map(|n| n as f32)
+                            .ok_or("expected numbers".to_string())
+                    })
+                    .collect()
+            };
+            let wire = match schema.wire {
+                Wire::Lengths => Value::Lengths(floats()?),
+                Wire::Bounds => Value::Bounds(
+                    floats()?
+                        .try_into()
+                        .map_err(|_| "bounds are [top, left, bottom, right]".to_string())?,
+                ),
+                Wire::Transform => Value::Transform(Some(
+                    floats()?
+                        .try_into()
+                        .map_err(|_| "a transform is [a, b, c, d, tx, ty]".to_string())?,
+                )),
+                Wire::GradientStops => Value::GradientStops(
+                    serde_json::from_value(json.clone()).map_err(|e| e.to_string())?,
+                ),
+                Wire::TabStops => Value::TabStops(
+                    serde_json::from_value(json.clone()).map_err(|e| e.to_string())?,
+                ),
+                Wire::Text => Value::Text(
+                    items
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or("expected a list of strings")?
+                        .join(" "),
+                ),
+                other => return Err(format!("a list is not a {other:?} value")),
+            };
+            validate(schema, &wire)
+        }
+        J::Object(_) => Err("an object must be a { type, value } wire value".to_string()),
+    }
+}
+
 /// Check a fully-formed wire value against a schema: the value's variant
 /// must be the schema's wire form (a typed `Number` / `Enum` normalises
 /// first), and scalar contents must satisfy range and membership.

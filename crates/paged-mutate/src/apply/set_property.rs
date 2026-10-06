@@ -637,6 +637,34 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // ---- ADR 131/132 — a page item's `Name` (`Spread::item_names`).
+        (
+            NodeId::TextFrame(id)
+            | NodeId::Rectangle(id)
+            | NodeId::Oval(id)
+            | NodeId::Polygon(id)
+            | NodeId::GraphicLine(id)
+            | NodeId::Group(id),
+            PropertyPath::ItemName,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let spread = doc
+                .spreads
+                .iter_mut()
+                .map(|s| &mut s.spread)
+                .find(|s| spread_holds_item(s, id))
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = if new_val.is_empty() {
+                spread.item_names.remove(id.as_str())
+            } else {
+                spread.item_names.insert(id.clone(), new_val)
+            };
+            // A name is an identity, not paint.
+            (
+                Value::Text(prev.unwrap_or_default()),
+                InvalidationHint::default(),
+            )
+        }
         // ---- ADR 132 — page margins and columns (`<MarginPreference>`).
         // A page with no margins of its own takes a fresh entry on the
         // first write; `null` (Length(None)) drops the page's entry, which
@@ -3092,4 +3120,15 @@ fn set_page_margin_field(m: &mut paged_model::MarginPreference, path: PropertyPa
         PropertyPath::PageColumnCount => m.column_count = v as u32,
         _ => m.column_gutter = v,
     }
+}
+
+/// True when `id` is one of `spread`'s page items (any of the six kinds).
+fn spread_holds_item(spread: &paged_model::Spread, id: &str) -> bool {
+    let is = |sid: &Option<String>| sid.as_deref() == Some(id);
+    spread.text_frames.iter().any(|f| is(&f.self_id))
+        || spread.rectangles.iter().any(|f| is(&f.self_id))
+        || spread.ovals.iter().any(|f| is(&f.self_id))
+        || spread.polygons.iter().any(|f| is(&f.self_id))
+        || spread.graphic_lines.iter().any(|f| is(&f.self_id))
+        || spread.groups.iter().any(|f| is(&f.self_id))
 }

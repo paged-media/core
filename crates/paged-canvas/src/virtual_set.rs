@@ -563,6 +563,13 @@ impl CanvasModel {
                     caller: None,
                 })
             }
+            (VirtualTarget::Element { element_id }, "setElementProperty") => {
+                m(Mutation::SetElementProperty {
+                    element_id: element_id.clone(),
+                    path: PropertyPath::ItemName,
+                    value: Value::Text(text_of(v).ok_or_else(bad)?.unwrap_or_default()),
+                })
+            }
             (VirtualTarget::Element { element_id }, "setGroupTransform") => {
                 let ElementId::Group(group_id) = element_id else {
                     return Err(format!("{what}: only a group takes groupTransform"));
@@ -652,6 +659,16 @@ impl CanvasModel {
                     _ => return Err(unknown()),
                 };
                 Ok(text(&link))
+            }
+            VirtualTarget::Element { element_id } if path == "name" || path == "itemName" => {
+                let id = element_id.raw_id();
+                Ok(text(
+                    &scene
+                        .spreads
+                        .iter()
+                        .find_map(|s| s.spread.item_names.get(id))
+                        .cloned(),
+                ))
             }
             VirtualTarget::Element {
                 element_id: ElementId::Group(id),

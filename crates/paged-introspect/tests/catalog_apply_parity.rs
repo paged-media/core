@@ -64,11 +64,11 @@ const OUT_OF_SCOPE: &[(&str, &str)] = &[
     ),
     (
         "Layer",
-        "dedicated layerSet* mutations — a layer has no element address",
+        "a layer has no element address: its paths live on the `layer` kind and are probed through `Mutation::Set` by paged-canvas/tests/virtual_paths.rs",
     ),
     (
         "Page",
-        "structural; insert/remove mutations, not property writes",
+        "structural here; its settable paths (bounds, margins, columns, master, labels) live on the `page` kind and are probed by paged-canvas/tests/virtual_paths.rs",
     ),
     ("Spread", "structural; not a paged.set target"),
 ];
@@ -287,5 +287,159 @@ fn every_advertised_settable_pair_applies() {
         probed >= 20,
         "only {probed} advertised pairs probed — the catalog walk lost its \
          subject; check SCOPE/OUT_OF_SCOPE filtering"
+    );
+}
+
+/// ADR 132 — the schema's `wire` is the form the apply layer TAKES.
+///
+/// The Boa bridge, the CLI and `Mutation::Set` build a `Value` from the
+/// schema alone (`schema::coerce` / `from_json`), so a schema naming the
+/// wrong wire form would make every surface send a value the engine
+/// refuses as a type mismatch. For every advertised path with a scalar
+/// wire form, a value OF THAT FORM must reach an arm on some real node:
+/// applied, or refused for its content (an out-of-vocabulary token) — not
+/// for its type, and not for want of any node kind that takes the path.
+#[test]
+fn every_advertised_schema_names_the_wire_apply_takes() {
+    use paged_introspect::catalog::{schema, PROPERTY_PATHS};
+    use paged_introspect::schema::{DefaultValue, Wire};
+    use paged_mutate::OperationError;
+
+    let mut docs = [
+        fixture("geometry.idml"),
+        fixture("text.idml"),
+        fixture("tables.idml"),
+        fixture("geometry-groups.idml"),
+        fixture("anchored.idml"),
+    ];
+    let line = mint_graphic_line(&mut docs[0]);
+    let mut nodes: Vec<(usize, NodeId)> = vec![(0, NodeId::GraphicLine(line))];
+    for (i, d) in docs.iter().enumerate() {
+        for kind in SCOPE {
+            if let Some(id) = find_kind(d, kind) {
+                nodes.push((i, node_id(kind, id)));
+            }
+            // anchored frames live inside stories; every rectangle of the
+            // anchored fixture is a candidate
+        }
+        for s in d.spreads.iter().map(|s| &s.spread) {
+            for r in &s.rectangles {
+                if let Some(id) = &r.self_id {
+                    nodes.push((i, NodeId::Rectangle(id.clone())));
+                }
+            }
+        }
+        // Anchored frames live in the stories, not the spreads; the
+        // anchored-object arms address them by Self id, kind-agnostic.
+        for st in &d.stories {
+            for para in &st.story.paragraphs {
+                for af in &para.anchored_frames {
+                    if let Some(id) = &af.self_id {
+                        nodes.push((i, NodeId::Rectangle(id.clone())));
+                    }
+                }
+            }
+        }
+        if let Some(s) = d.stories.iter().find(|s| !s.story.paragraphs.is_empty()) {
+            nodes.push((
+                i,
+                NodeId::StoryRange {
+                    story_id: s.self_id.clone(),
+                    start: 0,
+                    end: 2,
+                },
+            ));
+        }
+        for s in &d.stories {
+            if let Some(t) = s.story.paragraphs.iter().find_map(|p| p.table.as_ref()) {
+                let table_id = t.self_id.clone().expect("table id");
+                nodes.push((
+                    i,
+                    NodeId::Table {
+                        story_id: s.self_id.clone(),
+                        table_id: table_id.clone(),
+                    },
+                ));
+                nodes.push((
+                    i,
+                    NodeId::TableCell {
+                        story_id: s.self_id.clone(),
+                        table_id,
+                        row: 0,
+                        col: 0,
+                    },
+                ));
+                break;
+            }
+        }
+    }
+
+    let mut wrong = Vec::new();
+    for (name, path) in PROPERTY_PATHS {
+        let s = schema(*path);
+        let value = match s.wire {
+            Wire::Bool => Value::Bool(true),
+            Wire::Length => Value::Length(Some(match s.default {
+                Some(DefaultValue::Number(n)) => n as f32,
+                _ => s.min.unwrap_or(1.0).max(1.0) as f32,
+            })),
+            Wire::Text => Value::Text(
+                s.members
+                    .first()
+                    .map(|m| (*m).to_string())
+                    .unwrap_or_else(|| "probe".to_string()),
+            ),
+            Wire::ColorRef => Value::ColorRef(Some("Color/Black".into())),
+            Wire::Bounds => Value::Bounds([1.0, 2.0, 50.0, 60.0]),
+            Wire::Transform => Value::Transform(Some([1.0, 0.0, 0.0, 1.0, 2.0, 3.0])),
+            Wire::Lengths => Value::Lengths(vec![2.0, 1.0]),
+            // Structured and operation wires have their own probes.
+            _ => continue,
+        };
+        let reached = nodes.iter().any(|(i, node)| {
+            let mut doc = docs[*i].clone();
+            match apply(
+                &mut doc,
+                &Operation::SetProperty {
+                    node: node.clone(),
+                    path: *path,
+                    value: value.clone(),
+                },
+            ) {
+                Ok(_) => true,
+                Err(OperationError::TypeMismatch { .. })
+                | Err(OperationError::UnsupportedProperty { .. })
+                | Err(OperationError::NodeNotFound(_)) => false,
+                Err(_) => true,
+            }
+        });
+        // A path some style definition takes (`paragraphStyleNextStyle`
+        // lives only there) reaches its arm through `SetStyleProperty`.
+        let reached = reached
+            || docs.iter().any(|d| {
+                d.styles.paragraph_styles.keys().any(|style_id| {
+                    let mut doc = d.clone();
+                    !matches!(
+                        apply(
+                            &mut doc,
+                            &Operation::SetStyleProperty {
+                                collection: paged_mutate::StyleCollection::Paragraph,
+                                style_id: style_id.clone(),
+                                path: *path,
+                                value: value.clone(),
+                            },
+                        ),
+                        Err(OperationError::TypeMismatch { .. })
+                            | Err(OperationError::UnsupportedProperty { .. })
+                    )
+                })
+            });
+        if !reached {
+            wrong.push(format!("{name} ({:?})", s.wire));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these schemas name a wire form no apply arm takes: {wrong:?}"
     );
 }

@@ -1426,6 +1426,10 @@ pub enum PropertyPath {
     TableStyleEndRowFillColor,
     TableStyleEndRowFillCount,
     TableStyleEndRowFillTint,
+    /// ADR 131/132 — a page item's IDML `Name` (`Spread::item_names`), on
+    /// all six page-item kinds. `Value::Text`; `""` removes the name. The
+    /// stable handle a stored selector (`frame[name="price"]`) points at.
+    ItemName,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1758,6 +1762,7 @@ impl PropertyPath {
             PropertyPath::TableStyleEndRowFillColor => "tableStyle.endRowFillColor",
             PropertyPath::TableStyleEndRowFillCount => "tableStyle.endRowFillCount",
             PropertyPath::TableStyleEndRowFillTint => "tableStyle.endRowFillTint",
+            PropertyPath::ItemName => "item.name",
         }
     }
 }

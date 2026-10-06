@@ -4381,58 +4381,20 @@ fn js_scalar(value: &JsValue) -> Option<paged_introspect::schema::Input<'static>
 }
 
 /// Convert a JS value for a path whose schema is known — the `Set`
-/// lane, where the path may be virtual (`tint`, `labels[k]`, `rows[2].height`)
-/// and so has no `PropertyPath` to dispatch on.
+/// lane, where the path may be virtual (`tint`, `labels[k]`,
+/// `rows[2].height`) and so has no `PropertyPath` to dispatch on. One
+/// conversion for every JSON-holding surface: `schema::from_json`.
 fn js_to_value_by_schema(
     value: &JsValue,
     schema: &paged_introspect::schema::PropertySchema,
     ctx: &mut Context,
 ) -> Option<paged_mutate::Value> {
-    use paged_introspect::schema::{coerce, validate, Input, Wire};
-    if let Some(s) = value.as_string() {
-        let s = s.to_std_string_escaped();
-        return coerce(schema, Input::Text(&s)).ok();
-    }
-    if let Some(input) = js_scalar(value) {
-        return coerce(schema, input).ok();
-    }
-    let json = value.to_json(ctx).ok()??;
-    let is_wrapper = json.get("type").is_some() && json.get("value").is_some();
-    let wire = if is_wrapper {
-        serde_json::from_value::<paged_mutate::Value>(json).ok()?
+    let json = if value.is_null() {
+        serde_json::Value::Null
     } else {
-        // The natural JS forms of the structured wires.
-        match schema.wire {
-            Wire::Lengths => paged_mutate::Value::Lengths(
-                json.as_array()?
-                    .iter()
-                    .map(|n| n.as_f64().map(|n| n as f32))
-                    .collect::<Option<Vec<f32>>>()?,
-            ),
-            Wire::Bounds => {
-                let v: Vec<f32> = serde_json::from_value(json).ok()?;
-                paged_mutate::Value::Bounds(v.try_into().ok()?)
-            }
-            Wire::Transform => {
-                let v: Vec<f32> = serde_json::from_value(json).ok()?;
-                paged_mutate::Value::Transform(Some(v.try_into().ok()?))
-            }
-            Wire::GradientStops => {
-                paged_mutate::Value::GradientStops(serde_json::from_value(json).ok()?)
-            }
-            Wire::TabStops => paged_mutate::Value::TabStops(serde_json::from_value(json).ok()?),
-            // A space-separated reference list (colour-group members).
-            Wire::Text => paged_mutate::Value::Text(
-                json.as_array()?
-                    .iter()
-                    .map(|v| v.as_str().map(str::to_string))
-                    .collect::<Option<Vec<String>>>()?
-                    .join(" "),
-            ),
-            _ => return None,
-        }
+        value.to_json(ctx).ok()??
     };
-    validate(schema, &wire).ok()
+    paged_introspect::schema::from_json(schema, &json).ok()
 }
 
 /// A whole path in its script spellings: an anchor array, or
