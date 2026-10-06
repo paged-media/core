@@ -4218,6 +4218,27 @@ impl CanvasModel {
                     op: Box::new(inner),
                 })
             }
+            Mutation::CreateMaster {
+                master,
+                name,
+                width_pt,
+                height_pt,
+                duplicate_of,
+            } => Some(Operation::CreateMaster {
+                master_id: master.clone(),
+                name: name.clone(),
+                width_pt: *width_pt,
+                height_pt: *height_pt,
+                duplicate_of: duplicate_of.clone(),
+                restore_json: None,
+            }),
+            Mutation::DeleteMaster { master } => Some(Operation::DeleteMaster {
+                master_id: master.clone(),
+            }),
+            Mutation::RenameMaster { master, name } => Some(Operation::RenameMaster {
+                master_id: master.clone(),
+                name: name.clone(),
+            }),
             Mutation::MovePage { page, after } => Some(Operation::MovePage {
                 page_id: page.0.clone(),
                 after_page_id: after.as_ref().map(|a| a.0.clone()),
@@ -7688,7 +7709,8 @@ impl CanvasModel {
             .master_spreads
             .iter()
             .map(|(self_id, ms)| MasterPageSummary {
-                label: self_id.clone(),
+                // v69 — the master's `Name` when it has one.
+                label: ms.name.clone().unwrap_or_else(|| self_id.clone()),
                 self_id: self_id.clone(),
                 page_count: ms.spread.pages.len() as u32,
             })

@@ -1584,6 +1584,32 @@ pub enum Mutation {
         master: String,
         mutation: Box<Mutation>,
     },
+    /// v69 — create master spread `master` (its `Self` id, chosen by the
+    /// caller): one page of `width_pt` × `height_pt`, or a copy of
+    /// `duplicate_of` with fresh ids (the size is then ignored). `name`
+    /// defaults to the copied master's. One undo step.
+    CreateMaster {
+        master: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        width_pt: f32,
+        #[serde(default)]
+        height_pt: f32,
+        #[serde(default)]
+        duplicate_of: Option<String>,
+    },
+    /// v69 — delete a master no page applies; refused while one does.
+    /// Undo restores it exactly.
+    DeleteMaster {
+        master: String,
+    },
+    /// v69 — set a master's name (absent: clear it).
+    RenameMaster {
+        master: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// v69 — move a page (its single-page spread) to follow `after`, or to
     /// the front when `after` is absent: a slide sorter's reorder. Spreads
     /// stacked down the pasteboard restack in the new order. One undo step.
@@ -1874,6 +1900,9 @@ mutation_vocabulary! {
     DuplicatePage,
     MovePage,
     OnMaster,
+    CreateMaster,
+    DeleteMaster,
+    RenameMaster,
     InsertSection,
     EditSection,
     DeleteSection,

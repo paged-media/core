@@ -253,6 +253,27 @@
       "summary": "Move a page to follow another (omit/null: to the front)."
     },
     {
+      "name": "paged.createMaster",
+      "params": "(masterId, { name?, widthPt?, heightPt?, duplicateOf? })",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Create a master spread: one page of the given size, or a copy of another master."
+    },
+    {
+      "name": "paged.deleteMaster",
+      "params": "(masterId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a master no page applies."
+    },
+    {
+      "name": "paged.renameMaster",
+      "params": "(masterId, name?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set (omit/null: clear) a master's name."
+    },
+    {
       "name": "paged.onMaster",
       "params": "(masterId, mutation)",
       "returns": "bool",
@@ -1407,6 +1428,9 @@
     "duplicatePage",
     "movePage",
     "onMaster",
+    "createMaster",
+    "deleteMaster",
+    "renameMaster",
     "insertSection",
     "editSection",
     "deleteSection",

@@ -3786,6 +3786,37 @@ pub enum Operation {
         #[serde(default)]
         master: Option<String>,
     },
+    /// v69 — a new master spread `master_id`: one page of the given size,
+    /// or (with `duplicate_of`) a copy of that master with fresh ids for
+    /// its pages and items. `restore_json` is echo/redo-only (the created
+    /// master, so redo recreates its exact ids). Inverse: `DeleteMaster`.
+    CreateMaster {
+        master_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        width_pt: f32,
+        height_pt: f32,
+        #[serde(default)]
+        duplicate_of: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    /// v69 — remove a master no page applies (refused otherwise).
+    /// Inverse: `RestoreMaster` with the removed master.
+    DeleteMaster {
+        master_id: String,
+    },
+    /// v69 — `DeleteMaster`'s inverse: put back a removed master exactly.
+    RestoreMaster {
+        master_json: String,
+    },
+    /// v69 — set (or with `None` clear) a master's name. Inverse: the
+    /// previous name.
+    RenameMaster {
+        master_id: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// v69 — apply `op` to the items of master spread `master_id` (its
     /// `Self` id): the master is the only spread `op` sees, so every item,
     /// text and style operation edits a layout's logo or footer as it

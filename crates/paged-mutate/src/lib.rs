@@ -1673,6 +1673,24 @@ mod tests {
                 page_id: "Page/u1".to_string(),
                 after_page_id: None,
             },
+            Operation::CreateMaster {
+                master_id: "uM".to_string(),
+                name: Some("Title".to_string()),
+                width_pt: 960.0,
+                height_pt: 540.0,
+                duplicate_of: None,
+                restore_json: None,
+            },
+            Operation::DeleteMaster {
+                master_id: "uM".to_string(),
+            },
+            Operation::RestoreMaster {
+                master_json: "{}".to_string(),
+            },
+            Operation::RenameMaster {
+                master_id: "uM".to_string(),
+                name: None,
+            },
             Operation::SetSpreadOrder {
                 spreads: vec![crate::operation::SpreadPlacement {
                     self_id: "S1".to_string(),

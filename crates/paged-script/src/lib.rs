@@ -560,6 +560,9 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         )
         .function(guarded(paged_move_page), js_string!("movePage"), 2)
         .function(guarded(paged_on_master), js_string!("onMaster"), 2)
+        .function(guarded(paged_create_master), js_string!("createMaster"), 2)
+        .function(guarded(paged_delete_master), js_string!("deleteMaster"), 1)
+        .function(guarded(paged_rename_master), js_string!("renameMaster"), 2)
         .function(
             guarded(paged_set_page_metadata),
             js_string!("setPageMetadata"),
@@ -1631,6 +1634,47 @@ fn paged_move_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
         page: PageId(page),
         after,
     }))
+}
+
+/// `paged.createMaster(masterId, { name?, widthPt?, heightPt?,
+/// duplicateOf? })` — create a master spread (`Mutation::CreateMaster`).
+fn paged_create_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let mut opts = to_json_value(args.get_or_undefined(1), ctx)
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    opts["master"] = serde_json::Value::String(master);
+    let Ok(mutation) = serde_json::from_value::<Mutation>(serde_json::json!({
+        "op": "createMaster",
+        "args": opts,
+    })) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&mutation))
+}
+
+/// `paged.deleteMaster(masterId)` — delete a master no page applies
+/// (`Mutation::DeleteMaster`).
+fn paged_delete_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteMaster { master }))
+}
+
+/// `paged.renameMaster(masterId, name?)` — set or clear a master's name
+/// (`Mutation::RenameMaster`).
+fn paged_rename_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = opt_string(args.get_or_undefined(1), ctx);
+    Ok(apply_bool(&Mutation::RenameMaster { master, name }))
 }
 
 /// `paged.onMaster(masterId, mutation)` — apply a wire mutation (an

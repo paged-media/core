@@ -2028,6 +2028,57 @@ fn page_cases(c: &mut Vec<Case>) {
             }),
         }
     }));
+    c.push(when_used(
+        "CreateMaster",
+        "masters",
+        "a master no page applies draws nowhere; applying it replaces the page's master items",
+        |_| Mutation::CreateMaster {
+            master: "uSweepMaster".into(),
+            name: Some("Sweep".into()),
+            width_pt: 612.0,
+            height_pt: 792.0,
+            duplicate_of: None,
+        },
+        |m| {
+            let page = first_page(m);
+            m.apply_mutation(&Mutation::ApplyMasterToPage {
+                page,
+                master: Some("MasterSpread/uSweepMaster".into()),
+            })
+            .expect("apply the new master");
+        },
+    ));
+    c.push(inert(
+        "DeleteMaster",
+        "masters",
+        "the deleted master was applied to no page, so no page drew it",
+        |m| {
+            m.apply_mutation(&Mutation::CreateMaster {
+                master: "uSweepMaster".into(),
+                name: None,
+                width_pt: 612.0,
+                height_pt: 792.0,
+                duplicate_of: None,
+            })
+            .expect("create a master to delete");
+            Mutation::DeleteMaster {
+                master: "uSweepMaster".into(),
+            }
+        },
+    ));
+    c.push(inert(
+        "RenameMaster",
+        "masters",
+        "a master's name labels it in lists; the renderer never reads it",
+        |m| {
+            let mut ids: Vec<_> = m.scene().master_spreads.keys().cloned().collect();
+            ids.sort();
+            Mutation::RenameMaster {
+                master: ids[0].clone(),
+                name: Some("Renamed".into()),
+            }
+        },
+    ));
     c.push(paints("MovePage", "layout", |m| Mutation::MovePage {
         // The second page moves to the front: the first page shows what
         // the second did.

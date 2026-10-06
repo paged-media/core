@@ -478,6 +478,27 @@ pub(crate) fn apply_inner(
             after_page_id,
         } => apply_move_page(doc, page_id, after_page_id.as_deref()),
         Operation::OnMaster { master_id, op } => master::apply_on_master(doc, master_id, op),
+        Operation::CreateMaster {
+            master_id,
+            name,
+            width_pt,
+            height_pt,
+            duplicate_of,
+            restore_json,
+        } => master::apply_create_master(
+            doc,
+            master_id,
+            name.as_deref(),
+            *width_pt,
+            *height_pt,
+            duplicate_of.as_deref(),
+            restore_json.as_deref(),
+        ),
+        Operation::DeleteMaster { master_id } => master::apply_delete_master(doc, master_id),
+        Operation::RestoreMaster { master_json } => master::apply_restore_master(doc, master_json),
+        Operation::RenameMaster { master_id, name } => {
+            master::apply_rename_master(doc, master_id, name.as_deref())
+        }
         Operation::SetSpreadOrder { spreads } => apply_set_spread_order(doc, spreads),
         Operation::ApplyMasterToPage { page, master } => {
             apply_master_to_page(doc, page, master.as_deref())

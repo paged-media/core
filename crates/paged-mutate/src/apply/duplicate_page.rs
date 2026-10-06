@@ -89,62 +89,7 @@ pub(super) fn apply_duplicate_page(
     // InsertPage / id scans (`u<hex>`).
     let mut clone = doc.spreads[src_idx].clone();
     let mut next = next_id_seed(doc);
-    // Old id → new id, so the spread's id-keyed side maps follow.
-    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut remap = |slot: &mut Option<String>, next: &mut u64| {
-        let fresh = format!("u{:x}", *next);
-        if let Some(old) = slot.take() {
-            renamed.insert(old, fresh.clone());
-        }
-        *slot = Some(fresh);
-        *next += 1;
-    };
-    remap(&mut clone.spread.self_id, &mut next);
-    for pg in &mut clone.spread.pages {
-        remap(&mut pg.self_id, &mut next);
-    }
-    for f in &mut clone.spread.text_frames {
-        remap(&mut f.self_id, &mut next);
-    }
-    for r in &mut clone.spread.rectangles {
-        remap(&mut r.self_id, &mut next);
-    }
-    for o in &mut clone.spread.ovals {
-        remap(&mut o.self_id, &mut next);
-    }
-    for l in &mut clone.spread.graphic_lines {
-        remap(&mut l.self_id, &mut next);
-    }
-    for p in &mut clone.spread.polygons {
-        remap(&mut p.self_id, &mut next);
-    }
-    for g in &mut clone.spread.groups {
-        remap(&mut g.self_id, &mut next);
-    }
-
-    // The side maps keyed by a page's or an item's Self id (labels with
-    // plugin metadata, page margins, placed-image metadata, pasted-in
-    // children, opacity masks) follow their owners to the new ids; they
-    // used to keep the old ones, so a duplicate lost its metadata.
-    fn rekey<V>(
-        map: &mut std::collections::HashMap<String, V>,
-        renamed: &std::collections::HashMap<String, String>,
-    ) {
-        *map = std::mem::take(map)
-            .into_iter()
-            .map(|(k, v)| (renamed.get(&k).cloned().unwrap_or(k), v))
-            .collect();
-    }
-    rekey(&mut clone.spread.labels, &renamed);
-    rekey(&mut clone.spread.page_margins, &renamed);
-    rekey(&mut clone.spread.image_metadata, &renamed);
-    rekey(&mut clone.spread.nested_children, &renamed);
-    rekey(&mut clone.spread.opacity_masks, &renamed);
-    for mask in clone.spread.opacity_masks.values_mut() {
-        if let Some(fresh) = renamed.get(&mask.mask_item) {
-            mask.mask_item = fresh.clone();
-        }
-    }
+    fresh_ids(&mut clone.spread, &mut next);
 
     // Stack the clone below everything on the pasteboard (same rule as
     // InsertPage) so spread AABBs never overlap.
@@ -198,6 +143,64 @@ pub(super) fn apply_duplicate_page(
 
 /// Highest `u<hex>` id seen across the document + 1, as a raw counter
 /// for minting a run of fresh ids (DuplicatePage needs many at once).
+/// Give `spread`, its pages and all its items fresh `u<hex>` ids from
+/// `next` on, and move the spread's id-keyed side maps (labels with
+/// plugin metadata, page margins, placed-image metadata, pasted-in
+/// children, opacity masks and a mask's item reference) to the new ids.
+/// They used to keep the old ones, so a duplicate lost its metadata.
+pub(super) fn fresh_ids(spread: &mut paged_model::Spread, next: &mut u64) {
+    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut remap = |slot: &mut Option<String>, next: &mut u64| {
+        let fresh = format!("u{:x}", *next);
+        if let Some(old) = slot.take() {
+            renamed.insert(old, fresh.clone());
+        }
+        *slot = Some(fresh);
+        *next += 1;
+    };
+    remap(&mut spread.self_id, next);
+    for pg in &mut spread.pages {
+        remap(&mut pg.self_id, next);
+    }
+    for f in &mut spread.text_frames {
+        remap(&mut f.self_id, next);
+    }
+    for r in &mut spread.rectangles {
+        remap(&mut r.self_id, next);
+    }
+    for o in &mut spread.ovals {
+        remap(&mut o.self_id, next);
+    }
+    for l in &mut spread.graphic_lines {
+        remap(&mut l.self_id, next);
+    }
+    for p in &mut spread.polygons {
+        remap(&mut p.self_id, next);
+    }
+    for g in &mut spread.groups {
+        remap(&mut g.self_id, next);
+    }
+    fn rekey<V>(
+        map: &mut std::collections::HashMap<String, V>,
+        renamed: &std::collections::HashMap<String, String>,
+    ) {
+        *map = std::mem::take(map)
+            .into_iter()
+            .map(|(k, v)| (renamed.get(&k).cloned().unwrap_or(k), v))
+            .collect();
+    }
+    rekey(&mut spread.labels, &renamed);
+    rekey(&mut spread.page_margins, &renamed);
+    rekey(&mut spread.image_metadata, &renamed);
+    rekey(&mut spread.nested_children, &renamed);
+    rekey(&mut spread.opacity_masks, &renamed);
+    for mask in spread.opacity_masks.values_mut() {
+        if let Some(fresh) = renamed.get(&mask.mask_item) {
+            mask.mask_item = fresh.clone();
+        }
+    }
+}
+
 pub(super) fn next_id_seed(doc: &Document) -> u64 {
     let mut max: u64 = 0;
     let mut scan = |id: Option<&str>| {
@@ -212,8 +215,16 @@ pub(super) fn next_id_seed(doc: &Document) -> u64 {
             max = max.max(v);
         }
     };
-    for parsed in &doc.spreads {
-        let s = &parsed.spread;
+    // Masters too: their items share the document's id space.
+    for m in doc.master_spreads.values() {
+        scan(Some(m.self_id.as_str()));
+    }
+    let spreads = doc
+        .spreads
+        .iter()
+        .map(|p| &p.spread)
+        .chain(doc.master_spreads.values().map(|m| &m.spread));
+    for s in spreads {
         scan(s.self_id.as_deref());
         for p in &s.pages {
             scan(p.self_id.as_deref());
