@@ -1303,6 +1303,18 @@ fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_model::StripeDef>> {
                 width: 0.2,
             },
         ],
+        // Two equal rules a third of the weight apart — the table edge
+        // emitter's `ThickThick` and PowerPoint's `cmpd="dbl"`.
+        "Thick - Thick" | "Thick-Thick" | "ThickThick" => vec![
+            S {
+                left: 0.0,
+                width: 1.0 / 3.0,
+            },
+            S {
+                left: 2.0 / 3.0,
+                width: 1.0 / 3.0,
+            },
+        ],
         "Thin - Thick" | "Thin-Thick" | "ThinThick" => vec![
             S {
                 left: 0.0,
@@ -2612,6 +2624,18 @@ mod stroke_style_class_tests {
             wave_length: None,
             gap_color: None,
             gap_tint: None,
+        }
+    }
+
+    #[test]
+    fn thick_thick_is_two_equal_rules() {
+        match classify_stroke_style(Some("StrokeStyle/$ID/ThickThick"), 9.0, &styles(Vec::new())) {
+            StrokeStyleClass::Striped { rules, .. } => {
+                assert_eq!(rules.len(), 2);
+                assert!((rules[0].0 - 1.5).abs() < 1e-4 && (rules[0].1 - 3.0).abs() < 1e-4);
+                assert!((rules[1].0 - 7.5).abs() < 1e-4 && (rules[1].1 - 3.0).abs() < 1e-4);
+            }
+            other => panic!("expected Striped, got {other:?}"),
         }
     }
 
