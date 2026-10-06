@@ -735,7 +735,9 @@ pub(super) fn apply_create_text_variable(
         return Err(refuse(format!("text variable {self_id:?} already exists")));
     }
     if vars.iter().any(|v| v.name.as_deref() == Some(name)) {
-        return Err(refuse(format!("a text variable named {name:?} already exists")));
+        return Err(refuse(format!(
+            "a text variable named {name:?} already exists"
+        )));
     }
     let variable_type = variable_type
         .clone()

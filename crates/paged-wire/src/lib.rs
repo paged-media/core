@@ -322,7 +322,13 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         assert!(json.contains(r#""address":"swatch:Color/Red""#), "{json}");
         let back: Mutation = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, Mutation::Set { address: Address::Swatch { .. }, .. }));
+        assert!(matches!(
+            back,
+            Mutation::Set {
+                address: Address::Swatch { .. },
+                ..
+            }
+        ));
         // deprecated: the protocol-70 target object
         let legacy: Mutation = serde_json::from_str(
             r#"{"op":"set","args":{"address":{"kind":"cell","storyId":"Story/s","tableId":"ut","row":1,"col":2},"path":"rowSpan","value":{"type":"number","value":2}}}"#,
@@ -343,24 +349,62 @@ mod tests {
     fn every_virtual_target_maps_to_an_address_and_back() {
         let targets = vec![
             VirtualTarget::Doc,
-            VirtualTarget::Page { page_id: "p".into() },
-            VirtualTarget::Layer { layer_id: "l".into() },
-            VirtualTarget::Master { master_id: "m".into() },
-            VirtualTarget::Story { story_id: "Story/s".into() },
-            VirtualTarget::Field { story_id: "Story/s".into(), offset: 3 },
-            VirtualTarget::Swatch { swatch_id: "Color/Red".into() },
-            VirtualTarget::Gradient { gradient_id: "Gradient/g".into() },
-            VirtualTarget::ColorGroup { group_id: "ColorGroup/c".into() },
-            VirtualTarget::NumberingList { list_id: "NumberingList/n".into() },
-            VirtualTarget::Style { family: StyleFamily::Object, style_id: "ObjectStyle/o".into() },
-            VirtualTarget::Section { section_id: "s".into() },
-            VirtualTarget::Guide { guide_id: "Guide/Spread/u1/0".into() },
-            VirtualTarget::Condition { condition_id: "Condition/c".into() },
-            VirtualTarget::TextVariable { variable_id: "dTextVariablenX".into() },
-            VirtualTarget::Spread { spread_id: "sp".into() },
-            VirtualTarget::ConditionSet { set_id: "cs".into() },
-            VirtualTarget::Hyperlink { hyperlink_id: "h".into() },
-            VirtualTarget::Element { element_id: ElementId::Oval("o".into()) },
+            VirtualTarget::Page {
+                page_id: "p".into(),
+            },
+            VirtualTarget::Layer {
+                layer_id: "l".into(),
+            },
+            VirtualTarget::Master {
+                master_id: "m".into(),
+            },
+            VirtualTarget::Story {
+                story_id: "Story/s".into(),
+            },
+            VirtualTarget::Field {
+                story_id: "Story/s".into(),
+                offset: 3,
+            },
+            VirtualTarget::Swatch {
+                swatch_id: "Color/Red".into(),
+            },
+            VirtualTarget::Gradient {
+                gradient_id: "Gradient/g".into(),
+            },
+            VirtualTarget::ColorGroup {
+                group_id: "ColorGroup/c".into(),
+            },
+            VirtualTarget::NumberingList {
+                list_id: "NumberingList/n".into(),
+            },
+            VirtualTarget::Style {
+                family: StyleFamily::Object,
+                style_id: "ObjectStyle/o".into(),
+            },
+            VirtualTarget::Section {
+                section_id: "s".into(),
+            },
+            VirtualTarget::Guide {
+                guide_id: "Guide/Spread/u1/0".into(),
+            },
+            VirtualTarget::Condition {
+                condition_id: "Condition/c".into(),
+            },
+            VirtualTarget::TextVariable {
+                variable_id: "dTextVariablenX".into(),
+            },
+            VirtualTarget::Spread {
+                spread_id: "sp".into(),
+            },
+            VirtualTarget::ConditionSet {
+                set_id: "cs".into(),
+            },
+            VirtualTarget::Hyperlink {
+                hyperlink_id: "h".into(),
+            },
+            VirtualTarget::Element {
+                element_id: ElementId::Oval("o".into()),
+            },
         ];
         for t in targets {
             let a = Address::from(t.clone());
@@ -779,7 +823,9 @@ impl From<VirtualTarget> for Address {
             VirtualTarget::Section { section_id } => Address::Section { id: section_id },
             VirtualTarget::Guide { guide_id } => Address::Guide { id: guide_id },
             VirtualTarget::Condition { condition_id } => Address::Condition { id: condition_id },
-            VirtualTarget::TextVariable { variable_id } => Address::TextVariable { id: variable_id },
+            VirtualTarget::TextVariable { variable_id } => {
+                Address::TextVariable { id: variable_id }
+            }
             VirtualTarget::Spread { spread_id } => Address::Spread { id: spread_id },
             VirtualTarget::ConditionSet { set_id } => Address::ConditionSet { id: set_id },
             VirtualTarget::Hyperlink { hyperlink_id } => Address::Hyperlink { id: hyperlink_id },

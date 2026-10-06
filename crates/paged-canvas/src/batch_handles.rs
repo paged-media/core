@@ -492,10 +492,11 @@ mod tests {
         assert_eq!(set_address(&out), "page:up7");
         // no handle → untouched; an unknown one names itself
         let plain = set_on("swatch:Color/Red");
-        assert_eq!(set_address(&substitute(&plain, &t).unwrap()), "swatch:Color/Red");
-        assert!(substitute(&set_on("$h:zz"), &t)
-            .unwrap_err()
-            .contains("zz"));
+        assert_eq!(
+            set_address(&substitute(&plain, &t).unwrap()),
+            "swatch:Color/Red"
+        );
+        assert!(substitute(&set_on("$h:zz"), &t).unwrap_err().contains("zz"));
     }
 
     #[test]

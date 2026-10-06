@@ -29,7 +29,8 @@ use paged_wire::{address_forms, Address, AddressKind};
 use serde_json::json;
 
 fn apply(m: &mut CanvasModel, op: serde_json::Value) -> Option<paged_wire::ElementId> {
-    let mutation: Mutation = serde_json::from_value(op.clone()).unwrap_or_else(|e| panic!("{op}: {e}"));
+    let mutation: Mutation =
+        serde_json::from_value(op.clone()).unwrap_or_else(|e| panic!("{op}: {e}"));
     m.apply_mutation(&mutation)
         .unwrap_or_else(|e| panic!("{op}: {e:?}"))
         .created_id
@@ -45,23 +46,56 @@ fn everything() -> CanvasModel {
         .self_id
         .clone()
         .expect("a spread id");
-    apply(&mut m, json!({"op":"insertFrame","args":{"pageId":page,"bounds":[10.0,10.0,40.0,40.0]}}));
-    apply(&mut m, json!({"op":"insertOval","args":{"pageId":page,"bounds":[50.0,10.0,80.0,40.0]}}));
-    apply(&mut m, json!({"op":"insertLine","args":{"pageId":page,"start":[10.0,90.0],"end":[60.0,90.0]}}));
+    apply(
+        &mut m,
+        json!({"op":"insertFrame","args":{"pageId":page,"bounds":[10.0,10.0,40.0,40.0]}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertOval","args":{"pageId":page,"bounds":[50.0,10.0,80.0,40.0]}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertLine","args":{"pageId":page,"start":[10.0,90.0],"end":[60.0,90.0]}}),
+    );
     let a = |x: f32, y: f32| json!({"anchor":[x,y],"left":[x,y],"right":[x,y]});
-    let p1 = apply(&mut m, json!({"op":"insertPath","args":{"pageId":page,"open":false,
-        "anchors":[a(100.0,100.0),a(140.0,100.0),a(120.0,130.0)]}}))
+    let p1 = apply(
+        &mut m,
+        json!({"op":"insertPath","args":{"pageId":page,"open":false,
+        "anchors":[a(100.0,100.0),a(140.0,100.0),a(120.0,130.0)]}}),
+    )
     .expect("a polygon");
-    let p2 = apply(&mut m, json!({"op":"insertPath","args":{"pageId":page,"open":false,
-        "anchors":[a(200.0,100.0),a(240.0,100.0),a(220.0,130.0)]}}))
+    let p2 = apply(
+        &mut m,
+        json!({"op":"insertPath","args":{"pageId":page,"open":false,
+        "anchors":[a(200.0,100.0),a(240.0,100.0),a(220.0,130.0)]}}),
+    )
     .expect("a polygon");
-    apply(&mut m, json!({"op":"createGroup","args":{"memberIds":[p1,p2]}}));
-    apply(&mut m, json!({"op":"insertTable","args":{"storyId":story,"rows":2,"cols":2}}));
-    apply(&mut m, json!({"op":"insertField","args":{"storyId":story,"offset":0,
-        "field":{"placeholder":{"plugin":"media.paged.data","key":"price"}}}}));
-    apply(&mut m, json!({"op":"createNumberingList","args":{"spec":{"name":"Steps"}}}));
-    apply(&mut m, json!({"op":"insertGuide","args":{"spreadId":spread,"orientation":"horizontal","position":72.0}}));
-    apply(&mut m, json!({"op":"insertSection","args":{"atPage":page,"prefix":"A"}}));
+    apply(
+        &mut m,
+        json!({"op":"createGroup","args":{"memberIds":[p1,p2]}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertTable","args":{"storyId":story,"rows":2,"cols":2}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertField","args":{"storyId":story,"offset":0,
+        "field":{"placeholder":{"plugin":"media.paged.data","key":"price"}}}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"createNumberingList","args":{"spec":{"name":"Steps"}}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertGuide","args":{"spreadId":spread,"orientation":"horizontal","position":72.0}}),
+    );
+    apply(
+        &mut m,
+        json!({"op":"insertSection","args":{"atPage":page,"prefix":"A"}}),
+    );
     m
 }
 
@@ -76,7 +110,14 @@ fn live(m: &CanvasModel, kind: AddressKind) -> Option<String> {
         }
         AddressKind::StoryRange => {
             let story = m.scene().stories[0].self_id.clone();
-            Some(Address::StoryRange { story_id: story, start: 0, end: 1 }.to_string())
+            Some(
+                Address::StoryRange {
+                    story_id: story,
+                    start: 0,
+                    end: 1,
+                }
+                .to_string(),
+            )
         }
         // Opaque to core / bound per batch: carried through as written.
         AddressKind::Plugin | AddressKind::Handle => Some(kind.form().example.to_string()),
@@ -90,10 +131,15 @@ fn every_published_form_parses_round_trips_and_resolves_on_one_document() {
     let mut unresolved = Vec::new();
     for form in address_forms() {
         // The worked example is canonical.
-        let example = Address::parse(form.example)
-            .unwrap_or_else(|e| panic!("{}: {e}", form.example));
+        let example =
+            Address::parse(form.example).unwrap_or_else(|e| panic!("{}: {e}", form.example));
         assert_eq!(example.kind(), form.kind, "{}", form.example);
-        assert_eq!(example.to_string(), form.example, "{} is not canonical", form.example);
+        assert_eq!(
+            example.to_string(),
+            form.example,
+            "{} is not canonical",
+            form.example
+        );
 
         let Some(text) = live(&m, form.kind) else {
             unresolved.push(form.kind.prefix());
@@ -146,7 +192,13 @@ fn the_document_dependent_forms_resolve_to_their_canonical_targets() {
     });
     let (family, id) = style.expect("a style");
     let name = m
-        .get_property_at(&Address::Style { family, id: id.clone() }, "name")
+        .get_property_at(
+            &Address::Style {
+                family,
+                id: id.clone(),
+            },
+            "name",
+        )
         .ok()
         .and_then(|v| match v {
             paged_mutate::Value::Text(s) if !s.is_empty() => Some(s),

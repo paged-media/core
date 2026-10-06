@@ -109,7 +109,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **Some object-model state does not reach an IDML save yet.** The IDML adapter (in the
   plugin-publish repository) writes neither a page item's `Visible="false"` when it was hidden
   in paged, nor a text variable authored in paged (its definition or its instances), nor an item
-  name set in paged; the model and a `.paged` reload keep all three. Each is pinned by a test in
+  name set in paged; the engine model keeps all three. The first two are pinned by tests in
   `crates/paged-canvas/tests/idml_export_object_model_state.rs` that turns red when the adapter
   is fixed.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that

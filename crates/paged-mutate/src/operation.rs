@@ -4340,7 +4340,9 @@ pub enum FieldKind {
     /// tagged with the variable's `Self`, whose text is the variable's
     /// resolved value. InDesign keeps it on save, unlike a placeholder.
     #[serde(rename_all = "camelCase")]
-    TextVariable { variable_id: String },
+    TextVariable {
+        variable_id: String,
+    },
 }
 
 impl FieldKind {

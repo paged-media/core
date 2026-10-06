@@ -1045,7 +1045,12 @@ fn js_address(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::Address>
 
 /// `paged.set(address, path, value)` through `Mutation::Set`: coerce the
 /// JS value against the path's schema on the target's kind, then apply.
-fn set_virtual(address: paged_wire::Address, path: &str, value: &JsValue, ctx: &mut Context) -> bool {
+fn set_virtual(
+    address: paged_wire::Address,
+    path: &str,
+    value: &JsValue,
+    ctx: &mut Context,
+) -> bool {
     let Ok(target) = with_model(|m| m.target_of(&address)) else {
         return false;
     };

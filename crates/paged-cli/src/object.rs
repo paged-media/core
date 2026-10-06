@@ -135,9 +135,7 @@ fn read(session: &mut Session, address: &Address, path: &str) -> Result<paged_mu
         address: address.to_string(),
         path: path.to_string(),
     })? {
-        WorkerToMainKind::PropertyValue {
-            value: Some(v), ..
-        } => Ok(v),
+        WorkerToMainKind::PropertyValue { value: Some(v), .. } => Ok(v),
         WorkerToMainKind::PropertyValue { error, .. } => Err(anyhow!(
             "{address}.{path}: {}",
             error.unwrap_or_else(|| "no value".to_string())
