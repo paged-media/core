@@ -2452,13 +2452,37 @@ fn measure_cell_paragraph(
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
-    let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    // Indents work in a cell as in body text: LeftIndent / RightIndent
+    // narrow the measure and LeftIndent shifts the lines; FirstLineIndent
+    // narrows and shifts line 0 (a negative one hangs it). They used to be
+    // ignored here, so an indented or bulleted paragraph in a cell sat on
+    // the cell's inset.
+    let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+    let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+    let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+    let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
+    let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let first_64 = to_64(first_line_indent_pt);
+    if first_64 != 0 {
+        let mut widths = lopts
+            .compose
+            .column_widths
+            .clone()
+            .unwrap_or_else(|| vec![lopts.compose.column_width]);
+        if widths.len() == 1 {
+            widths.push(widths[0]);
+        }
+        let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+        widths[0] = (widths[0] - first_64).max(floor_64);
+        lopts.compose.column_widths = Some(widths);
+    }
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
@@ -2672,13 +2696,34 @@ pub(super) fn emit_cell_paragraph(
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
-    let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    // The same indents as `measure_cell_paragraph`, plus the shift after
+    // layout.
+    let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+    let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+    let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+    let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
+    let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let first_64 = to_64(first_line_indent_pt);
+    if first_64 != 0 {
+        let mut widths = lopts
+            .compose
+            .column_widths
+            .clone()
+            .unwrap_or_else(|| vec![lopts.compose.column_width]);
+        if widths.len() == 1 {
+            widths.push(widths[0]);
+        }
+        let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+        widths[0] = (widths[0] - first_64).max(floor_64);
+        lopts.compose.column_widths = Some(widths);
+    }
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
@@ -2690,7 +2735,16 @@ pub(super) fn emit_cell_paragraph(
         by_leading,
     );
 
-    let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
+    let mut laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
+    let left_64 = to_64(left_indent_pt);
+    if left_64 != 0 || first_64 != 0 {
+        for (i, line) in laid_out.lines.iter_mut().enumerate() {
+            let dx = left_64 + if i == 0 { first_64 } else { 0 };
+            for g in &mut line.glyphs {
+                g.x += dx;
+            }
+        }
+    }
     // Only the lines the cell has room for: the rest are overset.
     let fitting = laid_out
         .lines

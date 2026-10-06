@@ -913,3 +913,65 @@ fn a_row_span_suppresses_the_cell_below_it() {
         "the covered cell must not paint, got {cmds:#?}"
     );
 }
+
+/// Leftmost glyph x (`tx`) across all FillPath commands with a baseline
+/// at `ty` within 1 pt of `line_ty`, or of all when `line_ty` is None.
+fn min_glyph_tx(cmds: &[DisplayCommand], line_ty: Option<f32>) -> f32 {
+    cmds.iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. } => Some((transform.0[4], transform.0[5])),
+            _ => None,
+        })
+        .filter(|(_, ty)| line_ty.map_or(true, |l| (ty - l).abs() < 1.0))
+        .map(|(tx, _)| tx)
+        .fold(f32::INFINITY, f32::min)
+}
+
+fn indented_paragraph(attrs: &str, text: &str) -> String {
+    format!(
+        r#"<ParagraphStyleRange {attrs}><CharacterStyleRange><Properties><AppliedFont type="string">Inter</AppliedFont></Properties><Content>{text}</Content></CharacterStyleRange></ParagraphStyleRange>"#
+    )
+}
+
+#[test]
+fn cell_paragraphs_take_their_left_and_first_line_indents() {
+    // Indents inside a cell work as in body text: LeftIndent shifts every
+    // line, FirstLineIndent the first one on top of it. They used to be
+    // ignored, so a bulleted list in a table cell sat on the cell inset.
+    let plain = build_vjust_commands(Some("TopAlign"), &indented_paragraph("", "Hi"));
+    let left = build_vjust_commands(
+        Some("TopAlign"),
+        &indented_paragraph(r#"LeftIndent="20""#, "Hi"),
+    );
+    let shift = min_glyph_tx(&left, None) - min_glyph_tx(&plain, None);
+    assert!(
+        (shift - 20.0).abs() < 0.5,
+        "LeftIndent 20 shifted the text {shift} pt"
+    );
+
+    // A paragraph that wraps in the 200 pt cell: its first line takes
+    // LeftIndent + FirstLineIndent, the lines after it LeftIndent only.
+    let words = "Hi ".repeat(60);
+    let two = indented_paragraph(r#"LeftIndent="20" FirstLineIndent="15""#, words.trim_end());
+    let cmds = build_vjust_commands(Some("TopAlign"), &two);
+    let first_ty = min_glyph_ty(&cmds);
+    let second_ty = cmds
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. } => Some(transform.0[5]),
+            _ => None,
+        })
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(second_ty > first_ty + 5.0, "the paragraph wraps");
+    let x0 = min_glyph_tx(&plain, None);
+    let first = min_glyph_tx(&cmds, Some(first_ty)) - x0;
+    let second = min_glyph_tx(&cmds, Some(second_ty)) - x0;
+    assert!(
+        (first - 35.0).abs() < 0.5,
+        "first line at {first} pt, want 35"
+    );
+    assert!(
+        (second - 20.0).abs() < 0.5,
+        "second line at {second} pt, want 20"
+    );
+}
