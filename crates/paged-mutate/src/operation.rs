@@ -2416,6 +2416,47 @@ pub enum Value {
     /// ADR 132 — a whole gradient-stop list, the value of the
     /// `gradient.stops` virtual path (`EditGradient` underneath).
     GradientStops(Vec<GradientStopSpec>),
+    /// v71 — a swatch's colour as ONE value, the `swatch.color` virtual
+    /// path: space and components together (a space change cannot leave a
+    /// half-written colour behind), with the colour model and tint kept
+    /// unless given.
+    SwatchColor(SwatchColorSpec),
+}
+
+/// v71 — the value of the `swatch.color` virtual path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SwatchColorSpec {
+    /// `CMYK` | `RGB` | `LAB`.
+    pub space: String,
+    /// The components in `space` (4 for CMYK, 3 for RGB and LAB).
+    pub value: Vec<f32>,
+    /// `Process` | `Spot` | …; absent keeps the swatch's model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Percent; absent keeps the swatch's tint.
+    #[serde(default)]
+    pub tint: Option<f32>,
+}
+
+impl SwatchColorSpec {
+    /// `Err` when the component count does not fit the space.
+    pub fn check(&self) -> Result<(), String> {
+        let want = match self.space.as_str() {
+            "CMYK" => 4,
+            "RGB" | "LAB" => 3,
+            other => return Err(format!("{other:?} is not a colour space: CMYK | RGB | LAB")),
+        };
+        if self.value.len() != want {
+            return Err(format!(
+                "{} takes {want} components, got {}",
+                self.space,
+                self.value.len()
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Value {

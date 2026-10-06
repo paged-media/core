@@ -631,8 +631,14 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - `RequestQuery { selector }` → `QueryResult { addresses, error }` and
 //     `RequestGet { address, path }` → `PropertyValue { value, error }`,
 //     both pure reads.
-//   - `Value` gains `number`, `enum`, `ref` and `gradientStops` (additive;
-//     the old `length`/`text` payloads coerce by schema).
+//   - `Value` gains `number`, `enum`, `ref`, `gradientStops` and
+//     `swatchColor` (additive; the old `length`/`text` payloads coerce by
+//     schema). `swatch.color` writes space + components (+ model, tint)
+//     as one value.
+//   - `createTextVariable` / `deleteTextVariable`, and `insertField`'s
+//     `{ textVariable: { variableId } }` field kind: a custom text variable
+//     made and instanced in text; a `Set` on `textVariableContents`
+//     re-bakes every instance.
 //   - New `PropertyPath`s for fields that were modelled and unsettable:
 //     page margins and columns, document bleed and slug, text variables,
 //     object/cell/table style definitions (`SetStyleProperty` accepts the

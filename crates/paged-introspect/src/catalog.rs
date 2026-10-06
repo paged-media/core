@@ -685,7 +685,7 @@ property_paths! {
         TextWrapInvert => "frameTextWrapInvert" : bool_().default_bool(false),
         FrameFittingReferencePoint => "frameFittingReferencePoint" : enum_open(REFERENCE_POINTS).default_text("TopLeftPoint"),
         FrameAutoFit => "frameAutoFit" : bool_().default_bool(false),
-        FrameStrokeType => "frameStrokeType" : text(),
+        FrameStrokeType => "frameStrokeType" : enum_open(STROKE_TYPES),
         FrameStrokeJoin => "frameStrokeJoin" : enum_open(END_JOINS).default_text("MiterEndJoin"),
         FrameStrokeMiterLimit => "frameStrokeMiterLimit" : number().range(1.0, 500.0).default_num(4.0),
         FrameStrokeAlignment => "frameStrokeAlignment" : enum_open(STROKE_ALIGNMENT).default_text("CenterAlignment"),
@@ -860,7 +860,7 @@ property_paths! {
         ParagraphBulletsTextAfter => "paragraphBulletsTextAfter" : text(),
         ParagraphNumberingExpression => "paragraphNumberingExpression" : text(),
         ParagraphNumberingStartAt => "paragraphNumberingStartAt" : count().min(0.0),
-        ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true),
+        ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true).tristate(),
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle" : reference(RefKind::CharacterStyle),
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle" : reference(RefKind::CharacterStyle),
         // ADR 131/132 — the IDML `Name` of a page item; also the `name`

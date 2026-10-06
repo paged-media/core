@@ -305,6 +305,20 @@ impl CanvasModel {
                     "space" => spec.space = text_of(v).ok_or_else(bad)?.ok_or_else(bad)?,
                     "model" => spec.model = text_of(v).ok_or_else(bad)?,
                     "alternateSpace" => spec.alternate_space = text_of(v).ok_or_else(bad)?,
+                    "color" => {
+                        let Value::SwatchColor(c) = v else {
+                            return Err(bad());
+                        };
+                        c.check().map_err(|e| format!("{what}: {e}"))?;
+                        spec.space.clone_from(&c.space);
+                        spec.value.clone_from(&c.value);
+                        if c.model.is_some() {
+                            spec.model.clone_from(&c.model);
+                        }
+                        if c.tint.is_some() {
+                            spec.tint = c.tint;
+                        }
+                    }
                     "tint" => spec.tint = number_of(v).ok_or_else(bad)?,
                     "alpha" => spec.alpha = number_of(v).ok_or_else(bad)?,
                     "value" | "alternateValue" => {
@@ -831,6 +845,12 @@ impl CanvasModel {
                 Ok(match path {
                     "name" => text(&spec.name),
                     "space" => Value::Text(spec.space),
+                    "color" => Value::SwatchColor(paged_mutate::SwatchColorSpec {
+                        space: spec.space.clone(),
+                        value: spec.value.clone(),
+                        model: spec.model.clone(),
+                        tint: spec.tint,
+                    }),
                     "value" => Value::Lengths(spec.value),
                     "model" => text(&spec.model),
                     "alternateSpace" => text(&spec.alternate_space),

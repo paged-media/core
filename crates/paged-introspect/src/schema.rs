@@ -111,6 +111,7 @@ pub enum Wire {
     ParagraphRule,
     GradientFeather,
     GradientStops,
+    SwatchColor,
     FramePath,
     PathPoint,
     PathPointInsert,
@@ -425,6 +426,15 @@ impl PropertySchema {
             ..self
         }
     }
+    /// A three-state bool: `true`, `false`, or `null` to clear the local
+    /// override back to the inherited value (the wire spells the clear
+    /// `Text("")`, the paragraph tri-state setters' convention).
+    pub const fn tristate(self) -> Self {
+        Self {
+            nullable: true,
+            ..self
+        }
+    }
     pub const fn wire(self, wire: Wire) -> Self {
         Self { wire, ..self }
     }
@@ -534,6 +544,19 @@ pub const CORNER_OPTIONS: &[&str] = &[
 ];
 pub const END_CAPS: &[&str] = &["ButtEndCap", "RoundEndCap", "ProjectingEndCap"];
 pub const END_JOINS: &[&str] = &["MiterEndJoin", "RoundEndJoin", "BevelEndJoin"];
+/// The built-in stroke styles, as IDML references them. Open: a document
+/// may define its own `<StrokeStyle>` and reference it the same way.
+pub const STROKE_TYPES: &[&str] = &[
+    "StrokeStyle/$ID/Solid",
+    "StrokeStyle/$ID/Dashed",
+    "StrokeStyle/$ID/Dotted",
+    "StrokeStyle/$ID/Japanese Dots",
+    "StrokeStyle/$ID/Wavy",
+    "StrokeStyle/$ID/Thick - Thick",
+    "StrokeStyle/$ID/Thick - Thin",
+    "StrokeStyle/$ID/Thin - Thick",
+    "StrokeStyle/$ID/Thin - Thin",
+];
 pub const STROKE_ALIGNMENT: &[&str] = &["CenterAlignment", "InsideAlignment", "OutsideAlignment"];
 pub const TEXT_WRAP_MODES: &[&str] = &[
     "None",
@@ -654,6 +677,8 @@ pub fn coerce(schema: &PropertySchema, input: Input<'_>) -> Result<Value, String
                 Wire::TabStops => Value::TabStops(Vec::new()),
                 Wire::ParagraphRule => Value::ParagraphRule(None),
                 Wire::GradientFeather => Value::GradientFeather(None),
+                // A tri-state bool clears with `Text("")`.
+                Wire::Bool => Value::Text(String::new()),
                 other => return Err(format!("null has no {other:?} form")),
             })
         }
@@ -790,6 +815,11 @@ pub fn from_json(schema: &PropertySchema, json: &serde_json::Value) -> Result<Va
             };
             validate(schema, &wire)
         }
+        J::Object(_) if schema.wire == Wire::SwatchColor => {
+            let spec: paged_mutate::SwatchColorSpec = serde_json::from_value(json.clone())
+                .map_err(|e| format!("a colour is {{ space, value, model?, tint? }}: {e}"))?;
+            validate(schema, &Value::SwatchColor(spec))
+        }
         J::Object(_) => Err("an object must be a { type, value } wire value".to_string()),
     }
 }
@@ -816,6 +846,8 @@ pub fn validate(schema: &PropertySchema, value: &Value) -> Result<Value, String>
             coerce(schema, Input::Number(f64::from(*n)))
         }
         Value::Bool(b) => coerce(schema, Input::Bool(*b)),
+        // The tri-state bool's clear, as the paragraph setters spell it.
+        Value::Text(s) if s.is_empty() && schema.wire == Wire::Bool => coerce(schema, Input::Null),
         other => {
             if wire_of(other) == Some(schema.wire) {
                 Ok(other.clone())
@@ -845,6 +877,7 @@ pub fn wire_of(value: &Value) -> Option<Wire> {
         Value::ParagraphRule(_) => Wire::ParagraphRule,
         Value::GradientFeather(_) => Wire::GradientFeather,
         Value::GradientStops(_) => Wire::GradientStops,
+        Value::SwatchColor(_) => Wire::SwatchColor,
         Value::FramePath { .. } => Wire::FramePath,
         Value::PathPoint { .. } => Wire::PathPoint,
         Value::PathPointInsert { .. } => Wire::PathPointInsert,

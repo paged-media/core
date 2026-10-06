@@ -205,6 +205,16 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "editSwatch",
         "alternateValue",
     ),
+    // The colour as one value: a space change with its components,
+    // atomically (`space` and `value` written apart pass through a
+    // half-written colour).
+    v(
+        "swatch",
+        "color",
+        structure("SwatchColorSpec", Wire::SwatchColor).required(),
+        "editSwatch",
+        "color",
+    ),
     v("swatch", "tint", pct(), "editSwatch", "tint"),
     v("swatch", "alpha", pct(), "editSwatch", "alpha"),
     v(

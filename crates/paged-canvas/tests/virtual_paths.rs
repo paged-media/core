@@ -551,6 +551,15 @@ fn sample(row: &SchemaRow, current: &Value, t: &Targets) -> Value {
             }])
         }
         ValueType::Transform => Value::Transform(Some([1.0, 0.0, 0.0, 1.0, 3.0, 4.0])),
+        ValueType::Struct if row.wire == Wire::SwatchColor => {
+            Value::SwatchColor(paged_mutate::SwatchColorSpec {
+                space: "CMYK".into(),
+                value: vec![10.0, 20.0, 30.0, 40.0],
+                // the read twin reports the whole colour, model included
+                model: Some("Process".into()),
+                tint: None,
+            })
+        }
         _ => panic!(
             "{} {}: no sample for {:?}",
             row.address_kind, row.path, ty.kind

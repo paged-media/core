@@ -80,6 +80,11 @@ in the `address` position as a deprecated alias (`VirtualTarget → Address` is 
   (`insertField` with `{ textVariable: { variableId } }`); one `Set` on `textVariableContents`
   switches every instance and re-bakes its text, which is how a data binding drives a value
   InDesign keeps.
+- A swatch's colour is one value too: `swatch.color` (`{ space, value, model?, tint? }`) changes
+  the space with its components in one write, so a panel never passes through a half-written
+  colour; `space` and `value` stay as separate rows for reads and same-space edits.
+- A three-state bool (`paragraphNumberingContinue`: on, off, inherit) is a nullable bool; `null`
+  clears the override.
 - The 45 dedicated property operations stay on the wire; new surfaces send `Set`.
 
 ## The gates

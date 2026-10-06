@@ -2921,7 +2921,19 @@
       "addressKind": "frame",
       "path": "frameStrokeType",
       "type": {
-        "kind": "text"
+        "kind": "enum",
+        "members": [
+          "StrokeStyle/$ID/Solid",
+          "StrokeStyle/$ID/Dashed",
+          "StrokeStyle/$ID/Dotted",
+          "StrokeStyle/$ID/Japanese Dots",
+          "StrokeStyle/$ID/Wavy",
+          "StrokeStyle/$ID/Thick - Thick",
+          "StrokeStyle/$ID/Thick - Thin",
+          "StrokeStyle/$ID/Thin - Thick",
+          "StrokeStyle/$ID/Thin - Thin"
+        ],
+        "open": true
       },
       "wire": "text",
       "nullable": true,
@@ -5276,7 +5288,7 @@
         "kind": "bool"
       },
       "wire": "bool",
-      "nullable": false,
+      "nullable": true,
       "default": true,
       "access": "readWrite",
       "bindable": true
@@ -6542,7 +6554,7 @@
         "kind": "bool"
       },
       "wire": "bool",
-      "nullable": false,
+      "nullable": true,
       "default": true,
       "access": "readWrite",
       "virtual": {
@@ -8194,6 +8206,22 @@
       "virtual": {
         "op": "editSwatch",
         "field": "alternateValue"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "color",
+      "type": {
+        "kind": "struct",
+        "shape": "SwatchColorSpec"
+      },
+      "wire": "swatchColor",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "color"
       },
       "bindable": true
     },

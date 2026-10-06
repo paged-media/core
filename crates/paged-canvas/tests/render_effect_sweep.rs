@@ -1976,6 +1976,38 @@ fn frame_cases(c: &mut Vec<Case>) {
             caller: None,
         },
     ));
+    c.push(inert(
+        "CreateTextVariable",
+        "geometry",
+        "a <TextVariable> definition (v71) with no instance in the text yet — \
+         a definition draws nothing until an InsertField textVariable instance \
+         places it in a story, which is where its value is laid out",
+        |_| Mutation::CreateTextVariable {
+            name: "Sweep".into(),
+            contents: Some("swept".into()),
+            text_before: None,
+            text_after: None,
+        },
+    ));
+    c.push(inert(
+        "DeleteTextVariable",
+        "geometry",
+        "removes a <TextVariable> definition (v71); it is refused while an \
+         instance is in the text, so what it removes was never laid out and \
+         the page cannot change",
+        |m| {
+            m.apply_mutation(&Mutation::CreateTextVariable {
+                name: "Sweep".into(),
+                contents: Some("swept".into()),
+                text_before: None,
+                text_after: None,
+            })
+            .expect("seed a text variable");
+            Mutation::DeleteTextVariable {
+                variable_id: "dTextVariablenSweep".into(),
+            }
+        },
+    ));
     c.push(paints("Batch", "geometry", |m| {
         let id = rect_ids(m)[0].clone();
         let color = some_color(m);

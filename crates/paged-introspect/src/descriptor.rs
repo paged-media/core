@@ -126,7 +126,8 @@ impl From<Value> for AuthoredValue {
             // Like `TabStops`, no scalar authored-value widget renders a
             // length list, so it collapses to `None` here.
             | Value::Lengths(_)
-            | Value::GradientStops(_) => AuthoredValue::None,
+            | Value::GradientStops(_)
+            | Value::SwatchColor(_) => AuthoredValue::None,
         }
     }
 }

@@ -30,7 +30,8 @@
 //! `paged read style-properties`, 34 of 64 with v66's `paged read
 //! text-outlines`, 35 of 65 with v66's `paged parts delete`, 37 of 67 with v67's `paged
 //! read snap-point`, whose `--grid` sends `SetSnapSettings` first, 38 of 68
-//! with the object model's `paged query` → `RequestQuery`); what
+//! with the object model's `paged query` → `RequestQuery`, 39 of 69 with
+//! v71's `paged get` → `RequestGet`); what
 //! remains is almost entirely the first kind.
 //!
 //! **What this gate cannot see.** It counts message KINDS, and
@@ -260,9 +261,9 @@ fn every_reason_is_a_reason() {
 
 /// The headline in the module doc, pinned against the code.
 #[test]
-fn the_cli_reaches_38_of_68() {
-    assert_eq!(kinds_the_cli_sends().len(), 38);
-    assert_eq!(every_kind().len(), 68);
+fn the_cli_reaches_39_of_69() {
+    assert_eq!(kinds_the_cli_sends().len(), 39);
+    assert_eq!(every_kind().len(), 69);
 }
 
 /// The second axis, started (ADR 132): the CLI's own source names

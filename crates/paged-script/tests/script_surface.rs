@@ -155,9 +155,9 @@ fn every_reason_is_a_reason() {
 /// The bridge's own count, so the headline number in the module doc
 /// cannot drift from the code without a failure.
 #[test]
-fn the_script_surface_reaches_127_of_128() {
-    assert_eq!(ops_the_bridge_names().len(), 127);
-    assert_eq!(paged_wire::MUTATION_NAMES.len(), 128);
+fn the_script_surface_reaches_129_of_130() {
+    assert_eq!(ops_the_bridge_names().len(), 129);
+    assert_eq!(paged_wire::MUTATION_NAMES.len(), 130);
 }
 
 /// The names the bridge actually installs, read out of `install_bridge`
