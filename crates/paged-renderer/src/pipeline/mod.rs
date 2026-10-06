@@ -441,6 +441,13 @@ pub struct PipelineOptions<'a> {
     /// display-list → Vello/tiny-skia path. `None` (the default) is the
     /// no-plugin path and costs nothing.
     pub scene_layers: Option<&'a std::collections::HashMap<String, paged_compose::SceneLayer>>,
+    /// v69 — faces registered for scene-layer text ONLY (a plugin's own
+    /// fonts). A scene text run resolves here first, then through
+    /// [`Self::assets`]; document text, the font table and substitution
+    /// tracing never read it, so a plugin face cannot stand in for a font
+    /// the document lacks. `None` (the default): scene text resolves
+    /// through the document registry alone, as before.
+    pub scene_fonts: Option<&'a dyn AssetResolver>,
     /// C-6 (I-06) — image resource providers keyed by frame element id
     /// (`Self`). When a body frame's id has an entry, the renderer pulls
     /// pyramid tiles from the provider at the mip level matching
@@ -643,6 +650,7 @@ impl Default for PipelineOptions<'_> {
             keep_carry: None,
             document_clock: DocumentClock::default(),
             scene_layers: None,
+            scene_fonts: None,
             resource_providers: None,
             render_scale: 1.0,
         }

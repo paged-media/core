@@ -167,6 +167,9 @@ impl DocumentOptions {
                 family: family.clone(),
                 style: entry.style.clone(),
                 bytes: entry.bytes.clone().into(),
+                // A command line lays out documents; it has no plugin
+                // scene layers for a scene-scoped face to serve.
+                scope: paged_canvas::channel::FontScope::Document,
             })?;
             expect_reply!(reply, WorkerToMainKind::FontRegistered { .. } => (),
                 format!("register font {family:?}"))?;

@@ -71,6 +71,9 @@ pub struct CanvasOptions {
     /// `paged-inspect --font-family "Family=path"`. Translates 1:1 to
     /// `BytesResolver::add_font` entries on every build/rebuild.
     pub font_registry: Vec<FontEntry>,
+    /// v69 — faces registered with `scope: "sceneLayer"`: scene-layer
+    /// text resolves them (before `font_registry`); nothing else does.
+    pub scene_font_registry: Vec<FontEntry>,
     /// CMYK ICC profile bytes for accurate colour. Optional; the
     /// renderer falls back to naive conversion when absent.
     pub cmyk_icc_profile: Option<Vec<u8>>,
@@ -1332,6 +1335,13 @@ pub struct CanvasModel {
     /// every (re)build. Owned by the model so the assets resolver
     /// borrowed in `PipelineOptions` doesn't need lifetimes leaking out.
     font_registry: Vec<FontEntry>,
+    /// v69 — the scene-scoped faces ([`CanvasOptions::scene_font_registry`])
+    /// and the resolver built over them (no default font: a miss falls
+    /// through to the document registry). Read by scene-layer text ONLY —
+    /// never by the font table, `fonts()` (`isMissing`) or substitution
+    /// tracing.
+    scene_font_registry: Vec<FontEntry>,
+    scene_font_resolver: Option<BytesResolver>,
     icc_bytes: Option<Vec<u8>>,
     /// Concept 2 — the load-time profile bytes (explicit
     /// `CanvasOptions::cmyk_icc_profile` or the designmap-name
@@ -1935,6 +1945,7 @@ impl CanvasModel {
         // lifetimes leaking through.
         let font_bytes = opts.fonts.into_iter().next();
         let font_registry = opts.font_registry;
+        let scene_font_registry = opts.scene_font_registry;
         // Concept 2 — profile registry + activation precedence:
         // explicit CanvasOptions::cmyk_icc_profile wins; else a
         // registered profile whose name matches the designmap's
@@ -2062,6 +2073,8 @@ impl CanvasModel {
             resource_render_scale: 1.0,
             font_bytes,
             font_registry,
+            scene_font_resolver: build_font_resolver(&scene_font_registry, None),
+            scene_font_registry,
             initial_icc_bytes: icc_bytes.clone(),
             icc_bytes,
             color_profiles,
@@ -9643,6 +9656,11 @@ impl CanvasModel {
             // printed/exported sheet includes them (document-grade vector
             // output).
             scene_layers: Some(&self.scene_layers),
+            // v69 — scene-scoped faces, for scene-layer text alone.
+            scene_fonts: self
+                .scene_font_resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
             // C-6 — claimed image providers assemble pyramid tiles inside
             // their frames; missing tiles land on
             // `BuiltDocument::resource_tiles_needed`.
@@ -10727,6 +10745,70 @@ impl CanvasModel {
         let scene_frames = self.scene_layer_frames_naming(|family| family == entry.family);
         self.font_registry.push(entry);
         self.relayout_for_registry_change(scene_frames)
+    }
+
+    /// v69 — register a face in one scope. `Document` is
+    /// [`Self::register_font`]. `SceneLayer` adds it to the scene-only
+    /// table: the frames whose scene text names the family rebuild (their
+    /// ids are returned), and nothing the document sees changes — no story
+    /// re-lays out, `fonts()` still reports the family missing.
+    pub fn register_font_scoped(
+        &mut self,
+        entry: FontEntry,
+        scope: crate::channel::FontScope,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        match scope {
+            crate::channel::FontScope::Document => self.register_font(entry),
+            crate::channel::FontScope::SceneLayer => {
+                let frames = self.scene_layer_frames_naming(|family| family == entry.family);
+                self.scene_font_registry.push(entry);
+                self.scene_font_resolver = build_font_resolver(&self.scene_font_registry, None);
+                self.rebuild_scene_frames(frames)
+            }
+        }
+    }
+
+    /// v69 — clear one scope's registry. `Document` is
+    /// [`Self::clear_font_registry`]; `SceneLayer` drops the scene-only
+    /// faces and rebuilds the frames whose scene text named one.
+    pub fn clear_font_registry_scoped(
+        &mut self,
+        scope: crate::channel::FontScope,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        match scope {
+            crate::channel::FontScope::Document => self.clear_font_registry(),
+            crate::channel::FontScope::SceneLayer => {
+                if self.scene_font_registry.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let registered: std::collections::BTreeSet<String> = self
+                    .scene_font_registry
+                    .iter()
+                    .map(|e| e.family.clone())
+                    .collect();
+                let frames = self.scene_layer_frames_naming(|family| registered.contains(family));
+                self.scene_font_registry.clear();
+                self.scene_font_resolver = None;
+                self.rebuild_scene_frames(frames)
+            }
+        }
+    }
+
+    /// Rebuild for a scene-face change: only scene layers re-resolve, so
+    /// no story is touched; the frames' pages are not a story's, so every
+    /// page is reported (as for a scene re-resolve in
+    /// [`Self::relayout_for_registry_change`]). Nothing to do — and no
+    /// rebuild — when no frame names an affected family.
+    fn rebuild_scene_frames(
+        &mut self,
+        frames: Vec<String>,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        if frames.is_empty() {
+            return Ok(frames);
+        }
+        self.pending_dirty_scope = DirtyScope::Everything;
+        self.rebuild_after_mutation()?;
+        Ok(frames)
     }
 
     /// Drop every registered font from the LIVE model (the worker's

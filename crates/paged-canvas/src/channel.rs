@@ -806,6 +806,29 @@ pub struct MainToWorker {
     pub kind: MainToWorkerKind,
 }
 
+/// v69 — which registry a `RegisterFont` / `ClearFontRegistry` addresses.
+/// `document` is the registry document text lays out with (and the one
+/// `FontSummary.isMissing` and substitution tracing read); `sceneLayer` is
+/// consulted by plugin scene-layer text only, ahead of the document's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum FontScope {
+    #[default]
+    Document,
+    SceneLayer,
+}
+
+/// v69 — `ClearFontRegistry`'s optional payload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearFontRegistryPayload {
+    #[serde(default)]
+    #[tsify(optional)]
+    pub scope: FontScope,
+}
+
 /// The discriminated payload of a `MainToWorker` message. Tagged so
 /// TS can do `switch (msg.kind) { case "loadDocument": ... }` against
 /// camelCase field names. `rename_all_fields` cascades to struct
@@ -860,17 +883,34 @@ pub enum MainToWorkerKind {
     /// are re-laid out before the reply (no protocol change: the reply is
     /// still `FontRegistered`; re-render to see it).
     /// Reply: `FontRegistered`.
+    ///
+    /// v69 — `scope` (default `"document"`, today's behaviour). A
+    /// `"sceneLayer"` face goes to a separate table that only scene-layer
+    /// text resolves through (before the document registry): it never
+    /// lays out document text, never clears `FontSummary.isMissing` and
+    /// never enters substitution tracing — a plugin's face cannot stand in
+    /// for a font the document lacks.
     RegisterFont {
         family: String,
         #[serde(default)]
         style: Option<String>,
         #[tsify(type = "number[]")]
         bytes: ByteBuf,
+        #[serde(default)]
+        #[tsify(optional)]
+        scope: FontScope,
     },
-    /// Drop every font previously registered via `RegisterFont`. Reply:
-    /// `FontRegistryCleared`. Useful between two consecutive packs in a
-    /// long-running worker.
-    ClearFontRegistry,
+    /// Drop every font previously registered via `RegisterFont` in one
+    /// scope. Reply: `FontRegistryCleared`. Useful between two
+    /// consecutive packs in a long-running worker, and for dropping a
+    /// plugin's scene faces without touching the document's.
+    ///
+    /// v69 — the payload `{ scope }` is OPTIONAL: `{ kind:
+    /// "clearFontRegistry" }` (no payload, the message every older host
+    /// sends) clears the document registry, as before. It is a newtype
+    /// over an `Option` because an adjacently tagged struct variant
+    /// requires its `payload`, which would have refused that message.
+    ClearFontRegistry(#[tsify(optional)] Option<ClearFontRegistryPayload>),
     /// Concept 2 — register a named ICC profile with the worker's
     /// colour-profile registry (the `RegisterFont` pattern: sent any
     /// time, persists across loads). Profiles are assets shipped by
