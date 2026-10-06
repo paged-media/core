@@ -387,3 +387,154 @@ fn a_paragraph_mark_between_adjacent_placeholders_stays_between_them() {
         .collect();
     assert_eq!(texts, ["<<name>>", "<<subtitle>>", "<<price>>"]);
 }
+
+// ---------------------------------------------------------------------------
+// D-28 — overset needs a font: what a headless host must pass
+// ---------------------------------------------------------------------------
+
+/// The engine reports overset off its own layout, headless or not — but a
+/// host that loads the document with NO font gets no layout at all (no
+/// font, no glyphs, no lines), so every story reads `overset: false`
+/// because nothing was measured, not because it fits. Any registered face
+/// (here the corpus Inter, which the template does not even name: the
+/// engine falls back to it) gives the editor's answer. The headless
+/// plugin host loads with no font; that is a host gap, not an engine one.
+#[test]
+fn overset_is_reported_headless_once_the_host_supplies_a_font() {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/data-merge-empty-field-lines.idml");
+    let bytes = std::fs::read(p).expect("fixture");
+    let inter = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
+    )
+    .expect("font");
+    let run = |fonts: Vec<Vec<u8>>| {
+        let mut m = CanvasModel::load(
+            "overset",
+            &bytes,
+            CanvasOptions {
+                fonts,
+                ..CanvasOptions::default()
+            },
+        )
+        .expect("load");
+        m.apply_mutation(&wire(json!({ "op": "insertText", "args": {
+            "storyId": TEMPLATE_STORY, "offset": 0, "text": "word ".repeat(3000) } })))
+            .expect("overfill");
+        let overset = m
+            .stories()
+            .into_iter()
+            .find(|s| s.self_id == TEMPLATE_STORY)
+            .expect("story")
+            .overset;
+        let painted: usize = m.built().pages.iter().map(|p| p.list.commands.len()).sum();
+        (overset, painted)
+    };
+    assert_eq!(
+        run(Vec::new()),
+        (false, 0),
+        "no font: nothing laid out, nothing measured"
+    );
+    let (overset, painted) = run(vec![inter]);
+    assert!(painted > 0, "a font: the text is laid out");
+    assert!(overset, "and the overfilled story reads overset");
+}
+
+// ---------------------------------------------------------------------------
+// D-29 — undo after a re-merge, headless (the merge writer's op sequence)
+// ---------------------------------------------------------------------------
+
+/// The exact shape of paged.data's merge writer (`merge.ts`
+/// `pageMutations` + `contentMutation`, template CONSUMED, three output
+/// pages) and of its re-merge (`relower.ts` clears the previous run in the
+/// re-merge's FIRST batch): merge = pages batch + content batch; re-merge =
+/// clear-and-pages batch + content batch. Three undos leave the first
+/// merge's pages empty; the fourth gives back the template — one page, its
+/// frame, its story. The engine's history is consistent here; the editor's
+/// divergence at the fourth undo is host-side.
+#[test]
+fn undo_after_a_re_merge_walks_back_to_the_template() {
+    let mut m = template();
+    let (template_frame, _) = frames_on(&m, TEMPLATE_PAGE)[0].clone();
+    let template_text = text(&m, TEMPLATE_STORY);
+    let label = json!({ "v": 1, "data": { "kind": "merge" } }).to_string();
+
+    let pages_batch = |clear: Vec<serde_json::Value>, template_present: bool| {
+        let mut ops = clear;
+        if template_present {
+            ops.push(json!({ "op": "deleteFrame", "args": { "frameId": template_frame } }));
+        }
+        for _ in 1..3 {
+            ops.push(json!({ "op": "duplicatePage", "args": { "page": TEMPLATE_PAGE } }));
+        }
+        batch(serde_json::Value::Array(ops))
+    };
+    let content_batch = |pages: &[String], run: u32| {
+        let mut ops = Vec::new();
+        for (p, page) in pages.iter().enumerate() {
+            for r in 0..3u32 {
+                let h = format!("m{run}p{p}r{r}");
+                let top = 40.0 + 120.0 * r as f32;
+                ops.push(json!({ "op": "insertTextFrame", "args": {
+                    "pageId": page, "bounds": [top, 40.0, top + 100.0, 300.0] } }));
+                ops.push(json!({ "op": "bindCreated", "args": { "handle": h } }));
+                ops.push(json!({ "op": "insertText", "args": {
+                    "storyId": format!("$h:{h}"), "offset": 0, "text": format!("record {p}.{r}") } }));
+                ops.push(json!({ "op": "setPluginMetadata", "args": {
+                    "elementId": { "kind": "textFrame", "id": format!("$h:{h}") },
+                    "key": "x-paged:media.paged.data", "value": label } }));
+            }
+        }
+        batch(serde_json::Value::Array(ops))
+    };
+    let merged_frames =
+        |m: &CanvasModel| -> usize { page_ids(m).iter().map(|p| frames_on(m, p).len()).sum() };
+
+    // Merge: pages, then content.
+    m.apply_mutation(&pages_batch(Vec::new(), true))
+        .expect("merge pages");
+    let pages = page_ids(&m);
+    assert_eq!(pages.len(), 3);
+    m.apply_mutation(&content_batch(&pages, 1))
+        .expect("merge content");
+    assert_eq!(merged_frames(&m), 9);
+
+    // Re-merge: clear the first run (its frames and the pages it added) in
+    // the pages batch, then content again.
+    let mut clear: Vec<serde_json::Value> = pages
+        .iter()
+        .flat_map(|p| frames_on(&m, p))
+        .map(|(f, _)| json!({ "op": "deleteFrame", "args": { "frameId": f } }))
+        .collect();
+    clear.extend(
+        pages[1..]
+            .iter()
+            .map(|p| json!({ "op": "deletePage", "args": { "pageId": p } })),
+    );
+    m.apply_mutation(&pages_batch(clear, false))
+        .expect("re-merge pages");
+    let pages2 = page_ids(&m);
+    assert_eq!(pages2.len(), 3);
+    m.apply_mutation(&content_batch(&pages2, 2))
+        .expect("re-merge content");
+    assert_eq!(merged_frames(&m), 9);
+
+    // Undo ×2: the first merge's output is back.
+    m.undo().expect("undo re-merge content");
+    m.undo().expect("undo re-merge pages");
+    assert_eq!(page_ids(&m), pages);
+    assert_eq!(merged_frames(&m), 9);
+    // Undo ×3: the first merge's pages, empty.
+    m.undo().expect("undo merge content");
+    assert_eq!(page_ids(&m), pages);
+    assert_eq!(merged_frames(&m), 0);
+    // Undo ×4: the template.
+    m.undo().expect("undo merge pages");
+    assert_eq!(page_ids(&m), [TEMPLATE_PAGE]);
+    assert_eq!(
+        frames_on(&m, TEMPLATE_PAGE),
+        [(template_frame.clone(), TEMPLATE_STORY.to_string())]
+    );
+    assert_eq!(text(&m, TEMPLATE_STORY), template_text);
+    assert!(m.undo().is_none(), "nothing older");
+}
