@@ -7,7 +7,7 @@
   (`PipelineOptions::scene_fonts`), `crates/paged-renderer/src/module/drop_shadow.rs`,
   `crates/paged-mutate/src/apply/set_property.rs`, `crates/paged-model` (`Polygon` and
   `GraphicLine` `drop_shadow`), `crates/paged-script` (the value bridge), the IDML adapter in
-  the plugin-publish repository (protocol 69, no new message or operation kind)
+  the plugin-publish repository (protocol 70, no new message or operation kind)
 
 ## Context
 
@@ -66,4 +66,4 @@ into native page items met five gaps in the engine's doors:
 - Shadows made on a pen path, an ellipse or a rule survive an IDML save and reopen. Whether
   InDesign draws a line's object shadow from its stroke as the engine does has not been compared
   against InDesign yet.
-- Every addition is optional on the wire. Hosts gate on protocol 69.
+- Every addition is optional on the wire. Hosts gate on protocol 70.

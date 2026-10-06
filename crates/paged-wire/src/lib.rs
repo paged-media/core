@@ -714,7 +714,7 @@ pub enum Mutation {
     /// `HyperlinkURLDestination`) and registers them, so the renderer's
     /// existing link resolution makes the span clickable. Undoable in one
     /// step (inverse drops the tag + the two designmap resources). Backs
-    /// paged.doc's `w:hyperlink` runs. v69: with `page`, the link goes to
+    /// paged.doc's `w:hyperlink` runs. v70: with `page`, the link goes to
     /// that page instead (`url` is then ignored and may be empty): a
     /// slide's jump to another slide.
     InsertHyperlink {
@@ -1221,7 +1221,7 @@ pub enum Mutation {
         #[serde(default)]
         caller: Option<String>,
     },
-    /// v69 — `SetPluginMetadata` for a page: one Label `KeyValuePair`
+    /// v70 — `SetPluginMetadata` for a page: one Label `KeyValuePair`
     /// on the page itself (a slide's notes, transition, hidden flag), with
     /// the same gates (reserved `x-paged:` namespace, 64 KiB cap, JSON
     /// envelope, optional `caller`). It travels with the page through
@@ -1617,7 +1617,7 @@ pub enum Mutation {
     DuplicatePage {
         page: PageId,
     },
-    /// v69 — apply `mutation` to the items of master spread `master` (its
+    /// v70 — apply `mutation` to the items of master spread `master` (its
     /// `Self` id): edit a layout's logo, footer or background as a page's.
     /// Any page-item, style or property mutation may be wrapped (a `batch`
     /// too); page and spread mutations are refused. Text edits need no
@@ -1627,7 +1627,7 @@ pub enum Mutation {
         master: String,
         mutation: Box<Mutation>,
     },
-    /// v69 — create master spread `master` (its `Self` id, chosen by the
+    /// v70 — create master spread `master` (its `Self` id, chosen by the
     /// caller): one page of `width_pt` × `height_pt`, or a copy of
     /// `duplicate_of` with fresh ids (the size is then ignored). `name`
     /// defaults to the copied master's. One undo step.
@@ -1642,18 +1642,18 @@ pub enum Mutation {
         #[serde(default)]
         duplicate_of: Option<String>,
     },
-    /// v69 — delete a master no page applies; refused while one does.
+    /// v70 — delete a master no page applies; refused while one does.
     /// Undo restores it exactly.
     DeleteMaster {
         master: String,
     },
-    /// v69 — set a master's name (absent: clear it).
+    /// v70 — set a master's name (absent: clear it).
     RenameMaster {
         master: String,
         #[serde(default)]
         name: Option<String>,
     },
-    /// v69 — move a page (its single-page spread) to follow `after`, or to
+    /// v70 — move a page (its single-page spread) to follow `after`, or to
     /// the front when `after` is absent: a slide sorter's reorder. Spreads
     /// stacked down the pasteboard restack in the new order. One undo step.
     MovePage {

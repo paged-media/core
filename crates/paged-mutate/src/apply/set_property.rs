@@ -105,7 +105,7 @@ pub(super) fn apply_set_property(
         }
         // Plugin-metadata carrier — its inverse carries the prev
         // snapshot inside the same Value, so it short-circuits like
-        // the Track J ops. All five leaf page-item kinds, and (v69)
+        // the Track J ops. All five leaf page-item kinds, and (v70)
         // pages: a slide's notes and transition travel with its page.
         (
             NodeId::Polygon(_)

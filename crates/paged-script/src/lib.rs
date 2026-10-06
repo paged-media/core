@@ -2564,7 +2564,7 @@ fn paged_insert_anchored_frame(
 
 /// `paged.insertHyperlink(storyId, start, end, url, pageId?)` — make a
 /// character range a clickable link (`Mutation::InsertHyperlink`); with
-/// `pageId` it goes to that page (v69) and `url` may be empty. The read side is
+/// `pageId` it goes to that page (v70) and `url` may be empty. The read side is
 /// `paged.collection("hyperlinks")` — NOT `paged.links()`, which is the
 /// placed-asset link list and stays empty here.
 fn paged_insert_hyperlink(

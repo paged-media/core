@@ -6,7 +6,7 @@
   `crates/paged-model` (`gradient_fill_start`, cell edge stroke types), the renderer's fill and
   table modules, and the operations `movePage`, `setPageMetadata`, `onMaster`, `createMaster`,
   `deleteMaster`, `renameMaster`, `insertHyperlink.page` and `requestSnapshot.hideItems`
-  (protocol 69)
+  (protocol 70)
 
 ## Context
 

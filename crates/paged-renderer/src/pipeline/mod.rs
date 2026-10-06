@@ -441,7 +441,7 @@ pub struct PipelineOptions<'a> {
     /// display-list → Vello/tiny-skia path. `None` (the default) is the
     /// no-plugin path and costs nothing.
     pub scene_layers: Option<&'a std::collections::HashMap<String, paged_compose::SceneLayer>>,
-    /// v69 — faces registered for scene-layer text ONLY (a plugin's own
+    /// v70 — faces registered for scene-layer text ONLY (a plugin's own
     /// fonts). A scene text run resolves here first, then through
     /// [`Self::assets`]; document text, the font table and substitution
     /// tracing never read it, so a plugin face cannot stand in for a font

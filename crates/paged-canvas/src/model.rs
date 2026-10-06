@@ -71,7 +71,7 @@ pub struct CanvasOptions {
     /// `paged-inspect --font-family "Family=path"`. Translates 1:1 to
     /// `BytesResolver::add_font` entries on every build/rebuild.
     pub font_registry: Vec<FontEntry>,
-    /// v69 — faces registered with `scope: "sceneLayer"`: scene-layer
+    /// v70 — faces registered with `scope: "sceneLayer"`: scene-layer
     /// text resolves them (before `font_registry`); nothing else does.
     pub scene_font_registry: Vec<FontEntry>,
     /// CMYK ICC profile bytes for accurate colour. Optional; the
@@ -1335,7 +1335,7 @@ pub struct CanvasModel {
     /// every (re)build. Owned by the model so the assets resolver
     /// borrowed in `PipelineOptions` doesn't need lifetimes leaking out.
     font_registry: Vec<FontEntry>,
-    /// v69 — the scene-scoped faces ([`CanvasOptions::scene_font_registry`])
+    /// v70 — the scene-scoped faces ([`CanvasOptions::scene_font_registry`])
     /// and the resolver built over them (no default font: a miss falls
     /// through to the document registry). Read by scene-layer text ONLY —
     /// never by the font table, `fonts()` (`isMissing`) or substitution
@@ -4640,7 +4640,7 @@ impl CanvasModel {
     }
 
     pub(crate) fn resolve_frame_node_id(&self, frame_id: &str) -> Option<paged_mutate::NodeId> {
-        // v69 — master items resolve too, for mutations wrapped in
+        // v70 — master items resolve too, for mutations wrapped in
         // `OnMaster`.
         let spreads = self
             .scene
@@ -7752,7 +7752,7 @@ impl CanvasModel {
         let scene = grown.as_ref().unwrap_or(&self.scene);
         let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
-        // v69 — page self id → the spread whose labels hold its metadata.
+        // v70 — page self id → the spread whose labels hold its metadata.
         let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
             std::collections::HashMap::new();
         for parsed in &scene.spreads {
@@ -7862,7 +7862,7 @@ impl CanvasModel {
             .master_spreads
             .iter()
             .map(|(self_id, ms)| MasterPageSummary {
-                // v69 — the master's `Name` when it has one.
+                // v70 — the master's `Name` when it has one.
                 label: ms.name.clone().unwrap_or_else(|| self_id.clone()),
                 self_id: self_id.clone(),
                 page_count: ms.spread.pages.len() as u32,
@@ -9656,7 +9656,7 @@ impl CanvasModel {
             // printed/exported sheet includes them (document-grade vector
             // output).
             scene_layers: Some(&self.scene_layers),
-            // v69 — scene-scoped faces, for scene-layer text alone.
+            // v70 — scene-scoped faces, for scene-layer text alone.
             scene_fonts: self
                 .scene_font_resolver
                 .as_ref()
@@ -9749,7 +9749,7 @@ impl CanvasModel {
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
 
-    /// v69 — the page as it draws with some items hidden: a slideshow's
+    /// v70 — the page as it draws with some items hidden: a slideshow's
     /// build steps (each frame is the slide without the items later steps
     /// reveal). A copy of the scene with those items (a group: all its
     /// members, master items included) set invisible is built once; the
@@ -10747,7 +10747,7 @@ impl CanvasModel {
         self.relayout_for_registry_change(scene_frames)
     }
 
-    /// v69 — register a face in one scope. `Document` is
+    /// v70 — register a face in one scope. `Document` is
     /// [`Self::register_font`]. `SceneLayer` adds it to the scene-only
     /// table: the frames whose scene text names the family rebuild (their
     /// ids are returned), and nothing the document sees changes — no story
@@ -10768,7 +10768,7 @@ impl CanvasModel {
         }
     }
 
-    /// v69 — clear one scope's registry. `Document` is
+    /// v70 — clear one scope's registry. `Document` is
     /// [`Self::clear_font_registry`]; `SceneLayer` drops the scene-only
     /// faces and rebuilds the frames whose scene text named one.
     pub fn clear_font_registry_scoped(

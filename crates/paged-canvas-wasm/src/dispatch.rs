@@ -85,7 +85,7 @@ pub struct WorkerCore {
     /// Survives across `LoadDocument` calls so a Playwright suite can
     /// preload Inter / Poppins / Roboto once per worker.
     pub font_registry: Vec<FontEntry>,
-    /// v69 — faces registered with `scope: "sceneLayer"` (scene-layer
+    /// v70 — faces registered with `scope: "sceneLayer"` (scene-layer
     /// text only), kept like `font_registry` to seed every later load.
     pub scene_font_registry: Vec<FontEntry>,
     /// Named ICC profiles registered via `RegisterColorProfile`. Same

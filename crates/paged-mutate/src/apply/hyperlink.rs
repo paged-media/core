@@ -188,7 +188,7 @@ pub(super) fn apply_insert_hyperlink(
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))?;
 
-    // v69 — a page destination must name a page of the document.
+    // v70 — a page destination must name a page of the document.
     if let Some(pid) = page {
         let exists = doc.spreads.iter().any(|parsed| {
             parsed

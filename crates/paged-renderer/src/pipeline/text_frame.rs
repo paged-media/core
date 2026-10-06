@@ -1518,7 +1518,7 @@ impl SceneTextFaces {
             if bytes.iter().any(|(k, _)| *k == key) || fallbacks_contains(&fallbacks, &key) {
                 continue;
             }
-            // v69 — the scene-scoped faces first (a plugin's own), then
+            // v70 — the scene-scoped faces first (a plugin's own), then
             // the document registry. Either resolver's catch-all default
             // is a miss.
             let own = key.0.as_ref().and_then(|family| {

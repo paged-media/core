@@ -70,7 +70,7 @@ fn page_level(op: &Operation) -> bool {
     }
 }
 
-/// v69 — `OnMaster`: run `op` with master `master_id` standing in as the
+/// v70 — `OnMaster`: run `op` with master `master_id` standing in as the
 /// document's only spread, then put both back.
 pub(super) fn apply_on_master(
     doc: &mut Document,
@@ -143,7 +143,7 @@ fn master_error(id: &str, reason: String) -> OperationError {
     }
 }
 
-/// v69 — create a master: one page of the given size, or a fresh-id copy
+/// v70 — create a master: one page of the given size, or a fresh-id copy
 /// of `duplicate_of`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_create_master(
@@ -244,7 +244,7 @@ fn master_in_use(doc: &Document, id: &str) -> bool {
             .any(|m| m.spread.pages.iter().any(applies))
 }
 
-/// v69 — remove a master no page applies.
+/// v70 — remove a master no page applies.
 pub(super) fn apply_delete_master(
     doc: &mut Document,
     master_id: &str,
@@ -272,7 +272,7 @@ pub(super) fn apply_delete_master(
     })
 }
 
-/// v69 — `DeleteMaster`'s inverse.
+/// v70 — `DeleteMaster`'s inverse.
 pub(super) fn apply_restore_master(
     doc: &mut Document,
     master_json: &str,
@@ -296,7 +296,7 @@ pub(super) fn apply_restore_master(
     })
 }
 
-/// v69 — set or clear a master's name.
+/// v70 — set or clear a master's name.
 pub(super) fn apply_rename_master(
     doc: &mut Document,
     master_id: &str,

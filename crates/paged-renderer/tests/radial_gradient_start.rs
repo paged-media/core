@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v69 — a radial gradient with `GradientFillStart` + `GradientFillLength`
+//! v70 — a radial gradient with `GradientFillStart` + `GradientFillLength`
 //! is centred at the start point with the length as its radius, for a
 //! rectangle, an oval and a polygon. Before, the start was not read and
 //! every radial sat at InDesign's swatch default (the bottom-left corner),

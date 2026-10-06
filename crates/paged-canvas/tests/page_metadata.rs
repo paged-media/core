@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v69 — a page's plugin metadata (`SetPageMetadata`): set, read back
+//! v70 — a page's plugin metadata (`SetPageMetadata`): set, read back
 //! through the pages collection, carried by `MovePage`, copied by
 //! `DuplicatePage` under the clone's own id, restored by undo of a
 //! delete, and gated like item metadata.
@@ -115,7 +115,7 @@ fn page_metadata_is_gated_like_item_metadata() {
     assert_eq!(meta(&m, &p), None);
 }
 
-/// v69 — `InsertHyperlink { page }`: a link to a page, read back with its
+/// v70 — `InsertHyperlink { page }`: a link to a page, read back with its
 /// target from the hyperlinks collection, undone in one step, refused
 /// for a page that does not exist.
 #[test]
