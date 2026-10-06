@@ -780,6 +780,9 @@ pub enum Mutation {
     UnlinkFrames {
         frame: String,
     },
+    /// A new single-page spread after `after_page_id` (or at the end).
+    /// v69 (D-23) — the page takes its master's margins, else those of
+    /// the page it follows.
     InsertPage {
         after_page_id: Option<PageId>,
         master_id: Option<String>,
@@ -1177,9 +1180,12 @@ pub enum Mutation {
     /// completely: not a page item on a body spread; anchored in a
     /// story; serving as or carrying an opacity mask; a threaded text
     /// frame; a text frame whose story holds a table, an anchored
-    /// object, a footnote or a hyperlink; an element named together
-    /// with a group or container that holds it. Rides
-    /// `Operation::DuplicateNodes`.
+    /// object or a footnote; an element named together with a group or
+    /// container that holds it. Rides `Operation::DuplicateNodes`.
+    ///
+    /// v69 (D-24) — a story holding hyperlink SOURCES (every Data Merge
+    /// placeholder is one) is copied: the copy's sources get fresh ids
+    /// and each owning hyperlink is copied onto them, same destination.
     DuplicateElements {
         element_ids: Vec<ElementId>,
         offset: (f32, f32),
@@ -1276,6 +1282,14 @@ pub enum Mutation {
     ///
     /// See `batch_handles` for the resolution rules — notably that a
     /// `$h:` in a text payload is content and is never rewritten.
+    ///
+    /// v69 (paged.data D-22) — a PAGE is named too: after an
+    /// `insertPage` / `duplicatePage` child, `bindCreated` binds the page
+    /// it minted, and `$h:<handle>` resolves in a page position
+    /// (`pageId`, `afterPageId`, `page`, `atPage`) — and only there; an
+    /// element handle in a page position, or a page handle anywhere
+    /// else, fails the batch. Pages and their content are then ONE undo
+    /// step. A page is not an element, so it is not listed in `minted`.
     BindCreated {
         handle: String,
     },
@@ -1578,6 +1592,11 @@ pub enum Mutation {
         master: Option<String>,
     },
     /// W0.5 — duplicate a single-page spread after the source.
+    /// v69 (D-23) — the copy owns COPIES of its frames' stories (hyperlink
+    /// sources re-minted with their hyperlinks), threads inside the page
+    /// kept, and keeps the page's margins; a story holding a table, an
+    /// anchored object or a footnote is refused, as `duplicateElements`
+    /// refuses it.
     DuplicatePage {
         page: PageId,
     },

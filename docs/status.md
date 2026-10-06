@@ -27,6 +27,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   (`insertField.contentOffset`). Text typed at a field's edge lands beside it. A
   document-scoped, undoable plugin label is written with `setDocumentMetadata` and read in
   `DocumentMeta` ([ADR 127](adr/127-fields-and-document-labels-for-data.md), protocol 69).
+- **Pages in a batch.** `bindCreated` names a page that `insertPage` or `duplicatePage` minted, so
+  pages and their content are one batch and one undo step. A duplicated page owns copies of its
+  stories, including their hyperlink sources, and keeps its margins. An inserted page takes its
+  master's margins. `duplicateElements` copies a story that holds hyperlink sources
+  ([ADR 128](adr/128-pages-a-merge-can-make.md), protocol 69).
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.

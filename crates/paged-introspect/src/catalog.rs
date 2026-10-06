@@ -273,7 +273,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- complete mutation surface: pages & masters ---
         f!("paged.deletePage", "(pageId)", "bool", "author", "Delete a page."),
         f!("paged.duplicatePage", "(pageId)", "string | null", "author",
-           "Duplicate a single-page spread after the source; returns the new page selfId."),
+           "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."),
         f!("paged.resizePage", "(pageId, [t,l,b,r])", "bool", "write", "Set a page's GeometricBounds in page-inner points."),
         f!("paged.applyMasterToPage", "(pageId, masterId?)", "bool", "write", "Apply a master to a page (omit/null detaches)."),
         // --- frames & groups ---

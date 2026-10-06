@@ -229,7 +229,7 @@
       "params": "(pageId)",
       "returns": "string | null",
       "kind": "author",
-      "summary": "Duplicate a single-page spread after the source; returns the new page selfId."
+      "summary": "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."
     },
     {
       "name": "paged.resizePage",
