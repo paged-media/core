@@ -11,14 +11,19 @@ description = "The wire vocabulary: the identities and the mutation ops every su
 # unchanged; `paged-renderer` takes the crate with it OFF so the
 # read-only viewer SDK does not link the mutation engine to get a
 # `PageId`. See the crate docs.
-default = ["mutations"]
+default = ["mutations", "query"]
 mutations = ["dep:paged-mutate"]
+# Selector evaluation (`query::query`) needs the scene model.
+query = ["dep:paged-scene", "dep:paged-model"]
 
 [dependencies]
 paged-mutate = { path = "../paged-mutate", optional = true }
+paged-scene = { path = "../paged-scene", optional = true }
+paged-model = { path = "../paged-model", optional = true }
 serde = { workspace = true }
 tsify-next = { workspace = true }
 wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1"
+proptest = { version = "1", default-features = false, features = ["std"] }

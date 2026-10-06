@@ -6193,6 +6193,15 @@ pub struct Spread {
     /// per `Key`.
     #[serde(default)]
     pub labels: std::collections::HashMap<String, Vec<(String, String)>>,
+    /// The IDML `Name` of each page item that carries one, keyed by the
+    /// item's `Self` id — all six kinds, groups included. InDesign's
+    /// Layers panel shows it, scripts address by it, and it survives an
+    /// InDesign save while every `Self` is renumbered, so it is the
+    /// stable handle a stored selector (`frame[name="price"]`, ADR 131)
+    /// points at. Side map like [`Spread::labels`] so the frame literals
+    /// stay untouched; absent from the native encoding when empty.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub item_names: std::collections::HashMap<String, String>,
     /// B-18 nested content (InDesign **paste-into**). Child page
     /// items keyed by the HOST container's `Self` id (Rectangle /
     /// Oval / Polygon). The children live in the spread's backing

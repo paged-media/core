@@ -827,7 +827,7 @@ impl Document {
 /// (since bounds are stored in the frame's inner coords). Returns
 /// `None` if no page contains the centroid — caller defaults to the
 /// first page.
-pub(crate) fn page_index_for_bounds(
+pub fn page_index_for_bounds(
     pages: &[paged_model::Page],
     bounds: Bounds,
     item_transform: Option<[f32; 6]>,

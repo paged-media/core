@@ -5076,6 +5076,23 @@ impl CanvasModel {
             .collect()
     }
 
+    /// Object model (ADR 131) — the canonical addresses a selector
+    /// matches, or where it fails to parse. Pure READ.
+    pub fn query(
+        &self,
+        selector: &str,
+    ) -> Result<Vec<paged_wire::Address>, paged_wire::GrammarError> {
+        paged_wire::query::query_str(&self.scene, selector)
+    }
+
+    /// The canonical address `address` names here (`frame:` → its kind,
+    /// `page:#n` → the page id, a style name → its id), or `None` when
+    /// it does not parse or names nothing.
+    pub fn resolve_address(&self, address: &str) -> Option<paged_wire::Address> {
+        let a = paged_wire::Address::parse(address).ok()?;
+        paged_wire::query::resolve(&self.scene, &a)
+    }
+
     /// v43 (D-01) — enumerate every plugin placeholder field, in story
     /// order. `offset` is the field run's START in the story's char
     /// space (the same "sum of run chars, no paragraph separators"

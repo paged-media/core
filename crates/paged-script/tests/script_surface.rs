@@ -228,41 +228,44 @@ fn the_catalog_names_exactly_the_functions_the_bridge_installs() {
     );
 }
 
-/// The catalog PUBLISHES an id grammar — three worked examples that
-/// docs.paged.media prints and a plugin author copies. Nothing checked
-/// that the parser accepts them, which made the grammar a third
-/// statement of the same rule alongside `ElementId::parse` and the
-/// bridge's own doc comments. Two of the three would still be right by
-/// luck; the point is that the next one added has to be.
+/// The catalog PUBLISHES an id grammar — one worked example per address
+/// kind, generated from `paged_wire::Address` (ADR 131), which
+/// docs.paged.media prints and a plugin author copies. Every example must
+/// parse, print back byte-identically, and — where it names an element
+/// without needing a document — survive the `ElementId` round trip a
+/// caller does when it hands the id back to `paged.set` / `paged.inspect`.
 #[test]
 fn every_published_id_form_actually_parses() {
-    use paged_wire::ElementId;
+    use paged_wire::{Address, ElementId};
 
     let grammar = paged_introspect::api_catalog().id_grammar;
     assert!(
-        grammar.len() >= 3,
-        "the id grammar came back with {} forms — it is published documentation \
-         and must not silently empty",
+        grammar.len() >= paged_wire::AddressKind::ALL.len(),
+        "the id grammar came back with {} forms — it is generated from the \
+         address kinds and must cover all of them",
         grammar.len()
     );
     for form in grammar {
-        let parsed = ElementId::parse(form.example);
-        assert!(
-            parsed.is_some(),
-            "the catalog publishes {:?} as an example of {:?}, and the parser \
-             rejects it",
-            form.example,
-            form.form
-        );
-        // And it is an address, not merely something that parses: it
-        // must survive the round trip a caller does when it hands the
-        // id back to `paged.set` / `paged.inspect`.
-        let id = parsed.unwrap();
+        let parsed = Address::parse(form.example).unwrap_or_else(|e| {
+            panic!(
+                "the catalog publishes {:?} as an example of {:?}, and the parser \
+                 rejects it: {e}",
+                form.example, form.form
+            )
+        });
         assert_eq!(
-            id.to_address().as_deref().and_then(ElementId::parse),
-            Some(id.clone()),
-            "{:?} does not round-trip",
+            parsed.to_string(),
+            form.example,
+            "{:?} is not canonical",
             form.example
         );
+        if let Some(id) = parsed.to_element_id() {
+            assert_eq!(
+                id.to_address().as_deref().and_then(ElementId::parse),
+                Some(id.clone()),
+                "{:?} does not round-trip as an element id",
+                form.example
+            );
+        }
     }
 }
