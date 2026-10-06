@@ -304,6 +304,7 @@ fn a_text_frame_handle_addresses_the_story_it_minted() {
 
     assert_eq!(model.scene().stories.len(), stories_before + 1);
     let minted = model.scene().stories.last().expect("minted story");
+    let minted_id = minted.self_id.clone();
     let text: String = minted
         .story
         .paragraphs
@@ -325,25 +326,14 @@ fn a_text_frame_handle_addresses_the_story_it_minted() {
         frames_before_undo - 1,
         "one undo removes the frame the batch inserted"
     );
-    let text_after_undo: String = model
-        .scene()
-        .stories
-        .last()
-        .expect("story")
-        .story
-        .paragraphs
-        .iter()
-        .flat_map(|p| p.runs.iter())
-        .map(|r| r.text.as_str())
-        .collect();
+    // The poured text goes back with the story the insert minted: the
+    // insert's inverse removes that story too, so no empty, frameless
+    // story is left behind (it used to be, and a save wrote it out).
+    assert_eq!(model.scene().stories.len(), stories_before);
     assert!(
-        text_after_undo.is_empty(),
-        "the poured text was taken back too, got {text_after_undo:?}"
+        model.scene().stories.iter().all(|s| s.self_id != minted_id),
+        "the minted story is gone, not orphaned"
     );
-    // PRE-EXISTING, not C-15: `RemoveNode`'s inverse of an
-    // `InsertTextFrame` leaves the MINTED story behind (empty, unowned)
-    // — the same after one batch as after the standalone mutation.
-    assert_eq!(model.scene().stories.len(), stories_before + 1);
 
     // Redo replays the composite forward — frame back, text back, in the
     // same story — from ONE redo step.
@@ -364,6 +354,11 @@ fn a_text_frame_handle_addresses_the_story_it_minted() {
         .map(|r| r.text.as_str())
         .collect();
     assert_eq!(text_after_redo, "poured");
+    assert_eq!(
+        model.scene().stories.last().map(|s| s.self_id.as_str()),
+        Some(minted_id.as_str()),
+        "redo re-mints the same story id"
+    );
     assert_eq!(model.applied_log_len(), 1);
 }
 

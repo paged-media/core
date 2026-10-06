@@ -494,8 +494,11 @@ impl CornerOption {
 /// unrecognised-but-present names become `Other` (drawn as a triangle
 /// and counted as approximated; [`Self::as_idml`] can't reproduce the
 /// source token for it, so writers leave `Other` untouched).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ArrowheadType {
+    /// No line end — InDesign's default, and what a document written
+    /// before a kind carried line ends loads as.
+    #[default]
     None,
     /// Open / simple arrow — drawn as a filled triangle.
     Simple,
@@ -567,6 +570,13 @@ impl ArrowheadType {
     pub fn draws(self) -> bool {
         !matches!(self, Self::None)
     }
+}
+
+/// Serde default for `LeftArrowHeadScale` / `RightArrowHeadScale`:
+/// InDesign's 100 %, which a derived `0.0` would turn into a vanished
+/// arrowhead on every document written before the field existed.
+fn default_arrowhead_scale() -> f32 {
+    100.0
 }
 
 /// Ruler guide on a spread. See [`Spread::guides`].
@@ -916,6 +926,9 @@ pub struct TextFrame {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -995,7 +1008,10 @@ pub struct TextFrame {
 impl TextFrame {
     /// An empty, visible text frame with InDesign's defaults (no fill or
     /// stroke, no insets, default first baseline), `bounds` in its own
-    /// coordinates. For native document producers; set the rest by field.
+    /// coordinates. For native document producers AND adapters; set the
+    /// rest by field, or name the fields you have and take the rest with
+    /// `..TextFrame::new("", None, bounds)` — see [`Rectangle::new`] for
+    /// why a reader in another repository must not name every field.
     /// `TextFrame` deliberately has no `Default`: a defaulted `visible` would
     /// be `false`, an invisible frame.
     pub fn new(self_id: impl Into<String>, parent_story: Option<String>, bounds: Bounds) -> Self {
@@ -1040,6 +1056,7 @@ impl TextFrame {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,
@@ -1308,6 +1325,13 @@ pub struct Rectangle {
     /// than the diagonal compress the gradient (extreme stops paint
     /// flat regions outside the line); values larger expand it.
     pub gradient_fill_length: Option<f32>,
+    /// `GradientFillStart` — the gradient's start point in the item's
+    /// own (inner) coordinates. A radial gradient is centred there with
+    /// `gradient_fill_length` as its radius (PowerPoint's centred glows
+    /// arrive this way); a linear one still runs through the centre.
+    /// `None`, or a length of 0, keeps InDesign's default placement.
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
     /// `gradient_fill_angle` but applied to the stroke gradient.
     pub gradient_stroke_angle: Option<f32>,
@@ -1340,6 +1364,90 @@ pub struct Rectangle {
     pub subpath_starts: Vec<usize>,
     /// Per-contour open/closed flags; see [`Polygon::subpath_open`].
     pub subpath_open: Vec<bool>,
+}
+
+impl Rectangle {
+    /// An empty, visible rectangle with InDesign's defaults (no fill or
+    /// stroke, no image), `bounds` in its own coordinates. It takes only
+    /// what a page item cannot be without — an id and a box; set the rest
+    /// by field.
+    ///
+    /// **This is THE way for an adapter to build one**, as it is for
+    /// [`TextFrame::new`], [`Oval::new`], [`GraphicLine::new`] and
+    /// [`Polygon::new`]:
+    ///
+    /// ```
+    /// # use paged_model::{Bounds, Rectangle};
+    /// # let (self_id, bounds, fill_color) = (None, Bounds::ZERO, None);
+    /// let rect = Rectangle {
+    ///     self_id, // an `Option`: a source element may carry no `Self`
+    ///     fill_color,
+    ///     ..Rectangle::new("", bounds)
+    /// };
+    /// # assert!(rect.visible);
+    /// ```
+    ///
+    /// A literal that names EVERY field stops compiling the moment the
+    /// model gains one — and the IDML and PDF adapters live in another
+    /// repository, pinned here by revision, so that failure is this
+    /// repository's build breaking on a file it cannot edit. Taking the
+    /// rest from the constructor is what lets a reader survive a new
+    /// field, and lets the field land before the reader learns to fill
+    /// it. There is deliberately no `Default`: a derived one would give
+    /// `visible: false`, an invisible item.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Rectangle {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            applied_object_style: None,
+            text_wrap: None,
+            frame_fitting: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            end_cap: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            item_layer: None,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+            is_anchored: false,
+            opacity: None,
+            blend_mode: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_fill_start: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            text_paths: Vec::new(),
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+        }
+    }
 }
 
 /// Mirror of IDML's optional `InnerShadow`, `OuterGlow`, `InnerGlow`,
@@ -1581,6 +1689,9 @@ pub struct Oval {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -1648,6 +1759,64 @@ pub struct Oval {
     /// [`Rectangle::corners`] and [`Oval::corner_radius`].
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. An ellipse is a
+    /// closed contour, so the cap shows only on the ends of a dashed or
+    /// dotted stroke's dashes — which is where IDML carries it (4 corpus
+    /// ovals spell it).
+    #[serde(default)]
+    pub end_cap: Option<String>,
+}
+
+impl Oval {
+    /// An empty, visible ellipse inscribed in `bounds`, InDesign's
+    /// defaults otherwise. THE way for an adapter to build one — name the
+    /// fields you set and take the rest with `..Oval::new("", bounds)`;
+    /// see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Oval {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            drop_shadow: None,
+            stroke_drop_shadow: None,
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_fill_start: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+            end_cap: None,
+        }
+    }
 }
 
 /// Straight line — `<GraphicLine>` in IDML. The endpoints are the
@@ -1751,6 +1920,55 @@ pub struct GraphicLine {
     /// [`Rectangle::corners`] and [`GraphicLine::corner_radius`].
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. A line is open, so
+    /// the cap shapes both of its ends (128 corpus lines spell
+    /// `RoundEndCap`). It was read only on `<Rectangle>` until C-62, so
+    /// every one of those lines drew butt ends.
+    #[serde(default)]
+    pub end_cap: Option<String>,
+}
+
+impl GraphicLine {
+    /// A visible line with InDesign's defaults — no arrowheads (scales
+    /// at 100 %), no anchors, so it draws the diagonal of `bounds` until
+    /// a path is set. THE way for an adapter to build one — name the
+    /// fields you set and take the rest with
+    /// `..GraphicLine::new("", bounds)`; see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        GraphicLine {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            applied_object_style: None,
+            text_wrap: None,
+            item_layer: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_paths: Vec::new(),
+            effects: None,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            start_arrow: ArrowheadType::None,
+            end_arrow: ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+            end_cap: None,
+        }
+    }
 }
 
 /// One point on an IDML `<PathGeometry>` path. `anchor` is the
@@ -2007,6 +2225,9 @@ pub struct Polygon {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -2083,6 +2304,90 @@ pub struct Polygon {
     /// at every straight-line corner of every closed contour.
     #[serde(default)]
     pub corners: [CornerSpec; 4],
+    /// C-62 — `EndCap`; see [`Rectangle::end_cap`]. A pen or pencil path
+    /// is a `<Polygon>` whose contour is open, so this is the cap on its
+    /// two ends (109 corpus polygons spell it: 78 `ButtEndCap`, 31
+    /// `RoundEndCap`). A closed contour shows it only on dash ends.
+    #[serde(default)]
+    pub end_cap: Option<String>,
+    /// C-62 — `LeftLineEnd`: the arrowhead at an open contour's first
+    /// anchor. See [`GraphicLine::start_arrow`]; IDML writes the line-end
+    /// vocabulary on every page item (78 corpus polygons spell it), and
+    /// InDesign draws it on a polygon's open contours. Nothing on a
+    /// closed one.
+    #[serde(default)]
+    pub start_arrow: ArrowheadType,
+    /// C-62 — `RightLineEnd`: the arrowhead at an open contour's last
+    /// anchor.
+    #[serde(default)]
+    pub end_arrow: ArrowheadType,
+    /// C-62 — `LeftArrowHeadScale` (percent, default 100); see
+    /// [`GraphicLine::start_arrow_scale`].
+    #[serde(default = "default_arrowhead_scale")]
+    pub start_arrow_scale: f32,
+    /// C-62 — `RightArrowHeadScale` (percent, default 100).
+    #[serde(default = "default_arrowhead_scale")]
+    pub end_arrow_scale: f32,
+}
+
+impl Polygon {
+    /// A visible polygon with InDesign's defaults and no path: it draws
+    /// `bounds` until `anchors` are set. THE way for an adapter to build
+    /// one — name the fields you set and take the rest with
+    /// `..Polygon::new("", bounds)`; see [`Rectangle::new`] for why.
+    pub fn new(self_id: impl Into<String>, bounds: Bounds) -> Self {
+        Polygon {
+            self_id: Some(self_id.into()),
+            bounds,
+            item_transform: None,
+            fill_color: None,
+            fill_tint: None,
+            stroke_color: None,
+            stroke_weight: None,
+            stroke_type: None,
+            stroke_alignment: None,
+            end_join: None,
+            miter_limit: None,
+            stroke_gap_color: None,
+            stroke_gap_tint: None,
+            stroke_dash: Vec::new(),
+            applied_object_style: None,
+            anchors: Vec::new(),
+            subpath_starts: Vec::new(),
+            subpath_open: Vec::new(),
+            text_wrap: None,
+            item_layer: None,
+            effects: None,
+            gradient_fill_angle: None,
+            gradient_fill_length: None,
+            gradient_fill_start: None,
+            gradient_stroke_angle: None,
+            gradient_stroke_length: None,
+            opacity: None,
+            blend_mode: None,
+            text_paths: Vec::new(),
+            image_link: None,
+            has_image_element: false,
+            has_inline_pdf: false,
+            has_inline_eps: false,
+            image_item_transform: None,
+            image_bytes: None,
+            image_clip: None,
+            overprint_fill: false,
+            overprint_stroke: false,
+            nonprinting: false,
+            visible: true,
+            locked: false,
+            corner_radius: None,
+            corner_option: None,
+            corners: Default::default(),
+            end_cap: None,
+            start_arrow: ArrowheadType::None,
+            end_arrow: ArrowheadType::None,
+            start_arrow_scale: 100.0,
+            end_arrow_scale: 100.0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3499,6 +3804,15 @@ pub struct CellStyleDef {
     pub left_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
+    /// Edge stroke styles; see [`Cell::top_edge_stroke_type`].
+    #[serde(default)]
+    pub top_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub bottom_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub left_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub right_edge_stroke_type: Option<String>,
 }
 /// `<TableStyle>` — table-level defaults that flow through to
 /// cells. Carries the region → CellStyle map (Header / Body /
@@ -3606,6 +3920,10 @@ pub struct ResolvedCell {
     pub left_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
+    pub top_edge_stroke_type: Option<String>,
+    pub bottom_edge_stroke_type: Option<String>,
+    pub left_edge_stroke_type: Option<String>,
+    pub right_edge_stroke_type: Option<String>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
@@ -4400,6 +4718,22 @@ impl ResolvedCell {
         self.right_edge_stroke_weight = self
             .right_edge_stroke_weight
             .or(def.right_edge_stroke_weight);
+        for (mine, theirs) in [
+            (&mut self.top_edge_stroke_type, &def.top_edge_stroke_type),
+            (
+                &mut self.bottom_edge_stroke_type,
+                &def.bottom_edge_stroke_type,
+            ),
+            (&mut self.left_edge_stroke_type, &def.left_edge_stroke_type),
+            (
+                &mut self.right_edge_stroke_type,
+                &def.right_edge_stroke_type,
+            ),
+        ] {
+            if mine.is_none() {
+                mine.clone_from(theirs);
+            }
+        }
     }
 }
 impl ResolvedCharacter {
@@ -4973,6 +5307,50 @@ impl Paragraph {
         chars
     }
 }
+/// v69 — convert a `ContentSelection` stream offset (UTF-8 bytes of the
+/// runs plus one synthetic `\n` per inter-paragraph boundary: what
+/// `insertText`, `deleteRange` and the editor's caret use) into the
+/// contiguous CHARACTER offset the field and range-styling operations use
+/// (`insertField`, `setFieldValue`, `applyStyle`, `storyRange`: chars, no
+/// separator between paragraphs). `None` when `content` is past the end or
+/// falls inside a multi-byte character. The synthetic break itself maps to
+/// the end of the paragraph before it.
+pub fn char_offset_of_content_offset(paragraphs: &[Paragraph], content: u32) -> Option<u32> {
+    let content = content as usize;
+    let mut consumed = 0usize;
+    let mut chars = 0u32;
+    for (i, p) in paragraphs.iter().enumerate() {
+        if i > 0 {
+            if content == consumed {
+                return Some(chars);
+            }
+            consumed += 1;
+        }
+        let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+        if content <= consumed + len {
+            let local = content - consumed;
+            let mut at = 0usize;
+            for r in &p.runs {
+                if local <= at + r.text.len() {
+                    if !r.text.is_char_boundary(local - at) {
+                        return None;
+                    }
+                    break;
+                }
+                at += r.text.len();
+            }
+            return Some(chars + p.char_offset_of_byte(local));
+        }
+        consumed += len;
+        chars += p
+            .runs
+            .iter()
+            .map(|r| r.text.chars().count() as u32)
+            .sum::<u32>();
+    }
+    (content == 0).then_some(0)
+}
+
 /// IDML `<Footnote>` — a self-contained paragraph stream anchored at
 /// a point inside a host paragraph. The renderer places footnotes in
 /// a per-page footnote pool at the bottom of the host frame.
@@ -5240,6 +5618,17 @@ pub struct TableCell {
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_tint: Option<f32>,
+    /// `TopEdgeStrokeType` … `RightEdgeStrokeType` — the edge's stroke
+    /// style (`StrokeStyle/$ID/ThickThick` for a double line). `None` ⇒
+    /// inherit from the cell-style cascade, then solid.
+    #[serde(default)]
+    pub top_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub bottom_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub left_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub right_edge_stroke_type: Option<String>,
     /// Inline `FillColor="Color/..."` on the `<Cell>` element.
     /// Wins over the cell-style cascade — used by header / body /
     /// alternating-fill rows when the table doesn't carry an
@@ -5955,6 +6344,14 @@ pub struct FlowGrowRule {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DesignMap {
+    /// v69 — the DOCUMENT's own Label `KeyValuePair`s: document-scoped
+    /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
+    /// `Operation::SetDocumentMetadata` and undone with the rest of the
+    /// document. One entry per key, in write order. Persisted in the native
+    /// `.paged` model part; the IDML adapter does not carry it yet (a
+    /// designmap `<Document>` `Properties/Label` is the IDML home).
+    #[serde(default)]
+    pub labels: Vec<(String, String)>,
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,

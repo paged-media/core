@@ -100,10 +100,17 @@ fn forced_line_breaks_land_where_indesign_puts_them() {
     let mut ok = true;
     for (i, case) in cases().iter().enumerate() {
         let lines = built.story_layout(&body_story_id(i as u32));
+        // InDesign's PDF shows words; a blank line has none.
         let engine: Vec<(f32, f32)> = lines
             .iter()
+            .filter(|l| !l.byte_range.is_empty())
             .map(|l| {
-                let x = l.clusters.first().map(|c| c.x_pt).unwrap_or(f32::NAN);
+                // The line's first ink: its list marker when it has one.
+                let x = l
+                    .marker
+                    .first()
+                    .or(l.clusters.first())
+                    .map_or(f32::NAN, |c| c.x_pt);
                 (x, l.baseline_y_pt - WORD_TOP_TO_BASELINE)
             })
             .collect();

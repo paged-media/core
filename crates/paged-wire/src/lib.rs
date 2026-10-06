@@ -94,7 +94,7 @@ impl std::fmt::Display for PageId {
 /// text-side caret + range live in `ContentSelection`); the
 /// variant exists so the apply layer can be reached via the
 /// existing `Mutation::SetElementProperty` wire shape — see
-/// `docs/paged/sdk-implementation-plan.md` §3c.1 ADR.
+/// the editor's client-SDK implementation plan §3c.1 (not published).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", content = "id", rename_all = "camelCase")]
@@ -659,6 +659,12 @@ pub enum Mutation {
         /// gap where cell text could only carry default formatting.
         #[serde(default)]
         cell: Option<TextCellAddr>,
+        /// v65 — paragraph address (additive). `Some(i)` with paragraph scope
+        /// styles exactly paragraph `i` (0-based, in the body or in `cell`)
+        /// and ignores `start`/`end`: the only way to name one EMPTY
+        /// paragraph among several in a row.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// W0.5 — insert a field marker (page-number etc.) at a story
     /// offset. Routes to `Operation::InsertField`. v43 (D-01): `field`
@@ -670,6 +676,16 @@ pub enum Mutation {
         story_id: String,
         offset: u32,
         field: paged_mutate::operation::FieldKind,
+        /// v69 — the insertion point in the CARET unit instead: UTF-8 bytes
+        /// of the runs plus one synthetic `\n` per paragraph boundary (the
+        /// `ContentSelection` / `insertText` / `host.text.caret()` unit).
+        /// `offset` and every other field operation count characters with no
+        /// paragraph separator; the two agree only inside the first
+        /// paragraph of ASCII text. When present the engine converts this
+        /// against the story at apply time and ignores `offset` (send 0).
+        /// An older engine ignores the field, so gate it on `protocol >= 68`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// v52 — insert an image-bearing anchored Rectangle into a story, anchored
     /// at the paragraph containing character `offset`, sized `width`×`height`
@@ -684,6 +700,12 @@ pub enum Mutation {
         height: f32,
         #[serde(default)]
         image_uri: Option<String>,
+        /// v65 — paragraph address (additive). `Some(i)` anchors the frame
+        /// in paragraph `i` (0-based) of the story; `offset` stays the story
+        /// offset (so an engine without this field reads the same message)
+        /// and is clamped into that paragraph. Names an empty paragraph.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// v53 — the hyperlink CREATE door: make the story range `[start, end)`
     /// (contiguous char offsets, the `ApplyStyle` address space) a native
@@ -692,12 +714,16 @@ pub enum Mutation {
     /// `HyperlinkURLDestination`) and registers them, so the renderer's
     /// existing link resolution makes the span clickable. Undoable in one
     /// step (inverse drops the tag + the two designmap resources). Backs
-    /// paged.doc's `w:hyperlink` runs.
+    /// paged.doc's `w:hyperlink` runs. v69: with `page`, the link goes to
+    /// that page instead (`url` is then ignored and may be empty): a
+    /// slide's jump to another slide.
     InsertHyperlink {
         story_id: String,
         start: u32,
         end: u32,
         url: String,
+        #[serde(default)]
+        page: Option<PageId>,
     },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
@@ -758,6 +784,9 @@ pub enum Mutation {
     UnlinkFrames {
         frame: String,
     },
+    /// A new single-page spread after `after_page_id` (or at the end).
+    /// v69 (D-23) — the page takes its master's margins, else those of
+    /// the page it follows.
     InsertPage {
         after_page_id: Option<PageId>,
         master_id: Option<String>,
@@ -1138,6 +1167,33 @@ pub enum Mutation {
     DissolveGroup {
         group_id: String,
     },
+    /// C-64 (rides v65) — duplicate page items. Each of `elementIds`
+    /// gets a clone translated by `offset` (`[dx, dy]`, points, spread
+    /// space), inserted DIRECTLY ABOVE its source — in the spread's
+    /// z-order, or inside the group / container that holds the source —
+    /// all in one undo step. A clone is the whole item: every property,
+    /// its plugin metadata, a container's pasted-in children, a group's
+    /// members (nested groups too), and a text frame's story, copied
+    /// under a fresh id.
+    ///
+    /// The reply's `minted` lists the clones in `elementIds` order (one
+    /// per source — a group's clone is its group id; its members are
+    /// reached through it), and `createdId` is the last of them.
+    ///
+    /// Refused as a whole, by name, when any source cannot be cloned
+    /// completely: not a page item on a body spread; anchored in a
+    /// story; serving as or carrying an opacity mask; a threaded text
+    /// frame; a text frame whose story holds a table, an anchored
+    /// object or a footnote; an element named together with a group or
+    /// container that holds it. Rides `Operation::DuplicateNodes`.
+    ///
+    /// v69 (D-24) — a story holding hyperlink SOURCES (every Data Merge
+    /// placeholder is one) is copied: the copy's sources get fresh ids
+    /// and each owning hyperlink is copied onto them, same destination.
+    DuplicateElements {
+        element_ids: Vec<ElementId>,
+        offset: (f32, f32),
+    },
     /// W1.20 (groups v2, rides v35) — move/scale/rotate a group as a
     /// unit. The engine sets the group's own `ItemTransform` and
     /// rebases every descendant member's effective transform by the
@@ -1159,6 +1215,33 @@ pub enum Mutation {
     /// `None` keeps the prior behaviour (the editor / pre-B-16 callers).
     SetPluginMetadata {
         element_id: ElementId,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+    /// v69 — `SetPluginMetadata` for a page: one Label `KeyValuePair`
+    /// on the page itself (a slide's notes, transition, hidden flag), with
+    /// the same gates (reserved `x-paged:` namespace, 64 KiB cap, JSON
+    /// envelope, optional `caller`). It travels with the page through
+    /// move, duplicate, delete and undo. `value: None` deletes the entry.
+    SetPageMetadata {
+        page: PageId,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+    /// v69 — document-scoped plugin metadata: one Label `KeyValuePair` on
+    /// the DOCUMENT rather than a page item, for state that belongs to no
+    /// frame (a data session, the live version of a plugin's container
+    /// parts). `value: None` deletes. Same gates as `SetPluginMetadata`
+    /// (`x-paged:` namespace, optional `caller` gate, 64 KiB, JSON
+    /// envelope); ONE undoable step that composes in a `batch`. Read back
+    /// through `RequestDocumentMeta` → `DocumentMeta.pluginMetadata`.
+    SetDocumentMetadata {
         key: String,
         #[serde(default)]
         value: Option<String>,
@@ -1216,6 +1299,14 @@ pub enum Mutation {
     ///
     /// See `batch_handles` for the resolution rules — notably that a
     /// `$h:` in a text payload is content and is never rewritten.
+    ///
+    /// v69 (paged.data D-22) — a PAGE is named too: after an
+    /// `insertPage` / `duplicatePage` child, `bindCreated` binds the page
+    /// it minted, and `$h:<handle>` resolves in a page position
+    /// (`pageId`, `afterPageId`, `page`, `atPage`) — and only there; an
+    /// element handle in a page position, or a page handle anywhere
+    /// else, fails the batch. Pages and their content are then ONE undo
+    /// step. A page is not an element, so it is not listed in `minted`.
     BindCreated {
         handle: String,
     },
@@ -1312,7 +1403,9 @@ pub enum Mutation {
     PathfinderOutline {
         element_ids: Vec<ElementId>,
     },
-    /// The BACKMOST object minus every object in front of it.
+    /// Illustrator's Minus Back: the FRONTMOST element (the first of
+    /// `elementIds`, which is top-to-bottom) minus every element behind
+    /// it, in the front element's paint; the others are consumed.
     PathfinderMinusBack {
         element_ids: Vec<ElementId>,
     },
@@ -1490,7 +1583,7 @@ pub enum Mutation {
         condition: String,
         visible: bool,
     },
-    /// thoughts ADR 026 — let a story's frame chain GROW (`grow: true`):
+    /// ADR 026 — let a story's frame chain GROW (`grow: true`):
     /// generated pages are added after its last frame's page while it
     /// oversets, the way InDesign's Smart Text Reflow adds them, and dropped
     /// when they end up empty. `grow: false` clears the rule. `maxPages`
@@ -1516,8 +1609,57 @@ pub enum Mutation {
         master: Option<String>,
     },
     /// W0.5 — duplicate a single-page spread after the source.
+    /// v69 (D-23) — the copy owns COPIES of its frames' stories (hyperlink
+    /// sources re-minted with their hyperlinks), threads inside the page
+    /// kept, and keeps the page's margins; a story holding a table, an
+    /// anchored object or a footnote is refused, as `duplicateElements`
+    /// refuses it.
     DuplicatePage {
         page: PageId,
+    },
+    /// v69 — apply `mutation` to the items of master spread `master` (its
+    /// `Self` id): edit a layout's logo, footer or background as a page's.
+    /// Any page-item, style or property mutation may be wrapped (a `batch`
+    /// too); page and spread mutations are refused. Text edits need no
+    /// wrapper: they address stories, and a master frame's story is one.
+    /// One undo step; every page using the master repaints.
+    OnMaster {
+        master: String,
+        mutation: Box<Mutation>,
+    },
+    /// v69 — create master spread `master` (its `Self` id, chosen by the
+    /// caller): one page of `width_pt` × `height_pt`, or a copy of
+    /// `duplicate_of` with fresh ids (the size is then ignored). `name`
+    /// defaults to the copied master's. One undo step.
+    CreateMaster {
+        master: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        width_pt: f32,
+        #[serde(default)]
+        height_pt: f32,
+        #[serde(default)]
+        duplicate_of: Option<String>,
+    },
+    /// v69 — delete a master no page applies; refused while one does.
+    /// Undo restores it exactly.
+    DeleteMaster {
+        master: String,
+    },
+    /// v69 — set a master's name (absent: clear it).
+    RenameMaster {
+        master: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// v69 — move a page (its single-page spread) to follow `after`, or to
+    /// the front when `after` is absent: a slide sorter's reorder. Spreads
+    /// stacked down the pasteboard restack in the new order. One undo step.
+    MovePage {
+        page: PageId,
+        #[serde(default)]
+        after: Option<PageId>,
     },
     /// W0.5 — insert a `<Section>` anchored at `at_page`.
     InsertSection {
@@ -1651,6 +1793,16 @@ pub enum Mutation {
         #[serde(default)]
         row_heights: Vec<f32>,
     },
+    /// Delete a whole `<Table>` — the inverse of `InsertTable`, which
+    /// the wire could create but not take away (a plugin replacing its
+    /// placed table had to leave the old one behind). Routes to
+    /// `Operation::RemoveNode { NodeId::Table }`, which removes the
+    /// table's host paragraph and captures it whole, so undo puts back
+    /// every cell where it was.
+    DeleteTable {
+        story_id: String,
+        table_id: String,
+    },
 }
 
 /// The wire op vocabulary, written once.
@@ -1728,8 +1880,11 @@ mutation_vocabulary! {
     DetachTextFromPath,
     CreateGroup,
     DissolveGroup,
+    DuplicateElements,
     SetGroupTransform,
     SetPluginMetadata,
+    SetPageMetadata,
+    SetDocumentMetadata,
     PathPointCurveType,
     PathPointSet,
     Batch,
@@ -1787,6 +1942,11 @@ mutation_vocabulary! {
     ActivateConditionSet,
     ApplyMasterToPage,
     DuplicatePage,
+    MovePage,
+    OnMaster,
+    CreateMaster,
+    DeleteMaster,
+    RenameMaster,
     InsertSection,
     EditSection,
     DeleteSection,
@@ -1802,6 +1962,7 @@ mutation_vocabulary! {
     RemoveFooterRow,
     SetCellSpan,
     InsertTable,
+    DeleteTable,
 }
 
 #[cfg(feature = "mutations")]

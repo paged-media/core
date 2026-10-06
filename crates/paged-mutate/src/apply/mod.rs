@@ -39,7 +39,7 @@
 //! for why the whole-index rebuild is the right shape here and what it
 //! measures.
 //!
-//! Stage 1 limitations (flagged in `docs/paged/scripting-layer.md`'s
+//! Stage 1 limitations (flagged in the original scripting-layer design's
 //! Stage-1 deliverables):
 //!   - `InsertNode`/`RemoveNode`/`MoveNode` support TextFrame and
 //!     Rectangle children under a Spread parent. Group nesting,
@@ -128,6 +128,11 @@ pub(crate) fn apply_inner(
         // already in (see the operation doc).
         Operation::ReorderNode { node, target } => apply_reorder_node(doc, node, *target),
         Operation::Batch { ops } => apply_batch(doc, ops),
+        Operation::RemoveStory { story_id } => apply_remove_story(doc, story_id),
+        Operation::RestoreStory {
+            position,
+            story_json,
+        } => apply_restore_story(doc, *position, story_json),
         Operation::InsertPage {
             after_page_id,
             master_id,
@@ -236,6 +241,20 @@ pub(crate) fn apply_inner(
             apply_rename_table_style(doc, style_id, name)
         }
         Operation::DeleteTableStyle { style_id } => apply_delete_table_style(doc, style_id),
+        Operation::DuplicateNodes {
+            sources,
+            dx,
+            dy,
+            ids,
+            story_ids,
+        } => apply_duplicate_nodes(doc, sources, *dx, *dy, ids, story_ids),
+        Operation::RemoveDuplicates {
+            sources,
+            dx,
+            dy,
+            ids,
+            story_ids,
+        } => apply_remove_duplicates(doc, sources, *dx, *dy, ids, story_ids),
         Operation::CreateGroup { spec } => apply_create_group(doc, spec),
         Operation::DissolveGroup {
             group_id,
@@ -326,12 +345,23 @@ pub(crate) fn apply_inner(
             style,
             scope,
             cell,
-        } => apply_apply_style(doc, story_id, *start, *end, style, *scope, cell.as_ref()),
+            paragraph,
+        } => apply_apply_style(
+            doc,
+            story_id,
+            *start,
+            *end,
+            style,
+            *scope,
+            cell.as_ref(),
+            *paragraph,
+        ),
         Operation::InsertField {
             story_id,
             offset,
             field,
-        } => apply_insert_field(doc, story_id, *offset, field),
+            content_offset,
+        } => apply_insert_field(doc, story_id, *offset, field, *content_offset),
         Operation::DeleteField {
             story_id,
             offset,
@@ -344,9 +374,11 @@ pub(crate) fn apply_inner(
             height,
             image_uri,
             self_id,
+            paragraph,
         } => anchored_frame::apply_insert_anchored_frame(
             doc,
             story_id,
+            *paragraph,
             *offset,
             *width,
             *height,
@@ -364,6 +396,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page,
         } => hyperlink::apply_insert_hyperlink(
             doc,
             story_id,
@@ -373,6 +406,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page.as_deref(),
         ),
         Operation::RemoveHyperlink {
             story_id,
@@ -382,6 +416,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page,
         } => hyperlink::apply_remove_hyperlink(
             doc,
             story_id,
@@ -391,6 +426,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page.as_deref(),
         ),
         Operation::SetFieldValue {
             story_id,
@@ -438,6 +474,33 @@ pub(crate) fn apply_inner(
         Operation::RestoreConditionVisibility { states } => {
             apply_restore_condition_visibility(doc, states)
         }
+        Operation::MovePage {
+            page_id,
+            after_page_id,
+        } => apply_move_page(doc, page_id, after_page_id.as_deref()),
+        Operation::OnMaster { master_id, op } => master::apply_on_master(doc, master_id, op),
+        Operation::CreateMaster {
+            master_id,
+            name,
+            width_pt,
+            height_pt,
+            duplicate_of,
+            restore_json,
+        } => master::apply_create_master(
+            doc,
+            master_id,
+            name.as_deref(),
+            *width_pt,
+            *height_pt,
+            duplicate_of.as_deref(),
+            restore_json.as_deref(),
+        ),
+        Operation::DeleteMaster { master_id } => master::apply_delete_master(doc, master_id),
+        Operation::RestoreMaster { master_json } => master::apply_restore_master(doc, master_json),
+        Operation::RenameMaster { master_id, name } => {
+            master::apply_rename_master(doc, master_id, name.as_deref())
+        }
+        Operation::SetSpreadOrder { spreads } => apply_set_spread_order(doc, spreads),
         Operation::ApplyMasterToPage { page, master } => {
             apply_master_to_page(doc, page, master.as_deref())
         }
@@ -445,6 +508,12 @@ pub(crate) fn apply_inner(
             page,
             clone_spread_json,
         } => apply_duplicate_page(doc, page, clone_spread_json.as_deref()),
+        Operation::RemovePageClone {
+            page,
+            cloned_page,
+            story_ids,
+            hyperlink_ids,
+        } => apply_remove_page_clone(doc, page, cloned_page, story_ids, hyperlink_ids),
         Operation::InsertSection {
             at_page,
             prefix,
@@ -472,6 +541,9 @@ pub(crate) fn apply_inner(
             *start_at,
         ),
         Operation::DeleteSection { section_id } => apply_delete_section(doc, section_id),
+        Operation::SetDocumentMetadata { key, value, caller } => {
+            layer::apply_document_metadata(doc, key, value, caller)
+        }
         Operation::SetRowHeight {
             story_id,
             table_id,
@@ -799,6 +871,8 @@ mod anchored_frame;
 mod batch_page;
 mod character;
 mod conditions;
+mod duplicate_nodes;
+pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
 mod duplicate_page;
 mod flow;
 mod guides;
@@ -811,6 +885,7 @@ mod move_node;
 mod nested;
 mod opacity_mask;
 mod paragraph;
+pub(crate) use paragraph::COMPOSER_EXPECTED;
 mod path_topology;
 mod place_image;
 mod planar_ops;
@@ -825,11 +900,13 @@ mod reorder;
 mod replace_image_bytes;
 mod sections;
 mod set_property;
+mod story;
 mod text_on_path;
 
 use batch_page::*;
 use character::*;
 use conditions::*;
+use duplicate_nodes::{apply_duplicate_nodes, apply_remove_duplicates};
 use duplicate_page::*;
 use flow::*;
 use guides::*;
@@ -846,6 +923,7 @@ use remove_node::*;
 use reorder::*;
 use sections::*;
 use set_property::*;
+use story::*;
 use text_on_path::*;
 
 pub(crate) use path_topology::{new_oval, new_rectangle, new_text_frame};

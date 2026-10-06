@@ -31,7 +31,7 @@
 //!
 //! The wire format is JSON-over-strings — same shape as the Rust-side
 //! `Operation` / `AppliedOperation` (`Serialize`/`Deserialize` on
-//! both ends). Per RETROSPECTIVE.md this isn't the best long-term
+//! both ends). Per an internal retrospective (not published) this isn't the best long-term
 //! answer, but it keeps the bridge surface tiny; promoting to typed
 //! objects via `serde-wasm-bindgen` is a follow-up.
 

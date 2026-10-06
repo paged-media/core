@@ -363,3 +363,57 @@ fn the_annual_late_registration_cost() {
         "the annual after a late registration equals a cold load with every face"
     );
 }
+
+/// Each page's display-list digest, by page id.
+fn digests(m: &CanvasModel) -> Vec<(String, u64)> {
+    m.built()
+        .pages
+        .iter()
+        .map(|p| (p.id.0.clone(), p.list.digest()))
+        .collect()
+}
+
+/// v65 — the pages a late font reports (`dirty_page_ids`, which the
+/// `fontRegistered` reply carries) are exactly the pages whose display
+/// list it changed: every page whose digest moved is reported, and every
+/// page not reported is byte-identical to the build before. Registering
+/// and clearing both.
+#[test]
+fn a_late_font_reports_exactly_the_pages_it_changed() {
+    let bytes = document(Some(0));
+    let mut m = load(&bytes, Vec::new());
+    for step in ["register", "clear"] {
+        let before = digests(&m);
+        let affected = match step {
+            "register" => m.register_font(lora()).expect("register"),
+            _ => m.clear_font_registry().expect("clear"),
+        };
+        assert_eq!(affected, vec![section(0)], "{step}");
+        let after = digests(&m);
+        assert_eq!(
+            before.iter().map(|p| &p.0).collect::<Vec<_>>(),
+            after.iter().map(|p| &p.0).collect::<Vec<_>>(),
+            "{step}: a fixed chain keeps its pages"
+        );
+        let reported: Vec<String> = m.dirty_page_ids().into_iter().map(|p| p.0).collect();
+        let changed: Vec<String> = after
+            .iter()
+            .zip(&before)
+            .filter(|(a, b)| a.1 != b.1)
+            .map(|(a, _)| a.0.clone())
+            .collect();
+        assert!(!changed.is_empty(), "{step}: the Lora story's pages change");
+        assert_eq!(
+            reported, changed,
+            "{step}: report the pages that changed, and only those"
+        );
+        assert!(
+            m.narrowed_dirty_pages().is_some(),
+            "{step}: narrowed below every page"
+        );
+        assert!(
+            reported.len() < after.len(),
+            "{step}: the other sections' pages are not reported"
+        );
+    }
+}

@@ -226,10 +226,41 @@ pub(super) fn apply_insert_page(
         name: None,
         show_master_items: None,
     };
+    // paged.data D-23 — a new page takes its master's margins, as in
+    // InDesign (a page's `<MarginPreference>` follows its master's until
+    // the page overrides it); with no master, or a master that declares
+    // none, the page it follows lends its own. Before, every inserted page
+    // had none — a margin box equal to the page.
+    let margins = master_id
+        .and_then(|m| doc.master_spread(m))
+        .and_then(|m| {
+            m.spread.pages.iter().find_map(|p| {
+                p.self_id
+                    .as_ref()
+                    .and_then(|id| m.spread.page_margins.get(id))
+            })
+        })
+        .or_else(|| {
+            let host = &doc.spreads.get(host_idx)?.spread;
+            let page = match after_page_id {
+                Some(pid) => host
+                    .pages
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(pid)),
+                None => host.pages.first(),
+            }?;
+            host.page_margins.get(page.self_id.as_deref()?)
+        })
+        .cloned();
+    let mut page_margins = std::collections::HashMap::new();
+    if let Some(m) = margins {
+        page_margins.insert(pid.clone(), m);
+    }
     let spread = Spread {
         self_id: Some(sid.clone()),
         item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, max_bottom + SPREAD_STACK_GAP_PT]),
         pages: vec![page],
+        page_margins,
         ..Spread::default()
     };
     doc.spreads.insert(
@@ -307,6 +338,159 @@ pub(super) fn apply_remove_page(
             page_self_id: Some(page_id.to_string()),
             restore_spread_json: Some(json),
         },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+/// The vertical extent of a spread on the pasteboard: (top, height) in
+/// spread-transform space.
+fn spread_extent(spread: &Spread) -> (f32, f32) {
+    let ty = spread.item_transform.map(|m| m[5]).unwrap_or(0.0);
+    let mut top = f32::MAX;
+    let mut bottom = f32::MIN;
+    for p in &spread.pages {
+        let pty = p.item_transform.map(|m| m[5]).unwrap_or(0.0);
+        top = top.min(ty + pty + p.bounds.top);
+        bottom = bottom.max(ty + pty + p.bounds.bottom);
+    }
+    if top > bottom {
+        (ty, 0.0)
+    } else {
+        (top, bottom - top)
+    }
+}
+
+fn placements(doc: &Document) -> Vec<crate::operation::SpreadPlacement> {
+    doc.spreads
+        .iter()
+        .map(|parsed| crate::operation::SpreadPlacement {
+            self_id: parsed.spread.self_id.clone().unwrap_or_default(),
+            item_transform: parsed.spread.item_transform,
+        })
+        .collect()
+}
+
+pub(super) fn apply_move_page(
+    doc: &mut Document,
+    page_id: &str,
+    after_page_id: Option<&str>,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Page(page_id.to_string());
+    let spread_of = |doc: &Document, pid: &str| {
+        doc.spreads.iter().position(|parsed| {
+            parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(pid))
+        })
+    };
+    let from = spread_of(doc, page_id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    if doc.spreads[from].spread.pages.len() > 1 {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::PageBounds,
+            reason: "page belongs to a multi-page spread; moving a page within or out of a \
+                     spread is not supported in v1"
+                .to_string(),
+        });
+    }
+    if after_page_id == Some(page_id) {
+        return Err(OperationError::InvalidValue {
+            node,
+            path: PropertyPath::PageBounds,
+            reason: "a page cannot follow itself".to_string(),
+        });
+    }
+    let before = placements(doc);
+    let parsed = doc.spreads.remove(from);
+    let to = match after_page_id {
+        None => 0,
+        Some(pid) => match spread_of(doc, pid) {
+            Some(i) => i + 1,
+            None => {
+                doc.spreads.insert(from, parsed);
+                return Err(OperationError::NodeNotFound(NodeId::Page(pid.to_string())));
+            }
+        },
+    };
+    doc.spreads.insert(to, parsed);
+
+    // Spreads stacked down the pasteboard restack in their new order (the
+    // first keeps its top, each next one a gap below); spreads that share
+    // one position keep it.
+    let tys: Vec<f32> = before
+        .iter()
+        .map(|p| p.item_transform.map(|m| m[5]).unwrap_or(0.0))
+        .collect();
+    let stacked = tys.windows(2).any(|w| (w[0] - w[1]).abs() > 0.01);
+    if stacked {
+        let mut top = doc
+            .spreads
+            .iter()
+            .map(|parsed| spread_extent(&parsed.spread).0)
+            .fold(f32::MAX, f32::min);
+        for parsed in doc.spreads.iter_mut() {
+            let (old_top, height) = spread_extent(&parsed.spread);
+            let mut m = parsed
+                .spread
+                .item_transform
+                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            m[5] += top - old_top;
+            parsed.spread.item_transform = Some(m);
+            top += height + SPREAD_STACK_GAP_PT;
+        }
+    }
+    Ok(AppliedOperation {
+        op: Operation::MovePage {
+            page_id: page_id.to_string(),
+            after_page_id: after_page_id.map(str::to_string),
+        },
+        inverse: Operation::SetSpreadOrder { spreads: before },
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
+}
+
+pub(super) fn apply_set_spread_order(
+    doc: &mut Document,
+    spreads: &[crate::operation::SpreadPlacement],
+) -> Result<AppliedOperation, OperationError> {
+    let before = placements(doc);
+    let named = |id: &str| before.iter().any(|p| p.self_id == id);
+    let complete = spreads.len() == doc.spreads.len()
+        && spreads.iter().all(|p| named(&p.self_id))
+        && spreads
+            .iter()
+            .enumerate()
+            .all(|(i, p)| spreads[..i].iter().all(|q| q.self_id != p.self_id));
+    if !complete {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::Page(String::new()),
+            path: PropertyPath::PageBounds,
+            reason: "SetSpreadOrder must name every spread exactly once".to_string(),
+        });
+    }
+    let mut pool: Vec<paged_scene::ParsedSpread> = std::mem::take(&mut doc.spreads);
+    for p in spreads {
+        let k = pool
+            .iter()
+            .position(|parsed| parsed.spread.self_id.as_deref() == Some(p.self_id.as_str()))
+            .expect("checked above");
+        let mut parsed = pool.remove(k);
+        parsed.spread.item_transform = p.item_transform;
+        doc.spreads.push(parsed);
+    }
+    Ok(AppliedOperation {
+        op: Operation::SetSpreadOrder {
+            spreads: spreads.to_vec(),
+        },
+        inverse: Operation::SetSpreadOrder { spreads: before },
         invalidation: InvalidationHint {
             structural: true,
             ..Default::default()

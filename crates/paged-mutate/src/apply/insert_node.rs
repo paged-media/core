@@ -13,7 +13,7 @@
  */
 
 use super::*;
-use paged_model::{FrameRef, Spread};
+use paged_model::{FrameRef, GraphicLine, Oval, Polygon, Rectangle, Spread, TextFrame};
 use paged_scene::Document;
 
 use crate::error::OperationError;
@@ -147,6 +147,21 @@ pub(super) fn register_frame_ref(
             }
         }
     }
+    // C-74: so do every group's members. They were left out, and an
+    // insert below a grouped item of the same kind re-seated the group
+    // onto its neighbours — the mirror of the removal fault in
+    // `unregister_frame_ref`, and the reason undoing a delete could not
+    // repair what the delete had done.
+    for group in spread.groups.iter_mut() {
+        for fr in group.members.iter_mut() {
+            if fr_same_kind(fr, &template) {
+                let i = fr_index(fr);
+                if i >= vec_pos {
+                    *fr = fr_with_index(fr, i + 1);
+                }
+            }
+        }
+    }
     if spread.frames_in_order.is_empty() {
         // A spread BORN empty — every page an editor session authors
         // from nothing — used to return here, and so never acquired a
@@ -178,47 +193,399 @@ pub(super) fn register_frame_ref(
         .insert(slot, fr_with_index(&template, vec_pos));
 }
 
+/// The list that names a page item, and the item's position in it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum RefHome {
+    /// `Spread::frames_in_order`.
+    Root(usize),
+    /// `Spread::groups[group].members`.
+    Group(usize, usize),
+    /// `Spread::nested_children[host]`.
+    Nested(String, usize),
+}
+
+/// Where `r` is listed, if anywhere. A page item is named by exactly
+/// one list: the spread's z-order, one group's members, or one
+/// container's pasted-in children (a mask item is named by none).
+pub(super) fn ref_home(spread: &Spread, r: FrameRef) -> Option<RefHome> {
+    if let Some(i) = spread.frames_in_order.iter().position(|x| *x == r) {
+        return Some(RefHome::Root(i));
+    }
+    for (gi, g) in spread.groups.iter().enumerate() {
+        if let Some(i) = g.members.iter().position(|x| *x == r) {
+            return Some(RefHome::Group(gi, i));
+        }
+    }
+    // Deterministic across runs: a `HashMap` walk has no stable order,
+    // and an item is listed by at most one host anyway.
+    let mut hosts: Vec<&String> = spread.nested_children.keys().collect();
+    hosts.sort();
+    for host in hosts {
+        if let Some(i) = spread.nested_children[host].iter().position(|x| *x == r) {
+            return Some(RefHome::Nested(host.clone(), i));
+        }
+    }
+    None
+}
+
 /// Unregister a page item removed from `vec_pos` of its kind vec;
 /// returns the z slot it occupied so the `RemoveNode` inverse can
 /// restore the exact stacking position.
+///
+/// The item's ref is dropped from EVERY list that can name it — the
+/// z-table, a group's members, a container's pasted-in children — and
+/// same-kind refs above it step down by one in all three. C-74: the
+/// members were not touched at all, so removing an item re-seated every
+/// group holding a later item of its kind (`r1, group[r2, r3], r4` →
+/// `group[r3, r4], r4`) while the op reported success. A caller that
+/// needs to know WHICH list named the item (to put it back there) asks
+/// [`ref_home`] before it calls this.
 pub(super) fn unregister_frame_ref(
     spread: &mut Spread,
     template: FrameRef,
     vec_pos: usize,
 ) -> Option<usize> {
-    // B-18: shift nested-children refs of the same kind past the
-    // removed vec slot (the removed item itself can't be nested —
-    // `apply_remove_node` rejects that before capture).
-    for children in spread.nested_children.values_mut() {
-        for fr in children.iter_mut() {
-            if fr_same_kind(fr, &template) {
-                let i = fr_index(fr);
-                if i > vec_pos {
-                    *fr = fr_with_index(fr, i - 1);
-                }
-            }
-        }
-    }
-    if spread.frames_in_order.is_empty() {
-        return None;
-    }
     let target = fr_with_index(&template, vec_pos);
-    let slot = spread
-        .frames_in_order
-        .iter()
-        .position(|fr| fr_same_kind(fr, &target) && fr_index(fr) == vec_pos);
-    if let Some(s) = slot {
-        spread.frames_in_order.remove(s);
-    }
-    for fr in spread.frames_in_order.iter_mut() {
+    let step_down = |fr: &mut FrameRef| {
         if fr_same_kind(fr, &template) {
             let i = fr_index(fr);
             if i > vec_pos {
                 *fr = fr_with_index(fr, i - 1);
             }
         }
+    };
+    for children in spread.nested_children.values_mut() {
+        children.retain(|fr| *fr != target);
+        children.iter_mut().for_each(step_down);
     }
+    for group in spread.groups.iter_mut() {
+        group.members.retain(|fr| *fr != target);
+        group.members.iter_mut().for_each(step_down);
+    }
+    if spread.frames_in_order.is_empty() {
+        return None;
+    }
+    let slot = spread.frames_in_order.iter().position(|fr| *fr == target);
+    if let Some(s) = slot {
+        spread.frames_in_order.remove(s);
+    }
+    spread.frames_in_order.iter_mut().for_each(step_down);
     slot
+}
+
+/// Move a just-registered ref out of the z-table and into a group's
+/// members at `slot` (the end when `None`). `InsertNode` with a
+/// `NodeId::Group` parent — what the inverse of removing a member is.
+pub(super) fn seat_in_group(
+    spread: &mut Spread,
+    r: FrameRef,
+    group_idx: usize,
+    slot: Option<usize>,
+) {
+    spread.frames_in_order.retain(|fr| *fr != r);
+    let members = &mut spread.groups[group_idx].members;
+    let at = slot.unwrap_or(members.len()).min(members.len());
+    members.insert(at, r);
+}
+
+/// Where an insert lands: `(spread id, group id)`. The parent is a
+/// spread (the item joins its z-order) or — C-74 — a GROUP on some
+/// spread (the item joins that group's members, with `z_slot` naming the
+/// member slot). The second is what puts a removed member back where it
+/// was; before it the inverse of that removal could only say "the
+/// spread", and the member came back as a second top-level entry.
+fn resolve_parent(
+    doc: &Document,
+    parent: &NodeId,
+    spec: &NodeSpec,
+) -> Result<(String, Option<String>), OperationError> {
+    match parent {
+        NodeId::Spread(id) => Ok((id.clone(), None)),
+        NodeId::Group(gid) => {
+            let host = doc
+                .spreads
+                .iter()
+                .find(|p| {
+                    p.spread
+                        .groups
+                        .iter()
+                        .any(|g| g.self_id.as_deref() == Some(gid.as_str()))
+                })
+                .and_then(|p| p.spread.self_id.clone())
+                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+            Ok((host, Some(gid.clone())))
+        }
+        _ => Err(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: spec.node_id().kind().to_string(),
+        }),
+    }
+}
+
+/// Make sure the story a text frame names exists, creating the empty
+/// story when it does not (the fresh-insert case, and the redo of an
+/// undone insert). An existing story is left alone — that is how a
+/// re-inserted frame gets its text back. Returns whether it created the
+/// story: the insert's inverse then removes it again
+/// ([`invert_insert_minting`]).
+fn ensure_story(doc: &mut Document, id: &str) -> bool {
+    if doc.stories.iter().any(|s| s.self_id == id) {
+        return false;
+    }
+    let mut story = paged_model::Story::default();
+    // One empty paragraph + run — the shape an empty parsed story has;
+    // the text ops' `locate()` needs ≥1 paragraph.
+    story.paragraphs.push(paged_model::Paragraph {
+        runs: vec![paged_model::CharacterRun::default()],
+        ..Default::default()
+    });
+    doc.stories.push(paged_scene::ParsedStory {
+        // No source entry — minted post-parse. The empty src is the
+        // writer's mint signal: `paged-write` (C-8) emits a full
+        // `Stories/Story_<sanitized-id>.xml` part + designmap ref for it
+        // on export.
+        src: String::new(),
+        self_id: id.to_string(),
+        story,
+    });
+    true
+}
+
+/// The inverse of an insert: remove the node, and — when the insert
+/// created the frame's story (`minted`) — that story too. Without the
+/// second step undoing an `insertTextFrame` left an empty, frameless
+/// story behind, which a save wrote out as a `Stories/` part. Only the
+/// INSERT drops the story: removing a frame any other way keeps it, so
+/// the undo of a delete re-attaches the same story, text and all.
+fn invert_insert_minting(spec: &NodeSpec, minted: Option<&str>) -> Operation {
+    match minted {
+        Some(story_id) => Operation::Batch {
+            ops: vec![
+                invert_insert_node(spec),
+                Operation::RemoveStory {
+                    story_id: story_id.to_string(),
+                },
+            ],
+        },
+        None => invert_insert_node(spec),
+    }
+}
+
+/// Put a table `RemoveNode` captured back: its host paragraph, verbatim,
+/// at the index it was removed from (clamped to the story's end).
+/// `Err(None)` is a capture that does not decode.
+fn insert_captured_table(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    node: &NodeId,
+    story_id: &str,
+    table_id: &str,
+    json: &str,
+) -> Result<AppliedOperation, Option<OperationError>> {
+    if parent != &NodeId::Story(story_id.to_string()) {
+        return Err(Some(OperationError::InvalidParent {
+            parent: parent.clone(),
+            child_kind: "Table".to_string(),
+        }));
+    }
+    if find_table_pos(doc, story_id, table_id).is_some() {
+        return Err(Some(OperationError::DuplicateNodeId {
+            id: table_id.to_string(),
+        }));
+    }
+    let mut envelope: serde_json::Value = serde_json::from_str(json).map_err(|_| None)?;
+    let para: paged_model::Paragraph = envelope
+        .get_mut("paragraph")
+        .map(serde_json::Value::take)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .ok_or(None)?;
+    let si = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| Some(OperationError::NodeNotFound(parent.clone())))?;
+    let paragraphs = &mut doc.stories[si].story.paragraphs;
+    let at = position.min(paragraphs.len());
+    paragraphs.insert(at, para);
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position: at,
+            node: NodeSpec::Captured {
+                node: node.clone(),
+                json: json.to_string(),
+                image_bytes: None,
+            },
+            z_slot: None,
+        },
+        inverse: Operation::RemoveNode { node: node.clone() },
+        invalidation,
+    })
+}
+
+/// C-75 — re-insert a node `RemoveNode` captured whole
+/// ([`NodeSpec::Captured`]): the model struct goes back verbatim, with
+/// its image bytes and the side-map rows that left the spread with it.
+fn apply_insert_captured(
+    doc: &mut Document,
+    parent: &NodeId,
+    position: usize,
+    z_slot: Option<usize>,
+    spec: &NodeSpec,
+) -> Result<AppliedOperation, OperationError> {
+    let NodeSpec::Captured {
+        node,
+        json,
+        image_bytes,
+    } = spec
+    else {
+        unreachable!("apply_insert_captured called with another spec");
+    };
+    let malformed = |what: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path: crate::operation::PropertyPath::FrameTransform,
+        reason: format!("malformed captured node: {what}"),
+    };
+    if let NodeId::Table { story_id, table_id } = node {
+        return insert_captured_table(doc, parent, position, node, story_id, table_id, json)
+            .map_err(|e| e.unwrap_or_else(|| malformed("no paragraph".to_string())));
+    }
+    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
+    if node_exists(doc, node) {
+        return Err(OperationError::DuplicateNodeId {
+            id: node.self_id().to_string(),
+        });
+    }
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| malformed(e.to_string()))?;
+    let item = envelope
+        .get_mut("item")
+        .map(serde_json::Value::take)
+        .ok_or_else(|| malformed("no item".to_string()))?;
+    // Decode BEFORE touching the document, so a capture that does not
+    // decode leaves it untouched.
+    enum Item {
+        TextFrame(Box<TextFrame>),
+        Rectangle(Box<Rectangle>),
+        Oval(Box<Oval>),
+        GraphicLine(Box<GraphicLine>),
+        Polygon(Box<Polygon>),
+    }
+    let decode = |e: serde_json::Error| malformed(e.to_string());
+    let item = match node {
+        NodeId::TextFrame(_) => Item::TextFrame(serde_json::from_value(item).map_err(decode)?),
+        NodeId::Rectangle(_) => {
+            let mut r: Box<Rectangle> = serde_json::from_value(item).map_err(decode)?;
+            r.image_bytes = image_bytes.clone();
+            Item::Rectangle(r)
+        }
+        NodeId::Oval(_) => {
+            let mut o: Box<Oval> = serde_json::from_value(item).map_err(decode)?;
+            o.image_bytes = image_bytes.clone();
+            Item::Oval(o)
+        }
+        NodeId::GraphicLine(_) => Item::GraphicLine(serde_json::from_value(item).map_err(decode)?),
+        NodeId::Polygon(_) => {
+            let mut p: Box<Polygon> = serde_json::from_value(item).map_err(decode)?;
+            p.image_bytes = image_bytes.clone();
+            Item::Polygon(p)
+        }
+        other => return Err(malformed(format!("{other:?} is not a page item"))),
+    };
+    let labels: Option<Vec<(String, String)>> = envelope
+        .get_mut("labels")
+        .map(serde_json::Value::take)
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(decode)?
+        .flatten();
+    let image_metadata: Option<paged_model::ImageMetadata> = envelope
+        .get_mut("imageMetadata")
+        .map(serde_json::Value::take)
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(decode)?
+        .flatten();
+
+    let mut minted: Option<String> = None;
+    if let Item::TextFrame(frame) = &item {
+        if let Some(story) = frame.parent_story.clone() {
+            if ensure_story(doc, &story) {
+                minted = Some(story);
+            }
+        }
+    }
+    let spread = find_spread_mut(doc, &parent_id)
+        .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
+    let s = &mut spread.spread;
+    let len = match &item {
+        Item::TextFrame(_) => s.text_frames.len(),
+        Item::Rectangle(_) => s.rectangles.len(),
+        Item::Oval(_) => s.ovals.len(),
+        Item::GraphicLine(_) => s.graphic_lines.len(),
+        Item::Polygon(_) => s.polygons.len(),
+    };
+    if position > len {
+        return Err(OperationError::InvalidPosition {
+            parent: parent.clone(),
+            position,
+            len,
+        });
+    }
+    let new_ref = match item {
+        Item::TextFrame(f) => {
+            s.text_frames.insert(position, *f);
+            FrameRef::TextFrame(position)
+        }
+        Item::Rectangle(r) => {
+            s.rectangles.insert(position, *r);
+            FrameRef::Rectangle(position)
+        }
+        Item::Oval(o) => {
+            s.ovals.insert(position, *o);
+            FrameRef::Oval(position)
+        }
+        Item::GraphicLine(l) => {
+            s.graphic_lines.insert(position, *l);
+            FrameRef::GraphicLine(position)
+        }
+        Item::Polygon(p) => {
+            s.polygons.insert(position, *p);
+            FrameRef::Polygon(position)
+        }
+    };
+    register_frame_ref(s, new_ref, position, z_slot);
+    if let Some(gid) = &group_home {
+        let group_idx = s
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(gid.as_str()))
+            .expect("resolved above: the group is on this spread");
+        seat_in_group(s, new_ref, group_idx, z_slot);
+    }
+    let id = node.self_id().to_string();
+    if let Some(labels) = labels {
+        s.labels.insert(id.clone(), labels);
+    }
+    if let Some(meta) = image_metadata {
+        s.image_metadata.insert(id, meta);
+    }
+
+    Ok(AppliedOperation {
+        op: Operation::InsertNode {
+            parent: parent.clone(),
+            position,
+            node: spec.clone(),
+            z_slot,
+        },
+        inverse: invert_insert_minting(spec, minted.as_deref()),
+        invalidation: InvalidationHint {
+            structural: true,
+            ..Default::default()
+        },
+    })
 }
 
 pub(super) fn apply_insert_node(
@@ -241,15 +608,12 @@ pub(super) fn apply_insert_node(
     if let NodeSpec::Table { .. } = spec {
         return apply_insert_table(doc, parent, position, spec);
     }
-    let parent_id = match parent {
-        NodeId::Spread(id) => id,
-        _ => {
-            return Err(OperationError::InvalidParent {
-                parent: parent.clone(),
-                child_kind: spec.node_id().kind().to_string(),
-            });
-        }
-    };
+    // C-75 — a node captured whole by `RemoveNode` goes back verbatim.
+    if let NodeSpec::Captured { .. } = spec {
+        return apply_insert_captured(doc, parent, position, z_slot, spec);
+    }
+    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
+    let parent_id = &parent_id;
 
     // Uniqueness across the document — IDML Self IDs must be unique.
     let new_self_id = spec.node_id();
@@ -268,28 +632,29 @@ pub(super) fn apply_insert_node(
     // of an undone insert). `None` attaches nothing — the legacy
     // story-less shape stays byte-identical across remove → undo (the
     // kernel invariant). Runs BEFORE the spread borrow (`doc.stories`).
+    //
+    // The spread and position are checked first, so a refused insert
+    // never leaves a minted story behind.
+    let mut minted: Option<&str> = None;
     let text_frame_story: Option<String> = match spec {
         NodeSpec::TextFrame {
             parent_story: Some(id),
             ..
         } => {
-            if !doc.stories.iter().any(|s| s.self_id == *id) {
-                let mut story = paged_model::Story::default();
-                // One empty paragraph + run — the shape an empty parsed
-                // story has; the text ops' `locate()` needs ≥1 paragraph.
-                story.paragraphs.push(paged_model::Paragraph {
-                    runs: vec![paged_model::CharacterRun::default()],
-                    ..Default::default()
+            let len = find_spread_mut(doc, parent_id)
+                .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?
+                .spread
+                .text_frames
+                .len();
+            if position > len {
+                return Err(OperationError::InvalidPosition {
+                    parent: parent.clone(),
+                    position,
+                    len,
                 });
-                doc.stories.push(paged_scene::ParsedStory {
-                    // No source entry — minted post-parse. The empty src
-                    // is the writer's mint signal: `paged-write` (C-8)
-                    // emits a full `Stories/Story_<sanitized-id>.xml`
-                    // part + designmap ref for it on export.
-                    src: String::new(),
-                    self_id: id.clone(),
-                    story,
-                });
+            }
+            if ensure_story(doc, id) {
+                minted = Some(id);
             }
             Some(id.clone())
         }
@@ -473,9 +838,37 @@ pub(super) fn apply_insert_node(
             // (a table targets a `NodeId::Story`, not this spread path).
             unreachable!("Table insert routed via the early-return");
         }
+        NodeSpec::Captured { .. } => {
+            unreachable!("Captured routed via the early-return");
+        }
     }
 
-    let inverse = invert_insert_node(spec);
+    // C-74 — a group parent: the arms above registered the item in the
+    // z-table like any other insert (which also renumbered every list);
+    // re-seat it in the group's members instead.
+    if let Some(gid) = &group_home {
+        let new_ref = match spec {
+            NodeSpec::TextFrame { .. } => FrameRef::TextFrame(position),
+            NodeSpec::Rectangle { .. } => FrameRef::Rectangle(position),
+            NodeSpec::Oval { .. } => FrameRef::Oval(position),
+            NodeSpec::GraphicLine { .. } => FrameRef::GraphicLine(position),
+            NodeSpec::Polygon { .. } => FrameRef::Polygon(position),
+            NodeSpec::CloneTranslate { .. }
+            | NodeSpec::Table { .. }
+            | NodeSpec::Captured { .. } => {
+                unreachable!("routed via the early-returns")
+            }
+        };
+        let group_idx = spread
+            .spread
+            .groups
+            .iter()
+            .position(|g| g.self_id.as_deref() == Some(gid.as_str()))
+            .expect("resolved above: the group is on this spread");
+        seat_in_group(&mut spread.spread, new_ref, group_idx, z_slot);
+    }
+
+    let inverse = invert_insert_minting(spec, minted);
     Ok(AppliedOperation {
         op: Operation::InsertNode {
             parent: parent.clone(),

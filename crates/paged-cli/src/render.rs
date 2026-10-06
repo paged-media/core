@@ -95,6 +95,7 @@ pub fn render_pages(
             page_id: page_id.clone(),
             target_width_px,
             dpi: Some(dpi),
+            hide_items: Vec::new(),
         })?;
         let png = expect_reply!(reply, WorkerToMainKind::SnapshotReady(p) => p,
             format!("render page {}", index + 1))?;

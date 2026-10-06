@@ -15,7 +15,7 @@
 //! Text variables and page markers resolve as InDesign resolves them.
 //!
 //! The `variables` paged-gen sample is written in InDesign's own
-//! vocabulary (thoughts ADR 033, RFI C-37). [`INDESIGN`] is what InDesign
+//! vocabulary (ADR 033, RFI C-37). [`INDESIGN`] is what InDesign
 //! 20.0.1 printed for it — `pdftotext -layout` of its PDF export of the
 //! sample, `corpus/generated/variables.pdf`, exported 2026-10-01 — one
 //! entry per page, header and footer lines plus the variable-bearing body

@@ -148,6 +148,7 @@ pub(super) fn apply_insert_hyperlink(
     source_id: &str,
     dest_id: &str,
     hyperlink_id: &str,
+    page: Option<&str>,
 ) -> Result<AppliedOperation, OperationError> {
     if start >= end {
         return Err(OperationError::InvalidPosition {
@@ -187,13 +188,30 @@ pub(super) fn apply_insert_hyperlink(
         .position(|s| s.self_id == story_id)
         .ok_or_else(|| OperationError::NodeNotFound(NodeId::Story(story_id.to_string())))?;
 
+    // v69 — a page destination must name a page of the document.
+    if let Some(pid) = page {
+        let exists = doc.spreads.iter().any(|parsed| {
+            parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(pid))
+        });
+        if !exists {
+            return Err(OperationError::NodeNotFound(NodeId::Page(pid.to_string())));
+        }
+    }
+
     tag_source_over_range(&mut doc.stories[story_idx].story, start, end, source_id);
 
     doc.designmap
         .hyperlink_destinations
         .push(paged_model::HyperlinkDestination {
             self_id: dest_id.to_string(),
-            kind: paged_model::HyperlinkDestinationKind::Url(url.to_string()),
+            kind: match page {
+                Some(pid) => paged_model::HyperlinkDestinationKind::Page(pid.to_string()),
+                None => paged_model::HyperlinkDestinationKind::Url(url.to_string()),
+            },
         });
     doc.designmap.hyperlinks.push(paged_model::Hyperlink {
         self_id: hyperlink_id.to_string(),
@@ -212,6 +230,7 @@ pub(super) fn apply_insert_hyperlink(
             source_id: source_id.to_string(),
             dest_id: dest_id.to_string(),
             hyperlink_id: hyperlink_id.to_string(),
+            page: page.map(str::to_string),
         },
         inverse: Operation::RemoveHyperlink {
             story_id: story_id.to_string(),
@@ -221,6 +240,7 @@ pub(super) fn apply_insert_hyperlink(
             source_id: source_id.to_string(),
             dest_id: dest_id.to_string(),
             hyperlink_id: hyperlink_id.to_string(),
+            page: page.map(str::to_string),
         },
         invalidation,
     })
@@ -237,6 +257,7 @@ pub(super) fn apply_remove_hyperlink(
     source_id: &str,
     dest_id: &str,
     hyperlink_id: &str,
+    page: Option<&str>,
 ) -> Result<AppliedOperation, OperationError> {
     let story_idx = doc
         .stories
@@ -270,6 +291,7 @@ pub(super) fn apply_remove_hyperlink(
             source_id: source_id.to_string(),
             dest_id: dest_id.to_string(),
             hyperlink_id: hyperlink_id.to_string(),
+            page: page.map(str::to_string),
         },
         inverse: Operation::InsertHyperlink {
             story_id: story_id.to_string(),
@@ -279,6 +301,7 @@ pub(super) fn apply_remove_hyperlink(
             source_id: source_id.to_string(),
             dest_id: dest_id.to_string(),
             hyperlink_id: hyperlink_id.to_string(),
+            page: page.map(str::to_string),
         },
         invalidation,
     })

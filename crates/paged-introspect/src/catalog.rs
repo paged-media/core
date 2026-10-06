@@ -240,6 +240,8 @@ fn host_functions() -> Vec<HostFn> {
            "Apply a paragraph/character style to a story range. Scope inferred from the ref prefix (CharacterStyle/… else Paragraph)."),
         f!("paged.createGroup", "([id, ...])", "bool", "author",
            "Group two-or-more elements; <2 valid members returns false."),
+        f!("paged.duplicateElements", "([id, ...], dx, dy)", "string[] (created ids) JSON | null", "author",
+           "Duplicate page items: a whole clone of each (properties, plugin metadata, group members, pasted-in children, a text frame's story), offset by (dx, dy) pt and inserted directly above its source, in one undo step. Selects the clones and returns their kind:id addresses in source order; null when the engine refuses (threaded text frame, anchored object, opacity mask, an element named together with its group)."),
         // --- history ---
         f!("paged.undo", "()", "bool", "history", "Undo the last mutation."),
         f!("paged.redo", "()", "bool", "history", "Redo the last undone mutation."),
@@ -271,9 +273,15 @@ fn host_functions() -> Vec<HostFn> {
         // --- complete mutation surface: pages & masters ---
         f!("paged.deletePage", "(pageId)", "bool", "author", "Delete a page."),
         f!("paged.duplicatePage", "(pageId)", "string | null", "author",
-           "Duplicate a single-page spread after the source; returns the new page selfId."),
+           "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."),
         f!("paged.resizePage", "(pageId, [t,l,b,r])", "bool", "write", "Set a page's GeometricBounds in page-inner points."),
         f!("paged.applyMasterToPage", "(pageId, masterId?)", "bool", "write", "Apply a master to a page (omit/null detaches)."),
+        f!("paged.movePage", "(pageId, afterPageId?)", "bool", "write", "Move a page to follow another (omit/null: to the front)."),
+        f!("paged.createMaster", "(masterId, { name?, widthPt?, heightPt?, duplicateOf? })", "bool", "author", "Create a master spread: one page of the given size, or a copy of another master."),
+        f!("paged.deleteMaster", "(masterId)", "bool", "author", "Delete a master no page applies."),
+        f!("paged.renameMaster", "(masterId, name?)", "bool", "write", "Set (omit/null: clear) a master's name."),
+        f!("paged.onMaster", "(masterId, mutation)", "bool", "write", "Apply a mutation ({ op, args }) to a master spread's items."),
+        f!("paged.setPageMetadata", "(pageId, key, value?)", "bool", "write", "Set or delete one plugin-metadata entry on a page (value: the JSON envelope)."),
         // --- frames & groups ---
         f!("paged.deleteElement", "(id)", "bool", "author", "Delete a page item (kind:id address or bare self id)."),
         f!("paged.dissolveGroup", "(groupId)", "bool", "author", "Ungroup; members return to the group's paint slot."),
@@ -308,6 +316,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setRowHeight", "(storyId, tableId, row, height?)", "bool", "write", "Set/clear a table row height in pt."),
         f!("paged.setColumnWidth", "(storyId, tableId, col, width?)", "bool", "write", "Set/clear a table column width in pt."),
         f!("paged.insertTableRow", "(storyId, tableId, at)", "bool", "author", "Insert an empty body row at index."),
+        f!("paged.deleteTable", "(storyId, tableId)", "bool", "author", "Delete a whole table and its host paragraph; undo restores every cell."),
         f!("paged.deleteTableRow", "(storyId, tableId, at)", "bool", "author", "Delete the body row at index."),
         f!("paged.insertTableColumn", "(storyId, tableId, at)", "bool", "author", "Insert an empty column at index."),
         f!("paged.deleteTableColumn", "(storyId, tableId, at)", "bool", "author", "Delete the column at index."),
@@ -363,6 +372,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setUseStandardLabForSpots", "(enabled)", "bool", "write", "Prefer spots' Lab primary over their CMYK alternate in previews."),
         // --- plugin metadata & batch ---
         f!("paged.setPluginMetadata", "(elemId, key, value?, caller?)", "bool", "write", "Write one Label key/value pair on a leaf page item (value null deletes)."),
+        f!("paged.setDocumentMetadata", "(key, value?, caller?)", "bool", "write", "Write one document-scoped Label key/value pair (value null deletes); undoable."),
         f!("paged.batch", "([mutations])", "bool", "author", "Apply an array of { op, args } mutation objects as ONE undoable step."),
         // --- selection setters (application state, NOT undoable) ---
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),
@@ -409,7 +419,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- anchored frames & hyperlinks ---
         f!("paged.insertAnchoredFrame", "(storyId, offset, width, height, imageUri?)", "bool", "author",
            "Anchor a frame in the text at a story offset; with imageUri the frame is created holding that image."),
-        f!("paged.insertHyperlink", "(storyId, start, end, url)", "bool", "author",
+        f!("paged.insertHyperlink", "(storyId, start, end, url, pageId?)", "bool", "author",
            "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."),
         // --- layer attributes ---
         f!("paged.layerSetVisible", "(layerId, visible)", "bool", "write", "Show or hide a layer."),
@@ -807,6 +817,7 @@ property_paths! {
         ParagraphNumberingContinue => "paragraphNumberingContinue",
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle",
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle",
+        ParagraphComposer => "paragraphComposer",
     }
 
     hidden {
@@ -1141,7 +1152,11 @@ mod tests {
         // `paragraphNumberingCharacterStyle`, protocol 64) — modelled on
         // the paragraph (d10ffc9) and rendered (6192c72), but with no
         // setter until now.
-        assert_eq!(cat.settable_paths.len(), 219, "settable path count drifted");
+        //
+        // 219 -> 220: `paragraphComposer` (protocol 65) — modelled and
+        // laid out since fc2df8a (the Single-line Composer), with no
+        // setter until now.
+        assert_eq!(cat.settable_paths.len(), 220, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

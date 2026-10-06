@@ -500,14 +500,99 @@ export type WorkerToMain = WorkerToMainKind & {
 // The surface is shared now and only the parameter differs. Additive:
 // serde defaults the field, an older worker ignores it and runs the
 // default budget, and every existing caller is unchanged.
-// v64 — `SetFlowGrowRule` (thoughts ADR 026): a story's frame chain may
+// v64 — `SetFlowGrowRule` (ADR 026): a story's frame chain may
 // GROW. The renderer then adds generated pages after the last frame's page
 // while the story oversets, as InDesign's Smart Text Reflow does (measured:
 // end of story, the last page's master, a margin-box frame with default
 // options), and drops them when empty. The pages are derived at layout, so
 // the op carries only the rule and its inverse is the prior rule. A new op
 // an older worker cannot apply, hence the bump.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(64);
+// v65 — the paragraph-style editor's reads and writes:
+//   - `paragraphComposer`, a new `PropertyPath` at paragraph and
+//     paragraph-style level (`Value::Text`, the IDML composer name: "HL
+//     Composer", "HL Single", "HL Composer Optyca", "HL Single Optyca";
+//     "" clears). An unknown name is refused on the wire. An older worker
+//     cannot deserialise the path, hence the bump.
+//   - `RequestStyleProperties { collection, styleId }` → `StyleProperties
+//     { result }`: a style definition's settable properties, in the
+//     setter's shapes — the read a paragraph-style editor needs.
+//   - `StorySummary.growRule: { grow, maxPages, copyFrameOptions } | null`
+//     (the `stories` collection and `paged.stories()`): a story's ADR 026
+//     grow rule, readable at last. Additive on a reply.
+//   - `fontRegistered` / `fontRegistryCleared` report `pageIds` (and
+//     `pageStructureChanged` / `pageSizesPt`): the pages a late font
+//     re-laid out, so the host repaints exactly those. `fontRegistry
+//     Cleared` becomes a struct variant (a payload where there was none).
+// v65 also carries the drawing wave (RFI C-63 / C-24 / C-64), stacked on
+// the same unpublished number:
+//   - the effect paths, `frameOpacity` / `frameBlendMode` and
+//     `frameStrokeAlignment` reach the kinds that draw them (Polygon,
+//     Oval, TextFrame, Group) — no new path, more `(kind, path)` pairs
+//     accepted, and the descriptor reads what it now writes;
+//   - `DuplicateElements { elementIds, offset }`: a whole, translated
+//     clone of each element directly above its source, one undo step,
+//     the new ids in `mutationApplied.minted`. A new op an older worker
+//     cannot apply.
+// v66 — `RequestTextOutlines { id }` → `TextOutlines { result }` (RFI
+// C-69): a text frame's composed glyphs as path outlines in page space,
+// one run per fill colour — what "Create Outlines" inserts as compound
+// paths. A new message kind an older worker cannot answer, hence the
+// bump.
+// v66 — the paged.image batch (binary lanes + part deletion):
+//   - `DeletePagedPart { path, caller? }` → `PagedPartDeleted { existed }`:
+//     a part the loaded container carries is tombstoned, so read/list stop
+//     answering it and `ExportPaged` leaves it out. A new kind an older
+//     worker cannot deserialise, hence the bump.
+//   - `SceneItem::Image.rgba` / `PixelTile.rgba` are refcounted
+//     (`bytes::Bytes`): a rebuild hands the display list the refcount, not
+//     a copy. The JSON shape (`number[]`) is unchanged.
+//   - Binary doors on the canvas-wasm surface (no JSON, `Uint8Array` in or
+//     out; replies are the same `WorkerToMain` envelopes): `submitScene
+//     ImageDirect` (a frame's scene layer becomes one image),
+//     `submitSceneImageTilesDirect` (patch rectangles of that image in
+//     place; only the pages showing it re-encode, not the whole cache),
+//     `writePagedPartDirect`, `readPagedPartDirect`,
+//     `placedAssetBytesDirect` and `mutateWithBytesDirect` (a mutation —
+//     a `batch` too — whose first `replaceImageBytes` with empty `bytes`
+//     takes the transferred buffer).
+// v67 — snapping moves into the engine (RFI C-68):
+//   - `RequestSnapPoint { query }` → `SnapPoint { result }`: snap one
+//     page-local point to the points (anchors, frame corners, oval
+//     quadrant points, centres, the page), the x / y lines through them,
+//     ruler guides, the document grid and the nearest outline — one
+//     resolver for the Pen, Direct Selection and any plugin tool.
+//   - `SetSnapSettings { settings }` → `SnapSettingsApplied { settings }`:
+//     the session's tolerance and target switches, which the translate,
+//     resize and path-edit gestures obey too.
+//   - Gestures: translate aligns with every visible leaf kind (it saw
+//     text frames and rectangles only), resize snaps the edges it moves,
+//     a path edit snaps the dragged point.
+// Two new message kinds an older worker cannot answer, hence the bump.
+// v68 — the paged.web batch: scene-layer text in its own face.
+//   - `SceneItem::Text` honours `family` + `style` (reserved since v40 and
+//     ignored — every run drew in the document default font) and gains
+//     `weight` (CSS 100..900; the `wght` of a variable face, and the style
+//     name when `style` is absent) and `italic`. A run resolves through the
+//     faces the host registered; only an unresolvable family draws in the
+//     default font, and that is reported: a `FontSubstituted` diagnostic
+//     carrying the frame id and the face, and `SceneLayerApplied.
+//     fontFallbacks`. Registering or clearing fonts rebuilds the frames
+//     whose scene text names the family.
+//   - All fields additive; the bump is for the BEHAVIOUR: a host cannot
+//     tell a worker that draws `family` from one that ignores it by shape,
+//     so it gates per-run faces on `protocol >= 68`.
+// v69 — the paged.data batch.
+//   - `insertField.contentOffset`: place a field at the CARET. The caret
+//     (`ContentSelection`, `host.text.caret()`) counts UTF-8 bytes plus a
+//     synthetic `\n` per paragraph; field ops count chars with no
+//     separator. The engine converts at apply time, so a batch that types
+//     first still lands right. Additive; an older worker ignores it.
+//   - Behaviour: text typed at a field's edge lands beside the field, not
+//     inside its run (a refresh used to overwrite it).
+//   - `setDocumentMetadata`: a document-scoped, UNDOABLE plugin label
+//     (`DesignMap::labels`), read back in `DocumentMeta.pluginMetadata`;
+//     persisted in the `.paged` native model part (not yet in IDML).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -546,6 +631,12 @@ pub struct ProtocolVersion(pub u32);
 /// had to either send one mutation per element (paying a full rebuild
 /// each) or re-discover the ids with a scene walk. This is the list it
 /// could not get.
+///
+/// A `DuplicateElements` fills it too (C-64): it is the one single
+/// mutation that mints more than one element — a clone per source, in
+/// the order the sources were named — so `created_id` (its LAST clone)
+/// could not carry the answer. A group's clone is one entry, its group
+/// id; a text frame's clone carries the story copied for it.
 ///
 /// `handle` is the name a C-15 `BindCreated` child gave the element
 /// (`None` when nothing named it); `story_id` is the story the creating
@@ -821,6 +912,11 @@ pub enum MainToWorkerKind {
         target_width_px: u32,
         #[serde(default)]
         dpi: Option<f32>,
+        /// v69 — draw the page without these items (a group: all its
+        /// members): a slideshow build step, rendered without touching the
+        /// document. Empty draws the page as it is.
+        #[serde(default)]
+        hide_items: Vec<crate::element_selection::ElementId>,
     },
     /// Replace the worker's current selection. Phase 3 Item 1 — the
     /// worker mirrors the main thread's `ContentSelection` so the
@@ -941,6 +1037,20 @@ pub enum MainToWorkerKind {
     RequestPathAnchors {
         id: crate::element_selection::ElementId,
     },
+    /// v66 (RFI C-69) — a text frame's composed glyphs as outlines.
+    RequestTextOutlines {
+        id: crate::element_selection::ElementId,
+    },
+    /// v67 (RFI C-68) — snap one page-local point. Reply: `SnapPoint`.
+    RequestSnapPoint {
+        query: crate::snap_point::SnapPointQuery,
+    },
+    /// v67 (RFI C-68) — replace the session's snapping preferences (all
+    /// gestures and `RequestSnapPoint` obey them). Survives document
+    /// loads; not saved, not undoable. Reply: `SnapSettingsApplied`.
+    SetSnapSettings {
+        settings: crate::snap_point::SnapSettings,
+    },
     /// B-06 (protocol v30) — closest on-curve point on the element's
     /// path. `point` is in the element's LOCAL coordinate space (the
     /// same space `PathAnchors` reports — callers inverse-apply
@@ -1002,6 +1112,18 @@ pub enum MainToWorkerKind {
     /// `StoryContentResult` whose `content` is `None` when the story id doesn't
     /// resolve.
     RequestStoryContent { story_id: String },
+    /// v65 — read one style definition's settable properties: every path
+    /// `Mutation::SetStyleProperty` accepts for that collection, with the
+    /// style's OWN value in the shape the setter takes (`""` /
+    /// `Length(None)` when it inherits through `BasedOn`), so a style
+    /// editor can render and write back without re-deriving the schema.
+    /// Pure READ. Reply: `StyleProperties` whose `result` is `None` when
+    /// the style does not exist; object / cell / table styles, which have
+    /// no settable path yet, answer with no entries.
+    RequestStyleProperties {
+        collection: paged_mutate::StyleCollection,
+        style_id: String,
+    },
     /// v42 (C-5 / I-04) — read the ORIGINAL encoded bytes (PSD / JPEG /
     /// PNG file) of the placed image hosted by the frame `element_id`, so
     /// a plugin (paged.image) can ingest a document's placed asset into
@@ -1236,6 +1358,17 @@ pub enum MainToWorkerKind {
     /// v51 — list `.paged` part paths under `prefix` (the `paged/` namespace
     /// only). Reply: `PagedPartList` (or `PagedPartFailed`).
     ListPagedParts { prefix: String },
+    /// v66 — delete a `.paged` part. It leaves the live overlay and, when
+    /// the loaded container carries it, is tombstoned so read/list stop
+    /// answering it and the next `ExportPaged` leaves it out. Same
+    /// `paged/` boundary and C-34 `caller` gate as `WritePagedPart`; not
+    /// undoable, like the write. Reply: `PagedPartDeleted` (or
+    /// `PagedPartFailed`).
+    DeletePagedPart {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
+    },
     /// v51 — serialise the document as a `.paged` container: a valid IDML
     /// package + the plugin `paged/` parts + a refreshed `manifest.json`.
     /// Reply: `PagedExported` / `PagedPartFailed`.
@@ -1592,9 +1725,33 @@ pub enum WorkerToMainKind {
     },
     /// `RegisterFont` reply: the font is now part of the worker's
     /// asset resolver.
-    FontRegistered { family: String },
-    /// `ClearFontRegistry` reply.
-    FontRegistryCleared,
+    ///
+    /// v65 — with a document open, the face re-lays out the stories whose
+    /// runs now resolve to it (core 133f19b), and `page_ids` names the
+    /// pages whose display lists that changed, so the host repaints them
+    /// (empty: nothing changed, or no document). `page_structure_changed`
+    /// / `page_sizes_pt` as on `MutationApplied`: a growing story can gain
+    /// or lose generated pages when its face changes. All three are
+    /// `#[serde(default)]`.
+    FontRegistered {
+        family: String,
+        #[serde(default)]
+        page_ids: Vec<PageId>,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
+    },
+    /// `ClearFontRegistry` reply. v65 — the same page report as
+    /// `FontRegistered`, for the stories that lost a face.
+    FontRegistryCleared {
+        #[serde(default)]
+        page_ids: Vec<PageId>,
+        #[serde(default)]
+        page_structure_changed: bool,
+        #[serde(default)]
+        page_sizes_pt: Option<Vec<(f32, f32)>>,
+    },
     /// Concept 2 — `RegisterColorProfile` reply.
     ColorProfileRegistered { name: String },
     /// Phase A — `SetElementSelection` reply. Echoes the post-update
@@ -1622,6 +1779,18 @@ pub enum WorkerToMainKind {
     /// element's anchor list is empty (lets the caller distinguish
     /// "no path data" from "didn't resolve").
     PathAnchors { result: Option<PathAnchorsResult> },
+    /// v66 — `RequestTextOutlines` reply. `None` when the id is not a
+    /// text frame, does not resolve, or sits on no page.
+    TextOutlines { result: Option<TextOutlinesResult> },
+    /// v67 — `RequestSnapPoint` reply. With no document loaded the point
+    /// comes back unsnapped.
+    SnapPoint {
+        result: crate::snap_point::SnapPointResult,
+    },
+    /// v67 — `SetSnapSettings` reply: the settings now in force.
+    SnapSettingsApplied {
+        settings: crate::snap_point::SnapSettings,
+    },
     /// B-22 (protocol v57) — `RequestPlanarRegions` reply.
     PlanarRegions { result: PlanarRegionsResult },
     /// B-06 — `RequestNearestPathPoint` reply. `None` when the id
@@ -1701,7 +1870,21 @@ pub enum WorkerToMainKind {
     /// the `element_id`; the page caches are invalidated so the next
     /// snapshot reflects the layer. `applied` is false only when there was
     /// no document loaded.
-    SceneLayerApplied { element_id: String, applied: bool },
+    SceneLayerApplied {
+        element_id: String,
+        applied: bool,
+        /// v66 — the pages whose render the change touched, when the
+        /// engine scoped it (the binary scene-image doors do); absent means
+        /// unscoped, so a host repaints every page. Additive on the reply.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page_ids: Option<Vec<PageId>>,
+        /// v68 — the faces this frame's scene-layer text runs named that
+        /// did not resolve, each drawn in the document default font
+        /// (`"Family Style"`, report order). Absent when every named
+        /// family resolved, on a clear, and from an older worker.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_fallbacks: Option<Vec<String>>,
+    },
     /// v44 (C-6 / I-06) — ack for `ClaimImageResource` /
     /// `ReleaseImageResource` / `SubmitResourceTiles`. Echoes `image_id`;
     /// `applied` is false only when no document was loaded. The page caches
@@ -1827,6 +2010,9 @@ pub enum WorkerToMainKind {
     },
     /// v51 — `ListPagedParts` reply (paths under the requested prefix).
     PagedPartList { paths: Vec<String> },
+    /// v66 — `DeletePagedPart` ack. `existed: false` when there was no
+    /// such part (deleting an absent part is not an error).
+    PagedPartDeleted { existed: bool },
     /// v51 — `ExportPaged` reply: the `.paged` container bytes (mirrors how
     /// `IdmlExported` carries `idml_bytes` as a `number[]` on the wire).
     PagedExported {
@@ -1839,6 +2025,9 @@ pub enum WorkerToMainKind {
     /// Inspector P1 — `RequestElementProperties` reply. `None` when
     /// the id doesn't resolve.
     ElementProperties { result: Option<ElementProperties> },
+    /// v65 — `RequestStyleProperties` reply. `None` when the style does
+    /// not exist.
+    StyleProperties { result: Option<StyleProperties> },
     /// Inspector P1 — `RequestSceneTree` reply.
     SceneTree { roots: Vec<SceneTreeNode> },
     /// Scripting Stage 2 — `ExecuteScript` reply. `output` is the
@@ -2008,6 +2197,13 @@ pub struct ElementGeometryItem {
     /// of `Translate`.
     #[serde(default)]
     pub has_image: bool,
+    /// The story a TEXT FRAME shows (its `ParentStory`); `None` for every
+    /// other kind. `hitTest` answers `storyId: null` for an EMPTY frame
+    /// (the text hit path needs a laid-out line), so a frame's story was
+    /// discoverable only by diffing the stories collection around its
+    /// insert. Additive: absent from the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub story_id: Option<String>,
 }
 
 /// Step 5 — one anchor's three control points, in the polygon's
@@ -2130,6 +2326,23 @@ pub struct ElementProperties {
     /// the underlying type carries one.
     #[serde(default)]
     pub name: Option<String>,
+    pub entries: Vec<PropertyEntry>,
+}
+
+/// v65 — one style definition's settable properties
+/// (`RequestStyleProperties`). `entries` uses the inspector's row shape;
+/// every value is `Some` (a style has one value per field, never "mixed").
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleProperties {
+    pub collection: paged_mutate::StyleCollection,
+    pub style_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The style's `BasedOn` reference, verbatim.
+    #[serde(default)]
+    pub based_on: Option<String>,
     pub entries: Vec<PropertyEntry>,
 }
 
@@ -2382,6 +2595,13 @@ pub struct DocumentMeta {
     /// `BaselineColor` — grid-line colour ref / named colour.
     #[serde(default)]
     pub baseline_grid_color: Option<String>,
+    /// v69 — the document's own plugin metadata (`SetDocumentMetadata`
+    /// entries, write order). PRESENT (possibly empty) from a v69 worker,
+    /// absent from an older one, so a reader can tell "none" from "this
+    /// engine has no document labels".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub plugin_metadata: Option<Vec<PluginMetadataEntry>>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -2644,6 +2864,11 @@ pub struct PageSummary {
     pub bleed_bottom_pt: f32,
     #[serde(default)]
     pub bleed_right_pt: f32,
+    /// v69 — the page's own `x-paged:` plugin-metadata entries
+    /// (`SetPageMetadata`): a slide's notes, transition, hidden flag. Empty
+    /// when it has none.
+    #[serde(default)]
+    pub plugin_metadata: Vec<PluginMetadataEntry>,
 }
 
 /// panels.md gaps 9/10/19 — one `<Section>` definition. Backs
@@ -2861,6 +3086,12 @@ pub struct HyperlinkSummary {
     pub name: String,
     pub source: String,
     pub destination: String,
+    /// v69 — where the destination goes: a URL, or a page (its `Self`
+    /// id). Both absent for a text-anchor destination.
+    #[serde(default)]
+    pub destination_url: Option<String>,
+    #[serde(default)]
+    pub destination_page: Option<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Bookmark>` summary. Backs
@@ -3087,6 +3318,26 @@ pub struct StorySummary {
     /// older client that ignores it still reads the `overset` flag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overset_at: Option<OversetAt>,
+    /// v65 (thoughts ADR 026) — the story's grow rule, in the shape
+    /// `Mutation::SetFlowGrowRule` takes (`grow` is always `true` here:
+    /// a cleared rule reads as `None`). `None` = a fixed chain.
+    #[serde(default)]
+    pub grow_rule: Option<StoryGrowRule>,
+}
+
+/// v65 — a story's grow rule on the read side ([`StorySummary::grow_rule`]).
+/// Mirrors the `setFlowGrowRule` payload so a host can show the rule and
+/// send it back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryGrowRule {
+    pub grow: bool,
+    /// Upper bound on generated pages; `None` = the renderer's default.
+    #[serde(default)]
+    pub max_pages: Option<u32>,
+    /// Generated frames copy the chain's last frame's text-frame options.
+    pub copy_frame_options: bool,
 }
 
 /// DOC-03 (v54) — a story's full CONTENT: its paragraphs, each with its runs'
@@ -3167,6 +3418,27 @@ pub struct SceneTreeNode {
     pub label: String,
     #[serde(default)]
     pub children: Vec<SceneTreeNode>,
+    /// C-65 — the item's plugin metadata (its reserved-namespace
+    /// `x-paged:` Label entries, the same rows `RequestElementProperties`
+    /// reports as `pluginMetadata`), so one tree read answers what used to
+    /// take one property read PER LEAF: paged.draw's link discovery cost
+    /// 1 403 round trips on a 1 403-leaf document. PRESENT on every page
+    /// ITEM row — empty when the item carries none — and omitted only for
+    /// spread / page rows, so a reader can tell "this engine reports
+    /// metadata here and there is none" from "this engine predates the
+    /// field" (an older engine omits it everywhere). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub plugin_metadata: Option<Vec<PluginMetadataEntry>>,
+}
+
+/// C-65 — one plugin-metadata Label entry on a scene-tree node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginMetadataEntry {
+    pub key: String,
+    pub value: String,
 }
 
 /// Step 5 — `RequestPathAnchors` reply payload. `anchors.len()` may
@@ -3202,6 +3474,40 @@ pub struct PathAnchorsResult {
 
 /// B-06 — `RequestNearestPathPoint` reply payload. Coordinates are
 /// in the element's local space (the `PathAnchors` space).
+/// v66 (RFI C-69) — `RequestTextOutlines` reply payload: the frame's
+/// composed glyphs as closed outlines, in PAGE space (the space
+/// `insertPath` takes), grouped into one run per fill colour so each
+/// becomes one compound path. Outlines are exactly the shapes the
+/// renderer fills (the same `FillPath` commands), so what is inserted
+/// looks like what was on screen. Stroked text, gradients on text and
+/// overset text are not included.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOutlinesResult {
+    pub id: crate::element_selection::ElementId,
+    pub page_id: PageId,
+    pub runs: Vec<TextOutlineRun>,
+    /// Glyphs left out (stroked, or a non-solid paint).
+    #[serde(default)]
+    pub skipped_glyphs: u32,
+}
+
+/// One fill colour's glyph outlines (see [`TextOutlinesResult`]).
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOutlineRun {
+    /// sRGB, 0..1 — the colour the renderer filled with.
+    pub rgb: [f32; 3],
+    /// The CMYK the paint carried, 0..1, when it was a process colour.
+    #[serde(default)]
+    pub cmyk: Option<[f32; 4]>,
+    pub anchors: Vec<PathAnchorTriple>,
+    pub subpath_starts: Vec<u32>,
+    pub glyphs: u32,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -3491,6 +3797,7 @@ mod tests {
                 page_id: PageId("p1".into()),
                 target_width_px: 256,
                 dpi: None,
+                hide_items: Vec::new(),
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -3522,7 +3829,7 @@ mod tests {
     fn v50_pixel_layer_messages_round_trip() {
         let layer = paged_compose::PixelLayer {
             tiles: vec![paged_compose::PixelTile {
-                rgba: vec![255, 0, 0, 255],
+                rgba: vec![255, 0, 0, 255].into(),
                 width: 1,
                 height: 1,
                 x: 2.0,
@@ -3620,6 +3927,7 @@ mod tests {
                 frame: "TextFrame/a".into(),
             },
             Mutation::ApplyStyle {
+                paragraph: None,
                 story_id: "Story/u1".into(),
                 start: 0,
                 end: 5,
@@ -3631,6 +3939,7 @@ mod tests {
                 story_id: "Story/u1".into(),
                 offset: 2,
                 field: paged_mutate::operation::FieldKind::PageNumber,
+                content_offset: None,
             },
             Mutation::InsertOval {
                 page_id: PageId("Page/u1".into()),
@@ -3762,8 +4071,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v64() {
-        assert_eq!(PROTOCOL_VERSION.0, 64);
+    fn protocol_version_is_v69() {
+        assert_eq!(PROTOCOL_VERSION.0, 69);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

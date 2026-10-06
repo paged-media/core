@@ -314,6 +314,7 @@ fn hyperlink(start: u32, end: u32) -> Mutation {
         start,
         end,
         url: format!("https://paged.media/{start}-{end}"),
+        page: None,
     }
 }
 
@@ -331,6 +332,7 @@ fn table() -> Mutation {
 
 fn anchored(offset: u32) -> Mutation {
     Mutation::InsertAnchoredFrame {
+        paragraph: None,
         story_id: STORY.into(),
         offset,
         width: 40.0,

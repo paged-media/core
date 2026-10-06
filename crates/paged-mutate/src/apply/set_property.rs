@@ -105,13 +105,15 @@ pub(super) fn apply_set_property(
         }
         // Plugin-metadata carrier — its inverse carries the prev
         // snapshot inside the same Value, so it short-circuits like
-        // the Track J ops. All five leaf page-item kinds.
+        // the Track J ops. All five leaf page-item kinds, and (v69)
+        // pages: a slide's notes and transition travel with its page.
         (
             NodeId::Polygon(_)
             | NodeId::TextFrame(_)
             | NodeId::Rectangle(_)
             | NodeId::GraphicLine(_)
-            | NodeId::Oval(_),
+            | NodeId::Oval(_)
+            | NodeId::Page(_),
             PropertyPath::PluginMetadata,
         ) => {
             return apply_plugin_metadata(doc, node, value);
@@ -570,6 +572,21 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // C-63 — a `<Group>`'s own `<BlendingSetting Opacity>`. The
+        // value lives on `Group::transparency` (the group has no
+        // outline to carry a per-item slot) and the renderer's
+        // `group_pass` brackets the members' commands in one blend
+        // group whenever it is below 100 — so the group fades as ONE
+        // object, which is not what setting each member's opacity does
+        // (overlapping members would show through each other).
+        (NodeId::Group(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let group = find_group_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = group.transparency.opacity;
+            group.transparency.opacity = new_opacity;
+            (Value::Length(prev), frame_style_hint(node))
+        }
         // ---- Phase H: FramePathPoint (any path-bearing kind) -----
         // Track J fan-out — accepts Polygon, TextFrame, Rectangle,
         // GraphicLine. All four kinds share the anchor field shape.
@@ -676,17 +693,21 @@ pub(super) fn apply_set_property(
         }
         // ---- SDK Phase 5 (v1 sweep) — stroke end-cap (enum string)
         // Per-frame override. Empty string clears the override.
-        // Only Rectangle / Oval / Polygon / GraphicLine carry the
-        // `end_cap` field in the parse layer — TextFrame's stroke
-        // shape does not (its renderer path uses a simple solid
-        // outline rather than a stroked path with cap/join). Falls
-        // through to UnsupportedProperty for TextFrame.
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeEndCap) => {
+        // Rectangle carried the field from the start; C-62 gave it to
+        // Polygon (a pen path's two ends), GraphicLine and Oval (dash
+        // ends), which the model had read only on `<Rectangle>` — so
+        // until then a pen path could not take a cap at all. TextFrame
+        // has no `end_cap` (its stroke is the frame box) and falls
+        // through to UnsupportedProperty.
+        (
+            NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
+            PropertyPath::FrameStrokeEndCap,
+        ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_end_cap_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.end_cap.clone().unwrap_or_default();
-            rect.end_cap = if new_val.is_empty() {
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() {
                 None
             } else {
                 Some(new_val.clone())
@@ -700,9 +721,11 @@ pub(super) fn apply_set_property(
             )
         }
         // ---- v43 batch — stroke line ends (arrowheads) -------------
-        // GraphicLine-only: the kind that parses `LeftLineEnd` /
-        // `RightLineEnd` (InDesign draws line ends on open paths, and
-        // IDML serialises open paths as `<GraphicLine>`). The wire
+        // The kinds that carry `LeftLineEnd` / `RightLineEnd`: the
+        // `<GraphicLine>` (v43), and since C-62 the `<Polygon>` — a pen
+        // or pencil path is a polygon with an OPEN contour, and InDesign
+        // draws line ends on open contours (v43 assumed IDML serialises
+        // every open path as a `<GraphicLine>`; it does not). The wire
         // token is the IDML `ArrowHead` enumeration name; empty string
         // clears (= `"None"`). Unknown tokens are REJECTED rather than
         // stored as `ArrowheadType::Other` — `Other` has no faithful
@@ -710,7 +733,7 @@ pub(super) fn apply_set_property(
         // inverse. A prior `Other` (out-of-vocabulary source token,
         // unreachable from real InDesign exports) inverts to clear.
         (
-            NodeId::GraphicLine(id),
+            NodeId::GraphicLine(_) | NodeId::Polygon(_),
             PropertyPath::FrameStrokeStartArrowhead | PropertyPath::FrameStrokeEndArrowhead,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -728,12 +751,12 @@ pub(super) fn apply_set_property(
                     t => t,
                 }
             };
-            let line = find_graphic_line_mut(doc, id)
+            let (start, end) = find_line_ends_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
             let slot = if matches!(path, PropertyPath::FrameStrokeStartArrowhead) {
-                &mut line.start_arrow
+                start
             } else {
-                &mut line.end_arrow
+                end
             };
             let prev = match *slot {
                 paged_model::ArrowheadType::None => String::new(),
@@ -1117,7 +1140,7 @@ pub(super) fn apply_set_property(
         // Lines carry no fill, so the effect is meaningless there
         // (falls through to UnsupportedProperty).
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameGradientFeather,
         ) => {
             let new_spec = expect_gradient_feather(path, value)?;
@@ -1319,12 +1342,13 @@ pub(super) fn apply_set_property(
         // presence of the block is the enabled bit (the parser drops it
         // when `Applied="false"`), so this mirrors `FrameDropShadow`.
         // All paint-only → `frame_style`. Wired on TextFrame /
-        // Rectangle / Oval (the kinds `find_frame_effects_mut`
-        // reaches); other kinds fall through to UnsupportedProperty.
+        // Rectangle / Oval / Polygon (the kinds
+        // `find_frame_effects_mut` reaches — C-63 added Polygon);
+        // other kinds fall through to UnsupportedProperty.
 
         // -- Inner shadow ------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerShadowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1342,7 +1366,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerShadowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1360,7 +1384,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1371,7 +1395,7 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerShadowOpacity
             | PropertyPath::FrameInnerShadowAngle
             | PropertyPath::FrameInnerShadowDistance
@@ -1397,7 +1421,7 @@ pub(super) fn apply_set_property(
 
         // -- Outer glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameOuterGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1415,7 +1439,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameOuterGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1433,7 +1457,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameOuterGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1444,7 +1468,7 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameOuterGlowOpacity
             | PropertyPath::FrameOuterGlowSpread
             | PropertyPath::FrameOuterGlowSize
@@ -1466,7 +1490,7 @@ pub(super) fn apply_set_property(
 
         // -- Inner glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1484,7 +1508,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1502,7 +1526,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1513,7 +1537,7 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerGlowSource,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1531,7 +1555,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameInnerGlowOpacity
             | PropertyPath::FrameInnerGlowChoke
             | PropertyPath::FrameInnerGlowSize
@@ -1553,7 +1577,7 @@ pub(super) fn apply_set_property(
 
         // -- Bevel / emboss ----------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameBevelEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1568,7 +1592,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameBevelStyle
             | PropertyPath::FrameBevelTechnique
             | PropertyPath::FrameBevelDirection,
@@ -1593,7 +1617,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameBevelHighlightColor | PropertyPath::FrameBevelShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1608,7 +1632,7 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameBevelDepth
             | PropertyPath::FrameBevelSize
             | PropertyPath::FrameBevelSoften
@@ -1636,7 +1660,7 @@ pub(super) fn apply_set_property(
 
         // -- Satin -------------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameSatinEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1651,7 +1675,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameSatinBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1669,7 +1693,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameSatinColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1680,7 +1704,7 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameSatinInvert,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1691,7 +1715,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameSatinOpacity
             | PropertyPath::FrameSatinAngle
             | PropertyPath::FrameSatinDistance
@@ -1713,7 +1737,7 @@ pub(super) fn apply_set_property(
 
         // -- Feather (basic) ---------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1728,7 +1752,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameFeatherCornerType,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1746,7 +1770,7 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameFeatherWidth
             | PropertyPath::FrameFeatherNoise
             | PropertyPath::FrameFeatherChoke,
@@ -1766,7 +1790,7 @@ pub(super) fn apply_set_property(
 
         // -- Directional feather -----------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameDirectionalFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1784,7 +1808,7 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
             PropertyPath::FrameDirectionalFeatherLeftWidth
             | PropertyPath::FrameDirectionalFeatherRightWidth
             | PropertyPath::FrameDirectionalFeatherTopWidth
@@ -1815,8 +1839,15 @@ pub(super) fn apply_set_property(
         // tint arms above (per-layer blend on a baked appearance
         // stack). `GraphicLine` has no `blend_mode` field on the parse
         // struct, so it stays out and rejects honestly.
+        // C-63 — `Group` joins: its slot is
+        // `Group::transparency.blend_mode`, which `group_pass` already
+        // composites the bracketed members with.
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::Oval(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Polygon(_)
+            | NodeId::Oval(_)
+            | NodeId::Group(_),
             PropertyPath::FrameBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1976,6 +2007,39 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // v66 — the same inner `<Image>` transform on the other two image
+        // frames. The renderer has drawn `image_item_transform` for ovals
+        // and polygons (clipped by their outline) and the IDML writer has
+        // written it back all along; only the setter was missing, so a
+        // commit that changed an image's size could not reach them.
+        (NodeId::Oval(id), PropertyPath::ImageContentTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let oval =
+                find_oval_mut(doc, id).ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = oval.image_item_transform;
+            oval.image_item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
+        (NodeId::Polygon(id), PropertyPath::ImageContentTransform) => {
+            let new_transform = expect_transform(path, value)?;
+            let poly = find_polygon_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = poly.image_item_transform;
+            poly.image_item_transform = new_transform;
+            (
+                Value::Transform(prev),
+                InvalidationHint {
+                    frame_geometry: vec![node.clone()],
+                    ..Default::default()
+                },
+            )
+        }
         (
             NodeId::StoryRange {
                 story_id,
@@ -2118,6 +2182,7 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphNumberingContinue
             | PropertyPath::ParagraphBulletsCharacterStyle
             | PropertyPath::ParagraphNumberingCharacterStyle
+            | PropertyPath::ParagraphComposer
             | PropertyPath::ParagraphAppliedNumberingList,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);
@@ -2400,8 +2465,8 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        // Stroke alignment is a Rectangle-only parse field; join /
-        // miter ride v35 across all closed-path kinds (punch-list).
+        // Join / miter ride v35 across all closed-path kinds
+        // (punch-list); stroke alignment follows below.
         (
             NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::GraphicLine(_),
             PropertyPath::FrameStrokeJoin,
@@ -2423,20 +2488,38 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::Rectangle(id), PropertyPath::FrameStrokeAlignment) => {
+        // C-24 — every kind whose renderer offsets its outline by the
+        // alignment takes the write: Rectangle (the original arm),
+        // Polygon and Oval (W1.5 offsets their closed contours by
+        // ±weight/2) and TextFrame (same offset, and the stroke's share
+        // also insets the TEXT, so that one reflows). The model has
+        // carried the field on all four and the importer has filled it;
+        // only the Rectangle could be written. A `GraphicLine` has no
+        // such field — an open stroke has no inside — and keeps
+        // rejecting.
+        (
+            NodeId::Rectangle(_) | NodeId::Polygon(_) | NodeId::Oval(_) | NodeId::TextFrame(_),
+            PropertyPath::FrameStrokeAlignment,
+        ) => {
             let new_val = expect_text(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
+            let slot = find_stroke_alignment_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.stroke_alignment.clone().unwrap_or_default();
-            rect.stroke_alignment = if new_val.is_empty() {
+            let prev = slot.clone().unwrap_or_default();
+            *slot = if new_val.is_empty() {
                 None
             } else {
                 Some(new_val.clone())
+            };
+            let text_reflow = if matches!(node, NodeId::TextFrame(_)) {
+                vec![node.clone()]
+            } else {
+                Vec::new()
             };
             (
                 Value::Text(prev),
                 InvalidationHint {
                     frame_style: vec![node.clone()],
+                    text_reflow,
                     ..Default::default()
                 },
             )

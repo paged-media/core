@@ -53,6 +53,9 @@ pub(crate) struct ResolvedFrame<'a> {
     /// `GradientFillLength` in pt — page-space length of the gradient
     /// line through the frame centre. `None` ⇒ bbox diagonal.
     pub gradient_fill_length: Option<f32>,
+    /// `GradientFillStart` in the frame's inner coordinates; places a
+    /// radial gradient (see [`paged_model::Rectangle::gradient_fill_start`]).
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
     /// `gradient_fill_angle`, applied to the stroke gradient.
     pub gradient_stroke_angle: Option<f32>,
@@ -224,6 +227,43 @@ fn text_frame_is_rect_path(
     eq(xs[0], xs[1]) && eq(xs[2], xs[3]) && eq(ys[0], ys[1]) && eq(ys[2], ys[3])
 }
 
+// ---------------------------------------------------------------------------
+// Box or path — which geometry an item is DRAWN from.
+//
+// Every page item carries a box (`bounds`) and may carry a path
+// (`anchors`). The adapters below pick one, per kind, and nothing else
+// in the engine may disagree with their pick: an edit that moves the box
+// of an item drawn from its path moves nothing on the page (RFI C-78 —
+// the translate gesture did exactly that to every line and pen path).
+// These four are that pick, public so the canvas asks the renderer
+// instead of keeping its own idea of it.
+// ---------------------------------------------------------------------------
+
+/// A text frame paints its path when the path is not the ordinary box
+/// the cheap rect emitter reproduces (see [`text_frame_is_rect_path`]).
+pub fn text_frame_drawn_from_path(frame: &TextFrame) -> bool {
+    !text_frame_is_rect_path(&frame.anchors, &frame.subpath_starts, &frame.subpath_open)
+}
+
+/// Q-11 — a `<Rectangle>` with more than four anchors carries a stylised
+/// outline and is drawn as that polygon; four or fewer is the box.
+pub fn rectangle_drawn_from_path(rect: &Rectangle) -> bool {
+    rect.anchors.len() > 4
+}
+
+/// A polygon is drawn from its anchors whenever it has any; an
+/// anchorless one (a synthetic `GeometricBounds`-only polygon) is its
+/// box.
+pub fn polygon_drawn_from_path(poly: &Polygon) -> bool {
+    !poly.anchors.is_empty()
+}
+
+/// A line strokes its anchors when it has at least two; otherwise the
+/// corner-to-corner diagonal of its box.
+pub fn graphic_line_drawn_from_path(line: &GraphicLine) -> bool {
+    line.anchors.len() >= 2
+}
+
 impl<'a> ResolvedFrame<'a> {
     /// Stroke weight with InDesign's per-frame default applied
     /// (`1.0` pt). Modules use this when emitting; the `Option`
@@ -247,11 +287,7 @@ impl<'a> ResolvedFrame<'a> {
         // independently (see `frame_polygon_spread`); this only affects
         // the frame's own paint.
         let bbox = rect_from_bounds(frame.bounds);
-        let geometry = if text_frame_is_rect_path(
-            &frame.anchors,
-            &frame.subpath_starts,
-            &frame.subpath_open,
-        ) {
+        let geometry = if !text_frame_drawn_from_path(frame) {
             Geometry::TextFrameRect { rect: bbox }
         } else {
             Geometry::Polygon {
@@ -272,6 +308,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(frame.blend_mode.as_deref()),
             gradient_fill_angle: frame.gradient_fill_angle,
             gradient_fill_length: frame.gradient_fill_length,
+            gradient_fill_start: frame.gradient_fill_start,
             gradient_stroke_angle: frame.gradient_stroke_angle,
             gradient_stroke_length: frame.gradient_stroke_length,
             drop_shadow: frame.drop_shadow.as_ref(),
@@ -305,7 +342,7 @@ impl<'a> ResolvedFrame<'a> {
         // than `<Polygon>`). Mirror `from_polygon`'s adapter so paint
         // modules see the real curve instead of collapsing to the AABB.
         let bbox = rect_from_bounds(rect.bounds);
-        let geometry = if rect.anchors.len() > 4 {
+        let geometry = if rectangle_drawn_from_path(rect) {
             Geometry::Polygon {
                 anchors: &rect.anchors,
                 subpath_starts: &rect.subpath_starts,
@@ -326,6 +363,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(rect.blend_mode.as_deref()),
             gradient_fill_angle: rect.gradient_fill_angle,
             gradient_fill_length: rect.gradient_fill_length,
+            gradient_fill_start: rect.gradient_fill_start,
             gradient_stroke_angle: rect.gradient_stroke_angle,
             gradient_stroke_length: rect.gradient_stroke_length,
             drop_shadow: rect.drop_shadow.as_ref(),
@@ -359,12 +397,14 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(oval.blend_mode.as_deref()),
             gradient_fill_angle: oval.gradient_fill_angle,
             gradient_fill_length: oval.gradient_fill_length,
+            gradient_fill_start: oval.gradient_fill_start,
             gradient_stroke_angle: oval.gradient_stroke_angle,
             gradient_stroke_length: oval.gradient_stroke_length,
             drop_shadow: oval.drop_shadow.as_ref(),
             stroke_alignment: oval.stroke_alignment.as_deref(),
             stroke_type: oval.stroke_type.as_deref(),
-            end_cap: None,
+            // C-62: a closed outline shows its cap on dash ends only.
+            end_cap: oval.end_cap.as_deref(),
             end_join: None,
             miter_limit: None,
             stroke_gap_color: oval.stroke_gap_color.as_deref(),
@@ -392,7 +432,7 @@ impl<'a> ResolvedFrame<'a> {
         let bbox = rect_from_bounds(poly.bounds);
         // Synthetic IDMLs sometimes omit anchor data; fall back to
         // bbox-as-rect so paint modules never see an empty polygon.
-        let geometry = if poly.anchors.is_empty() {
+        let geometry = if !polygon_drawn_from_path(poly) {
             Geometry::Rect { rect: bbox }
         } else {
             Geometry::Polygon {
@@ -413,12 +453,14 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(poly.blend_mode.as_deref()),
             gradient_fill_angle: poly.gradient_fill_angle,
             gradient_fill_length: poly.gradient_fill_length,
+            gradient_fill_start: poly.gradient_fill_start,
             gradient_stroke_angle: poly.gradient_stroke_angle,
             gradient_stroke_length: poly.gradient_stroke_length,
             drop_shadow: None,
             stroke_alignment: poly.stroke_alignment.as_deref(),
             stroke_type: poly.stroke_type.as_deref(),
-            end_cap: None,
+            // C-62: the cap on an open contour's two ends (a pen path).
+            end_cap: poly.end_cap.as_deref(),
             end_join: poly.end_join.as_deref(),
             miter_limit: poly.miter_limit,
             stroke_gap_color: poly.stroke_gap_color.as_deref(),
@@ -461,12 +503,13 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: BlendMode::Normal,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             drop_shadow: None,
             stroke_alignment: None,
             stroke_type: line.stroke_type.as_deref(),
-            end_cap: None,
+            end_cap: line.end_cap.as_deref(),
             end_join: line.end_join.as_deref(),
             miter_limit: line.miter_limit,
             stroke_gap_color: line.stroke_gap_color.as_deref(),
@@ -540,6 +583,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             text_paths: Vec::new(),
@@ -609,6 +653,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,
@@ -740,50 +785,16 @@ mod tests {
     fn cycle4_track3_stroke_type_threads_from_oval_into_resolved_frame() {
         use paged_model::Oval;
         let oval = Oval {
-            self_id: None,
-            bounds: Bounds {
-                top: 0.0,
-                left: 0.0,
-                bottom: 10.0,
-                right: 10.0,
-            },
-            item_transform: None,
-            fill_color: None,
-            fill_tint: None,
-            stroke_color: None,
-            stroke_weight: None,
             stroke_type: Some("StrokeStyle/$ID/Dashed".to_string()),
-            stroke_alignment: None,
-            stroke_gap_color: None,
-            stroke_gap_tint: None,
-            stroke_dash: Vec::new(),
-            drop_shadow: None,
-            stroke_drop_shadow: None,
-            applied_object_style: None,
-            text_wrap: None,
-            item_layer: None,
-            effects: None,
-            gradient_fill_angle: None,
-            gradient_fill_length: None,
-            gradient_stroke_angle: None,
-            gradient_stroke_length: None,
-            opacity: None,
-            blend_mode: None,
-            image_link: None,
-            image_bytes: None,
-            image_clip: None,
-            has_image_element: false,
-            has_inline_pdf: false,
-            has_inline_eps: false,
-            image_item_transform: None,
-            overprint_fill: false,
-            overprint_stroke: false,
-            nonprinting: false,
-            visible: true,
-            locked: false,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            ..Oval::new(
+                "",
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 10.0,
+                    right: 10.0,
+                },
+            )
         };
         let frame = ResolvedFrame::from_oval(&oval);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dashed"));
@@ -793,54 +804,16 @@ mod tests {
     fn cycle4_track3_stroke_type_threads_from_polygon_into_resolved_frame() {
         use paged_model::Polygon;
         let poly = Polygon {
-            self_id: None,
-            bounds: Bounds {
-                top: 0.0,
-                left: 0.0,
-                bottom: 10.0,
-                right: 10.0,
-            },
-            item_transform: None,
-            fill_color: None,
-            fill_tint: None,
-            stroke_color: None,
-            stroke_weight: None,
             stroke_type: Some("StrokeStyle/$ID/Dotted".to_string()),
-            stroke_alignment: None,
-            end_join: None,
-            miter_limit: None,
-            stroke_gap_color: None,
-            stroke_gap_tint: None,
-            stroke_dash: Vec::new(),
-            applied_object_style: None,
-            anchors: Vec::new(),
-            subpath_starts: Vec::new(),
-            subpath_open: Vec::new(),
-            text_wrap: None,
-            item_layer: None,
-            effects: None,
-            gradient_fill_angle: None,
-            gradient_fill_length: None,
-            gradient_stroke_angle: None,
-            gradient_stroke_length: None,
-            opacity: None,
-            blend_mode: None,
-            text_paths: Vec::new(),
-            image_link: None,
-            has_image_element: false,
-            has_inline_pdf: false,
-            has_inline_eps: false,
-            image_item_transform: None,
-            image_bytes: None,
-            image_clip: None,
-            overprint_fill: false,
-            overprint_stroke: false,
-            nonprinting: false,
-            visible: true,
-            locked: false,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            ..Polygon::new(
+                "",
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 10.0,
+                    right: 10.0,
+                },
+            )
         };
         let frame = ResolvedFrame::from_polygon(&poly);
         assert_eq!(frame.stroke_type, Some("StrokeStyle/$ID/Dotted"));
@@ -850,41 +823,16 @@ mod tests {
     fn cycle4_track3_stroke_type_threads_from_graphic_line_into_resolved_frame() {
         use paged_model::GraphicLine;
         let line = GraphicLine {
-            self_id: None,
-            bounds: Bounds {
-                top: 0.0,
-                left: 0.0,
-                bottom: 10.0,
-                right: 10.0,
-            },
-            item_transform: None,
-            stroke_color: None,
-            stroke_weight: None,
             stroke_type: Some("CustomDashStyle".to_string()),
-            end_join: None,
-            miter_limit: None,
-            stroke_gap_color: None,
-            stroke_gap_tint: None,
-            stroke_dash: Vec::new(),
-            applied_object_style: None,
-            text_wrap: None,
-            item_layer: None,
-            anchors: Vec::new(),
-            subpath_starts: Vec::new(),
-            subpath_open: Vec::new(),
-            text_paths: Vec::new(),
-            effects: None,
-            overprint_stroke: false,
-            nonprinting: false,
-            visible: true,
-            locked: false,
-            start_arrow: paged_model::ArrowheadType::None,
-            end_arrow: paged_model::ArrowheadType::None,
-            start_arrow_scale: 100.0,
-            end_arrow_scale: 100.0,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            ..GraphicLine::new(
+                "",
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 10.0,
+                    right: 10.0,
+                },
+            )
         };
         let frame = ResolvedFrame::from_graphic_line(&line);
         assert_eq!(frame.stroke_type, Some("CustomDashStyle"));

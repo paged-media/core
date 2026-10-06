@@ -122,6 +122,10 @@ pub struct ParsedMasterSpread {
     pub src: String,
     pub self_id: String,
     pub spread: Spread,
+    /// v69 — the master's `Name` (e.g. `"A-Master"`, a slide layout's
+    /// name), when the package gives one.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Cap on the number of AUTHORED `NextTextFrame` links followed.

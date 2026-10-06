@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 027 §3 / plan step 6 — early stop inside a story.
+//! ADR 027 §3 / plan step 6 — early stop inside a story.
 //!
 //! An edited story used to re-emit from its first paragraph. Its previous
 //! emission is now kept with a [`ParaMark`] per paragraph: the emitter's

@@ -294,11 +294,11 @@
     },
     {
       "name": "tables-rows",
-      "max_pages_with_pdf": 11,
+      "max_pages_with_pdf": 12,
       "max_mean_de": 0.19,
       "max_p99_de": 3.8,
       "min_ssim": 0.994,
-      "rationale": "New 2026-10-02. Eleven pages asking InDesign how a row's height comes from its cells: 1-3 paragraphs per cell, space before/after, fixed / tight leading and mixed sizes, insets (incl. 0 under 1 pt and 4 pt edges), MinimumHeight / MaximumHeight, vertical justification, a table breaking across two threaded frames with its header repeating, and a row taller than every frame. Pages 10-11 (AutoGrow=\"false\" fixed rows, KeepWithNextRow) are NOT gated: the IDML reader does not carry either attribute yet. Before the fix the gated pages measured worst mean 1.597 / p99 84.1 / SSIM 0.919 (p8: every multi-paragraph row short, its later lines overlapping the next row); after, worst page mean 0.158 / p99 3.147 / SSIM 0.9956 (p8, glyph sub-pixel phase); sized by the rule above. GATED 2026-10-02 to all 11 pages: the reader carries AutoGrow / KeepWithNextRow (plugin-publish 96cfb6c), a fixed row is held at its height with its cells overset, and a run of kept rows moves to the next frame together. p10 (fixed rows) mean 0.718 -> 0.024, p99 20.556 -> 0.000, SSIM 0.9620 -> 0.9996; p11 (KeepWithNextRow) 0.571 -> 0.121, 12.611 -> 1.504, 0.9729 -> 0.9973. The worst page over all 11 is still p8 (mean 0.158 / p99 3.147) and p4 (SSIM 0.9956): 83% / 83% of the mean / p99 budget and 0.0016 of SSIM headroom, so by the rule the thresholds stay."
+      "rationale": "New 2026-10-02. Eleven pages asking InDesign how a row's height comes from its cells: 1-3 paragraphs per cell, space before/after, fixed / tight leading and mixed sizes, insets (incl. 0 under 1 pt and 4 pt edges), MinimumHeight / MaximumHeight, vertical justification, a table breaking across two threaded frames with its header repeating, and a row taller than every frame. Pages 10-11 (AutoGrow=\"false\" fixed rows, KeepWithNextRow) are NOT gated: the IDML reader does not carry either attribute yet. Before the fix the gated pages measured worst mean 1.597 / p99 84.1 / SSIM 0.919 (p8: every multi-paragraph row short, its later lines overlapping the next row); after, worst page mean 0.158 / p99 3.147 / SSIM 0.9956 (p8, glyph sub-pixel phase); sized by the rule above. GATED 2026-10-02 to all 11 pages: the reader carries AutoGrow / KeepWithNextRow (plugin-publish 96cfb6c), a fixed row is held at its height with its cells overset, and a run of kept rows moves to the next frame together. p10 (fixed rows) mean 0.718 -> 0.024, p99 20.556 -> 0.000, SSIM 0.9620 -> 0.9996; p11 (KeepWithNextRow) 0.571 -> 0.121, 12.611 -> 1.504, 0.9729 -> 0.9973. The worst page over all 11 is still p8 (mean 0.158 / p99 3.147) and p4 (SSIM 0.9956): 83% / 83% of the mean / p99 budget and 0.0016 of SSIM headroom, so by the rule the thresholds stay. PAGE 12 ADDED 2026-10-02 (blank paragraphs in a cell: a paragraph with no word is a line, as InDesign sets it; they took no room before). Reference re-exported from the changed IDML; page 12 measures mean 0.042 / p99 0.000 / ssim 0.9991 and the worst page is unchanged, so the thresholds stay and now cover 12 pages."
     },
     {
       "name": "text",
@@ -467,6 +467,38 @@
       "max_p99_de": 14.87,
       "min_ssim": 0.9861,
       "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh."
+    },
+    {
+      "name": "blank-paragraphs",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.006,
+      "max_p99_de": 0.01,
+      "min_ssim": 0.9948,
+      "rationale": "Added 2026-10-02 (RFI C-56): a paragraph with no word still takes a line. Six frames of A / something / B in Inter 10/12; the reference is InDesign 20.0.1's export. A paragraph of spaces is a line at its own leading (it laid out no line and took no room before); crates/paged-renderer/tests/blank_paragraphs_pipeline.rs pins all six distances, the truly empty paragraph as a named known difference (the IDML importer drops its range's leading, RFI C-57: 2.4 pt). Measured mean 0.0047 / p99 0.000 / ssim 0.99984; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+    },
+    {
+      "name": "mixed-leading",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.043,
+      "max_p99_de": 0.01,
+      "min_ssim": 0.9933,
+      "rationale": "Added 2026-10-02 (RFI C-59): a line takes the largest leading among its characters, and sits its OWN leading below the line before it. Six frames, Inter 10 pt, lines fixed by forced line breaks; the reference is InDesign 20.0.1's export. The engine gave every line the paragraph's first run's leading and stepped by the previous line's. crates/paged-renderer/tests/mixed_leading_pipeline.rs pins every step; one frame is a named known difference (the forced break ending a line counts for that line in InDesign). Measured mean 0.0351 / p99 0.000 / ssim 0.9983; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+    },
+    {
+      "name": "hard-hyphen",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.156,
+      "max_p99_de": 1.78,
+      "min_ssim": 0.9896,
+      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005."
+    },
+    {
+      "name": "line-ends",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.596,
+      "max_p99_de": 2.34,
+      "min_ssim": 0.9804,
+      "rationale": "Added 2026-10-03 (RFI C-62): a pen path's stroke end cap and line ends. One page, no text: open polygons in the three caps, with line ends (circle/triangle, barbed/simple-wide, square at 150 % + triangle at 50 %), a compound path of two open contours, a closed triangle with line ends set, graphic lines in round/projecting caps, and dashed ellipses in the three caps; the reference is InDesign 20.0.1's export. InDesign agrees on every cap, on line ends for EACH open contour of a compound path, and on none for a closed one. Measured mean 0.497 / p99 1.952 / ssim 0.9854 (the same IDML with the attributes the pre-C-62 reader ignored stripped: 0.710 / 8.739 / 0.981); sized at worst * 1.20 and ssim - 0.005. The residue is named, not C-62's: arrowhead geometry (InDesign trims the stroke under the head and draws Simple/SimpleWide/Barbed/hollow-Square differently) and the dash distribution on a closed path (InDesign spreads dashes evenly)."
     }
   ]
 }

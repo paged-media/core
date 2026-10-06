@@ -15,7 +15,7 @@
 //! Direct-manipulation gesture spine.
 //!
 //! A gesture has a four-phase lifecycle that mirrors
-//! `canvas-interaction-plan.md` §2.1: **begin** snapshots the
+//! `docs/design/canvas-interaction.md` §2.1: **begin** snapshots the
 //! committed state, **update** mutates a preview in place and returns
 //! the dirty pages, **commit** reverts the preview and re-applies the
 //! diff through `paged_mutate::apply` so the unified undo log gets a
@@ -29,7 +29,7 @@
 //! mutate `CanvasModel::scene` directly + rebuild on every update.
 //! That's already what `apply_mutation` does for text edits, so the
 //! rebuild path is well-trodden. A future v2 will swap in an
-//! ephemeral overlay (`canvas-interaction-plan.md` §3.4) that the
+//! ephemeral overlay (`docs/design/canvas-interaction.md` §3.4) that the
 //! display-list build composes — only worth the complexity once
 //! per-update rebuild perf hits a wall.
 
@@ -219,16 +219,16 @@ pub enum ResizeHandle {
 }
 
 impl ResizeHandle {
-    fn moves_north(self) -> bool {
+    pub(crate) fn moves_north(self) -> bool {
         matches!(self, Self::North | Self::NorthEast | Self::NorthWest)
     }
-    fn moves_south(self) -> bool {
+    pub(crate) fn moves_south(self) -> bool {
         matches!(self, Self::South | Self::SouthEast | Self::SouthWest)
     }
-    fn moves_west(self) -> bool {
+    pub(crate) fn moves_west(self) -> bool {
         matches!(self, Self::West | Self::NorthWest | Self::SouthWest)
     }
-    fn moves_east(self) -> bool {
+    pub(crate) fn moves_east(self) -> bool {
         matches!(self, Self::East | Self::NorthEast | Self::SouthEast)
     }
     fn is_corner(self) -> bool {
@@ -272,6 +272,15 @@ pub struct GestureModifiers {
 pub struct GestureAnchor {
     pub page_id: PageId,
     pub point_in_page: (f32, f32),
+    /// C-67 — the point Rotate / Scale / Shear turn about, page-local on
+    /// the same page as `point_in_page`. Absent (every caller before it
+    /// existed) keeps the union centroid of the targets — Illustrator's
+    /// default reference point; a click-to-set pivot, a reference-point
+    /// grid or "about a corner" pass it. Additive (`serde(default)`), so
+    /// it needs no protocol bump.
+    #[serde(default)]
+    #[tsify(optional)]
+    pub pivot_in_page: Option<(f32, f32)>,
 }
 
 /// Pre-gesture snapshot of one node. Captured at `begin_gesture` so
@@ -303,6 +312,13 @@ pub struct NodeSnapshot {
     /// preview can recompute the new point from snapshot + delta on
     /// every update.
     pub(crate) path_anchors: Vec<paged_model::PathAnchor>,
+    /// C-78 — whether the renderer draws this item from its PATH rather
+    /// than from its box (the renderer's own answer, per kind: a line or
+    /// a pen path with anchors, a `<Rectangle>` with more than four, a
+    /// text frame whose path is not a plain box). Such an item cannot be
+    /// translated by moving its `bounds` — nothing painted follows — so
+    /// `Translate` writes its `ItemTransform` instead.
+    pub(crate) drawn_from_path: bool,
 }
 
 /// One active gesture. Lives on `CanvasModel`. Only one gesture is
@@ -428,6 +444,9 @@ impl CanvasModel {
         if nodes.is_empty() {
             return Err(GestureError::EmptySelection);
         }
+        // v67 — take the snap targets now, before the preview starts
+        // rebuilding; `update_gesture` holds this index to the end.
+        self.ensure_snap_index(false);
         // Track L — when a Group element is in the selection,
         // expand it to (Group itself, every member recursively).
         // The Group's own item_transform mutates alongside each
@@ -470,7 +489,21 @@ impl CanvasModel {
             return Err(GestureError::MissingAnchor);
         }
         let pivot_spread = if needs_anchor {
-            Some(union_centroid_in_spread(&snapshots))
+            // C-67 — an explicit pivot wins; else the union centroid.
+            let explicit = match anchor.as_ref() {
+                Some(a) => match a.pivot_in_page {
+                    Some(p) => {
+                        let origin = self
+                            .page(&a.page_id)
+                            .map(|bp| bp.spread_origin)
+                            .ok_or_else(|| GestureError::UnknownAnchorPage(a.page_id.clone()))?;
+                        Some((p.0 + origin.0, p.1 + origin.1))
+                    }
+                    None => None,
+                },
+                None => None,
+            };
+            Some(explicit.unwrap_or_else(|| union_centroid_in_spread(&snapshots)))
         } else {
             None
         };
@@ -499,7 +532,7 @@ impl CanvasModel {
         delta: (f32, f32),
         modifiers: GestureModifiers,
     ) -> Result<GestureUpdateResult, GestureError> {
-        let (session_clone, pages, siblings) = {
+        let (session_clone, pages) = {
             let session = self
                 .active_gesture
                 .as_mut()
@@ -560,15 +593,48 @@ impl CanvasModel {
                     }
                 })
                 .collect::<Vec<_>>();
-            let siblings = collect_sibling_frames(&self.scene, &self.built);
-            (session_clone, pages, siblings)
+            (session_clone, pages)
         };
         // Phase E snap: adjusts the raw pointer delta so the candidate
         // edges land on snap targets within tolerance. The
         // adjusted delta is stored on the session so commit picks up
         // the same value.
-        let adjustment =
-            crate::snap::compute_snap_adjustment(&session_clone, delta, &pages, &siblings);
+        //
+        // v67 (RFI C-68) — the targets come from the snap index taken at
+        // `begin_gesture` (held for the whole gesture: the preview below
+        // rebuilds every tick), so every visible leaf kind is a sibling,
+        // and the session's snap settings and the document grid apply.
+        // Resize snaps its moving edges; a path edit snaps the dragged
+        // point through the same resolver `RequestSnapPoint` answers with.
+        self.ensure_snap_index(true);
+        let index = self.snap_index.as_ref().expect("just ensured");
+        let env = crate::snap::SnapEnv {
+            settings: self.snap_settings,
+            grid: index.grid,
+        };
+        let adjustment = match session_clone.gesture {
+            GestureType::Translate => {
+                let siblings = crate::snap_point::frame_rects(index);
+                crate::snap::compute_snap_adjustment_with(
+                    &session_clone,
+                    delta,
+                    &pages,
+                    &siblings,
+                    &env,
+                )
+            }
+            GestureType::Resize { .. } => {
+                let siblings = crate::snap_point::frame_rects(index);
+                crate::snap::compute_resize_snap(&session_clone, delta, &pages, &siblings, &env)
+            }
+            GestureType::PathEdit { address } => {
+                path_edit_snap(index, &env, &session_clone, delta, &pages, address)
+            }
+            _ => crate::snap::SnapAdjustment {
+                delta,
+                lines: Vec::new(),
+            },
+        };
         let snapped_delta = adjustment.delta;
         {
             let session = self.active_gesture.as_mut().expect("session still present");
@@ -780,6 +846,7 @@ impl CanvasModel {
                         item_transform: f.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: paged_renderer::text_frame_drawn_from_path(f),
                     });
                 }
             }
@@ -796,6 +863,7 @@ impl CanvasModel {
                         item_transform: f.item_transform,
                         image_item_transform: f.image_item_transform,
                         path_anchors: Vec::new(),
+                        drawn_from_path: paged_renderer::rectangle_drawn_from_path(f),
                     });
                 }
             }
@@ -812,6 +880,7 @@ impl CanvasModel {
                         item_transform: p.item_transform,
                         image_item_transform: None,
                         path_anchors: p.anchors.clone(),
+                        drawn_from_path: paged_renderer::polygon_drawn_from_path(p),
                     });
                 }
             }
@@ -827,6 +896,7 @@ impl CanvasModel {
                         item_transform: o.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: false,
                     });
                 }
             }
@@ -843,6 +913,7 @@ impl CanvasModel {
                         item_transform: l.item_transform,
                         image_item_transform: None,
                         path_anchors: l.anchors.clone(),
+                        drawn_from_path: paged_renderer::graphic_line_drawn_from_path(l),
                     });
                 }
             }
@@ -866,6 +937,7 @@ impl CanvasModel {
                         item_transform: g.item_transform,
                         image_item_transform: None,
                         path_anchors: Vec::new(),
+                        drawn_from_path: false,
                     });
                 }
             }
@@ -1006,8 +1078,9 @@ fn compute_node_mutation(
                 delta
             };
             // Phase D — rotated frames translate through their
-            // ItemTransform's tx/ty; un-rotated stays on the bounds
-            // path so text reflow continues to track the bbox.
+            // ItemTransform's tx/ty; an un-rotated item DRAWN FROM ITS
+            // BOX stays on the bounds path so text reflow continues to
+            // track the bbox.
             // Track L — two new constraints:
             //   * Groups carry no geometric bounds, so a translate
             //     ALWAYS mutates their item_transform.
@@ -1024,7 +1097,15 @@ fn compute_node_mutation(
                 .snapshots
                 .iter()
                 .any(|s| matches!(s.node_id, NodeId::Group(_)));
-            let force_transform_path = is_group || session_targets_group;
+            // C-78 — a third constraint: an item drawn from its PATH.
+            // A line, a pen path, a many-anchored rectangle and a shaped
+            // text frame paint their anchors, which a bounds write does
+            // not touch — the drag committed, the box moved and the
+            // drawing stayed where it was. They translate through the
+            // transform, which moves box and path together and undoes
+            // exactly. (Their anchors and box are left alone, so they
+            // still agree with each other afterwards.)
+            let force_transform_path = is_group || session_targets_group || snap.drawn_from_path;
             if !force_transform_path && is_pure_translate_or_identity(snap.item_transform) {
                 NodeMutation::Bounds(translate_bounds(snap.bounds, d))
             } else {
@@ -1201,6 +1282,73 @@ fn compute_node_mutation(
 }
 
 const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// v67 (RFI C-68) — snap a path-edit drag: the dragged anchor (or
+/// handle), moved by `delta`, goes through the point resolver with
+/// itself left out of the targets (and its element's outline, which the
+/// drag is changing). The returned delta lands it on what it snapped to.
+fn path_edit_snap(
+    index: &crate::snap_point::SnapIndex,
+    env: &crate::snap::SnapEnv,
+    session: &GestureSession,
+    delta: (f32, f32),
+    pages: &[crate::snap::PageInfo],
+    address: paged_mutate::PathPointAddress,
+) -> crate::snap::SnapAdjustment {
+    let pass = crate::snap::SnapAdjustment {
+        delta,
+        lines: Vec::new(),
+    };
+    if !env.settings.enabled || session.modifiers.disable_snap {
+        return pass;
+    }
+    let Some(snap) = session.snapshots.first() else {
+        return pass;
+    };
+    let Some(a) = snap.path_anchors.get(address.index) else {
+        return pass;
+    };
+    let local = match address.role {
+        paged_mutate::PathPointRole::Anchor => a.anchor,
+        paged_mutate::PathPointRole::Left => a.left,
+        paged_mutate::PathPointRole::Right => a.right,
+    };
+    let m = snap.item_transform.unwrap_or(IDENTITY);
+    let world = (
+        m[0] * local.0 + m[2] * local.1 + m[4],
+        m[1] * local.0 + m[3] * local.1 + m[5],
+    );
+    let Some(page) = pages.iter().find(|p| {
+        world.0 >= p.spread_origin.0
+            && world.0 <= p.spread_origin.0 + p.width_pt
+            && world.1 >= p.spread_origin.1
+            && world.1 <= p.spread_origin.1 + p.height_pt
+    }) else {
+        return pass;
+    };
+    let start = (
+        world.0 - page.spread_origin.0,
+        world.1 - page.spread_origin.1,
+    );
+    let query = crate::snap_point::SnapPointQuery {
+        page_id: page.page_id.clone(),
+        point: [start.0 + delta.0, start.1 + delta.1],
+        camera_scale: session.camera_scale,
+        exclude: vec![crate::snap_point::SnapExclude {
+            id: snap.id.clone(),
+            anchors: Some(vec![address.index as u32]),
+        }],
+        extra_points: Vec::new(),
+    };
+    let r = crate::snap_point::resolve(index, &env.settings, &query);
+    if !r.snapped {
+        return pass;
+    }
+    crate::snap::SnapAdjustment {
+        delta: (r.point[0] - start.0, r.point[1] - start.1),
+        lines: r.lines,
+    }
+}
 
 /// Phase E — lock a translate delta to the dominant axis. If
 /// |dx| ≥ |dy|, drop the y component; otherwise drop the x. Equal
@@ -1451,48 +1599,6 @@ pub(crate) fn scale_about_pivot(
     ]
 }
 
-/// Phase E — collect a flat list of every frame's AABB in
-/// page-local coords, tagged by its host page. Used as the snap
-/// target set so the moving items' edges align with sibling frames.
-/// Only text frames + rectangles for v1 (matches the rest of the
-/// gesture support).
-fn collect_sibling_frames(
-    scene: &paged_scene::Document,
-    built: &paged_renderer::BuiltDocument,
-) -> Vec<crate::snap::FrameRect> {
-    let mut out = Vec::new();
-    for parsed in &scene.spreads {
-        let spread = &parsed.spread;
-        for f in &spread.text_frames {
-            let Some(id) = f.self_id.as_deref() else {
-                continue;
-            };
-            let aabb = transformed_aabb(f.bounds, f.item_transform);
-            if let Some((page_id, page_local)) = page_for_aabb(built, aabb) {
-                out.push(crate::snap::FrameRect {
-                    element_id: crate::element_selection::ElementId::TextFrame(id.to_string()),
-                    page_id,
-                    aabb: page_local,
-                });
-            }
-        }
-        for r in &spread.rectangles {
-            let Some(id) = r.self_id.as_deref() else {
-                continue;
-            };
-            let aabb = transformed_aabb(r.bounds, r.item_transform);
-            if let Some((page_id, page_local)) = page_for_aabb(built, aabb) {
-                out.push(crate::snap::FrameRect {
-                    element_id: crate::element_selection::ElementId::Rectangle(id.to_string()),
-                    page_id,
-                    aabb: page_local,
-                });
-            }
-        }
-    }
-    out
-}
-
 /// Track K — does a parsed spread host the frame identified by
 /// `raw_id`? Walks every per-kind vec until one is found. Returns
 /// false for unknown ids.
@@ -1567,29 +1673,6 @@ fn transformed_aabb(b: Bounds, m: Option<[f32; 6]>) -> [f32; 4] {
     }
     // Return [top, left, bottom, right] in SPREAD coords.
     [min_y, min_x, max_y, max_x]
-}
-
-/// Locate the page whose spread-coord rect contains the centroid of
-/// `aabb_spread = [top, left, bottom, right]`, and return the AABB
-/// expressed in that page's page-local pt.
-fn page_for_aabb(
-    built: &paged_renderer::BuiltDocument,
-    aabb_spread: [f32; 4],
-) -> Option<(PageId, [f32; 4])> {
-    let cx = (aabb_spread[1] + aabb_spread[3]) * 0.5;
-    let cy = (aabb_spread[0] + aabb_spread[2]) * 0.5;
-    let p = built.pages.iter().find(|bp| {
-        let (ox, oy) = bp.spread_origin;
-        cx >= ox && cx <= ox + bp.width_pt && cy >= oy && cy <= oy + bp.height_pt
-    })?;
-    let (ox, oy) = p.spread_origin;
-    let page_local = [
-        aabb_spread[0] - oy,
-        aabb_spread[1] - ox,
-        aabb_spread[2] - oy,
-        aabb_spread[3] - ox,
-    ];
-    Some((p.id.clone(), page_local))
 }
 
 /// Phase D — average of every snapshot's transformed centroid in
@@ -1789,24 +1872,75 @@ fn write_mutation_to_scene(
                     .iter_mut()
                     .find(|p| p.self_id.as_deref() == Some(id.as_str()))
                 {
-                    if let NodeMutation::PathPoint { address, position } = mutation {
-                        if let Some(anchor) = p.anchors.get_mut(address.index) {
-                            match address.role {
-                                paged_mutate::PathPointRole::Anchor => {
-                                    let dx = position[0] - anchor.anchor.0;
-                                    let dy = position[1] - anchor.anchor.1;
-                                    anchor.anchor = (position[0], position[1]);
-                                    anchor.left = (anchor.left.0 + dx, anchor.left.1 + dy);
-                                    anchor.right = (anchor.right.0 + dx, anchor.right.1 + dy);
-                                }
-                                paged_mutate::PathPointRole::Left => {
-                                    anchor.left = (position[0], position[1]);
-                                }
-                                paged_mutate::PathPointRole::Right => {
-                                    anchor.right = (position[0], position[1]);
+                    match mutation {
+                        NodeMutation::PathPoint { address, position } => {
+                            if let Some(anchor) = p.anchors.get_mut(address.index) {
+                                match address.role {
+                                    paged_mutate::PathPointRole::Anchor => {
+                                        let dx = position[0] - anchor.anchor.0;
+                                        let dy = position[1] - anchor.anchor.1;
+                                        anchor.anchor = (position[0], position[1]);
+                                        anchor.left = (anchor.left.0 + dx, anchor.left.1 + dy);
+                                        anchor.right = (anchor.right.0 + dx, anchor.right.1 + dy);
+                                    }
+                                    paged_mutate::PathPointRole::Left => {
+                                        anchor.left = (position[0], position[1]);
+                                    }
+                                    paged_mutate::PathPointRole::Right => {
+                                        anchor.right = (position[0], position[1]);
+                                    }
                                 }
                             }
                         }
+                        // C-78 — a polygon is dragged, rotated and
+                        // scaled like any other item. These two were
+                        // dropped here, so a path never followed the
+                        // pointer: the preview showed nothing until
+                        // (and, for a translate, not even after) the
+                        // commit.
+                        NodeMutation::Bounds(b) => p.bounds = b,
+                        NodeMutation::Transform(m) => p.item_transform = m,
+                        NodeMutation::ImageTransform(_) => {}
+                    }
+                    return;
+                }
+            }
+        }
+        // C-78 — ovals and lines had no arm at all (they fell to the
+        // catch-all below), so neither previewed any gesture.
+        NodeId::Oval(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(o) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|o| o.self_id.as_deref() == Some(id.as_str()))
+                {
+                    match mutation {
+                        NodeMutation::Bounds(b) => o.bounds = b,
+                        NodeMutation::Transform(m) => o.item_transform = m,
+                        // The snapshot does not carry an oval's image
+                        // transform, so the content gestures stay off
+                        // this kind rather than write one it could not
+                        // put back.
+                        NodeMutation::ImageTransform(_) | NodeMutation::PathPoint { .. } => {}
+                    }
+                    return;
+                }
+            }
+        }
+        NodeId::GraphicLine(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(l) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|l| l.self_id.as_deref() == Some(id.as_str()))
+                {
+                    match mutation {
+                        NodeMutation::Bounds(b) => l.bounds = b,
+                        NodeMutation::Transform(m) => l.item_transform = m,
+                        NodeMutation::ImageTransform(_) | NodeMutation::PathPoint { .. } => {}
                     }
                     return;
                 }
@@ -1827,10 +1961,8 @@ fn write_mutation_to_scene(
                 }
             }
         }
-        // Phase D only mutates TextFrame + Rectangle. Other shapes
-        // resolve as ElementNotFound at snapshot time. Phase H added
-        // Polygon for path-point editing (handled above); Track L
-        // added Group above.
+        // Every page-item kind is handled above; what remains (pages,
+        // stories, layers…) is never a gesture target.
         _ => {}
     }
 }
@@ -1894,6 +2026,37 @@ fn restore_snapshot_in_scene(scene: &mut paged_scene::Document, snap: &NodeSnaps
                 }
             }
         }
+        // C-78 — the two kinds the preview now writes must be put back
+        // by the same snapshot, or a cancelled drag would leave them
+        // where the pointer was.
+        NodeId::Oval(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(o) = parsed
+                    .spread
+                    .ovals
+                    .iter_mut()
+                    .find(|o| o.self_id.as_deref() == Some(id.as_str()))
+                {
+                    o.bounds = snap.bounds;
+                    o.item_transform = snap.item_transform;
+                    return;
+                }
+            }
+        }
+        NodeId::GraphicLine(id) => {
+            for parsed in scene.spreads.iter_mut() {
+                if let Some(l) = parsed
+                    .spread
+                    .graphic_lines
+                    .iter_mut()
+                    .find(|l| l.self_id.as_deref() == Some(id.as_str()))
+                {
+                    l.bounds = snap.bounds;
+                    l.item_transform = snap.item_transform;
+                    return;
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1917,6 +2080,7 @@ pub(crate) fn compute_new_bounds(
         item_transform: None,
         image_item_transform: None,
         path_anchors: Vec::new(),
+        drawn_from_path: false,
     };
     let session = GestureSession {
         handle: GestureHandle(0),
@@ -2421,6 +2585,7 @@ mod tests {
             item_transform: None,
             image_item_transform: Some(IDENTITY),
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let session = GestureSession {
             handle: GestureHandle(0),
@@ -2449,6 +2614,7 @@ mod tests {
             item_transform: None,
             image_item_transform: Some(IDENTITY),
             path_anchors: Vec::new(),
+            drawn_from_path: false,
         };
         let op = build_op_from_mutation(&snap, mutation);
         assert!(matches!(

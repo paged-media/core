@@ -596,7 +596,7 @@ pub(super) fn parse_font_metrics(bytes: &[u8]) -> Option<FontMetrics> {
 /// paragraph (several times: shaping faces, outline cache keys, metrics).
 /// With real fonts registered (0.6–1.2 MB each, a CJK face 9 MB) that was
 /// gigabytes of byte-hashing per rebuild: ~17 s of a ~18 s wasm rebuild on the
-/// 134-page annual (thoughts ADR 030). Native benches never saw it because
+/// 134-page annual (ADR 030). Native benches never saw it because
 /// they ran without registered fonts, so every lookup took the substituted
 /// early return.
 ///

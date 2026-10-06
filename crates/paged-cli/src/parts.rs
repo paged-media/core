@@ -18,7 +18,7 @@
 //! native content parts beside the model: a plugin's HTML, a
 //! spreadsheet, a vector document, a SQLite database. The engine has had
 //! the door since protocol 51 (`ListPagedParts` / `ReadPagedPart` /
-//! `WritePagedPart`) and the README says container parts "come for
+//! `WritePagedPart`; `DeletePagedPart` since 66) and the README says container parts "come for
 //! free"; `grep PagedPart crates/paged-cli/src` returned nothing, so
 //! from a command line they were unreachable — the one thing in
 //! `cli_surface.rs`'s list that a `.paged`-shaped file format cannot be
@@ -83,6 +83,51 @@ pub enum PartsCommand {
         #[command(flatten)]
         assets: DocumentOptions,
     },
+    /// Delete one part and save the container back.
+    ///
+    /// Like `write`, the delete lands in the loaded model and `--save` is
+    /// what puts it on disk. Deleting a part that is not there is not an
+    /// error; the command says so.
+    Delete {
+        /// `.paged` container.
+        doc: PathBuf,
+        /// Part path inside the container.
+        path: String,
+        /// Name the deleting caller, as a bundle adapter does.
+        #[arg(long)]
+        caller: Option<String>,
+        /// Save the container back to this path (or `--save` alone to
+        /// overwrite the input).
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        save: Option<String>,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
+}
+
+/// Export the loaded container to `save` (empty: back over `doc`).
+fn save_container(session: &mut Session, doc: &Path, save: &str, what: &str) -> Result<()> {
+    let dest: &Path = if save.is_empty() {
+        doc
+    } else {
+        Path::new(save)
+    };
+    let reply = session.send(MainToWorkerKind::ExportPaged {})?;
+    if let Some(e) = failed(&reply) {
+        return Err(anyhow!("{e}"));
+    }
+    match reply {
+        WorkerToMainKind::PagedExported { bytes } => {
+            std::fs::write(dest, bytes.as_slice())?;
+            eprintln!(
+                "{what}: saved container ({} bytes) → {}",
+                bytes.as_slice().len(),
+                dest.display()
+            );
+            Ok(())
+        }
+        other => Err(anyhow!("the engine answered {other:?}")),
+    }
 }
 
 /// The three shapes the engine says no in, rendered. They carry
@@ -99,6 +144,40 @@ fn failed(reply: &WorkerToMainKind) -> Option<String> {
 
 pub fn run(what: &PartsCommand) -> Result<()> {
     match what {
+        PartsCommand::Delete {
+            doc,
+            path,
+            caller,
+            save,
+            assets,
+        } => {
+            let mut session = Session::new();
+            assets.open(&mut session, doc)?;
+            let reply = session.send(MainToWorkerKind::DeletePagedPart {
+                path: path.clone(),
+                caller: caller.clone(),
+            })?;
+            if let Some(e) = failed(&reply) {
+                return Err(anyhow!("{e}"));
+            }
+            let existed = match reply {
+                WorkerToMainKind::PagedPartDeleted { existed } => existed,
+                other => return Err(anyhow!("the engine answered {other:?}")),
+            };
+            if !existed {
+                eprintln!("{path}: no such part; nothing deleted.");
+            }
+            match save {
+                None => {
+                    eprintln!(
+                        "{path}: deleted from the loaded container. \
+                         Nothing saved — pass --save to write the file."
+                    );
+                    Ok(())
+                }
+                Some(dest) => save_container(&mut session, doc, dest, path),
+            }
+        }
         PartsCommand::List {
             doc,
             prefix,
@@ -188,29 +267,7 @@ pub fn run(what: &PartsCommand) -> Result<()> {
                     );
                     Ok(())
                 }
-                Some(dest) => {
-                    let dest: &Path = if dest.is_empty() {
-                        doc
-                    } else {
-                        Path::new(dest.as_str())
-                    };
-                    let reply = session.send(MainToWorkerKind::ExportPaged {})?;
-                    if let Some(e) = failed(&reply) {
-                        return Err(anyhow!("{e}"));
-                    }
-                    match reply {
-                        WorkerToMainKind::PagedExported { bytes } => {
-                            std::fs::write(dest, bytes.as_slice())?;
-                            eprintln!(
-                                "{path}: saved container ({} bytes) → {}",
-                                bytes.as_slice().len(),
-                                dest.display()
-                            );
-                            Ok(())
-                        }
-                        other => Err(anyhow!("the engine answered {other:?}")),
-                    }
-                }
+                Some(dest) => save_container(&mut session, doc, dest, path),
             }
         }
     }

@@ -451,6 +451,53 @@ pub const SOFT_HYPHEN: char = '\u{00ad}';
 /// word still breaks at its soft hyphen ("Ab-solutely"). A soft hyphen
 /// before the first letter therefore offers nothing, which is how an
 /// author keeps a word from hyphenating at all.
+/// The hyphens a text already has that a line may break after: U+002D and
+/// U+2010 standing between two letters or digits.
+///
+/// Asked of InDesign with the `hard-hyphen` paged-gen fixture (InDesign
+/// 20.0.1): `The two-way street` breaks `The two-` / `way street` with
+/// hyphenation off as well as on, in both composers, and justified;
+/// `state-of-the-art` breaks after any of its hyphens. An en dash and an
+/// em dash offered no break in any width tried (`10–20`, `so—on`). The
+/// Single-line Composer weighs such a break like a hyphenation point (its
+/// zone applies: at 50 pt it sets `The` / `two-way` / `street`). Word breaks
+/// the same way. The break adds no hyphen: the text ends in one.
+pub fn hard_hyphen_opportunities(word: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut prev: Option<char> = None;
+    let mut chars = word.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if is_hard_hyphen(c)
+            && prev.is_some_and(char::is_alphanumeric)
+            && chars.peek().is_some_and(|(_, n)| n.is_alphanumeric())
+        {
+            out.push(i + c.len_utf8());
+        }
+        prev = Some(c);
+    }
+    out
+}
+
+fn is_hard_hyphen(c: char) -> bool {
+    c == '-' || c == '\u{2010}'
+}
+
+/// True when the break at byte `offset` of `text` follows a hyphen the text
+/// already has, so the line needs no synthetic one.
+pub fn breaks_after_hard_hyphen(text: &str, offset: usize) -> bool {
+    text.get(..offset)
+        .and_then(|head| head.chars().next_back())
+        .is_some_and(is_hard_hyphen)
+}
+
+/// Two sorted break lists as one, without duplicates.
+pub fn merge_opportunities(mut a: Vec<usize>, b: Vec<usize>) -> Vec<usize> {
+    a.extend(b);
+    a.sort_unstable();
+    a.dedup();
+    a
+}
+
 pub fn soft_hyphen_opportunities(
     word: &str,
     limits: &HyphenationLimits,

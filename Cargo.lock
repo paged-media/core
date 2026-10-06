@@ -1662,7 +1662,7 @@ dependencies = [
 [[package]]
 name = "idml-export"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=42632a7b80f77c290c88bcdd98aa99fbf8c1afe7#42632a7b80f77c290c88bcdd98aa99fbf8c1afe7"
+source = "git+https://github.com/paged-media/plugin-publish?rev=2f27d4da84c0e384d73eb8ff72e90f62d4e606ab#2f27d4da84c0e384d73eb8ff72e90f62d4e606ab"
 dependencies = [
  "base64",
  "idml-import",
@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=42632a7b80f77c290c88bcdd98aa99fbf8c1afe7#42632a7b80f77c290c88bcdd98aa99fbf8c1afe7"
+source = "git+https://github.com/paged-media/plugin-publish?rev=2f27d4da84c0e384d73eb8ff72e90f62d4e606ab#2f27d4da84c0e384d73eb8ff72e90f62d4e606ab"
 dependencies = [
  "base64",
  "bytes",
@@ -2478,6 +2478,7 @@ dependencies = [
  "paged-composition",
  "paged-export-pdf",
  "paged-gen",
+ "paged-introspect",
  "paged-model",
  "paged-mutate",
  "paged-renderer",
@@ -2501,6 +2502,7 @@ dependencies = [
 name = "paged-canvas-wasm"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "console_error_panic_hook",
  "getrandom 0.3.4",
  "js-sys",
@@ -3869,7 +3871,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",

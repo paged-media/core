@@ -205,6 +205,76 @@ pub(super) fn apply_paragraph_property_in(
     })
 }
 
+/// v65 (RFI C-53) — apply paragraph style `style` to exactly paragraph
+/// `index` of the stream (the story body, or `cell`'s own paragraphs). The
+/// inverse names the same paragraph with its prior style ("" clears), so
+/// undo is exact for an empty paragraph among others at one offset.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_paragraph_style_at(
+    doc: &mut Document,
+    story_id: &str,
+    cell: Option<&crate::operation::CellAddr>,
+    index: u32,
+    style: &str,
+    scope: crate::operation::StyleScope,
+    start: u32,
+    end: u32,
+) -> Result<AppliedOperation, OperationError> {
+    let node = NodeId::Story(story_id.to_string());
+    let path = PropertyPath::AppliedParagraphStyle;
+    if scope != crate::operation::StyleScope::Paragraph {
+        return Err(OperationError::InvalidValue {
+            node,
+            path,
+            reason: "a paragraph address takes a paragraph style (scope = paragraph)".to_string(),
+        });
+    }
+    let story_idx = doc
+        .stories
+        .iter()
+        .position(|s| s.self_id == story_id)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let paragraphs = super::cell_paragraphs_mut(&mut doc.stories[story_idx].story, cell)
+        .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+    let count = paragraphs.len();
+    let Some(para) = paragraphs.get_mut(index as usize) else {
+        return Err(OperationError::InvalidValue {
+            node,
+            path,
+            reason: format!("paragraph {index} is past the stream's {count} paragraphs"),
+        });
+    };
+    let (prev, _) = apply_paragraph_field(para, path, &Value::Text(style.to_string()))?;
+    let Value::Text(prev) = prev else {
+        unreachable!("the applied paragraph style is text");
+    };
+    let invalidation = match doc
+        .frame_for_story
+        .get(story_id)
+        .and_then(|f| f.self_id.clone())
+    {
+        Some(frame) => InvalidationHint {
+            text_reflow: vec![NodeId::TextFrame(frame)],
+            ..Default::default()
+        },
+        None => InvalidationHint::default(),
+    };
+    let op = |style: String| Operation::ApplyStyle {
+        story_id: story_id.to_string(),
+        start,
+        end,
+        style,
+        scope,
+        cell: cell.cloned(),
+        paragraph: Some(index),
+    };
+    Ok(AppliedOperation {
+        op: op(style.to_string()),
+        inverse: op(prev),
+        invalidation,
+    })
+}
+
 /// The paragraph(s) a zero-length range — a caret — at contiguous offset
 /// `at` is in, the way InDesign applies a paragraph attribute to the
 /// paragraph holding the insertion point.
@@ -591,6 +661,39 @@ pub(super) fn set_list_marker_field(
     })
 }
 
+/// Set an `Option<Composer>` from a `Value::Text` carrying the IDML
+/// string; the empty string clears the override (`None`). The prior is
+/// returned as `Value::Text` (`None ⇒ ""`), so the inverse round-trips.
+///
+/// This layer stores an unknown string verbatim, as the parser does
+/// ([`paged_model::Composer::Other`]): it is what the inverse of
+/// overwriting a third-party composer carries, and refusing it here would
+/// make that undo fail. Authoring surfaces refuse it instead — see
+/// [`crate::refuse_unauthorable_value`], which the canvas runs on every
+/// wire mutation.
+pub(super) fn set_para_composer_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<paged_model::Composer>,
+) -> Result<(Value, Value), OperationError> {
+    let Value::Text(new_val) = value else {
+        return Err(OperationError::TypeMismatch {
+            path,
+            expected: COMPOSER_EXPECTED.to_string(),
+        });
+    };
+    let prev = slot
+        .as_ref()
+        .map(|c| c.as_idml().to_string())
+        .unwrap_or_default();
+    *slot = (!new_val.is_empty()).then(|| paged_model::Composer::from_idml(new_val));
+    Ok((Value::Text(prev), Value::Text(new_val.clone())))
+}
+
+/// The values an authoring surface may send for `paragraphComposer`.
+pub(crate) const COMPOSER_EXPECTED: &str =
+    "Text: \"\" | \"HL Composer\" | \"HL Single\" | \"HL Composer Optyca\" | \"HL Single Optyca\"";
+
 /// W0.2 — set the whole `ParagraphRule` struct (`rule_above` /
 /// `rule_below`) from a `Value::ParagraphRule`. `ParagraphRule(None)`
 /// clears the rule to the all-`None` default. The captured prior is
@@ -758,6 +861,7 @@ pub(super) fn apply_paragraph_field(
         PropertyPath::ParagraphStartParagraph => {
             set_para_start_paragraph_field(path, value, &mut para.start_paragraph)
         }
+        PropertyPath::ParagraphComposer => set_para_composer_field(path, value, &mut para.composer),
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount
         | PropertyPath::ParagraphSpanColumnMinSpaceBefore

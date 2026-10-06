@@ -150,6 +150,24 @@ fn the_diagnostic_reads_answer_what_the_document_holds() {
         "gradient: {grad}"
     );
 
+    let style = ok(&[
+        "read",
+        "style-properties",
+        doc,
+        "paragraph",
+        "ParagraphStyle/$ID/[No paragraph style]",
+        "--compact",
+    ]);
+    assert!(
+        style.contains(r#""kind":"styleProperties""#) && style.contains("paragraphComposer"),
+        "style: {style}"
+    );
+    let not_a_collection = refused(&["read", "style-properties", doc, "swatch", "x"]);
+    assert!(
+        not_a_collection.contains("not a style collection"),
+        "{not_a_collection}"
+    );
+
     let props = ok(&[
         "read",
         "element-properties",
@@ -354,6 +372,41 @@ fn container_parts_are_written_listed_and_read_back() {
         doc,
         "paged/someone-else/data.json",
         payload.to_str().unwrap(),
+        "--caller",
+        "cli-test",
+    ]);
+    assert!(err.contains("own subtree"), "stderr: {err}");
+
+    // v66 — delete, saved: the part is gone from the file, not just
+    // hidden in one process.
+    let pruned = d.join("pruned.paged");
+    ok(&[
+        "parts",
+        "delete",
+        saved.to_str().unwrap(),
+        "paged/cli-test/data.json",
+        "--caller",
+        "cli-test",
+        "--save",
+        pruned.to_str().unwrap(),
+    ]);
+    let listed = ok(&["parts", "list", pruned.to_str().unwrap()]);
+    assert!(
+        !listed.contains("paged/cli-test/data.json") && listed.contains("paged/core/model/"),
+        "list after delete: {listed}"
+    );
+    let err = refused(&[
+        "parts",
+        "read",
+        pruned.to_str().unwrap(),
+        "paged/cli-test/data.json",
+    ]);
+    assert!(err.contains("no part at"), "stderr: {err}");
+    let err = refused(&[
+        "parts",
+        "delete",
+        saved.to_str().unwrap(),
+        "paged/core/model/x",
         "--caller",
         "cli-test",
     ]);

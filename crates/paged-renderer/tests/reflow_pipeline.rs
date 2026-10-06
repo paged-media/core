@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 026 — page growth over the generated `reflow.idml`,
+//! ADR 026 — page growth over the generated `reflow.idml`,
 //! against what InDesign 2025's Smart Text Reflow did with the same file
 //! (`tools/indesign-export/reflow-probe.sh`, 2026-10-01):
 //!

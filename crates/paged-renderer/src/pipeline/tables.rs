@@ -821,11 +821,20 @@ pub(super) fn emit_table_into_chain(
             let cell_bot_weight = cell
                 .bottom_edge_stroke_weight
                 .or(resolved_cell.bottom_edge_stroke_weight);
+            // An edge's stroke style (a double line) — inline, then the
+            // cell style.
+            let edge_type = |inline: &Option<String>, style: &Option<String>| {
+                inline.clone().or_else(|| style.clone())
+            };
             let edges = [
                 (
                     cell_top_color,
                     cell_top_weight,
                     cell.top_edge_stroke_tint,
+                    edge_type(
+                        &cell.top_edge_stroke_type,
+                        &resolved_cell.top_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt,
                     cell_w_pt,
@@ -834,24 +843,27 @@ pub(super) fn emit_table_into_chain(
                     cell_bot_color,
                     cell_bot_weight,
                     cell.bottom_edge_stroke_tint,
+                    edge_type(
+                        &cell.bottom_edge_stroke_type,
+                        &resolved_cell.bottom_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt + cell_h_pt,
                     cell_w_pt,
                 ),
             ];
-            for (color, weight, tint, x, y, w) in edges {
+            for (color, weight, tint, stroke_type, x, y, w) in edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                         .map(|p| apply_fill_tint(p, tint))
                     {
-                        emit_rect(
-                            Rect {
-                                x,
-                                y: y - weight * 0.5,
-                                w,
-                                h: weight,
-                            },
+                        emit_table_horizontal_edge(
+                            x,
+                            y,
+                            w,
+                            stroke_type.as_deref(),
+                            weight,
                             paint,
                             &mut pages[target_page].list,
                         );
@@ -879,6 +891,10 @@ pub(super) fn emit_table_into_chain(
                     cell_left_color,
                     cell_left_weight,
                     cell.left_edge_stroke_tint,
+                    edge_type(
+                        &cell.left_edge_stroke_type,
+                        &resolved_cell.left_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt,
                     cell_h_pt,
@@ -887,24 +903,27 @@ pub(super) fn emit_table_into_chain(
                     cell_right_color,
                     cell_right_weight,
                     cell.right_edge_stroke_tint,
+                    edge_type(
+                        &cell.right_edge_stroke_type,
+                        &resolved_cell.right_edge_stroke_type,
+                    ),
                     cell_x_pt + cell_w_pt,
                     cell_y_pt,
                     cell_h_pt,
                 ),
             ];
-            for (color, weight, tint, x, y, h) in v_edges {
+            for (color, weight, tint, stroke_type, x, y, h) in v_edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                         .map(|p| apply_fill_tint(p, tint))
                     {
-                        emit_rect(
-                            Rect {
-                                x: x - weight * 0.5,
-                                y,
-                                w: weight,
-                                h,
-                            },
+                        emit_table_vertical_edge(
+                            x,
+                            y,
+                            h,
+                            stroke_type.as_deref(),
+                            weight,
                             paint,
                             &mut pages[target_page].list,
                         );
@@ -2134,14 +2153,16 @@ fn plan_cell_block<'t>(
     let mut prev_text: Option<(f32, f32)> = None;
     let mut cursor = 0.0f32;
     for (index, paragraph) in paragraphs.iter().enumerate() {
-        if paragraph.runs.is_empty() {
-            if let Some(table) = paragraph.table.as_ref() {
-                let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
-                let height = measure_nested_table_height(em, table, inner_w);
-                items.push(CellItem::Table { table, top, height });
-                cursor = top + height;
-                prev_text = None;
-            }
+        if let Some(table) = paragraph
+            .table
+            .as_ref()
+            .filter(|_| paragraph.runs.is_empty())
+        {
+            let top = prev_text.map(|(b, after)| b + after).unwrap_or(cursor);
+            let height = measure_nested_table_height(em, table, inner_w);
+            items.push(CellItem::Table { table, top, height });
+            cursor = top + height;
+            prev_text = None;
             continue;
         }
         let attrs = em.document.resolved_paragraph_attrs(paragraph);
@@ -2152,7 +2173,29 @@ fn plan_cell_block<'t>(
             ),
             None => (cursor, false),
         };
-        let lines = measure_cell_paragraph(em, paragraph, inner_w, by_leading);
+        // A paragraph with no word (empty, or nothing but spaces) is a
+        // line all the same: InDesign sets the next paragraph one leading
+        // further down, and a blank first paragraph takes the cell's
+        // first line (measured, `tables-rows` page 12). The composer finds
+        // no line in it, so measure a one-letter stand-in with the same
+        // formatting; nothing is drawn for it.
+        let blank = !paragraph
+            .runs
+            .iter()
+            .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
+        let stand_in;
+        let measured = if blank {
+            let mut run = paragraph.runs.first().cloned().unwrap_or_default();
+            run.text = "x".to_string();
+            stand_in = paged_model::Paragraph {
+                runs: vec![run],
+                ..paragraph.clone()
+            };
+            &stand_in
+        } else {
+            paragraph
+        };
+        let lines = measure_cell_paragraph(em, measured, inner_w, by_leading);
         let Some(&last) = lines.last() else {
             continue;
         };
@@ -2428,13 +2471,37 @@ fn measure_cell_paragraph(
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
-    let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    // Indents work in a cell as in body text: LeftIndent / RightIndent
+    // narrow the measure and LeftIndent shifts the lines; FirstLineIndent
+    // narrows and shifts line 0 (a negative one hangs it). They used to be
+    // ignored here, so an indented or bulleted paragraph in a cell sat on
+    // the cell's inset.
+    let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+    let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+    let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+    let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
+    let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let first_64 = to_64(first_line_indent_pt);
+    if first_64 != 0 {
+        let mut widths = lopts
+            .compose
+            .column_widths
+            .clone()
+            .unwrap_or_else(|| vec![lopts.compose.column_width]);
+        if widths.len() == 1 {
+            widths.push(widths[0]);
+        }
+        let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+        widths[0] = (widths[0] - first_64).max(floor_64);
+        lopts.compose.column_widths = Some(widths);
+    }
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
@@ -2648,13 +2715,34 @@ pub(super) fn emit_cell_paragraph(
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
     let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
-    let mut lopts = paged_text::LayoutOptions::new(column_width_pt, paragraph_size);
+    // The same indents as `measure_cell_paragraph`, plus the shift after
+    // layout.
+    let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+    let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+    let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+    let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
+    let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
     lopts.alignment = map_justification(resolved_paragraph.justification);
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+    let first_64 = to_64(first_line_indent_pt);
+    if first_64 != 0 {
+        let mut widths = lopts
+            .compose
+            .column_widths
+            .clone()
+            .unwrap_or_else(|| vec![lopts.compose.column_width]);
+        if widths.len() == 1 {
+            widths.push(widths[0]);
+        }
+        let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+        widths[0] = (widths[0] - first_64).max(floor_64);
+        lopts.compose.column_widths = Some(widths);
+    }
     let head_metrics = bytes_font_ids
         .first()
         .and_then(|id| em.font_table.metrics_for(*id));
@@ -2666,7 +2754,16 @@ pub(super) fn emit_cell_paragraph(
         by_leading,
     );
 
-    let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
+    let mut laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
+    let left_64 = to_64(left_indent_pt);
+    if left_64 != 0 || first_64 != 0 {
+        for (i, line) in laid_out.lines.iter_mut().enumerate() {
+            let dx = left_64 + if i == 0 { first_64 } else { 0 };
+            for g in &mut line.glyphs {
+                g.x += dx;
+            }
+        }
+    }
     // Only the lines the cell has room for: the rest are overset.
     let fitting = laid_out
         .lines
@@ -2779,6 +2876,7 @@ pub(super) fn emit_cell_paragraph(
                 descent_pt: 0.2 * line_h_pt,
                 byte_range: line.byte_range.start as u32..line.byte_range.end as u32,
                 clusters,
+                marker: Vec::new(),
             });
         }
     }

@@ -32,6 +32,7 @@ pub enum PageItem {
     Group(Group),
     Polygon(Polygon),
     Oval(Oval),
+    GraphicLine(GraphicLine),
     /// B-18 paste-into: a container `Rect` whose element nests child
     /// page items (InDesign's paste-into serialisation — the children
     /// are the container element's last children, `ItemTransform`s
@@ -67,6 +68,12 @@ impl From<Oval> for PageItem {
     }
 }
 
+impl From<GraphicLine> for PageItem {
+    fn from(l: GraphicLine) -> Self {
+        PageItem::GraphicLine(l)
+    }
+}
+
 impl PageItem {
     pub fn write(&self, b: &mut XmlBuilder) {
         match self {
@@ -74,6 +81,7 @@ impl PageItem {
             PageItem::Group(g) => g.write(b),
             PageItem::Polygon(p) => p.write(b),
             PageItem::Oval(o) => o.write(b),
+            PageItem::GraphicLine(l) => l.write(b),
             PageItem::PasteInto {
                 container,
                 children,
@@ -409,6 +417,51 @@ impl Polygon {
             tp.write(b);
         }
         b.end("Polygon");
+    }
+}
+
+/// IDML `<GraphicLine>` — an open path, stroke only. Written the way
+/// InDesign writes one: an explicit `[None]` object style, no fill, and
+/// the path as one `PathOpen="true"` `<GeometryPathType>` (two anchors for
+/// a straight line). `extra_attrs` carries the stroke vocabulary a sample
+/// exercises — `EndCap`, `LeftLineEnd` / `RightLineEnd`, the arrowhead
+/// scales — the same escape hatch as [`Polygon::extra_attrs`].
+pub struct GraphicLine {
+    pub self_id: String,
+    pub item_transform: Matrix,
+    pub stroke_color: Option<String>,
+    pub stroke_weight_pt: Option<f32>,
+    pub extra_attrs: Vec<(String, String)>,
+    pub points: Vec<PathPoint>,
+}
+
+impl GraphicLine {
+    pub fn write(&self, b: &mut XmlBuilder) {
+        let mut attrs: Vec<(&str, String)> = vec![
+            ("Self", self.self_id.clone()),
+            ("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()),
+            ("ItemTransform", format_matrix(&self.item_transform)),
+            ("FillColor", "Swatch/None".to_string()),
+        ];
+        push_color_attr(&mut attrs, "StrokeColor", &self.stroke_color);
+        if let Some(w) = self.stroke_weight_pt {
+            attrs.push(("StrokeWeight", format_f32(w)));
+        }
+        for (k, v) in &self.extra_attrs {
+            attrs.push((k.as_str(), v.clone()));
+        }
+        let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        b.start("GraphicLine", &attr_refs);
+        b.start("Properties", &[]);
+        write_custom_path_geometry(
+            b,
+            &[PolygonSubPath {
+                points: self.points.clone(),
+                closed: false,
+            }],
+        );
+        b.end("Properties");
+        b.end("GraphicLine");
     }
 }
 

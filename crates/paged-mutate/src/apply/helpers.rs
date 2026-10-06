@@ -340,6 +340,60 @@ pub(super) fn find_end_join_mut<'a>(
     }
 }
 
+/// C-62 — locate the `end_cap: Option<String>` field. Every stroked
+/// path kind carries it: Rectangle (the original), and since C-62
+/// Polygon (a pen path's two ends), GraphicLine and Oval (dash ends on
+/// a closed outline). TextFrame does not — its stroke is the frame box.
+pub(super) fn find_end_cap_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.end_cap),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.end_cap),
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.end_cap),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.end_cap),
+        _ => None,
+    }
+}
+
+/// C-62 — locate the `(start_arrow, end_arrow)` line-end pair: the
+/// `<GraphicLine>` (v43) and, since C-62, the `<Polygon>`, whose OPEN
+/// contours draw them (a pen or pencil path).
+pub(super) fn find_line_ends_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<(
+    &'a mut paged_model::ArrowheadType,
+    &'a mut paged_model::ArrowheadType,
+)> {
+    match node {
+        NodeId::GraphicLine(id) => {
+            find_graphic_line_mut(doc, id).map(|l| (&mut l.start_arrow, &mut l.end_arrow))
+        }
+        NodeId::Polygon(id) => {
+            find_polygon_mut(doc, id).map(|p| (&mut p.start_arrow, &mut p.end_arrow))
+        }
+        _ => None,
+    }
+}
+
+/// C-24 — locate the `stroke_alignment: Option<String>` field on the
+/// kinds that carry one, which are exactly the kinds whose renderer
+/// offsets the stroked outline by it. `GraphicLine` has no such field.
+pub(super) fn find_stroke_alignment_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<String>> {
+    match node {
+        NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.stroke_alignment),
+        NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.stroke_alignment),
+        NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.stroke_alignment),
+        NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.stroke_alignment),
+        _ => None,
+    }
+}
+
 /// W1.1 — locate the `stroke_dash: Vec<f32>` field (per-frame
 /// `StrokeDashAndGap` override) on any stroked page-item kind.
 pub(super) fn find_stroke_dash_mut<'a>(
@@ -1013,6 +1067,17 @@ pub(super) fn expect_gradient_feather(
 
 /// Editor-ops — the `FrameEffects` block of an effect-bearing item,
 /// materialising the default block when the item had none yet.
+///
+/// C-63 — `Polygon` joins: `paged_model::Polygon` has carried the bag
+/// since Q-04, the importer fills it, and `emit_polygon_into` paints it
+/// against the polygon's own interned path — so a path drawn with the
+/// pen (which IS a `Polygon`) rendered an effect it could be given in a
+/// file and never in the editor.
+///
+/// `GraphicLine` stays out on purpose. It carries the same field and the
+/// importer fills it, but `emit_line_into` never reads it: every effect
+/// is defined against a FILL path and a line has none. An arm here would
+/// write a value no renderer consults, so the kind keeps rejecting.
 pub(super) fn find_frame_effects_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
@@ -1027,6 +1092,9 @@ pub(super) fn find_frame_effects_mut<'a>(
         NodeId::Oval(id) => {
             find_oval_mut(doc, id).map(|o| o.effects.get_or_insert_with(Default::default))
         }
+        NodeId::Polygon(id) => {
+            find_polygon_mut(doc, id).map(|p| p.effects.get_or_insert_with(Default::default))
+        }
         _ => None,
     }
 }
@@ -1036,7 +1104,7 @@ pub(super) fn find_frame_effects_mut<'a>(
 // its InDesign-preset default when the prior was `None`) so the
 // per-field apply arms always have a target. Mirrors
 // `find_drop_shadow_mut`. Returns `None` only when the node isn't an
-// effect-bearing kind (TextFrame / Rectangle / Oval).
+// effect-bearing kind (TextFrame / Rectangle / Oval / Polygon).
 pub(super) fn find_inner_shadow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
@@ -1104,8 +1172,9 @@ pub(super) fn find_directional_feather_mut<'a>(
 // W0.4 — object-level transparency blend mode. Locates the
 // `blend_mode: Option<String>` slot on the kinds that parse it
 // (TextFrame / Rectangle / Polygon / Oval — C-20 added the latter
-// two). The `<BlendingSetting Opacity>` half is already wired as
-// `FrameOpacity`, which covers the same four kinds. `GraphicLine`
+// two — and Group, whose slot is `transparency.blend_mode`, C-63).
+// The `<BlendingSetting Opacity>` half is already wired as
+// `FrameOpacity`, which covers the same five kinds. `GraphicLine`
 // carries neither field on `paged_model::GraphicLine`, so it is
 // absent here on purpose rather than silently no-op'ing.
 pub(super) fn find_blend_mode_mut<'a>(
@@ -1117,6 +1186,7 @@ pub(super) fn find_blend_mode_mut<'a>(
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
         NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.blend_mode),
         NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.blend_mode),
+        NodeId::Group(id) => find_group_mut(doc, id).map(|g| &mut g.transparency.blend_mode),
         _ => None,
     }
 }

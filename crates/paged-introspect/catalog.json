@@ -71,6 +71,13 @@
       "summary": "Group two-or-more elements; <2 valid members returns false."
     },
     {
+      "name": "paged.duplicateElements",
+      "params": "([id, ...], dx, dy)",
+      "returns": "string[] (created ids) JSON | null",
+      "kind": "author",
+      "summary": "Duplicate page items: a whole clone of each (properties, plugin metadata, group members, pasted-in children, a text frame's story), offset by (dx, dy) pt and inserted directly above its source, in one undo step. Selects the clones and returns their kind:id addresses in source order; null when the engine refuses (threaded text frame, anchored object, opacity mask, an element named together with its group)."
+    },
+    {
       "name": "paged.undo",
       "params": "()",
       "returns": "bool",
@@ -222,7 +229,7 @@
       "params": "(pageId)",
       "returns": "string | null",
       "kind": "author",
-      "summary": "Duplicate a single-page spread after the source; returns the new page selfId."
+      "summary": "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."
     },
     {
       "name": "paged.resizePage",
@@ -237,6 +244,48 @@
       "returns": "bool",
       "kind": "write",
       "summary": "Apply a master to a page (omit/null detaches)."
+    },
+    {
+      "name": "paged.movePage",
+      "params": "(pageId, afterPageId?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Move a page to follow another (omit/null: to the front)."
+    },
+    {
+      "name": "paged.createMaster",
+      "params": "(masterId, { name?, widthPt?, heightPt?, duplicateOf? })",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Create a master spread: one page of the given size, or a copy of another master."
+    },
+    {
+      "name": "paged.deleteMaster",
+      "params": "(masterId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a master no page applies."
+    },
+    {
+      "name": "paged.renameMaster",
+      "params": "(masterId, name?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set (omit/null: clear) a master's name."
+    },
+    {
+      "name": "paged.onMaster",
+      "params": "(masterId, mutation)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Apply a mutation ({ op, args }) to a master spread's items."
+    },
+    {
+      "name": "paged.setPageMetadata",
+      "params": "(pageId, key, value?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set or delete one plugin-metadata entry on a page (value: the JSON envelope)."
     },
     {
       "name": "paged.deleteElement",
@@ -412,6 +461,13 @@
       "returns": "bool",
       "kind": "author",
       "summary": "Insert an empty body row at index."
+    },
+    {
+      "name": "paged.deleteTable",
+      "params": "(storyId, tableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a whole table and its host paragraph; undo restores every cell."
     },
     {
       "name": "paged.deleteTableRow",
@@ -736,6 +792,13 @@
       "summary": "Write one Label key/value pair on a leaf page item (value null deletes)."
     },
     {
+      "name": "paged.setDocumentMetadata",
+      "params": "(key, value?, caller?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Write one document-scoped Label key/value pair (value null deletes); undoable."
+    },
+    {
       "name": "paged.batch",
       "params": "([mutations])",
       "returns": "bool",
@@ -891,7 +954,7 @@
     },
     {
       "name": "paged.insertHyperlink",
-      "params": "(storyId, start, end, url)",
+      "params": "(storyId, start, end, url, pageId?)",
       "returns": "bool",
       "kind": "author",
       "summary": "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."
@@ -1252,7 +1315,8 @@
     "paragraphNumberingStartAt",
     "paragraphNumberingContinue",
     "paragraphBulletsCharacterStyle",
-    "paragraphNumberingCharacterStyle"
+    "paragraphNumberingCharacterStyle",
+    "paragraphComposer"
   ],
   "constraints": [
     "Scripts run in Boa (pure ECMAScript), NOT Node: no require/import, fetch, fs, setTimeout, or network. Use only paged.* and console.*.",
@@ -1308,8 +1372,11 @@
     "detachTextFromPath",
     "createGroup",
     "dissolveGroup",
+    "duplicateElements",
     "setGroupTransform",
     "setPluginMetadata",
+    "setPageMetadata",
+    "setDocumentMetadata",
     "pathPointCurveType",
     "pathPointSet",
     "batch",
@@ -1367,6 +1434,11 @@
     "activateConditionSet",
     "applyMasterToPage",
     "duplicatePage",
+    "movePage",
+    "onMaster",
+    "createMaster",
+    "deleteMaster",
+    "renameMaster",
     "insertSection",
     "editSection",
     "deleteSection",
@@ -1381,7 +1453,8 @@
     "insertFooterRow",
     "removeFooterRow",
     "setCellSpan",
-    "insertTable"
+    "insertTable",
+    "deleteTable"
   ],
   "elements": [
     {

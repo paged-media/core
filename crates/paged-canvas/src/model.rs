@@ -254,8 +254,10 @@ pub struct MutationOutcome {
     /// dispatch threads this onto `MutationApplied.reflow`.
     pub reflow: Option<crate::channel::FrameReflowInfo>,
     /// Every element this mutation minted, in mint order, each with the
-    /// C-15 handle that named it. A `Batch` fills it; a single mutation
-    /// leaves it empty, because `created_id` already names its one mint.
+    /// C-15 handle that named it. A `Batch` fills it, and so does a
+    /// `DuplicateElements` (one clone per source); any other single
+    /// mutation leaves it empty, because `created_id` already names its
+    /// one mint.
     /// Threaded onto `MutationApplied::minted` so a caller that authors
     /// through batches can address what it just made.
     pub minted: Vec<crate::channel::MintedElement>,
@@ -327,14 +329,51 @@ fn element_to_member_node_id(
 ///
 /// ORDER is the contract: a caller that sent N creating children reads
 /// them back in the order it wrote them.
-fn created_element_ids(op: &paged_mutate::Operation) -> Vec<crate::element_selection::ElementId> {
+fn created_element_ids(
+    doc: &paged_scene::Document,
+    op: &paged_mutate::Operation,
+) -> Vec<crate::element_selection::ElementId> {
     if let paged_mutate::Operation::Batch { ops } = op {
-        return ops.iter().flat_map(created_element_ids).collect();
+        return ops
+            .iter()
+            .flat_map(|child| created_element_ids(doc, child))
+            .collect();
     }
-    created_element_id(op).into_iter().collect()
+    // C-64 — a duplicate mints one clone PER SOURCE: the one single
+    // (non-batch) mutation that creates more than one element.
+    if matches!(op, paged_mutate::Operation::DuplicateNodes { .. }) {
+        return paged_mutate::duplicate_roots(doc, op)
+            .iter()
+            .filter_map(page_item_element_id)
+            .collect();
+    }
+    created_element_id(doc, op).into_iter().collect()
 }
 
-fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_selection::ElementId> {
+/// `NodeId` → wire `ElementId`, for the page-item kinds.
+fn page_item_element_id(
+    node: &paged_mutate::NodeId,
+) -> Option<crate::element_selection::ElementId> {
+    use crate::element_selection::ElementId;
+    use paged_mutate::NodeId;
+    Some(match node {
+        NodeId::TextFrame(id) => ElementId::TextFrame(id.clone()),
+        NodeId::Rectangle(id) => ElementId::Rectangle(id.clone()),
+        NodeId::Oval(id) => ElementId::Oval(id.clone()),
+        NodeId::GraphicLine(id) => ElementId::GraphicLine(id.clone()),
+        NodeId::Polygon(id) => ElementId::Polygon(id.clone()),
+        NodeId::Group(id) => ElementId::Group(id.clone()),
+        _ => return None,
+    })
+}
+
+/// The element an operation created, or the LAST of them. `doc` is the
+/// document the op was (or is about to be) applied to: a duplicate's
+/// clones are named by walking its SOURCES, which are there either way.
+fn created_element_id(
+    doc: &paged_scene::Document,
+    op: &paged_mutate::Operation,
+) -> Option<crate::element_selection::ElementId> {
     use crate::element_selection::ElementId;
     // B-04 — group creation reports the minted group id.
     if let paged_mutate::Operation::CreateGroup { spec } = op {
@@ -349,7 +388,17 @@ fn created_element_id(op: &paged_mutate::Operation) -> Option<crate::element_sel
     // the batch-created sentinel resolved to), so insert-with-
     // metadata flows still get a `createdId` to select.
     if let paged_mutate::Operation::Batch { ops } = op {
-        return ops.iter().rev().find_map(created_element_id);
+        return ops
+            .iter()
+            .rev()
+            .find_map(|child| created_element_id(doc, child));
+    }
+    // C-64 — a duplicate's "created" is its last clone, the same rule a
+    // batch follows.
+    if matches!(op, paged_mutate::Operation::DuplicateNodes { .. }) {
+        return paged_mutate::duplicate_roots(doc, op)
+            .last()
+            .and_then(page_item_element_id);
     }
     if let paged_mutate::Operation::InsertNode { parent, node, .. } = op {
         // S-03 — a table's id needs the parent story for the full
@@ -510,6 +559,27 @@ fn element_to_node_id(id: &crate::element_selection::ElementId) -> paged_mutate:
 /// scene-tree outline. Recurses through Groups so nested members
 /// appear as children. Returns `None` for empty / unresolvable
 /// references.
+/// C-65 — an item's `x-paged:` Label entries, for its scene-tree node.
+fn tree_plugin_metadata(
+    spread: &paged_model::Spread,
+    id: &str,
+) -> Vec<crate::channel::PluginMetadataEntry> {
+    spread
+        .labels
+        .get(id)
+        .map(|labels| {
+            labels
+                .iter()
+                .filter(|(k, _)| k.starts_with("x-paged:"))
+                .map(|(k, v)| crate::channel::PluginMetadataEntry {
+                    key: k.clone(),
+                    value: v.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn frame_to_tree_node(
     spread: &paged_model::Spread,
     fr: paged_model::FrameRef,
@@ -525,6 +595,7 @@ fn frame_to_tree_node(
                 kind: "TextFrame".to_string(),
                 label: format!("TextFrame {id}"),
                 children: Vec::new(),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Rectangle(i) => spread.rectangles.get(i).and_then(|f| {
@@ -534,6 +605,7 @@ fn frame_to_tree_node(
                 kind: "Rectangle".to_string(),
                 label: format!("Rectangle {id}"),
                 children: Vec::new(),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Oval(i) => spread.ovals.get(i).and_then(|f| {
@@ -543,6 +615,7 @@ fn frame_to_tree_node(
                 kind: "Oval".to_string(),
                 label: format!("Oval {id}"),
                 children: Vec::new(),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Polygon(i) => spread.polygons.get(i).and_then(|f| {
@@ -552,6 +625,7 @@ fn frame_to_tree_node(
                 kind: "Polygon".to_string(),
                 label: format!("Polygon {id}"),
                 children: Vec::new(),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::GraphicLine(i) => spread.graphic_lines.get(i).and_then(|f| {
@@ -561,6 +635,7 @@ fn frame_to_tree_node(
                 kind: "GraphicLine".to_string(),
                 label: format!("GraphicLine {id}"),
                 children: Vec::new(),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
             })
         }),
         FrameRef::Group(i) => spread.groups.get(i).map(|g| {
@@ -574,6 +649,7 @@ fn frame_to_tree_node(
                 id: Some(ElementId::Group(id.clone())),
                 kind: "Group".to_string(),
                 label: format!("Group {id}"),
+                plugin_metadata: Some(tree_plugin_metadata(spread, &id)),
                 children,
             }
         }),
@@ -665,7 +741,7 @@ fn collapse_uniform<T: Clone + PartialEq>(values: &[T]) -> Option<T> {
 /// `None` — never `Some(0.0)` — when the swatch has no ink
 /// decomposition: RGB and Lab process colours separate at the RIP
 /// against the output intent, and mixed-ink swatches need the spectral
-/// model this engine does not ship (see `deep-defer-records.md`
+/// model this engine does not ship (see `docs/reference/deferred-scope.md`, formerly `deep-defer-records.md`,
 /// §mixed-ink). Reporting 0% for those would read as "adds no ink".
 ///
 /// Exact and resolution-free — no render involved — so it catches an
@@ -762,6 +838,16 @@ fn corner_option_idml(v: paged_model::CornerOption) -> &'static str {
     }
 }
 
+/// A line end as the `frame.stroke*Arrowhead` paths spell it: `None` reads
+/// `""` (the cleared spelling the mutation takes), and so does an
+/// out-of-vocabulary `Other`, whose source token was discarded at parse.
+fn arrowhead_text(end: paged_model::ArrowheadType) -> String {
+    match end {
+        paged_model::ArrowheadType::None => String::new(),
+        t => t.as_idml().to_string(),
+    }
+}
+
 /// E-1 — the eight per-corner read rows, in IDML `corners[4]` order
 /// `[top_left, top_right, bottom_right, bottom_left]`.
 ///
@@ -832,13 +918,32 @@ fn decompose_flip_v(m: Option<[f32; 6]>) -> bool {
     paged_mutate::operation::decompose_transform(m).flip_v
 }
 
+/// The whole-struct gradient-feather row (`FrameGradientFeather`), for
+/// the kinds whose descriptor does not already spell it inline. `None`
+/// when the item carries no gradient feather — the same value the
+/// mutation takes to clear one.
+fn gradient_feather_entry(
+    effects: Option<&paged_model::FrameEffects>,
+) -> crate::channel::PropertyEntry {
+    crate::channel::PropertyEntry {
+        path: paged_mutate::PropertyPath::FrameGradientFeather,
+        value: Some(paged_mutate::Value::GradientFeather(
+            effects
+                .and_then(|e| e.gradient_feather.as_ref())
+                .map(paged_mutate::operation::GradientFeatherSpec::from_parse),
+        )),
+    }
+}
+
 /// W0.4 — read-side mirror of the transparency-effect per-field paths
 /// (gap 18). Emits one `PropertyEntry` per effect field, sourcing each
 /// from the parsed `effects: Option<FrameEffects>` block (a `None`
 /// effect surfaces the field's "empty" value: `false` for the
 /// `*Enabled` toggle, `Length(None)` / `ColorRef(None)` / `Text("")`
-/// for the rest). Shared by the TextFrame and Rectangle property
-/// blocks so the inventory stays in lockstep across kinds. The
+/// for the rest). Shared by the TextFrame, Rectangle, Oval and Polygon
+/// property blocks so the inventory stays in lockstep across kinds —
+/// exactly the kinds `paged_mutate`'s `find_frame_effects_mut` writes
+/// (C-63). The
 /// object-level `frame.blendMode` path reads the page item's own
 /// `blend_mode` slot (the `<BlendingSetting>` Opacity half is already
 /// surfaced as `FrameOpacity`).
@@ -1142,6 +1247,15 @@ pub struct CanvasModel {
     /// re-seeds from the freshly-loaded container. The `host.parts` SDK
     /// door gates writes to a plugin's own `paged/<plugin-id>/…` namespace.
     paged_parts: std::collections::BTreeMap<String, Vec<u8>>,
+    /// v66 — `paged/` parts DELETED since load (`DeletePagedPart`). A part
+    /// the loaded container carries rides in `source_idml`, so deleting it
+    /// from the overlay alone would resurrect it on the next save; the
+    /// tombstone hides it from read/list and `export_paged` drops it. A
+    /// later write of the same path lifts the tombstone.
+    paged_part_tombstones: std::collections::BTreeSet<String>,
+    /// v66 — tile patches that had to copy a shared scene image
+    /// (`patch_scene_image_as`); a count for budgets and tests.
+    scene_image_copies: u64,
     pub(crate) built: BuiltDocument,
     /// Index from `PageId` to `BuiltDocument::pages` position. Built
     /// once at load and refreshed after every rebuild. Worker callers
@@ -1266,7 +1380,7 @@ pub struct CanvasModel {
     /// in the current test harness; this stays as forward-looking
     /// infra for when asset resolvers wire up.
     image_decode_cache: std::cell::RefCell<HashMap<String, paged_compose::DecodedImage>>,
-    /// thoughts ADR 026 — generated-page counts per growing story, carried
+    /// ADR 026 — generated-page counts per growing story, carried
     /// from one build to the next so an edit starts from the pages it had
     /// (usually one build) instead of growing from zero.
     grow_hint: std::cell::RefCell<HashMap<String, u32>>,
@@ -1336,11 +1450,11 @@ pub struct CanvasModel {
     /// build the batch executor runs when its children are done. A batch
     /// whose children changed nothing owes nothing and builds nothing.
     rebuild_owed: bool,
-    /// thoughts ADR 027 §4 — when set, every rebuild is checked against a
+    /// ADR 027 §4 — when set, every rebuild is checked against a
     /// cold build ([`Self::digest_gate_check`]) and a difference panics.
     /// Seeded from `PAGED_DIGEST_GATE=1`; a CI / debug lane only.
     digest_gate: bool,
-    /// thoughts ADR 027 plan step 3 — each story's settled keep-option
+    /// ADR 027 plan step 3 — each story's settled keep-option
     /// breaks, seeding the next build's keeps fixpoint.
     keep_seeds: paged_renderer::KeepSeedStore,
     /// Story id → first paragraph a text edit changed since the last
@@ -1352,7 +1466,7 @@ pub struct CanvasModel {
     /// scene first ([`Self::refresh_font_table`]). Gesture rebuilds
     /// (drags) never set it, so they never pay the walk.
     font_check_owed: bool,
-    /// thoughts ADR 027 plan step 6 — each story's previous emission with a
+    /// ADR 027 plan step 6 — each story's previous emission with a
     /// mark per paragraph, so an edited story resumes at the edit and stops
     /// early.
     story_resume: paged_renderer::StoryResumeStore,
@@ -1363,7 +1477,14 @@ pub struct CanvasModel {
     /// Bumped by every rebuild; a resume record is never read back in the
     /// build that wrote it.
     build_generation: u64,
-    /// thoughts ADR 027 plan step 7 — the previous build's print of each
+    /// v67 (RFI C-68) — the session's snapping preferences, shared by
+    /// every gesture and by `RequestSnapPoint`.
+    pub(crate) snap_settings: crate::snap_point::SnapSettings,
+    /// v67 — every page's snap targets for one build, rebuilt lazily when
+    /// `build_generation` moves on (and held still for a whole gesture,
+    /// whose preview rebuilds on every tick).
+    pub(crate) snap_index: Option<crate::snap_point::SnapIndex>,
+    /// ADR 027 plan step 7 — the previous build's print of each
     /// master-text emission, so a re-emitted master with the same output
     /// leaves its page clean.
     emission_prints: paged_renderer::EmissionPrints,
@@ -1376,7 +1497,7 @@ pub struct CanvasModel {
     last_dirty_narrowed: bool,
 }
 
-/// thoughts ADR 027 plan step 7 — how far the pages a build reports as
+/// ADR 027 plan step 7 — how far the pages a build reports as
 /// changed may narrow. Only a build whose every commit was a text edit of
 /// one story with a chain of its own narrows: no other commit is known to
 /// leave the frame pass (frames, masters' items, page geometry) untouched.
@@ -1388,8 +1509,219 @@ enum DirtyScope {
     Unset,
     /// Text edits of this one story only.
     Story(String),
+    /// A font registry change that re-laid out these stories, and nothing
+    /// else since the last build. The scene's frames are untouched, so the
+    /// pages that changed are the ones laid out afresh (plus new pages and
+    /// the pages of these stories' auto-sizing frames).
+    Fonts(std::collections::BTreeSet<String>),
     /// Anything else: every page.
     Everything,
+}
+
+/// Run [`paged_mutate::refuse_unauthorable_value`] over every property
+/// write a wire mutation carries, batch children included.
+fn refuse_unauthorable(mutation: &Mutation) -> Result<(), crate::channel::WorkerError> {
+    let refused = |path: paged_mutate::PropertyPath, value: &paged_mutate::Value| {
+        paged_mutate::refuse_unauthorable_value(path, value).map_err(|e| {
+            crate::channel::WorkerError::NotImplemented {
+                what: format!("property write refused: {e}"),
+            }
+        })
+    };
+    match mutation {
+        Mutation::SetElementProperty { path, value, .. }
+        | Mutation::SetStyleProperty { path, value, .. } => refused(*path, value),
+        Mutation::Batch { ops } => ops.iter().try_for_each(refuse_unauthorable),
+        _ => Ok(()),
+    }
+}
+
+/// The run-level fields both paragraph and character styles carry, in the
+/// style setters' shapes (`""` / `Length(None)` / the IDML default for a
+/// bool the setter cannot clear).
+macro_rules! style_run_entries {
+    ($d:expr) => {{
+        use paged_mutate::{PropertyPath as P, Value as V};
+        let d = $d;
+        let text = |o: &Option<String>| V::Text(o.clone().unwrap_or_default());
+        vec![
+            (P::CharacterFontFamily, text(&d.font)),
+            (P::CharacterFontStyle, text(&d.font_style)),
+            (P::CharacterFontSize, V::Length(d.point_size)),
+            (P::CharacterLeading, V::Length(d.leading)),
+            (P::CharacterTracking, V::Length(d.tracking)),
+            (P::CharacterFillColor, V::ColorRef(d.fill_color.clone())),
+            (P::CharacterCase, text(&d.capitalization)),
+            (P::CharacterPosition, text(&d.position)),
+            (P::CharacterBaselineShift, V::Length(d.baseline_shift)),
+            (P::CharacterUnderline, V::Bool(d.underline.unwrap_or(false))),
+            (
+                P::CharacterStrikethru,
+                V::Bool(d.strikethru.unwrap_or(false)),
+            ),
+            (
+                P::CharacterLigatures,
+                V::Bool(d.ligatures_on.unwrap_or(true)),
+            ),
+            (P::CharacterKerningMethod, text(&d.kerning_method)),
+        ]
+    }};
+}
+
+fn into_entries(
+    pairs: Vec<(paged_mutate::PropertyPath, paged_mutate::Value)>,
+) -> Vec<crate::channel::PropertyEntry> {
+    pairs
+        .into_iter()
+        .map(|(path, value)| crate::channel::PropertyEntry {
+            path,
+            value: Some(value),
+        })
+        .collect()
+}
+
+fn character_style_entries(
+    d: &paged_model::CharacterStyleDef,
+) -> Vec<crate::channel::PropertyEntry> {
+    into_entries(style_run_entries!(d))
+}
+
+/// Every path `set_paragraph_style_field` accepts, read off the definition.
+/// `style_properties_cover_every_settable_style_path` (tests/style_properties.rs)
+/// fails when the setter learns a path this list does not read.
+fn paragraph_style_entries(
+    d: &paged_model::ParagraphStyleDef,
+) -> Vec<crate::channel::PropertyEntry> {
+    use paged_mutate::{PropertyPath as P, Value as V};
+    let text = |o: &Option<String>| V::Text(o.clone().unwrap_or_default());
+    let count = |o: Option<u32>| V::Length(o.map(|n| n as f32));
+    let span = &d.span_columns;
+    let mut pairs = style_run_entries!(d);
+    pairs.extend([
+        (
+            P::ParagraphJustification,
+            V::Text(
+                d.justification
+                    .map(|j| j.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (P::ParagraphSpaceBefore, V::Length(d.space_before)),
+        (P::ParagraphSpaceAfter, V::Length(d.space_after)),
+        (P::ParagraphFirstLineIndent, V::Length(d.first_line_indent)),
+        (P::ParagraphLeftIndent, V::Length(d.left_indent)),
+        (P::ParagraphRightIndent, V::Length(d.right_indent)),
+        (P::ParagraphStyleNextStyle, text(&d.next_style)),
+        (
+            P::ParagraphHyphenation,
+            V::Bool(d.hyphenation.unwrap_or(true)),
+        ),
+        (P::ParagraphHyphenationZone, V::Length(d.hyphenation_zone)),
+        (
+            P::ParagraphComposer,
+            V::Text(
+                d.composer
+                    .as_ref()
+                    .map(|c| c.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphKeepLinesTogether,
+            V::Bool(d.keep_lines_together.unwrap_or(false)),
+        ),
+        (
+            P::ParagraphKeepAllLinesTogether,
+            V::Bool(d.keep_all_lines_together.unwrap_or(false)),
+        ),
+        (P::ParagraphKeepFirstLines, count(d.keep_first_lines)),
+        (P::ParagraphKeepLastLines, count(d.keep_last_lines)),
+        (P::ParagraphKeepWithNext, count(d.keep_with_next)),
+        (
+            P::ParagraphStartParagraph,
+            V::Text(
+                d.start_paragraph
+                    .map(|sp| sp.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphSpanColumnType,
+            V::Text(
+                span.column_type
+                    .map(|t| t.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
+            P::ParagraphSpanSplitColumnCount,
+            V::Text(span.count.map(|c| c.as_idml()).unwrap_or_default()),
+        ),
+        (
+            P::ParagraphSpanColumnMinSpaceBefore,
+            V::Length(span.min_space_before),
+        ),
+        (
+            P::ParagraphSpanColumnMinSpaceAfter,
+            V::Length(span.min_space_after),
+        ),
+        (
+            P::ParagraphSplitColumnInsideGutter,
+            V::Length(span.inside_gutter),
+        ),
+        (
+            P::ParagraphSplitColumnOutsideGutter,
+            V::Length(span.outside_gutter),
+        ),
+        (P::ParagraphListType, text(&d.bullets_list_type)),
+        (
+            P::ParagraphBulletCharacter,
+            V::Text(
+                d.bullet_character
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (P::ParagraphNumberingFormat, text(&d.numbering_format)),
+        (
+            P::ParagraphAppliedNumberingList,
+            text(&d.applied_numbering_list),
+        ),
+        (P::ParagraphBulletsTextAfter, text(&d.bullets_text_after)),
+        (
+            P::ParagraphNumberingExpression,
+            text(&d.numbering_expression),
+        ),
+        (
+            P::ParagraphNumberingStartAt,
+            V::Length(d.numbering_start_at.map(|n| n as f32)),
+        ),
+        (
+            P::ParagraphNumberingContinue,
+            d.numbering_continue
+                .map(V::Bool)
+                .unwrap_or(V::Text(String::new())),
+        ),
+        (
+            P::ParagraphBulletsCharacterStyle,
+            text(&d.bullets_character_style),
+        ),
+        (
+            P::ParagraphNumberingCharacterStyle,
+            text(&d.bullets_and_numbering_digits_character_style),
+        ),
+        (
+            P::ParagraphTabStops,
+            V::TabStops(
+                d.tab_list
+                    .iter()
+                    .map(paged_mutate::operation::TabStopSpec::from_parse)
+                    .collect(),
+            ),
+        ),
+    ]);
+    into_entries(pairs)
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -1696,6 +2028,8 @@ impl CanvasModel {
             source_idml: bytes.to_vec(),
             source_id_floor: source_id_floor(bytes),
             paged_parts: std::collections::BTreeMap::new(),
+            paged_part_tombstones: std::collections::BTreeSet::new(),
+            scene_image_copies: 0,
             built,
             page_index,
             scene_layers: HashMap::new(),
@@ -1761,6 +2095,8 @@ impl CanvasModel {
             story_resume: Default::default(),
             pending_edit_spans: HashMap::new(),
             build_generation: 0,
+            snap_settings: Default::default(),
+            snap_index: None,
             emission_prints: Default::default(),
             pending_dirty_scope: DirtyScope::Unset,
             last_dirty_pages: Vec::new(),
@@ -1908,6 +2244,9 @@ impl CanvasModel {
         &mut self,
         mutation: &Mutation,
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
+        // A value the operation layer would store but no caller may
+        // author (an unknown composer) is refused before anything runs.
+        refuse_unauthorable(mutation)?;
         // Editor-ops — document defaults are app-level state, not a
         // scene edit: no rebuild, no undo entry, no pixel change. The
         // editor reads the triple back via `DocumentMeta`.
@@ -1931,6 +2270,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -1993,6 +2333,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -2046,6 +2387,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -2088,6 +2430,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -2119,6 +2462,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id: None,
                 page_structure_changed: false,
@@ -2134,7 +2478,7 @@ impl CanvasModel {
         // convergence folds both into one shape.
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
             let outcome = self.apply_operation(op)?;
-            let created_id = created_element_id(&outcome.applied.op);
+            let created_id = created_element_id(&self.scene, &outcome.applied.op);
             // Perf-Batch — a batch that translates whole still mints one
             // id per creating child, and `created_id` names only the
             // last. Report the list in mint order. The `handle` names
@@ -2142,22 +2486,24 @@ impl CanvasModel {
             // before apply and drops the `bindCreated` children, so the
             // binding is not recoverable from the applied operation —
             // ORDER is the contract a caller reads either way.
-            let minted: Vec<crate::channel::MintedElement> =
-                if matches!(mutation, Mutation::Batch { .. }) {
-                    created_element_ids(&outcome.applied.op)
-                        .into_iter()
-                        .map(|element| {
-                            let story_id = self.story_of_element(&element);
-                            crate::channel::MintedElement {
-                                handle: None,
-                                element,
-                                story_id,
-                            }
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let minted: Vec<crate::channel::MintedElement> = if matches!(
+                mutation,
+                Mutation::Batch { .. } | Mutation::DuplicateElements { .. }
+            ) {
+                created_element_ids(&self.scene, &outcome.applied.op)
+                    .into_iter()
+                    .map(|element| {
+                        let story_id = self.story_of_element(&element);
+                        crate::channel::MintedElement {
+                            handle: None,
+                            element,
+                            story_id,
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // Page-list mutations (M7 extends this set with ResizePage)
             // require the editor to rebuild its page grid.
             let page_structure_changed = matches!(
@@ -2203,6 +2549,7 @@ impl CanvasModel {
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 created_id,
                 page_structure_changed,
@@ -2232,6 +2579,7 @@ impl CanvasModel {
                 offset: *offset,
                 text: text.clone(),
                 cell: cell.clone(),
+                restore: None,
             },
             Mutation::DeleteRange {
                 story_id,
@@ -2243,8 +2591,24 @@ impl CanvasModel {
                 start: *start,
                 end: *end,
                 recovered: String::new(),
+                unseed: false,
+                keep_run: false,
                 cell: cell.clone(),
             },
+            // C-64 — a duplicate that did not translate was REFUSED by
+            // the kernel's validation; say why, in its words, instead of
+            // the generic "not implemented" a missing arm would mean.
+            Mutation::DuplicateElements { element_ids, .. } => {
+                let sources: Vec<paged_mutate::NodeId> =
+                    element_ids.iter().map(element_to_node_id).collect();
+                let why = paged_mutate::duplicate_demand(&self.scene, &sources)
+                    .err()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "the duplicate could not be translated".to_string());
+                return Err(crate::channel::WorkerError::NotImplemented {
+                    what: format!("frame mutation failed: {why}"),
+                });
+            }
             other => {
                 return Err(crate::channel::WorkerError::NotImplemented {
                     what: format!("Mutation::{}", other.discriminant()),
@@ -2282,6 +2646,7 @@ impl CanvasModel {
                     offset,
                     text,
                     cell,
+                    ..
                 } => sel.shift_for_insert(story_id, cell, *offset, text.chars().count() as u32),
                 crate::mutate::TextOp::DeleteRange {
                     story_id,
@@ -2408,8 +2773,12 @@ impl CanvasModel {
                         // The name also travels back on the reply, so a
                         // caller reads its own handles rather than
                         // guessing which minted id is which.
-                        if let Some(last) = minted.last_mut() {
-                            last.handle = Some(handle.clone());
+                        // A page is not in `minted` (it is not an
+                        // element); its name stays in the scope only.
+                        if matches!(bound, crate::batch_handles::Binding::Element(_)) {
+                            if let Some(last) = minted.last_mut() {
+                                last.handle = Some(handle.clone());
+                            }
                         }
                         scope.bind(handle.clone(), bound);
                         continue;
@@ -2466,8 +2835,26 @@ impl CanvasModel {
                 });
                 continue;
             }
+            // D-22 — a page-creating child mints a PAGE, which no
+            // `created_id` reports (pages are not elements). Read it off
+            // the scene: the one page id that was not there before.
+            let pages_before = (uses_handles
+                && matches!(
+                    child,
+                    Mutation::InsertPage { .. } | Mutation::DuplicatePage { .. }
+                ))
+            .then(|| self.scene_page_ids());
             match self.apply_mutation(child) {
                 Ok(outcome) => {
+                    if let Some(before) = pages_before {
+                        if let Some(page) = self
+                            .scene_page_ids()
+                            .into_iter()
+                            .find(|p| !before.contains(p))
+                        {
+                            scope.set_created_page(page);
+                        }
+                    }
                     // The batch reports the LAST id minted by any child,
                     // matching the single-mutation contract (the editor
                     // selects the fresh element).
@@ -2537,6 +2924,7 @@ impl CanvasModel {
                 offset: 0,
                 text: String::new(),
                 cell: None,
+                restore: None,
             },
             created_id,
             page_structure_changed,
@@ -3170,6 +3558,8 @@ impl CanvasModel {
                         .collect::<Option<Vec<_>>>()?,
                     parent: None,
                     item_transform: None,
+                    opacity: None,
+                    blend_mode: None,
                 },
             }),
             Mutation::SetGroupTransform {
@@ -3199,6 +3589,28 @@ impl CanvasModel {
                     prev: None,
                 },
             }),
+            Mutation::SetPageMetadata {
+                page,
+                key,
+                value,
+                caller,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Page(page.0.clone()),
+                path: PropertyPath::PluginMetadata,
+                value: Value::PluginMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                    caller: caller.clone(),
+                    prev: None,
+                },
+            }),
+            Mutation::SetDocumentMetadata { key, value, caller } => {
+                Some(Operation::SetDocumentMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                    caller: caller.clone(),
+                })
+            }
             Mutation::PathPointCurveType {
                 element_id,
                 index,
@@ -3254,6 +3666,18 @@ impl CanvasModel {
                     .any(|op| matches!(op, Mutation::BindCreated { .. }));
                 let mut scope = crate::batch_handles::HandleScope::default();
                 for child in ops {
+                    // D-22 — a page's id is minted by the applier, so this
+                    // lane cannot know it before apply. A handle-using batch
+                    // that creates a page takes the sequential (mixed) lane,
+                    // which reads the minted page back after each child.
+                    if uses_handles
+                        && matches!(
+                            child,
+                            Mutation::InsertPage { .. } | Mutation::DuplicatePage { .. }
+                        )
+                    {
+                        return None;
+                    }
                     if let Mutation::BindCreated { handle } = child {
                         // Nothing to name ⇒ the whole translation bails
                         // and `apply_mixed_batch` reports which child
@@ -3311,7 +3735,7 @@ impl CanvasModel {
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
                     let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
-                    if let Some(id) = created_element_id(&op) {
+                    if let Some(id) = created_element_id(&self.scene, &op) {
                         if uses_handles {
                             scope.set_created(Some(crate::batch_handles::BoundHandle {
                                 element: id.clone(),
@@ -3656,7 +4080,9 @@ impl CanvasModel {
                 width,
                 height,
                 image_uri,
+                paragraph,
             } => Some(Operation::InsertAnchoredFrame {
+                paragraph: *paragraph,
                 story_id: story_id.clone(),
                 offset: *offset,
                 width: *width,
@@ -3669,6 +4095,7 @@ impl CanvasModel {
                 start,
                 end,
                 url,
+                page,
             } => {
                 // A native link needs three cross-referencing ids. One minted
                 // suffix keyed under three distinct designmap namespaces keeps
@@ -3684,8 +4111,12 @@ impl CanvasModel {
                     end: *end,
                     url: url.clone(),
                     source_id: format!("HyperlinkTextSource/{base}"),
-                    dest_id: format!("HyperlinkURLDestination/{base}"),
+                    dest_id: match page {
+                        Some(_) => format!("HyperlinkPageDestination/{base}"),
+                        None => format!("HyperlinkURLDestination/{base}"),
+                    },
                     hyperlink_id: format!("Hyperlink/{base}"),
+                    page: page.as_ref().map(|p| p.0.clone()),
                 })
             }
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
@@ -3707,7 +4138,9 @@ impl CanvasModel {
                 style,
                 scope,
                 cell,
+                paragraph,
             } => Some(Operation::ApplyStyle {
+                paragraph: *paragraph,
                 story_id: story_id.clone(),
                 start: *start,
                 end: *end,
@@ -3723,10 +4156,12 @@ impl CanvasModel {
                 story_id,
                 offset,
                 field,
+                content_offset,
             } => Some(Operation::InsertField {
                 story_id: story_id.clone(),
                 offset: *offset,
                 field: field.clone(),
+                content_offset: *content_offset,
             }),
             // v43 (D-01) — re-resolve a placeholder's cached display.
             Mutation::SetFieldValue {
@@ -3790,6 +4225,37 @@ impl CanvasModel {
                     visible: *visible,
                 })
             }
+            // C-64 — duplicate. Every id the clones take is minted HERE,
+            // from the same two number lines the inserts use, so a batch
+            // that duplicates and then inserts cannot hand one id out
+            // twice (the canvas floor also covers ids that live only in
+            // the source package, which the kernel's own minter cannot
+            // see). How many is the kernel's answer — it is the op's own
+            // validation, run without writing.
+            //
+            // `None` when that validation refuses: the caller reports the
+            // kernel's reason (see `apply_mutation`), and inside a batch
+            // the whole batch falls to the child-by-child lane, where a
+            // source minted by an EARLIER child of the same batch exists
+            // by the time this child is translated.
+            Mutation::DuplicateElements {
+                element_ids,
+                offset,
+            } => {
+                let sources: Vec<NodeId> = element_ids.iter().map(element_to_node_id).collect();
+                let demand = paged_mutate::duplicate_demand(&self.scene, &sources).ok()?;
+                let story_ids = self.mint_story_ids(demand.stories, *mint_offset);
+                let ids = (0..demand.items)
+                    .map(|_| self.mint_page_item_id_with_offset(mint_offset))
+                    .collect();
+                Some(Operation::DuplicateNodes {
+                    sources,
+                    dx: offset.0,
+                    dy: offset.1,
+                    ids,
+                    story_ids,
+                })
+            }
             Mutation::SetFlowGrowRule {
                 story_id,
                 grow,
@@ -3808,6 +4274,39 @@ impl CanvasModel {
             Mutation::ApplyMasterToPage { page, master } => Some(Operation::ApplyMasterToPage {
                 page: page.0.clone(),
                 master: master.clone(),
+            }),
+            Mutation::OnMaster { master, mutation } => {
+                let inner =
+                    self.try_translate_frame_mutation_to_operation(mutation, mint_offset)?;
+                Some(Operation::OnMaster {
+                    master_id: master.clone(),
+                    op: Box::new(inner),
+                })
+            }
+            Mutation::CreateMaster {
+                master,
+                name,
+                width_pt,
+                height_pt,
+                duplicate_of,
+            } => Some(Operation::CreateMaster {
+                master_id: master.clone(),
+                name: name.clone(),
+                width_pt: *width_pt,
+                height_pt: *height_pt,
+                duplicate_of: duplicate_of.clone(),
+                restore_json: None,
+            }),
+            Mutation::DeleteMaster { master } => Some(Operation::DeleteMaster {
+                master_id: master.clone(),
+            }),
+            Mutation::RenameMaster { master, name } => Some(Operation::RenameMaster {
+                master_id: master.clone(),
+                name: name.clone(),
+            }),
+            Mutation::MovePage { page, after } => Some(Operation::MovePage {
+                page_id: page.0.clone(),
+                after_page_id: after.as_ref().map(|a| a.0.clone()),
             }),
             Mutation::DuplicatePage { page } => Some(Operation::DuplicatePage {
                 page: page.0.clone(),
@@ -3871,6 +4370,12 @@ impl CanvasModel {
                 table_id: table_id.clone(),
                 at: *at,
                 restore: None,
+            }),
+            Mutation::DeleteTable { story_id, table_id } => Some(Operation::RemoveNode {
+                node: NodeId::Table {
+                    story_id: story_id.clone(),
+                    table_id: table_id.clone(),
+                },
             }),
             Mutation::DeleteTableRow {
                 story_id,
@@ -3982,6 +4487,24 @@ impl CanvasModel {
         floor
     }
 
+    /// `count` fresh `Story/u<n>` ids, distinct from every story in the
+    /// document and from each other, starting past what a batch has
+    /// already minted (`offset`, the same counter `insertTextFrame`
+    /// offsets its story id by). The caller then mints at least `count`
+    /// page-item ids, which moves the counter past these too.
+    fn mint_story_ids(&self, count: usize, offset: u64) -> Vec<String> {
+        let mut n = self.story_id_floor() + offset as usize;
+        let mut out = Vec::with_capacity(count);
+        while out.len() < count {
+            let id = format!("Story/u{n}");
+            n += 1;
+            if !self.scene.stories.iter().any(|s| s.self_id == id) {
+                out.push(id);
+            }
+        }
+        out
+    }
+
     ///
     /// The floor is the highest `u<hex>` number of ANY kind on the
     /// shared line (`paged_mutate::ids::highest_u_hex_id`), not of the
@@ -4005,11 +4528,53 @@ impl CanvasModel {
     /// page's spread-origin (for the page-local → spread-coordinate
     /// conversion the structural inserts need; same rule as
     /// `marquee_hits`). Returns `(spread self_id, origin, spread idx)`.
+    /// Every page `Self` id in the scene, in document order.
+    fn scene_page_ids(&self) -> Vec<String> {
+        self.scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter().filter_map(|p| p.self_id.clone()))
+            .collect()
+    }
+
+    /// A page's origin in its spread, read off the SCENE: the page's
+    /// bounds through its `ItemTransform`, as the build computes
+    /// `spread_origin`. Used when the build does not know the page yet —
+    /// a page minted earlier in the same batch, whose rebuild is deferred
+    /// to the batch's end (D-22).
+    fn scene_page_origin(&self, page_id: &PageId) -> Option<(f32, f32)> {
+        let page = self
+            .scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter())
+            .find(|p| p.self_id.as_deref() == Some(page_id.as_str()))?;
+        let b = page.bounds;
+        let m = page
+            .item_transform
+            .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let corners = [
+            (b.left, b.top),
+            (b.right, b.top),
+            (b.left, b.bottom),
+            (b.right, b.bottom),
+        ];
+        let (mut x, mut y) = (f32::INFINITY, f32::INFINITY);
+        for (cx, cy) in corners {
+            x = x.min(m[0] * cx + m[2] * cy + m[4]);
+            y = y.min(m[1] * cx + m[3] * cy + m[5]);
+        }
+        Some((x, y))
+    }
+
     pub(crate) fn page_insert_context(
         &self,
         page_id: &PageId,
     ) -> Option<(String, (f32, f32), usize)> {
-        let origin = self.page(page_id)?.spread_origin;
+        let origin = match self.page(page_id) {
+            Some(p) => p.spread_origin,
+            None => self.scene_page_origin(page_id)?,
+        };
         let (idx, parsed) = self.scene.spreads.iter().enumerate().find(|(_, parsed)| {
             parsed
                 .spread
@@ -4029,8 +4594,15 @@ impl CanvasModel {
     }
 
     pub(crate) fn resolve_frame_node_id(&self, frame_id: &str) -> Option<paged_mutate::NodeId> {
-        for parsed in &self.scene.spreads {
-            let s = &parsed.spread;
+        // v69 — master items resolve too, for mutations wrapped in
+        // `OnMaster`.
+        let spreads = self
+            .scene
+            .spreads
+            .iter()
+            .map(|p| &p.spread)
+            .chain(self.scene.master_spreads.values().map(|m| &m.spread));
+        for s in spreads {
             if s.text_frames
                 .iter()
                 .any(|f| f.self_id.as_deref() == Some(frame_id))
@@ -4720,8 +5292,47 @@ impl CanvasModel {
                 ));
             }
         }
+        self.paged_part_tombstones.remove(&path);
         self.paged_parts.insert(path, bytes);
         Ok(())
+    }
+
+    /// v66 — delete a `.paged` part ON BEHALF OF a named plugin: drop it
+    /// from the live overlay and tombstone it so a part the LOADED
+    /// container carries is hidden from read/list and left out of the next
+    /// `export_paged`. Same namespace + caller gate as
+    /// [`Self::set_paged_part_as`]. Returns whether the part existed.
+    /// Not undoable, like the write: parts live outside the mutation
+    /// channel.
+    pub fn delete_paged_part_as(
+        &mut self,
+        caller: Option<&str>,
+        path: &str,
+    ) -> Result<bool, String> {
+        if !path.starts_with(idml_export::PAGED_PREFIX) {
+            return Err(format!(
+                "paged part path must start with `{}` (got {path:?})",
+                idml_export::PAGED_PREFIX
+            ));
+        }
+        if let Some(caller) = caller {
+            let own = format!("{}{caller}/", idml_export::PAGED_PREFIX);
+            if !path.starts_with(&own) {
+                return Err(format!(
+                    "caller {caller:?} may only delete in its own subtree {own:?}, not {path:?}"
+                ));
+            }
+        }
+        let existed = self.get_paged_part(path).is_some();
+        self.paged_parts.remove(path);
+        let in_source = self
+            .source_archive
+            .as_ref()
+            .is_some_and(|s| s.entries.contains_key(path));
+        if in_source {
+            self.paged_part_tombstones.insert(path.to_string());
+        }
+        Ok(existed)
     }
 
     /// Read a `.paged` part — the live overlay first, else the loaded
@@ -4733,6 +5344,9 @@ impl CanvasModel {
         }
         if let Some(b) = self.paged_parts.get(path) {
             return Some(b.clone());
+        }
+        if self.paged_part_tombstones.contains(path) {
+            return None;
         }
         self.source_archive
             .as_ref()
@@ -4746,7 +5360,10 @@ impl CanvasModel {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         if let Some(source) = &self.source_archive {
             for k in source.entries.keys() {
-                if k.starts_with(idml_export::PAGED_PREFIX) && k.starts_with(prefix) {
+                if k.starts_with(idml_export::PAGED_PREFIX)
+                    && k.starts_with(prefix)
+                    && !self.paged_part_tombstones.contains(k)
+                {
                     names.insert(k.clone());
                 }
             }
@@ -4807,6 +5424,12 @@ impl CanvasModel {
                     parts.insert(path, bytes);
                 }
             }
+        }
+        // v66 — a deleted part the loaded container carries must not ride
+        // the carry-through: hand the writer a source without it.
+        if !self.paged_part_tombstones.is_empty() {
+            original =
+                std::borrow::Cow::Owned(zip_without(&original, &self.paged_part_tombstones)?);
         }
         idml_export::write_paged(&self.export_scene(), &original, &parts, paged_protocol)
     }
@@ -5008,6 +5631,61 @@ impl CanvasModel {
         })
     }
 
+    /// v65 — every property a style definition can be SET through
+    /// `SetStyleProperty`, read back in the shapes that setter accepts, so a
+    /// style editor can show a value and write it back unchanged. The values
+    /// are the style's OWN (`""` / `Length(None)` when it inherits through
+    /// `BasedOn`), not the resolved cascade: that is what the setter writes.
+    ///
+    /// Paragraph and character styles carry entries; object, cell and table
+    /// styles have no settable path yet and answer with none. `None` when
+    /// the style does not exist.
+    pub fn style_properties(
+        &self,
+        collection: paged_mutate::StyleCollection,
+        style_id: &str,
+    ) -> Option<crate::channel::StyleProperties> {
+        use paged_mutate::StyleCollection as C;
+        let styles = &self.scene.styles;
+        let (name, based_on, entries) = match collection {
+            C::Paragraph => {
+                let d = styles.paragraph_styles.get(style_id)?;
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    paragraph_style_entries(d),
+                )
+            }
+            C::Character => {
+                let d = styles.character_styles.get(style_id)?;
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    character_style_entries(d),
+                )
+            }
+            C::Object => {
+                let d = styles.object_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+            C::Cell => {
+                let d = styles.cell_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+            C::Table => {
+                let d = styles.table_styles.get(style_id)?;
+                (d.name.clone(), d.based_on.clone(), Vec::new())
+            }
+        };
+        Some(crate::channel::StyleProperties {
+            collection,
+            style_id: style_id.to_string(),
+            name,
+            based_on,
+            entries,
+        })
+    }
+
     pub fn element_properties(
         &self,
         id: &crate::element_selection::ElementId,
@@ -5090,6 +5768,17 @@ impl CanvasModel {
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeWeight,
                                 value: Some(Value::Length(f.stroke_weight)),
+                            },
+                            // C-24 — a text frame's outline is stroked
+                            // inside / centred / outside like any other
+                            // closed shape, and the stroke's share insets
+                            // the text. Read here because it is written
+                            // now.
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    f.stroke_alignment.clone().unwrap_or_default(),
+                                )),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
@@ -5758,6 +6447,23 @@ impl CanvasModel {
                                 path: PropertyPath::FrameTransform,
                                 value: Some(Value::Transform(g.item_transform)),
                             },
+                            // C-63 — the group's own transparency: the
+                            // values `group_pass` composites the members
+                            // with, as one object. Paired with the Group
+                            // write arms; the group's `drop_shadow` is
+                            // NOT here because nothing paints it (the
+                            // bracket opens for it and emits no shadow)
+                            // and it has no write arm either.
+                            PropertyEntry {
+                                path: PropertyPath::FrameOpacity,
+                                value: Some(Value::Length(g.transparency.opacity)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameBlendMode,
+                                value: Some(Value::Text(
+                                    g.transparency.blend_mode.clone().unwrap_or_default(),
+                                )),
+                            },
                         ];
                         // C-18 / E-1 — a `<Group>` carries the corner
                         // vocabulary on disk (37 corpus groups do, 11
@@ -5812,6 +6518,27 @@ impl CanvasModel {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(p.opacity)),
                             },
+                            // C-83b — the gradient axis is WRITABLE on this kind
+                            // (`find_gradient_field_mut`) and exported; it was
+                            // not readable, so a panel or a plugin could set an
+                            // angle it could never show (the InDesign round
+                            // trip found it on a Polygon).
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(p.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(p.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(p.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(p.gradient_stroke_length)),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeType,
                                 value: Some(Value::Text(
@@ -5846,6 +6573,21 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(p.stroke_dash.clone())),
                             },
+                            // C-62 — a pen path's cap and line ends, read
+                            // with the GraphicLine's spelling (`None` and
+                            // an out-of-vocabulary `Other` both read "").
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(p.end_cap.clone().unwrap_or_default())),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeStartArrowhead,
+                                value: Some(Value::Text(arrowhead_text(p.start_arrow))),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndArrowhead,
+                                value: Some(Value::Text(arrowhead_text(p.end_arrow))),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
                                 value: Some(Value::Text(
@@ -5856,18 +6598,6 @@ impl CanvasModel {
                                 path: PropertyPath::ItemLayer,
                                 value: Some(Value::Text(
                                     p.item_layer.clone().unwrap_or_default(),
-                                )),
-                            },
-                            // C-20 — the object-level blend mode now has
-                            // a Polygon write arm, so surface the read
-                            // half too (tint + opacity were already
-                            // here). The full effects inventory stays
-                            // TextFrame/Rectangle-only: `paged_model::
-                            // Polygon` carries no `effects` bag.
-                            PropertyEntry {
-                                path: PropertyPath::FrameBlendMode,
-                                value: Some(Value::Text(
-                                    p.blend_mode.clone().unwrap_or_default(),
                                 )),
                             },
                             // C-25 — both overprints were writable and
@@ -5882,6 +6612,17 @@ impl CanvasModel {
                                 value: Some(Value::Bool(p.overprint_stroke)),
                             },
                         ];
+                        // C-63 — the effects inventory. A polygon has
+                        // carried the `effects` bag since Q-04 and the
+                        // renderer paints it; the write arms reach it
+                        // now, so the read half is here to pair with
+                        // them. The object-level blend mode (C-20) rides
+                        // the same builder, as it does for a rectangle.
+                        entries.push(gradient_feather_entry(p.effects.as_ref()));
+                        entries.extend(effect_property_entries(
+                            p.effects.as_ref(),
+                            p.blend_mode.as_deref(),
+                        ));
                         // B-23 / E-1 — the polygon corner slots the
                         // kernel has applied since B-23 finally have a
                         // read half, so an editor panel has something to
@@ -5889,6 +6630,14 @@ impl CanvasModel {
                         // slot 0 drives geometry (uniformly, at every
                         // straight-line corner) — see
                         // `paged_model::Polygon::corners`.
+                        // v66 — the image-content transform is writable on
+                        // ovals and polygons too; image-bearing ones read it.
+                        if p.has_image_element {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::ImageContentTransform,
+                                value: Some(Value::Transform(p.image_item_transform)),
+                            });
+                        }
                         entries.extend(corner_entries(&p.corners));
                         entries
                     }),
@@ -5953,17 +6702,17 @@ impl CanvasModel {
                             // (its source token was discarded at parse).
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeStartArrowhead,
-                                value: Some(Value::Text(match l.start_arrow {
-                                    paged_model::ArrowheadType::None => String::new(),
-                                    t => t.as_idml().to_string(),
-                                })),
+                                value: Some(Value::Text(arrowhead_text(l.start_arrow))),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameStrokeEndArrowhead,
-                                value: Some(Value::Text(match l.end_arrow {
-                                    paged_model::ArrowheadType::None => String::new(),
-                                    t => t.as_idml().to_string(),
-                                })),
+                                value: Some(Value::Text(arrowhead_text(l.end_arrow))),
+                            },
+                            // C-62 — the line's cap (read only on a
+                            // rectangle before).
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(l.end_cap.clone().unwrap_or_default())),
                             },
                             PropertyEntry {
                                 path: PropertyPath::AppliedObjectStyle,
@@ -6028,12 +6777,9 @@ impl CanvasModel {
                         // bind these exact paths — had nothing to show
                         // for an ellipse.
                         //
-                        // `FrameStrokeAlignment` is NOT here on purpose:
-                        // only `NodeId::Rectangle` has that write arm,
-                        // so on an Oval it is neither readable nor
-                        // writable — symmetric, if empty. Reading it
-                        // would be the C-17 mistake the `FrameBounds`
-                        // note above is already about.
+                        // `FrameStrokeAlignment` joined with C-24: the
+                        // ellipse outline has been offset by it since
+                        // W1.5, and the write arm now reaches the kind.
                         let mut entries = vec![
                             PropertyEntry {
                                 path: PropertyPath::FrameTransform,
@@ -6062,6 +6808,12 @@ impl CanvasModel {
                                 )),
                             },
                             PropertyEntry {
+                                path: PropertyPath::FrameStrokeAlignment,
+                                value: Some(Value::Text(
+                                    o.stroke_alignment.clone().unwrap_or_default(),
+                                )),
+                            },
+                            PropertyEntry {
                                 path: PropertyPath::FrameStrokeGapColor,
                                 value: Some(Value::ColorRef(o.stroke_gap_color.clone())),
                             },
@@ -6073,15 +6825,35 @@ impl CanvasModel {
                                 path: PropertyPath::FrameStrokeDashArray,
                                 value: Some(Value::Lengths(o.stroke_dash.clone())),
                             },
+                            // C-62 — the cap on a dashed outline's dashes.
+                            PropertyEntry {
+                                path: PropertyPath::FrameStrokeEndCap,
+                                value: Some(Value::Text(o.end_cap.clone().unwrap_or_default())),
+                            },
                             PropertyEntry {
                                 path: PropertyPath::FrameOpacity,
                                 value: Some(Value::Length(o.opacity)),
                             },
+                            // C-83b — the gradient axis is WRITABLE on this kind
+                            // (`find_gradient_field_mut`) and exported; it was
+                            // not readable, so a panel or a plugin could set an
+                            // angle it could never show (the InDesign round
+                            // trip found it on a Polygon).
                             PropertyEntry {
-                                path: PropertyPath::FrameBlendMode,
-                                value: Some(Value::Text(
-                                    o.blend_mode.clone().unwrap_or_default(),
-                                )),
+                                path: PropertyPath::FrameGradientFillAngle,
+                                value: Some(Value::Length(o.gradient_fill_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientFillLength,
+                                value: Some(Value::Length(o.gradient_fill_length)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeAngle,
+                                value: Some(Value::Length(o.gradient_stroke_angle)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::FrameGradientStrokeLength,
+                                value: Some(Value::Length(o.gradient_stroke_length)),
                             },
                             PropertyEntry {
                                 path: PropertyPath::FrameOverprintFill,
@@ -6104,9 +6876,27 @@ impl CanvasModel {
                                 )),
                             },
                         ];
+                        // C-63 — the effects inventory. Every one of
+                        // these has had a `NodeId::Oval` write arm since
+                        // W0.4 and none was readable, so an ellipse's
+                        // glow could be set and never shown. The blend
+                        // mode row (C-25) moves into the shared builder.
+                        entries.push(gradient_feather_entry(o.effects.as_ref()));
+                        entries.extend(effect_property_entries(
+                            o.effects.as_ref(),
+                            o.blend_mode.as_deref(),
+                        ));
                         // Stored + mutable, never rendered — an ellipse
                         // has no corner. See
                         // `paged_model::Oval::corner_radius`.
+                        // v66 — the image-content transform is writable on
+                        // ovals and polygons too; image-bearing ones read it.
+                        if o.has_image_element {
+                            entries.push(PropertyEntry {
+                                path: PropertyPath::ImageContentTransform,
+                                value: Some(Value::Transform(o.image_item_transform)),
+                            });
+                        }
                         entries.extend(corner_entries(&o.corners));
                         entries
                     }),
@@ -6236,6 +7026,7 @@ impl CanvasModel {
         let mut numbering_continues: Vec<Option<bool>> = Vec::new();
         let mut bullets_character_styles: Vec<Option<String>> = Vec::new();
         let mut numbering_character_styles: Vec<Option<String>> = Vec::new();
+        let mut composers: Vec<Option<paged_model::Composer>> = Vec::new();
         let mut rule_aboves: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut rule_belows: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut tab_lists: Vec<Vec<paged_model::TabStop>> = Vec::new();
@@ -6286,6 +7077,7 @@ impl CanvasModel {
                 bullets_character_styles.push(para.bullets_character_style.clone());
                 numbering_character_styles
                     .push(para.bullets_and_numbering_digits_character_style.clone());
+                composers.push(para.composer.clone());
                 rule_aboves.push(para.rule_above.clone());
                 rule_belows.push(para.rule_below.clone());
                 tab_lists.push(para.tab_list.clone());
@@ -6612,6 +7404,13 @@ impl CanvasModel {
                 path: PropertyPath::ParagraphNumberingCharacterStyle,
                 value: collapse_uniform(&numbering_character_styles)
                     .map(|o| Value::Text(o.unwrap_or_default())),
+            },
+            // The IDML string, "" when the paragraph inherits — the shapes
+            // the setter accepts.
+            PropertyEntry {
+                path: PropertyPath::ParagraphComposer,
+                value: collapse_uniform(&composers)
+                    .map(|o| Value::Text(o.map(|c| c.as_idml().to_string()).unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphRuleAbove,
@@ -7026,9 +7825,17 @@ impl CanvasModel {
         let scene = grown.as_ref().unwrap_or(&self.scene);
         let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
+        // v69 — page self id → the spread whose labels hold its metadata.
+        let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
+            std::collections::HashMap::new();
         for parsed in &scene.spreads {
             for (pid, m) in &parsed.spread.page_margins {
                 margins.insert(pid.as_str(), m);
+            }
+            for pg in &parsed.spread.pages {
+                if let Some(id) = pg.self_id.as_deref() {
+                    spread_of.insert(id, &parsed.spread);
+                }
             }
         }
         self.built
@@ -7051,6 +7858,10 @@ impl CanvasModel {
                     bleed_left_pt: bleed.bleed_inside_or_left,
                     bleed_bottom_pt: bleed.bleed_bottom,
                     bleed_right_pt: bleed.bleed_outside_or_right,
+                    plugin_metadata: spread_of
+                        .get(p.id.as_str())
+                        .map(|sp| tree_plugin_metadata(sp, p.id.as_str()))
+                        .unwrap_or_default(),
                 }
             })
             .collect()
@@ -7124,7 +7935,8 @@ impl CanvasModel {
             .master_spreads
             .iter()
             .map(|(self_id, ms)| MasterPageSummary {
-                label: self_id.clone(),
+                // v69 — the master's `Name` when it has one.
+                label: ms.name.clone().unwrap_or_else(|| self_id.clone()),
                 self_id: self_id.clone(),
                 page_count: ms.spread.pages.len() as u32,
             })
@@ -7280,11 +8092,29 @@ impl CanvasModel {
             .designmap
             .hyperlinks
             .iter()
-            .map(|h| HyperlinkSummary {
-                self_id: h.self_id.clone(),
-                name: h.name.clone().unwrap_or_else(|| h.self_id.clone()),
-                source: h.source.clone().unwrap_or_default(),
-                destination: h.destination.clone().unwrap_or_default(),
+            .map(|h| {
+                let kind = h.destination.as_deref().and_then(|d| {
+                    self.scene
+                        .designmap
+                        .hyperlink_destinations
+                        .iter()
+                        .find(|x| x.self_id == d)
+                        .map(|x| &x.kind)
+                });
+                HyperlinkSummary {
+                    self_id: h.self_id.clone(),
+                    name: h.name.clone().unwrap_or_else(|| h.self_id.clone()),
+                    source: h.source.clone().unwrap_or_default(),
+                    destination: h.destination.clone().unwrap_or_default(),
+                    destination_url: match kind {
+                        Some(paged_model::HyperlinkDestinationKind::Url(u)) => Some(u.clone()),
+                        _ => None,
+                    },
+                    destination_page: match kind {
+                        Some(paged_model::HyperlinkDestinationKind::Page(p)) => Some(p.clone()),
+                        _ => None,
+                    },
+                }
             })
             .collect()
     }
@@ -7752,6 +8582,15 @@ impl CanvasModel {
                             paragraph: c.paragraph_idx,
                             line: c.line_idx,
                         }),
+                    grow_rule: s
+                        .story
+                        .grow
+                        .as_ref()
+                        .map(|r| crate::channel::StoryGrowRule {
+                            grow: true,
+                            max_pages: r.max_pages,
+                            copy_frame_options: r.copy_frame_options,
+                        }),
                 }
             })
             .collect()
@@ -8011,6 +8850,17 @@ impl CanvasModel {
             baseline_grid_shown: gp.baseline_grid_shown,
             baseline_grid_relative_to: gp.baseline_grid_relative_option.clone(),
             baseline_grid_color: gp.baseline_color.clone(),
+            plugin_metadata: Some(
+                self.scene
+                    .designmap
+                    .labels
+                    .iter()
+                    .map(|(key, value)| crate::channel::PluginMetadataEntry {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -8057,12 +8907,14 @@ impl CanvasModel {
                 kind: "Page".to_string(),
                 label,
                 children: frame_nodes,
+                plugin_metadata: None,
             });
             spread_nodes.push(SceneTreeNode {
                 id: None,
                 kind: "Spread".to_string(),
                 label: spread_label,
                 children: page_nodes,
+                plugin_metadata: None,
             });
         }
         spread_nodes
@@ -8263,6 +9115,7 @@ impl CanvasModel {
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
                             has_image: false,
+                            story_id: None,
                         });
                         break;
                     }
@@ -8272,12 +9125,16 @@ impl CanvasModel {
             let raw = id.raw_id();
             for parsed in &self.scene().spreads {
                 let spread = &parsed.spread;
+                let mut story_id = None;
                 let resolved: Option<(paged_model::Bounds, Option<[f32; 6]>, bool)> = match id {
                     ElementId::TextFrame(_) => spread
                         .text_frames
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
-                        .map(|f| (f.bounds, f.item_transform, false)),
+                        .map(|f| {
+                            story_id = f.parent_story.clone();
+                            (f.bounds, f.item_transform, false)
+                        }),
                     ElementId::Rectangle(_) => spread
                         .rectangles
                         .iter()
@@ -8377,6 +9234,7 @@ impl CanvasModel {
                     bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
                     item_transform,
                     has_image,
+                    story_id,
                 });
                 break;
             }
@@ -8390,6 +9248,190 @@ impl CanvasModel {
     /// Rectangles / Ovals declared via `GeometricBounds` only (no
     /// `<PathGeometry>`) come back with an empty `anchors` vector —
     /// callers treat that as "nothing to draw".
+    /// v66 (RFI C-69) — a text frame's composed glyphs as outlines in
+    /// page space, one run per fill colour (see
+    /// [`crate::channel::TextOutlinesResult`]). Built from the export
+    /// build's glyph side-channel: each `GlyphRunEntry` names the exact
+    /// `FillPath` command that draws the glyph, so the outline is that
+    /// command's path through that command's transform — no second font
+    /// pass. A glyph belongs to the frame when its origin lies inside the
+    /// frame's page-space box (a threaded story's other frames, and
+    /// overset text, are excluded by construction).
+    pub fn text_outlines(
+        &self,
+        id: &crate::element_selection::ElementId,
+    ) -> Option<crate::channel::TextOutlinesResult> {
+        use crate::channel::{PathAnchorTriple, TextOutlineRun, TextOutlinesResult};
+        use crate::element_selection::ElementId;
+        use paged_compose::{DisplayCommand, Paint, PathSegment};
+
+        let ElementId::TextFrame(raw) = id else {
+            return None;
+        };
+        let (bounds, item_transform, page_self) =
+            self.scene().spreads.iter().find_map(|parsed| {
+                let f = parsed
+                    .spread
+                    .text_frames
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw.as_str()))?;
+                let aabb = crate::hit::transform_bbox(f.bounds, f.item_transform);
+                let (cx, cy) = (
+                    (aabb.left + aabb.right) * 0.5,
+                    (aabb.top + aabb.bottom) * 0.5,
+                );
+                let page = parsed.spread.pages.iter().find(|p| {
+                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
+                })?;
+                Some((f.bounds, f.item_transform, page.self_id.clone()?))
+            })?;
+        let built = self.build_for_export().ok()?;
+        let bp = built.pages.iter().find(|p| p.id.as_str() == page_self)?;
+        let spread_box = crate::hit::transform_bbox(bounds, item_transform);
+        let (ox, oy) = bp.spread_origin;
+        let slack = 0.5;
+        let (l, t, r, b) = (
+            spread_box.left - ox - slack,
+            spread_box.top - oy - slack,
+            spread_box.right - ox + slack,
+            spread_box.bottom - oy + slack,
+        );
+        let table = bp.list.glyph_runs.as_ref()?;
+        let mut runs: Vec<TextOutlineRun> = Vec::new();
+        let mut skipped = 0u32;
+        for entry in &table.entries {
+            let (gx, gy) = (entry.transform.0[4], entry.transform.0[5]);
+            if !(gx >= l && gx <= r && gy >= t && gy <= b) {
+                continue;
+            }
+            let (rgb, cmyk) = match &entry.paint {
+                Paint::Solid(c) => ([c.r, c.g, c.b], None),
+                Paint::Cmyk {
+                    c, m, y, k, rgb, ..
+                } => ([rgb.r, rgb.g, rgb.b], Some([*c, *m, *y, *k])),
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            if entry.is_stroke {
+                skipped += 1;
+                continue;
+            }
+            let (path_id, xf) = match bp.list.commands.get(entry.command_index as usize) {
+                Some(DisplayCommand::FillPath {
+                    path_id, transform, ..
+                })
+                | Some(DisplayCommand::FillPathBlend {
+                    path_id, transform, ..
+                }) => (*path_id, *transform),
+                _ => {
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let Some(path) = bp.list.paths.get(path_id) else {
+                skipped += 1;
+                continue;
+            };
+            let run = match runs.iter_mut().find(|r| r.rgb == rgb && r.cmyk == cmyk) {
+                Some(r) => r,
+                None => {
+                    runs.push(TextOutlineRun {
+                        rgb,
+                        cmyk,
+                        anchors: Vec::new(),
+                        subpath_starts: Vec::new(),
+                        glyphs: 0,
+                    });
+                    runs.last_mut().expect("just pushed")
+                }
+            };
+            run.glyphs += 1;
+            let p = |x: f32, y: f32| -> [f32; 2] {
+                let (px, py) = xf.apply(x, y);
+                [px, py]
+            };
+            let corner = |q: [f32; 2]| PathAnchorTriple {
+                anchor: q,
+                left: q,
+                right: q,
+            };
+            let mut start = run.anchors.len();
+            for seg in &path.segments {
+                match *seg {
+                    PathSegment::MoveTo { x, y } => {
+                        start = run.anchors.len();
+                        run.subpath_starts.push(start as u32);
+                        run.anchors.push(corner(p(x, y)));
+                    }
+                    PathSegment::LineTo { x, y } => run.anchors.push(corner(p(x, y))),
+                    PathSegment::QuadTo { cx, cy, x, y } => {
+                        // Degree-elevate: c1 = p0 + 2/3 (q - p0), c2 = p + 2/3 (q - p).
+                        let Some(last) = run.anchors.last_mut() else {
+                            continue;
+                        };
+                        let p0 = last.anchor;
+                        let q = p(cx, cy);
+                        let pe = p(x, y);
+                        last.right = [
+                            p0[0] + 2.0 / 3.0 * (q[0] - p0[0]),
+                            p0[1] + 2.0 / 3.0 * (q[1] - p0[1]),
+                        ];
+                        run.anchors.push(PathAnchorTriple {
+                            anchor: pe,
+                            left: [
+                                pe[0] + 2.0 / 3.0 * (q[0] - pe[0]),
+                                pe[1] + 2.0 / 3.0 * (q[1] - pe[1]),
+                            ],
+                            right: pe,
+                        });
+                    }
+                    PathSegment::CubicTo {
+                        cx1,
+                        cy1,
+                        cx2,
+                        cy2,
+                        x,
+                        y,
+                    } => {
+                        let Some(last) = run.anchors.last_mut() else {
+                            continue;
+                        };
+                        last.right = p(cx1, cy1);
+                        let pe = p(x, y);
+                        run.anchors.push(PathAnchorTriple {
+                            anchor: pe,
+                            left: p(cx2, cy2),
+                            right: pe,
+                        });
+                    }
+                    PathSegment::Close => {
+                        // A closing anchor that repeats the start folds
+                        // into it (its incoming handle moves over).
+                        if run.anchors.len() > start + 1 {
+                            let first = run.anchors[start].anchor;
+                            let last = *run.anchors.last().expect("non-empty");
+                            if (last.anchor[0] - first[0]).abs() < 1e-4
+                                && (last.anchor[1] - first[1]).abs() < 1e-4
+                            {
+                                run.anchors.pop();
+                                run.anchors[start].left = last.left;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Some(TextOutlinesResult {
+            id: id.clone(),
+            page_id: bp.id.clone(),
+            runs,
+            skipped_glyphs: skipped,
+        })
+    }
+
     pub fn path_anchors(
         &self,
         id: &crate::element_selection::ElementId,
@@ -8651,7 +9693,7 @@ impl CanvasModel {
             .collect()
     }
 
-    /// thoughts ADR 027 §5 — the ONE place the model turns its state into
+    /// ADR 027 §5 — the ONE place the model turns its state into
     /// [`PipelineOptions`]. The live rebuild, the export build and the
     /// digest gate's cold build all start here, so they cannot drift apart.
     fn pipeline_options<'a>(
@@ -8775,6 +9817,88 @@ impl CanvasModel {
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
 
+    /// v69 — the page as it draws with some items hidden: a slideshow's
+    /// build steps (each frame is the slide without the items later steps
+    /// reveal). A copy of the scene with those items (a group: all its
+    /// members, master items included) set invisible is built once; the
+    /// document itself is untouched.
+    pub fn build_page_hiding(
+        &self,
+        page_id: &PageId,
+        hide: &[crate::element_selection::ElementId],
+    ) -> Result<paged_renderer::BuiltPage, crate::channel::LoadError> {
+        use std::collections::HashSet;
+        let mut scene = self.scene.clone();
+        let mut ids: HashSet<String> = hide.iter().map(|e| e.raw_id().to_string()).collect();
+        // A hidden group hides its members (nested groups too).
+        let spreads = scene
+            .spreads
+            .iter()
+            .map(|p| &p.spread)
+            .chain(scene.master_spreads.values().map(|m| &m.spread));
+        for sp in spreads {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for g in &sp.groups {
+                    if g.self_id.as_deref().is_some_and(|id| ids.contains(id)) {
+                        for m in &g.members {
+                            let id = frame_self_id(sp, *m);
+                            if let Some(id) = id {
+                                changed |= ids.insert(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let hide_in = |sp: &mut paged_model::Spread| {
+            let off = |id: &Option<String>| id.as_deref().is_some_and(|i| ids.contains(i));
+            sp.text_frames
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.rectangles
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.ovals
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.graphic_lines
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.polygons
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+        };
+        for p in scene.spreads.iter_mut() {
+            hide_in(&mut p.spread);
+        }
+        for m in scene.master_spreads.values_mut() {
+            hide_in(&mut m.spread);
+        }
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let resource_providers = self.resource_tiles.provider_entries();
+        let options = self.pipeline_options(
+            PipelinePurpose::Export,
+            resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
+            &resource_providers,
+        );
+        let built = pipeline::build_document(&scene, &options)
+            .map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
+        built
+            .pages
+            .into_iter()
+            .find(|p| &p.id == page_id)
+            .ok_or_else(|| crate::channel::LoadError::Build(format!("no page {page_id}")))
+    }
+
     /// Concept 3 — read accessors for the export session's begin.
     pub fn font_table(&self) -> &paged_renderer::FontTable {
         &self.font_table
@@ -8808,7 +9932,7 @@ impl CanvasModel {
         &self.scene.palette
     }
 
-    /// thoughts ADR 027 §5 — the ONE commit path: drop what `invalidation`
+    /// ADR 027 §5 — the ONE commit path: drop what `invalidation`
     /// names from the cross-build emit caches, then rebuild. Every
     /// committed edit (a text op, an operation, undo, redo) comes through
     /// here, so invalidation has one place to live.
@@ -8851,7 +9975,7 @@ impl CanvasModel {
             // still checked against its key and its pages' pools on the hit.
             Invalidation::PageItemPaint => {}
             Invalidation::Text { story, edit } => {
-                // thoughts ADR 027 plan step 4 — a text edit changes one
+                // ADR 027 plan step 4 — a text edit changes one
                 // story's content, so only that story's body emission is
                 // stale: every input another story reads (its own content,
                 // chain geometry, wrap, page numbering, the list ledger in,
@@ -8925,7 +10049,7 @@ impl CanvasModel {
         }
         let mut cache = std::mem::take(&mut self.layout_cache);
         cache.reset_stats();
-        // thoughts ADR 027 plan step 7 — a build whose commits were text
+        // ADR 027 plan step 7 — a build whose commits were text
         // edits of one story (whose frames do not auto-size) leaves the
         // frame pass as it was: the pipeline may adopt the previous pages it
         // laid nothing out on afresh.
@@ -8997,30 +10121,39 @@ impl CanvasModel {
             // reported value is the true post-mutation depth.
             applied_log_len: self.applied_log.len(),
         };
-        // thoughts ADR 027 plan step 7 — the pages this build changed: a
+        // ADR 027 plan step 7 — the pages this build changed: a
         // text edit of one story narrows to the pages laid out afresh, the
         // pages that are new, and the pages of the story's auto-sizing
         // frames (their bounds follow the text); anything else is every
         // page.
         let scope = std::mem::take(&mut self.pending_dirty_scope);
-        let narrowed = match &scope {
-            DirtyScope::Story(story) => {
-                let autosized: Vec<usize> = if self
-                    .scene
-                    .frame_chain(story)
+        let narrowed_stories: Option<Vec<&String>> = match &scope {
+            DirtyScope::Story(story) => Some(vec![story]),
+            DirtyScope::Fonts(stories) => Some(stories.iter().collect()),
+            _ => None,
+        };
+        let narrowed = match narrowed_stories {
+            Some(stories) => {
+                let autosizing: Vec<&String> = stories
+                    .into_iter()
+                    .filter(|story| {
+                        self.scene
+                            .frame_chain(story)
+                            .iter()
+                            .any(|f| f.auto_sizing.is_some())
+                    })
+                    .collect();
+                let autosized: Vec<usize> = built
+                    .pages
                     .iter()
-                    .any(|f| f.auto_sizing.is_some())
-                {
-                    built
-                        .pages
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, p)| p.story_layout.iter().any(|l| &l.story_id == story))
-                        .map(|(i, _)| i)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.story_layout
+                            .iter()
+                            .any(|l| autosizing.contains(&&l.story_id))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
                 Some(
                     (0..built.pages.len())
                         .filter(|&i| {
@@ -9047,7 +10180,7 @@ impl CanvasModel {
         Ok(())
     }
 
-    /// thoughts ADR 027 §4 — the digest gate. Builds the scene COLD (fresh
+    /// ADR 027 §4 — the digest gate. Builds the scene COLD (fresh
     /// layout cache, no emit caches, no grow hint) and compares it with the
     /// incremental `built`: page count, page ids, every page's
     /// [`paged_compose::DisplayList::digest`], every page's `story_layout`
@@ -9168,6 +10301,28 @@ impl CanvasModel {
         Ok(())
     }
 
+    /// C-1 — the indices of the built pages a frame's scene layer is
+    /// drawn on (each page of the spread the frame reaches into). Empty
+    /// when the frame carries no layer, has no items, or draws
+    /// nowhere. A submit re-encodes the union of this before and after.
+    pub fn pages_showing_scene_layer(&self, element_id: &str) -> Vec<usize> {
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.scene_layer_frames.iter().any(|f| f == element_id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// v68 — the faces a frame's scene-layer text runs named that the
+    /// last build could not resolve (drawn in the default font instead),
+    /// as `"Family Style"` labels. Empty when every named family resolved
+    /// or the frame carries no layer.
+    pub fn scene_layer_font_fallbacks(&self, element_id: &str) -> Vec<String> {
+        self.built.diagnostics.scene_font_fallbacks(element_id)
+    }
+
     /// C-1 — the frame ids that currently carry a plugin scene layer
     /// (test/introspection aid).
     pub fn scene_layer_ids(&self) -> Vec<&str> {
@@ -9196,6 +10351,167 @@ impl CanvasModel {
     /// [`Self::clear_scene_layer`].
     pub fn clear_pixel_layer(&mut self, element_id: &str) -> Result<(), crate::channel::LoadError> {
         self.clear_scene_layer(element_id)
+    }
+
+    /// v66 — the binary scene-image door: make the frame's scene layer ONE
+    /// image, taking ownership of `rgba` (the bytes the host transferred;
+    /// no JSON, no per-byte parse). Same caller gate and ephemeral posture
+    /// as [`Self::set_scene_layer_as`]. A malformed buffer is refused here
+    /// rather than stored and silently skipped at lowering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_scene_image_as(
+        &mut self,
+        caller: Option<&str>,
+        element_id: String,
+        rgba: bytes::Bytes,
+        width: u32,
+        height: u32,
+        dest: (f32, f32, f32, f32),
+    ) -> Result<(), crate::channel::LoadError> {
+        let (x, y, w, h) = dest;
+        if width == 0
+            || height == 0
+            || w <= 0.0
+            || h <= 0.0
+            || rgba.len() != (width as usize) * (height as usize) * 4
+        {
+            return Err(crate::channel::LoadError::Scene(format!(
+                "scene image for {element_id:?}: {} bytes for {width}x{height}, dest {w}x{h}",
+                rgba.len()
+            )));
+        }
+        let layer = paged_compose::SceneLayer {
+            items: vec![paged_compose::SceneItem::Image {
+                rgba,
+                width,
+                height,
+                x,
+                y,
+                w,
+                h,
+            }],
+        };
+        self.set_scene_layer_as(caller, element_id, layer)
+    }
+
+    /// v66 — patch rectangles of the frame's retained scene image in place
+    /// (the brush-preview lane: a stroke dirties a window, not the image).
+    ///
+    /// `rects` holds four `u32`s per tile — `x, y, w, h` in IMAGE pixels —
+    /// and `rgba` the tiles' tightly packed pixels back to back, in the
+    /// same order. The whole call is validated before any byte moves, so a
+    /// bad tile leaves the image as it was. The target is the first
+    /// `SceneItem::Image` of the frame's layer (a layer the binary door
+    /// set holds exactly one).
+    ///
+    /// The buffer is patched in place when nothing else holds it; when the
+    /// last build's display list still shares it (the usual case: lowering
+    /// clones the refcount) the patch copies it once inside the engine —
+    /// copy-on-write — and the copy is counted in
+    /// [`Self::scene_image_copies`].
+    pub fn patch_scene_image_as(
+        &mut self,
+        caller: Option<&str>,
+        element_id: &str,
+        rects: &[u32],
+        rgba: &[u8],
+    ) -> Result<(), crate::channel::LoadError> {
+        let fail = |why: String| {
+            Err(crate::channel::LoadError::Scene(format!(
+                "scene image tiles for {element_id:?}: {why}"
+            )))
+        };
+        if let (Some(caller), Some(owner)) = (caller, self.scene_layer_owner.get(element_id)) {
+            if owner != caller {
+                return fail(format!(
+                    "the frame's scene layer is owned by {owner:?}, not {caller:?}"
+                ));
+            }
+        }
+        if rects.len() % 4 != 0 {
+            return fail(format!(
+                "{} rect values is not a multiple of 4",
+                rects.len()
+            ));
+        }
+        let Some(layer) = self.scene_layers.get_mut(element_id) else {
+            return fail("the frame carries no scene layer".into());
+        };
+        let Some(paged_compose::SceneItem::Image {
+            rgba: target,
+            width,
+            height,
+            ..
+        }) = layer
+            .items
+            .iter_mut()
+            .find(|i| matches!(i, paged_compose::SceneItem::Image { .. }))
+        else {
+            return fail("the frame's scene layer holds no image".into());
+        };
+        let (iw, ih) = (*width as u64, *height as u64);
+        let mut need: u64 = 0;
+        for r in rects.chunks_exact(4) {
+            let (x, y, w, h) = (r[0] as u64, r[1] as u64, r[2] as u64, r[3] as u64);
+            if w == 0 || h == 0 || x + w > iw || y + h > ih {
+                return fail(format!("tile {x},{y} {w}x{h} outside the {iw}x{ih} image"));
+            }
+            need += w * h * 4;
+        }
+        if need != rgba.len() as u64 {
+            return fail(format!("tiles need {need} bytes, got {}", rgba.len()));
+        }
+        let shared = std::mem::take(target);
+        let mut buf = match shared.try_into_mut() {
+            Ok(unique) => unique,
+            Err(shared) => {
+                self.scene_image_copies += 1;
+                bytes::BytesMut::from(&shared[..])
+            }
+        };
+        let stride = iw as usize * 4;
+        let mut src = 0usize;
+        for r in rects.chunks_exact(4) {
+            let (x, y, w, h) = (r[0] as usize, r[1] as usize, r[2] as usize, r[3] as usize);
+            let row = w * 4;
+            for j in 0..h {
+                let dst = (y + j) * stride + x * 4;
+                buf[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
+                src += row;
+            }
+        }
+        *target = buf.freeze();
+        self.rebuild_after_mutation()
+    }
+
+    /// v66 — how many times a tile patch had to copy a shared scene image
+    /// (see [`Self::patch_scene_image_as`]). A count for budgets and tests.
+    pub fn scene_image_copies(&self) -> u64 {
+        self.scene_image_copies
+    }
+
+    /// v66 — the built pages whose display list draws the frame's current
+    /// scene image, found by the buffer itself (lowering shares it), so a
+    /// frame on a master page answers every page that shows it. Empty when
+    /// the frame draws nowhere. The GPU cache re-encodes exactly these.
+    pub fn pages_showing_scene_image(&self, element_id: &str) -> Vec<usize> {
+        let Some(ptr) = self.scene_layers.get(element_id).and_then(|l| {
+            l.items.iter().find_map(|i| match i {
+                paged_compose::SceneItem::Image { rgba, .. } if !rgba.is_empty() => {
+                    Some(rgba.as_ptr())
+                }
+                _ => None,
+            })
+        }) else {
+            return Vec::new();
+        };
+        self.built
+            .pages
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.list.images.iter().any(|img| img.rgba.as_ptr() == ptr))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// C-6 — parse the frame `Self` id out of a claim's
@@ -9361,7 +10677,7 @@ impl CanvasModel {
 
     /// Expose the inner built document for tests and the wasm
     /// renderer-on-demand path that needs to read display lists.
-    /// thoughts ADR 027 §7 — the ids of the pages the last build changed:
+    /// ADR 027 §7 — the ids of the pages the last build changed:
     /// after a text edit of one story, only the pages laid out afresh (and
     /// new ones); otherwise every page.
     pub fn dirty_page_ids(&self) -> Vec<PageId> {
@@ -9381,6 +10697,46 @@ impl CanvasModel {
 
     pub fn built(&self) -> &BuiltDocument {
         &self.built
+    }
+
+    /// v67 — the session's snapping preferences.
+    pub fn snap_settings(&self) -> crate::snap_point::SnapSettings {
+        self.snap_settings
+    }
+
+    /// v67 — replace the snapping preferences. Session state: not saved,
+    /// not undoable.
+    pub fn set_snap_settings(&mut self, settings: crate::snap_point::SnapSettings) {
+        self.snap_settings = settings;
+    }
+
+    /// v67 — (re)build the snap index when the document has been rebuilt
+    /// since it was taken. `hold` keeps whatever index exists — a gesture's
+    /// preview rebuilds every tick, and the items it moves are excluded
+    /// from its own targets anyway.
+    pub(crate) fn ensure_snap_index(&mut self, hold: bool) {
+        let fresh = self
+            .snap_index
+            .as_ref()
+            .is_some_and(|i| hold || i.generation == self.build_generation);
+        if !fresh {
+            self.snap_index = Some(crate::snap_point::build_index(
+                &self.scene,
+                &self.built,
+                self.build_generation,
+            ));
+        }
+    }
+
+    /// v67 (RFI C-68) — `RequestSnapPoint`: snap one page-local point to
+    /// the points, alignment lines and outlines around it.
+    pub fn snap_point(
+        &mut self,
+        query: &crate::snap_point::SnapPointQuery,
+    ) -> crate::snap_point::SnapPointResult {
+        self.ensure_snap_index(self.active_gesture.is_some());
+        let index = self.snap_index.as_ref().expect("just ensured");
+        crate::snap_point::resolve(index, &self.snap_settings, query)
     }
 
     pub fn font_bytes(&self) -> Option<&[u8]> {
@@ -9449,14 +10805,17 @@ impl CanvasModel {
     ///
     /// Only the stories with a run that now resolves to a different face
     /// are re-laid out; the rest reuse their cached emission. Returns the
-    /// ids of the re-laid-out stories, empty when the font changed nothing
-    /// (no rebuild then).
+    /// ids of the re-laid-out stories, then (v68) the ids of the frames
+    /// whose scene-layer text names this family; empty when the font
+    /// changed nothing (no rebuild then).
     pub fn register_font(
         &mut self,
         entry: FontEntry,
     ) -> Result<Vec<String>, crate::channel::LoadError> {
+        // v68 — scene-layer text naming this family re-resolves too.
+        let scene_frames = self.scene_layer_frames_naming(|family| family == entry.family);
         self.font_registry.push(entry);
-        self.relayout_for_registry_change()
+        self.relayout_for_registry_change(scene_frames)
     }
 
     /// Drop every registered font from the LIVE model (the worker's
@@ -9465,16 +10824,62 @@ impl CanvasModel {
         if self.font_registry.is_empty() {
             return Ok(Vec::new());
         }
+        let registered: std::collections::BTreeSet<String> = self
+            .font_registry
+            .iter()
+            .map(|e| e.family.clone())
+            .collect();
+        let scene_frames = self.scene_layer_frames_naming(|family| registered.contains(family));
         self.font_registry.clear();
-        self.relayout_for_registry_change()
+        self.relayout_for_registry_change(scene_frames)
     }
 
-    fn relayout_for_registry_change(&mut self) -> Result<Vec<String>, crate::channel::LoadError> {
-        let affected = self.refresh_font_table(true);
-        if !affected.is_empty() {
+    /// Rebuild after a registry change, narrowed to the stories whose
+    /// faces moved.
+    ///
+    /// `scene_frames` are the frames whose plugin scene-layer text names a
+    /// family the change touches (v68): their runs re-resolve, so they
+    /// rebuild too and their ids join the returned list after the stories.
+    fn relayout_for_registry_change(
+        &mut self,
+        scene_frames: Vec<String>,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        let mut affected = self.refresh_font_table(true);
+        if !affected.is_empty() || !scene_frames.is_empty() {
+            // Nothing else is pending between builds outside a batch, so the
+            // pages this build changes are the affected stories' alone —
+            // unless a scene layer re-resolves, whose pages are not a
+            // story's: then every page is reported.
+            self.pending_dirty_scope = match std::mem::take(&mut self.pending_dirty_scope) {
+                DirtyScope::Unset if scene_frames.is_empty() => {
+                    DirtyScope::Fonts(affected.iter().cloned().collect())
+                }
+                _ => DirtyScope::Everything,
+            };
             self.rebuild_after_mutation()?;
+            affected.extend(scene_frames);
         }
         Ok(affected)
+    }
+
+    /// v68 — the frames whose scene layer carries a text run naming a
+    /// family `matches` accepts.
+    fn scene_layer_frames_naming(&self, matches: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut frames: Vec<String> = self
+            .scene_layers
+            .iter()
+            .filter(|(_, layer)| {
+                layer.items.iter().any(|item| match item {
+                    paged_compose::SceneItem::Text(t) => {
+                        t.family.as_deref().map(str::trim).is_some_and(&matches)
+                    }
+                    _ => false,
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        frames.sort();
+        frames
     }
 
     /// Bring the font table up to date with the scene and the registry,
@@ -9792,7 +11197,7 @@ fn rgb_to_hex(rgb: [f32; 3]) -> String {
 }
 
 /// What a committed edit invalidates in the cross-build emit caches
-/// (thoughts ADR 027 §5). [`CanvasModel::commit_and_rebuild`] is its one
+/// (ADR 027 §5). [`CanvasModel::commit_and_rebuild`] is its one
 /// consumer.
 #[derive(Clone, Debug)]
 enum Invalidation {
@@ -9919,7 +11324,7 @@ fn is_paint_path(path: &paged_mutate::PropertyPath) -> bool {
     )
 }
 
-/// What a model build is for (thoughts ADR 027 §5).
+/// What a model build is for (ADR 027 §5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelinePurpose {
     /// The interactive canvas build: emit caches on, proof condition,
@@ -9929,7 +11334,7 @@ enum PipelinePurpose {
     Export,
 }
 
-/// thoughts ADR 027 §4 — compare an incremental build with a cold one.
+/// ADR 027 §4 — compare an incremental build with a cold one.
 /// `Err` names the first difference.
 fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(), String> {
     let ids = |b: &BuiltDocument| b.pages.iter().map(|p| p.id.0.clone()).collect::<Vec<_>>();
@@ -10395,6 +11800,24 @@ fn fvar_instances(t: &[u8], name: &dyn Fn(u16) -> Option<String>) -> Vec<FvarIns
     out
 }
 
+/// v66 — `src` re-zipped without the entries named in `drop` (raw copies,
+/// nothing re-compressed). The tombstone half of `DeletePagedPart`.
+fn zip_without(
+    src: &[u8],
+    drop: &std::collections::BTreeSet<String>,
+) -> Result<Vec<u8>, idml_export::WriteError> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(src))?;
+    let mut out = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+    for i in 0..archive.len() {
+        let raw = archive.by_index_raw(i)?;
+        if drop.contains(raw.name()) {
+            continue;
+        }
+        out.raw_copy_file(raw)?;
+    }
+    Ok(out.finish()?.into_inner())
+}
+
 fn compute_story_pages(built: &BuiltDocument) -> HashMap<String, Vec<PageId>> {
     let mut out: HashMap<String, Vec<PageId>> = HashMap::new();
     for page in &built.pages {
@@ -10451,6 +11874,19 @@ pub(crate) fn source_id_floor(package: &[u8]) -> u64 {
         }
     }
     max
+}
+
+/// The `Self` id of a frame of `spread`.
+fn frame_self_id(spread: &paged_model::Spread, fr: paged_model::FrameRef) -> Option<String> {
+    use paged_model::FrameRef;
+    match fr {
+        FrameRef::TextFrame(i) => spread.text_frames.get(i)?.self_id.clone(),
+        FrameRef::Rectangle(i) => spread.rectangles.get(i)?.self_id.clone(),
+        FrameRef::Oval(i) => spread.ovals.get(i)?.self_id.clone(),
+        FrameRef::GraphicLine(i) => spread.graphic_lines.get(i)?.self_id.clone(),
+        FrameRef::Polygon(i) => spread.polygons.get(i)?.self_id.clone(),
+        FrameRef::Group(i) => spread.groups.get(i)?.self_id.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -11566,12 +13002,15 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
                     offset: 0,
                     text: String::new(),
                     cell: None,
+                    restore: None,
                 },
                 inverse: crate::mutate::TextOp::DeleteRange {
                     story_id: String::new(),
                     start: 0,
                     end: 0,
                     recovered: String::new(),
+                    unseed: false,
+                    keep_run: false,
                     cell: None,
                 },
             },

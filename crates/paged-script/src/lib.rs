@@ -16,7 +16,7 @@
 //!
 //! Hosts a Boa JS context inside the canvas worker so user scripts
 //! can mutate the document through the same Operation channel the
-//! Inspector + REPL already use. Per `docs/paged/scripting-layer.md`
+//! Inspector + REPL already use. Per the original scripting-layer design (not published; see `docs/adr/001-boa-over-quickjs.md`)
 //! every write goes through `paged_mutate::apply`; the host functions
 //! installed here are the only path JS can take to reach it.
 //!
@@ -36,6 +36,7 @@
 //!   paged.placeImage(frameId, uri, fit?) -> bool
 //!   paged.applyStyle(storyId, start, end, styleRef) -> bool
 //!   paged.createGroup([id, ...]) -> bool
+//!   paged.duplicateElements([id, ...], dx, dy) -> address[] JSON | null
 //!   paged.inspect(idStr) -> ElementProperties JSON
 //!   paged.layers() -> LayerSummary[]
 //!   paged.tree() -> SceneTreeNode[]
@@ -497,6 +498,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_place_image), js_string!("placeImage"), 3)
         .function(guarded(paged_apply_style), js_string!("applyStyle"), 4)
         .function(guarded(paged_create_group), js_string!("createGroup"), 1)
+        .function(
+            guarded(paged_duplicate_elements),
+            js_string!("duplicateElements"),
+            3,
+        )
         .function(guarded(paged_undo), js_string!("undo"), 0)
         .function(guarded(paged_redo), js_string!("redo"), 0)
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
@@ -551,6 +557,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             guarded(paged_apply_master_to_page),
             js_string!("applyMasterToPage"),
             2,
+        )
+        .function(guarded(paged_move_page), js_string!("movePage"), 2)
+        .function(guarded(paged_on_master), js_string!("onMaster"), 2)
+        .function(guarded(paged_create_master), js_string!("createMaster"), 2)
+        .function(guarded(paged_delete_master), js_string!("deleteMaster"), 1)
+        .function(guarded(paged_rename_master), js_string!("renameMaster"), 2)
+        .function(
+            guarded(paged_set_page_metadata),
+            js_string!("setPageMetadata"),
+            3,
         )
         // frames & groups
         .function(
@@ -626,6 +642,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("insertTableRow"),
             3,
         )
+        .function(guarded(paged_delete_table), js_string!("deleteTable"), 2)
         .function(
             guarded(paged_delete_table_row),
             js_string!("deleteTableRow"),
@@ -833,6 +850,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("setPluginMetadata"),
             4,
         )
+        .function(
+            guarded(paged_set_document_metadata),
+            js_string!("setDocumentMetadata"),
+            3,
+        )
         .function(guarded(paged_batch), js_string!("batch"), 1)
         // selection setters
         .function(
@@ -931,7 +953,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(
             guarded(paged_insert_hyperlink),
             js_string!("insertHyperlink"),
-            4,
+            5,
         )
         // layer attributes
         .function(
@@ -1268,6 +1290,7 @@ fn paged_apply_style(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         paged_mutate::operation::StyleScope::Paragraph
     };
     let mutation = Mutation::ApplyStyle {
+        paragraph: None,
         story_id,
         start,
         end,
@@ -1603,6 +1626,107 @@ fn paged_apply_master_to_page(
     }))
 }
 
+/// `paged.movePage(pageId, afterPageId?)` — move a page to follow
+/// `afterPageId`, or to the front when it is omitted/null
+/// (`Mutation::MovePage`).
+fn paged_move_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let after = opt_string(args.get_or_undefined(1), ctx).map(PageId);
+    Ok(apply_bool(&Mutation::MovePage {
+        page: PageId(page),
+        after,
+    }))
+}
+
+/// `paged.createMaster(masterId, { name?, widthPt?, heightPt?,
+/// duplicateOf? })` — create a master spread (`Mutation::CreateMaster`).
+fn paged_create_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let mut opts = to_json_value(args.get_or_undefined(1), ctx)
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    opts["master"] = serde_json::Value::String(master);
+    let Ok(mutation) = serde_json::from_value::<Mutation>(serde_json::json!({
+        "op": "createMaster",
+        "args": opts,
+    })) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&mutation))
+}
+
+/// `paged.deleteMaster(masterId)` — delete a master no page applies
+/// (`Mutation::DeleteMaster`).
+fn paged_delete_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteMaster { master }))
+}
+
+/// `paged.renameMaster(masterId, name?)` — set or clear a master's name
+/// (`Mutation::RenameMaster`).
+fn paged_rename_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let name = opt_string(args.get_or_undefined(1), ctx);
+    Ok(apply_bool(&Mutation::RenameMaster { master, name }))
+}
+
+/// `paged.onMaster(masterId, mutation)` — apply a wire mutation (an
+/// `{ op, args }` object, as `paged.batch` takes) to the items of a master
+/// spread (`Mutation::OnMaster`).
+fn paged_on_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(inner) = to_json_value(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let Ok(mutation) = serde_json::from_value::<Mutation>(inner) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::OnMaster {
+        master,
+        mutation: Box::new(mutation),
+    }))
+}
+
+/// `paged.setPageMetadata(pageId, key, value?)` — set (or, with
+/// `value` omitted/null, delete) one plugin-metadata entry on a page
+/// (`Mutation::SetPageMetadata`; the value is the JSON envelope string).
+fn paged_set_page_metadata(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let key = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::SetPageMetadata {
+        page: PageId(page),
+        key,
+        value,
+        caller: None,
+    }))
+}
+
 // ---------------------------------------------------- frames & groups
 
 /// `paged.deleteElement(id)` — delete a page item (`Mutation::DeleteFrame`).
@@ -1616,6 +1740,63 @@ fn paged_delete_element(_this: &JsValue, args: &[JsValue], ctx: &mut Context) ->
     Ok(apply_bool(&Mutation::DeleteFrame {
         frame_id: bare_id(&id),
     }))
+}
+
+/// `paged.duplicateElements([id, ...], dx, dy)` — duplicate page items
+/// (`Mutation::DuplicateElements`): a whole clone of each, `(dx, dy)`
+/// points away, directly above its source, in one undo step. Selects
+/// the clones and returns their `kind:id` addresses as a JSON array, in
+/// the order the sources were named; `null` when the engine refuses
+/// (a threaded text frame, an anchored object, …) or an id does not
+/// parse. A missing offset is `0`.
+fn paged_duplicate_elements(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let given = args
+        .get_or_undefined(0)
+        .as_object()
+        .and_then(|o| o.get(js_string!("length"), ctx).ok())
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as usize;
+    let element_ids = parse_element_id_array(args.get_or_undefined(0), ctx);
+    // An id that does not parse is a caller error, not something to
+    // drop quietly: duplicating two of three named elements would be a
+    // different operation from the one asked for.
+    if element_ids.is_empty() || element_ids.len() != given {
+        return Ok(JsValue::null());
+    }
+    let coord = |v: &JsValue, ctx: &mut Context| -> JsResult<f32> {
+        if v.is_undefined() || v.is_null() {
+            Ok(0.0)
+        } else {
+            Ok(v.to_number(ctx)? as f32)
+        }
+    };
+    let dx = coord(args.get_or_undefined(1), ctx)?;
+    let dy = coord(args.get_or_undefined(2), ctx)?;
+    let mutation = Mutation::DuplicateElements {
+        element_ids,
+        offset: (dx, dy),
+    };
+    let clones = with_model(|m| match m.apply_mutation(&mutation) {
+        Ok(outcome) => {
+            let ids: Vec<_> = outcome.minted.into_iter().map(|e| e.element).collect();
+            m.element_selection.ids = ids.clone();
+            Some(ids)
+        }
+        Err(_) => None,
+    });
+    Ok(match clones {
+        Some(ids) => {
+            let addresses: Vec<String> = ids.iter().map(element_id_to_address).collect();
+            JsValue::from(js_string!(
+                serde_json::to_string(&addresses).unwrap_or_default()
+            ))
+        }
+        None => JsValue::null(),
+    })
 }
 
 /// `paged.dissolveGroup(groupId)` — ungroup; members return to the
@@ -2296,6 +2477,7 @@ fn paged_insert_field(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> J
         story_id,
         offset,
         field,
+        content_offset: None,
     }))
 }
 
@@ -2371,6 +2553,7 @@ fn paged_insert_anchored_frame(
     let height = args.get_or_undefined(3).to_number(ctx)? as f32;
     let image_uri = opt_string(args.get_or_undefined(4), ctx);
     Ok(apply_bool(&Mutation::InsertAnchoredFrame {
+        paragraph: None,
         story_id,
         offset,
         width,
@@ -2379,8 +2562,9 @@ fn paged_insert_anchored_frame(
     }))
 }
 
-/// `paged.insertHyperlink(storyId, start, end, url)` — make a character
-/// range a clickable link (`Mutation::InsertHyperlink`). The read side is
+/// `paged.insertHyperlink(storyId, start, end, url, pageId?)` — make a
+/// character range a clickable link (`Mutation::InsertHyperlink`); with
+/// `pageId` it goes to that page (v69) and `url` may be empty. The read side is
 /// `paged.collection("hyperlinks")` — NOT `paged.links()`, which is the
 /// placed-asset link list and stays empty here.
 fn paged_insert_hyperlink(
@@ -2398,11 +2582,13 @@ fn paged_insert_hyperlink(
         .get_or_undefined(3)
         .to_string(ctx)?
         .to_std_string_escaped();
+    let page = opt_string(args.get_or_undefined(4), ctx).map(PageId);
     Ok(apply_bool(&Mutation::InsertHyperlink {
         story_id,
         start,
         end,
         url,
+        page,
     }))
 }
 
@@ -2507,6 +2693,20 @@ fn paged_insert_table_row(
         table_id,
         at,
     }))
+}
+
+/// `paged.deleteTable(storyId, tableId)` — delete a whole table and the
+/// paragraph that hosts it (`Mutation::DeleteTable`). Undo restores it.
+fn paged_delete_table(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let table_id = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::DeleteTable { story_id, table_id }))
 }
 
 /// `paged.deleteTableRow(storyId, tableId, at)` — delete the row at `at`
@@ -3128,7 +3328,7 @@ fn paged_set_condition_visible(
 }
 
 /// `paged.setFlowGrowRule(storyId, grow, maxPages?, copyFrameOptions?)`
-/// (`Mutation::SetFlowGrowRule`, thoughts ADR 026).
+/// (`Mutation::SetFlowGrowRule`, ADR 026).
 fn paged_set_flow_grow_rule(
     _this: &JsValue,
     args: &[JsValue],
@@ -3597,6 +3797,27 @@ fn paged_set_plugin_metadata(
     }))
 }
 
+/// `paged.setDocumentMetadata(key, value?, caller?)` — write one
+/// document-scoped `Label` key/value pair (`value` null deletes;
+/// `Mutation::SetDocumentMetadata`, v69).
+fn paged_set_document_metadata(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let key = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value = opt_string(args.get_or_undefined(1), ctx);
+    let caller = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::SetDocumentMetadata {
+        key,
+        value,
+        caller,
+    }))
+}
+
 /// `paged.batch([mutations])` — apply an array of `{ op, args }` mutation
 /// objects as ONE undoable step (`Mutation::Batch`). An unparseable array
 /// returns `false`.
@@ -4044,6 +4265,8 @@ fn js_value_to_wire(
             | P::ParagraphNumberingContinue
             | P::ParagraphBulletsCharacterStyle
             | P::ParagraphNumberingCharacterStyle
+            // The composer's IDML name ("HL Single", ...).
+            | P::ParagraphComposer
             // W1.22 — applied numbering-list ref + next-style ref.
             | P::ParagraphAppliedNumberingList
             | P::ParagraphStyleNextStyle

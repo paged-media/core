@@ -14,7 +14,7 @@
 
 //! `Operation` — the single typed primitive every committed mutation
 //! flows through. The five variants match the scripting-layer briefing
-//! (`docs/paged/scripting-layer.md`): `SetProperty`, `InsertNode`,
+//! (the original scripting-layer design, not published): `SetProperty`, `InsertNode`,
 //! `RemoveNode`, `MoveNode`, `Batch`. Extensions require deliberation.
 //!
 //! Every Operation is `Serialize`/`Deserialize` so the same value can
@@ -521,8 +521,9 @@ pub enum PropertyPath {
     /// SDK Phase 5 (v1 sweep) — frame stroke end-cap. Wire value is
     /// `Value::Text` carrying the IDML enum string
     /// (`"ButtEndCap"`, `"RoundEndCap"`, `"ProjectingEndCap"`).
-    /// Addressed against any page-item kind that carries stroke
-    /// state; the renderer uses the field on next paint. Empty
+    /// Addressed against Rectangle, Polygon, GraphicLine and Oval (the
+    /// last three since C-62 — a pen path is a Polygon); TextFrame has
+    /// no cap. The renderer uses the field on next paint. Empty
     /// string clears the override.
     FrameStrokeEndCap,
     /// SDK Phase 5 (v1 sweep) — `<TextFramePreference InsetSpacing="…">`
@@ -810,6 +811,16 @@ pub enum PropertyPath {
     /// Same contract as [`PropertyPath::ParagraphBulletsCharacterStyle`].
     /// Reflow-affecting.
     ParagraphNumberingCharacterStyle,
+    /// `Composer` — which of InDesign's line breakers sets the
+    /// paragraph. `Value::Text` carrying the IDML string: `"HL Composer"`
+    /// (Adobe Paragraph Composer), `"HL Single"` (Single-line Composer),
+    /// `"HL Composer Optyca"` / `"HL Single Optyca"` (their World-Ready
+    /// twins). The empty string clears the override (inherit; absent
+    /// everywhere is the Paragraph Composer). Any other string is refused
+    /// with a `TypeMismatch`, never stored — the model keeps a
+    /// third-party composer it READ verbatim, but nothing may author one.
+    /// Reflow-affecting.
+    ParagraphComposer,
 
     // ---- W0.3 — text-frame prefs --------------------------------
     /// W0.3 — `<TextFramePreference TextColumnCount="...">`. The run
@@ -889,8 +900,11 @@ pub enum PropertyPath {
     FrameStrokeMiterLimit,
     /// W0.3 — `StrokeAlignment` (`"CenterAlignment"`,
     /// `"InsideAlignment"`, `"OutsideAlignment"`). `Value::Text`;
-    /// empty clears. Rectangle-only. Paint-only (the renderer
-    /// inset/outsets by half the weight on rebuild).
+    /// empty clears. Rectangle, Polygon, Oval and TextFrame (C-24 — the
+    /// kinds whose stroked outline the renderer offsets by half the
+    /// weight; on a TextFrame the stroke's share also insets the text,
+    /// so that kind reflows). A `GraphicLine` has no inside and no
+    /// field, and rejects.
     FrameStrokeAlignment,
     /// W0.3 — `GapColor` reference for dashed-stroke gaps.
     /// `Value::ColorRef`. Carried on every stroked page-item kind.
@@ -988,7 +1002,9 @@ pub enum PropertyPath {
     // the `Option<…Params>` is the enabled bit (the parser drops the
     // whole block when `Applied="false"`), so `true` materialises a
     // default block and `false` clears it. Wired on the effect-bearing
-    // kinds (`TextFrame` / `Rectangle` / `Oval`); other kinds raise
+    // kinds (`TextFrame` / `Rectangle` / `Oval` / `Polygon` — C-63
+    // added the last; a `GraphicLine` carries the bag but no renderer
+    // reads it, so it stays out); other kinds raise
     // `UnsupportedProperty`. All paint-only → `frame_style` (the
     // rasterizer's effect compositor reads them on the next rebuild;
     // none reflow). The `*Enabled` toggle is lossy on a customised
@@ -1132,7 +1148,8 @@ pub enum PropertyPath {
     /// `"Overlay"`, …); empty clears the override (`blend_mode = None`).
     /// Carried on every page-item kind with a `blend_mode` field
     /// (TextFrame / Rectangle / Polygon / Oval — C-20 added the last
-    /// two so a baked appearance stack can blend per layer;
+    /// two so a baked appearance stack can blend per layer — and Group,
+    /// whose slot is `transparency.blend_mode`, C-63;
     /// `GraphicLine` has no such field). The rasterizer doesn't yet honour
     /// non-Normal modes; the field is wired for authoring + round-trip.
     /// Paint-only (`frame_style`). The companion `FrameOpacity` path
@@ -1321,9 +1338,11 @@ pub enum PropertyPath {
     /// `Value::Text` carrying the IDML `ArrowHead` enumeration token
     /// (`"SimpleArrowHead"`, `"TriangleArrowHead"`,
     /// `"CircleSolidArrowHead"`, ... — `ArrowheadType::as_idml`'s
-    /// vocabulary); empty string clears (= `"None"`). GraphicLine-only
-    /// (the kind that parses the attribute; InDesign draws line ends
-    /// on open paths, which IDML serialises as `<GraphicLine>`).
+    /// vocabulary); empty string clears (= `"None"`). GraphicLine and,
+    /// since C-62, Polygon: InDesign draws line ends on open paths, and
+    /// a pen or pencil path is a `<Polygon>` whose contour is open —
+    /// not always a `<GraphicLine>`, as v43 assumed. On a polygon every
+    /// open contour takes them; a closed one draws none.
     /// Unknown tokens raise `InvalidValue`. Paint-only
     /// (`frame_style`). Undo note: a prior out-of-vocabulary token
     /// (`ArrowheadType::Other`, unreachable from real InDesign
@@ -1469,6 +1488,7 @@ impl PropertyPath {
             PropertyPath::ParagraphNumberingContinue => "paragraph.numberingContinue",
             PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
             PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
+            PropertyPath::ParagraphComposer => "paragraph.composer",
             // W0.3 — text-frame prefs.
             PropertyPath::TextFrameColumnCount => "textFrame.columnCount",
             PropertyPath::TextFrameColumnGutter => "textFrame.columnGutter",
@@ -2253,14 +2273,17 @@ pub enum Value {
     Lengths(Vec<f32>),
 }
 
-/// Description of a node about to be inserted. Carries the minimal
-/// Stage-1 supported field set plus `item_transform` — `RemoveNode` →
-/// undo → re-insertion round-trips these reliably. (Without the
-/// transform, undoing a deleteFrame snapped the frame back to the page
-/// origin — the editor-suite AC-E2E-PROVE-3 finding.) Remaining
-/// non-essential fields (drop_shadow, opacity, effects, …) still
-/// default on re-insertion; that residue of the Stage 1 limitation
-/// tightens in later stages.
+/// Description of a node about to be inserted. The per-kind variants
+/// carry what a CREATION names — geometry, the fill/stroke triple, the
+/// path tables, a transform — and everything else takes its default.
+///
+/// They used to double as what `RemoveNode` captured for its inverse,
+/// which is how a delete → undo brought back a bare frame: opacity,
+/// effects, corners, a placed image, every field outside this short
+/// list re-defaulted (RFI C-75; the transform had been added for the
+/// same reason one field at a time). A removed node is now captured
+/// WHOLE, as [`NodeSpec::Captured`], and these variants describe new
+/// nodes only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -2399,6 +2422,30 @@ pub enum NodeSpec {
         #[serde(default)]
         destination_spread_id: Option<String>,
     },
+    /// C-75 — a page item captured WHOLE: what `RemoveNode` (and
+    /// `MoveNode`) hand their inverse, so re-insertion restores the node
+    /// that was removed rather than a re-derivation of it. `node` says
+    /// which kind and id; `json` is that kind's model struct
+    /// (`TextFrame`, `Rectangle`, `Oval`, `GraphicLine`, `Polygon`)
+    /// serialised as it stood, beside the rows of the spread's side maps
+    /// that are keyed by the item's id (its labels — the plugin-metadata
+    /// carrier — and its image metadata), which leave the spread with
+    /// the item and return with it. Because the struct itself is
+    /// captured, a field the model gains later is covered here without
+    /// anyone remembering to list it.
+    ///
+    /// `image_bytes` rides beside the JSON rather than inside it: an
+    /// inline image is megabytes, and as a JSON number array it would be
+    /// four times that, re-encoded on every delete.
+    ///
+    /// Inverse-only. A caller creating a node uses the variants above.
+    Captured {
+        node: NodeId,
+        json: String,
+        #[serde(default)]
+        #[tsify(type = "number[] | null")]
+        image_bytes: Option<Vec<u8>>,
+    },
     /// S-03 — a `<Table>` created inside a story (parent
     /// `NodeId::Story`). Unlike the frame arms there is NO
     /// `item_transform`: a table is in-story content (it hangs off
@@ -2444,6 +2491,7 @@ impl NodeSpec {
             NodeSpec::Oval { self_id, .. } => NodeId::Oval(self_id.clone()),
             NodeSpec::GraphicLine { self_id, .. } => NodeId::GraphicLine(self_id.clone()),
             NodeSpec::Polygon { self_id, .. } => NodeId::Polygon(self_id.clone()),
+            NodeSpec::Captured { node, .. } => node.clone(),
             NodeSpec::Table { self_id, .. } => NodeId::Table {
                 story_id: String::new(),
                 table_id: self_id.clone(),
@@ -2633,6 +2681,17 @@ pub struct GroupSpec {
     /// a fresh top-level create never has). `None` ⇒ identity.
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
+    /// C-63 inverse-only — the group's own `<BlendingSetting Opacity>`
+    /// to restore on re-creation. Group opacity became settable
+    /// (`FrameOpacity` on a `NodeId::Group`), and ungrouping drops the
+    /// wrapper that carried it; without this an undo of that ungroup
+    /// brought the group back fully opaque. A fresh create omits it.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// C-63 inverse-only — the group's own `<BlendingSetting
+    /// BlendMode>`; see [`GroupSpec::opacity`].
+    #[serde(default)]
+    pub blend_mode: Option<String>,
 }
 
 /// W1.20 — `(parent_group_id, index_within_parent_members)` carried by
@@ -2906,6 +2965,23 @@ pub enum Operation {
     Batch {
         ops: Vec<Operation>,
     },
+    /// Inverse-only (internal; no wire mutation produces it) — remove
+    /// the story `story_id` from the document. The inverse of an
+    /// `InsertNode` text frame whose insert CREATED that story (the
+    /// wire's `insertTextFrame` mints one), so undoing the insert leaves
+    /// no empty, frameless story behind. Captures the story whole; its
+    /// inverse is [`Operation::RestoreStory`].
+    RemoveStory {
+        story_id: String,
+    },
+    /// Inverse-only (internal) — put back a story [`Operation::RemoveStory`]
+    /// captured: `story_json` is the serialized parsed story, re-inserted
+    /// at index `position` of the document's story list (clamped), so
+    /// the redo of an undone insert lands on the exact prior state.
+    RestoreStory {
+        position: usize,
+        story_json: String,
+    },
     /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
     /// immediately after the spread hosting `after_page_id` (or at
     /// the end when `None`). Page size clones the reference page
@@ -3113,6 +3189,56 @@ pub enum Operation {
         /// omit it.
         #[serde(default)]
         restore_slots: Option<Vec<u32>>,
+    },
+    /// C-64 — duplicate page items: a translated clone of each of
+    /// `sources`, inserted DIRECTLY ABOVE its source in whichever list
+    /// names the source (the spread's z-order, a group's members, a
+    /// container's pasted-in children). A clone is the whole item: its
+    /// struct verbatim, its label and image-metadata rows, a container's
+    /// pasted-in children, a group's members (recursively), and — for a
+    /// text frame — a copy of its story under a fresh id. `(dx, dy)` is
+    /// the offset in spread space, applied through each clone's
+    /// `ItemTransform`.
+    ///
+    /// Refused, by name and before anything is written: a node that is
+    /// not a page item on a body spread; an object anchored in a story;
+    /// an item serving as or carrying an opacity mask; a threaded text
+    /// frame; a text frame whose story holds a table, an anchored
+    /// object, a footnote or a hyperlink (each carries an id a plain
+    /// copy would duplicate); a source that sits inside another source
+    /// of the same op.
+    ///
+    /// `ids` / `story_ids` are the ids the clones take, in clone order
+    /// (pre-order per source: a group before its members, a container
+    /// before its children). A caller that mints ahead of the apply
+    /// asks [`crate::duplicate_demand`] how many; both empty ⇒ the
+    /// applier mints. The applied op echoes the resolved lists, so redo
+    /// brings the clones back under the same ids. Inverse:
+    /// `RemoveDuplicates`.
+    DuplicateNodes {
+        sources: Vec<NodeId>,
+        dx: f32,
+        dy: f32,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        story_ids: Vec<String>,
+    },
+    /// C-64 — the inverse of `DuplicateNodes`: remove exactly the items
+    /// and stories it minted (`ids`, `story_ids`), with the reference
+    /// fix-up a removal needs in the z-table, in every group's members
+    /// and in every container's children. Not a batch of `RemoveNode`s:
+    /// that op cannot remove a group or a pasted-in child. The other
+    /// fields ride along so ITS inverse is the original duplicate.
+    /// Inverse-only; a wire caller has no use for it.
+    RemoveDuplicates {
+        sources: Vec<NodeId>,
+        dx: f32,
+        dy: f32,
+        #[serde(default)]
+        ids: Vec<String>,
+        #[serde(default)]
+        story_ids: Vec<String>,
     },
     /// W1.20 (groups v2) — move/scale/rotate a group AS A UNIT. Unlike
     /// the v1 `SetProperty(Group, FrameTransform)` arm (which stores
@@ -3433,6 +3559,13 @@ pub enum Operation {
         /// Closes the "cell text can only pour at the default formatting" gap.
         #[serde(default)]
         cell: Option<CellAddr>,
+        /// v65 — paragraph address (RFI C-53). `Some(i)` at paragraph scope
+        /// styles exactly paragraph `i` of the stream (body, or `cell`'s own)
+        /// and ignores `[start, end)`. It is the only way to name ONE empty
+        /// paragraph: in the contiguous character space consecutive empty
+        /// paragraphs share an offset.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// W0.5 — insert a field marker (e.g. the auto current-page-number
     /// marker, U+E018) into a story at a character offset. v1 supports
@@ -3443,6 +3576,15 @@ pub enum Operation {
         story_id: String,
         offset: u32,
         field: FieldKind,
+        /// v69 — the insertion point in the `ContentSelection` unit
+        /// (UTF-8 bytes plus one synthetic `\n` per paragraph boundary —
+        /// the unit `insertText` and the editor's text caret use). When
+        /// present it REPLACES `offset`: the engine converts it against the
+        /// story as it is at apply time (so a batch that typed first still
+        /// lands right) and echoes the resolved char `offset`. Lets a caller
+        /// holding a caret place a field without converting units itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// W0.5 — inverse-only companion to `InsertField`: remove the
     /// single field-marker character at `offset` (for a
@@ -3472,6 +3614,12 @@ pub enum Operation {
         #[serde(default)]
         image_uri: Option<String>,
         self_id: String,
+        /// v65 — paragraph address (RFI C-53). `Some(i)` anchors the frame
+        /// in paragraph `i` of the story; `offset` stays the story offset
+        /// and is clamped into that paragraph. An empty paragraph (a
+        /// picture alone on its line) has no offset of its own otherwise.
+        #[serde(default)]
+        paragraph: Option<u32>,
     },
     /// v52 — inverse-only companion to `InsertAnchoredFrame`: remove the
     /// anchored frame `self_id` from whichever paragraph of `story_id` holds
@@ -3499,6 +3647,9 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
+        /// v69 — a link to this page (its `Self` id) rather than `url`.
+        #[serde(default)]
+        page: Option<String>,
     },
     /// v53 — inverse-only companion to `InsertHyperlink`: clear the
     /// `hyperlink_source == source_id` tag from every run of `story_id` and
@@ -3513,6 +3664,9 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
+        /// v69 — the page the link went to, so the inverse recreates it.
+        #[serde(default)]
+        page: Option<String>,
     },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char
@@ -3613,7 +3767,7 @@ pub enum Operation {
         condition: String,
         visible: bool,
     },
-    /// thoughts ADR 026 — set or clear (`None`) a story's grow rule: the
+    /// ADR 026 — set or clear (`None`) a story's grow rule: the
     /// chain gets generated pages while it oversets. The pages are derived
     /// at layout, so the inverse is simply the prior rule.
     SetFlowGrowRule {
@@ -3641,9 +3795,67 @@ pub enum Operation {
         #[serde(default)]
         master: Option<String>,
     },
+    /// v69 — a new master spread `master_id`: one page of the given size,
+    /// or (with `duplicate_of`) a copy of that master with fresh ids for
+    /// its pages and items. `restore_json` is echo/redo-only (the created
+    /// master, so redo recreates its exact ids). Inverse: `DeleteMaster`.
+    CreateMaster {
+        master_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        width_pt: f32,
+        height_pt: f32,
+        #[serde(default)]
+        duplicate_of: Option<String>,
+        #[serde(default)]
+        restore_json: Option<String>,
+    },
+    /// v69 — remove a master no page applies (refused otherwise).
+    /// Inverse: `RestoreMaster` with the removed master.
+    DeleteMaster {
+        master_id: String,
+    },
+    /// v69 — `DeleteMaster`'s inverse: put back a removed master exactly.
+    RestoreMaster {
+        master_json: String,
+    },
+    /// v69 — set (or with `None` clear) a master's name. Inverse: the
+    /// previous name.
+    RenameMaster {
+        master_id: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// v69 — apply `op` to the items of master spread `master_id` (its
+    /// `Self` id): the master is the only spread `op` sees, so every item,
+    /// text and style operation edits a layout's logo or footer as it
+    /// would a page's. Page- and spread-structure ops are refused inside
+    /// it. Inverse: `OnMaster` around the inner inverse.
+    OnMaster {
+        master_id: String,
+        op: Box<Operation>,
+    },
+    /// v69 — move a page (its single-page spread) to follow
+    /// `after_page_id`, or to the front when `None`: the slide sorter's
+    /// reorder. The spreads restack in their new order when they were
+    /// stacked; spreads that share one position keep it. Inverse:
+    /// `SetSpreadOrder` with the previous order and transforms.
+    MovePage {
+        page_id: String,
+        #[serde(default)]
+        after_page_id: Option<String>,
+    },
+    /// v69 — put the document's spreads in exactly this order, each with
+    /// the transform given. `MovePage`'s inverse (and this op's own); every
+    /// spread must be named once.
+    SetSpreadOrder {
+        spreads: Vec<SpreadPlacement>,
+    },
     /// W0.5 — duplicate a single-page spread (the page plus every page
     /// item) immediately after the source, minting fresh self ids for
-    /// the clone. Inverse: `RemovePage` of the cloned page.
+    /// the clone. Each text frame's story is COPIED (D-23), and every
+    /// side map keyed by `Self` (margins, labels, …) follows the clone.
+    /// Inverse: `RemovePageClone`.
     /// `clone_spread_json` is **echo/redo-only** — the apply layer
     /// fills it with the materialised clone so redo re-creates the
     /// exact ids and geometry.
@@ -3651,6 +3863,20 @@ pub enum Operation {
         page: String,
         #[serde(default)]
         clone_spread_json: Option<String>,
+    },
+    /// Inverse-only (internal; paged.data D-23) — the undo of a
+    /// `DuplicatePage`: remove the cloned page's spread (`cloned_page`),
+    /// the story copies its frames own (`story_ids`) and the hyperlinks
+    /// minted for their sources (`hyperlink_ids`). Its inverse is the
+    /// `DuplicatePage` of `page` carrying the capture, so redo re-creates
+    /// the exact ids.
+    RemovePageClone {
+        page: String,
+        cloned_page: String,
+        #[serde(default)]
+        story_ids: Vec<String>,
+        #[serde(default)]
+        hyperlink_ids: Vec<String>,
     },
     /// W0.5 — insert a `<Section>` anchored at `at_page`. Inverse:
     /// `DeleteSection`. `self_id` is minted when `None` and echoed.
@@ -3681,6 +3907,21 @@ pub enum Operation {
         /// Same double-option semantics as `prefix`.
         #[serde(default, deserialize_with = "double_option::deserialize")]
         start_at: Option<Option<u32>>,
+    },
+    /// v69 — document-scoped plugin metadata: set / replace / delete
+    /// (`value: None`) one Label `KeyValuePair` on the DOCUMENT
+    /// (`DesignMap::labels`). Same gates as the page-item carrier
+    /// (`PropertyPath::PluginMetadata`): `x-paged:` key namespace, the
+    /// optional `caller` namespace gate, 64 KiB, the JSON envelope. The
+    /// inverse restores the prior value exactly (including "was absent"),
+    /// so a plugin can name the live version of its container parts in a
+    /// label that undo and redo keep true.
+    SetDocumentMetadata {
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
     },
     /// W0.5 — inverse-only companion to `InsertSection`: remove the
     /// section by id. Inverse re-inserts it via `InsertSection` with
@@ -4000,7 +4241,11 @@ pub enum PathfinderRegionVerb {
     /// Fills become strokes: the arrangement's EDGES (split at every
     /// crossing) become open line elements.
     Outline,
-    /// The BACKMOST object minus every object in front of it.
+    /// Illustrator's Minus Back: the FRONTMOST object minus every
+    /// object behind it, keeping the front object's paint (C-80). One
+    /// result, carried by the front input; the inputs behind it are
+    /// consumed. (Until C-80 this kept the BACKMOST object minus the
+    /// ones in front — Illustrator's Minus Front.)
     MinusBack,
 }
 
@@ -4012,6 +4257,16 @@ pub enum PathfinderRegionVerb {
 pub enum FaceSelectMode {
     Keep,
     Remove,
+}
+
+/// A spread's place in the document: its id and transform.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadPlacement {
+    pub self_id: String,
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
 }
 
 /// Hint to downstream caches about what the apply touched. Lists

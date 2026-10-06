@@ -40,6 +40,20 @@ use crate::display_list::{
     SweepGradient, Transform,
 };
 
+/// Serde for refcounted RGBA buffers: the same `number[]` JSON shape a
+/// `Vec<u8>` has, so the wire did not change when the storage did.
+pub(crate) mod rgba_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &bytes::Bytes, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(b.iter())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<bytes::Bytes, D::Error> {
+        Vec::<u8>::deserialize(d).map(bytes::Bytes::from)
+    }
+}
+
 /// A plugin-submitted vector layer in frame-content coordinates. Keyed
 /// (on the wire) by the host element id of the frame it renders into.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
@@ -86,8 +100,14 @@ pub enum SceneItem {
     /// zero-area image/dest) is skipped, never panicked.
     Image {
         /// Tightly packed RGBA8, row-major. Length must be `width*height*4`.
+        ///
+        /// Refcounted (v66): lowering hands the display list a clone of
+        /// the refcount, not of the pixels, so every rebuild of a page
+        /// carrying a plugin image used to copy the whole buffer and no
+        /// longer does. The JSON wire shape is unchanged (`number[]`).
+        #[serde(with = "rgba_bytes")]
         #[tsify(type = "number[]")]
-        rgba: Vec<u8>,
+        rgba: bytes::Bytes,
         /// Pixel width of the buffer.
         width: u32,
         /// Pixel height of the buffer.
@@ -324,11 +344,59 @@ pub struct SceneTextItem {
     /// Point size.
     pub size: f32,
     pub paint: ScenePaint,
-    /// Reserved face hints (v1 renders in the document default font).
+    /// v68 — the run's font family. Resolved through the renderer's font
+    /// resolver (the faces the host registered for the document); the
+    /// document default font draws the run only when the family does not
+    /// resolve, and that fallback is reported (a `FontSubstituted`
+    /// diagnostic carrying the frame id, and `SceneLayerApplied.
+    /// fontFallbacks`). Absent ⇒ the default font, as before v68.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
+    /// v68 — the face within `family`, spelled like IDML's `FontStyle`
+    /// (`"Bold"`, `"Italic"`, `"Bold Italic"`, `"Light"`). When absent it
+    /// is derived from `weight` / `italic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// v68 — numeric weight (CSS scale, `100..=900`). Sets the `wght`
+    /// axis of a variable face; when `style` is absent it also picks the
+    /// style name (`700` ⇒ `"Bold"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+    /// v68 — italic. Only consulted when `style` is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+}
+
+impl SceneTextItem {
+    /// The face name this run asks for within its family: `style` when
+    /// given, else derived from `weight` / `italic` the way a type menu
+    /// names faces (`700` + italic ⇒ `"Bold Italic"`, `400` ⇒
+    /// `"Regular"`). `None` when the run names none of the three.
+    pub fn effective_style(&self) -> Option<String> {
+        if let Some(s) = self.style.as_deref().filter(|s| !s.trim().is_empty()) {
+            return Some(s.to_string());
+        }
+        if self.weight.is_none() && self.italic.is_none() {
+            return None;
+        }
+        let w = self.weight.unwrap_or(400.0).round() as i32;
+        let base = match w {
+            i32::MIN..=149 => "Thin",
+            150..=249 => "ExtraLight",
+            250..=349 => "Light",
+            350..=449 => "Regular",
+            450..=549 => "Medium",
+            550..=649 => "SemiBold",
+            650..=749 => "Bold",
+            750..=849 => "ExtraBold",
+            _ => "Black",
+        };
+        Some(match (self.italic.unwrap_or(false), base) {
+            (false, b) => b.to_string(),
+            (true, "Regular") => "Italic".to_string(),
+            (true, b) => format!("{b} Italic"),
+        })
+    }
 }
 
 /// A bezier path segment in frame-content coordinates (points).
@@ -613,7 +681,7 @@ pub fn emit_scene_layer<T>(
                     width: *width,
                     height: *height,
                     encoded: bytes::Bytes::new(),
-                    rgba: bytes::Bytes::from(rgba.clone()),
+                    rgba: rgba.clone(),
                     icc: None,
                 });
                 // `for_rect_in` maps the image's unit square into `dest`
@@ -1124,7 +1192,7 @@ mod tests {
         ];
         let layer = SceneLayer {
             items: vec![SceneItem::Image {
-                rgba: red2x2.clone(),
+                rgba: red2x2.clone().into(),
                 width: 2,
                 height: 2,
                 x: 10.0,
@@ -1161,12 +1229,67 @@ mod tests {
         );
     }
 
+    /// v66 — lowering shares the plugin's pixels with the display list
+    /// instead of copying them: every rebuild of the page used to clone
+    /// the whole buffer. Reverting `rgba` to a `Vec<u8>` that is copied
+    /// into a fresh `Bytes` fails the pointer check.
+    #[test]
+    fn image_item_lowering_shares_the_buffer_not_a_copy() {
+        let rgba = bytes::Bytes::from(vec![7u8; 64 * 64 * 4]);
+        let layer = SceneLayer {
+            items: vec![SceneItem::Image {
+                rgba: rgba.clone(),
+                width: 64,
+                height: 64,
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            }],
+        };
+        for _ in 0..3 {
+            let mut list = DisplayList::new();
+            emit_scene_layer(
+                &mut list,
+                &layer,
+                Transform::IDENTITY,
+                (10.0, 10.0),
+                |_, _, _| {},
+            );
+            assert_eq!(list.images.len(), 1);
+            assert_eq!(
+                list.images[0].rgba.as_ptr(),
+                rgba.as_ptr(),
+                "the display list must hold the same allocation"
+            );
+        }
+    }
+
+    /// The wire shape did not change with the storage: `rgba` is still a
+    /// JSON number array both ways.
+    #[test]
+    fn image_item_rgba_stays_a_json_number_array() {
+        let item = SceneItem::Image {
+            rgba: bytes::Bytes::from_static(&[1, 2, 3, 4]),
+            width: 1,
+            height: 1,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        };
+        let json = serde_json::to_string(&item).expect("serialize");
+        assert!(json.contains("\"rgba\":[1,2,3,4]"), "{json}");
+        let back: SceneItem = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, item);
+    }
+
     #[test]
     fn image_item_with_a_malformed_buffer_is_skipped_not_panicked() {
         let mut list = DisplayList::new();
         let layer = SceneLayer {
             items: vec![SceneItem::Image {
-                rgba: vec![255, 0, 0], // 3 bytes, not 2*2*4 = 16
+                rgba: vec![255, 0, 0].into(), // 3 bytes, not 2*2*4 = 16
                 width: 2,
                 height: 2,
                 x: 0.0,
@@ -1298,6 +1421,8 @@ mod tests {
                 paint: black(),
                 family: None,
                 style: None,
+                weight: None,
+                italic: None,
             })],
         };
         let mut seen: Vec<(String, (f32, f32))> = Vec::new();
@@ -1322,6 +1447,8 @@ mod tests {
                 paint: black(),
                 family: None,
                 style: None,
+                weight: None,
+                italic: None,
             })],
         };
         let mut called = false;

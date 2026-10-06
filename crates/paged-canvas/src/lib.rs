@@ -18,7 +18,7 @@
 //! a thin binding layer on top of this crate. Unit-testable via
 //! `cargo test`.
 //!
-//! What this crate owns (per `docs/paged/canvas.md`):
+//! What this crate owns (per `docs/design/canvas.md`):
 //!
 //! - The worker-side `CanvasModel` that wraps a parsed IDML document
 //!   and the four-tier pipeline state (content, layout, resolution,
@@ -60,6 +60,7 @@ pub mod resolve;
 pub mod resource_tiles;
 pub mod selection;
 pub mod snap;
+pub mod snap_point;
 pub mod snapshot;
 
 pub use camera::{Camera, CameraLayout, CameraSabLayout, CAMERA_SAB_BYTES};
@@ -114,7 +115,7 @@ pub use resolve::{
 #[cfg(feature = "cpu")]
 pub use snapshot::{
     render_snapshot, render_snapshot_at_dpi, render_snapshot_png, render_snapshot_png_at_dpi,
-    Snapshot,
+    render_snapshot_png_hiding, Snapshot,
 };
 pub use snapshot::{SnapshotError, SnapshotPng};
 

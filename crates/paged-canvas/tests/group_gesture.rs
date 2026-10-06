@@ -282,6 +282,7 @@ fn rotate_group_composes_same_rotation_onto_group_and_members() {
     let anchor = GestureAnchor {
         page_id: PageId("p1".to_string()),
         point_in_page: (55.0, 25.0), // roughly the centroid of (0..50, 0..50) + (60..110, 0..50)
+        pivot_in_page: None,
     };
 
     let handle = model
@@ -346,6 +347,7 @@ fn scale_group_composes_same_scale_onto_group_and_members() {
     let anchor = GestureAnchor {
         page_id: PageId("p1".to_string()),
         point_in_page: (55.0, 25.0),
+        pivot_in_page: None,
     };
 
     let handle = model

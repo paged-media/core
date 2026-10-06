@@ -161,6 +161,14 @@ pub struct LayoutOptions<'a> {
     /// (auto leading). Mirrors IDML's explicit `Leading` attribute on
     /// the leading run of a paragraph.
     pub leading_override: Option<i32>,
+    /// The leading each run asks for, when the paragraph's runs do NOT
+    /// agree: `(the run's first byte in the paragraph text, its explicit
+    /// leading in 1/64 pt)`, in text order; `None` is auto leading
+    /// (1.2 x the size). A line then takes the LARGEST leading among its
+    /// characters ([`line_leading`]), as InDesign sets it (measured,
+    /// `mixed-leading`). Empty when every run agrees: `leading_override`
+    /// (or auto leading) then covers every line.
+    pub run_leadings: Vec<(u32, Option<i32>)>,
     /// Auto leading ignores glyphs whose cluster lies before this byte.
     /// A list marker is shaped as the paragraph's first bytes, and
     /// InDesign does not let it raise the line: a 20 pt marker on 10 pt
@@ -226,6 +234,7 @@ impl LayoutOptions<'_> {
             line_height,
             first_baseline,
             leading_override: None,
+            run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             alignment: Alignment::Left,
             justify_last_line: false,
@@ -871,7 +880,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             Some(_) if zone_allows_hyphenation => {
                 let word_text = &paragraph_text[w.start..w.end];
                 let is_last_word = i + 1 == words.len();
-                match opts.hyphenator {
+                let points = match opts.hyphenator {
                     Some(h) => {
                         h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
                     }
@@ -880,7 +889,13 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         &opts.hyphenation_limits,
                         is_last_word,
                     ),
-                }
+                };
+                // A hyphen the word already has is a break too (InDesign
+                // and Word: `two-` / `way`), hyphenation on or off.
+                crate::hyphenate::merge_opportunities(
+                    points,
+                    crate::hyphenate::hard_hyphen_opportunities(word_text),
+                )
                 .into_iter()
                 .filter(|&b| b > 0 && b < word_text.len())
                 .map(|b| w.start + b)
@@ -903,13 +918,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             });
             byte_ends.push(*offset);
             is_hyphen.push(false);
+            // After a hyphen the text already has, the line gains no
+            // hyphen glyph and no width.
+            let hard = crate::hyphenate::breaks_after_hard_hyphen(&paragraph_text, *offset);
             items.push(Item::Penalty {
-                width: hyphen_width,
+                width: if hard { 0 } else { hyphen_width },
                 penalty: opts.hyphen_penalty,
                 flagged: true,
             });
             byte_ends.push(*offset);
-            is_hyphen.push(true);
+            is_hyphen.push(!hard);
             seg_start = *offset;
         }
         let final_width = sum_advances_in(&flat, seg_start as u32..w.end as u32);
@@ -1220,15 +1238,18 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             opts.minimum_raggedness,
             single_line.is_some(),
         );
-        // Per-line line-height: explicit `leading_override` wins
-        // (mirrors IDML's `Leading` attribute), otherwise the largest
-        // run's point size on the line × 1.2 (Adobe's Auto leading
-        // default), with `options.line_height` as the empty-line
-        // fallback.
-        let line_height = options
-            .leading_override
-            .or_else(|| auto_line_height(&glyphs, options.auto_leading_from_byte))
-            .unwrap_or(options.line_height);
+        // A line sits ITS OWN leading below the line before it (the
+        // first one at `first_baseline`): the largest leading among its
+        // characters, see [`line_leading`]. InDesign, `mixed-leading`: a
+        // line with a 20 pt-leaded word after 12 pt-leaded lines steps
+        // 20, and the next line steps 12 again.
+        if !lines.is_empty() {
+            let step = line_leading(&glyphs, options).unwrap_or(options.line_height);
+            baseline += step;
+            for g in &mut glyphs {
+                g.y += step;
+            }
+        }
         lines.push(LaidOutLine {
             byte_range: start..end,
             baseline_y: baseline,
@@ -1236,7 +1257,6 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             ratio: bp.ratio,
             glyphs,
         });
-        baseline += line_height;
         byte_cursor = end;
     }
     // Phase 7 — opportunistic BiDi reorder. When the paragraph
@@ -1598,6 +1618,39 @@ pub fn auto_line_height(glyphs: &[PositionedGlyph], from_byte: u32) -> Option<i3
     counted
         .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
         .or_else(|| max_line_height_for_glyphs(glyphs))
+}
+
+/// The leading of a line holding `glyphs`: how far it sits below the line
+/// before it.
+///
+/// With one leading for the whole paragraph (`run_leadings` empty) that
+/// is `leading_override`, else auto leading from the line's largest
+/// glyph. With runs that disagree it is the largest leading among the
+/// line's characters, each its run's explicit leading or, for a run with
+/// none, 1.2 x its own size. A list marker (`auto_leading_from_byte`)
+/// does not count. `None` for a line with no glyph to ask.
+pub fn line_leading(glyphs: &[PositionedGlyph], options: &LayoutOptions) -> Option<i32> {
+    if options.run_leadings.is_empty() {
+        return options
+            .leading_override
+            .or_else(|| auto_line_height(glyphs, options.auto_leading_from_byte));
+    }
+    let auto = |pt: f32| (pt * 1.2 * ADVANCE_PRECISION).round() as i32;
+    glyphs
+        .iter()
+        .filter(|g| g.cluster >= options.auto_leading_from_byte)
+        .map(|g| {
+            let after = options
+                .run_leadings
+                .partition_point(|(start, _)| *start <= g.cluster);
+            after
+                .checked_sub(1)
+                .and_then(|i| options.run_leadings[i].1)
+                .unwrap_or_else(|| auto(g.point_size))
+        })
+        .reduce(i32::max)
+        .or(options.leading_override)
+        .or_else(|| auto_line_height(glyphs, 0))
 }
 
 /// In-cell alignment for a tab stop. IDML's `Alignment` attribute on
@@ -2202,6 +2255,7 @@ mod tests {
             first_baseline: 15,
             alignment,
             leading_override: None,
+            run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             justify_last_line: false,
             tabs: None,

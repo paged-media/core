@@ -14,7 +14,7 @@
 
 //! Every style path plugin-doc's Word lowering sets must be settable on a
 //! STYLE. plugin-doc lowers Word's direct formatting to synthesized styles
-//! (thoughts ADR 029), and the style setters accepted only size, tracking,
+//! (ADR 029), and the style setters accepted only size, tracking,
 //! fill, family, face, leading, spacing, first-line indent and
 //! justification: indents, keeps, tabs, lists, case, position, underline
 //! and strike-through were refused ("not supported"), and a refused child
@@ -215,6 +215,7 @@ fn a_paragraph_style_switches_kerning_and_ligatures_off() {
             based_on: None,
         },
         Mutation::ApplyStyle {
+            paragraph: None,
             story_id: story.clone(),
             start: 0,
             end: text.chars().count() as u32,

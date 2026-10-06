@@ -232,6 +232,7 @@ fn zoom_independence_via_logical_replay() {
             offset: 5,
             text: ",".into(),
             cell: None,
+            restore: None,
         },
     )
     .unwrap();
@@ -242,6 +243,8 @@ fn zoom_independence_via_logical_replay() {
             start: 11,
             end: 12,
             recovered: String::new(),
+            unseed: false,
+            keep_run: false,
             cell: None,
         },
     )

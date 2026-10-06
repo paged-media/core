@@ -2038,3 +2038,388 @@ fn text_on_path_rejects_what_it_cannot_render() {
     .is_err());
     assert!(text_paths_of(&doc, "c24R2").is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// offsetPath JOINS. `offset_closed_path` took `_join` and `_miter_limit`
+// and used neither: every corner the offset opens came back BEVELLED,
+// whatever the caller asked for. Measured against the closed forms
+// before the fix — a 100 × 60 rectangle offset outward by 10 pt gave
+// area 9400 for miter (the definition is 120 × 80 = 9600) and for round
+// (9514.16); a 3-4-5 triangle with miter gave bounds [90, 90, 226, 198]
+// instead of [90, 90, 250, 210], although its sharpest corner's miter
+// ratio is 3.16, under the limit of 4.
+//
+// The closed forms, for a polygon with area A, perimeter P and exterior
+// (turning) angles φ at the corners the offset OPENS — the convex ones
+// for an outset, the reflex ones for an inset:
+//
+//   bevel   A ± P·d + Σ (d²/2)·sin φ
+//   miter   A ± P·d + Σ d²·tan(φ/2)      (a corner past the limit bevels)
+//   round   A ± P·d + Σ (d²/2)·φ
+//
+// The corners the offset CLOSES (where the two offset edges cross) are
+// trimmed to their intersection in every join, which is the same
+// `d²·tan(φ/2)` with a negative φ.
+// ---------------------------------------------------------------------------
+
+/// `(area, [min x, min y, max x, max y])` of a closed anchor loop,
+/// exact for its Beziers (kurbo integrates the curves; nothing is
+/// flattened).
+fn area_and_bounds(anchors: &[AnchorKey]) -> (f64, [f64; 4]) {
+    use kurbo::Shape;
+    let p = |t: (f32, f32)| kurbo::Point::new(f64::from(t.0), f64::from(t.1));
+    let mut path = kurbo::BezPath::new();
+    path.move_to(p(anchors[0].0));
+    for i in 0..anchors.len() {
+        let (a, b) = (anchors[i], anchors[(i + 1) % anchors.len()]);
+        // AnchorKey is (anchor, left, right): out along `a.right`, in
+        // along `b.left`.
+        path.curve_to(p(a.2), p(b.1), p(b.0));
+    }
+    path.close_path();
+    let b = path.bounding_box();
+    (path.area().abs(), [b.x0, b.y0, b.x1, b.y1])
+}
+
+/// Insert a closed polygon, offset it, and measure what came back.
+fn offset_of(pts: &[(f32, f32)], delta: f32, join: &str, miter_limit: f32) -> (f64, [f64; 4]) {
+    let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+    let spread_id = doc.spreads[0].spread.self_id.clone().expect("spread id");
+    let position = doc.spreads[0].spread.polygons.len();
+    let xs = pts.iter().map(|p| p.0);
+    let ys = pts.iter().map(|p| p.1);
+    let bounds = [
+        ys.clone().fold(f32::MAX, f32::min),
+        xs.clone().fold(f32::MAX, f32::min),
+        ys.fold(f32::MIN, f32::max),
+        xs.fold(f32::MIN, f32::max),
+    ];
+    apply(
+        &mut doc,
+        &Operation::InsertNode {
+            parent: NodeId::Spread(spread_id),
+            position,
+            z_slot: None,
+            node: paged_mutate::NodeSpec::Polygon {
+                self_id: "offsetJoin".to_string(),
+                bounds,
+                anchors: pts
+                    .iter()
+                    .map(|&(x, y)| paged_mutate::operation::PathAnchorSpec {
+                        anchor: [x, y],
+                        left: [x, y],
+                        right: [x, y],
+                    })
+                    .collect(),
+                subpath_starts: vec![0],
+                subpath_open: vec![false],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+        },
+    )
+    .expect("insert polygon");
+    let before = anchors_of(&doc, "offsetJoin");
+    let applied = apply(
+        &mut doc,
+        &Operation::SetProperty {
+            node: NodeId::Polygon("offsetJoin".to_string()),
+            path: PropertyPath::OffsetPath,
+            value: Value::OffsetPath {
+                delta,
+                join: join.to_string(),
+                miter_limit,
+                prev_anchors: None,
+                prev_subpath_starts: None,
+                prev_subpath_open: None,
+            },
+        },
+    )
+    .unwrap_or_else(|e| panic!("offsetPath {delta} {join}: {e:?}"));
+    let out = area_and_bounds(&anchors_of(&doc, "offsetJoin"));
+    // The op stays a snapshot inverse whatever the join.
+    apply(&mut doc, &applied.inverse).expect("inverse");
+    assert_eq!(anchors_of(&doc, "offsetJoin"), before, "inverse restores");
+    out
+}
+
+/// Area within `tol`, each bound within 0.05 pt (the kernel's own
+/// tolerance).
+#[track_caller]
+fn assert_offset(got: (f64, [f64; 4]), area: f64, tol: f64, bounds: [f64; 4], what: &str) {
+    println!(
+        "{what}: area {:.3} (definition {area:.3}), bounds {:?}",
+        got.0, got.1
+    );
+    assert!(
+        (got.0 - area).abs() <= tol,
+        "{what}: area {} — the definition is {area} (±{tol})",
+        got.0
+    );
+    for (g, w) in got.1.iter().zip(bounds) {
+        assert!(
+            (g - w).abs() <= 0.05,
+            "{what}: bounds {:?} — the definition is {bounds:?}",
+            got.1
+        );
+    }
+}
+
+/// A 100 × 60 rectangle; its 10 pt outset is 120 × 80 with square
+/// corners.
+const RECT: [(f32, f32); 4] = [
+    (100.0, 100.0),
+    (200.0, 100.0),
+    (200.0, 160.0),
+    (100.0, 160.0),
+];
+/// A 3-4-5 triangle (legs 120 and 90, hypotenuse 150, inradius 30),
+/// right angle at (100, 100). Corner miter ratios 1.41, 2.24 and 3.16.
+const TRIANGLE: [(f32, f32); 3] = [(100.0, 100.0), (220.0, 100.0), (100.0, 190.0)];
+/// An L: a 100 × 100 square with a 60 × 60 notch — one REFLEX corner at
+/// (140, 140), which an outset closes and an inset opens.
+const ELL: [(f32, f32); 6] = [
+    (100.0, 100.0),
+    (200.0, 100.0),
+    (200.0, 140.0),
+    (140.0, 140.0),
+    (140.0, 200.0),
+    (100.0, 200.0),
+];
+const PI: f64 = std::f64::consts::PI;
+
+#[test]
+fn offset_path_outset_honours_the_join_on_a_rectangle() {
+    let bounds = [90.0, 90.0, 210.0, 170.0];
+    assert_offset(
+        offset_of(&RECT, 10.0, "miter", 4.0),
+        9600.0,
+        0.5,
+        bounds,
+        "rect miter",
+    );
+    assert_offset(
+        offset_of(&RECT, 10.0, "round", 4.0),
+        6000.0 + 3200.0 + 100.0 * PI, // 9514.16
+        0.25,
+        bounds,
+        "rect round",
+    );
+    assert_offset(
+        offset_of(&RECT, 10.0, "bevel", 4.0),
+        9400.0,
+        0.5,
+        bounds,
+        "rect bevel",
+    );
+}
+
+#[test]
+fn offset_path_outset_honours_the_join_and_the_miter_limit_on_a_triangle() {
+    // Miter, limit 4: every corner is under the limit (the sharpest is
+    // 3.16), so the outset is the triangle scaled about its incentre by
+    // (30 + 10) / 30.
+    assert_offset(
+        offset_of(&TRIANGLE, 10.0, "miter", 4.0),
+        9600.0,
+        0.5,
+        [90.0, 90.0, 250.0, 210.0],
+        "triangle miter, limit 4",
+    );
+    // Limit 3: the 3.16 corner is past it and BEVELS; the 2.24 corner
+    // and the right angle still miter. The bevel gives up
+    // d²·tan(φ/2) − (d²/2)·sin φ = 300 − 30 at that corner.
+    assert_offset(
+        offset_of(&TRIANGLE, 10.0, "miter", 3.0),
+        9600.0 - 270.0,
+        0.5,
+        [90.0, 90.0, 226.0, 210.0],
+        "triangle miter, limit 3",
+    );
+    // Limit 2: only the right angle (1.41) miters.
+    assert_offset(
+        offset_of(&TRIANGLE, 10.0, "miter", 2.0),
+        9600.0 - 270.0 - 160.0,
+        0.5,
+        [90.0, 90.0, 226.0, 198.0],
+        "triangle miter, limit 2",
+    );
+    assert_offset(
+        offset_of(&TRIANGLE, 10.0, "round", 4.0),
+        5400.0 + 3600.0 + 100.0 * PI, // 9314.16
+        0.25,
+        [90.0, 90.0, 230.0, 200.0],
+        "triangle round",
+    );
+    assert_offset(
+        offset_of(&TRIANGLE, 10.0, "bevel", 4.0),
+        5400.0 + 3600.0 + 50.0 + 30.0 + 40.0, // 9120
+        0.5,
+        [90.0, 90.0, 226.0, 198.0],
+        "triangle bevel",
+    );
+}
+
+/// An inset of a CONVEX shape opens no corner: every offset edge crosses
+/// its neighbour and is trimmed there, so all three joins agree.
+#[test]
+fn offset_path_inset_of_a_convex_shape_is_the_same_in_every_join() {
+    for join in ["miter", "round", "bevel"] {
+        assert_offset(
+            offset_of(&RECT, -10.0, join, 4.0),
+            80.0 * 40.0,
+            0.5,
+            [110.0, 110.0, 190.0, 150.0],
+            &format!("rect inset {join}"),
+        );
+        // The triangle scaled about its incentre by (30 − 10) / 30.
+        assert_offset(
+            offset_of(&TRIANGLE, -10.0, join, 4.0),
+            5400.0 * 4.0 / 9.0,
+            0.5,
+            [110.0, 110.0, 190.0, 170.0],
+            &format!("triangle inset {join}"),
+        );
+    }
+}
+
+/// The L has one reflex corner. An OUTSET closes it (trimmed, the same
+/// in every join) and opens the five convex ones; an INSET opens exactly
+/// that one corner and closes the other five — so the join shows up on
+/// the inside too.
+#[test]
+fn offset_path_honours_the_join_on_a_concave_shape_in_both_directions() {
+    let out = [90.0, 90.0, 210.0, 210.0];
+    // Outset: 120² less the notch, which stays 60 × 60.
+    assert_offset(
+        offset_of(&ELL, 10.0, "miter", 4.0),
+        10800.0,
+        0.5,
+        out,
+        "L outset miter",
+    );
+    assert_offset(
+        offset_of(&ELL, 10.0, "round", 4.0),
+        10800.0 - 5.0 * (100.0 - 25.0 * PI), // 10692.70
+        0.25,
+        out,
+        "L outset round",
+    );
+    assert_offset(
+        offset_of(&ELL, 10.0, "bevel", 4.0),
+        10800.0 - 5.0 * 50.0,
+        0.5,
+        out,
+        "L outset bevel",
+    );
+    // Inset: two 20-wide arms, 80 × 20 + 20 × 60 = 2800, meeting at the
+    // corner the inset opens. Miter keeps it square; bevel cuts the
+    // 10 × 10 half-square across it; round swings the arc of radius 10
+    // about the source vertex, between the two.
+    let inside = [110.0, 110.0, 190.0, 190.0];
+    assert_offset(
+        offset_of(&ELL, -10.0, "miter", 4.0),
+        2800.0,
+        0.5,
+        inside,
+        "L inset miter",
+    );
+    assert_offset(
+        offset_of(&ELL, -10.0, "bevel", 4.0),
+        2850.0,
+        0.5,
+        inside,
+        "L inset bevel",
+    );
+    assert_offset(
+        offset_of(&ELL, -10.0, "round", 4.0),
+        2800.0 + (100.0 - 25.0 * PI), // 2821.46
+        0.25,
+        inside,
+        "L inset round",
+    );
+}
+
+/// A curve has no corners to join, so the join must not matter — and
+/// the stroker's own curve offset (the miter / round lane) has to land
+/// where the exact parallel curve (the bevel lane) does. A circle of
+/// radius 50 as four cubics; its offsets are circles of radius 60 and
+/// 40 to within the kernel's tolerance.
+#[test]
+fn offset_path_on_a_curve_is_the_parallel_curve_in_every_join() {
+    const K: f32 = 0.552_284_8 * 50.0;
+    let (cx, cy, r) = (200.0_f32, 200.0_f32, 50.0_f32);
+    // (anchor, left handle, right handle), clockwise from the top.
+    let anchors: [AnchorKey; 4] = [
+        ((cx, cy - r), (cx - K, cy - r), (cx + K, cy - r)),
+        ((cx + r, cy), (cx + r, cy - K), (cx + r, cy + K)),
+        ((cx, cy + r), (cx + K, cy + r), (cx - K, cy + r)),
+        ((cx - r, cy), (cx - r, cy + K), (cx - r, cy - K)),
+    ];
+    for join in ["miter", "round", "bevel"] {
+        for (delta, radius) in [(10.0_f32, 60.0_f64), (-10.0, 40.0)] {
+            let mut doc = idml_import::import_idml_doc(&fixture_bytes()).expect("open");
+            let spread_id = doc.spreads[0].spread.self_id.clone().expect("spread id");
+            let position = doc.spreads[0].spread.polygons.len();
+            apply(
+                &mut doc,
+                &Operation::InsertNode {
+                    parent: NodeId::Spread(spread_id),
+                    position,
+                    z_slot: None,
+                    node: paged_mutate::NodeSpec::Polygon {
+                        self_id: "offsetCircle".to_string(),
+                        bounds: [cy - r, cx - r, cy + r, cx + r],
+                        anchors: anchors
+                            .iter()
+                            .map(|(a, l, rt)| paged_mutate::operation::PathAnchorSpec {
+                                anchor: [a.0, a.1],
+                                left: [l.0, l.1],
+                                right: [rt.0, rt.1],
+                            })
+                            .collect(),
+                        subpath_starts: vec![0],
+                        subpath_open: vec![false],
+                        fill_color: None,
+                        stroke_color: None,
+                        stroke_weight: None,
+                        item_transform: None,
+                    },
+                },
+            )
+            .expect("insert circle");
+            apply(
+                &mut doc,
+                &Operation::SetProperty {
+                    node: NodeId::Polygon("offsetCircle".to_string()),
+                    path: PropertyPath::OffsetPath,
+                    value: Value::OffsetPath {
+                        delta,
+                        join: join.to_string(),
+                        miter_limit: 4.0,
+                        prev_anchors: None,
+                        prev_subpath_starts: None,
+                        prev_subpath_open: None,
+                    },
+                },
+            )
+            .unwrap_or_else(|e| panic!("circle {delta} {join}: {e:?}"));
+            let (area, b) = area_and_bounds(&anchors_of(&doc, "offsetCircle"));
+            println!("circle {delta} {join}: area {area:.3}, bounds {b:?}");
+            let want = PI * radius * radius;
+            assert!(
+                (area - want).abs() / want < 0.002,
+                "circle {delta} {join}: area {area} — a circle of radius {radius} is {want}"
+            );
+            let (c, r) = (200.0_f64, radius);
+            for (g, w) in b.iter().zip([c - r, c - r, c + r, c + r]) {
+                assert!(
+                    (g - w).abs() <= 0.1,
+                    "circle {delta} {join}: bounds {b:?} — radius {radius} about (200, 200)"
+                );
+            }
+        }
+    }
+}

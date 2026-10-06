@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! thoughts ADR 027 plan step 2 — the page-growth loop, seen from the
+//! ADR 027 plan step 2 — the page-growth loop, seen from the
 //! model: an overset story grows by the frames its dropped lines need
 //! instead of doubling, and the count carried over from the last layout is
 //! held to the rule's current `max_pages`. Every result is checked against

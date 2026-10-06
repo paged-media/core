@@ -936,6 +936,7 @@ pub(super) fn build_document_inner(
                 diagnostics: Vec::new(),
                 cell_rects: Vec::new(),
                 resource_tiles_needed: Vec::new(),
+                scene_layer_frames: Vec::new(),
             });
         }
         spread_page_ranges.push(start..pages.len());
@@ -973,6 +974,7 @@ pub(super) fn build_document_inner(
             diagnostics: Vec::new(),
             cell_rects: Vec::new(),
             resource_tiles_needed: Vec::new(),
+            scene_layer_frames: Vec::new(),
         });
         page_geometries.push(PageGeom {
             bounds_in_spread: paged_model::Bounds {
@@ -1035,6 +1037,43 @@ pub(super) fn build_document_inner(
     // the emit passes only on the second (post-layout) build. `None` on
     // the first pass — running headers then keep their baked value.
     let running_header_index: Option<&links::RunningHeaderIndex> = post.map(|p| &p.running_headers);
+
+    // Per-page (URI → ImageId) cache so multiple rectangles on the
+    // same page sharing an image share a single ImageId in the
+    // page's display list.
+    let mut page_image_caches: Vec<HashMap<String, paged_compose::ImageId>> =
+        (0..pages.len()).map(|_| HashMap::new()).collect();
+    // Renderer-scoped (URI → DecodedImage) cache so an image
+    // referenced from multiple pages is decoded once. The cached
+    // DecodedImage is cloned into each page's image pool — the
+    // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
+    // Build a layer-visibility map once: any item whose `ItemLayer`
+    // points at a hidden or non-printable layer is suppressed. Items
+    // without an explicit ItemLayer always render — matches InDesign's
+    // single-layer-by-default behaviour. The same predicate is consumed
+    // by the canvas hit-tester so selection cannot disagree with paint.
+    let layer_renders = paged_scene::build_layer_render_map(&document.designmap);
+    let layer_visible = |layer_ref: Option<&str>| -> bool {
+        paged_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
+    };
+
+    // Perf-S — when the caller supplies a persistent cache, decode
+    // results survive across `build_document` calls; otherwise fall
+    // back to a per-call scratch. The match holds the RefMut alive
+    // for the duration of the build via the `_owned_borrow` binding
+    // — dropping it would invalidate the `&mut HashMap` reference.
+    let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
+    let mut _owned_borrow: Option<
+        std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>,
+    > = None;
+    let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
+        match options.image_decode_cache {
+            Some(rc) => {
+                _owned_borrow = Some(rc.borrow_mut());
+                _owned_borrow.as_mut().unwrap()
+            }
+            None => &mut local_image_cache,
+        };
 
     // Master-spread pass — runs first so master items end up at the
     // bottom of each page's display list (page-level frames overlay on
@@ -1183,142 +1222,182 @@ pub(super) fn build_document_inner(
                 && b.top < target_master.bottom
         };
 
-        for frame in &master.spread.text_frames {
-            let spread_b = transform_bounds(frame.bounds, frame.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
+        // Master items paint in the master spread's own stacking order
+        // (`frames_in_order`, groups expanded to their members), exactly
+        // as body items do. Walking the backing vecs kind by kind put
+        // every polygon above every rectangle, so a full-page background
+        // polygon covered a master's placed picture. Items the walk does
+        // not reach (pasted-in children, mask sources) keep the legacy
+        // kind-by-kind order after it.
+        let master_order = master_paint_order(&master.spread);
+        let mut emit_master = |fr: paged_model::FrameRef| {
+            match fr {
+                paged_model::FrameRef::TextFrame(idx) => {
+                    let Some(frame) = master.spread.text_frames.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(frame.bounds, frame.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if frame
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    // Master items live in master-spread coords. Compose an
+                    // outer translate(dx, dy) into the frame's existing
+                    // ItemTransform so the inner-coord rect ends up in the
+                    // *live* spread coords once frame_outer_transform applies.
+                    // Mutating bounds (inner coords) would be wrong now that
+                    // PathGeometry-derived shapes carry geometry in inner
+                    // space.
+                    let mut copy = frame.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_text_frame_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                        None, // master items don't carry a drop shadow today.
+                        None, // master frames don't auto-size in our model.
+                    );
+                    // Stash a relocated copy so the master-story pass below
+                    // can flow this frame's hosted story (page-number footers,
+                    // running headers, etc.) onto this body page. Skipping it
+                    // when ParentStory is missing is fine — the rectangle was
+                    // still drawn above.
+                    if copy.parent_story.is_some() {
+                        let copy = text_area_frame(&copy, document).into_owned();
+                        master_text_emissions.push((i, copy));
+                    }
+                }
+                paged_model::FrameRef::Rectangle(idx) => {
+                    let Some(rect) = master.spread.rectangles.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(rect.bounds, rect.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if rect
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = rect.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_rectangle_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                        None,
+                    );
+                    // A master's placed picture (a slide-master background
+                    // photo, a logo) paints on every page that applies it.
+                    emit_rectangle_image(
+                        &mut pages[i],
+                        &copy,
+                        options,
+                        &mut page_image_caches[i],
+                        decoded_image_cache,
+                    );
+                }
+                paged_model::FrameRef::Polygon(idx) => {
+                    let Some(poly) = master.spread.polygons.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(poly.bounds, poly.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if poly
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = poly.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_polygon_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                    );
+                }
+                paged_model::FrameRef::Oval(idx) => {
+                    let Some(oval) = master.spread.ovals.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(oval.bounds, oval.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if oval
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = oval.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_oval_into(
+                        &mut pages[i],
+                        &copy,
+                        document,
+                        palette,
+                        options.fallback_frame_fill,
+                        color_ctx,
+                    );
+                }
+                paged_model::FrameRef::GraphicLine(idx) => {
+                    let Some(line) = master.spread.graphic_lines.get(idx) else {
+                        return;
+                    };
+                    let spread_b = transform_bounds(line.bounds, line.item_transform);
+                    if !item_belongs(spread_b) {
+                        return;
+                    }
+                    if line
+                        .self_id
+                        .as_deref()
+                        .is_some_and(|id| override_set.contains(id))
+                    {
+                        return;
+                    }
+                    total_stats.frames += 1;
+                    let mut copy = line.clone();
+                    copy.item_transform =
+                        Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    emit_line_into(&mut pages[i], &copy, document, palette, color_ctx);
+                }
+                paged_model::FrameRef::Group(_) => {}
             }
-            if frame
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            // Master items live in master-spread coords. Compose an
-            // outer translate(dx, dy) into the frame's existing
-            // ItemTransform so the inner-coord rect ends up in the
-            // *live* spread coords once frame_outer_transform applies.
-            // Mutating bounds (inner coords) would be wrong now that
-            // PathGeometry-derived shapes carry geometry in inner
-            // space.
-            let mut copy = frame.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_text_frame_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-                None, // master items don't carry a drop shadow today.
-                None, // master frames don't auto-size in our model.
-            );
-            // Stash a relocated copy so the master-story pass below
-            // can flow this frame's hosted story (page-number footers,
-            // running headers, etc.) onto this body page. Skipping it
-            // when ParentStory is missing is fine — the rectangle was
-            // still drawn above.
-            if copy.parent_story.is_some() {
-                let copy = text_area_frame(&copy, document).into_owned();
-                master_text_emissions.push((i, copy));
-            }
-        }
-        for rect in &master.spread.rectangles {
-            let spread_b = transform_bounds(rect.bounds, rect.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if rect
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = rect.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_rectangle_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-                None,
-            );
-        }
-        // Non-text background shapes (Polygon / Oval / GraphicLine)
-        // routed onto live body pages. The legacy code stopped at
-        // Rectangle, so master-spread page backgrounds drawn as
-        // polygons / ovals (full-bleed brand colours, decorative
-        // bezel strokes) silently disappeared on every body page.
-        for poly in &master.spread.polygons {
-            let spread_b = transform_bounds(poly.bounds, poly.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if poly
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = poly.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_polygon_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-            );
-        }
-        for oval in &master.spread.ovals {
-            let spread_b = transform_bounds(oval.bounds, oval.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if oval
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = oval.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_oval_into(
-                &mut pages[i],
-                &copy,
-                document,
-                palette,
-                options.fallback_frame_fill,
-                color_ctx,
-            );
-        }
-        for line in &master.spread.graphic_lines {
-            let spread_b = transform_bounds(line.bounds, line.item_transform);
-            if !item_belongs(spread_b) {
-                continue;
-            }
-            if line
-                .self_id
-                .as_deref()
-                .is_some_and(|id| override_set.contains(id))
-            {
-                continue;
-            }
-            total_stats.frames += 1;
-            let mut copy = line.clone();
-            copy.item_transform = Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-            emit_line_into(&mut pages[i], &copy, document, palette, color_ctx);
+        };
+        for &fr in &master_order {
+            emit_master(fr);
         }
     }
 
@@ -1329,42 +1408,6 @@ pub(super) fn build_document_inner(
     // can route line emission across pages.
     let mut frame_to_page: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    // Per-page (URI → ImageId) cache so multiple rectangles on the
-    // same page sharing an image share a single ImageId in the
-    // page's display list.
-    let mut page_image_caches: Vec<HashMap<String, paged_compose::ImageId>> =
-        (0..pages.len()).map(|_| HashMap::new()).collect();
-    // Renderer-scoped (URI → DecodedImage) cache so an image
-    // referenced from multiple pages is decoded once. The cached
-    // DecodedImage is cloned into each page's image pool — the
-    // memcpy is cheap; the saved decode (PNG/JPEG → RGBA) is not.
-    // Build a layer-visibility map once: any item whose `ItemLayer`
-    // points at a hidden or non-printable layer is suppressed. Items
-    // without an explicit ItemLayer always render — matches InDesign's
-    // single-layer-by-default behaviour. The same predicate is consumed
-    // by the canvas hit-tester so selection cannot disagree with paint.
-    let layer_renders = paged_scene::build_layer_render_map(&document.designmap);
-    let layer_visible = |layer_ref: Option<&str>| -> bool {
-        paged_scene::lookup_layer_render_visible(&layer_renders, layer_ref)
-    };
-
-    // Perf-S — when the caller supplies a persistent cache, decode
-    // results survive across `build_document` calls; otherwise fall
-    // back to a per-call scratch. The match holds the RefMut alive
-    // for the duration of the build via the `_owned_borrow` binding
-    // — dropping it would invalidate the `&mut HashMap` reference.
-    let mut local_image_cache: HashMap<String, paged_compose::DecodedImage> = HashMap::new();
-    let mut _owned_borrow: Option<
-        std::cell::RefMut<'_, HashMap<String, paged_compose::DecodedImage>>,
-    > = None;
-    let decoded_image_cache: &mut HashMap<String, paged_compose::DecodedImage> =
-        match options.image_decode_cache {
-            Some(rc) => {
-                _owned_borrow = Some(rc.borrow_mut());
-                _owned_borrow.as_mut().unwrap()
-            }
-            None => &mut local_image_cache,
-        };
     // Aggregated queue of image-bearing anchored Rectangles captured
     // during the master + body story passes. Drained after both
     // passes complete so `emit_rectangle_image` can route the
@@ -1588,6 +1631,7 @@ pub(super) fn build_document_inner(
                             frame.item_transform,
                             options.scene_layers,
                             options.font,
+                            options.assets,
                         );
                         // W2 — the z-slot this frame's story text belongs
                         // at. Recorded AFTER the box, the C-6 tiles and the
@@ -1693,6 +1737,7 @@ pub(super) fn build_document_inner(
                             rect.item_transform,
                             options.scene_layers,
                             options.font,
+                            options.assets,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1784,6 +1829,7 @@ pub(super) fn build_document_inner(
                             oval.item_transform,
                             options.scene_layers,
                             options.font,
+                            options.assets,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1861,6 +1907,7 @@ pub(super) fn build_document_inner(
                             line.item_transform,
                             options.scene_layers,
                             options.font,
+                            options.assets,
                         );
                     }
                 }
@@ -1939,6 +1986,7 @@ pub(super) fn build_document_inner(
                             poly.item_transform,
                             options.scene_layers,
                             options.font,
+                            options.assets,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -3671,6 +3719,25 @@ pub(super) fn build_document_inner(
         .flat_map(|p| p.resource_tiles_needed.iter().cloned())
         .collect();
 
+    let paragraph_starts = document
+        .stories
+        .iter()
+        .map(|s| {
+            let mut at = 0u32;
+            let starts = s
+                .story
+                .paragraphs
+                .iter()
+                .map(|p| {
+                    let start = at;
+                    at += p.runs.iter().map(|r| r.text.len() as u32).sum::<u32>() + 1;
+                    start
+                })
+                .collect();
+            (s.self_id.clone(), starts)
+        })
+        .collect();
+
     Ok(BuiltDocument {
         pages,
         stats: total_stats,
@@ -3678,6 +3745,7 @@ pub(super) fn build_document_inner(
         diagnostics,
         resource_tiles_needed,
         overset,
+        paragraph_starts,
         grow_passes: 1,
         fresh_pages: fresh,
     })
@@ -5218,10 +5286,13 @@ fn emit_paragraph_lines(
     // similar patterns. Advance the baseline cursor by one line of
     // auto-leading at the paragraph style's resolved point size so
     // the visible vertical rhythm matches InDesign. No glyphs emit.
+    // A paragraph of nothing but spaces is a blank line too: the composer
+    // finds no word in it and lays out no line, so without this it took
+    // no room at all and the next paragraph moved up a line.
     let runs_have_text = paragraph
         .runs
         .iter()
-        .any(|r| !r.text.is_empty() && r.text != "\n");
+        .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
     if !runs_have_text {
         let resolved_paragraph = em
             .segment
@@ -5304,6 +5375,44 @@ fn emit_paragraph_lines(
         let prev_lh = em.prev_line_height_64.unwrap_or(line_height_64);
         em.y_cursor = em.y_cursor - prev_lh + line_height_64 + line_height_64;
         em.prev_line_height_64 = Some(line_height_64);
+        // The blank line is a line: the caret can stand on it, a click
+        // on it lands in it, and a selection across it shows it. Its one
+        // cluster is a zero-width stop at the line's left edge.
+        if em.segment.opens_paragraph {
+            if let Some(&target_page) = em.chain_pages.get(em.frame_idx) {
+                let frame = em.chain[em.frame_idx];
+                let (ox, oy) = pages[target_page].spread_origin;
+                let frame_insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+                let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+                let x_pt = sx - ox
+                    + frame_insets[1]
+                    + em.column_x_shift_pt
+                    + resolved_paragraph.left_indent.unwrap_or(0.0);
+                let line_h_pt = line_height_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
+                let baseline_pt_local =
+                    (em.y_cursor - line_height_64) as f32 / paged_text::shape::ADVANCE_PRECISION;
+                let byte = em.segment.byte_base;
+                let host_page_id = pages[target_page].id.clone();
+                pages[target_page].story_layout.push(LineLayout {
+                    story_id: em.current_story_id.clone(),
+                    page_id: host_page_id,
+                    cell: None,
+                    paragraph_idx: em.paragraph_idx,
+                    line_idx: em.segment.line_base,
+                    frame_id: frame.self_id.clone(),
+                    baseline_y_pt: sy - oy + baseline_pt_local,
+                    ascent_pt: 0.8 * line_h_pt,
+                    descent_pt: 0.2 * line_h_pt,
+                    byte_range: byte..byte,
+                    clusters: vec![ClusterPos {
+                        byte,
+                        x_pt,
+                        advance_pt: 0.0,
+                    }],
+                    marker: Vec::new(),
+                });
+            }
+        }
         let space_after_64 =
             resolved_paragraph.space_after.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
         em.y_cursor += space_after_64.round() as i32;
@@ -5871,6 +5980,31 @@ fn emit_paragraph_lines(
                 Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
         }
     }
+    // Runs that ask for DIFFERENT leadings: each line takes the largest
+    // among its characters (`paged_text::layout::line_leading`). When
+    // they all agree, the override above (or auto leading) says it all.
+    {
+        let explicit = |r: &paged_scene::ResolvedRunAttrs| {
+            r.leading
+                .filter(|l| *l > 0.0)
+                .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+        };
+        let leadings: Vec<Option<i32>> = resolved_runs.iter().map(explicit).collect();
+        if leadings.windows(2).any(|w| w[0] != w[1]) {
+            let mut at = 0u32;
+            let mut out = Vec::with_capacity(styled_runs.len());
+            for (k, run) in styled_runs.iter().enumerate() {
+                // A marker shaped as its own run leads the text; its
+                // glyphs never count (`auto_leading_from_byte`).
+                let leading = k
+                    .checked_sub(head_run)
+                    .and_then(|i| leadings.get(i).copied().flatten());
+                out.push((at, leading));
+                at += run.text.len() as u32;
+            }
+            lopts.run_leadings = out;
+        }
+    }
 
     // First-baseline metrics for this paragraph's head run. A
     // family-keyed override (`--font-metrics`) wins, so a documented
@@ -6330,16 +6464,45 @@ fn emit_paragraph_lines(
         }
         v
     };
+    // The list marker leads the shaped text and is not in the model's:
+    // a line's bytes count from the paragraph's own first character.
+    let marker_bytes = list_prefix_text.as_deref().map_or(0, |p| p.len() as u32);
     let model_byte = |b: u32| -> u32 {
+        let b = b.saturating_sub(marker_bytes);
         if placeholder_bytes.is_empty() {
             return b;
         }
-        let before = objects_before + placeholder_bytes.iter().filter(|&&p| p < b).count();
+        let before = objects_before
+            + placeholder_bytes
+                .iter()
+                .filter(|&&p| p.saturating_sub(marker_bytes) < b)
+                .count();
         let len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8() as u32;
         b.saturating_sub(len * before as u32)
     };
 
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
+
+    // The paragraph's first line was placed one leading below the line
+    // before it, by the leading its head run asks for (above). The line
+    // takes the LARGEST leading among its characters: when that is another
+    // one, the whole paragraph moves by the difference. (A paragraph that
+    // opens its frame is placed by the frame's first-baseline rule.)
+    if !frame_first_paragraph {
+        if let Some(first) = laid_out.lines.first() {
+            let assumed = lopts.leading_override.unwrap_or(lopts.line_height);
+            let own = paged_text::layout::line_leading(&first.glyphs, &lopts).unwrap_or(assumed);
+            let delta = own - assumed;
+            if delta != 0 {
+                for line in &mut laid_out.lines {
+                    line.baseline_y += delta;
+                    for g in &mut line.glyphs {
+                        g.y += delta;
+                    }
+                }
+            }
+        }
+    }
 
     // Optical margin alignment: when the story carries
     // `<StoryPreference OpticalMarginAlignment="true" />`, nudge the
@@ -6767,10 +6930,7 @@ fn emit_paragraph_lines(
     // In-line objects: which composed line holds each one, and how far
     // that line moves down for it (`anchored::line_object_shift`).
     let line_leading_64 = |glyphs: &[paged_text::layout::PositionedGlyph]| {
-        lopts.leading_override.unwrap_or_else(|| {
-            paged_text::layout::auto_line_height(glyphs, lopts.auto_leading_from_byte)
-                .unwrap_or(lopts.line_height)
-        })
+        paged_text::layout::line_leading(glyphs, &lopts).unwrap_or(lopts.line_height)
     };
     let mut line_objects: Vec<Vec<anchored::LineObject>> = Vec::new();
     if !segment_objects.is_empty() {
@@ -6839,10 +6999,8 @@ fn emit_paragraph_lines(
         // style stepped 10.2 pt to the next (the annual's code block,
         // 30 lines in a frame that holds 28 at 13 pt — measured
         // 2026-09-06 against InDesign, which oversets it).
-        let line_h = lopts.leading_override.unwrap_or_else(|| {
-            paged_text::layout::auto_line_height(&line.glyphs, lopts.auto_leading_from_byte)
-                .unwrap_or(lopts.line_height)
-        });
+        let line_h =
+            paged_text::layout::line_leading(&line.glyphs, &lopts).unwrap_or(lopts.line_height);
         // A line fits while its baseline is inside the TEXT AREA, which
         // ends the bottom inset above the frame's edge. Measured on
         // InDesign 20.0.1 (`stroke-inset`): a 66 pt frame with a 6 pt
@@ -7160,6 +7318,13 @@ fn emit_paragraph_lines(
             // A split paragraph's segment reports paragraph-wide bytes and
             // line indices (zero bases for an unsplit paragraph).
             let seg = em.segment;
+            // The marker's glyphs are not characters the caret can reach.
+            let marker: Vec<ClusterPos> = clusters
+                .iter()
+                .filter(|c| c.byte < marker_bytes)
+                .copied()
+                .collect();
+            clusters.retain(|c| c.byte >= marker_bytes);
             for c in &mut clusters {
                 c.byte = seg.byte_base + model_byte(c.byte);
             }
@@ -7180,6 +7345,7 @@ fn emit_paragraph_lines(
                 byte_range: seg.byte_base + model_byte(line.byte_range.start as u32)
                     ..seg.byte_base + model_byte(line.byte_range.end as u32),
                 clusters,
+                marker,
             });
         }
 
@@ -7779,4 +7945,42 @@ fn story_prints_page_context(story: &paged_model::Story) -> bool {
         })
     }
     paragraphs_print(&story.paragraphs)
+}
+
+/// The paint order of a master spread's items: `frames_in_order` with
+/// every group expanded to its members (depth first), followed by any
+/// item of the backing vecs the walk did not reach, in the legacy
+/// kind-by-kind order. A spread without `frames_in_order` yields the
+/// legacy order alone.
+fn master_paint_order(spread: &paged_model::Spread) -> Vec<paged_model::FrameRef> {
+    use paged_model::FrameRef;
+    fn walk(spread: &paged_model::Spread, fr: FrameRef, out: &mut Vec<FrameRef>, depth: usize) {
+        match fr {
+            FrameRef::Group(gi) => {
+                if depth > 64 {
+                    return;
+                }
+                if let Some(g) = spread.groups.get(gi) {
+                    for &m in &g.members {
+                        walk(spread, m, out, depth + 1);
+                    }
+                }
+            }
+            leaf => out.push(leaf),
+        }
+    }
+    let mut order = Vec::new();
+    for &fr in &spread.frames_in_order {
+        walk(spread, fr, &mut order, 0);
+    }
+    let seen = |fr: &FrameRef| order.contains(fr);
+    let legacy = (0..spread.text_frames.len())
+        .map(FrameRef::TextFrame)
+        .chain((0..spread.rectangles.len()).map(FrameRef::Rectangle))
+        .chain((0..spread.polygons.len()).map(FrameRef::Polygon))
+        .chain((0..spread.ovals.len()).map(FrameRef::Oval))
+        .chain((0..spread.graphic_lines.len()).map(FrameRef::GraphicLine));
+    let rest: Vec<FrameRef> = legacy.filter(|fr| !seen(fr)).collect();
+    order.extend(rest);
+    order
 }

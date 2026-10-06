@@ -258,10 +258,13 @@ fn divide_of_disjoint_shapes_leaves_each_element_alone() {
     let b = NodeId::Rectangle(ids[1].clone());
     set_rect_path(&mut doc, &a, 0.0, 0.0, 10.0, 10.0);
     set_rect_path(&mut doc, &b, 40.0, 40.0, 50.0, 50.0);
-    // Disjoint inputs are a no-op by construction: each element is the
-    // sole face of its own signature, so it is rewritten with the path
-    // it already had. Assert exactly that — including that the inverse
-    // is still well-formed.
+    // Disjoint inputs divide into themselves: each element is the sole
+    // face of its own signature, so it is rewritten with the region it
+    // already covered. Since C-81 that region comes back in the
+    // Pathfinder direction (counter-clockwise on the page, as
+    // Illustrator answers) — these squares were drawn clockwise, so the
+    // same four corners now run the other way round. Same region, same
+    // ids, same paint; the inverse is still exact.
     let before = snapshot(&doc);
     let applied = apply(
         &mut doc,
@@ -272,7 +275,12 @@ fn divide_of_disjoint_shapes_leaves_each_element_alone() {
     )
     .expect("forward apply");
     let after = snapshot(&doc);
-    assert_eq!(after, before, "disjoint shapes divide into themselves");
+    for (b, a) in before.rectangles.iter().zip(&after.rectangles) {
+        assert_eq!((&a.id, &a.fill, &a.starts), (&b.id, &b.fill, &b.starts));
+        let mut reversed = b.anchors.clone();
+        reversed[1..].reverse();
+        assert_eq!(a.anchors, reversed, "the same corners, counter-clockwise");
+    }
     assert_eq!(after.rectangles.len(), 2);
     assert!(after.polygons.is_empty(), "no surplus faces");
     assert_eq!(
@@ -408,12 +416,13 @@ fn crop_keeps_only_what_falls_inside_the_topmost_object() {
 }
 
 #[test]
-fn minus_back_subtracts_everything_in_front_from_the_backmost() {
+fn minus_back_subtracts_everything_behind_from_the_frontmost() {
     let (mut doc, elements) = two_squares();
-    let back_id = match &elements[1] {
+    let front_id = match &elements[0] {
         NodeId::Rectangle(id) => id.clone(),
         other => panic!("expected a rectangle, got {other:?}"),
     };
+    let front_fill = doc.spreads[0].spread.rectangles[0].fill_color.clone();
     let after = assert_one_undo_restores(
         &mut doc,
         Operation::PathfinderRegion {
@@ -421,14 +430,16 @@ fn minus_back_subtracts_everything_in_front_from_the_backmost() {
             verb: PathfinderRegionVerb::MinusBack,
         },
     );
-    assert_eq!(after.rectangles.len(), 1, "only the backmost survives");
-    assert_eq!(after.rectangles[0].id, back_id);
-    // B minus A: the L-shape, six corners, 300 pt², spanning B's box.
+    // C-80: Illustrator's Minus Back keeps the FRONT object. A minus B:
+    // the L-shape, six corners, 300 pt², spanning A's box, in A's fill.
+    assert_eq!(after.rectangles.len(), 1, "only the frontmost survives");
+    assert_eq!(after.rectangles[0].id, front_id);
+    assert_eq!(after.rectangles[0].fill, front_fill);
     assert_eq!(after.rectangles[0].anchors.len(), 6);
     assert!((polygon_area(&after.rectangles[0]) - 300.0).abs() < 0.01);
     assert_eq!(
         anchor_bbox(&after.rectangles[0].anchors),
-        (10.0, 10.0, 30.0, 30.0)
+        (0.0, 0.0, 20.0, 20.0)
     );
 }
 

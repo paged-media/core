@@ -27,6 +27,8 @@
 //!   8. a table breaking across two threaded frames, header repeating
 //!   9. the same with `KeepWithNextRow` on the rows at the break
 //!  10. a row taller than its frame
+//!  11. (after the two `AutoGrow` / `KeepWithNextRow` pages) paragraphs
+//!      with no word in a cell: empty, and of spaces
 //!
 //! Every cell's text names its own cell and paragraph ("B2 · p3"), so a
 //! misplaced line reads off the diff, and every table has a plain row
@@ -56,10 +58,11 @@ const FRAME_W_PT: f32 = 400.0;
 /// row. InDesign's own smallest row is a few points.
 const LOW_FLOOR_PT: f32 = 3.0;
 
-/// How many leading pages the fidelity gate covers: all eleven. Pages
+/// How many leading pages the fidelity gate covers: all twelve. Pages
 /// 10-11 (`AutoGrow`, `KeepWithNextRow`) joined once the IDML reader
-/// carried both attributes (plugin-publish 96cfb6c).
-pub const GATED_PAGES: usize = 11;
+/// carried both attributes (plugin-publish 96cfb6c); page 12 (blank
+/// paragraphs in a cell) was added after them.
+pub const GATED_PAGES: usize = 12;
 
 /// The story holding page `page`'s table (0-based page).
 pub fn body_story_id(page: u32) -> String {
@@ -524,6 +527,45 @@ fn variants() -> Vec<Variant> {
         .into_iter()
         .partition(|v| !(v.name.contains("AutoGrow") || v.name.contains("KeepWithNextRow")));
     gated.extend(ungated);
+
+    // Page 12, after them so no earlier page moves: paragraphs with no
+    // word in a cell. A blank paragraph between two others, first in its
+    // cell, last in its cell; a paragraph of spaces; two blank ones in a
+    // row; and a cell holding nothing but a blank paragraph next to one
+    // line of text.
+    let cell = |texts: &[&str]| Cell {
+        paragraphs: texts.iter().map(|t| Paragraph::plain(*t)).collect(),
+        ..Cell::plain("")
+    };
+    gated.push(Variant {
+        name: "rows · blank paragraphs in a cell",
+        frames: one_frame(400.0),
+        table: table(
+            "t11",
+            0,
+            vec![130.0; 3],
+            vec![
+                (
+                    LOW_FLOOR_PT,
+                    vec![
+                        cell(&["A1 · p1", "", "A1 · p3"]),
+                        cell(&["", "B1 · p2"]),
+                        cell(&["C1 · p1", ""]),
+                    ],
+                ),
+                (LOW_FLOOR_PT, plain_cells("next row ", 3)),
+                (
+                    LOW_FLOOR_PT,
+                    vec![
+                        cell(&["A3 · p1", "   ", "A3 · p3"]),
+                        cell(&["", ""]),
+                        cell(&["C3 · p1", "", "", "C3 · p4"]),
+                    ],
+                ),
+                (LOW_FLOOR_PT, plain_cells("last row ", 3)),
+            ],
+        ),
+    });
     gated
 }
 

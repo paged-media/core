@@ -1467,6 +1467,7 @@ pub(crate) fn new_text_frame(
         effects: None,
         gradient_fill_angle: None,
         gradient_fill_length: None,
+        gradient_fill_start: None,
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         applied_toc_style: None,
@@ -1494,40 +1495,16 @@ pub(super) fn new_graphic_line(
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
 ) -> GraphicLine {
+    // The rest at the model's defaults — no arrowheads, no cap, and the
+    // C-18 corner fields stored but never rendered on an open contour
+    // (see `paged_model::GraphicLine::corner_radius`).
     GraphicLine {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         stroke_color,
         stroke_weight,
-        stroke_type: None,
-        end_join: None,
-        miter_limit: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        applied_object_style: None,
-        text_wrap: None,
-        item_layer: None,
         anchors,
         subpath_starts,
         subpath_open,
-        text_paths: Vec::new(),
-        effects: None,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        start_arrow: paged_model::ArrowheadType::None,
-        end_arrow: paged_model::ArrowheadType::None,
-        start_arrow_scale: 100.0,
-        end_arrow_scale: 100.0,
-        // C-18: parsed + round-tripped, never rendered on an open
-        // stroke-only contour — see `paged_model::GraphicLine::
-        // corner_radius`.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..GraphicLine::new(self_id, bounds)
     }
 }
 
@@ -1542,99 +1519,27 @@ pub(super) fn new_polygon(
     stroke_color: Option<String>,
     stroke_weight: Option<f32>,
 ) -> Polygon {
+    // The rest at the model's defaults. B-23: a freshly-inserted polygon
+    // starts with square corners; `frameCornerOption*` /
+    // `frameCornerRadius*` writes fill these in afterwards, as the
+    // stroke-end paths do the cap and line ends.
     Polygon {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         fill_color,
-        fill_tint: None,
         stroke_color,
         stroke_weight,
-        stroke_type: None,
-        stroke_alignment: None,
-        end_join: None,
-        miter_limit: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        applied_object_style: None,
         anchors,
         subpath_starts,
         subpath_open,
-        text_wrap: None,
-        item_layer: None,
-        effects: None,
-        gradient_fill_angle: None,
-        gradient_fill_length: None,
-        gradient_stroke_angle: None,
-        gradient_stroke_length: None,
-        opacity: None,
-        blend_mode: None,
-        text_paths: Vec::new(),
-        image_link: None,
-        has_image_element: false,
-        has_inline_pdf: false,
-        has_inline_eps: false,
-        image_item_transform: None,
-        image_bytes: None,
-        image_clip: None,
-        overprint_fill: false,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        // B-23: a freshly-inserted polygon starts with square
-        // corners; `frameCornerOption*` / `frameCornerRadius*` writes
-        // fill these in afterwards.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..Polygon::new(self_id, bounds)
     }
 }
 
 pub(crate) fn new_oval(self_id: String, bounds: Bounds, fill_color: Option<String>) -> Oval {
+    // C-18: the corner fields stay at their defaults — parsed and
+    // round-tripped, never rendered (an ellipse has no corner).
     Oval {
-        self_id: Some(self_id),
-        bounds,
-        item_transform: None,
         fill_color,
-        fill_tint: None,
-        stroke_color: None,
-        stroke_weight: None,
-        stroke_type: None,
-        stroke_alignment: None,
-        stroke_gap_color: None,
-        stroke_gap_tint: None,
-        stroke_dash: Vec::new(),
-        drop_shadow: None,
-        stroke_drop_shadow: None,
-        applied_object_style: None,
-        text_wrap: None,
-        item_layer: None,
-        effects: None,
-        gradient_fill_angle: None,
-        gradient_fill_length: None,
-        gradient_stroke_angle: None,
-        gradient_stroke_length: None,
-        opacity: None,
-        blend_mode: None,
-        image_link: None,
-        has_image_element: false,
-        has_inline_pdf: false,
-        has_inline_eps: false,
-        image_item_transform: None,
-        image_bytes: None,
-        image_clip: None,
-        overprint_fill: false,
-        overprint_stroke: false,
-        nonprinting: false,
-        visible: true,
-        locked: false,
-        // C-18: parsed + round-tripped, never rendered — an ellipse
-        // has no corner. See `paged_model::Oval::corner_radius`.
-        corner_radius: None,
-        corner_option: None,
-        corners: Default::default(),
+        ..Oval::new(self_id, bounds)
     }
 }
 
@@ -1681,6 +1586,7 @@ pub(crate) fn new_rectangle(
         effects: None,
         gradient_fill_angle: None,
         gradient_fill_length: None,
+        gradient_fill_start: None,
         gradient_stroke_angle: None,
         gradient_stroke_length: None,
         text_paths: Vec::new(),
@@ -3269,7 +3175,15 @@ pub(super) fn apply_apply_style(
     style: &str,
     scope: StyleScope,
     cell: Option<&crate::operation::CellAddr>,
+    paragraph: Option<u32>,
 ) -> Result<AppliedOperation, OperationError> {
+    // v65 — a paragraph ADDRESS names exactly one paragraph, empty or not
+    // (RFI C-53); the character range is not consulted.
+    if let Some(index) = paragraph {
+        return super::paragraph::apply_paragraph_style_at(
+            doc, story_id, cell, index, style, scope, start, end,
+        );
+    }
     // Delegate to the existing run/paragraph splitter via the
     // AppliedCharacterStyle / AppliedParagraphStyle property paths. The
     // splitter captures a per-segment inverse Batch. We then rewrap the
@@ -3315,6 +3229,7 @@ pub(super) fn apply_apply_style(
     };
     Ok(AppliedOperation {
         op: Operation::ApplyStyle {
+            paragraph: None,
             story_id: story_id.to_string(),
             start,
             end,
@@ -3352,6 +3267,7 @@ fn cell_addressed_inverse(
             path: PropertyPath::AppliedParagraphStyle | PropertyPath::AppliedCharacterStyle,
             value: Value::Text(style),
         } => Operation::ApplyStyle {
+            paragraph: None,
             story_id,
             start,
             end,
@@ -3368,6 +3284,7 @@ pub(super) fn apply_insert_field(
     story_id: &str,
     offset: u32,
     field: &FieldKind,
+    content_offset: Option<u32>,
 ) -> Result<AppliedOperation, OperationError> {
     let story_idx = doc
         .stories
@@ -3380,6 +3297,26 @@ pub(super) fn apply_insert_field(
                 end: offset,
             })
         })?;
+    // v69 — a caret-unit insertion point is converted against the story as
+    // it is NOW, and the echoed op carries the resolved char offset.
+    let offset = match content_offset {
+        None => offset,
+        Some(content) => paged_model::char_offset_of_content_offset(
+            &doc.stories[story_idx].story.paragraphs,
+            content,
+        )
+        .ok_or_else(|| OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: content,
+                end: content,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!(
+                "contentOffset {content} is past the end of the story or inside a character"
+            ),
+        })?,
+    };
     // v43 (D-01) — plugin placeholders insert a TAGGED RUN (display
     // text + identity), not a single marker char; separate lane.
     if let FieldKind::Placeholder { plugin, key, value } = field {
@@ -3458,6 +3395,7 @@ pub(super) fn apply_insert_field(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         // Undo removes the one marker char we inserted at `offset`.
         inverse: Operation::DeleteField {
@@ -3581,6 +3519,7 @@ fn insert_placeholder_run(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         // Undo removes the whole tagged run starting at `offset`.
         inverse: Operation::DeleteField {
@@ -3671,6 +3610,7 @@ pub(super) fn apply_delete_field(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         invalidation,
     })
@@ -3744,6 +3684,7 @@ fn delete_placeholder_run(
                 key: tag.key,
                 value: tag.value,
             },
+            content_offset: None,
         },
         invalidation,
     })

@@ -14,7 +14,7 @@
 
 //! Operation-based mutation channel for the IDML scene graph.
 //!
-//! Stage 1 of the Paged scripting layer (`docs/paged/scripting-layer.md`):
+//! Stage 1 of the Paged scripting layer (the original scripting-layer design, not published):
 //! a single typed, serializable, invertible [`Operation`] is the sole
 //! committed mutation surface. The inspector, the future REPL, the
 //! Boa-based scripting layer, the gesture commit path, undo/redo,
@@ -53,11 +53,13 @@ pub mod invert;
 pub mod kurbo_kernel;
 pub mod notify;
 pub mod operation;
+pub mod orientation;
 pub mod path_math;
 pub mod pathfinder;
 pub mod planar;
 
 pub use apply::apply;
+pub use apply::{duplicate_demand, duplicate_roots, DuplicateDemand};
 pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};
 pub use notify::Notifier;
@@ -69,6 +71,33 @@ pub use operation::{
     Value, ZOrderTarget,
 };
 pub use path_math::fit_polyline_to_anchors;
+
+/// The values the operation layer STORES but an authoring surface may not
+/// SEND. Today one: a `paragraphComposer` that is not one of the four
+/// composers InDesign writes. The model keeps a third-party composer it
+/// read verbatim ([`paged_model::Composer::Other`]), and the inverse of
+/// overwriting one must be able to put it back, so the setter accepts any
+/// string; a caller authoring a composer is refused here instead, with the
+/// accepted values. The canvas runs this on every wire mutation (batch
+/// children included) before translating it.
+pub fn refuse_unauthorable_value(path: PropertyPath, value: &Value) -> Result<(), OperationError> {
+    if path == PropertyPath::ParagraphComposer {
+        if let Value::Text(s) = value {
+            if !s.is_empty()
+                && matches!(
+                    paged_model::Composer::from_idml(s),
+                    paged_model::Composer::Other(_)
+                )
+            {
+                return Err(OperationError::TypeMismatch {
+                    path,
+                    expected: apply::COMPOSER_EXPECTED.to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Holds a [`Document`] plus the Operation surface, undo/redo
 /// history, and change-notification fan-out around it.
@@ -219,6 +248,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,
@@ -1560,6 +1590,7 @@ mod tests {
                 restore_target: None,
             },
             Operation::ApplyStyle {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 start: 0,
                 end: 5,
@@ -1571,6 +1602,7 @@ mod tests {
                 story_id: "Story/u1".to_string(),
                 offset: 3,
                 field: crate::operation::FieldKind::PageNumber,
+                content_offset: None,
             },
             Operation::DeleteField {
                 story_id: "Story/u1".to_string(),
@@ -1586,6 +1618,7 @@ mod tests {
                     key: "price".to_string(),
                     value: Some("€ 9,99".to_string()),
                 },
+                content_offset: None,
             },
             Operation::SetFieldValue {
                 story_id: "Story/u1".to_string(),
@@ -1638,6 +1671,34 @@ mod tests {
             Operation::ApplyMasterToPage {
                 page: "Page/u1".to_string(),
                 master: Some("MasterSpread/uA".to_string()),
+            },
+            Operation::MovePage {
+                page_id: "Page/u1".to_string(),
+                after_page_id: None,
+            },
+            Operation::CreateMaster {
+                master_id: "uM".to_string(),
+                name: Some("Title".to_string()),
+                width_pt: 960.0,
+                height_pt: 540.0,
+                duplicate_of: None,
+                restore_json: None,
+            },
+            Operation::DeleteMaster {
+                master_id: "uM".to_string(),
+            },
+            Operation::RestoreMaster {
+                master_json: "{}".to_string(),
+            },
+            Operation::RenameMaster {
+                master_id: "uM".to_string(),
+                name: None,
+            },
+            Operation::SetSpreadOrder {
+                spreads: vec![crate::operation::SpreadPlacement {
+                    self_id: "S1".to_string(),
+                    item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+                }],
             },
             Operation::DuplicatePage {
                 page: "Page/u1".to_string(),
@@ -1985,54 +2046,18 @@ mod tests {
     ) -> Polygon {
         let open_flags = vec![false; subpath_starts.len().max(1)];
         Polygon {
-            self_id: Some(self_id.to_string()),
-            bounds: Bounds {
-                top: 0.0,
-                left: 0.0,
-                bottom: 100.0,
-                right: 100.0,
-            },
-            item_transform: None,
-            fill_color: None,
-            fill_tint: None,
-            stroke_color: None,
-            stroke_weight: None,
-            stroke_type: None,
-            stroke_alignment: None,
-            end_join: None,
-            miter_limit: None,
-            stroke_gap_color: None,
-            stroke_gap_tint: None,
-            stroke_dash: Vec::new(),
-            applied_object_style: None,
             anchors,
             subpath_starts,
             subpath_open: open_flags,
-            text_wrap: None,
-            item_layer: None,
-            effects: None,
-            gradient_fill_angle: None,
-            gradient_fill_length: None,
-            gradient_stroke_angle: None,
-            gradient_stroke_length: None,
-            opacity: None,
-            blend_mode: None,
-            text_paths: Vec::new(),
-            image_link: None,
-            image_bytes: None,
-            image_clip: None,
-            has_image_element: false,
-            has_inline_pdf: false,
-            has_inline_eps: false,
-            image_item_transform: None,
-            overprint_fill: false,
-            overprint_stroke: false,
-            nonprinting: false,
-            visible: true,
-            locked: false,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
+            ..Polygon::new(
+                self_id,
+                Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 100.0,
+                    right: 100.0,
+                },
+            )
         }
     }
 
@@ -2218,43 +2243,15 @@ mod tests {
             self_id: Some("Spread/u_main".to_string()),
             ..Default::default()
         };
-        spread.graphic_lines.push(GraphicLine {
-            self_id: Some("GraphicLine/l1".to_string()),
-            bounds: Bounds {
+        spread.graphic_lines.push(GraphicLine::new(
+            "GraphicLine/l1",
+            Bounds {
                 top: 0.0,
                 left: 0.0,
                 bottom: 10.0,
                 right: 10.0,
             },
-            item_transform: None,
-            stroke_color: None,
-            stroke_weight: None,
-            stroke_type: None,
-            end_join: None,
-            miter_limit: None,
-            stroke_gap_color: None,
-            stroke_gap_tint: None,
-            stroke_dash: Vec::new(),
-            applied_object_style: None,
-            text_wrap: None,
-            item_layer: None,
-            anchors: Vec::new(),
-            subpath_starts: Vec::new(),
-            subpath_open: Vec::new(),
-            text_paths: Vec::new(),
-            effects: None,
-            overprint_stroke: false,
-            nonprinting: false,
-            visible: true,
-            locked: false,
-            start_arrow: paged_model::ArrowheadType::None,
-            end_arrow: paged_model::ArrowheadType::None,
-            start_arrow_scale: 100.0,
-            end_arrow_scale: 100.0,
-            corner_radius: None,
-            corner_option: None,
-            corners: Default::default(),
-        });
+        ));
         let doc = Document {
             designmap: DesignMap::default(),
             palette: Graphic::default(),
@@ -3023,6 +3020,7 @@ mod tests {
         // Offset 3 lands in para1 ("Hello world"); para2 ("!") is untouched.
         let applied = project
             .apply(Operation::InsertAnchoredFrame {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 offset: 3,
                 width: 100.0,
@@ -3062,6 +3060,7 @@ mod tests {
         // An offset in the second paragraph anchors there, paragraph-local.
         project
             .apply(Operation::InsertAnchoredFrame {
+                paragraph: None,
                 story_id: "Story/u1".to_string(),
                 offset: 12,
                 width: 10.0,
@@ -3088,6 +3087,7 @@ mod tests {
                 source_id: "HyperlinkTextSource/u9".to_string(),
                 dest_id: "HyperlinkURLDestination/u9".to_string(),
                 hyperlink_id: "Hyperlink/u9".to_string(),
+                page: None,
             })
             .unwrap();
 
@@ -4297,6 +4297,163 @@ mod tests {
         ));
     }
 
+    /// C-62 — a pen path (an open Polygon) takes a cap and line ends
+    /// through the EXISTING paths, and the cap reaches GraphicLine and
+    /// Oval too. Set, undo, the rejected token, and the kind that still
+    /// has no cap (TextFrame).
+    #[test]
+    fn c62_pen_path_cap_and_line_ends_round_trip() {
+        let mut project = Project::new(Document {
+            spreads: vec![ParsedSpread {
+                src: "Spreads/syn.xml".to_string(),
+                spread: paged_model::Spread {
+                    self_id: Some("Spread/u_main".to_string()),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        });
+        let parent = NodeId::Spread("Spread/u_main".to_string());
+        let corner = |x: f32, y: f32| crate::operation::PathAnchorSpec {
+            anchor: [x, y],
+            left: [x, y],
+            right: [x, y],
+        };
+        for node in [
+            NodeSpec::Polygon {
+                self_id: "Polygon/pen".to_string(),
+                bounds: [0.0, 0.0, 50.0, 100.0],
+                anchors: vec![corner(0.0, 0.0), corner(50.0, 50.0), corner(100.0, 0.0)],
+                subpath_starts: vec![0],
+                subpath_open: vec![true],
+                fill_color: None,
+                stroke_color: Some("Color/Black".to_string()),
+                stroke_weight: Some(4.0),
+                item_transform: None,
+            },
+            NodeSpec::GraphicLine {
+                self_id: "GraphicLine/l".to_string(),
+                bounds: [0.0, 0.0, 100.0, 100.0],
+                anchors: Vec::new(),
+                subpath_starts: Vec::new(),
+                subpath_open: Vec::new(),
+                stroke_color: None,
+                stroke_weight: Some(2.0),
+                item_transform: None,
+            },
+            NodeSpec::Oval {
+                self_id: "Oval/o".to_string(),
+                bounds: [0.0, 0.0, 40.0, 40.0],
+                fill_color: None,
+                stroke_color: None,
+                stroke_weight: None,
+                item_transform: None,
+            },
+        ] {
+            project
+                .apply(Operation::InsertNode {
+                    z_slot: None,
+                    parent: parent.clone(),
+                    position: 0,
+                    node,
+                })
+                .expect("insert");
+        }
+        let cap = |p: &Project, node: &NodeId| -> Option<String> {
+            let s = &p.document().spreads[0].spread;
+            match node {
+                NodeId::Polygon(_) => s.polygons[0].end_cap.clone(),
+                NodeId::GraphicLine(_) => s.graphic_lines[0].end_cap.clone(),
+                NodeId::Oval(_) => s.ovals[0].end_cap.clone(),
+                _ => unreachable!(),
+            }
+        };
+        for node in [
+            NodeId::Polygon("Polygon/pen".to_string()),
+            NodeId::GraphicLine("GraphicLine/l".to_string()),
+            NodeId::Oval("Oval/o".to_string()),
+        ] {
+            let applied = project
+                .apply(Operation::SetProperty {
+                    node: node.clone(),
+                    path: PropertyPath::FrameStrokeEndCap,
+                    value: Value::Text("RoundEndCap".to_string()),
+                })
+                .unwrap_or_else(|e| panic!("{node:?} takes a cap: {e:?}"));
+            assert_eq!(cap(&project, &node).as_deref(), Some("RoundEndCap"));
+            crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+            assert_eq!(cap(&project, &node), None, "{node:?} undo");
+        }
+
+        // The pen path's line ends.
+        let pen = NodeId::Polygon("Polygon/pen".to_string());
+        let start = project
+            .apply(Operation::SetProperty {
+                node: pen.clone(),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("CircleSolidArrowHead".to_string()),
+            })
+            .expect("start arrowhead");
+        project
+            .apply(Operation::SetProperty {
+                node: pen.clone(),
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect("end arrowhead");
+        let poly = &project.document().spreads[0].spread.polygons[0];
+        assert_eq!(poly.start_arrow, paged_model::ArrowheadType::CircleSolid);
+        assert_eq!(poly.end_arrow, paged_model::ArrowheadType::Triangle);
+        crate::apply(project.document_mut(), &start.inverse).expect("undo start");
+        let poly = &project.document().spreads[0].spread.polygons[0];
+        assert_eq!(poly.start_arrow, paged_model::ArrowheadType::None);
+        assert_eq!(poly.end_arrow, paged_model::ArrowheadType::Triangle);
+        let err = project
+            .apply(Operation::SetProperty {
+                node: pen,
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                value: Value::Text("FancyMysteryHead".to_string()),
+            })
+            .expect_err("unknown token must be rejected");
+        assert!(matches!(
+            err,
+            crate::OperationError::InvalidValue {
+                path: PropertyPath::FrameStrokeEndArrowhead,
+                ..
+            }
+        ));
+
+        // An ellipse is closed: it has a cap (dash ends) but no line ends.
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::Oval("Oval/o".to_string()),
+                path: PropertyPath::FrameStrokeStartArrowhead,
+                value: Value::Text("TriangleArrowHead".to_string()),
+            })
+            .expect_err("an oval has no line ends");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty { .. }
+        ));
+    }
+
+    /// C-62 — a text frame's stroke is its box: it still has no cap.
+    #[test]
+    fn c62_a_text_frame_still_has_no_end_cap() {
+        let mut project = Project::new(document_with_one_textframe("TextFrame/u1"));
+        let err = project
+            .apply(Operation::SetProperty {
+                node: NodeId::TextFrame("TextFrame/u1".to_string()),
+                path: PropertyPath::FrameStrokeEndCap,
+                value: Value::Text("RoundEndCap".to_string()),
+            })
+            .expect_err("a text frame has no cap");
+        assert!(matches!(
+            err,
+            crate::OperationError::UnsupportedProperty { .. }
+        ));
+    }
+
     /// SDK Phase 5 (v1 sweep) — TextFrame inset spacing apply +
     /// undo. Wire shape: Value::Bounds([top, left, bottom, right])
     /// in pt. The renderer's text-frame composer reads the field
@@ -4944,6 +5101,100 @@ mod tests {
             project.document().stories[0].story.paragraphs[0].start_paragraph,
             Some(paged_model::StartParagraph::NextPage)
         );
+    }
+
+    /// `paragraphComposer` takes the IDML name; "" clears; undo restores
+    /// the prior value — including a third-party composer the document was
+    /// read with, which only the operation layer may write (the wire
+    /// refuses it, `refuse_unauthorable_value`).
+    #[test]
+    fn paragraph_composer_round_trips_and_undoes_verbatim() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        register_host_frame(&mut project, "Story/u1", "TextFrame/f1");
+        let applied = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text("HL Single".into()),
+            ))
+            .expect("apply");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(paged_model::Composer::SingleLine)
+        );
+        assert_eq!(applied.invalidation.text_reflow.len(), 1);
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            None
+        );
+
+        let third_party = paged_model::Composer::from_idml("HL Japanese Composer");
+        project.document_mut().stories[0].story.paragraphs[0].composer = Some(third_party.clone());
+        let over = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text("HL Composer".into()),
+            ))
+            .expect("overwrite");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(paged_model::Composer::Paragraph)
+        );
+        crate::apply(project.document_mut(), &over.inverse).expect("undo restores verbatim");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            Some(third_party)
+        );
+
+        let cleared = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Text(String::new()),
+            ))
+            .expect("clear");
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].composer,
+            None
+        );
+        assert!(project
+            .apply(story_range_op(
+                PropertyPath::ParagraphComposer,
+                Value::Bool(true)
+            ))
+            .is_err());
+        crate::apply(project.document_mut(), &cleared.inverse).expect("undo clear");
+    }
+
+    #[test]
+    fn only_the_four_composers_are_authorable() {
+        for ok in [
+            "",
+            "HL Composer",
+            "HL Single",
+            "HL Composer Optyca",
+            "HL Single Optyca",
+        ] {
+            assert!(
+                refuse_unauthorable_value(PropertyPath::ParagraphComposer, &Value::Text(ok.into()))
+                    .is_ok(),
+                "{ok:?}"
+            );
+        }
+        for bad in ["HL single", "Paragraph Composer", "HL Japanese Composer"] {
+            assert!(matches!(
+                refuse_unauthorable_value(
+                    PropertyPath::ParagraphComposer,
+                    &Value::Text(bad.into())
+                ),
+                Err(OperationError::TypeMismatch { .. })
+            ));
+        }
+        // Other paths are not this function's business.
+        assert!(refuse_unauthorable_value(
+            PropertyPath::ParagraphListType,
+            &Value::Text("Anything".into())
+        )
+        .is_ok());
     }
 
     /// An unknown `StartParagraph` string is refused, never stored or
@@ -6880,8 +7131,11 @@ mod tests {
 
     #[test]
     fn w04_effect_unsupported_on_graphic_line() {
-        // Effects are fill-based; GraphicLine carries no effects bag, so
-        // the per-field + toggle paths reject it.
+        // Effects are fill-based. A GraphicLine does carry the `effects`
+        // bag (the importer fills it) but `emit_line_into` never reads
+        // it — a line has no fill path to composite against — so the
+        // per-field + toggle paths reject rather than write a value no
+        // renderer consults (C-63 extended the lane to Polygon only).
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         p.apply(Operation::InsertNode {
             parent: NodeId::Spread("Spread/u_main".to_string()),
@@ -7165,6 +7419,7 @@ mod tests {
             let mut p = Project::new(document_with_one_story("Story/u1"));
             let applied = p
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/u1".to_string(),
                     start: 0,
                     end: 6,
@@ -7191,6 +7446,7 @@ mod tests {
             // [0,6) covers "Hello " exactly (run boundary).
             let applied = p
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/u1".to_string(),
                     start: 0,
                     end: 6,
@@ -7221,6 +7477,7 @@ mod tests {
                     story_id: "Story/u1".to_string(),
                     offset: 0,
                     field: FieldKind::PageNumber,
+                    content_offset: None,
                 })
                 .expect("insert field");
             // The U+E018 marker now leads the first run.
@@ -7406,6 +7663,104 @@ mod tests {
             );
         }
 
+        // ---- MovePage -----------------------------------------------------
+
+        /// Three single-page spreads `S1`/`P1` … `S3`/`P3`, stacked down the
+        /// pasteboard (100 pt pages, 72 pt apart) when `stacked`, all at
+        /// the origin otherwise.
+        fn three_spreads(stacked: bool) -> Document {
+            let mut doc = base_doc();
+            for k in 1..=3 {
+                let mut pg = page(&format!("P{k}"));
+                pg.bounds = paged_model::Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 100.0,
+                    right: 100.0,
+                };
+                let ty = if stacked { (k - 1) as f32 * 172.0 } else { 0.0 };
+                let spread = Spread {
+                    self_id: Some(format!("S{k}")),
+                    item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, ty]),
+                    pages: vec![pg],
+                    ..Default::default()
+                };
+                doc.spreads.push(paged_scene::ParsedSpread {
+                    src: format!("Spreads/Spread_S{k}.xml"),
+                    spread,
+                });
+            }
+            doc
+        }
+
+        fn order(p: &Project) -> Vec<String> {
+            p.document()
+                .spreads
+                .iter()
+                .map(|s| s.spread.self_id.clone().unwrap())
+                .collect()
+        }
+
+        fn tys(p: &Project) -> Vec<f32> {
+            p.document()
+                .spreads
+                .iter()
+                .map(|s| s.spread.item_transform.unwrap()[5])
+                .collect()
+        }
+
+        #[test]
+        fn move_page_reorders_restacks_and_undoes_exactly() {
+            let mut p = Project::new(three_spreads(true));
+            p.apply(Operation::MovePage {
+                page_id: "P3".to_string(),
+                after_page_id: None,
+            })
+            .expect("move to front");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+            // Restacked in the new order: same slots as before.
+            assert_eq!(tys(&p), [0.0, 172.0, 344.0]);
+            p.apply(Operation::MovePage {
+                page_id: "P3".to_string(),
+                after_page_id: Some("P2".to_string()),
+            })
+            .expect("move after P2");
+            assert_eq!(order(&p), ["S1", "S2", "S3"]);
+            p.undo().expect("undo");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+            p.undo().expect("undo");
+            assert_eq!(order(&p), ["S1", "S2", "S3"]);
+            assert_eq!(tys(&p), [0.0, 172.0, 344.0]);
+            p.redo().expect("redo");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+        }
+
+        #[test]
+        fn move_page_keeps_shared_positions_and_refuses_bad_targets() {
+            let mut p = Project::new(three_spreads(false));
+            p.apply(Operation::MovePage {
+                page_id: "P1".to_string(),
+                after_page_id: Some("P3".to_string()),
+            })
+            .expect("move to end");
+            assert_eq!(order(&p), ["S2", "S3", "S1"]);
+            assert_eq!(tys(&p), [0.0, 0.0, 0.0]);
+            assert!(p
+                .apply(Operation::MovePage {
+                    page_id: "P2".to_string(),
+                    after_page_id: Some("P9".to_string()),
+                })
+                .is_err());
+            assert!(p
+                .apply(Operation::MovePage {
+                    page_id: "P2".to_string(),
+                    after_page_id: Some("P2".to_string()),
+                })
+                .is_err());
+            // A refused move leaves the order alone.
+            assert_eq!(order(&p), ["S2", "S3", "S1"]);
+        }
+
         // ---- ApplyMasterToPage ------------------------------------------
 
         #[test]
@@ -7474,8 +7829,8 @@ mod tests {
                     .as_deref(),
                 Some("Rectangle/r1")
             );
-            // Inverse removes the cloned page.
-            assert!(matches!(applied.inverse, Operation::RemovePage { .. }));
+            // Inverse removes the cloned page (and any stories it owns).
+            assert!(matches!(applied.inverse, Operation::RemovePageClone { .. }));
             p.undo().expect("undo");
             assert_eq!(p.document().spreads.len(), 1);
             p.redo().expect("redo");
@@ -7860,6 +8215,7 @@ mod tests {
 
             project
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/t1".to_string(),
                     start: 0,
                     end: 4,
@@ -7890,6 +8246,7 @@ mod tests {
             // An unknown cell address is a clean error, not a panic.
             assert!(project
                 .apply(Operation::ApplyStyle {
+                    paragraph: None,
                     story_id: "Story/t1".to_string(),
                     start: 0,
                     end: 1,

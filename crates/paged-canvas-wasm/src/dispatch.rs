@@ -94,6 +94,9 @@ pub struct WorkerCore {
     pub export_sessions: std::collections::HashMap<u32, paged_canvas::export::CanvasExportSession>,
     /// Monotone id source for export sessions.
     pub next_export_session: u32,
+    /// v67 — the session's snapping preferences. Kept here as well as on
+    /// the model so they survive `LoadDocument` / `NewBlankDocument`.
+    pub snap_settings: paged_canvas::snap_point::SnapSettings,
 }
 
 impl Default for WorkerCore {
@@ -133,7 +136,7 @@ pub fn story_id_for_mutation(m: &paged_canvas::channel::Mutation) -> Option<Stri
 /// chain) clears the whole cache; otherwise we invalidate just the
 /// pages the story touches. Matches the gpu arms in the old shell.
 fn cache_effect_for_story(model: &CanvasModel, story_id: Option<&str>) -> CacheEffect {
-    // thoughts ADR 027 §7 — after a text edit the model knows the pages
+    // ADR 027 §7 — after a text edit the model knows the pages
     // whose display lists changed (the edited story's re-laid pages, and
     // any other story or master it moved); re-encode exactly those.
     if story_id.is_some() {
@@ -154,6 +157,89 @@ fn cache_effect_for_story(model: &CanvasModel, story_id: Option<&str>) -> CacheE
     }
 }
 
+/// Run a scene-layer change (submit or clear) for `element_id` and scope
+/// the GPU cache effect to the pages that drew the frame's layer before
+/// the change or draw it after: a layer is the frame's own content, so no
+/// other page's display list moves. The whole cache goes only when the
+/// page list itself changed (a pending relayout the rebuild picked up).
+/// Nothing re-encodes for a frame that draws nowhere. Returns whether the
+/// change applied.
+fn scene_layer_change(
+    model: &mut CanvasModel,
+    element_id: &str,
+    change: impl FnOnce(&mut CanvasModel) -> Result<(), paged_canvas::channel::LoadError>,
+) -> (bool, CacheEffect) {
+    let pages_before = page_table(model);
+    let mut pages = model.pages_showing_scene_layer(element_id);
+    if change(model).is_err() {
+        return (false, CacheEffect::None);
+    }
+    if page_table(model) != pages_before {
+        return (true, CacheEffect::ClearAll);
+    }
+    for p in model.pages_showing_scene_layer(element_id) {
+        if !pages.contains(&p) {
+            pages.push(p);
+        }
+    }
+    pages.sort_unstable();
+    let effect = if pages.is_empty() {
+        CacheEffect::None
+    } else {
+        CacheEffect::InvalidatePages(pages)
+    };
+    (true, effect)
+}
+
+/// v65 — what a font registry change re-laid out, for the
+/// `fontRegistered` / `fontRegistryCleared` replies.
+#[derive(Default)]
+struct FontChangeReport {
+    page_ids: Vec<PageId>,
+    page_structure_changed: bool,
+    page_sizes_pt: Option<Vec<(f32, f32)>>,
+}
+
+/// Run a registry change on the live model and report the pages it
+/// changed, with the GPU cache effect: only those pages re-encode, unless
+/// the page list itself moved (a growing story gained or lost pages) or the
+/// relayout failed, which drop the whole cache.
+fn font_change_report(
+    model: &mut CanvasModel,
+    change: impl FnOnce(&mut CanvasModel) -> Result<Vec<String>, paged_canvas::channel::LoadError>,
+) -> (FontChangeReport, CacheEffect) {
+    let pages_before = page_table(model);
+    match change(model) {
+        Ok(affected) if affected.is_empty() => (FontChangeReport::default(), CacheEffect::None),
+        Ok(_) => {
+            let pages_after = page_table(model);
+            let page_structure_changed = pages_before != pages_after;
+            let effect = match model.narrowed_dirty_pages() {
+                Some(dirty) if !page_structure_changed => {
+                    CacheEffect::InvalidatePages(dirty.to_vec())
+                }
+                _ => CacheEffect::ClearAll,
+            };
+            let report = FontChangeReport {
+                page_ids: model.dirty_page_ids(),
+                page_structure_changed,
+                page_sizes_pt: page_structure_changed
+                    .then(|| pages_after.into_iter().map(|p| p.1).collect()),
+            };
+            (report, effect)
+        }
+        // The registry took the change; a failed relayout leaves the
+        // previous build standing, so report every page.
+        Err(_) => (
+            FontChangeReport {
+                page_ids: model.built().pages.iter().map(|p| p.id.clone()).collect(),
+                ..FontChangeReport::default()
+            },
+            CacheEffect::ClearAll,
+        ),
+    }
+}
+
 impl WorkerCore {
     pub fn new() -> Self {
         Self {
@@ -162,6 +248,7 @@ impl WorkerCore {
             color_profiles: Vec::new(),
             export_sessions: std::collections::HashMap::new(),
             next_export_session: 1,
+            snap_settings: Default::default(),
         }
     }
 
@@ -245,7 +332,8 @@ impl WorkerCore {
                 };
                 let doc_id = format!("doc-{}", msg.seq);
                 match CanvasModel::load(doc_id, bytes.as_slice(), opts) {
-                    Ok(model) => {
+                    Ok(mut model) => {
+                        model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
                         // Export sessions hold a build of the PREVIOUS
@@ -275,7 +363,8 @@ impl WorkerCore {
                 };
                 let doc_id = format!("doc-{}", msg.seq);
                 match CanvasModel::new_blank(doc_id, width_pt, height_pt, opts) {
-                    Ok(model) => {
+                    Ok(mut model) => {
+                        model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
                         self.export_sessions.clear();
@@ -404,6 +493,7 @@ impl WorkerCore {
                 page_id,
                 target_width_px,
                 dpi,
+                hide_items,
             } => {
                 let Some(model) = self.model.as_ref() else {
                     reply!(WorkerToMainKind::SnapshotFailed {
@@ -413,12 +503,13 @@ impl WorkerCore {
                 // An explicit `dpi` (> 0) wins over `target_width_px`:
                 // the fidelity suite drives DPI directly so the PNG
                 // matches `pdftoppm -r <dpi>` at the dimension boundary.
-                let res = match dpi {
-                    Some(d) if d > 0.0 => {
-                        paged_canvas::render_snapshot_png_at_dpi(model, &page_id, d)
-                    }
-                    _ => paged_canvas::render_snapshot_png(model, &page_id, target_width_px),
-                };
+                let res = paged_canvas::render_snapshot_png_hiding(
+                    model,
+                    &page_id,
+                    target_width_px,
+                    dpi,
+                    &hide_items,
+                );
                 match res {
                     Ok(snap) => WorkerToMainKind::SnapshotReady(snap),
                     Err(error) => WorkerToMainKind::SnapshotFailed { error },
@@ -515,6 +606,18 @@ impl WorkerCore {
                 let content = model.story_content(&story_id);
                 WorkerToMainKind::StoryContentResult { content }
             }
+            MainToWorkerKind::RequestStyleProperties {
+                collection,
+                style_id,
+            } => {
+                let Some(model) = self.model.as_ref() else {
+                    reply!(WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NoDocument,
+                    });
+                };
+                let result = model.style_properties(collection, &style_id);
+                WorkerToMainKind::StyleProperties { result }
+            }
             MainToWorkerKind::Undo => {
                 if self.model.is_none() {
                     reply!(WorkerToMainKind::MutationFailed {
@@ -571,26 +674,38 @@ impl WorkerCore {
                 // The worker copy seeds future loads; the LIVE model gets
                 // the face too and re-lays out the stories it changes (it
                 // used to be ignored until the next load).
-                if let Some(model) = self.model.as_mut() {
-                    match model.register_font(entry.clone()) {
-                        Ok(affected) if !affected.is_empty() => effect = CacheEffect::ClearAll,
-                        Ok(_) => {}
-                        // The registry took the face; a failed relayout
-                        // leaves the previous build standing.
-                        Err(_) => effect = CacheEffect::ClearAll,
+                let report = match self.model.as_mut() {
+                    Some(model) => {
+                        let (report, e) =
+                            font_change_report(model, |m| m.register_font(entry.clone()));
+                        effect = e;
+                        report
                     }
-                }
+                    None => FontChangeReport::default(),
+                };
                 self.font_registry.push(entry);
-                WorkerToMainKind::FontRegistered { family }
+                WorkerToMainKind::FontRegistered {
+                    family,
+                    page_ids: report.page_ids,
+                    page_structure_changed: report.page_structure_changed,
+                    page_sizes_pt: report.page_sizes_pt,
+                }
             }
             MainToWorkerKind::ClearFontRegistry => {
                 self.font_registry.clear();
-                if let Some(model) = self.model.as_mut() {
-                    if !matches!(model.clear_font_registry(), Ok(a) if a.is_empty()) {
-                        effect = CacheEffect::ClearAll;
+                let report = match self.model.as_mut() {
+                    Some(model) => {
+                        let (report, e) = font_change_report(model, |m| m.clear_font_registry());
+                        effect = e;
+                        report
                     }
+                    None => FontChangeReport::default(),
+                };
+                WorkerToMainKind::FontRegistryCleared {
+                    page_ids: report.page_ids,
+                    page_structure_changed: report.page_structure_changed,
+                    page_sizes_pt: report.page_sizes_pt,
                 }
-                WorkerToMainKind::FontRegistryCleared
             }
             MainToWorkerKind::RegisterColorProfile { name, bytes } => {
                 let bytes = bytes.into_vec();
@@ -645,6 +760,33 @@ impl WorkerCore {
             MainToWorkerKind::RequestPathAnchors { id } => {
                 let result = self.model.as_ref().and_then(|m| m.path_anchors(&id));
                 WorkerToMainKind::PathAnchors { result }
+            }
+            MainToWorkerKind::RequestTextOutlines { id } => {
+                let result = self.model.as_ref().and_then(|m| m.text_outlines(&id));
+                WorkerToMainKind::TextOutlines { result }
+            }
+            MainToWorkerKind::RequestSnapPoint { query } => {
+                let result = match self.model.as_mut() {
+                    Some(m) => m.snap_point(&query),
+                    None => paged_canvas::snap_point::SnapPointResult {
+                        point: query.point,
+                        snapped: false,
+                        point_target: None,
+                        x_target: None,
+                        y_target: None,
+                        segment_target: None,
+                        lines: Vec::new(),
+                        tolerance_pt: 0.0,
+                    },
+                };
+                WorkerToMainKind::SnapPoint { result }
+            }
+            MainToWorkerKind::SetSnapSettings { settings } => {
+                self.snap_settings = settings;
+                if let Some(m) = self.model.as_mut() {
+                    m.set_snap_settings(settings);
+                }
+                WorkerToMainKind::SnapSettingsApplied { settings }
             }
             MainToWorkerKind::RequestNearestPathPoint { id, point } => {
                 let result = self
@@ -787,9 +929,8 @@ impl WorkerCore {
                 caller,
             } => {
                 // v39 (C-1) — store the plugin scene layer + rebuild so the
-                // next snapshot lowers it inside the frame. Invalidate ALL
-                // page caches: the layer's frame may sit on any page and we
-                // don't (yet) scope it.
+                // next snapshot lowers it inside the frame. Re-encode only
+                // the pages that drew the layer before or draw it now.
                 let applied = match self.model.as_mut() {
                     Some(m) => {
                         // A rebuild failure must not poison the worker; the
@@ -798,30 +939,42 @@ impl WorkerCore {
                         // C-34 — the caller-gated door. A foreign replace
                         // of another plugin's in-frame render is refused;
                         // `None` keeps the prior behaviour exactly.
-                        m.set_scene_layer_as(caller.as_deref(), element_id.clone(), layer)
-                            .is_ok()
+                        let (ok, scoped) = scene_layer_change(m, &element_id, |m| {
+                            m.set_scene_layer_as(caller.as_deref(), element_id.clone(), layer)
+                        });
+                        effect = scoped;
+                        ok
                     }
                     None => false,
                 };
-                if applied {
-                    effect = CacheEffect::ClearAll;
-                }
+                let font_fallbacks = self
+                    .model
+                    .as_ref()
+                    .map(|m| m.scene_layer_font_fallbacks(&element_id))
+                    .filter(|f| !f.is_empty());
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
+                    font_fallbacks,
                 }
             }
             MainToWorkerKind::ClearSceneLayer { element_id } => {
                 let applied = match self.model.as_mut() {
-                    Some(m) => m.clear_scene_layer(&element_id).is_ok(),
+                    Some(m) => {
+                        let (ok, scoped) = scene_layer_change(m, &element_id, |m| {
+                            m.clear_scene_layer(&element_id)
+                        });
+                        effect = scoped;
+                        ok
+                    }
                     None => false,
                 };
-                if applied {
-                    effect = CacheEffect::ClearAll;
-                }
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::SubmitPixelLayer { element_id, layer } => {
@@ -840,6 +993,8 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::ClearPixelLayer { element_id } => {
@@ -853,6 +1008,8 @@ impl WorkerCore {
                 WorkerToMainKind::SceneLayerApplied {
                     element_id,
                     applied,
+                    page_ids: None,
+                    font_fallbacks: None,
                 }
             }
             MainToWorkerKind::ClaimImageResource {
@@ -974,6 +1131,7 @@ impl WorkerCore {
                         baseline_grid_shown: None,
                         baseline_grid_relative_to: None,
                         baseline_grid_color: None,
+                        plugin_metadata: None,
                     },
                 );
                 WorkerToMainKind::DocumentMetaReply { meta }
@@ -1111,6 +1269,17 @@ impl WorkerCore {
                         found: false,
                         bytes: Vec::new().into(),
                     },
+                },
+                None => WorkerToMainKind::PagedPartFailed {
+                    error: "no document loaded".into(),
+                },
+            },
+            MainToWorkerKind::DeletePagedPart { path, caller } => match self.model.as_mut() {
+                // v66 — the caller-gated delete; a part the loaded container
+                // carries is tombstoned so `ExportPaged` drops it.
+                Some(m) => match m.delete_paged_part_as(caller.as_deref(), &path) {
+                    Ok(existed) => WorkerToMainKind::PagedPartDeleted { existed },
+                    Err(e) => WorkerToMainKind::PagedPartFailed { error: e },
                 },
                 None => WorkerToMainKind::PagedPartFailed {
                     error: "no document loaded".into(),
@@ -1366,5 +1535,252 @@ impl WorkerCore {
             },
             effect,
         )
+    }
+
+    // ---- v66 binary doors -------------------------------------------
+    //
+    // The canvas-wasm shell exposes these as `…Direct` exports taking or
+    // returning `Uint8Array`s, so pixels and part bytes never ride the JSON
+    // channel as `number[]` (8x the bytes, plus a parse per element). They
+    // live here, not in the shell, so they are tested natively; their
+    // replies are the SAME `WorkerToMain` envelopes the JSON kinds produce.
+
+    fn envelope(seq: u64, kind: WorkerToMainKind) -> WorkerToMain {
+        WorkerToMain {
+            seq: Some(seq),
+            protocol: PROTOCOL_VERSION,
+            kind,
+        }
+    }
+
+    /// The GPU cache effect of a scene-image change: exactly the pages that
+    /// showed the frame's image before or show it now. Nothing when neither
+    /// set has a page (the frame draws nowhere).
+    fn scene_image_effect(before: Vec<usize>, after: Vec<usize>) -> CacheEffect {
+        let mut pages = before;
+        for p in after {
+            if !pages.contains(&p) {
+                pages.push(p);
+            }
+        }
+        if pages.is_empty() {
+            CacheEffect::None
+        } else {
+            pages.sort_unstable();
+            CacheEffect::InvalidatePages(pages)
+        }
+    }
+
+    /// The page ids an `InvalidatePages` effect names (none for `None`).
+    fn page_ids_of(&self, effect: &CacheEffect) -> Vec<PageId> {
+        let (Some(m), CacheEffect::InvalidatePages(pages)) = (self.model.as_ref(), effect) else {
+            return Vec::new();
+        };
+        pages
+            .iter()
+            .filter_map(|&i| m.built().pages.get(i).map(|p| p.id.clone()))
+            .collect()
+    }
+
+    /// v66 — `submitSceneImageDirect`: the frame's scene layer becomes ONE
+    /// RGBA8 image, taking ownership of the transferred bytes. Reply:
+    /// `sceneLayerApplied` (`applied: false` for a malformed buffer, a
+    /// foreign owner or no document).
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_scene_image(
+        &mut self,
+        seq: u64,
+        element_id: String,
+        caller: Option<String>,
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+        dest: (f32, f32, f32, f32),
+    ) -> (WorkerToMain, CacheEffect) {
+        let mut effect = CacheEffect::None;
+        let applied = match self.model.as_mut() {
+            Some(m) => {
+                let before = m.pages_showing_scene_image(&element_id);
+                let ok = m
+                    .set_scene_image_as(
+                        caller.as_deref(),
+                        element_id.clone(),
+                        bytes::Bytes::from(rgba),
+                        width,
+                        height,
+                        dest,
+                    )
+                    .is_ok();
+                if ok {
+                    effect =
+                        Self::scene_image_effect(before, m.pages_showing_scene_image(&element_id));
+                }
+                ok
+            }
+            None => false,
+        };
+        (
+            Self::envelope(
+                seq,
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                    page_ids: Some(self.page_ids_of(&effect)),
+                    font_fallbacks: None,
+                },
+            ),
+            effect,
+        )
+    }
+
+    /// v66 — `submitSceneImageTilesDirect`: patch rectangles of the frame's
+    /// retained scene image (`rects`: `x, y, w, h` image pixels per tile;
+    /// `rgba`: the tiles' pixels back to back). Only the pages showing the
+    /// frame re-encode. Reply: `sceneLayerApplied`.
+    pub fn submit_scene_image_tiles(
+        &mut self,
+        seq: u64,
+        element_id: String,
+        caller: Option<String>,
+        rects: &[u32],
+        rgba: &[u8],
+    ) -> (WorkerToMain, CacheEffect) {
+        let mut effect = CacheEffect::None;
+        let applied = match self.model.as_mut() {
+            Some(m) => {
+                let before = m.pages_showing_scene_image(&element_id);
+                let ok = m
+                    .patch_scene_image_as(caller.as_deref(), &element_id, rects, rgba)
+                    .is_ok();
+                if ok {
+                    effect =
+                        Self::scene_image_effect(before, m.pages_showing_scene_image(&element_id));
+                }
+                ok
+            }
+            None => false,
+        };
+        (
+            Self::envelope(
+                seq,
+                WorkerToMainKind::SceneLayerApplied {
+                    element_id,
+                    applied,
+                    page_ids: Some(self.page_ids_of(&effect)),
+                    font_fallbacks: None,
+                },
+            ),
+            effect,
+        )
+    }
+
+    /// v66 — `writePagedPartDirect`: `WritePagedPart` with the bytes moved
+    /// in, not parsed out of JSON. Reply: `pagedPartWritten` /
+    /// `pagedPartFailed`.
+    pub fn write_paged_part_bytes(
+        &mut self,
+        seq: u64,
+        path: String,
+        caller: Option<String>,
+        bytes: Vec<u8>,
+        clock: &Clock<'_>,
+    ) -> (WorkerToMain, CacheEffect) {
+        self.dispatch(
+            MainToWorker {
+                seq,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::WritePagedPart {
+                    path,
+                    bytes: bytes.into(),
+                    caller,
+                },
+            },
+            clock,
+        )
+    }
+
+    /// v66 — `readPagedPartDirect`: a part's bytes, or `None` when absent
+    /// (or no document). The same read `ReadPagedPart` answers.
+    pub fn read_paged_part_bytes(&self, path: &str) -> Option<Vec<u8>> {
+        self.model.as_ref()?.get_paged_part(path)
+    }
+
+    /// v66 — `placedAssetBytesDirect`: `(uri, width, height, encoded)` of a
+    /// frame's placed image, the same read `RequestPlacedAssetBytes`
+    /// answers.
+    pub fn placed_asset_bytes(&self, element_id: &str) -> Option<(String, u32, u32, Vec<u8>)> {
+        self.model.as_ref()?.placed_asset_bytes(element_id)
+    }
+
+    /// v66 — `mutateWithBytesDirect`: apply `mutation_json` (one wire
+    /// `Mutation`, a `batch` included) after handing `bytes` to its FIRST
+    /// `replaceImageBytes` whose `bytes` is an empty array — the slot the
+    /// caller leaves for the transferred buffer. A mutation with no such
+    /// slot is refused rather than applied without the bytes it was sent
+    /// with. Reply: the `Mutate` reply (`mutationApplied` /
+    /// `mutationFailed`).
+    pub fn mutate_with_bytes(
+        &mut self,
+        seq: u64,
+        mutation_json: &str,
+        bytes: Vec<u8>,
+        clock: &Clock<'_>,
+    ) -> (WorkerToMain, CacheEffect) {
+        let fail = |what: String| {
+            (
+                Self::envelope(
+                    seq,
+                    WorkerToMainKind::MutationFailed {
+                        error: WorkerError::NotImplemented { what },
+                    },
+                ),
+                CacheEffect::None,
+            )
+        };
+        let mut m: paged_canvas::channel::Mutation = match serde_json::from_str(mutation_json) {
+            Ok(m) => m,
+            Err(e) => return fail(format!("malformed mutation: {e}")),
+        };
+        let mut slot = Some(bytes);
+        fill_bytes_slot(&mut m, &mut slot);
+        if slot.is_some() {
+            return fail(
+                "mutateWithBytes: no replaceImageBytes with an empty `bytes` slot to fill".into(),
+            );
+        }
+        self.dispatch(
+            MainToWorker {
+                seq,
+                protocol: PROTOCOL_VERSION,
+                kind: MainToWorkerKind::Mutate(m),
+            },
+            clock,
+        )
+    }
+}
+
+/// Hand `slot` to the first `ReplaceImageBytes` (depth-first through
+/// batches) whose bytes are present and empty. Leaves `slot` `Some` when
+/// there is none.
+fn fill_bytes_slot(m: &mut paged_canvas::channel::Mutation, slot: &mut Option<Vec<u8>>) {
+    use paged_canvas::channel::Mutation as M;
+    if slot.is_none() {
+        return;
+    }
+    match m {
+        M::ReplaceImageBytes { bytes: Some(b), .. } if b.as_slice().is_empty() => {
+            if let Some(v) = slot.take() {
+                *b = v.into();
+            }
+        }
+        M::Batch { ops } => {
+            for op in ops {
+                fill_bytes_slot(op, slot);
+                if slot.is_none() {
+                    return;
+                }
+            }
+        }
+        _ => {}
     }
 }

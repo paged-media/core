@@ -702,6 +702,7 @@ fn seed_page_number(m: &mut CanvasModel) {
         story_id,
         offset: 0,
         field: FieldKind::PageNumber,
+        content_offset: None,
     })
     .expect("seed a page-number marker");
 }
@@ -1301,7 +1302,164 @@ fn property_cases() -> Vec<Case> {
             })),
         }
     }));
+    // ---------------------------------------------------------------
+    // C-63 — the same effects on a PEN PATH, and transparency on a group
+    //
+    // Every case above hangs its effect on a Rectangle, which is why the
+    // sweep stayed green while a Polygon could not take one at all: the
+    // model carried the bag, the importer filled it, the renderer painted
+    // it, and `find_frame_effects_mut` never reached the kind. The path
+    // here is minted the way the pen mints it (`insertPath`), so what is
+    // measured is the thing a user draws.
+    // ---------------------------------------------------------------
+    c.push(paints(
+        "SetProperty frameInnerShadowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameInnerShadowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameOuterGlowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameOuterGlowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameInnerGlowEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameInnerGlowEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameBevelEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameBevelEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameSatinEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameSatinEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameFeatherEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameFeatherEnabled),
+    ));
+    c.push(paints(
+        "SetProperty frameDirectionalFeatherEnabled (Polygon)",
+        "geometry",
+        |m| enable_polygon_effect(m, PropertyPath::FrameDirectionalFeatherEnabled),
+    ));
+    // A group fades and blends as ONE object: the renderer brackets its
+    // members in a single blend group, which is not what setting each
+    // member's own opacity paints where two members overlap.
+    c.push(paints(
+        "SetProperty frameOpacity (Group)",
+        "geometry",
+        |m| Mutation::SetElementProperty {
+            element_id: ElementId::Group(overlapping_group(m)),
+            path: PropertyPath::FrameOpacity,
+            value: Value::Length(Some(40.0)),
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameBlendMode (Group)",
+        "geometry",
+        |m| Mutation::SetElementProperty {
+            element_id: ElementId::Group(overlapping_group(m)),
+            path: PropertyPath::FrameBlendMode,
+            value: Value::Text("Multiply".into()),
+        },
+    ));
+    // ---------------------------------------------------------------
+    // C-24 — stroke alignment on the kinds that draw it
+    //
+    // The renderer has offset a polygon's, an ellipse's and a text
+    // frame's stroked outline by the alignment since W1.5; only a
+    // Rectangle could be told to. Each case strokes the item first (as
+    // SETUP — an unstroked item has nothing to align) and measures the
+    // alignment alone.
+    // ---------------------------------------------------------------
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (Polygon)",
+        "geometry",
+        |m| {
+            let id = ElementId::Polygon(add_quad(m, 120.0, 120.0, 160.0, 120.0));
+            align_inside(m, id)
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (Oval)",
+        "geometry",
+        |m| {
+            let page_id = first_page(m);
+            let id = m
+                .apply_mutation(&Mutation::InsertOval {
+                    page_id,
+                    bounds: (120.0, 120.0, 280.0, 240.0),
+                })
+                .expect("insert oval")
+                .created_id
+                .expect("created id");
+            align_inside(m, id)
+        },
+    ));
+    c.push(paints(
+        "SetProperty frameStrokeAlignment (TextFrame)",
+        "layout",
+        |m| {
+            let id = paged_wire::ElementId::parse(&first_body_text_frame(m))
+                .expect("a parseable frame address");
+            align_inside(m, id)
+        },
+    ));
     c
+}
+
+/// Stroke `id` heavily (setup), then hand back the mutation that aligns
+/// that stroke to the inside of the outline.
+fn align_inside(m: &mut CanvasModel, id: ElementId) -> Mutation {
+    let color = some_color(m);
+    m.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id.clone(),
+        path: PropertyPath::FrameStrokeColor,
+        value: Value::ColorRef(Some(color)),
+    })
+    .expect("stroke colour");
+    m.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id.clone(),
+        path: PropertyPath::FrameStrokeWeight,
+        value: Value::Length(Some(8.0)),
+    })
+    .expect("stroke weight");
+    Mutation::SetElementProperty {
+        element_id: id,
+        path: PropertyPath::FrameStrokeAlignment,
+        value: Value::Text("InsideAlignment".into()),
+    }
+}
+
+/// Turn one frame effect on, on a filled quad minted through
+/// `insertPath` — a `Polygon`, exactly what the pen tool draws.
+fn enable_polygon_effect(m: &mut CanvasModel, path: PropertyPath) -> Mutation {
+    let id = add_quad(m, 120.0, 120.0, 160.0, 120.0);
+    Mutation::SetElementProperty {
+        element_id: ElementId::Polygon(id),
+        path,
+        value: Value::Bool(true),
+    }
+}
+
+/// Two overlapping filled rectangles in one group; returns the group id.
+fn overlapping_group(m: &mut CanvasModel) -> String {
+    let a = add_rect(m, (100.0, 100.0, 300.0, 300.0));
+    let b = add_rect(m, (150.0, 150.0, 350.0, 350.0));
+    let out = m
+        .apply_mutation(&Mutation::CreateGroup {
+            member_ids: vec![ElementId::Rectangle(a), ElementId::Rectangle(b)],
+        })
+        .expect("group");
+    match out.created_id.expect("created id") {
+        ElementId::Group(id) => id,
+        other => panic!("expected a Group, got {other:?}"),
+    }
 }
 
 /// Turn one frame effect on, on the fixture's first rectangle.
@@ -1352,6 +1510,7 @@ fn text_cases(c: &mut Vec<Case>) {
             .map(|(id, _)| id.clone())
             .expect("fixture carries a paragraph style with a point size");
         Mutation::ApplyStyle {
+            paragraph: None,
             story_id,
             start: 0,
             end: chars.min(40),
@@ -1366,11 +1525,13 @@ fn text_cases(c: &mut Vec<Case>) {
             story_id,
             offset: 0,
             field: FieldKind::PageNumber,
+            content_offset: None,
         }
     }));
     c.push(paints("InsertAnchoredFrame", "text", |m| {
         let (story_id, _) = biggest_story(m);
         Mutation::InsertAnchoredFrame {
+            paragraph: None,
             story_id,
             offset: 0,
             width: 60.0,
@@ -1395,6 +1556,7 @@ fn text_cases(c: &mut Vec<Case>) {
             start: 0,
             end: chars.min(12),
             url: "https://paged.media".into(),
+            page: None,
         }
     }));
     c.push(paints("SetFieldValue", "text", |m| {
@@ -1407,6 +1569,7 @@ fn text_cases(c: &mut Vec<Case>) {
                 key: "title".into(),
                 value: Some("BEFORE".into()),
             },
+            content_offset: None,
         })
         .expect("seed a placeholder");
         Mutation::SetFieldValue {
@@ -1675,6 +1838,16 @@ fn frame_cases(c: &mut Vec<Case>) {
             element_id: ElementId::Polygon(host),
         }
     }));
+    // C-64 — a duplicate paints its clone: a second copy of the path,
+    // offset, so the page gains an item. The source is a pen path (a
+    // `Polygon`), the kind the old Alt-drag clone could not reach.
+    c.push(paints("DuplicateElements", "geometry", |m| {
+        let id = add_quad(m, 120.0, 120.0, 160.0, 120.0);
+        Mutation::DuplicateElements {
+            element_ids: vec![ElementId::Polygon(id)],
+            offset: (40.0, 40.0),
+        }
+    }));
     c.push(when_used(
         "CreateGroup",
         "geometry",
@@ -1763,6 +1936,29 @@ fn frame_cases(c: &mut Vec<Case>) {
             caller: None,
         },
     ));
+    c.push(inert(
+        "SetPageMetadata",
+        "geometry",
+        "one Label KeyValuePair on a page — a carrier for plugin state (a \
+         slide's notes) with no paint of its own; the renderer never reads Label",
+        |m| Mutation::SetPageMetadata {
+            page: first_page(m),
+            key: "x-paged:sweep".into(),
+            value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
+            caller: None,
+        },
+    ));
+    c.push(inert(
+        "SetDocumentMetadata",
+        "geometry",
+        "one Label KeyValuePair on the DOCUMENT (v69) — plugin state that \
+         belongs to no frame; the renderer never reads Label",
+        |_| Mutation::SetDocumentMetadata {
+            key: "x-paged:sweep".into(),
+            value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
+            caller: None,
+        },
+    ));
     c.push(paints("Batch", "geometry", |m| {
         let id = rect_ids(m)[0].clone();
         let color = some_color(m);
@@ -1821,6 +2017,107 @@ fn page_cases(c: &mut Vec<Case>) {
     c.push(paints("ResizePage", "layout", |m| Mutation::ResizePage {
         page_id: first_page(m),
         bounds: (0.0, 0.0, 500.0, 400.0),
+    }));
+    c.push(paints("OnMaster", "masters", |m| {
+        // A master rectangle recoloured: every page using the master shows
+        // it. Only a master some page applies, chosen in id order (the
+        // map's own order is a hash's).
+        let applied: Vec<String> = m
+            .scene()
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter())
+            .filter_map(|p| {
+                p.applied_master
+                    .as_deref()?
+                    .rsplit('/')
+                    .next()
+                    .map(str::to_string)
+            })
+            .collect();
+        let mut masters: Vec<_> = m
+            .scene()
+            .master_spreads
+            .iter()
+            .filter(|(id, _)| applied.contains(id))
+            .collect();
+        masters.sort_by_key(|(id, _)| id.as_str());
+        let (master, rect) = masters
+            .into_iter()
+            .find_map(|(id, ms)| {
+                ms.spread
+                    .rectangles
+                    .first()
+                    .and_then(|r| r.self_id.clone())
+                    .map(|r| (id.clone(), r))
+            })
+            .expect("the masters fixture has a master rectangle");
+        let color = fresh_color(m);
+        Mutation::OnMaster {
+            master,
+            mutation: Box::new(Mutation::SetElementProperty {
+                element_id: ElementId::Rectangle(rect),
+                path: PropertyPath::FrameFillColor,
+                value: Value::ColorRef(Some(color)),
+            }),
+        }
+    }));
+    c.push(when_used(
+        "CreateMaster",
+        "masters",
+        "a master no page applies draws nowhere; applying it replaces the page's master items",
+        |_| Mutation::CreateMaster {
+            master: "uSweepMaster".into(),
+            name: Some("Sweep".into()),
+            width_pt: 612.0,
+            height_pt: 792.0,
+            duplicate_of: None,
+        },
+        |m| {
+            let page = first_page(m);
+            m.apply_mutation(&Mutation::ApplyMasterToPage {
+                page,
+                master: Some("MasterSpread/uSweepMaster".into()),
+            })
+            .expect("apply the new master");
+        },
+    ));
+    c.push(inert(
+        "DeleteMaster",
+        "masters",
+        "the deleted master was applied to no page, so no page drew it",
+        |m| {
+            m.apply_mutation(&Mutation::CreateMaster {
+                master: "uSweepMaster".into(),
+                name: None,
+                width_pt: 612.0,
+                height_pt: 792.0,
+                duplicate_of: None,
+            })
+            .expect("create a master to delete");
+            Mutation::DeleteMaster {
+                master: "uSweepMaster".into(),
+            }
+        },
+    ));
+    c.push(inert(
+        "RenameMaster",
+        "masters",
+        "a master's name labels it in lists; the renderer never reads it",
+        |m| {
+            let mut ids: Vec<_> = m.scene().master_spreads.keys().cloned().collect();
+            ids.sort();
+            Mutation::RenameMaster {
+                master: ids[0].clone(),
+                name: Some("Renamed".into()),
+            }
+        },
+    ));
+    c.push(paints("MovePage", "layout", |m| Mutation::MovePage {
+        // The second page moves to the front: the first page shows what
+        // the second did.
+        page: page_at(m, 1),
+        after: None,
     }));
     c.push(paints("DuplicatePage", "layout", |m| {
         Mutation::DuplicatePage {
@@ -2500,6 +2797,7 @@ fn style_cases(c: &mut Vec<Case>) {
             .expect("give the style a fill");
             let (story_id, chars) = biggest_story(m);
             m.apply_mutation(&Mutation::ApplyStyle {
+                paragraph: None,
                 story_id,
                 start: 0,
                 end: chars.min(40),
@@ -2550,6 +2848,7 @@ fn style_cases(c: &mut Vec<Case>) {
             .expect("give the style a fill");
             let (story_id, chars) = biggest_story(m);
             m.apply_mutation(&Mutation::ApplyStyle {
+                paragraph: None,
                 story_id,
                 start: 0,
                 end: chars.min(20),
@@ -2839,6 +3138,7 @@ fn seed_applied_character_style(m: &mut CanvasModel) -> String {
     .expect("give the style a fill");
     let (story_id, chars) = biggest_story(m);
     m.apply_mutation(&Mutation::ApplyStyle {
+        paragraph: None,
         story_id,
         start: 0,
         end: chars.min(20),
@@ -2890,6 +3190,10 @@ fn table_cases(c: &mut Vec<Case>) {
             table_id,
             at: 1,
         }
+    }));
+    c.push(paints("DeleteTable", "tables", |m| {
+        let (story_id, table_id) = first_table(m);
+        Mutation::DeleteTable { story_id, table_id }
     }));
     c.push(paints("DeleteTableRow", "tables", |m| {
         let (story_id, table_id) = first_table(m);

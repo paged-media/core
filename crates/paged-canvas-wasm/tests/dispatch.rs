@@ -854,18 +854,49 @@ fn register_font_reaches_the_open_document() {
         }),
     );
     assert_eq!(reg["kind"], "fontRegistered");
+    // v65 — the reply names the page the relayout changed, and only that
+    // page's GPU scene is re-encoded.
+    let page = core.model.as_ref().unwrap().built().pages[0].id.0.clone();
+    assert_eq!(
+        reg["payload"]["pageIds"],
+        serde_json::json!([page]),
+        "{reg}"
+    );
+    assert_eq!(reg["payload"]["pageStructureChanged"], false);
     assert!(
-        matches!(effect, CacheEffect::ClearAll),
-        "scene cache dropped"
+        matches!(effect, CacheEffect::InvalidatePages(ref p) if p == &[0]),
+        "only the changed page's scene is dropped"
     );
     assert_ne!(advances(&core), fallback, "the run lays out in Lora now");
+
+    // A face nothing asks for changes nothing and reports no page.
+    let (unused, effect) = roundtrip_with_effect(
+        &mut core,
+        &serde_json::json!({
+            "seq": 9,
+            "protocol": protocol(),
+            "kind": "registerFont",
+            "payload": { "family": "Nobody Uses This", "bytes": std::fs::read(fonts.join("Lora.ttf")).unwrap() }
+        }),
+    );
+    assert_eq!(
+        unused["payload"]["pageIds"],
+        serde_json::json!([]),
+        "{unused}"
+    );
+    assert!(matches!(effect, CacheEffect::None));
 
     let (cleared, effect) = roundtrip_with_effect(
         &mut core,
         &serde_json::json!({ "seq": 3, "protocol": protocol(), "kind": "clearFontRegistry" }),
     );
     assert_eq!(cleared["kind"], "fontRegistryCleared");
-    assert!(matches!(effect, CacheEffect::ClearAll));
+    assert_eq!(
+        cleared["payload"]["pageIds"],
+        serde_json::json!([page]),
+        "{cleared}"
+    );
+    assert!(matches!(effect, CacheEffect::InvalidatePages(ref p) if p == &[0]));
     assert_eq!(advances(&core), fallback, "back to the fallback face");
 }
 
@@ -1549,4 +1580,283 @@ fn a_partial_budget_only_overrides_what_it_names() {
         serde_json::Value::Null,
         "{reply}"
     );
+}
+
+/// v65 — `requestStyleProperties` answers a style definition's settable
+/// properties in the setter's shapes: a value written through
+/// `setStyleProperty` comes back as the same JSON, an unknown style is
+/// `result: null`, and nothing is answered without a document.
+#[test]
+fn request_style_properties_reads_back_what_set_style_property_wrote() {
+    let mut empty = WorkerCore::new();
+    let none = roundtrip(
+        &mut empty,
+        &serde_json::json!({
+            "seq": 1, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/x" }
+        }),
+    );
+    assert_eq!(none["kind"], "mutationFailed", "{none}");
+
+    let mut core = loaded_core();
+    let created = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 2, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "createParagraphStyle",
+                         "args": { "selfId": "ParagraphStyle/s", "name": "S" } }
+        }),
+    );
+    assert_eq!(created["kind"], "mutationApplied", "{created}");
+    let composer = serde_json::json!({ "type": "text", "value": "HL Single" });
+    let set = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 3, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "setStyleProperty",
+                         "args": { "collection": "paragraph", "styleId": "ParagraphStyle/s",
+                                   "path": "paragraphComposer", "value": composer } }
+        }),
+    );
+    assert_eq!(set["kind"], "mutationApplied", "{set}");
+
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 4, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/s" }
+        }),
+    );
+    assert_eq!(reply["kind"], "styleProperties", "{reply}");
+    let result = &reply["payload"]["result"];
+    assert_eq!(result["styleId"], "ParagraphStyle/s");
+    assert_eq!(result["name"], "S");
+    let entries = result["entries"].as_array().expect("entries");
+    let entry = entries
+        .iter()
+        .find(|e| e["path"] == "paragraphComposer")
+        .expect("the composer is read");
+    assert_eq!(entry["value"], composer, "{entry}");
+    assert!(entries.len() > 30, "every settable paragraph-style path");
+
+    let unknown = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 5, "protocol": protocol(), "kind": "requestStyleProperties",
+            "payload": { "collection": "paragraph", "styleId": "ParagraphStyle/none" }
+        }),
+    );
+    assert_eq!(unknown["kind"], "styleProperties");
+    assert!(unknown["payload"]["result"].is_null(), "{unknown}");
+}
+
+// ---------------------------------------------------------------------
+// C-1 — a vector scene-layer submit re-encodes only the frame's page
+// ---------------------------------------------------------------------
+
+/// Two spreads of one page each: `tf1` on page 0, `tf2` on page 1.
+fn two_page_core() -> WorkerCore {
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Spread src="Spreads/Spread_s2.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+        )
+        .unwrap();
+        for (spread, page, frame) in [("s1", "p1", "tf1"), ("s2", "p2", "tf2")] {
+            zip.start_file(format!("Spreads/Spread_{spread}.xml"), opts)
+                .unwrap();
+            zip.write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="{spread}" PageCount="1">
+<Page Self="{page}" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<Rectangle Self="{frame}" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1, "protocol": protocol(), "kind": "loadDocument",
+            "payload": { "bytes": buf }
+        }),
+    );
+    assert_eq!(reply["kind"], "documentLoaded", "fixture loads: {reply}");
+    core
+}
+
+fn square(rgb: f32) -> serde_json::Value {
+    serde_json::json!({ "items": [ { "kind": "fillPath",
+        "path": [ { "op": "moveTo", "x": 0.0, "y": 0.0 },
+                  { "op": "lineTo", "x": 50.0, "y": 0.0 },
+                  { "op": "lineTo", "x": 50.0, "y": 50.0 },
+                  { "op": "close" } ],
+        "paint": { "r": rgb, "g": 0.0, "b": 0.0, "a": 1.0 } } ] })
+}
+
+fn submit(core: &mut WorkerCore, frame: &str, layer: serde_json::Value) -> CacheEffect {
+    let (reply, effect) = roundtrip_with_effect(
+        core,
+        &serde_json::json!({ "seq": 80, "protocol": protocol(), "kind": "submitSceneLayer",
+            "payload": { "elementId": frame, "layer": layer } }),
+    );
+    assert_eq!(reply["kind"], "sceneLayerApplied", "{reply}");
+    assert!(reply["payload"]["applied"].as_bool().unwrap(), "{reply}");
+    effect
+}
+
+fn clear(core: &mut WorkerCore, frame: &str) -> CacheEffect {
+    let (reply, effect) = roundtrip_with_effect(
+        core,
+        &serde_json::json!({ "seq": 81, "protocol": protocol(), "kind": "clearSceneLayer",
+            "payload": { "elementId": frame } }),
+    );
+    assert!(reply["payload"]["applied"].as_bool().unwrap(), "{reply}");
+    effect
+}
+
+#[test]
+fn a_scene_layer_submit_invalidates_only_its_frames_page() {
+    let mut core = two_page_core();
+    // The ClearAll this used to answer dropped page 2's cached scene too,
+    // so a sheet edit on page 1 re-encoded every page of the document.
+    assert_eq!(
+        submit(&mut core, "tf1", square(1.0)),
+        CacheEffect::InvalidatePages(vec![0]),
+        "a submit on page 1 leaves page 2's cache intact",
+    );
+    assert_eq!(
+        submit(&mut core, "tf2", square(1.0)),
+        CacheEffect::InvalidatePages(vec![1]),
+    );
+    assert_eq!(
+        submit(&mut core, "tf1", square(0.5)),
+        CacheEffect::InvalidatePages(vec![0]),
+        "a replace re-encodes the same page",
+    );
+    // An emptied layer still re-encodes the page that showed the old one.
+    assert_eq!(
+        submit(&mut core, "tf1", serde_json::json!({ "items": [] })),
+        CacheEffect::InvalidatePages(vec![0]),
+    );
+    assert_eq!(
+        clear(&mut core, "tf2"),
+        CacheEffect::InvalidatePages(vec![1])
+    );
+    // Nothing drawn before or after: nothing to re-encode.
+    assert_eq!(clear(&mut core, "tf2"), CacheEffect::None);
+    assert_eq!(
+        submit(&mut core, "no-such-frame", square(1.0)),
+        CacheEffect::None
+    );
+}
+
+// ---------------------------------------------------------------------
+// Element geometry names a text frame's story — even an EMPTY frame's
+// ---------------------------------------------------------------------
+
+#[test]
+fn element_geometry_names_an_empty_text_frames_story() {
+    let mut core = loaded_core();
+    let applied = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 90, "protocol": protocol(), "kind": "mutate",
+            "payload": { "op": "insertTextFrame",
+                "args": { "pageId": "p1", "bounds": [20.0, 20.0, 120.0, 220.0] } } }),
+    );
+    assert_eq!(applied["kind"], "mutationApplied", "{applied}");
+    let frame = applied["payload"]["createdId"].clone();
+    // hitTest answers storyId: null for this frame (nothing laid out);
+    // the geometry door is where its story is read.
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 91, "protocol": protocol(),
+            "kind": "requestElementGeometry",
+            "payload": { "ids": [frame, { "kind": "textFrame", "id": "tf1" },
+                                 { "kind": "rectangle", "id": "nope" }] } }),
+    );
+    let items = reply["payload"]["items"].as_array().expect("items");
+    let fresh = items[0]["storyId"].as_str().expect("the minted story");
+    assert!(fresh.starts_with("Story/"), "{reply}");
+    assert_eq!(items[1]["storyId"], "story1", "an authored frame too");
+    assert_eq!(items.len(), 2, "an unknown id answers nothing");
+}
+
+// ---------------------------------------------------------------------
+// v67 — snapping over the wire (RFI C-68)
+// ---------------------------------------------------------------------
+
+fn snap_query(seq: u64, x: f32, y: f32) -> serde_json::Value {
+    serde_json::json!({
+        "seq": seq,
+        "protocol": protocol(),
+        "kind": "requestSnapPoint",
+        "payload": { "query": { "pageId": "p1", "point": [x, y], "cameraScale": 1.0 } }
+    })
+}
+
+#[test]
+fn request_snap_point_lands_on_a_text_frames_corner() {
+    let mut core = loaded_core();
+    let reply = roundtrip(&mut core, &snap_query(2, 102.0, 98.0));
+    assert_eq!(reply["kind"], "snapPoint", "{reply}");
+    let r = &reply["payload"]["result"];
+    assert_eq!(r["snapped"], true);
+    assert_eq!(r["point"], serde_json::json!([100.0, 100.0]));
+    assert_eq!(r["pointTarget"]["source"], "corner");
+    assert_eq!(
+        r["pointTarget"]["element"],
+        serde_json::json!({ "kind": "textFrame", "id": "tf1" })
+    );
+}
+
+#[test]
+fn snap_settings_survive_a_load_and_switch_snapping_off() {
+    let mut core = WorkerCore::new();
+    let reply = roundtrip(
+        &mut core,
+        &serde_json::json!({
+            "seq": 1,
+            "protocol": protocol(),
+            "kind": "setSnapSettings",
+            "payload": { "settings": { "enabled": false } }
+        }),
+    );
+    assert_eq!(reply["kind"], "snapSettingsApplied", "{reply}");
+    // Unnamed fields take their defaults.
+    assert_eq!(reply["payload"]["settings"]["tolerancePx"], 4.0);
+    let loaded = roundtrip(&mut core, &load_msg(2));
+    assert_eq!(loaded["kind"], "documentLoaded");
+    let r = roundtrip(&mut core, &snap_query(3, 102.0, 98.0));
+    assert_eq!(r["payload"]["result"]["snapped"], false);
+    assert_eq!(
+        r["payload"]["result"]["point"],
+        serde_json::json!([102.0, 98.0])
+    );
+}
+
+#[test]
+fn request_snap_point_without_a_document_answers_the_point() {
+    let mut core = WorkerCore::new();
+    let r = roundtrip(&mut core, &snap_query(1, 10.0, 20.0));
+    assert_eq!(r["kind"], "snapPoint");
+    assert_eq!(r["payload"]["result"]["snapped"], false);
 }

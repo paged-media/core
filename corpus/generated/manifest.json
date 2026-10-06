@@ -19,6 +19,24 @@
       "report": "/tmp/idml-generated-diff/annual-base/report.json"
     },
     {
+      "name": "blank-paragraphs",
+      "idml": "blank-paragraphs.idml",
+      "pdf": "blank-paragraphs.pdf",
+      "pages": 1,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/blank-paragraphs",
+      "report": "/tmp/idml-generated-diff/blank-paragraphs/report.json"
+    },
+    {
+      "name": "composer",
+      "idml": "composer.idml",
+      "pdf": "composer.pdf",
+      "pages": 8,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/composer",
+      "report": "/tmp/idml-generated-diff/composer/report.json"
+    },
+    {
       "name": "conditions",
       "idml": "conditions.idml",
       "pdf": "conditions.pdf",
@@ -91,6 +109,15 @@
       "report": "/tmp/idml-generated-diff/gradients/report.json"
     },
     {
+      "name": "hard-hyphen",
+      "idml": "hard-hyphen.idml",
+      "pdf": "hard-hyphen.pdf",
+      "pages": 1,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/hard-hyphen",
+      "report": "/tmp/idml-generated-diff/hard-hyphen/report.json"
+    },
+    {
       "name": "image-clipping",
       "idml": "image-clipping.idml",
       "pdf": "image-clipping.pdf",
@@ -132,8 +159,8 @@
       "pdf": "keeps-reflow.pdf",
       "pages": 9,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/90730297-cc1b-4798-ad9c-623f3d1e6b0e/scratchpad/widow/gate1/keeps-reflow",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/90730297-cc1b-4798-ad9c-623f3d1e6b0e/scratchpad/widow/gate1/keeps-reflow/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/keeps-reflow",
+      "report": "/tmp/idml-generated-diff/keeps-reflow/report.json"
     },
     {
       "name": "layers-z",
@@ -215,6 +242,15 @@
       "passing": 3,
       "diff_dir": "/tmp/idml-generated-diff/masters",
       "report": "/tmp/idml-generated-diff/masters/report.json"
+    },
+    {
+      "name": "mixed-leading",
+      "idml": "mixed-leading.idml",
+      "pdf": "mixed-leading.pdf",
+      "pages": 1,
+      "passing": 1,
+      "diff_dir": "/tmp/idml-generated-diff/mixed-leading",
+      "report": "/tmp/idml-generated-diff/mixed-leading/report.json"
     },
     {
       "name": "navigation",
@@ -391,8 +427,8 @@
       "name": "tables-rows",
       "idml": "tables-rows.idml",
       "pdf": "tables-rows.pdf",
-      "pages": 11,
-      "passing": 8,
+      "pages": 12,
+      "passing": 11,
       "diff_dir": "/tmp/idml-generated-diff/tables-rows",
       "report": "/tmp/idml-generated-diff/tables-rows/report.json"
     },

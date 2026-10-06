@@ -495,6 +495,7 @@ fn handle(live: &mut Live, req: Request) -> Result<Value> {
                 page_id: page_id.clone(),
                 target_width_px,
                 dpi: Some(dpi),
+                hide_items: Vec::new(),
             })?;
             let png = expect_reply!(reply, WorkerToMainKind::SnapshotReady(p) => p,
                 format!("render page {}", page_id.0))?;

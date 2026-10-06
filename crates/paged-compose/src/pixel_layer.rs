@@ -61,8 +61,9 @@ pub struct PixelLayer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
 #[serde(rename_all = "camelCase")]
 pub struct PixelTile {
+    #[serde(with = "crate::scene_layer::rgba_bytes")]
     #[tsify(type = "number[]")]
-    pub rgba: Vec<u8>,
+    pub rgba: bytes::Bytes,
     pub width: u32,
     pub height: u32,
     pub x: f32,
@@ -117,7 +118,7 @@ mod tests {
 
     fn tile(width: u32, height: u32, x: f32, y: f32, w: f32, h: f32, fill: u8) -> PixelTile {
         PixelTile {
-            rgba: vec![fill; (width * height * 4) as usize],
+            rgba: vec![fill; (width * height * 4) as usize].into(),
             width,
             height,
             x,

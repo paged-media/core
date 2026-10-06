@@ -19,7 +19,7 @@ use paged_scene::Document;
 use crate::error::OperationError;
 use crate::invert::invert_remove_node;
 use crate::operation::{
-    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PathAnchorSpec, PropertyPath,
+    AppliedOperation, InvalidationHint, NodeId, NodeSpec, Operation, PropertyPath,
 };
 
 // ---------------------------------------------------------------------------
@@ -63,6 +63,40 @@ pub(super) fn apply_remove_node(
                 .to_string(),
         });
     }
+    // C-76: a CONTAINER takes what was pasted into it along, the way
+    // InDesign deletes a frame's pasted-in content with the frame. It
+    // used to leave the children in their kind vecs under a
+    // `nested_children` entry whose host was gone — the editor saw them
+    // come back as free top-level items, and undo restored the
+    // container beside them with the nesting lost.
+    //
+    // Done as the batch the user could have sent: each child released
+    // and removed (last first, so each release captures the index its
+    // undo pastes it back at), then the container. The batch's inverse
+    // re-inserts the container, then each child and pastes it back in,
+    // in order — the nesting and every z slot come back exactly. A
+    // child that is itself a container recurses through this same arm.
+    let pasted_in = pasted_in_children(doc, node);
+    if !pasted_in.is_empty() {
+        let mut ops = Vec::with_capacity(2 * pasted_in.len() + 1);
+        for child in pasted_in.into_iter().rev() {
+            ops.push(Operation::ReleaseFrom {
+                child: child.clone(),
+                restore_slot: None,
+            });
+            ops.push(Operation::RemoveNode { node: child });
+        }
+        ops.push(Operation::RemoveNode { node: node.clone() });
+        let applied = super::apply_inner(doc, &Operation::Batch { ops })?;
+        return Ok(AppliedOperation {
+            op: Operation::RemoveNode { node: node.clone() },
+            inverse: applied.inverse,
+            invalidation: InvalidationHint {
+                structural: true,
+                ..Default::default()
+            },
+        });
+    }
     let (parent, position, captured, z_slot) = remove_and_capture(doc, node)?;
     let inverse = invert_remove_node(parent, position, captured, z_slot);
     Ok(AppliedOperation {
@@ -75,9 +109,83 @@ pub(super) fn apply_remove_node(
     })
 }
 
-/// Locate `node` in its containing spread, snapshot its current state
-/// into a `NodeSpec`, and remove it (including its `frames_in_order`
-/// entry). Returns `(parent_id, position, spec, z_slot)` for the
+/// The items pasted into `node` (B-18), in their stored order; empty
+/// when it hosts none.
+fn pasted_in_children(doc: &Document, node: &NodeId) -> Vec<NodeId> {
+    let id = node.self_id();
+    for parsed in &doc.spreads {
+        let spread = &parsed.spread;
+        if super::nested::leaf_ref_in_spread(spread, node).is_none() {
+            continue;
+        }
+        return spread
+            .nested_children
+            .get(id)
+            .map(|refs| {
+                refs.iter()
+                    .filter_map(|r| super::layer::node_for_frame_ref(spread, *r))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    Vec::new()
+}
+
+/// Take a just-removed item's ref out of whichever list named it, and
+/// say where it was — as the `(parent, slot)` an `InsertNode` puts it
+/// back with. The spread and its z slot for a top-level item; C-74: the
+/// GROUP and the member slot for a group's member, so undo re-seats it
+/// in its group. (A member of an id-less group cannot be addressed that
+/// way and falls back to the spread, on top.)
+fn release_home(parsed: &mut paged_scene::ParsedSpread, r: FrameRef) -> (NodeId, Option<usize>) {
+    let home = ref_home(&parsed.spread, r);
+    let z_slot = unregister_frame_ref(&mut parsed.spread, r, fr_index(&r));
+    if let Some(RefHome::Group(group_idx, slot)) = home {
+        // The removed item is a leaf, so group indices have not moved.
+        if let Some(gid) = parsed.spread.groups[group_idx].self_id.clone() {
+            return (NodeId::Group(gid), Some(slot));
+        }
+    }
+    (spread_parent_id(parsed), z_slot)
+}
+
+/// C-75 — capture a just-removed page item WHOLE, as the
+/// [`NodeSpec::Captured`] its inverse re-inserts.
+///
+/// `item` is the model struct itself, serialised as it stood — not a
+/// list of the fields someone thought to copy, which is what made undo
+/// of a delete restore a bare frame. The rows of the spread's side maps
+/// keyed by the item's id go into the capture too and LEAVE the spread:
+/// they used to stay behind, and since an id is minted as "highest in
+/// the document + 1", the next item created after deleting the newest
+/// one took the same id and with it the deleted item's plugin metadata.
+///
+/// `image_bytes` is carried beside the JSON (the caller has already
+/// taken it out of `item`), so an inline image is not re-encoded as a
+/// number array on every delete.
+fn capture<T: serde::Serialize>(
+    spread: &mut paged_model::Spread,
+    node: &NodeId,
+    item: &T,
+    image_bytes: Option<Vec<u8>>,
+) -> NodeSpec {
+    let id = node.self_id();
+    let json = serde_json::json!({
+        "item": item,
+        "labels": spread.labels.remove(id),
+        "imageMetadata": spread.image_metadata.remove(id),
+    })
+    .to_string();
+    NodeSpec::Captured {
+        node: node.clone(),
+        json,
+        image_bytes,
+    }
+}
+
+/// Locate `node` in its containing spread, capture it whole
+/// ([`capture`]), and remove it (including its entry in whichever list
+/// named it). Returns `(parent_id, position, spec, z_slot)` for the
 /// caller to feed into the inverse.
 pub(super) fn remove_and_capture(
     doc: &mut Document,
@@ -93,20 +201,9 @@ pub(super) fn remove_and_capture(
                     .position(|f| f.self_id.as_deref() == Some(id.as_str()))
                 {
                     let frame = parsed.spread.text_frames.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::TextFrame(0), pos);
-                    let parent = spread_parent_id(parsed);
-                    let spec = NodeSpec::TextFrame {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(frame.bounds),
-                        fill_color: frame.fill_color,
-                        stroke_color: frame.stroke_color,
-                        stroke_weight: frame.stroke_weight,
-                        item_transform: frame.item_transform,
-                        // Captured so undo-of-delete REATTACHES the
-                        // story (the text comes back with the frame).
-                        parent_story: frame.parent_story,
-                    };
+                    let (parent, z_slot) = release_home(parsed, FrameRef::TextFrame(pos));
+                    let image_bytes = None;
+                    let spec = capture(&mut parsed.spread, node, &frame, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -120,18 +217,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|r| r.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let rect = parsed.spread.rectangles.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::Rectangle(0), pos);
-                    let parent = spread_parent_id(parsed);
-                    let spec = NodeSpec::Rectangle {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(rect.bounds),
-                        fill_color: rect.fill_color,
-                        stroke_color: rect.stroke_color,
-                        stroke_weight: rect.stroke_weight,
-                        item_transform: rect.item_transform,
-                    };
+                    let mut rect = parsed.spread.rectangles.remove(pos);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Rectangle(pos));
+                    let image_bytes = rect.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &rect, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -145,17 +234,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|o| o.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let oval = parsed.spread.ovals.remove(pos);
-                    let z_slot = unregister_frame_ref(&mut parsed.spread, FrameRef::Oval(0), pos);
-                    let parent = spread_parent_id(parsed);
-                    let spec = NodeSpec::Oval {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(oval.bounds),
-                        fill_color: oval.fill_color,
-                        stroke_color: oval.stroke_color,
-                        stroke_weight: oval.stroke_weight,
-                        item_transform: oval.item_transform,
-                    };
+                    let mut oval = parsed.spread.ovals.remove(pos);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Oval(pos));
+                    let image_bytes = oval.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &oval, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -170,23 +252,9 @@ pub(super) fn remove_and_capture(
                     .position(|l| l.self_id.as_deref() == Some(id.as_str()))
                 {
                     let line = parsed.spread.graphic_lines.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::GraphicLine(0), pos);
-                    let parent = spread_parent_id(parsed);
-                    let spec = NodeSpec::GraphicLine {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(line.bounds),
-                        anchors: line
-                            .anchors
-                            .iter()
-                            .map(PathAnchorSpec::from_parse)
-                            .collect(),
-                        subpath_starts: line.subpath_starts,
-                        subpath_open: line.subpath_open,
-                        stroke_color: line.stroke_color,
-                        stroke_weight: line.stroke_weight,
-                        item_transform: line.item_transform,
-                    };
+                    let (parent, z_slot) = release_home(parsed, FrameRef::GraphicLine(pos));
+                    let image_bytes = None;
+                    let spec = capture(&mut parsed.spread, node, &line, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -200,25 +268,10 @@ pub(super) fn remove_and_capture(
                     .iter()
                     .position(|p| p.self_id.as_deref() == Some(id.as_str()))
                 {
-                    let poly = parsed.spread.polygons.remove(pos);
-                    let z_slot =
-                        unregister_frame_ref(&mut parsed.spread, FrameRef::Polygon(0), pos);
-                    let parent = spread_parent_id(parsed);
-                    let spec = NodeSpec::Polygon {
-                        self_id: id.clone(),
-                        bounds: bounds_to_array(poly.bounds),
-                        anchors: poly
-                            .anchors
-                            .iter()
-                            .map(PathAnchorSpec::from_parse)
-                            .collect(),
-                        subpath_starts: poly.subpath_starts,
-                        subpath_open: poly.subpath_open,
-                        fill_color: poly.fill_color,
-                        stroke_color: poly.stroke_color,
-                        stroke_weight: poly.stroke_weight,
-                        item_transform: poly.item_transform,
-                    };
+                    let mut poly = parsed.spread.polygons.remove(pos);
+                    let (parent, z_slot) = release_home(parsed, FrameRef::Polygon(pos));
+                    let image_bytes = poly.image_bytes.take();
+                    let spec = capture(&mut parsed.spread, node, &poly, image_bytes);
                     return Ok((parent, pos, spec, z_slot));
                 }
             }
@@ -238,33 +291,20 @@ pub(super) fn remove_and_capture(
             let Some((si, pi)) = find_table_pos(doc, story_id, table_id) else {
                 return Err(OperationError::NodeNotFound(node.clone()));
             };
+            // The host paragraph is captured WHOLE — every cell's text,
+            // styling and spans — so the inverse puts back the table that
+            // was there, at the paragraph it occupied. It used to hand back
+            // a `NodeSpec::Table` of the bare grid, which re-inserted an
+            // empty table at the END of the story: undoing a delete lost
+            // every cell. The parent is the host story; `position` is the
+            // paragraph index; z_slot is N/A for story content.
             let para = doc.stories[si].story.paragraphs.remove(pi);
-            let table = para
-                .table
-                .expect("find_table_pos guarantees the paragraph carries a table");
-            let column_widths: Vec<f32> = table
-                .columns
-                .iter()
-                .map(|c| c.single_column_width.unwrap_or(0.0))
-                .collect();
-            let row_heights: Vec<f32> = table
-                .rows
-                .iter()
-                .map(|r| r.single_row_height.unwrap_or(0.0))
-                .collect();
-            let spec = NodeSpec::Table {
-                self_id: table_id.clone(),
-                rows: table.rows.len() as u32,
-                cols: table.columns.len().max(table.column_count as usize) as u32,
-                header_rows: table.header_row_count,
-                footer_rows: table.footer_row_count,
-                column_widths,
-                row_heights,
+            let json = serde_json::json!({ "paragraph": para }).to_string();
+            let spec = NodeSpec::Captured {
+                node: node.clone(),
+                json,
+                image_bytes: None,
             };
-            // The parent is the host story; position is the dropped
-            // paragraph index (accepted but ignored by re-insert, which
-            // appends — see `apply_insert_table`). z_slot is N/A for a
-            // story-nested node.
             Ok((NodeId::Story(story_id.clone()), pi, spec, None))
         }
         _ => Err(OperationError::UnsupportedProperty {

@@ -721,8 +721,22 @@ pub fn compose_paragraph(
         // With hyphenation off a word still breaks at its discretionary
         // hyphens (`soft_hyphen_opportunities`), under the same limits and
         // zone; route it through the segmenting arm below.
+        // A hyphen the word already has is a break as well, hyphenation on
+        // or off (`hard_hyphen_opportunities`).
+        let hard = if zone_allows_hyphenation {
+            crate::hyphenate::hard_hyphen_opportunities(word_text)
+        } else {
+            Vec::new()
+        };
         let soft = if options.hyphenator.is_none() && zone_allows_hyphenation {
-            soft_hyphen_opportunities(word_text, &options.hyphenation_limits, i + 1 == words.len())
+            crate::hyphenate::merge_opportunities(
+                soft_hyphen_opportunities(
+                    word_text,
+                    &options.hyphenation_limits,
+                    i + 1 == words.len(),
+                ),
+                hard.clone(),
+            )
         } else {
             Vec::new()
         };
@@ -785,7 +799,10 @@ pub fn compose_paragraph(
                 emit_segmented_word(
                     word_text,
                     w.start,
-                    &h.opportunities_for(word_text, &options.hyphenation_limits, is_last_word),
+                    &crate::hyphenate::merge_opportunities(
+                        h.opportunities_for(word_text, &options.hyphenation_limits, is_last_word),
+                        hard,
+                    ),
                     measurer,
                     hyphen_width,
                     options.hyphen_penalty,
@@ -976,16 +993,19 @@ fn emit_segmented_word(
             word_start + offset,
             false,
         );
+        // After a hyphen the word already has, the line gains no hyphen
+        // glyph and no width.
+        let hard = crate::hyphenate::breaks_after_hard_hyphen(word_text, offset);
         push(
             items,
             meta,
             Item::Penalty {
-                width: hyphen_width,
+                width: if hard { 0 } else { hyphen_width },
                 penalty: hyphen_penalty,
                 flagged: true,
             },
             word_start + offset,
-            true,
+            !hard,
         );
         seg_start = offset;
     }

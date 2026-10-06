@@ -91,6 +91,7 @@ fn anchor_at(point: (f32, f32)) -> GestureAnchor {
     GestureAnchor {
         page_id: paged_renderer::PageId("p1".into()),
         point_in_page: point,
+        pivot_in_page: None,
     }
 }
 
@@ -391,5 +392,67 @@ fn scale_with_shift_locks_aspect() {
         "aspect not locked: sx={}, sy={}",
         mt[0],
         mt[3]
+    );
+}
+
+/// C-67 — an explicit pivot. Frame tf1 is [100,100]-[300,300] (centroid
+/// (200,200)). Rotating 90° about its TOP-LEFT corner (100,100) must keep
+/// that corner fixed — so the frame's centre lands at (0,200), where the
+/// centroid default would have left it at (200,200).
+#[test]
+fn rotate_90_degrees_about_an_explicit_pivot_keeps_the_pivot_fixed() {
+    let mut m = model();
+    let anchor = GestureAnchor {
+        page_id: paged_renderer::PageId("p1".into()),
+        // Pointer starts to the right of the pivot …
+        point_in_page: (200.0, 100.0),
+        pivot_in_page: Some((100.0, 100.0)),
+    };
+    let h = m
+        .begin_gesture(
+            vec![ElementId::TextFrame("tf1".into())],
+            GestureType::Rotate,
+            Some(anchor),
+        )
+        .expect("begin");
+    // … and ends straight below it: +90° about (100,100).
+    m.update_gesture(h, (-100.0, 100.0), GestureModifiers::default())
+        .expect("update");
+    m.commit_gesture(h).expect("commit");
+    let t = tf_transform(&m, "tf1").expect("transform present");
+    let map = |x: f32, y: f32| (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]);
+    let corner = map(100.0, 100.0);
+    assert!(
+        (corner.0 - 100.0).abs() < 1e-2 && (corner.1 - 100.0).abs() < 1e-2,
+        "the pivot corner stays put: {corner:?}"
+    );
+    let centre = map(200.0, 200.0);
+    assert!(
+        (centre.0 - 0.0).abs() < 1e-2 && (centre.1 - 200.0).abs() < 1e-2,
+        "the centre swings about the corner: {centre:?}"
+    );
+}
+
+#[test]
+fn an_absent_pivot_keeps_the_centroid_default() {
+    let mut m = model();
+    let h = m
+        .begin_gesture(
+            vec![ElementId::TextFrame("tf1".into())],
+            GestureType::Rotate,
+            Some(anchor_at((300.0, 200.0))),
+        )
+        .expect("begin");
+    m.update_gesture(h, (-100.0, 100.0), GestureModifiers::default())
+        .expect("update");
+    m.commit_gesture(h).expect("commit");
+    let t = tf_transform(&m, "tf1").expect("transform present");
+    let centre = (
+        t[0] * 200.0 + t[2] * 200.0 + t[4],
+        t[1] * 200.0 + t[3] * 200.0 + t[5],
+    );
+    assert!(
+        (centre.0 - 200.0).abs() < 1e-2 && (centre.1 - 200.0).abs() < 1e-2,
+        "{centre:?}"
     );
 }

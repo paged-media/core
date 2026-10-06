@@ -17,6 +17,7 @@
 
 pub mod anchored;
 pub mod annual_base;
+pub mod blank_paragraphs;
 pub mod composer;
 pub mod conditions;
 pub mod corners;
@@ -27,6 +28,7 @@ pub mod forced_line_break;
 pub mod geometry;
 pub mod geometry_groups;
 pub mod gradients;
+pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
@@ -34,6 +36,7 @@ pub mod keeps;
 pub mod keeps_reflow;
 pub mod layers_z;
 pub mod layout;
+pub mod line_ends;
 pub mod links_broken;
 pub mod links_ok;
 pub mod list_marker_styles;
@@ -41,6 +44,7 @@ pub mod list_markers;
 pub mod list_overrides;
 pub mod markers;
 pub mod masters;
+pub mod mixed_leading;
 pub mod navigation;
 pub mod nested_groups;
 pub mod numbering;
@@ -119,6 +123,9 @@ pub const SAMPLES: &[&str] = &[
     "navigation",
     "styles-cascade",
     "layout",
+    "blank-paragraphs",
+    "hard-hyphen",
+    "mixed-leading",
     "keeps",
     "start-paragraph",
     "span-columns",
@@ -140,6 +147,7 @@ pub const SAMPLES: &[&str] = &[
     "soft-hyphens",
     "showcase-base",
     "annual-base",
+    "line-ends",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -180,6 +188,9 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "navigation" => navigation::build(),
         "styles-cascade" => styles_cascade::build(),
         "layout" => layout::build(),
+        "blank-paragraphs" => blank_paragraphs::build(),
+        "hard-hyphen" => hard_hyphen::build(),
+        "mixed-leading" => mixed_leading::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
         "span-columns" => span_columns::build(),
@@ -201,6 +212,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "soft-hyphens" => soft_hyphens::build(),
         "showcase-base" => showcase_base::build(),
         "annual-base" => annual_base::build(),
+        "line-ends" => line_ends::build(),
         _ => return None,
     })
 }
@@ -229,7 +241,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            56,
+            60,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

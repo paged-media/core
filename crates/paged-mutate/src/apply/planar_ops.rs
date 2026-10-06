@@ -158,7 +158,7 @@ pub(super) fn apply_pathfinder_faces(
     let plan = Plan {
         results: vec![ResultRegion {
             owner,
-            anchors,
+            anchors: oriented(anchors, &starts),
             subpath_starts: starts,
             subpath_open: open,
             kind: ResultKind::Region,
@@ -280,14 +280,21 @@ fn region_plan(
             }
         }
         PathfinderRegionVerb::MinusBack => {
-            // The BACKMOST object minus everything in front of it: the
-            // faces covered by it alone.
-            let back = n - 1;
+            // C-80 — the FRONTMOST object minus everything behind it:
+            // the faces covered by it alone, in its own paint. This
+            // used to keep the BACKMOST object instead, which is
+            // Illustrator's Minus FRONT: on the oracle's two rectangles
+            // it answered 6000 pt² in the back object's red where
+            // Illustrator 30.1 answers 6800 pt² in the front object's
+            // blue, and passing the ids in reverse reproduced
+            // Illustrator exactly. `elements` is top-to-bottom, so the
+            // front is index 0.
+            let front = 0;
             let mine: Vec<&PlanarFace> = faces
                 .iter()
-                .filter(|f| f.signature.as_slice() == [back])
+                .filter(|f| f.signature.as_slice() == [front])
                 .collect();
-            if let Some(region) = united(back, &mine) {
+            if let Some(region) = united(front, &mine) {
                 results.push(region);
             }
         }
@@ -331,11 +338,27 @@ fn outline_plan(
     })
 }
 
+/// C-81 — a region result runs counter-clockwise on the page, holes
+/// the other way: Illustrator's direction for every Pathfinder result.
+fn oriented(
+    mut anchors: Vec<paged_model::PathAnchor>,
+    starts: &[usize],
+) -> Vec<paged_model::PathAnchor> {
+    let closed = vec![false; starts.len().max(1)];
+    crate::orientation::orient_contours(
+        &mut anchors,
+        starts,
+        &closed,
+        crate::orientation::Turn::CounterClockwise,
+    );
+    anchors
+}
+
 fn region_from(owner: usize, face: &PlanarFace) -> ResultRegion {
     ResultRegion {
         owner,
         subpath_open: vec![false; face.subpath_starts.len().max(1)],
-        anchors: face.anchors.clone(),
+        anchors: oriented(face.anchors.clone(), &face.subpath_starts),
         subpath_starts: face.subpath_starts.clone(),
         kind: ResultKind::Region,
     }
@@ -355,7 +378,7 @@ fn united(owner: usize, faces: &[&PlanarFace]) -> Option<ResultRegion> {
     Some(ResultRegion {
         owner,
         subpath_open: vec![false; subpath_starts.len().max(1)],
-        anchors,
+        anchors: oriented(anchors, &subpath_starts),
         subpath_starts,
         kind: ResultKind::Region,
     })
