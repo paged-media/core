@@ -2,17 +2,17 @@
   "hostFunctions": [
     {
       "name": "paged.set",
-      "params": "(id, path, value)",
+      "params": "(id | target, path, value)",
       "returns": "bool",
       "kind": "write",
-      "summary": "Set a property (see settablePaths) on the addressed element. null clears."
+      "summary": "Set a property on the addressed element (see settablePaths), or — with a target object ({kind:\"doc\"}, {kind:\"layer\",layerId}, {kind:\"swatch\",swatchId}, {kind:\"style\",family,styleId}, …) — any path propertySchemas lists for that kind (Mutation::Set). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears."
     },
     {
       "name": "paged.get",
-      "params": "(id, path)",
-      "returns": "value | null",
+      "params": "(id | target, path)",
+      "returns": "value JSON | null",
       "kind": "read",
-      "summary": "Read one property value of the addressed element."
+      "summary": "Read one property of the addressed element or target object, as its wire value JSON."
     },
     {
       "name": "paged.insertText",
@@ -4917,7 +4917,10 @@
       "path": "paragraphSpanSplitColumnCount",
       "type": {
         "kind": "number",
-        "unit": "count"
+        "unit": "count",
+        "members": [
+          "All"
+        ]
       },
       "wire": "length",
       "nullable": true,
@@ -6109,7 +6112,10 @@
       "path": "paragraphSpanSplitColumnCount",
       "type": {
         "kind": "number",
-        "unit": "count"
+        "unit": "count",
+        "members": [
+          "All"
+        ]
       },
       "wire": "length",
       "nullable": true,

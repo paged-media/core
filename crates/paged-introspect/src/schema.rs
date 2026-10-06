@@ -428,6 +428,12 @@ impl PropertySchema {
     pub const fn wire(self, wire: Wire) -> Self {
         Self { wire, ..self }
     }
+    /// Keywords a NUMERIC path also takes as text (`"All"` for a span
+    /// split count). Published as `members`; coercion passes them through
+    /// as `Value::Text`.
+    pub const fn keywords(self, members: &'static [&'static str]) -> Self {
+        Self { members, ..self }
+    }
     pub const fn of(self, kind: RefKind) -> Self {
         Self {
             ref_kind: Some(kind),
@@ -680,6 +686,22 @@ pub fn coerce(schema: &PropertySchema, input: Input<'_>) -> Result<Value, String
             }
         }
         Input::Text(s) => match schema.wire {
+            // A unit string on a numeric path (`"3mm"`, `"0.5in"`, `"12pt"`),
+            // or one of the path's keywords (`"All"`).
+            Wire::Length => {
+                if schema.members.contains(&s) {
+                    return Ok(Value::Text(s.to_string()));
+                }
+                match parse_length_pt(s) {
+                    Some(pt) if schema.unit == Some(Unit::Pt) || !has_unit_suffix(s) => {
+                        coerce(schema, Input::Number(pt))
+                    }
+                    _ => Err(format!(
+                        "expected {:?}, got the string {s:?}",
+                        schema.value_type
+                    )),
+                }
+            }
             Wire::ColorRef => Ok(Value::ColorRef(if s.is_empty() {
                 None
             } else {
@@ -773,6 +795,29 @@ pub fn wire_of(value: &Value) -> Option<Wire> {
     })
 }
 
+/// `"12"`, `"12pt"`, `"3mm"`, `"1.5cm"`, `"0.5in"`, `"2pc"`, `"10px"` →
+/// points (px at 72 dpi, InDesign's convention). `None` for anything else.
+pub fn parse_length_pt(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num.trim().parse().ok()?;
+    let factor = match unit.trim() {
+        "" | "pt" | "px" => 1.0,
+        "mm" => 72.0 / 25.4,
+        "cm" => 72.0 / 2.54,
+        "in" => 72.0,
+        "pc" => 12.0,
+        _ => return None,
+    };
+    let pt = n * factor;
+    pt.is_finite().then_some(pt)
+}
+
+fn has_unit_suffix(s: &str) -> bool {
+    s.trim().ends_with(|c: char| c.is_ascii_alphabetic())
+}
+
 fn format_number(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
         format!("{}", n as i64)
@@ -814,6 +859,25 @@ mod tests {
         assert_eq!(
             coerce(&text(), Input::Number(3.0)),
             Ok(Value::Text("3".into()))
+        );
+    }
+
+    #[test]
+    fn unit_strings_become_points_on_length_paths_only() {
+        let close = |v: Result<Value, String>, want: f32| match v {
+            Ok(Value::Length(Some(n))) => (n - want).abs() < 1e-3,
+            _ => false,
+        };
+        assert!(close(coerce(&length(), Input::Text("10mm")), 28.346_457));
+        assert!(close(coerce(&length(), Input::Text("1in")), 72.0));
+        assert!(close(coerce(&length(), Input::Text("12")), 12.0));
+        // a unit on a percentage is a mistake, not a conversion
+        assert!(coerce(&pct(), Input::Text("10mm")).is_err());
+        assert!(coerce(&length(), Input::Text("wide")).is_err());
+        let split = count().keywords(&["All"]);
+        assert_eq!(
+            coerce(&split, Input::Text("All")),
+            Ok(Value::Text("All".into()))
         );
     }
 

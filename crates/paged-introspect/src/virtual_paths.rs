@@ -388,6 +388,31 @@ pub fn lookup_virtual(address_kind: &str, path: &str) -> Option<&'static Virtual
         .find(|row| row.address_kind == address_kind && row.path == pattern)
 }
 
+/// The schema of `path` on an object of `address_kind` (`family` names
+/// the style family for `style`): an op-backed row, an addressed path, or
+/// an element / style-definition `PropertyPath`. What a surface coerces a
+/// plain JSON value against before it sends `Set`.
+pub fn schema_for(address_kind: &str, family: Option<&str>, path: &str) -> Option<PropertySchema> {
+    if let Some(row) = lookup_virtual(address_kind, path).or_else(|| {
+        (address_kind == "group")
+            .then(|| lookup_virtual("frame", path))
+            .flatten()
+    }) {
+        return Some(row.schema);
+    }
+    let kind = match (address_kind, family) {
+        ("style", Some(f)) => format!("style:{f}"),
+        (k, _) => k.to_string(),
+    };
+    if let Some((_, p, _)) = ADDRESSED_PATHS
+        .iter()
+        .find(|(name, _, k)| *name == path && *k == kind)
+    {
+        return Some(schema(*p));
+    }
+    crate::catalog::lookup_path(path).map(schema)
+}
+
 /// The `[…]` segment of a concrete path, if it has one.
 pub fn segment(path: &str) -> Option<&str> {
     let open = path.find('[')?;

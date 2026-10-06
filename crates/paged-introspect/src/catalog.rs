@@ -228,10 +228,10 @@ fn host_functions() -> Vec<HostFn> {
     }
     vec![
         // --- writes (property mutation) ---
-        f!("paged.set", "(id, path, value)", "bool", "write",
-           "Set a property (see settablePaths) on the addressed element. null clears."),
-        f!("paged.get", "(id, path)", "value | null", "read",
-           "Read one property value of the addressed element."),
+        f!("paged.set", "(id | target, path, value)", "bool", "write",
+           "Set a property on the addressed element (see settablePaths), or — with a target object ({kind:\"doc\"}, {kind:\"layer\",layerId}, {kind:\"swatch\",swatchId}, {kind:\"style\",family,styleId}, …) — any path propertySchemas lists for that kind (Mutation::Set). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears."),
+        f!("paged.get", "(id | target, path)", "value JSON | null", "read",
+           "Read one property of the addressed element or target object, as its wire value JSON."),
         // --- authoring (Stage 1/2) ---
         f!("paged.insertText", "(storyId, offset, text)", "bool", "author",
            "Insert plain text at a story body offset; \\n splits paragraphs."),
@@ -842,7 +842,7 @@ property_paths! {
         ParagraphKeepLastLines => "paragraphKeepLastLines" : count().range(1.0, 50.0).default_num(2.0),
         ParagraphStartParagraph => "paragraphStartParagraph" : enum_(START_PARAGRAPH).default_text("Anywhere"),
         ParagraphSpanColumnType => "paragraphSpanColumnType" : enum_(SPAN_COLUMN_TYPE).default_text("SingleColumn"),
-        ParagraphSpanSplitColumnCount => "paragraphSpanSplitColumnCount" : count().min(1.0),
+        ParagraphSpanSplitColumnCount => "paragraphSpanSplitColumnCount" : count().min(1.0).keywords(&["All"]),
         ParagraphSpanColumnMinSpaceBefore => "paragraphSpanColumnMinSpaceBefore" : length_pos(),
         ParagraphSpanColumnMinSpaceAfter => "paragraphSpanColumnMinSpaceAfter" : length_pos(),
         ParagraphSplitColumnInsideGutter => "paragraphSplitColumnInsideGutter" : length_pos(),

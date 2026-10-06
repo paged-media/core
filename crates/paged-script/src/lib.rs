@@ -1018,7 +1018,55 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
 
 // ---------------------------------------------------------------- paged.*
 
+/// ADR 132 — a `Set` target from a script: the `VirtualTarget` object
+/// (`{ kind: "layer", layerId: "ua" }`, `{ kind: "doc" }`,
+/// `{ kind: "style", family: "object", styleId: "ObjectStyle/x" }`, …).
+/// The string address forms arrive with ADR 131's `Address`; until then
+/// the object IS the address.
+fn js_virtual_target(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::VirtualTarget> {
+    if value.as_object().is_none() {
+        return None;
+    }
+    from_js::<paged_wire::VirtualTarget>(value, ctx)
+}
+
+/// `paged.set(target, path, value)` through `Mutation::Set`: coerce the JS
+/// value against the path's schema on the target's kind, then apply.
+fn set_virtual(
+    target: paged_wire::VirtualTarget,
+    path: &str,
+    value: &JsValue,
+    ctx: &mut Context,
+) -> bool {
+    let family = match &target {
+        paged_wire::VirtualTarget::Style { family, .. } => Some(family.as_str()),
+        _ => None,
+    };
+    let Some(schema) =
+        paged_introspect::virtual_paths::schema_for(target.address_kind(), family, path)
+    else {
+        return false;
+    };
+    let Some(value) = js_to_value_by_schema(value, &schema, ctx) else {
+        return false;
+    };
+    let mutation = Mutation::Set {
+        address: target,
+        path: path.to_string(),
+        value,
+    };
+    with_model(|m| m.apply_mutation(&mutation).is_ok())
+}
+
 fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if let Some(target) = js_virtual_target(args.get_or_undefined(0), ctx) {
+        let path = args
+            .get_or_undefined(1)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        let value = args.get_or_undefined(2).clone();
+        return Ok(JsValue::from(set_virtual(target, &path, &value, ctx)));
+    }
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -1063,7 +1111,10 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     }
 
     let Some(wire_path) = parse_property_path(&path) else {
-        return Ok(JsValue::from(false));
+        // Not an element `PropertyPath`: a virtual path on the element
+        // (`imageUri`, `labels[x-paged:k]`) goes through `Set`.
+        let target = paged_wire::VirtualTarget::Element { element_id };
+        return Ok(JsValue::from(set_virtual(target, &path, &value_arg, ctx)));
     };
     let Some(wire_value) = js_value_to_wire(&value_arg, wire_path, ctx) else {
         return Ok(JsValue::from(false));
@@ -3877,6 +3928,13 @@ fn paged_set_content_selection(
 }
 
 fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if let Some(target) = js_virtual_target(args.get_or_undefined(0), ctx) {
+        let path = args
+            .get_or_undefined(1)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        return Ok(get_virtual(&target, &path));
+    }
     let id = args
         .get_or_undefined(0)
         .to_string(ctx)?
@@ -3900,7 +3958,21 @@ fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         Some(e) => Ok(JsValue::from(js_string!(
             serde_json::to_string(&e.value).unwrap_or_default()
         ))),
+        // A virtual path on the element (`imageUri`, `labels[key]`, a
+        // group's `groupTransform`).
+        None if parse_property_path(&path).is_none() => Ok(get_virtual(
+            &paged_wire::VirtualTarget::Element { element_id },
+            &path,
+        )),
         None => Ok(JsValue::null()),
+    }
+}
+
+/// The read twin of `set_virtual`: the value's wire JSON, or `null`.
+fn get_virtual(target: &paged_wire::VirtualTarget, path: &str) -> JsValue {
+    match with_model(|m| m.get_property(target, path)) {
+        Ok(v) => JsValue::from(js_string!(serde_json::to_string(&v).unwrap_or_default())),
+        Err(_) => JsValue::null(),
     }
 }
 
@@ -4218,146 +4290,22 @@ fn js_value_to_wire(
 ) -> Option<paged_mutate::Value> {
     use paged_mutate::PropertyPath as P;
     use paged_mutate::Value as W;
-    if let Some(b) = value.as_boolean() {
-        return Some(W::Bool(b));
-    }
-    if let Some(n) = value.as_number() {
-        return Some(W::Length(Some(n as f32)));
-    }
-    if value.is_null() {
-        return Some(W::Length(None));
-    }
+    // ADR 132 — scalars coerce against the path's SCHEMA: the wire form
+    // (`Length` / `Text` / `ColorRef` / `Bool`), the range and, for a
+    // closed enum, the members. This replaces the hand list that chose
+    // `Text` over `ColorRef` by path and turned every number into a
+    // `Length`; a string on a length path may carry a unit (`"3mm"`).
+    let schema = paged_introspect::catalog::schema(path);
     if let Some(s) = value.as_string() {
         let s = s.to_std_string_escaped();
-        // Path-aware string encoding. The wire `Value` enum has two
-        // string-ish variants (`Text`, `ColorRef`); the apply layer
-        // raises `TypeMismatch` if we pick wrong, so the bridge has
-        // to know the path's expected variant. We default to
-        // `ColorRef` for back-compat with pre-Track-A scripts that
-        // wrote `paged.set(id, "frameFillColor", "Color/Red")`;
-        // explicit Text-bearing paths get the matching variant.
-        return Some(match path {
-            // Applied-entity refs (D3 paths) — Value::Text payload.
-            P::AppliedParagraphStyle
-            | P::AppliedCharacterStyle
-            | P::AppliedObjectStyle
-            | P::AppliedCellStyle
-            | P::AppliedTableStyle
-            | P::AppliedConditions
-            | P::LayerName
-            // Enum strings (v1 sweep).
-            | P::ParagraphJustification
-            | P::FrameStrokeEndCap
-            | P::FrameStrokeStartArrowhead
-            | P::FrameStrokeEndArrowhead
-            | P::FrameTextWrapMode
-            | P::FrameTextWrapContourType
-            | P::FrameFittingType
-            | P::FrameDropShadowMode
-            // W0.1 — character text / enum-string paths.
-            | P::CharacterFontFamily
-            | P::CharacterFontStyle
-            | P::CharacterKerningMethod
-            | P::CharacterCase
-            | P::CharacterPosition
-            | P::CharacterLanguage
-            | P::CharacterOtfFeatures
-            // W0.2 — paragraph text / enum-string paths. The
-            // whole-struct rule paths and the tab-stop list arrive as
-            // `{ type, value }` objects, handled by the JSON
-            // round-trip branch below — not here.
-            | P::ParagraphListType
-            | P::ParagraphBulletCharacter
-            | P::ParagraphNumberingFormat
-            // ADR 028 — the break-before rule, an IDML enum string.
-            | P::ParagraphStartParagraph
-            // Span / split columns: the IDML enum string, and the
-            // count ("All" or digits; a JS number arrives as a Length).
-            | P::ParagraphSpanColumnType
-            | P::ParagraphSpanSplitColumnCount
-            // List-marker overrides: IDML text (`^t`, `^#.^t`) and
-            // character-style ids. `numberingContinue` takes a JS bool;
-            // its string form is only "" (clear), so it is Text too.
-            | P::ParagraphBulletsTextAfter
-            | P::ParagraphNumberingExpression
-            | P::ParagraphNumberingContinue
-            | P::ParagraphBulletsCharacterStyle
-            | P::ParagraphNumberingCharacterStyle
-            // The composer's IDML name ("HL Single", ...).
-            | P::ParagraphComposer
-            // W1.22 — applied numbering-list ref + next-style ref.
-            | P::ParagraphAppliedNumberingList
-            | P::ParagraphStyleNextStyle
-            // W0.3 — enum-string / text frame-scope paths.
-            | P::TextFrameVerticalJustification
-            | P::TextFrameAutoSizing
-            | P::TextFrameFirstBaseline
-            | P::FrameFittingReferencePoint
-            | P::FrameStrokeType
-            | P::FrameStrokeJoin
-            | P::FrameStrokeAlignment
-            | P::FrameCornerOptionTopLeft
-            | P::FrameCornerOptionTopRight
-            | P::FrameCornerOptionBottomLeft
-            | P::FrameCornerOptionBottomRight
-            // C-35 (v62) — the layer an item sits on, carried as the
-            // layer's IDML Self. Protocol 62 added this path to the
-            // catalog (so `paged.set` PARSES it) and to the mutate
-            // layer (so the wire APPLIES it), and stopped there: the
-            // conversion below never learned it was string-valued, so
-            // `paged.set(id, "itemLayer", "u0")` parsed, failed to
-            // build a Value, and returned false with nothing written.
-            // Found by a spec demanding evidence for the registry's
-            // `editor.script: shipped` claim, which was not true.
-            | P::ItemLayer
-            // W0.4 — transparency-effect enum / blend-mode strings.
-            | P::FrameInnerShadowBlendMode
-            | P::FrameOuterGlowBlendMode
-            | P::FrameInnerGlowBlendMode
-            | P::FrameInnerGlowSource
-            | P::FrameBevelStyle
-            | P::FrameBevelTechnique
-            | P::FrameBevelDirection
-            | P::FrameSatinBlendMode
-            | P::FrameFeatherCornerType
-            | P::FrameBlendMode
-            // W3.A1 — cell vertical-justify enum string.
-            | P::CellVerticalJustification
-            // W1.16 — anchored-object enum-string settings.
-            | P::AnchoredPosition
-            | P::AnchorPoint
-            | P::AnchoredHorizontalReference
-            | P::AnchoredVerticalReference
-            | P::AnchoredHorizontalAlignment
-            | P::AnchoredVerticalAlignment => W::Text(s),
-            // Color-ref paths.
-            P::FrameFillColor
-            | P::FrameStrokeColor
-            | P::CharacterFillColor
-            | P::FrameDropShadowColor
-            // W3.A1 — cell fill colour ref.
-            | P::CellFillColor
-            // W1.11b — per-cell edge-stroke colour refs (weight / tint
-            // arrive as numbers, handled by the `as_number` branch above).
-            | P::CellTopEdgeStrokeColor
-            | P::CellBottomEdgeStrokeColor
-            | P::CellLeftEdgeStrokeColor
-            | P::CellRightEdgeStrokeColor
-            // W0.3 — stroke gap colour.
-            | P::FrameStrokeGapColor
-            // W0.4 — transparency-effect colour refs.
-            | P::FrameInnerShadowColor
-            | P::FrameOuterGlowColor
-            | P::FrameInnerGlowColor
-            | P::FrameBevelHighlightColor
-            | P::FrameBevelShadowColor
-            | P::FrameSatinColor => W::ColorRef(Some(s)),
-            // Anything else gets ColorRef as the legacy default —
-            // callers passing other typed strings should use the
-            // explicit `{ type, value }` wrapper which the
-            // `to_json`-round-trip branch below handles.
-            _ => W::ColorRef(Some(s)),
-        });
+        return paged_introspect::schema::coerce(
+            &schema,
+            paged_introspect::schema::Input::Text(&s),
+        )
+        .ok();
+    }
+    if let Some(input) = js_scalar(value) {
+        return paged_introspect::schema::coerce(&schema, input).ok();
     }
     if let Some(obj) = value.as_object() {
         // Structured paths whose natural JS form is not the `{ type,
@@ -4404,11 +4352,87 @@ fn js_value_to_wire(
                 return Some(W::Transform(Some(out)));
             }
         }
-        // `{ type, value }` shape — round-trip via JSON.
+        // `{ type, value }` shape — round-trip via JSON, then through the
+        // schema, so a typed `{ type: "enum" }` is checked against the
+        // members and a `{ type: "number" }` lands in the wire form.
         let json = value.to_json(ctx).ok()??;
-        return serde_json::from_value::<paged_mutate::Value>(json).ok();
+        let wire = serde_json::from_value::<paged_mutate::Value>(json).ok()?;
+        return paged_introspect::schema::validate(&schema, &wire).ok();
     }
     None
+}
+
+/// A JS scalar as the surface-neutral coercion input; `None` for
+/// objects and arrays (and `undefined`).
+fn js_scalar(value: &JsValue) -> Option<paged_introspect::schema::Input<'static>> {
+    use paged_introspect::schema::Input;
+    if value.is_null() {
+        return Some(Input::Null);
+    }
+    if let Some(b) = value.as_boolean() {
+        return Some(Input::Bool(b));
+    }
+    if let Some(n) = value.as_number() {
+        return Some(Input::Number(n));
+    }
+    // Strings borrow from the JS value, so each caller converts them in
+    // place (`Input::Text`) rather than through this helper.
+    None
+}
+
+/// Convert a JS value for a path whose schema is known — the `Set`
+/// lane, where the path may be virtual (`tint`, `labels[k]`, `rows[2].height`)
+/// and so has no `PropertyPath` to dispatch on.
+fn js_to_value_by_schema(
+    value: &JsValue,
+    schema: &paged_introspect::schema::PropertySchema,
+    ctx: &mut Context,
+) -> Option<paged_mutate::Value> {
+    use paged_introspect::schema::{coerce, validate, Input, Wire};
+    if let Some(s) = value.as_string() {
+        let s = s.to_std_string_escaped();
+        return coerce(schema, Input::Text(&s)).ok();
+    }
+    if let Some(input) = js_scalar(value) {
+        return coerce(schema, input).ok();
+    }
+    let json = value.to_json(ctx).ok()??;
+    let is_wrapper = json.get("type").is_some() && json.get("value").is_some();
+    let wire = if is_wrapper {
+        serde_json::from_value::<paged_mutate::Value>(json).ok()?
+    } else {
+        // The natural JS forms of the structured wires.
+        match schema.wire {
+            Wire::Lengths => paged_mutate::Value::Lengths(
+                json.as_array()?
+                    .iter()
+                    .map(|n| n.as_f64().map(|n| n as f32))
+                    .collect::<Option<Vec<f32>>>()?,
+            ),
+            Wire::Bounds => {
+                let v: Vec<f32> = serde_json::from_value(json).ok()?;
+                paged_mutate::Value::Bounds(v.try_into().ok()?)
+            }
+            Wire::Transform => {
+                let v: Vec<f32> = serde_json::from_value(json).ok()?;
+                paged_mutate::Value::Transform(Some(v.try_into().ok()?))
+            }
+            Wire::GradientStops => {
+                paged_mutate::Value::GradientStops(serde_json::from_value(json).ok()?)
+            }
+            Wire::TabStops => paged_mutate::Value::TabStops(serde_json::from_value(json).ok()?),
+            // A space-separated reference list (colour-group members).
+            Wire::Text => paged_mutate::Value::Text(
+                json.as_array()?
+                    .iter()
+                    .map(|v| v.as_str().map(str::to_string))
+                    .collect::<Option<Vec<String>>>()?
+                    .join(" "),
+            ),
+            _ => return None,
+        }
+    };
+    validate(schema, &wire).ok()
 }
 
 /// A whole path in its script spellings: an anchor array, or
