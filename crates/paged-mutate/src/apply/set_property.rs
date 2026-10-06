@@ -637,6 +637,157 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // ---- ADR 132 — page margins and columns (`<MarginPreference>`).
+        // A page with no margins of its own takes a fresh entry on the
+        // first write; `null` (Length(None)) drops the page's entry, which
+        // is also the inverse of that first write, so undo is exact.
+        (
+            NodeId::Page(id),
+            PropertyPath::PageMarginTop
+            | PropertyPath::PageMarginBottom
+            | PropertyPath::PageMarginLeft
+            | PropertyPath::PageMarginRight
+            | PropertyPath::PageColumnCount
+            | PropertyPath::PageColumnGutter,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let margins = find_page_margins_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let hint = InvalidationHint {
+                structural: true,
+                ..Default::default()
+            };
+            let Some(new_val) = new_val else {
+                // Undo puts the WHOLE entry back, field by field (the
+                // first write recreates it), so a cleared page is exact.
+                let inverse = match margins.remove(id.as_str()) {
+                    Some(m) => Operation::Batch {
+                        ops: PAGE_MARGIN_PATHS
+                            .iter()
+                            .map(|p| Operation::SetProperty {
+                                node: node.clone(),
+                                path: *p,
+                                value: Value::Length(Some(page_margin_field(&m, *p))),
+                            })
+                            .collect(),
+                    },
+                    None => Operation::Batch { ops: Vec::new() },
+                };
+                return Ok(AppliedOperation {
+                    op: Operation::SetProperty {
+                        node: node.clone(),
+                        path,
+                        value: value.clone(),
+                    },
+                    inverse,
+                    invalidation: hint,
+                });
+            };
+            if matches!(path, PropertyPath::PageColumnCount)
+                && (new_val < 1.0 || new_val.fract() != 0.0)
+            {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("a column count is a whole number >= 1, not {new_val}"),
+                });
+            }
+            if new_val < 0.0 {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("{new_val} is negative"),
+                });
+            }
+            let prev = match margins.get_mut(id.as_str()) {
+                Some(m) => {
+                    let prev = page_margin_field(m, path);
+                    set_page_margin_field(m, path, new_val);
+                    Some(prev)
+                }
+                None => {
+                    let mut m = paged_model::MarginPreference {
+                        column_count: 1,
+                        ..Default::default()
+                    };
+                    set_page_margin_field(&mut m, path, new_val);
+                    margins.insert(id.clone(), m);
+                    None
+                }
+            };
+            (Value::Length(prev), hint)
+        }
+        // ---- ADR 132 — document setup: bleed and slug offsets.
+        (
+            NodeId::Document(_),
+            PropertyPath::DocumentBleedTop
+            | PropertyPath::DocumentBleedBottom
+            | PropertyPath::DocumentBleedInsideOrLeft
+            | PropertyPath::DocumentBleedOutsideOrRight
+            | PropertyPath::DocumentSlugTop
+            | PropertyPath::DocumentSlugBottom
+            | PropertyPath::DocumentSlugInsideOrLeft
+            | PropertyPath::DocumentSlugRightOrOutside,
+        ) => {
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            if new_val < 0.0 {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("{new_val} is negative"),
+                });
+            }
+            let pref = &mut doc.designmap.document_preference;
+            let slot = match path {
+                PropertyPath::DocumentBleedTop => &mut pref.bleed_top,
+                PropertyPath::DocumentBleedBottom => &mut pref.bleed_bottom,
+                PropertyPath::DocumentBleedInsideOrLeft => &mut pref.bleed_inside_or_left,
+                PropertyPath::DocumentBleedOutsideOrRight => &mut pref.bleed_outside_or_right,
+                PropertyPath::DocumentSlugTop => &mut pref.slug_top,
+                PropertyPath::DocumentSlugBottom => &mut pref.slug_bottom,
+                PropertyPath::DocumentSlugInsideOrLeft => &mut pref.slug_inside_or_left,
+                _ => &mut pref.slug_right_or_outside,
+            };
+            let prev = std::mem::replace(slot, new_val);
+            // Bleed and slug are export geometry; nothing on the page moves.
+            (Value::Length(Some(prev)), InvalidationHint::default())
+        }
+        // ---- ADR 132 — text variable definitions.
+        (
+            NodeId::TextVariable(id),
+            PropertyPath::TextVariableName
+            | PropertyPath::TextVariableType
+            | PropertyPath::TextVariableContents
+            | PropertyPath::TextVariableTextBefore
+            | PropertyPath::TextVariableTextAfter
+            | PropertyPath::TextVariableDateFormat,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let var = doc
+                .designmap
+                .text_variables
+                .iter_mut()
+                .find(|v| v.self_id == *id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::TextVariableName => &mut var.name,
+                PropertyPath::TextVariableType => &mut var.variable_type,
+                PropertyPath::TextVariableContents => &mut var.contents,
+                PropertyPath::TextVariableTextBefore => &mut var.text_before,
+                PropertyPath::TextVariableTextAfter => &mut var.text_after,
+                _ => &mut var.date_format,
+            };
+            let prev = slot.clone().unwrap_or_default();
+            *slot = (!new_val.is_empty()).then_some(new_val);
+            (
+                Value::Text(prev),
+                // Every instance re-resolves its text from the definition.
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Track M: Layer toggles (visible / locked / printable)
         (NodeId::Layer(id), PropertyPath::LayerVisible) => {
             let new_value = expect_bool(path, value)?;
@@ -2894,4 +3045,51 @@ pub(super) fn apply_set_property(
         inverse,
         invalidation,
     })
+}
+
+const PAGE_MARGIN_PATHS: [PropertyPath; 6] = [
+    PropertyPath::PageMarginTop,
+    PropertyPath::PageMarginBottom,
+    PropertyPath::PageMarginLeft,
+    PropertyPath::PageMarginRight,
+    PropertyPath::PageColumnCount,
+    PropertyPath::PageColumnGutter,
+];
+
+/// The `page_margins` side map of the spread that holds page `page_id`.
+fn find_page_margins_mut<'a>(
+    doc: &'a mut Document,
+    page_id: &str,
+) -> Option<&'a mut std::collections::HashMap<String, paged_model::MarginPreference>> {
+    doc.spreads
+        .iter_mut()
+        .map(|s| &mut s.spread)
+        .find(|s| {
+            s.pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(page_id))
+        })
+        .map(|s| &mut s.page_margins)
+}
+
+fn page_margin_field(m: &paged_model::MarginPreference, path: PropertyPath) -> f32 {
+    match path {
+        PropertyPath::PageMarginTop => m.top,
+        PropertyPath::PageMarginBottom => m.bottom,
+        PropertyPath::PageMarginLeft => m.left,
+        PropertyPath::PageMarginRight => m.right,
+        PropertyPath::PageColumnCount => m.column_count as f32,
+        _ => m.column_gutter,
+    }
+}
+
+fn set_page_margin_field(m: &mut paged_model::MarginPreference, path: PropertyPath, v: f32) {
+    match path {
+        PropertyPath::PageMarginTop => m.top = v,
+        PropertyPath::PageMarginBottom => m.bottom = v,
+        PropertyPath::PageMarginLeft => m.left = v,
+        PropertyPath::PageMarginRight => m.right = v,
+        PropertyPath::PageColumnCount => m.column_count = v as u32,
+        _ => m.column_gutter = v,
+    }
 }

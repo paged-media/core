@@ -110,7 +110,11 @@ pub(crate) fn apply_inner(
     op: &Operation,
 ) -> Result<AppliedOperation, OperationError> {
     match op {
-        Operation::SetProperty { node, path, value } => apply_set_property(doc, node, *path, value),
+        // ADR 132 — the typed value forms (`Number`, `Enum`, `Ref`) fold into
+        // the variants the arms match on, so one apply path serves both.
+        Operation::SetProperty { node, path, value } => {
+            apply_set_property(doc, node, *path, &value.normalized())
+        }
         Operation::InsertNode {
             parent,
             position,
@@ -283,7 +287,7 @@ pub(crate) fn apply_inner(
             style_id,
             path,
             value,
-        } => apply_set_style_property(doc, *collection, style_id, *path, value),
+        } => apply_set_style_property(doc, *collection, style_id, *path, &value.normalized()),
         Operation::PathfinderBoolean {
             kept,
             others,
@@ -880,6 +884,10 @@ mod helpers;
 mod hyperlink;
 mod insert_node;
 mod layer;
+/// ADR 132 — model → wire-spec readers, for the `Set` resolver: a
+/// virtual path on a swatch, gradient or numbering list is an edit of the
+/// whole spec, read here, merged and written back.
+pub use layer::{gradient_spec_from_entry, numbering_list_spec_from_def, swatch_spec_from_entry};
 mod master;
 mod move_node;
 mod nested;

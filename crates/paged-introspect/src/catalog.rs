@@ -29,6 +29,7 @@
 //! recipes (layers 2/3) live in the consumer's authoring guide, which refers
 //! back to this catalog for exact names.
 
+use crate::schema::*;
 use paged_mutate::PropertyPath as P;
 use serde::Serialize;
 
@@ -108,6 +109,13 @@ pub struct ApiCatalog {
     /// second by being rejected. See [`wire_alias`]. Empty when the two
     /// vocabularies agree everywhere, which is the state to aim for.
     pub path_aliases: Vec<PathAlias>,
+    /// ADR 132 — the typed schema of every settable or readable property,
+    /// one row per (address kind, path): the element paths of
+    /// `settablePaths`, the paths that live on a layer / page / the
+    /// document / a text variable / a style definition, and the
+    /// op-backed virtual paths `Mutation::Set` resolves. `settablePaths`
+    /// stays the name projection of the element rows.
+    pub property_schemas: Vec<crate::virtual_paths::SchemaRow>,
 }
 
 /// One settable path that answers to two names.
@@ -133,6 +141,7 @@ pub fn api_catalog() -> ApiCatalog {
         operations: operations(),
         elements: elements(),
         path_aliases: path_aliases(),
+        property_schemas: crate::virtual_paths::property_schemas(),
     }
 }
 
@@ -507,8 +516,9 @@ fn constraints() -> Vec<&'static str> {
 /// of them and the worklist for promoting them.
 macro_rules! property_paths {
     (
-        advertised { $($a_variant:ident => $a_name:literal,)* }
-        hidden { $($h_variant:ident => $h_name:literal, $h_reason:literal,)* }
+        advertised { $($a_variant:ident => $a_name:literal : $a_schema:expr,)* }
+        addressed { $($d_variant:ident => $d_name:literal : $d_schema:expr, $d_kind:literal,)* }
+        hidden { $($h_variant:ident => $h_name:literal : $h_schema:expr, $h_reason:literal,)* }
     ) => {
         /// The advertised name → `PropertyPath` pairs, in the engine's
         /// own grouping. `parse_property_path` (via [`lookup_path`]) and
@@ -517,11 +527,19 @@ macro_rules! property_paths {
             $(($a_name, P::$a_variant),)*
         ];
 
+        /// ADR 132 — the paths that live on a non-element address kind,
+        /// with that kind (`"layer"`, `"page"`, `"doc"`, `"textVariable"`,
+        /// `"style:object"`, …).
+        pub const ADDRESSED_PATHS: &[(&str, P, &str)] = &[
+            $(($d_name, P::$d_variant, $d_kind),)*
+        ];
+
         /// Every property path, advertised or not, generated from the
         /// same tokens as the names — so iteration and naming cannot
         /// come apart the way the two hand tables did.
         pub const ALL_PATHS: &[P] = &[
             $(P::$a_variant,)*
+            $(P::$d_variant,)*
             $(P::$h_variant,)*
         ];
 
@@ -531,15 +549,38 @@ macro_rules! property_paths {
         pub fn wire_name(path: P) -> &'static str {
             match path {
                 $(P::$a_variant => $a_name,)*
+                $(P::$d_variant => $d_name,)*
                 $(P::$h_variant => $h_name,)*
             }
         }
 
+        /// ADR 132 — the typed schema of ANY property path. A variant
+        /// without one does not compile: the macro arm requires the
+        /// `: schema` slot on every entry.
+        pub fn schema(path: P) -> PropertySchema {
+            match path {
+                $(P::$a_variant => $a_schema,)*
+                $(P::$d_variant => $d_schema,)*
+                $(P::$h_variant => $h_schema,)*
+            }
+        }
+
+        /// The address kind an `addressed` path lives on; `None` for the
+        /// element paths and the hidden ones.
+        pub fn addressed_on(path: P) -> Option<&'static str> {
+            match path {
+                $(P::$d_variant => Some($d_kind),)*
+                _ => None,
+            }
+        }
+
         /// `Some(reason)` when a path has a name but is deliberately not
-        /// advertised as settable; `None` when it is published.
+        /// advertised as settable; `None` when it is published (as an
+        /// element path or on its own address kind).
         pub fn unadvertised_reason(path: P) -> Option<&'static str> {
             match path {
                 $(P::$a_variant => None,)*
+                $(P::$d_variant => None,)*
                 $(P::$h_variant => Some($h_reason),)*
             }
         }
@@ -550,6 +591,7 @@ macro_rules! property_paths {
         pub fn variant_name(path: P) -> &'static str {
             match path {
                 $(P::$a_variant => stringify!($a_variant),)*
+                $(P::$d_variant => stringify!($d_variant),)*
                 $(P::$h_variant => stringify!($h_variant),)*
             }
         }
@@ -559,17 +601,17 @@ macro_rules! property_paths {
 property_paths! {
     advertised {
 
-        FrameBounds => "frameBounds",
-        FrameFillColor => "frameFillColor",
-        FrameStrokeColor => "frameStrokeColor",
-        FrameStrokeWeight => "frameStrokeWeight",
-        FrameOpacity => "frameOpacity",
-        FrameTransform => "frameTransform",
-        ImageContentTransform => "imageContentTransform",
-        FramePathPoint => "framePathPoint",
-        PathPointInsert => "pathPointInsert",
-        PathPointRemove => "pathPointRemove",
-        PathPointCurveType => "pathPointCurveType",
+        FrameBounds => "frameBounds" : bounds(),
+        FrameFillColor => "frameFillColor" : color(),
+        FrameStrokeColor => "frameStrokeColor" : color(),
+        FrameStrokeWeight => "frameStrokeWeight" : length_pos().default_num(1.0),
+        FrameOpacity => "frameOpacity" : pct().default_num(100.0),
+        FrameTransform => "frameTransform" : transform(),
+        ImageContentTransform => "imageContentTransform" : transform(),
+        FramePathPoint => "framePathPoint" : operation("PathPoint", Wire::PathPoint),
+        PathPointInsert => "pathPointInsert" : operation("PathPointInsert", Wire::PathPointInsert),
+        PathPointRemove => "pathPointRemove" : operation("PathPointRemove", Wire::PathPointRemove),
+        PathPointCurveType => "pathPointCurveType" : operation("PathPointCurveType", Wire::PathPointCurveType),
         // NO layer* PATHS HERE, deliberately (C-33, 2026-08-07). They were
         // listed and projected into `settable_paths`, and NOTHING COULD USE
         // THEM: `ElementId` has no Layer variant, `id_grammar()` publishes
@@ -582,16 +624,16 @@ property_paths! {
         // both GENERATE from this catalog, so the false claim propagated to
         // every consumer that trusted it. `every_settable_path_is_addressable`
         // below now fails if this comes back.
-        CharacterFontSize => "characterFontSize",
-        CharacterLeading => "characterLeading",
-        CharacterTracking => "characterTracking",
-        CharacterFillColor => "characterFillColor",
-        ParagraphSpaceBefore => "paragraphSpaceBefore",
-        ParagraphSpaceAfter => "paragraphSpaceAfter",
-        ParagraphFirstLineIndent => "paragraphFirstLineIndent",
-        AppliedParagraphStyle => "appliedParagraphStyle",
-        AppliedCharacterStyle => "appliedCharacterStyle",
-        AppliedObjectStyle => "appliedObjectStyle",
+        CharacterFontSize => "characterFontSize" : length().range(0.1, 1296.0).default_num(12.0),
+        CharacterLeading => "characterLeading" : length().min(0.0),
+        CharacterTracking => "characterTracking" : number().range(-1000.0, 10000.0).default_num(0.0),
+        CharacterFillColor => "characterFillColor" : color(),
+        ParagraphSpaceBefore => "paragraphSpaceBefore" : length().default_num(0.0),
+        ParagraphSpaceAfter => "paragraphSpaceAfter" : length().default_num(0.0),
+        ParagraphFirstLineIndent => "paragraphFirstLineIndent" : length().default_num(0.0),
+        AppliedParagraphStyle => "appliedParagraphStyle" : reference(RefKind::ParagraphStyle),
+        AppliedCharacterStyle => "appliedCharacterStyle" : reference(RefKind::CharacterStyle),
+        AppliedObjectStyle => "appliedObjectStyle" : reference(RefKind::ObjectStyle),
         // C-35 (v62) — WHICH LAYER an item is on. Note the contrast with
         // the `layer*` paths refused just above: those addressed a LAYER,
         // which has no `ElementId` form, so nothing could name the target.
@@ -599,164 +641,164 @@ property_paths! {
         // — forms `id_grammar()` already publishes) and merely carries a
         // layer self_id as its value, so it is addressable and passes
         // `every_settable_path_is_addressable`.
-        ItemLayer => "itemLayer",
-        AppliedCellStyle => "appliedCellStyle",
-        AppliedTableStyle => "appliedTableStyle",
-        AppliedConditions => "appliedConditions",
-        FrameInsetSpacing => "frameInsetSpacing",
-        ParagraphJustification => "paragraphJustification",
-        ParagraphStyleNextStyle => "paragraphStyleNextStyle",
-        ParagraphAppliedNumberingList => "paragraphAppliedNumberingList",
-        FrameStrokeEndCap => "frameStrokeEndCap",
-        FrameStrokeStartArrowhead => "frameStrokeStartArrowhead",
-        FrameStrokeEndArrowhead => "frameStrokeEndArrowhead",
-        FrameTextWrapMode => "frameTextWrapMode",
-        FrameTextWrapOffsets => "frameTextWrapOffsets",
-        FrameTextWrapContourType => "frameTextWrapContourType",
-        FrameTextWrapContourIncludeInside => "frameTextWrapContourIncludeInside",
-        FrameFittingCrops => "frameFittingCrops",
-        FrameFittingType => "frameFittingType",
-        FrameDropShadow => "frameDropShadow",
-        FrameDropShadowMode => "frameDropShadowMode",
-        FrameDropShadowXOffset => "frameDropShadowXOffset",
-        FrameDropShadowYOffset => "frameDropShadowYOffset",
-        FrameDropShadowSize => "frameDropShadowSize",
-        FrameDropShadowOpacity => "frameDropShadowOpacity",
-        FrameDropShadowColor => "frameDropShadowColor",
-        FramePath => "framePath",
-        FrameFillTint => "frameFillTint",
-        FrameNonprinting => "frameNonprinting",
-        FrameGradientFillAngle => "frameGradientFillAngle",
-        FrameGradientFillLength => "frameGradientFillLength",
-        FrameGradientStrokeAngle => "frameGradientStrokeAngle",
-        FrameGradientStrokeLength => "frameGradientStrokeLength",
-        TextFrameColumnCount => "textFrameColumnCount",
-        TextFrameColumnGutter => "textFrameColumnGutter",
-        TextFrameColumnBalance => "textFrameColumnBalance",
-        TextFrameVerticalJustification => "textFrameVerticalJustification",
-        TextFrameAutoSizing => "textFrameAutoSizing",
-        TextFrameFirstBaseline => "textFrameFirstBaseline",
-        TextWrapInvert => "frameTextWrapInvert",
-        FrameFittingReferencePoint => "frameFittingReferencePoint",
-        FrameAutoFit => "frameAutoFit",
-        FrameStrokeType => "frameStrokeType",
-        FrameStrokeJoin => "frameStrokeJoin",
-        FrameStrokeMiterLimit => "frameStrokeMiterLimit",
-        FrameStrokeAlignment => "frameStrokeAlignment",
-        FrameStrokeGapColor => "frameStrokeGapColor",
-        FrameStrokeGapTint => "frameStrokeGapTint",
-        FrameStrokeDashArray => "frameStrokeDashArray",
-        FrameCornerOptionTopLeft => "frameCornerOptionTopLeft",
-        FrameCornerOptionTopRight => "frameCornerOptionTopRight",
-        FrameCornerOptionBottomLeft => "frameCornerOptionBottomLeft",
-        FrameCornerOptionBottomRight => "frameCornerOptionBottomRight",
-        FrameCornerRadiusTopLeft => "frameCornerRadiusTopLeft",
-        FrameCornerRadiusTopRight => "frameCornerRadiusTopRight",
-        FrameCornerRadiusBottomLeft => "frameCornerRadiusBottomLeft",
-        FrameCornerRadiusBottomRight => "frameCornerRadiusBottomRight",
-        FrameRotationAngle => "frameRotationAngle",
-        FrameScaleX => "frameScaleX",
-        FrameScaleY => "frameScaleY",
-        FrameFlipH => "frameFlipH",
-        FrameFlipV => "frameFlipV",
-        FrameOverprintFill => "frameOverprintFill",
-        FrameOverprintStroke => "frameOverprintStroke",
-        FrameInnerShadowEnabled => "frameInnerShadow",
-        FrameInnerShadowBlendMode => "frameInnerShadowBlendMode",
-        FrameInnerShadowColor => "frameInnerShadowColor",
-        FrameInnerShadowOpacity => "frameInnerShadowOpacity",
-        FrameInnerShadowAngle => "frameInnerShadowAngle",
-        FrameInnerShadowDistance => "frameInnerShadowDistance",
-        FrameInnerShadowSize => "frameInnerShadowSize",
-        FrameInnerShadowChoke => "frameInnerShadowChoke",
-        FrameInnerShadowNoise => "frameInnerShadowNoise",
-        FrameOuterGlowEnabled => "frameOuterGlow",
-        FrameOuterGlowBlendMode => "frameOuterGlowBlendMode",
-        FrameOuterGlowColor => "frameOuterGlowColor",
-        FrameOuterGlowOpacity => "frameOuterGlowOpacity",
-        FrameOuterGlowSpread => "frameOuterGlowSpread",
-        FrameOuterGlowSize => "frameOuterGlowSize",
-        FrameOuterGlowNoise => "frameOuterGlowNoise",
-        FrameInnerGlowEnabled => "frameInnerGlow",
-        FrameInnerGlowBlendMode => "frameInnerGlowBlendMode",
-        FrameInnerGlowColor => "frameInnerGlowColor",
-        FrameInnerGlowOpacity => "frameInnerGlowOpacity",
-        FrameInnerGlowChoke => "frameInnerGlowChoke",
-        FrameInnerGlowSize => "frameInnerGlowSize",
-        FrameInnerGlowSource => "frameInnerGlowSource",
-        FrameInnerGlowNoise => "frameInnerGlowNoise",
-        FrameBevelEnabled => "frameBevel",
-        FrameBevelStyle => "frameBevelStyle",
-        FrameBevelTechnique => "frameBevelTechnique",
-        FrameBevelDepth => "frameBevelDepth",
-        FrameBevelDirection => "frameBevelDirection",
-        FrameBevelSize => "frameBevelSize",
-        FrameBevelSoften => "frameBevelSoften",
-        FrameBevelAngle => "frameBevelAngle",
-        FrameBevelAltitude => "frameBevelAltitude",
-        FrameBevelHighlightColor => "frameBevelHighlightColor",
-        FrameBevelShadowColor => "frameBevelShadowColor",
-        FrameBevelHighlightOpacity => "frameBevelHighlightOpacity",
-        FrameBevelShadowOpacity => "frameBevelShadowOpacity",
-        FrameSatinEnabled => "frameSatin",
-        FrameSatinBlendMode => "frameSatinBlendMode",
-        FrameSatinColor => "frameSatinColor",
-        FrameSatinOpacity => "frameSatinOpacity",
-        FrameSatinAngle => "frameSatinAngle",
-        FrameSatinDistance => "frameSatinDistance",
-        FrameSatinSize => "frameSatinSize",
-        FrameSatinInvert => "frameSatinInvert",
-        FrameFeatherEnabled => "frameFeather",
-        FrameFeatherWidth => "frameFeatherWidth",
-        FrameFeatherCornerType => "frameFeatherCornerType",
-        FrameFeatherNoise => "frameFeatherNoise",
-        FrameFeatherChoke => "frameFeatherChoke",
-        FrameDirectionalFeatherEnabled => "frameDirectionalFeather",
-        FrameDirectionalFeatherLeftWidth => "frameDirectionalFeatherLeftWidth",
-        FrameDirectionalFeatherRightWidth => "frameDirectionalFeatherRightWidth",
-        FrameDirectionalFeatherTopWidth => "frameDirectionalFeatherTopWidth",
-        FrameDirectionalFeatherBottomWidth => "frameDirectionalFeatherBottomWidth",
-        FrameDirectionalFeatherAngle => "frameDirectionalFeatherAngle",
-        FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise",
-        FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke",
-        FrameBlendMode => "frameBlendMode",
+        ItemLayer => "itemLayer" : reference(RefKind::Layer),
+        AppliedCellStyle => "appliedCellStyle" : reference(RefKind::CellStyle),
+        AppliedTableStyle => "appliedTableStyle" : reference(RefKind::TableStyle),
+        AppliedConditions => "appliedConditions" : reference(RefKind::Condition),
+        FrameInsetSpacing => "frameInsetSpacing" : bounds(),
+        ParagraphJustification => "paragraphJustification" : enum_(JUSTIFICATION).default_text("LeftAlign"),
+        ParagraphStyleNextStyle => "paragraphStyleNextStyle" : reference(RefKind::ParagraphStyle),
+        ParagraphAppliedNumberingList => "paragraphAppliedNumberingList" : reference(RefKind::NumberingList),
+        FrameStrokeEndCap => "frameStrokeEndCap" : enum_(END_CAPS).default_text("ButtEndCap"),
+        FrameStrokeStartArrowhead => "frameStrokeStartArrowhead" : enum_(ARROWHEADS).default_text("None"),
+        FrameStrokeEndArrowhead => "frameStrokeEndArrowhead" : enum_(ARROWHEADS).default_text("None"),
+        FrameTextWrapMode => "frameTextWrapMode" : enum_open(TEXT_WRAP_MODES).default_text("None"),
+        FrameTextWrapOffsets => "frameTextWrapOffsets" : bounds(),
+        FrameTextWrapContourType => "frameTextWrapContourType" : enum_open(CONTOUR_TYPES),
+        FrameTextWrapContourIncludeInside => "frameTextWrapContourIncludeInside" : bool_().default_bool(false),
+        FrameFittingCrops => "frameFittingCrops" : bounds(),
+        FrameFittingType => "frameFittingType" : enum_open(FITTING).default_text("None"),
+        FrameDropShadow => "frameDropShadow" : bool_().default_bool(false),
+        FrameDropShadowMode => "frameDropShadowMode" : enum_open(DROP_SHADOW_MODES),
+        FrameDropShadowXOffset => "frameDropShadowXOffset" : length(),
+        FrameDropShadowYOffset => "frameDropShadowYOffset" : length(),
+        FrameDropShadowSize => "frameDropShadowSize" : length_pos(),
+        FrameDropShadowOpacity => "frameDropShadowOpacity" : pct().default_num(75.0),
+        FrameDropShadowColor => "frameDropShadowColor" : color(),
+        FramePath => "framePath" : structure("FramePath", Wire::FramePath).required(),
+        FrameFillTint => "frameFillTint" : pct().default_num(100.0),
+        FrameNonprinting => "frameNonprinting" : bool_().default_bool(false),
+        FrameGradientFillAngle => "frameGradientFillAngle" : deg(),
+        FrameGradientFillLength => "frameGradientFillLength" : length_pos(),
+        FrameGradientStrokeAngle => "frameGradientStrokeAngle" : deg(),
+        FrameGradientStrokeLength => "frameGradientStrokeLength" : length_pos(),
+        TextFrameColumnCount => "textFrameColumnCount" : count().range(1.0, 40.0).default_num(1.0),
+        TextFrameColumnGutter => "textFrameColumnGutter" : length_pos().default_num(12.0),
+        TextFrameColumnBalance => "textFrameColumnBalance" : bool_().default_bool(false),
+        TextFrameVerticalJustification => "textFrameVerticalJustification" : enum_(VERTICAL_JUSTIFICATION).default_text("TopAlign"),
+        TextFrameAutoSizing => "textFrameAutoSizing" : enum_(AUTO_SIZING).default_text("Off"),
+        TextFrameFirstBaseline => "textFrameFirstBaseline" : enum_(FIRST_BASELINE).default_text("AscentOffset"),
+        TextWrapInvert => "frameTextWrapInvert" : bool_().default_bool(false),
+        FrameFittingReferencePoint => "frameFittingReferencePoint" : enum_open(REFERENCE_POINTS).default_text("TopLeftPoint"),
+        FrameAutoFit => "frameAutoFit" : bool_().default_bool(false),
+        FrameStrokeType => "frameStrokeType" : text(),
+        FrameStrokeJoin => "frameStrokeJoin" : enum_open(END_JOINS).default_text("MiterEndJoin"),
+        FrameStrokeMiterLimit => "frameStrokeMiterLimit" : number().range(1.0, 500.0).default_num(4.0),
+        FrameStrokeAlignment => "frameStrokeAlignment" : enum_open(STROKE_ALIGNMENT).default_text("CenterAlignment"),
+        FrameStrokeGapColor => "frameStrokeGapColor" : color(),
+        FrameStrokeGapTint => "frameStrokeGapTint" : pct().default_num(100.0),
+        FrameStrokeDashArray => "frameStrokeDashArray" : lengths(),
+        FrameCornerOptionTopLeft => "frameCornerOptionTopLeft" : enum_open(CORNER_OPTIONS).default_text("None"),
+        FrameCornerOptionTopRight => "frameCornerOptionTopRight" : enum_open(CORNER_OPTIONS).default_text("None"),
+        FrameCornerOptionBottomLeft => "frameCornerOptionBottomLeft" : enum_open(CORNER_OPTIONS).default_text("None"),
+        FrameCornerOptionBottomRight => "frameCornerOptionBottomRight" : enum_open(CORNER_OPTIONS).default_text("None"),
+        FrameCornerRadiusTopLeft => "frameCornerRadiusTopLeft" : length_pos().default_num(12.0),
+        FrameCornerRadiusTopRight => "frameCornerRadiusTopRight" : length_pos().default_num(12.0),
+        FrameCornerRadiusBottomLeft => "frameCornerRadiusBottomLeft" : length_pos().default_num(12.0),
+        FrameCornerRadiusBottomRight => "frameCornerRadiusBottomRight" : length_pos().default_num(12.0),
+        FrameRotationAngle => "frameRotationAngle" : deg().default_num(0.0),
+        FrameScaleX => "frameScaleX" : number().default_num(100.0).wire(Wire::Length),
+        FrameScaleY => "frameScaleY" : number().default_num(100.0).wire(Wire::Length),
+        FrameFlipH => "frameFlipH" : bool_().default_bool(false),
+        FrameFlipV => "frameFlipV" : bool_().default_bool(false),
+        FrameOverprintFill => "frameOverprintFill" : bool_().default_bool(false),
+        FrameOverprintStroke => "frameOverprintStroke" : bool_().default_bool(false),
+        FrameInnerShadowEnabled => "frameInnerShadow" : bool_().default_bool(false),
+        FrameInnerShadowBlendMode => "frameInnerShadowBlendMode" : enum_open(BLEND_MODES),
+        FrameInnerShadowColor => "frameInnerShadowColor" : color(),
+        FrameInnerShadowOpacity => "frameInnerShadowOpacity" : pct(),
+        FrameInnerShadowAngle => "frameInnerShadowAngle" : deg(),
+        FrameInnerShadowDistance => "frameInnerShadowDistance" : length_pos(),
+        FrameInnerShadowSize => "frameInnerShadowSize" : length_pos(),
+        FrameInnerShadowChoke => "frameInnerShadowChoke" : pct(),
+        FrameInnerShadowNoise => "frameInnerShadowNoise" : pct(),
+        FrameOuterGlowEnabled => "frameOuterGlow" : bool_().default_bool(false),
+        FrameOuterGlowBlendMode => "frameOuterGlowBlendMode" : enum_open(BLEND_MODES),
+        FrameOuterGlowColor => "frameOuterGlowColor" : color(),
+        FrameOuterGlowOpacity => "frameOuterGlowOpacity" : pct(),
+        FrameOuterGlowSpread => "frameOuterGlowSpread" : pct(),
+        FrameOuterGlowSize => "frameOuterGlowSize" : length_pos(),
+        FrameOuterGlowNoise => "frameOuterGlowNoise" : pct(),
+        FrameInnerGlowEnabled => "frameInnerGlow" : bool_().default_bool(false),
+        FrameInnerGlowBlendMode => "frameInnerGlowBlendMode" : enum_open(BLEND_MODES),
+        FrameInnerGlowColor => "frameInnerGlowColor" : color(),
+        FrameInnerGlowOpacity => "frameInnerGlowOpacity" : pct(),
+        FrameInnerGlowChoke => "frameInnerGlowChoke" : pct(),
+        FrameInnerGlowSize => "frameInnerGlowSize" : length_pos(),
+        FrameInnerGlowSource => "frameInnerGlowSource" : enum_(GLOW_SOURCES),
+        FrameInnerGlowNoise => "frameInnerGlowNoise" : pct(),
+        FrameBevelEnabled => "frameBevel" : bool_().default_bool(false),
+        FrameBevelStyle => "frameBevelStyle" : enum_open(BEVEL_STYLES),
+        FrameBevelTechnique => "frameBevelTechnique" : enum_open(BEVEL_TECHNIQUES),
+        FrameBevelDepth => "frameBevelDepth" : pct().range(1.0, 1000.0),
+        FrameBevelDirection => "frameBevelDirection" : enum_open(BEVEL_DIRECTIONS),
+        FrameBevelSize => "frameBevelSize" : length_pos(),
+        FrameBevelSoften => "frameBevelSoften" : length_pos(),
+        FrameBevelAngle => "frameBevelAngle" : deg(),
+        FrameBevelAltitude => "frameBevelAltitude" : deg(),
+        FrameBevelHighlightColor => "frameBevelHighlightColor" : color(),
+        FrameBevelShadowColor => "frameBevelShadowColor" : color(),
+        FrameBevelHighlightOpacity => "frameBevelHighlightOpacity" : pct(),
+        FrameBevelShadowOpacity => "frameBevelShadowOpacity" : pct(),
+        FrameSatinEnabled => "frameSatin" : bool_().default_bool(false),
+        FrameSatinBlendMode => "frameSatinBlendMode" : enum_open(BLEND_MODES),
+        FrameSatinColor => "frameSatinColor" : color(),
+        FrameSatinOpacity => "frameSatinOpacity" : pct(),
+        FrameSatinAngle => "frameSatinAngle" : deg(),
+        FrameSatinDistance => "frameSatinDistance" : length_pos(),
+        FrameSatinSize => "frameSatinSize" : length_pos(),
+        FrameSatinInvert => "frameSatinInvert" : bool_().default_bool(false),
+        FrameFeatherEnabled => "frameFeather" : bool_().default_bool(false),
+        FrameFeatherWidth => "frameFeatherWidth" : length_pos(),
+        FrameFeatherCornerType => "frameFeatherCornerType" : enum_open(FEATHER_CORNERS),
+        FrameFeatherNoise => "frameFeatherNoise" : pct(),
+        FrameFeatherChoke => "frameFeatherChoke" : pct(),
+        FrameDirectionalFeatherEnabled => "frameDirectionalFeather" : bool_().default_bool(false),
+        FrameDirectionalFeatherLeftWidth => "frameDirectionalFeatherLeftWidth" : length_pos(),
+        FrameDirectionalFeatherRightWidth => "frameDirectionalFeatherRightWidth" : length_pos(),
+        FrameDirectionalFeatherTopWidth => "frameDirectionalFeatherTopWidth" : length_pos(),
+        FrameDirectionalFeatherBottomWidth => "frameDirectionalFeatherBottomWidth" : length_pos(),
+        FrameDirectionalFeatherAngle => "frameDirectionalFeatherAngle" : deg(),
+        FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise" : pct(),
+        FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke" : pct(),
+        FrameBlendMode => "frameBlendMode" : enum_open(BLEND_MODES).default_text("Normal"),
         // W0.4 — the seventh frame effect. Its six siblings were
         // advertised and it was not, under "no recorded reason"; the
         // apply arm takes the same node kinds as the others and the
         // bridge already encodes its spec. PROMOTED 2026-09-09.
-        FrameGradientFeather => "frameGradientFeather",
-        CellFillColor => "cellFillColor",
-        CellFillTint => "cellFillTint",
-        CellInsetTop => "cellInsetTop",
-        CellInsetLeft => "cellInsetLeft",
-        CellInsetBottom => "cellInsetBottom",
-        CellInsetRight => "cellInsetRight",
-        CellVerticalJustification => "cellVerticalJustification",
-        CellTopEdgeStrokeColor => "cellTopEdgeStrokeColor",
-        CellTopEdgeStrokeWeight => "cellTopEdgeStrokeWeight",
-        CellTopEdgeStrokeTint => "cellTopEdgeStrokeTint",
-        CellBottomEdgeStrokeColor => "cellBottomEdgeStrokeColor",
-        CellBottomEdgeStrokeWeight => "cellBottomEdgeStrokeWeight",
-        CellBottomEdgeStrokeTint => "cellBottomEdgeStrokeTint",
-        CellLeftEdgeStrokeColor => "cellLeftEdgeStrokeColor",
-        CellLeftEdgeStrokeWeight => "cellLeftEdgeStrokeWeight",
-        CellLeftEdgeStrokeTint => "cellLeftEdgeStrokeTint",
-        CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor",
-        CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight",
-        CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint",
-        PluginMetadata => "pluginMetadata",
-        AnchoredPosition => "anchoredPosition",
-        AnchorPoint => "anchorPoint",
-        AnchoredXOffset => "anchoredXOffset",
-        AnchoredYOffset => "anchoredYOffset",
-        AnchoredHorizontalReference => "anchoredHorizontalReference",
-        AnchoredVerticalReference => "anchoredVerticalReference",
-        AnchoredHorizontalAlignment => "anchoredHorizontalAlignment",
-        AnchoredVerticalAlignment => "anchoredVerticalAlignment",
-        AnchoredSpineRelative => "anchoredSpineRelative",
-        AnchoredLockPosition => "anchoredLockPosition",
-        ElementVisible => "elementVisible",
-        ElementLocked => "elementLocked",
+        FrameGradientFeather => "frameGradientFeather" : structure("GradientFeatherSpec", Wire::GradientFeather),
+        CellFillColor => "cellFillColor" : color(),
+        CellFillTint => "cellFillTint" : pct().default_num(100.0),
+        CellInsetTop => "cellInsetTop" : length_pos(),
+        CellInsetLeft => "cellInsetLeft" : length_pos(),
+        CellInsetBottom => "cellInsetBottom" : length_pos(),
+        CellInsetRight => "cellInsetRight" : length_pos(),
+        CellVerticalJustification => "cellVerticalJustification" : enum_(VERTICAL_JUSTIFICATION).default_text("TopAlign"),
+        CellTopEdgeStrokeColor => "cellTopEdgeStrokeColor" : color(),
+        CellTopEdgeStrokeWeight => "cellTopEdgeStrokeWeight" : length_pos(),
+        CellTopEdgeStrokeTint => "cellTopEdgeStrokeTint" : pct().default_num(100.0),
+        CellBottomEdgeStrokeColor => "cellBottomEdgeStrokeColor" : color(),
+        CellBottomEdgeStrokeWeight => "cellBottomEdgeStrokeWeight" : length_pos(),
+        CellBottomEdgeStrokeTint => "cellBottomEdgeStrokeTint" : pct().default_num(100.0),
+        CellLeftEdgeStrokeColor => "cellLeftEdgeStrokeColor" : color(),
+        CellLeftEdgeStrokeWeight => "cellLeftEdgeStrokeWeight" : length_pos(),
+        CellLeftEdgeStrokeTint => "cellLeftEdgeStrokeTint" : pct().default_num(100.0),
+        CellRightEdgeStrokeColor => "cellRightEdgeStrokeColor" : color(),
+        CellRightEdgeStrokeWeight => "cellRightEdgeStrokeWeight" : length_pos(),
+        CellRightEdgeStrokeTint => "cellRightEdgeStrokeTint" : pct().default_num(100.0),
+        PluginMetadata => "pluginMetadata" : structure("PluginMetadata", Wire::PluginMetadata).required(),
+        AnchoredPosition => "anchoredPosition" : enum_open(ANCHORED_POSITIONS).default_text("InlinePosition"),
+        AnchorPoint => "anchorPoint" : enum_open(REFERENCE_POINTS),
+        AnchoredXOffset => "anchoredXOffset" : length().default_num(0.0),
+        AnchoredYOffset => "anchoredYOffset" : length().default_num(0.0),
+        AnchoredHorizontalReference => "anchoredHorizontalReference" : text(),
+        AnchoredVerticalReference => "anchoredVerticalReference" : text(),
+        AnchoredHorizontalAlignment => "anchoredHorizontalAlignment" : text(),
+        AnchoredVerticalAlignment => "anchoredVerticalAlignment" : text(),
+        AnchoredSpineRelative => "anchoredSpineRelative" : bool_().default_bool(false),
+        AnchoredLockPosition => "anchoredLockPosition" : bool_().default_bool(false),
+        ElementVisible => "elementVisible" : bool_().default_bool(true),
+        ElementLocked => "elementLocked" : bool_().default_bool(false),
 
         // W0.1 / W0.2 — the character and paragraph attributes a
         // `storyRange:` address has always been able to set. PROMOTED
@@ -773,83 +815,130 @@ property_paths! {
         // `paged-script/tests/story_range_text_paths.rs` is the probe the
         // old reason asked for: it sets every one of them through
         // `paged.set` and reads it back.
-        CharacterFontFamily => "characterFontFamily",
-        CharacterFontStyle => "characterFontStyle",
-        CharacterKerningMethod => "characterKerningMethod",
-        CharacterCase => "characterCase",
-        CharacterPosition => "characterPosition",
-        CharacterLanguage => "characterLanguage",
-        CharacterBaselineShift => "characterBaselineShift",
-        CharacterHorizontalScale => "characterHorizontalScale",
-        CharacterVerticalScale => "characterVerticalScale",
-        CharacterSkew => "characterSkew",
-        CharacterUnderline => "characterUnderline",
-        CharacterStrikethru => "characterStrikethru",
-        CharacterLigatures => "characterLigatures",
-        CharacterOtfFeatures => "characterOtfFeatures",
-        ParagraphLeftIndent => "paragraphLeftIndent",
-        ParagraphRightIndent => "paragraphRightIndent",
-        ParagraphDropCapCharacters => "paragraphDropCapCharacters",
-        ParagraphDropCapLines => "paragraphDropCapLines",
-        ParagraphHyphenation => "paragraphHyphenation",
-        ParagraphHyphenationZone => "paragraphHyphenationZone",
-        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether",
-        ParagraphKeepWithNext => "paragraphKeepWithNext",
-        ParagraphKeepAllLinesTogether => "paragraphKeepAllLinesTogether",
-        ParagraphKeepFirstLines => "paragraphKeepFirstLines",
-        ParagraphKeepLastLines => "paragraphKeepLastLines",
-        ParagraphStartParagraph => "paragraphStartParagraph",
-        ParagraphSpanColumnType => "paragraphSpanColumnType",
-        ParagraphSpanSplitColumnCount => "paragraphSpanSplitColumnCount",
-        ParagraphSpanColumnMinSpaceBefore => "paragraphSpanColumnMinSpaceBefore",
-        ParagraphSpanColumnMinSpaceAfter => "paragraphSpanColumnMinSpaceAfter",
-        ParagraphSplitColumnInsideGutter => "paragraphSplitColumnInsideGutter",
-        ParagraphSplitColumnOutsideGutter => "paragraphSplitColumnOutsideGutter",
-        ParagraphRuleAbove => "paragraphRuleAbove",
-        ParagraphRuleBelow => "paragraphRuleBelow",
-        ParagraphTabStops => "paragraphTabStops",
-        ParagraphListType => "paragraphListType",
-        ParagraphBulletCharacter => "paragraphBulletCharacter",
-        ParagraphNumberingFormat => "paragraphNumberingFormat",
-        ParagraphBulletsTextAfter => "paragraphBulletsTextAfter",
-        ParagraphNumberingExpression => "paragraphNumberingExpression",
-        ParagraphNumberingStartAt => "paragraphNumberingStartAt",
-        ParagraphNumberingContinue => "paragraphNumberingContinue",
-        ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle",
-        ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle",
-        ParagraphComposer => "paragraphComposer",
+        CharacterFontFamily => "characterFontFamily" : reference(RefKind::Font),
+        CharacterFontStyle => "characterFontStyle" : text(),
+        CharacterKerningMethod => "characterKerningMethod" : enum_open(KERNING_METHODS).default_text("Metrics"),
+        CharacterCase => "characterCase" : enum_open(CASES).default_text("Normal"),
+        CharacterPosition => "characterPosition" : enum_open(POSITIONS).default_text("Normal"),
+        CharacterLanguage => "characterLanguage" : reference(RefKind::Language),
+        CharacterBaselineShift => "characterBaselineShift" : length().default_num(0.0),
+        CharacterHorizontalScale => "characterHorizontalScale" : pct().range(1.0, 1000.0).default_num(100.0),
+        CharacterVerticalScale => "characterVerticalScale" : pct().range(1.0, 1000.0).default_num(100.0),
+        CharacterSkew => "characterSkew" : deg().range(-85.0, 85.0).default_num(0.0),
+        CharacterUnderline => "characterUnderline" : bool_().default_bool(false),
+        CharacterStrikethru => "characterStrikethru" : bool_().default_bool(false),
+        CharacterLigatures => "characterLigatures" : bool_().default_bool(true),
+        CharacterOtfFeatures => "characterOtfFeatures" : text(),
+        ParagraphLeftIndent => "paragraphLeftIndent" : length().default_num(0.0),
+        ParagraphRightIndent => "paragraphRightIndent" : length().default_num(0.0),
+        ParagraphDropCapCharacters => "paragraphDropCapCharacters" : count().range(0.0, 150.0).default_num(0.0),
+        ParagraphDropCapLines => "paragraphDropCapLines" : count().range(0.0, 25.0).default_num(0.0),
+        ParagraphHyphenation => "paragraphHyphenation" : bool_().default_bool(true),
+        ParagraphHyphenationZone => "paragraphHyphenationZone" : length_pos(),
+        ParagraphKeepLinesTogether => "paragraphKeepLinesTogether" : bool_().default_bool(false),
+        ParagraphKeepWithNext => "paragraphKeepWithNext" : count().range(0.0, 5.0).default_num(0.0),
+        ParagraphKeepAllLinesTogether => "paragraphKeepAllLinesTogether" : bool_().default_bool(false),
+        ParagraphKeepFirstLines => "paragraphKeepFirstLines" : count().range(1.0, 50.0).default_num(2.0),
+        ParagraphKeepLastLines => "paragraphKeepLastLines" : count().range(1.0, 50.0).default_num(2.0),
+        ParagraphStartParagraph => "paragraphStartParagraph" : enum_(START_PARAGRAPH).default_text("Anywhere"),
+        ParagraphSpanColumnType => "paragraphSpanColumnType" : enum_(SPAN_COLUMN_TYPE).default_text("SingleColumn"),
+        ParagraphSpanSplitColumnCount => "paragraphSpanSplitColumnCount" : count().min(1.0),
+        ParagraphSpanColumnMinSpaceBefore => "paragraphSpanColumnMinSpaceBefore" : length_pos(),
+        ParagraphSpanColumnMinSpaceAfter => "paragraphSpanColumnMinSpaceAfter" : length_pos(),
+        ParagraphSplitColumnInsideGutter => "paragraphSplitColumnInsideGutter" : length_pos(),
+        ParagraphSplitColumnOutsideGutter => "paragraphSplitColumnOutsideGutter" : length_pos(),
+        ParagraphRuleAbove => "paragraphRuleAbove" : structure("ParagraphRuleSpec", Wire::ParagraphRule),
+        ParagraphRuleBelow => "paragraphRuleBelow" : structure("ParagraphRuleSpec", Wire::ParagraphRule),
+        ParagraphTabStops => "paragraphTabStops" : list_of("TabStopSpec", Wire::TabStops),
+        ParagraphListType => "paragraphListType" : enum_(LIST_TYPES).default_text("NoList"),
+        ParagraphBulletCharacter => "paragraphBulletCharacter" : text(),
+        ParagraphNumberingFormat => "paragraphNumberingFormat" : text(),
+        ParagraphBulletsTextAfter => "paragraphBulletsTextAfter" : text(),
+        ParagraphNumberingExpression => "paragraphNumberingExpression" : text(),
+        ParagraphNumberingStartAt => "paragraphNumberingStartAt" : count().min(0.0),
+        ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true),
+        ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle" : reference(RefKind::CharacterStyle),
+        ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle" : reference(RefKind::CharacterStyle),
+        ParagraphComposer => "paragraphComposer" : enum_open(COMPOSERS),
+    }
+
+    // ADR 132 — paths whose TARGET is not a page item: a layer, a page,
+    // the document, a text variable, a style definition. `ElementId`
+    // cannot name those, so they are not `paged.set(element, …)` paths
+    // and not in `settablePaths`; they are reached through `Mutation::Set`
+    // on the address kind named here, and published in `propertySchemas`.
+    addressed {
+        LayerVisible => "layerVisible" : bool_().default_bool(true), "layer",
+        LayerLocked => "layerLocked" : bool_().default_bool(false), "layer",
+        LayerPrintable => "layerPrintable" : bool_().default_bool(true), "layer",
+        LayerName => "layerName" : text().required(), "layer",
+        PageBounds => "pageBounds" : bounds(), "page",
+        PageMarginTop => "pageMarginTop" : length_pos().default_num(36.0), "page",
+        PageMarginBottom => "pageMarginBottom" : length_pos().default_num(36.0), "page",
+        PageMarginLeft => "pageMarginLeft" : length_pos().default_num(36.0), "page",
+        PageMarginRight => "pageMarginRight" : length_pos().default_num(36.0), "page",
+        PageColumnCount => "pageColumnCount" : count().range(1.0, 216.0).default_num(1.0), "page",
+        PageColumnGutter => "pageColumnGutter" : length_pos().default_num(12.0), "page",
+        DocumentBleedTop => "documentBleedTop" : length_pos().default_num(0.0), "doc",
+        DocumentBleedBottom => "documentBleedBottom" : length_pos().default_num(0.0), "doc",
+        DocumentBleedInsideOrLeft => "documentBleedInsideOrLeft" : length_pos().default_num(0.0), "doc",
+        DocumentBleedOutsideOrRight => "documentBleedOutsideOrRight" : length_pos().default_num(0.0), "doc",
+        DocumentSlugTop => "documentSlugTop" : length_pos().default_num(0.0), "doc",
+        DocumentSlugBottom => "documentSlugBottom" : length_pos().default_num(0.0), "doc",
+        DocumentSlugInsideOrLeft => "documentSlugInsideOrLeft" : length_pos().default_num(0.0), "doc",
+        DocumentSlugRightOrOutside => "documentSlugRightOrOutside" : length_pos().default_num(0.0), "doc",
+        TextVariableName => "textVariableName" : text(), "textVariable",
+        TextVariableType => "textVariableType" : enum_open(TEXT_VARIABLE_TYPES), "textVariable",
+        TextVariableContents => "textVariableContents" : text(), "textVariable",
+        TextVariableTextBefore => "textVariableTextBefore" : text(), "textVariable",
+        TextVariableTextAfter => "textVariableTextAfter" : text(), "textVariable",
+        TextVariableDateFormat => "textVariableDateFormat" : text(), "textVariable",
+        ObjectStyleStrokeTint => "objectStyleStrokeTint" : pct(), "style:object",
+        ObjectStyleCornerRadius => "objectStyleCornerRadius" : length_pos(), "style:object",
+        ObjectStyleCornerOption => "objectStyleCornerOption" : enum_open(CORNER_OPTIONS), "style:object",
+        CellStyleRotationAngle => "cellStyleRotationAngle" : deg(), "style:cell",
+        TableStyleHeaderRegionCellStyle => "tableStyleHeaderRegionCellStyle" : reference(RefKind::CellStyle), "style:table",
+        TableStyleBodyRegionCellStyle => "tableStyleBodyRegionCellStyle" : reference(RefKind::CellStyle), "style:table",
+        TableStyleFooterRegionCellStyle => "tableStyleFooterRegionCellStyle" : reference(RefKind::CellStyle), "style:table",
+        TableStyleLeftColumnRegionCellStyle => "tableStyleLeftColumnRegionCellStyle" : reference(RefKind::CellStyle), "style:table",
+        TableStyleRightColumnRegionCellStyle => "tableStyleRightColumnRegionCellStyle" : reference(RefKind::CellStyle), "style:table",
+        TableStyleTopBorderStrokeColor => "tableStyleTopBorderStrokeColor" : color(), "style:table",
+        TableStyleTopBorderStrokeWeight => "tableStyleTopBorderStrokeWeight" : length_pos(), "style:table",
+        TableStyleBottomBorderStrokeColor => "tableStyleBottomBorderStrokeColor" : color(), "style:table",
+        TableStyleBottomBorderStrokeWeight => "tableStyleBottomBorderStrokeWeight" : length_pos(), "style:table",
+        TableStyleLeftBorderStrokeColor => "tableStyleLeftBorderStrokeColor" : color(), "style:table",
+        TableStyleLeftBorderStrokeWeight => "tableStyleLeftBorderStrokeWeight" : length_pos(), "style:table",
+        TableStyleRightBorderStrokeColor => "tableStyleRightBorderStrokeColor" : color(), "style:table",
+        TableStyleRightBorderStrokeWeight => "tableStyleRightBorderStrokeWeight" : length_pos(), "style:table",
+        TableStyleAlternatingFills => "tableStyleAlternatingFills" : enum_(ALTERNATING_FILLS), "style:table",
+        TableStyleStartRowFillColor => "tableStyleStartRowFillColor" : color(), "style:table",
+        TableStyleStartRowFillCount => "tableStyleStartRowFillCount" : count(), "style:table",
+        TableStyleStartRowFillTint => "tableStyleStartRowFillTint" : pct(), "style:table",
+        TableStyleEndRowFillColor => "tableStyleEndRowFillColor" : color(), "style:table",
+        TableStyleEndRowFillCount => "tableStyleEndRowFillCount" : count(), "style:table",
+        TableStyleEndRowFillTint => "tableStyleEndRowFillTint" : pct(), "style:table",
     }
 
     hidden {
-        LayerVisible => "layerVisible",
-            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        LayerLocked => "layerLocked",
-            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        LayerPrintable => "layerPrintable",
-            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        LayerName => "layerName",
-            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        PathOpenAt => "pathOpenAt",
+        PathOpenAt => "pathOpenAt" : operation("PathOpenAt", Wire::PathOpenAt),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        OutlineStroke => "outlineStroke",
+        OutlineStroke => "outlineStroke" : operation("OutlineStroke", Wire::OutlineStroke),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        OutlineStrokeVariable => "outlineStrokeVariable",
+        OutlineStrokeVariable => "outlineStrokeVariable" : operation("OutlineStrokeVariable", Wire::OutlineStrokeVariable),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        OffsetPath => "offsetPath",
+        OffsetPath => "offsetPath" : operation("OffsetPath", Wire::OffsetPath),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        SimplifyPath => "simplifyPath",
+        SimplifyPath => "simplifyPath" : operation("SimplifyPath", Wire::SimplifyPath),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        ClosePath => "closePath",
+        ClosePath => "closePath" : operation("ClosePath", Wire::ClosePath),
             "a path OPERATION carried as a `PropertyPath` for the apply/invert algebra; every surface reaches it through its own `Mutation`, not a property write",
-        PageBounds => "pageBounds",
-            "the wire's `ElementId` has no address form for this node kind: settable through `NodeId` (native apply, `paged.set`) but not over `SetElementProperty` — C-33",
-        TableRowCount => "tableRowCount",
+        TableRowCount => "tableRowCount" : count().derived(),
             "READ-ONLY by contract: `SetProperty` carrying either table count is rejected, and structure edits go through Insert/DeleteTableRow and Insert/DeleteTableColumn. `settablePaths` means settable, so advertising them published a promise the apply layer refuses. `paged.get` still reads them — it matches on `wire_name`, not on this list",
-        TableColumnCount => "tableColumnCount",
+        TableColumnCount => "tableColumnCount" : count().derived(),
             "READ-ONLY by contract: `SetProperty` carrying either table count is rejected, and structure edits go through Insert/DeleteTableRow and Insert/DeleteTableColumn. `settablePaths` means settable, so advertising them published a promise the apply layer refuses. `paged.get` still reads them — it matches on `wire_name`, not on this list",
-        NextTextFrame => "nextTextFrame",
+        NextTextFrame => "nextTextFrame" : text().derived(),
             "NOT settable at all: the apply layer has no arm for it, so the old reason here — `settable on a TextFrame` — was untrue about the engine. And it could not usefully gain one: a forward pointer on its own does nothing, because the chain walk starts from the STORY, and `linkFrames` is what also rewrites the target's ParentStory. A raw property write would apply cleanly, change the model and move no pixels — the defect that lane already shipped once",
-        PreviousTextFrame => "previousTextFrame",
+        PreviousTextFrame => "previousTextFrame" : text().derived(),
             "NOT settable at all, and nothing to set: `paged_model::TextFrame` carries no back-pointer. IDML has the attribute and the parser drops it, because a singly-linked chain plus the story is all the composer reads",
     }
 }
@@ -1031,7 +1120,7 @@ mod tests {
     // left is the honest residue — eleven that are structurally not
     // property writes or have no address form, plus three still
     // carrying "no recorded reason".
-    const UNADVERTISED: usize = 15;
+    const UNADVERTISED: usize = 10;
 
     /// Every variant has exactly one name, and no two variants share one.
     ///
@@ -1075,8 +1164,10 @@ mod tests {
             let name = wire_name(*path);
             assert!(!name.is_empty(), "{path:?} has an empty name");
             match unadvertised_reason(*path) {
+                // Published either as an element path or (ADR 132) on
+                // its own address kind.
                 None => assert!(
-                    advertised.contains(path),
+                    advertised.contains(path) || addressed_on(*path).is_some(),
                     "{path:?} has no reason to be unadvertised but is not in the table"
                 ),
                 Some(reason) => {
@@ -1113,8 +1204,8 @@ mod tests {
         );
         assert_eq!(
             ALL_PATHS.len(),
-            PROPERTY_PATHS.len() + UNADVERTISED,
-            "every named path is advertised or explained, never both, never neither"
+            PROPERTY_PATHS.len() + ADDRESSED_PATHS.len() + UNADVERTISED,
+            "every named path is advertised, addressed or explained — exactly one"
         );
     }
 

@@ -28,7 +28,9 @@
 
 pub mod catalog;
 pub mod descriptor;
+pub mod schema;
 pub mod tree;
+pub mod virtual_paths;
 
 #[cfg(feature = "render")]
 pub mod render;

@@ -95,7 +95,8 @@ impl From<Value> for AuthoredValue {
             Value::Length(Some(n)) => AuthoredValue::Length(n),
             Value::Length(None) => AuthoredValue::None,
             Value::Bool(b) => AuthoredValue::Bool(b),
-            Value::Text(s) => AuthoredValue::Text(s),
+            Value::Text(s) | Value::Enum(s) | Value::Ref(s) => AuthoredValue::Text(s),
+            Value::Number(n) => AuthoredValue::Length(n as f32),
             // Structural / path-edit payloads (affine transforms, path-point
             // edits, whole-path replacement) have no scalar authored-value
             // form yet — no `PropertyKind` widget renders them, and
@@ -124,7 +125,8 @@ impl From<Value> for AuthoredValue {
             // W1.1 — the per-frame dash-array list (`FrameStrokeDashArray`).
             // Like `TabStops`, no scalar authored-value widget renders a
             // length list, so it collapses to `None` here.
-            | Value::Lengths(_) => AuthoredValue::None,
+            | Value::Lengths(_)
+            | Value::GradientStops(_) => AuthoredValue::None,
         }
     }
 }

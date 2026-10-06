@@ -1,0 +1,734 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ *
+ * This file is part of paged (https://paged.media) and is additionally
+ * available under the Paged Media Enterprise License (PMEL). Full
+ * copyright and license information is available in LICENSE.md which is
+ * distributed with this source code.
+ *
+ *  @copyright  Copyright (c) And The Next GmbH
+ *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
+ */
+
+//! ADR 132 — virtual paths: the dedicated property ops, as paths on their
+//! address kinds.
+//!
+//! About 45 of the wire ops are property writes with an argument shape of
+//! their own (`editSwatch`, `layerSetName`, `setDocumentDefaults`, …). A
+//! surface that wants "set any property" had to know every one. Here each
+//! becomes a row `(address kind, path, schema, op)`, and `Mutation::Set`
+//! resolves the row back to the op — the resolver lives with the model in
+//! `paged-canvas` (it reads the current spec to merge one field), the
+//! TABLE lives here so the catalog publishes it.
+//!
+//! Three kinds of row make up the whole property surface
+//! ([`property_schemas`]):
+//! - element paths (`settablePaths`), on frame / group / storyRange /
+//!   table / cell;
+//! - `addressed` paths (`property_paths!`), real `PropertyPath`s whose
+//!   target is a layer, page, the document, a text variable or a style
+//!   definition (`setProperty` / `setStyleProperty`);
+//! - the op-backed rows below ([`VIRTUAL_PATHS`]).
+//!
+//! Indexed and keyed segments are written `[i]` and `[key]` in the table
+//! (`rows[i].height`, `labels[key]`); a call names the concrete segment
+//! (`rows[2].height`, `labels[x-paged:oid]`).
+
+use crate::catalog::{addressed_on, schema, wire_name, ADDRESSED_PATHS, PROPERTY_PATHS};
+use crate::schema::*;
+use paged_mutate::PropertyPath as P;
+use serde::Serialize;
+
+/// One op-backed virtual path.
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualPath {
+    /// ADR 131 address kind.
+    pub address_kind: &'static str,
+    pub path: &'static str,
+    pub schema: PropertySchema,
+    /// The wire op (`Mutation` tag) a `Set` on this row becomes.
+    pub op: &'static str,
+    /// The op's argument (or spec field) the value lands in.
+    pub field: &'static str,
+}
+
+const fn v(
+    address_kind: &'static str,
+    path: &'static str,
+    schema: PropertySchema,
+    op: &'static str,
+    field: &'static str,
+) -> VirtualPath {
+    VirtualPath {
+        address_kind,
+        path,
+        schema,
+        op,
+        field,
+    }
+}
+
+const RENDERING_INTENTS: &[&str] = &[
+    "Perceptual",
+    "Saturation",
+    "RelativeColorimetric",
+    "AbsoluteColorimetric",
+];
+const RGB_POLICIES: &[&str] = &["PreserveEmbedded", "ConvertToWorking", "Off"];
+
+/// The op-backed rows. Generated cockpit tables (`object-model`) count
+/// these; `virtual_paths_cover_the_classified_ops` keeps them total
+/// against the ops this crate knows are property writes.
+pub const VIRTUAL_PATHS: &[VirtualPath] = &[
+    // ---- doc
+    v(
+        "doc",
+        "defaultFillColor",
+        color_text(),
+        "setDocumentDefaults",
+        "fillColor",
+    ),
+    v(
+        "doc",
+        "defaultStrokeColor",
+        color_text(),
+        "setDocumentDefaults",
+        "strokeColor",
+    ),
+    v(
+        "doc",
+        "defaultStrokeWeight",
+        length_pos(),
+        "setDocumentDefaults",
+        "strokeWeight",
+    ),
+    v(
+        "doc",
+        "cmykProfile",
+        text(),
+        "setColorSettings",
+        "cmykProfileName",
+    ),
+    v(
+        "doc",
+        "rgbPolicy",
+        enum_open(RGB_POLICIES),
+        "setColorSettings",
+        "rgbPolicy",
+    ),
+    v(
+        "doc",
+        "renderingIntent",
+        enum_(RENDERING_INTENTS),
+        "setColorSettings",
+        "intent",
+    ),
+    v(
+        "doc",
+        "blackPointCompensation",
+        bool_().default_bool(true),
+        "setColorSettings",
+        "bpc",
+    ),
+    v(
+        "doc",
+        "proofProfile",
+        text(),
+        "setProofSetup",
+        "profileName",
+    ),
+    v(
+        "doc",
+        "proofSimulatePaperWhite",
+        bool_().default_bool(false),
+        "setProofSetup",
+        "simulatePaperWhite",
+    ),
+    v(
+        "doc",
+        "proofIntent",
+        enum_(RENDERING_INTENTS),
+        "setProofSetup",
+        "intent",
+    ),
+    v(
+        "doc",
+        "useStandardLabForSpots",
+        bool_().default_bool(false),
+        "setUseStandardLabForSpots",
+        "enabled",
+    ),
+    v(
+        "doc",
+        "activeConditionSet",
+        reference(RefKind::Condition),
+        "activateConditionSet",
+        "setId",
+    ),
+    v("doc", "labels[key]", text(), "setDocumentMetadata", "value"),
+    // ---- swatch (editSwatch is a whole-spec op: read, merge, write)
+    v("swatch", "name", text(), "editSwatch", "name"),
+    v(
+        "swatch",
+        "space",
+        enum_(SWATCH_SPACES).required(),
+        "editSwatch",
+        "space",
+    ),
+    v(
+        "swatch",
+        "value",
+        lengths().required(),
+        "editSwatch",
+        "value",
+    ),
+    v(
+        "swatch",
+        "model",
+        enum_(SWATCH_MODELS),
+        "editSwatch",
+        "model",
+    ),
+    v(
+        "swatch",
+        "alternateSpace",
+        enum_(SWATCH_SPACES),
+        "editSwatch",
+        "alternateSpace",
+    ),
+    v(
+        "swatch",
+        "alternateValue",
+        lengths(),
+        "editSwatch",
+        "alternateValue",
+    ),
+    v("swatch", "tint", pct(), "editSwatch", "tint"),
+    v("swatch", "alpha", pct(), "editSwatch", "alpha"),
+    v(
+        "swatch",
+        "convertToProcess",
+        bool_().default_bool(false),
+        "setInkSetting",
+        "convertToProcess",
+    ),
+    v(
+        "swatch",
+        "inkAliasTo",
+        reference(RefKind::Swatch),
+        "setInkSetting",
+        "aliasTo",
+    ),
+    // ---- gradient
+    v("gradient", "name", text(), "editGradient", "name"),
+    v(
+        "gradient",
+        "kind",
+        enum_(GRADIENT_KINDS).required(),
+        "editGradient",
+        "kind",
+    ),
+    v(
+        "gradient",
+        "stops",
+        list_of("GradientStopSpec", Wire::GradientStops),
+        "editGradient",
+        "stops",
+    ),
+    // ---- colour group
+    v("colorGroup", "name", text(), "editColorGroup", "name"),
+    v(
+        "colorGroup",
+        "members",
+        list_of("swatch ref", Wire::Text),
+        "editColorGroup",
+        "members",
+    ),
+    // ---- numbering list
+    v("numberingList", "name", text(), "editNumberingList", "name"),
+    v(
+        "numberingList",
+        "continueAcrossStories",
+        bool_().default_bool(false),
+        "editNumberingList",
+        "continueAcrossStories",
+    ),
+    v(
+        "numberingList",
+        "continueAcrossDocuments",
+        bool_().default_bool(false),
+        "editNumberingList",
+        "continueAcrossDocuments",
+    ),
+    // ---- style (the definition's NAME; its properties are the
+    // `setStyleProperty` rows `property_schemas` lists per family)
+    v(
+        "style",
+        "name",
+        text().required(),
+        "rename<Family>Style",
+        "name",
+    ),
+    // ---- guide / condition
+    v("guide", "position", length(), "moveGuide", "position"),
+    v(
+        "condition",
+        "visible",
+        bool_().default_bool(true),
+        "setConditionVisible",
+        "visible",
+    ),
+    // ---- story
+    v(
+        "story",
+        "flowGrow",
+        bool_().default_bool(false),
+        "setFlowGrowRule",
+        "grow",
+    ),
+    v(
+        "story",
+        "flowGrowMaxPages",
+        count().min(1.0),
+        "setFlowGrowRule",
+        "maxPages",
+    ),
+    v(
+        "story",
+        "flowGrowCopyFrameOptions",
+        bool_().default_bool(false),
+        "setFlowGrowRule",
+        "copyFrameOptions",
+    ),
+    // ---- page
+    v(
+        "page",
+        "appliedMaster",
+        reference(RefKind::Master),
+        "applyMasterToPage",
+        "master",
+    ),
+    v("page", "labels[key]", text(), "setPageMetadata", "value"),
+    // ---- master
+    v("master", "name", text(), "renameMaster", "name"),
+    // ---- section
+    v("section", "prefix", text(), "editSection", "prefix"),
+    v(
+        "section",
+        "numberingStyle",
+        enum_open(PAGE_NUMBER_STYLES),
+        "editSection",
+        "numberingStyle",
+    ),
+    v(
+        "section",
+        "startAt",
+        count().min(1.0),
+        "editSection",
+        "startAt",
+    ),
+    // ---- table / cell
+    v(
+        "table",
+        "rows[i].height",
+        length_pos(),
+        "setRowHeight",
+        "height",
+    ),
+    v(
+        "table",
+        "columns[i].width",
+        length_pos(),
+        "setColumnWidth",
+        "width",
+    ),
+    v(
+        "cell",
+        "rowSpan",
+        count().min(1.0).required(),
+        "setCellSpan",
+        "rowSpan",
+    ),
+    v(
+        "cell",
+        "columnSpan",
+        count().min(1.0).required(),
+        "setCellSpan",
+        "columnSpan",
+    ),
+    // ---- field
+    v("field", "value", text(), "setFieldValue", "value"),
+    // ---- frame / group
+    v(
+        "frame",
+        "imageUri",
+        reference(RefKind::Uri).required(),
+        "placeImage",
+        "uri",
+    ),
+    v("frame", "labels[key]", text(), "setPluginMetadata", "value"),
+    v(
+        "group",
+        "groupTransform",
+        transform(),
+        "setGroupTransform",
+        "transform",
+    ),
+];
+
+/// Find the op-backed row for `(address kind, path)`. A concrete indexed
+/// or keyed path (`rows[3].height`, `labels[x-paged:a]`) matches its
+/// pattern row; the caller parses the segment with [`segment`].
+pub fn lookup_virtual(address_kind: &str, path: &str) -> Option<&'static VirtualPath> {
+    let pattern = pattern_of(path);
+    VIRTUAL_PATHS
+        .iter()
+        .find(|row| row.address_kind == address_kind && row.path == pattern)
+}
+
+/// The `[…]` segment of a concrete path, if it has one.
+pub fn segment(path: &str) -> Option<&str> {
+    let open = path.find('[')?;
+    let close = path[open..].find(']')? + open;
+    Some(&path[open + 1..close])
+}
+
+/// `rows[3].height` → `rows[i].height`; `labels[x]` → `labels[key]`.
+fn pattern_of(path: &str) -> String {
+    let Some(seg) = segment(path) else {
+        return path.to_string();
+    };
+    let placeholder = if seg.chars().all(|c| c.is_ascii_digit()) && !seg.is_empty() {
+        "i"
+    } else {
+        "key"
+    };
+    path.replacen(&format!("[{seg}]"), &format!("[{placeholder}]"), 1)
+}
+
+/// The `PropertyPath`s `setStyleProperty` takes per style family — the
+/// apply arms in `paged-mutate/src/apply/layer.rs`, published.
+pub fn style_paths(family: &str) -> &'static [P] {
+    match family {
+        "paragraph" => &[
+            P::CharacterFontSize,
+            P::CharacterTracking,
+            P::CharacterFillColor,
+            P::CharacterFontFamily,
+            P::CharacterFontStyle,
+            P::CharacterLeading,
+            P::ParagraphSpaceBefore,
+            P::ParagraphSpaceAfter,
+            P::ParagraphFirstLineIndent,
+            P::ParagraphJustification,
+            P::ParagraphStyleNextStyle,
+            P::ParagraphLeftIndent,
+            P::ParagraphRightIndent,
+            P::ParagraphHyphenationZone,
+            P::ParagraphKeepWithNext,
+            P::ParagraphKeepLinesTogether,
+            P::ParagraphKeepAllLinesTogether,
+            P::ParagraphKeepFirstLines,
+            P::ParagraphKeepLastLines,
+            P::ParagraphStartParagraph,
+            P::ParagraphComposer,
+            P::ParagraphSpanColumnType,
+            P::ParagraphSpanSplitColumnCount,
+            P::ParagraphSpanColumnMinSpaceBefore,
+            P::ParagraphSpanColumnMinSpaceAfter,
+            P::ParagraphSplitColumnInsideGutter,
+            P::ParagraphSplitColumnOutsideGutter,
+            P::ParagraphHyphenation,
+            P::ParagraphListType,
+            P::ParagraphNumberingFormat,
+            P::ParagraphAppliedNumberingList,
+            P::ParagraphBulletsTextAfter,
+            P::ParagraphNumberingExpression,
+            P::ParagraphNumberingStartAt,
+            P::ParagraphNumberingContinue,
+            P::ParagraphBulletsCharacterStyle,
+            P::ParagraphNumberingCharacterStyle,
+            P::ParagraphBulletCharacter,
+            P::ParagraphTabStops,
+            P::CharacterCase,
+            P::CharacterPosition,
+            P::CharacterBaselineShift,
+            P::CharacterUnderline,
+            P::CharacterStrikethru,
+            P::CharacterLigatures,
+            P::CharacterKerningMethod,
+        ],
+        "character" => &[
+            P::CharacterFontSize,
+            P::CharacterTracking,
+            P::CharacterFillColor,
+            P::CharacterFontFamily,
+            P::CharacterFontStyle,
+            P::CharacterLeading,
+            P::CharacterCase,
+            P::CharacterPosition,
+            P::CharacterBaselineShift,
+            P::CharacterUnderline,
+            P::CharacterStrikethru,
+            P::CharacterLigatures,
+            P::CharacterKerningMethod,
+        ],
+        "object" => &[
+            P::FrameFillColor,
+            P::FrameFillTint,
+            P::FrameStrokeColor,
+            P::FrameStrokeWeight,
+            P::ObjectStyleStrokeTint,
+            P::ObjectStyleCornerRadius,
+            P::ObjectStyleCornerOption,
+        ],
+        "cell" => &[
+            P::CellFillColor,
+            P::CellVerticalJustification,
+            P::CellStyleRotationAngle,
+            P::CellTopEdgeStrokeColor,
+            P::CellTopEdgeStrokeWeight,
+            P::CellBottomEdgeStrokeColor,
+            P::CellBottomEdgeStrokeWeight,
+            P::CellLeftEdgeStrokeColor,
+            P::CellLeftEdgeStrokeWeight,
+            P::CellRightEdgeStrokeColor,
+            P::CellRightEdgeStrokeWeight,
+        ],
+        "table" => &[
+            P::TableStyleHeaderRegionCellStyle,
+            P::TableStyleBodyRegionCellStyle,
+            P::TableStyleFooterRegionCellStyle,
+            P::TableStyleLeftColumnRegionCellStyle,
+            P::TableStyleRightColumnRegionCellStyle,
+            P::TableStyleTopBorderStrokeColor,
+            P::TableStyleTopBorderStrokeWeight,
+            P::TableStyleBottomBorderStrokeColor,
+            P::TableStyleBottomBorderStrokeWeight,
+            P::TableStyleLeftBorderStrokeColor,
+            P::TableStyleLeftBorderStrokeWeight,
+            P::TableStyleRightBorderStrokeColor,
+            P::TableStyleRightBorderStrokeWeight,
+            P::TableStyleAlternatingFills,
+            P::TableStyleStartRowFillColor,
+            P::TableStyleStartRowFillCount,
+            P::TableStyleStartRowFillTint,
+            P::TableStyleEndRowFillColor,
+            P::TableStyleEndRowFillCount,
+            P::TableStyleEndRowFillTint,
+        ],
+        _ => &[],
+    }
+}
+
+pub const STYLE_FAMILIES: &[&str] = &["paragraph", "character", "object", "cell", "table"];
+
+/// The address kind of an ELEMENT path (one `ElementId` reaches).
+pub fn element_address_kind(path: P) -> &'static str {
+    let name = wire_name(path);
+    match path {
+        P::AppliedParagraphStyle | P::AppliedCharacterStyle | P::AppliedConditions => "storyRange",
+        P::AppliedCellStyle => "cell",
+        P::AppliedTableStyle => "table",
+        _ if name.starts_with("character") || name.starts_with("paragraph") => "storyRange",
+        _ if name.starts_with("cell") => "cell",
+        _ => "frame",
+    }
+}
+
+/// One published schema row (ADR 132's normative shape, the parts this
+/// engine fills).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaRow {
+    pub address_kind: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub applies_to: Vec<&'static str>,
+    pub path: &'static str,
+    #[serde(rename = "type")]
+    pub value_type: TypeJson,
+    pub wire: Wire,
+    pub nullable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<DefaultValue>,
+    pub access: &'static str,
+    #[serde(rename = "virtual", skip_serializing_if = "Option::is_none")]
+    pub virtual_op: Option<VirtualJson>,
+    pub bindable: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeJson {
+    pub kind: ValueType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<Unit>,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub members: &'static [&'static str],
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<RefKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub of: Option<ValueType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RangeJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VirtualJson {
+    pub op: &'static str,
+    pub field: &'static str,
+}
+
+fn row(
+    address_kind: &'static str,
+    applies_to: Vec<&'static str>,
+    path: &'static str,
+    s: PropertySchema,
+    virtual_op: Option<VirtualJson>,
+) -> SchemaRow {
+    let access = if s.derived {
+        "derived"
+    } else if s.read_only {
+        "readOnly"
+    } else {
+        "readWrite"
+    };
+    SchemaRow {
+        address_kind,
+        applies_to,
+        path,
+        value_type: TypeJson {
+            kind: s.value_type,
+            unit: s.unit,
+            members: s.members,
+            open: s.open,
+            to: s.ref_kind,
+            of: s.item,
+            shape: s.shape,
+        },
+        wire: s.wire,
+        nullable: s.nullable,
+        range: (s.min.is_some() || s.max.is_some()).then_some(RangeJson {
+            min: s.min,
+            max: s.max,
+        }),
+        default: s.default,
+        access,
+        virtual_op,
+        bindable: access == "readWrite" && s.value_type != ValueType::Operation,
+    }
+}
+
+/// Every settable or readable property, as published rows: element
+/// paths, addressed paths, style-definition paths per family, and the
+/// op-backed virtual paths.
+pub fn property_schemas() -> Vec<SchemaRow> {
+    let mut out = Vec::new();
+    for (name, path) in PROPERTY_PATHS {
+        out.push(row(
+            element_address_kind(*path),
+            Vec::new(),
+            name,
+            schema(*path),
+            None,
+        ));
+    }
+    for (name, path, kind) in ADDRESSED_PATHS {
+        // Style-definition-only paths are listed with their family below.
+        if kind.starts_with("style:") {
+            continue;
+        }
+        out.push(row(
+            kind,
+            Vec::new(),
+            name,
+            schema(*path),
+            Some(VirtualJson {
+                op: "setProperty",
+                field: "value",
+            }),
+        ));
+    }
+    for family in STYLE_FAMILIES {
+        for path in style_paths(family) {
+            debug_assert!(addressed_on(*path).is_none_or(|k| k == format!("style:{family}")));
+            out.push(row(
+                "style",
+                vec![family],
+                wire_name(*path),
+                schema(*path),
+                Some(VirtualJson {
+                    op: "setStyleProperty",
+                    field: "value",
+                }),
+            ));
+        }
+    }
+    for vp in VIRTUAL_PATHS {
+        out.push(row(
+            vp.address_kind,
+            Vec::new(),
+            vp.path,
+            vp.schema,
+            Some(VirtualJson {
+                op: vp.op,
+                field: vp.field,
+            }),
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concrete_segments_match_their_pattern_rows() {
+        assert_eq!(
+            lookup_virtual("table", "rows[3].height").unwrap().op,
+            "setRowHeight"
+        );
+        assert_eq!(
+            lookup_virtual("frame", "labels[x-paged:oid]").unwrap().op,
+            "setPluginMetadata"
+        );
+        assert_eq!(segment("labels[x-paged:oid]"), Some("x-paged:oid"));
+        assert!(lookup_virtual("swatch", "nope").is_none());
+    }
+
+    #[test]
+    fn every_addressed_style_path_is_listed_under_its_family() {
+        for (name, path, kind) in ADDRESSED_PATHS {
+            if let Some(family) = kind.strip_prefix("style:") {
+                assert!(
+                    style_paths(family).contains(path),
+                    "{name} is addressed on {kind} but {family}'s list omits it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rows_are_unique_per_address_kind_and_family() {
+        let mut seen = std::collections::HashSet::new();
+        for r in property_schemas() {
+            let key = (r.address_kind, r.applies_to.clone(), r.path);
+            assert!(seen.insert(key.clone()), "duplicate schema row {key:?}");
+        }
+    }
+}

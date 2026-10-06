@@ -1389,6 +1389,7 @@
     "layerInsert",
     "layerRemove",
     "setElementProperty",
+    "set",
     "pathfinderBoolean",
     "pathfinderDivide",
     "pathfinderTrim",
@@ -1850,6 +1851,6708 @@
     {
       "name": "frameDirectionalFeather",
       "wire": "frameDirectionalFeatherEnabled"
+    }
+  ],
+  "propertySchemas": [
+    {
+      "addressKind": "frame",
+      "path": "frameBounds",
+      "type": {
+        "kind": "bounds",
+        "unit": "pt"
+      },
+      "wire": "bounds",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTransform",
+      "type": {
+        "kind": "transform"
+      },
+      "wire": "transform",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "imageContentTransform",
+      "type": {
+        "kind": "transform"
+      },
+      "wire": "transform",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "framePathPoint",
+      "type": {
+        "kind": "operation",
+        "shape": "PathPoint"
+      },
+      "wire": "pathPoint",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": false
+    },
+    {
+      "addressKind": "frame",
+      "path": "pathPointInsert",
+      "type": {
+        "kind": "operation",
+        "shape": "PathPointInsert"
+      },
+      "wire": "pathPointInsert",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": false
+    },
+    {
+      "addressKind": "frame",
+      "path": "pathPointRemove",
+      "type": {
+        "kind": "operation",
+        "shape": "PathPointRemove"
+      },
+      "wire": "pathPointRemove",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": false
+    },
+    {
+      "addressKind": "frame",
+      "path": "pathPointCurveType",
+      "type": {
+        "kind": "operation",
+        "shape": "PathPointCurveType"
+      },
+      "wire": "pathPointCurveType",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": false
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterFontSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.1,
+        "max": 1296.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterLeading",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterTracking",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -1000.0,
+        "max": 10000.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpaceBefore",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpaceAfter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphFirstLineIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "appliedParagraphStyle",
+      "type": {
+        "kind": "ref",
+        "to": "paragraphStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "appliedCharacterStyle",
+      "type": {
+        "kind": "ref",
+        "to": "characterStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "appliedObjectStyle",
+      "type": {
+        "kind": "ref",
+        "to": "objectStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "itemLayer",
+      "type": {
+        "kind": "ref",
+        "to": "layer"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "appliedCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "table",
+      "path": "appliedTableStyle",
+      "type": {
+        "kind": "ref",
+        "to": "tableStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "appliedConditions",
+      "type": {
+        "kind": "ref",
+        "to": "condition"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInsetSpacing",
+      "type": {
+        "kind": "bounds",
+        "unit": "pt"
+      },
+      "wire": "bounds",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "LeftAlign",
+          "CenterAlign",
+          "RightAlign",
+          "LeftJustified",
+          "CenterJustified",
+          "RightJustified",
+          "FullyJustified",
+          "ToBindingSide",
+          "AwayFromBindingSide"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "LeftAlign",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphStyleNextStyle",
+      "type": {
+        "kind": "ref",
+        "to": "paragraphStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphAppliedNumberingList",
+      "type": {
+        "kind": "ref",
+        "to": "numberingList"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeEndCap",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "ButtEndCap",
+          "RoundEndCap",
+          "ProjectingEndCap"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "ButtEndCap",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeStartArrowhead",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "SimpleArrowHead",
+          "SimpleWideArrowHead",
+          "TriangleArrowHead",
+          "TriangleWideArrowHead",
+          "BarbedArrowHead",
+          "CurvedArrowHead",
+          "CircleArrowHead",
+          "CircleSolidArrowHead",
+          "SquareArrowHead",
+          "SquareSolidArrowHead",
+          "BarArrowHead"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeEndArrowhead",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "SimpleArrowHead",
+          "SimpleWideArrowHead",
+          "TriangleArrowHead",
+          "TriangleWideArrowHead",
+          "BarbedArrowHead",
+          "CurvedArrowHead",
+          "CircleArrowHead",
+          "CircleSolidArrowHead",
+          "SquareArrowHead",
+          "SquareSolidArrowHead",
+          "BarArrowHead"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTextWrapMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "BoundingBoxTextWrap",
+          "Contour",
+          "JumpObjectTextWrap",
+          "NextColumnTextWrap"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTextWrapOffsets",
+      "type": {
+        "kind": "bounds",
+        "unit": "pt"
+      },
+      "wire": "bounds",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTextWrapContourType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "BoundingBox",
+          "DetectEdges",
+          "AlphaChannel",
+          "PhotoshopPath",
+          "GraphicFrame",
+          "SameAsClipping",
+          "UserModifiedPath"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTextWrapContourIncludeInside",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFittingCrops",
+      "type": {
+        "kind": "bounds",
+        "unit": "pt"
+      },
+      "wire": "bounds",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFittingType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "Proportionally",
+          "FillProportionally",
+          "ContentToFrame",
+          "CenterContent",
+          "FrameToContent"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadow",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "Drop"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowXOffset",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowYOffset",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 75.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "framePath",
+      "type": {
+        "kind": "struct",
+        "shape": "FramePath"
+      },
+      "wire": "framePath",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameNonprinting",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameGradientFillAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameGradientFillLength",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameGradientStrokeAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameGradientStrokeLength",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameColumnCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 40.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameColumnGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameColumnBalance",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameVerticalJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "TopAlign",
+          "CenterAlign",
+          "BottomAlign",
+          "JustifyAlign"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "TopAlign",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameAutoSizing",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Off",
+          "HeightOnly",
+          "WidthOnly",
+          "HeightAndWidth",
+          "HeightAndWidthProportionally"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Off",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "textFrameFirstBaseline",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "AscentOffset",
+          "CapHeight",
+          "XHeight",
+          "EmBoxHeight",
+          "LeadingOffset",
+          "FixedHeight"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "AscentOffset",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameTextWrapInvert",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFittingReferencePoint",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "TopLeftPoint",
+          "TopCenterPoint",
+          "TopRightPoint",
+          "CenterLeftPoint",
+          "CenterPoint",
+          "CenterRightPoint",
+          "BottomLeftPoint",
+          "BottomCenterPoint",
+          "BottomRightPoint"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "TopLeftPoint",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameAutoFit",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeType",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeJoin",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "MiterEndJoin",
+          "RoundEndJoin",
+          "BevelEndJoin"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "MiterEndJoin",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeMiterLimit",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 500.0
+      },
+      "default": 4.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeAlignment",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "CenterAlignment",
+          "InsideAlignment",
+          "OutsideAlignment"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "CenterAlignment",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeGapColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeGapTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeDashArray",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length"
+      },
+      "wire": "lengths",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerOptionTopLeft",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "RoundedCorner",
+          "InverseRoundedCorner",
+          "InsetCorner",
+          "BeveledCorner",
+          "FancyCorner"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerOptionTopRight",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "RoundedCorner",
+          "InverseRoundedCorner",
+          "InsetCorner",
+          "BeveledCorner",
+          "FancyCorner"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerOptionBottomLeft",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "RoundedCorner",
+          "InverseRoundedCorner",
+          "InsetCorner",
+          "BeveledCorner",
+          "FancyCorner"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerOptionBottomRight",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "RoundedCorner",
+          "InverseRoundedCorner",
+          "InsetCorner",
+          "BeveledCorner",
+          "FancyCorner"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "None",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerRadiusTopLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerRadiusTopRight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerRadiusBottomLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameCornerRadiusBottomRight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameRotationAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameScaleX",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameScaleY",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFlipH",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFlipV",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOverprintFill",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOverprintStroke",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadow",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowDistance",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowChoke",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerShadowNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlow",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowSpread",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameOuterGlowNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlow",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowChoke",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowSource",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "EdgeSourced",
+          "CenterSourced"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameInnerGlowNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevel",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelStyle",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "OuterBevel",
+          "InnerBevel",
+          "Emboss",
+          "PillowEmboss"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelTechnique",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "SmoothContour",
+          "ChiselHard",
+          "ChiselSoft"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelDepth",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 1000.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelDirection",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Up",
+          "Down"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelSoften",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelAltitude",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelHighlightColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelShadowColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelHighlightOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBevelShadowOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatin",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinDistance",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameSatinInvert",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFeather",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFeatherWidth",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFeatherCornerType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Sharp",
+          "Rounded",
+          "Diffusion"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFeatherNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFeatherChoke",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeather",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherLeftWidth",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherRightWidth",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherTopWidth",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherBottomWidth",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDirectionalFeatherChoke",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameGradientFeather",
+      "type": {
+        "kind": "struct",
+        "shape": "GradientFeatherSpec"
+      },
+      "wire": "gradientFeather",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellInsetTop",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellInsetLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellInsetBottom",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellInsetRight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellVerticalJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "TopAlign",
+          "CenterAlign",
+          "BottomAlign",
+          "JustifyAlign"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "TopAlign",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellTopEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellTopEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellTopEdgeStrokeTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellBottomEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellBottomEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellBottomEdgeStrokeTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellLeftEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellLeftEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellLeftEdgeStrokeTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellRightEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellRightEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "cellRightEdgeStrokeTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "pluginMetadata",
+      "type": {
+        "kind": "struct",
+        "shape": "PluginMetadata"
+      },
+      "wire": "pluginMetadata",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredPosition",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "InlinePosition",
+          "AboveLine",
+          "Anchored"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "InlinePosition",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchorPoint",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "TopLeftPoint",
+          "TopCenterPoint",
+          "TopRightPoint",
+          "CenterLeftPoint",
+          "CenterPoint",
+          "CenterRightPoint",
+          "BottomLeftPoint",
+          "BottomCenterPoint",
+          "BottomRightPoint"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredXOffset",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredYOffset",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredHorizontalReference",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredVerticalReference",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredHorizontalAlignment",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredVerticalAlignment",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredSpineRelative",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "anchoredLockPosition",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "elementVisible",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "elementLocked",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterFontFamily",
+      "type": {
+        "kind": "ref",
+        "to": "font"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterFontStyle",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterKerningMethod",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Metrics",
+          "Optical",
+          "None"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Metrics",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterCase",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "AllCaps",
+          "SmallCaps",
+          "OTSmallCaps"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterPosition",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Superscript",
+          "Subscript",
+          "OTSuperscript",
+          "OTSubscript",
+          "OTNumerator",
+          "OTDenominator"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterLanguage",
+      "type": {
+        "kind": "ref",
+        "to": "language"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterBaselineShift",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterHorizontalScale",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 1000.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterVerticalScale",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 1000.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterSkew",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -85.0,
+        "max": 85.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterUnderline",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterStrikethru",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterLigatures",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "characterOtfFeatures",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphLeftIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphRightIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphDropCapCharacters",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 150.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphDropCapLines",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 25.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphHyphenation",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphHyphenationZone",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphKeepLinesTogether",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphKeepWithNext",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 5.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphKeepAllLinesTogether",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphKeepFirstLines",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 50.0
+      },
+      "default": 2.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphKeepLastLines",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 50.0
+      },
+      "default": 2.0,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphStartParagraph",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Anywhere",
+          "NextColumn",
+          "NextFrame",
+          "NextPage",
+          "NextOddPage",
+          "NextEvenPage"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Anywhere",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpanColumnType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "SingleColumn",
+          "SpanColumns",
+          "SplitColumns"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "SingleColumn",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpanSplitColumnCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpanColumnMinSpaceBefore",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSpanColumnMinSpaceAfter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSplitColumnInsideGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSplitColumnOutsideGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphRuleAbove",
+      "type": {
+        "kind": "struct",
+        "shape": "ParagraphRuleSpec"
+      },
+      "wire": "paragraphRule",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphRuleBelow",
+      "type": {
+        "kind": "struct",
+        "shape": "ParagraphRuleSpec"
+      },
+      "wire": "paragraphRule",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphTabStops",
+      "type": {
+        "kind": "list",
+        "of": "struct",
+        "shape": "TabStopSpec"
+      },
+      "wire": "tabStops",
+      "nullable": false,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphListType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoList",
+          "BulletList",
+          "NumberedList"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoList",
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphBulletCharacter",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingFormat",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphBulletsTextAfter",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingExpression",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingStartAt",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingContinue",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphBulletsCharacterStyle",
+      "type": {
+        "kind": "ref",
+        "to": "characterStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingCharacterStyle",
+      "type": {
+        "kind": "ref",
+        "to": "characterStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphComposer",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "HL Composer",
+          "HL Single",
+          "Adobe Paragraph Composer",
+          "Adobe Single-line Composer"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "bindable": true
+    },
+    {
+      "addressKind": "layer",
+      "path": "layerVisible",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "layer",
+      "path": "layerLocked",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "layer",
+      "path": "layerPrintable",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "layer",
+      "path": "layerName",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageBounds",
+      "type": {
+        "kind": "bounds",
+        "unit": "pt"
+      },
+      "wire": "bounds",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageMarginTop",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 36.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageMarginBottom",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 36.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageMarginLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 36.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageMarginRight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 36.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageColumnCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 216.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "pageColumnGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentBleedTop",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentBleedBottom",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentBleedInsideOrLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentBleedOutsideOrRight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentSlugTop",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentSlugBottom",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentSlugInsideOrLeft",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentSlugRightOrOutside",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableName",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "CustomTextType",
+          "FileNameType",
+          "PageCountType",
+          "CreationDateType",
+          "ModificationDateType",
+          "OutputDateType",
+          "ChapterNumberType",
+          "MatchParagraphStyleType",
+          "MatchCharacterStyleType",
+          "LastPageNumberType",
+          "XrefPageNumberType",
+          "XrefChapterNumberType"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableContents",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableTextBefore",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableTextAfter",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "textVariable",
+      "path": "textVariableDateFormat",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterFontSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.1,
+        "max": 1296.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterTracking",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -1000.0,
+        "max": 10000.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterFontFamily",
+      "type": {
+        "kind": "ref",
+        "to": "font"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterFontStyle",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterLeading",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpaceBefore",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpaceAfter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphFirstLineIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "LeftAlign",
+          "CenterAlign",
+          "RightAlign",
+          "LeftJustified",
+          "CenterJustified",
+          "RightJustified",
+          "FullyJustified",
+          "ToBindingSide",
+          "AwayFromBindingSide"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "LeftAlign",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphStyleNextStyle",
+      "type": {
+        "kind": "ref",
+        "to": "paragraphStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphLeftIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphRightIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphHyphenationZone",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphKeepWithNext",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 5.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphKeepLinesTogether",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphKeepAllLinesTogether",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphKeepFirstLines",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 50.0
+      },
+      "default": 2.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphKeepLastLines",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 50.0
+      },
+      "default": 2.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphStartParagraph",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Anywhere",
+          "NextColumn",
+          "NextFrame",
+          "NextPage",
+          "NextOddPage",
+          "NextEvenPage"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Anywhere",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphComposer",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "HL Composer",
+          "HL Single",
+          "Adobe Paragraph Composer",
+          "Adobe Single-line Composer"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpanColumnType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "SingleColumn",
+          "SpanColumns",
+          "SplitColumns"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "SingleColumn",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpanSplitColumnCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpanColumnMinSpaceBefore",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSpanColumnMinSpaceAfter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSplitColumnInsideGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSplitColumnOutsideGutter",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphHyphenation",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphListType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoList",
+          "BulletList",
+          "NumberedList"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoList",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingFormat",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphAppliedNumberingList",
+      "type": {
+        "kind": "ref",
+        "to": "numberingList"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphBulletsTextAfter",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingExpression",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingStartAt",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingContinue",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphBulletsCharacterStyle",
+      "type": {
+        "kind": "ref",
+        "to": "characterStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingCharacterStyle",
+      "type": {
+        "kind": "ref",
+        "to": "characterStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphBulletCharacter",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphTabStops",
+      "type": {
+        "kind": "list",
+        "of": "struct",
+        "shape": "TabStopSpec"
+      },
+      "wire": "tabStops",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterCase",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "AllCaps",
+          "SmallCaps",
+          "OTSmallCaps"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterPosition",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Superscript",
+          "Subscript",
+          "OTSuperscript",
+          "OTSubscript",
+          "OTNumerator",
+          "OTDenominator"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterBaselineShift",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterUnderline",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterStrikethru",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterLigatures",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "characterKerningMethod",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Metrics",
+          "Optical",
+          "None"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Metrics",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterFontSize",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.1,
+        "max": 1296.0
+      },
+      "default": 12.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterTracking",
+      "type": {
+        "kind": "number"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -1000.0,
+        "max": 10000.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterFontFamily",
+      "type": {
+        "kind": "ref",
+        "to": "font"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterFontStyle",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterLeading",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterCase",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "AllCaps",
+          "SmallCaps",
+          "OTSmallCaps"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterPosition",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Superscript",
+          "Subscript",
+          "OTSuperscript",
+          "OTSubscript",
+          "OTNumerator",
+          "OTDenominator"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterBaselineShift",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterUnderline",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterStrikethru",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterLigatures",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterKerningMethod",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Metrics",
+          "Optical",
+          "None"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Metrics",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "frameFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "frameFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "frameStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "frameStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "objectStyleStrokeTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "objectStyleCornerRadius",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "object"
+      ],
+      "path": "objectStyleCornerOption",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "RoundedCorner",
+          "InverseRoundedCorner",
+          "InsetCorner",
+          "BeveledCorner",
+          "FancyCorner"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellVerticalJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "TopAlign",
+          "CenterAlign",
+          "BottomAlign",
+          "JustifyAlign"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "TopAlign",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellStyleRotationAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellTopEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellTopEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellBottomEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellBottomEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellLeftEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellLeftEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellRightEdgeStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellRightEdgeStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleHeaderRegionCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleBodyRegionCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleFooterRegionCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleLeftColumnRegionCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleRightColumnRegionCellStyle",
+      "type": {
+        "kind": "ref",
+        "to": "cellStyle"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleTopBorderStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleTopBorderStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleBottomBorderStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleBottomBorderStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleLeftBorderStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleLeftBorderStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleRightBorderStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleRightBorderStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleAlternatingFills",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "None",
+          "AlternatingRows",
+          "AlternatingColumns"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleStartRowFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleStartRowFillCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleStartRowFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleEndRowFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "colorRef",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleEndRowFillCount",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "table"
+      ],
+      "path": "tableStyleEndRowFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "defaultFillColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setDocumentDefaults",
+        "field": "fillColor"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "defaultStrokeColor",
+      "type": {
+        "kind": "color",
+        "to": "swatch"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setDocumentDefaults",
+        "field": "strokeColor"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "defaultStrokeWeight",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setDocumentDefaults",
+        "field": "strokeWeight"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "cmykProfile",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setColorSettings",
+        "field": "cmykProfileName"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "rgbPolicy",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "PreserveEmbedded",
+          "ConvertToWorking",
+          "Off"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setColorSettings",
+        "field": "rgbPolicy"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "renderingIntent",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Perceptual",
+          "Saturation",
+          "RelativeColorimetric",
+          "AbsoluteColorimetric"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setColorSettings",
+        "field": "intent"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "blackPointCompensation",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setColorSettings",
+        "field": "bpc"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "proofProfile",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProofSetup",
+        "field": "profileName"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "proofSimulatePaperWhite",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProofSetup",
+        "field": "simulatePaperWhite"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "proofIntent",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Perceptual",
+          "Saturation",
+          "RelativeColorimetric",
+          "AbsoluteColorimetric"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProofSetup",
+        "field": "intent"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "useStandardLabForSpots",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setUseStandardLabForSpots",
+        "field": "enabled"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "activeConditionSet",
+      "type": {
+        "kind": "ref",
+        "to": "condition"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "activateConditionSet",
+        "field": "setId"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "doc",
+      "path": "labels[key]",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setDocumentMetadata",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "space",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "CMYK",
+          "RGB",
+          "LAB",
+          "Gray"
+        ]
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "space"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "value",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length"
+      },
+      "wire": "lengths",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "model",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Process",
+          "Spot"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "model"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "alternateSpace",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "CMYK",
+          "RGB",
+          "LAB",
+          "Gray"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "alternateSpace"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "alternateValue",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length"
+      },
+      "wire": "lengths",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "alternateValue"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "tint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "tint"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "alpha",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSwatch",
+        "field": "alpha"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "convertToProcess",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setInkSetting",
+        "field": "convertToProcess"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "swatch",
+      "path": "inkAliasTo",
+      "type": {
+        "kind": "ref",
+        "to": "swatch"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setInkSetting",
+        "field": "aliasTo"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "gradient",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editGradient",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "gradient",
+      "path": "kind",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Linear",
+          "Radial"
+        ]
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editGradient",
+        "field": "kind"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "gradient",
+      "path": "stops",
+      "type": {
+        "kind": "list",
+        "of": "struct",
+        "shape": "GradientStopSpec"
+      },
+      "wire": "gradientStops",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editGradient",
+        "field": "stops"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "colorGroup",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editColorGroup",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "colorGroup",
+      "path": "members",
+      "type": {
+        "kind": "list",
+        "of": "struct",
+        "shape": "swatch ref"
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editColorGroup",
+        "field": "members"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "numberingList",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editNumberingList",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "numberingList",
+      "path": "continueAcrossStories",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editNumberingList",
+        "field": "continueAcrossStories"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "numberingList",
+      "path": "continueAcrossDocuments",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editNumberingList",
+        "field": "continueAcrossDocuments"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "style",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "rename<Family>Style",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "guide",
+      "path": "position",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "moveGuide",
+        "field": "position"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "condition",
+      "path": "visible",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setConditionVisible",
+        "field": "visible"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "story",
+      "path": "flowGrow",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setFlowGrowRule",
+        "field": "grow"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "story",
+      "path": "flowGrowMaxPages",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setFlowGrowRule",
+        "field": "maxPages"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "story",
+      "path": "flowGrowCopyFrameOptions",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setFlowGrowRule",
+        "field": "copyFrameOptions"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "appliedMaster",
+      "type": {
+        "kind": "ref",
+        "to": "master"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "applyMasterToPage",
+        "field": "master"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "page",
+      "path": "labels[key]",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setPageMetadata",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "master",
+      "path": "name",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "renameMaster",
+        "field": "name"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "section",
+      "path": "prefix",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSection",
+        "field": "prefix"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "section",
+      "path": "numberingStyle",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Arabic",
+          "UpperRoman",
+          "LowerRoman",
+          "UpperLetters",
+          "LowerLetters"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSection",
+        "field": "numberingStyle"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "section",
+      "path": "startAt",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "editSection",
+        "field": "startAt"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "table",
+      "path": "rows[i].height",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setRowHeight",
+        "field": "height"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "table",
+      "path": "columns[i].width",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setColumnWidth",
+        "field": "width"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "rowSpan",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": false,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setCellSpan",
+        "field": "rowSpan"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "cell",
+      "path": "columnSpan",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": false,
+      "range": {
+        "min": 1.0
+      },
+      "access": "readWrite",
+      "virtual": {
+        "op": "setCellSpan",
+        "field": "columnSpan"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "field",
+      "path": "value",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setFieldValue",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "imageUri",
+      "type": {
+        "kind": "ref",
+        "to": "uri"
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "placeImage",
+        "field": "uri"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "labels[key]",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setPluginMetadata",
+        "field": "value"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "group",
+      "path": "groupTransform",
+      "type": {
+        "kind": "transform"
+      },
+      "wire": "transform",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setGroupTransform",
+        "field": "transform"
+      },
+      "bindable": true
     }
   ]
 }

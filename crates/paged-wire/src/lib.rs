@@ -579,6 +579,147 @@ pub struct TextCellAddr {
     pub col: u32,
 }
 
+/// ADR 132 — the style families a `style:` target names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum StyleFamily {
+    Paragraph,
+    Character,
+    Object,
+    Cell,
+    Table,
+}
+
+impl StyleFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StyleFamily::Paragraph => "paragraph",
+            StyleFamily::Character => "character",
+            StyleFamily::Object => "object",
+            StyleFamily::Cell => "cell",
+            StyleFamily::Table => "table",
+        }
+    }
+}
+
+/// ADR 132 — the TARGET of a `Mutation::Set` / a property read: every
+/// object kind a virtual path can live on, named by today's ids.
+///
+/// This is the seam for ADR 131's `Address`: each variant is one address
+/// kind (`doc`, `page:<id>`, `layer:<id>`, `style:<family>/<id>`,
+/// `field:<story>@<offset>`, `cell:<table>/<r>,<c>`, …), and
+/// `Element` carries the six page-item kinds plus `storyRange:` through
+/// the existing `ElementId`. When `Address` lands, `Address → VirtualTarget`
+/// is a total map and `Set` can take either; until then the JSON form is
+/// this enum's (`{ "kind": "layer", "layerId": "ua" }`). The id fields are
+/// spelled `…Id` so batch handle substitution (`$h:`) reaches them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum VirtualTarget {
+    /// The document: defaults, colour management, setup, labels.
+    Doc,
+    Page {
+        page_id: String,
+    },
+    Layer {
+        layer_id: String,
+    },
+    Master {
+        master_id: String,
+    },
+    Story {
+        story_id: String,
+    },
+    /// A text field anchored at a story offset.
+    Field {
+        story_id: String,
+        offset: u32,
+    },
+    Swatch {
+        swatch_id: String,
+    },
+    Gradient {
+        gradient_id: String,
+    },
+    ColorGroup {
+        group_id: String,
+    },
+    NumberingList {
+        list_id: String,
+    },
+    Style {
+        family: StyleFamily,
+        style_id: String,
+    },
+    Section {
+        section_id: String,
+    },
+    Guide {
+        guide_id: String,
+    },
+    Condition {
+        condition_id: String,
+    },
+    TextVariable {
+        variable_id: String,
+    },
+    Table {
+        story_id: String,
+        table_id: String,
+    },
+    Cell {
+        story_id: String,
+        table_id: String,
+        row: u32,
+        col: u32,
+    },
+    /// A page item or a story range — every `SetElementProperty` path,
+    /// plus the frame-level virtual paths (`imageUri`, `labels[key]`,
+    /// `groupTransform`).
+    Element {
+        element_id: ElementId,
+    },
+}
+
+impl VirtualTarget {
+    /// The ADR 131 address kind this target is (`"doc"`, `"page"`, …).
+    /// Element targets answer `"frame"`, `"group"` or `"storyRange"`.
+    pub fn address_kind(&self) -> &'static str {
+        match self {
+            VirtualTarget::Doc => "doc",
+            VirtualTarget::Page { .. } => "page",
+            VirtualTarget::Layer { .. } => "layer",
+            VirtualTarget::Master { .. } => "master",
+            VirtualTarget::Story { .. } => "story",
+            VirtualTarget::Field { .. } => "field",
+            VirtualTarget::Swatch { .. } => "swatch",
+            VirtualTarget::Gradient { .. } => "gradient",
+            VirtualTarget::ColorGroup { .. } => "colorGroup",
+            VirtualTarget::NumberingList { .. } => "numberingList",
+            VirtualTarget::Style { .. } => "style",
+            VirtualTarget::Section { .. } => "section",
+            VirtualTarget::Guide { .. } => "guide",
+            VirtualTarget::Condition { .. } => "condition",
+            VirtualTarget::TextVariable { .. } => "textVariable",
+            VirtualTarget::Table { .. } => "table",
+            VirtualTarget::Cell { .. } => "cell",
+            VirtualTarget::Element { element_id } => match element_id {
+                ElementId::Group(_) => "group",
+                ElementId::StoryRange { .. } => "storyRange",
+                ElementId::Table { .. } => "table",
+                ElementId::TableCell { .. } => "cell",
+                _ => "frame",
+            },
+        }
+    }
+}
+
 /// A byte buffer that crosses the message channel. Wraps `Vec<u8>`
 /// so transferable-via-`postMessage` semantics are explicit at call
 /// sites; the wasm crate decides whether to clone or transfer based
@@ -1359,6 +1500,21 @@ pub enum Mutation {
         path: paged_mutate::PropertyPath,
         value: paged_mutate::Value,
     },
+    /// ADR 132 — set one property on any object, named by `(address,
+    /// path)`. `path` is a `PropertyPath` name or a virtual path from the
+    /// catalog's `propertySchemas` (`name`, `tint`, `labels[x-paged:k]`,
+    /// `rows[2].height`, …). The engine resolves it to the ONE existing
+    /// operation that already writes that property (`SetProperty`,
+    /// `EditSwatch` with the spec read and merged, `LayerSetName`, …), so
+    /// there is no second apply path: one undo step, legal in a batch,
+    /// `$h:` handles resolve inside `address`. The value is checked
+    /// against the path's schema first (enum members, ranges; `Number`,
+    /// `Enum`, `Ref` normalise).
+    Set {
+        address: VirtualTarget,
+        path: String,
+        value: paged_mutate::Value,
+    },
     /// SDK Phase 5 (v1 sweep) — Pathfinder boolean op routed
     /// through `Operation::PathfinderBoolean`. Same wire shape
     /// the Pathfinder panel emits on a button click.
@@ -1897,6 +2053,7 @@ mutation_vocabulary! {
     LayerInsert,
     LayerRemove,
     SetElementProperty,
+    Set,
     PathfinderBoolean,
     PathfinderDivide,
     PathfinderTrim,
