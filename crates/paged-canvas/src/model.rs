@@ -22,6 +22,10 @@
 //! The point of this phase is to nail down the **API surface** the
 //! main thread depends on; incrementality is Phase 3's problem.
 
+/// ADR 132 — `Mutation::Set` resolution and the property read twin.
+#[path = "virtual_set.rs"]
+pub mod virtual_set;
+
 use std::collections::HashMap;
 
 use idml_export::{ExportedLink, FontFace};
@@ -2297,6 +2301,44 @@ impl CanvasModel {
         // A value the operation layer would store but no caller may
         // author (an unknown composer) is refused before anything runs.
         refuse_unauthorable(mutation)?;
+        // ADR 132 — `Set { address, path, value }` resolves to the op that
+        // already writes the property and is applied as THAT op: same
+        // apply arm, same inverse, one undo step. Inside a batch it reaches
+        // here per child (a batch holding a `Set` takes the sequential
+        // lane, so each `Set` merges against the state its predecessors
+        // left — two `Set`s on one swatch must not both start from the
+        // pre-batch spec).
+        if let Mutation::Set {
+            address,
+            path,
+            value,
+        } = mutation
+        {
+            let resolved = self
+                .resolve_set(address, path, value)
+                .map_err(|what| crate::channel::WorkerError::NotImplemented { what })?;
+            return match resolved {
+                virtual_set::Resolved::Mutation(m) => self.apply_mutation(&m),
+                virtual_set::Resolved::Operation(op) => {
+                    let outcome = self.apply_operation(op)?;
+                    Ok(MutationOutcome {
+                        applied_seq: outcome.applied_seq,
+                        page_ids: outcome.page_ids,
+                        inverse: crate::mutate::TextOp::InsertText {
+                            story_id: String::new(),
+                            offset: 0,
+                            text: String::new(),
+                            cell: None,
+                            restore: None,
+                        },
+                        created_id: None,
+                        page_structure_changed: false,
+                        reflow: None,
+                        minted: Vec::new(),
+                    })
+                }
+            };
+        }
         // Editor-ops — document defaults are app-level state, not a
         // scene edit: no rebuild, no undo entry, no pixel change. The
         // editor reads the triple back via `DocumentMeta`.
@@ -5742,15 +5784,33 @@ impl CanvasModel {
             }
             C::Object => {
                 let d = styles.object_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Object, style_id),
+                )
             }
             C::Cell => {
                 let d = styles.cell_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Cell, style_id),
+                )
             }
             C::Table => {
                 let d = styles.table_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Table, style_id),
+                )
             }
         };
         Some(crate::channel::StyleProperties {
@@ -6816,6 +6876,15 @@ impl CanvasModel {
                         // on an open stroke-only contour. See
                         // `paged_model::GraphicLine::corner_radius`.
                         entries.extend(corner_entries(&l.corners));
+                        // ADR 132 — a line's effects are written and drawn
+                        // (cast from its stroke band) now, so they read
+                        // too. Not the blend-mode row: a line has no
+                        // blend-mode write arm.
+                        entries.extend(
+                            effect_property_entries(l.effects.as_ref(), None)
+                                .into_iter()
+                                .filter(|e| e.path != PropertyPath::FrameBlendMode),
+                        );
                         entries
                     }),
                 // C-18 / E-1 — an `<Oval>` had NO descriptor arm at all

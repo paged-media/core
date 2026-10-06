@@ -1730,6 +1730,23 @@ fn frame_cases(c: &mut Vec<Case>) {
             value: Value::ColorRef(Some(color)),
         }
     }));
+    // ADR 132 — `Set` on a VIRTUAL path: the swatch a rectangle paints
+    // with is edited through `swatch.value` (an `EditSwatch` underneath,
+    // the spec read and merged), and the page must change with it.
+    c.push(paints("Set", "geometry", |m| {
+        let color = fresh_color(m);
+        m.apply_mutation(&Mutation::SetElementProperty {
+            element_id: ElementId::Rectangle(rect_ids(m)[0].clone()),
+            path: PropertyPath::FrameFillColor,
+            value: Value::ColorRef(Some(color.clone())),
+        })
+        .expect("paint the rectangle with the fresh swatch");
+        Mutation::Set {
+            address: paged_wire::VirtualTarget::Swatch { swatch_id: color },
+            path: "value".into(),
+            value: Value::Lengths(vec![20.0, 200.0, 60.0]),
+        }
+    }));
     c.push(paints("PlaceImage", "images", |m| {
         // Reuse a URI the fixture already packages, so the asset resolver
         // can actually serve it — an unreachable uri is documented to

@@ -291,9 +291,31 @@ fn every_advertised_path_has_a_script_literal_the_engine_accepts() {
     let mut unconstructible = Vec::new();
     for name in &catalog.settable_paths {
         let path = paged_introspect::lookup_path(name).expect("advertised resolves");
+        // ADR 132 — the bridge now coerces against the path's schema, so a
+        // closed enum refuses a stranger before the engine sees it and a
+        // number outside the range never leaves the script. The literal an
+        // author writes for such a path is one the SCHEMA names: its first
+        // member, or a number inside its range.
+        let schema = paged_introspect::catalog::schema(path);
+        let from_schema: Vec<String> = schema
+            .members
+            .first()
+            .map(|m| format!("{m:?}"))
+            .into_iter()
+            .chain(schema.default.map(|d| match d {
+                paged_introspect::schema::DefaultValue::Number(n) => n.to_string(),
+                paged_introspect::schema::DefaultValue::Bool(b) => b.to_string(),
+                paged_introspect::schema::DefaultValue::Text(t) => format!("{t:?}"),
+            }))
+            .chain(schema.min.map(|n| n.to_string()))
+            .collect();
         let candidates: Vec<&str> = match STRUCTURED.iter().find(|(p, _)| p == name) {
             Some((_, literal)) => vec![*literal],
-            None => BATTERY.to_vec(),
+            None => BATTERY
+                .iter()
+                .copied()
+                .chain(from_schema.iter().map(String::as_str))
+                .collect(),
         };
         let ok = candidates.iter().any(|literal| {
             paged_script::js_literal_to_wire(literal, name)

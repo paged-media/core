@@ -637,6 +637,185 @@ pub(super) fn apply_set_property(
                 },
             )
         }
+        // ---- ADR 131/132 — a page item's `Name` (`Spread::item_names`).
+        (
+            NodeId::TextFrame(id)
+            | NodeId::Rectangle(id)
+            | NodeId::Oval(id)
+            | NodeId::Polygon(id)
+            | NodeId::GraphicLine(id)
+            | NodeId::Group(id),
+            PropertyPath::ItemName,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let spread = doc
+                .spreads
+                .iter_mut()
+                .map(|s| &mut s.spread)
+                .find(|s| spread_holds_item(s, id))
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = if new_val.is_empty() {
+                spread.item_names.remove(id.as_str())
+            } else {
+                spread.item_names.insert(id.clone(), new_val)
+            };
+            // A name is an identity, not paint.
+            (
+                Value::Text(prev.unwrap_or_default()),
+                InvalidationHint::default(),
+            )
+        }
+        // ---- ADR 132 — page margins and columns (`<MarginPreference>`).
+        // A page with no margins of its own takes a fresh entry on the
+        // first write; `null` (Length(None)) drops the page's entry, which
+        // is also the inverse of that first write, so undo is exact.
+        (
+            NodeId::Page(id),
+            PropertyPath::PageMarginTop
+            | PropertyPath::PageMarginBottom
+            | PropertyPath::PageMarginLeft
+            | PropertyPath::PageMarginRight
+            | PropertyPath::PageColumnCount
+            | PropertyPath::PageColumnGutter,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let margins = find_page_margins_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let hint = InvalidationHint {
+                structural: true,
+                ..Default::default()
+            };
+            let Some(new_val) = new_val else {
+                // Undo puts the WHOLE entry back, field by field (the
+                // first write recreates it), so a cleared page is exact.
+                let inverse = match margins.remove(id.as_str()) {
+                    Some(m) => Operation::Batch {
+                        ops: PAGE_MARGIN_PATHS
+                            .iter()
+                            .map(|p| Operation::SetProperty {
+                                node: node.clone(),
+                                path: *p,
+                                value: Value::Length(Some(page_margin_field(&m, *p))),
+                            })
+                            .collect(),
+                    },
+                    None => Operation::Batch { ops: Vec::new() },
+                };
+                return Ok(AppliedOperation {
+                    op: Operation::SetProperty {
+                        node: node.clone(),
+                        path,
+                        value: value.clone(),
+                    },
+                    inverse,
+                    invalidation: hint,
+                });
+            };
+            if matches!(path, PropertyPath::PageColumnCount)
+                && (new_val < 1.0 || new_val.fract() != 0.0)
+            {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("a column count is a whole number >= 1, not {new_val}"),
+                });
+            }
+            if new_val < 0.0 {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("{new_val} is negative"),
+                });
+            }
+            let prev = match margins.get_mut(id.as_str()) {
+                Some(m) => {
+                    let prev = page_margin_field(m, path);
+                    set_page_margin_field(m, path, new_val);
+                    Some(prev)
+                }
+                None => {
+                    let mut m = paged_model::MarginPreference {
+                        column_count: 1,
+                        ..Default::default()
+                    };
+                    set_page_margin_field(&mut m, path, new_val);
+                    margins.insert(id.clone(), m);
+                    None
+                }
+            };
+            (Value::Length(prev), hint)
+        }
+        // ---- ADR 132 — document setup: bleed and slug offsets.
+        (
+            NodeId::Document(_),
+            PropertyPath::DocumentBleedTop
+            | PropertyPath::DocumentBleedBottom
+            | PropertyPath::DocumentBleedInsideOrLeft
+            | PropertyPath::DocumentBleedOutsideOrRight
+            | PropertyPath::DocumentSlugTop
+            | PropertyPath::DocumentSlugBottom
+            | PropertyPath::DocumentSlugInsideOrLeft
+            | PropertyPath::DocumentSlugRightOrOutside,
+        ) => {
+            let new_val = expect_length(path, value)?.unwrap_or(0.0);
+            if new_val < 0.0 {
+                return Err(OperationError::InvalidValue {
+                    node: node.clone(),
+                    path,
+                    reason: format!("{new_val} is negative"),
+                });
+            }
+            let pref = &mut doc.designmap.document_preference;
+            let slot = match path {
+                PropertyPath::DocumentBleedTop => &mut pref.bleed_top,
+                PropertyPath::DocumentBleedBottom => &mut pref.bleed_bottom,
+                PropertyPath::DocumentBleedInsideOrLeft => &mut pref.bleed_inside_or_left,
+                PropertyPath::DocumentBleedOutsideOrRight => &mut pref.bleed_outside_or_right,
+                PropertyPath::DocumentSlugTop => &mut pref.slug_top,
+                PropertyPath::DocumentSlugBottom => &mut pref.slug_bottom,
+                PropertyPath::DocumentSlugInsideOrLeft => &mut pref.slug_inside_or_left,
+                _ => &mut pref.slug_right_or_outside,
+            };
+            let prev = std::mem::replace(slot, new_val);
+            // Bleed and slug are export geometry; nothing on the page moves.
+            (Value::Length(Some(prev)), InvalidationHint::default())
+        }
+        // ---- ADR 132 — text variable definitions.
+        (
+            NodeId::TextVariable(id),
+            PropertyPath::TextVariableName
+            | PropertyPath::TextVariableType
+            | PropertyPath::TextVariableContents
+            | PropertyPath::TextVariableTextBefore
+            | PropertyPath::TextVariableTextAfter
+            | PropertyPath::TextVariableDateFormat,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let var = doc
+                .designmap
+                .text_variables
+                .iter_mut()
+                .find(|v| v.self_id == *id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = match path {
+                PropertyPath::TextVariableName => &mut var.name,
+                PropertyPath::TextVariableType => &mut var.variable_type,
+                PropertyPath::TextVariableContents => &mut var.contents,
+                PropertyPath::TextVariableTextBefore => &mut var.text_before,
+                PropertyPath::TextVariableTextAfter => &mut var.text_after,
+                _ => &mut var.date_format,
+            };
+            let prev = slot.clone().unwrap_or_default();
+            *slot = (!new_val.is_empty()).then_some(new_val);
+            (
+                Value::Text(prev),
+                // Every instance re-resolves its text from the definition.
+                InvalidationHint {
+                    structural: true,
+                    ..Default::default()
+                },
+            )
+        }
         // ---- Track M: Layer toggles (visible / locked / printable)
         (NodeId::Layer(id), PropertyPath::LayerVisible) => {
             let new_value = expect_bool(path, value)?;
@@ -1359,13 +1538,18 @@ pub(super) fn apply_set_property(
         // presence of the block is the enabled bit (the parser drops it
         // when `Applied="false"`), so this mirrors `FrameDropShadow`.
         // All paint-only → `frame_style`. Wired on TextFrame /
-        // Rectangle / Oval / Polygon (the kinds
-        // `find_frame_effects_mut` reaches — C-63 added Polygon);
-        // other kinds fall through to UnsupportedProperty.
+        // Rectangle / Oval / Polygon / GraphicLine (the kinds
+        // `find_frame_effects_mut` reaches — C-63 added Polygon, ADR 132
+        // the line, whose effects are cast by its stroke's outline band);
+        // a Group falls through to UnsupportedProperty.
 
         // -- Inner shadow ------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1383,7 +1567,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1401,7 +1589,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1412,7 +1604,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowOpacity
             | PropertyPath::FrameInnerShadowAngle
             | PropertyPath::FrameInnerShadowDistance
@@ -1438,7 +1634,11 @@ pub(super) fn apply_set_property(
 
         // -- Outer glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1456,7 +1656,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1474,7 +1678,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1485,7 +1693,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowOpacity
             | PropertyPath::FrameOuterGlowSpread
             | PropertyPath::FrameOuterGlowSize
@@ -1507,7 +1719,11 @@ pub(super) fn apply_set_property(
 
         // -- Inner glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1525,7 +1741,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1543,7 +1763,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1554,7 +1778,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowSource,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1572,7 +1800,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowOpacity
             | PropertyPath::FrameInnerGlowChoke
             | PropertyPath::FrameInnerGlowSize
@@ -1594,7 +1826,11 @@ pub(super) fn apply_set_property(
 
         // -- Bevel / emboss ----------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1609,7 +1845,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelStyle
             | PropertyPath::FrameBevelTechnique
             | PropertyPath::FrameBevelDirection,
@@ -1634,7 +1874,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelHighlightColor | PropertyPath::FrameBevelShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1649,7 +1893,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelDepth
             | PropertyPath::FrameBevelSize
             | PropertyPath::FrameBevelSoften
@@ -1677,7 +1925,11 @@ pub(super) fn apply_set_property(
 
         // -- Satin -------------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1692,7 +1944,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1710,7 +1966,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1721,7 +1981,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinInvert,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1732,7 +1996,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinOpacity
             | PropertyPath::FrameSatinAngle
             | PropertyPath::FrameSatinDistance
@@ -1754,7 +2022,11 @@ pub(super) fn apply_set_property(
 
         // -- Feather (basic) ---------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1769,7 +2041,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherCornerType,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1787,7 +2063,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherWidth
             | PropertyPath::FrameFeatherNoise
             | PropertyPath::FrameFeatherChoke,
@@ -1807,7 +2087,11 @@ pub(super) fn apply_set_property(
 
         // -- Directional feather -----------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameDirectionalFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1825,7 +2109,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameDirectionalFeatherLeftWidth
             | PropertyPath::FrameDirectionalFeatherRightWidth
             | PropertyPath::FrameDirectionalFeatherTopWidth
@@ -2894,4 +3182,62 @@ pub(super) fn apply_set_property(
         inverse,
         invalidation,
     })
+}
+
+const PAGE_MARGIN_PATHS: [PropertyPath; 6] = [
+    PropertyPath::PageMarginTop,
+    PropertyPath::PageMarginBottom,
+    PropertyPath::PageMarginLeft,
+    PropertyPath::PageMarginRight,
+    PropertyPath::PageColumnCount,
+    PropertyPath::PageColumnGutter,
+];
+
+/// The `page_margins` side map of the spread that holds page `page_id`.
+fn find_page_margins_mut<'a>(
+    doc: &'a mut Document,
+    page_id: &str,
+) -> Option<&'a mut std::collections::HashMap<String, paged_model::MarginPreference>> {
+    doc.spreads
+        .iter_mut()
+        .map(|s| &mut s.spread)
+        .find(|s| {
+            s.pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(page_id))
+        })
+        .map(|s| &mut s.page_margins)
+}
+
+fn page_margin_field(m: &paged_model::MarginPreference, path: PropertyPath) -> f32 {
+    match path {
+        PropertyPath::PageMarginTop => m.top,
+        PropertyPath::PageMarginBottom => m.bottom,
+        PropertyPath::PageMarginLeft => m.left,
+        PropertyPath::PageMarginRight => m.right,
+        PropertyPath::PageColumnCount => m.column_count as f32,
+        _ => m.column_gutter,
+    }
+}
+
+fn set_page_margin_field(m: &mut paged_model::MarginPreference, path: PropertyPath, v: f32) {
+    match path {
+        PropertyPath::PageMarginTop => m.top = v,
+        PropertyPath::PageMarginBottom => m.bottom = v,
+        PropertyPath::PageMarginLeft => m.left = v,
+        PropertyPath::PageMarginRight => m.right = v,
+        PropertyPath::PageColumnCount => m.column_count = v as u32,
+        _ => m.column_gutter = v,
+    }
+}
+
+/// True when `id` is one of `spread`'s page items (any of the six kinds).
+fn spread_holds_item(spread: &paged_model::Spread, id: &str) -> bool {
+    let is = |sid: &Option<String>| sid.as_deref() == Some(id);
+    spread.text_frames.iter().any(|f| is(&f.self_id))
+        || spread.rectangles.iter().any(|f| is(&f.self_id))
+        || spread.ovals.iter().any(|f| is(&f.self_id))
+        || spread.polygons.iter().any(|f| is(&f.self_id))
+        || spread.graphic_lines.iter().any(|f| is(&f.self_id))
+        || spread.groups.iter().any(|f| is(&f.self_id))
 }

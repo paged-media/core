@@ -29,6 +29,7 @@ pub mod export;
 pub mod gen;
 pub mod inspect;
 pub mod new;
+pub mod object;
 pub mod options;
 pub mod parts;
 pub mod place;

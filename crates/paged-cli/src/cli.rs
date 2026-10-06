@@ -178,6 +178,42 @@ pub enum Command {
         #[command(flatten)]
         assets: DocumentOptions,
     },
+    /// Set one property of any object (ADR 132, `Mutation::Set`).
+    ///
+    /// TARGET is an element address (`rectangle:<id>`, `storyRange:…`),
+    /// `doc`, or a target object (`{"kind":"layer","layerId":"ua"}`).
+    /// PATH is any `propertySchemas` row for the target's kind. VALUE is
+    /// JSON when it parses (`12`, `true`, `[0,0,100,100]`), a string
+    /// otherwise (`3mm`, `CenterAlign`), coerced by the path's schema.
+    /// Prints the value read back.
+    Set {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// `doc`, an element address (`rectangle:<id>`), or a target object.
+        target: String,
+        /// A `propertySchemas` path for the target's kind.
+        path: String,
+        /// JSON (`12`, `true`, `[0,0,100,100]`) or a plain string (`3mm`).
+        value: String,
+        /// Write the result here. The format follows the extension.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        #[command(flatten)]
+        pdf: PdfOptions,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
+    /// Read one property of any object, as its wire value JSON.
+    Get {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// `doc`, an element address (`rectangle:<id>`), or a target object.
+        target: String,
+        /// A `propertySchemas` path for the target's kind.
+        path: String,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// List, read and write a `.paged` container's content parts.
     Parts {
         #[command(subcommand)]

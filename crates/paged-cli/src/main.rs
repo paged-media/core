@@ -94,6 +94,21 @@ fn main() -> Result<()> {
             out.as_ref(),
             &pdf,
         ),
+        Command::Set {
+            doc,
+            target,
+            path,
+            value,
+            out,
+            pdf,
+            assets,
+        } => paged_cli::object::set(&doc, &assets, &target, &path, &value, out.as_ref(), &pdf),
+        Command::Get {
+            doc,
+            target,
+            path,
+            assets,
+        } => paged_cli::object::get(&doc, &assets, &target, &path),
         Command::Parts { what } => paged_cli::parts::run(&what),
         Command::Query {
             doc,

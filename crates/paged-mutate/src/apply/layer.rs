@@ -212,7 +212,7 @@ pub(super) fn color_entry_from_spec(self_id: String, spec: &SwatchSpec) -> paged
 /// Capture a `ColorEntry` back into a `SwatchSpec` (for lossless
 /// inverses). `self_id` is carried so a delete→undo recreates the
 /// swatch at its original id.
-pub(super) fn swatch_spec_from_entry(entry: &paged_model::ColorEntry) -> SwatchSpec {
+pub fn swatch_spec_from_entry(entry: &paged_model::ColorEntry) -> SwatchSpec {
     SwatchSpec {
         self_id: Some(entry.self_id.clone()),
         name: entry.name.clone(),
@@ -372,7 +372,7 @@ pub(super) fn gradient_entry_from_spec(
     }
 }
 
-pub(super) fn gradient_spec_from_entry(entry: &paged_model::GradientEntry) -> GradientSpec {
+pub fn gradient_spec_from_entry(entry: &paged_model::GradientEntry) -> GradientSpec {
     GradientSpec {
         self_id: Some(entry.self_id.clone()),
         name: entry.name.clone(),
@@ -1572,9 +1572,7 @@ pub(super) fn numbering_list_def_from_spec(
     }
 }
 
-pub(super) fn numbering_list_spec_from_def(
-    def: &paged_model::NumberingListDef,
-) -> NumberingListSpec {
+pub fn numbering_list_spec_from_def(def: &paged_model::NumberingListDef) -> NumberingListSpec {
     NumberingListSpec {
         self_id: Some(def.self_id.clone()),
         name: def.name.clone(),
@@ -2300,6 +2298,204 @@ pub(super) fn set_character_style_field(
     }
 }
 
+/// One `Option<String>` swatch slot from a `Value::ColorRef`.
+fn style_color(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<String>,
+) -> Result<Value, OperationError> {
+    let Value::ColorRef(c) = value else {
+        return Err(OperationError::TypeMismatch {
+            path,
+            expected: "ColorRef".to_string(),
+        });
+    };
+    Ok(Value::ColorRef(std::mem::replace(slot, c.clone())))
+}
+
+/// One `Option<f32>` slot from a `Value::Length` (`None` inherits).
+fn style_length(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<f32>,
+) -> Result<Value, OperationError> {
+    let Value::Length(n) = value else {
+        return Err(OperationError::TypeMismatch {
+            path,
+            expected: "Length".to_string(),
+        });
+    };
+    Ok(Value::Length(std::mem::replace(slot, *n)))
+}
+
+/// One `Option<u32>` count slot from a `Value::Length` carrying a whole
+/// number.
+fn style_count(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<u32>,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    let Value::Length(n) = value else {
+        return Err(OperationError::TypeMismatch {
+            path,
+            expected: "Length".to_string(),
+        });
+    };
+    let next = match n {
+        None => None,
+        Some(n) if *n >= 0.0 && n.fract() == 0.0 => Some(*n as u32),
+        Some(n) => {
+            return Err(OperationError::InvalidValue {
+                node: style_node_marker(style_id),
+                path,
+                reason: format!("a count is a whole number >= 0, not {n}"),
+            })
+        }
+    };
+    Ok(Value::Length(
+        std::mem::replace(slot, next).map(|c| c as f32),
+    ))
+}
+
+/// One `Option<String>` slot from a `Value::Text` (`""` clears).
+fn style_text(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<String>,
+) -> Result<Value, OperationError> {
+    Ok(super::paragraph::set_para_text_field(path, value, slot)?.0)
+}
+
+fn set_object_style_field(
+    def: &mut paged_model::ObjectStyleDef,
+    path: PropertyPath,
+    value: &Value,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    match path {
+        PropertyPath::FrameFillColor => style_color(path, value, &mut def.fill_color),
+        PropertyPath::FrameFillTint => style_length(path, value, &mut def.fill_tint),
+        PropertyPath::FrameStrokeColor => style_color(path, value, &mut def.stroke_color),
+        PropertyPath::FrameStrokeWeight => style_length(path, value, &mut def.stroke_weight),
+        PropertyPath::ObjectStyleStrokeTint => style_length(path, value, &mut def.stroke_tint),
+        PropertyPath::ObjectStyleCornerRadius => style_length(path, value, &mut def.corner_radius),
+        PropertyPath::ObjectStyleCornerOption => style_text(path, value, &mut def.corner_option),
+        _ => Err(OperationError::UnsupportedProperty {
+            node: style_node_marker(style_id),
+            path,
+        }),
+    }
+}
+
+fn set_cell_style_field(
+    def: &mut paged_model::CellStyleDef,
+    path: PropertyPath,
+    value: &Value,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    match path {
+        PropertyPath::CellFillColor => style_color(path, value, &mut def.fill_color),
+        PropertyPath::CellVerticalJustification => {
+            style_text(path, value, &mut def.vertical_justification)
+        }
+        PropertyPath::CellStyleRotationAngle => style_length(path, value, &mut def.rotation_angle),
+        PropertyPath::CellTopEdgeStrokeColor => {
+            style_color(path, value, &mut def.top_edge_stroke_color)
+        }
+        PropertyPath::CellTopEdgeStrokeWeight => {
+            style_length(path, value, &mut def.top_edge_stroke_weight)
+        }
+        PropertyPath::CellBottomEdgeStrokeColor => {
+            style_color(path, value, &mut def.bottom_edge_stroke_color)
+        }
+        PropertyPath::CellBottomEdgeStrokeWeight => {
+            style_length(path, value, &mut def.bottom_edge_stroke_weight)
+        }
+        PropertyPath::CellLeftEdgeStrokeColor => {
+            style_color(path, value, &mut def.left_edge_stroke_color)
+        }
+        PropertyPath::CellLeftEdgeStrokeWeight => {
+            style_length(path, value, &mut def.left_edge_stroke_weight)
+        }
+        PropertyPath::CellRightEdgeStrokeColor => {
+            style_color(path, value, &mut def.right_edge_stroke_color)
+        }
+        PropertyPath::CellRightEdgeStrokeWeight => {
+            style_length(path, value, &mut def.right_edge_stroke_weight)
+        }
+        _ => Err(OperationError::UnsupportedProperty {
+            node: style_node_marker(style_id),
+            path,
+        }),
+    }
+}
+
+fn set_table_style_field(
+    def: &mut paged_model::TableStyleDef,
+    path: PropertyPath,
+    value: &Value,
+    style_id: &str,
+) -> Result<Value, OperationError> {
+    use PropertyPath as P;
+    match path {
+        P::TableStyleHeaderRegionCellStyle => {
+            style_text(path, value, &mut def.header_region_cell_style)
+        }
+        P::TableStyleBodyRegionCellStyle => {
+            style_text(path, value, &mut def.body_region_cell_style)
+        }
+        P::TableStyleFooterRegionCellStyle => {
+            style_text(path, value, &mut def.footer_region_cell_style)
+        }
+        P::TableStyleLeftColumnRegionCellStyle => {
+            style_text(path, value, &mut def.left_column_region_cell_style)
+        }
+        P::TableStyleRightColumnRegionCellStyle => {
+            style_text(path, value, &mut def.right_column_region_cell_style)
+        }
+        P::TableStyleTopBorderStrokeColor => {
+            style_color(path, value, &mut def.top_border_stroke_color)
+        }
+        P::TableStyleTopBorderStrokeWeight => {
+            style_length(path, value, &mut def.top_border_stroke_weight)
+        }
+        P::TableStyleBottomBorderStrokeColor => {
+            style_color(path, value, &mut def.bottom_border_stroke_color)
+        }
+        P::TableStyleBottomBorderStrokeWeight => {
+            style_length(path, value, &mut def.bottom_border_stroke_weight)
+        }
+        P::TableStyleLeftBorderStrokeColor => {
+            style_color(path, value, &mut def.left_border_stroke_color)
+        }
+        P::TableStyleLeftBorderStrokeWeight => {
+            style_length(path, value, &mut def.left_border_stroke_weight)
+        }
+        P::TableStyleRightBorderStrokeColor => {
+            style_color(path, value, &mut def.right_border_stroke_color)
+        }
+        P::TableStyleRightBorderStrokeWeight => {
+            style_length(path, value, &mut def.right_border_stroke_weight)
+        }
+        P::TableStyleAlternatingFills => style_text(path, value, &mut def.alternating_fills),
+        P::TableStyleStartRowFillColor => style_color(path, value, &mut def.start_row_fill_color),
+        P::TableStyleStartRowFillCount => {
+            style_count(path, value, &mut def.start_row_fill_count, style_id)
+        }
+        P::TableStyleStartRowFillTint => style_length(path, value, &mut def.start_row_fill_tint),
+        P::TableStyleEndRowFillColor => style_color(path, value, &mut def.end_row_fill_color),
+        P::TableStyleEndRowFillCount => {
+            style_count(path, value, &mut def.end_row_fill_count, style_id)
+        }
+        P::TableStyleEndRowFillTint => style_length(path, value, &mut def.end_row_fill_tint),
+        _ => Err(OperationError::UnsupportedProperty {
+            node: style_node_marker(style_id),
+            path,
+        }),
+    }
+}
+
 pub(super) fn apply_set_style_property(
     doc: &mut Document,
     collection: StyleCollection,
@@ -2328,13 +2524,33 @@ pub(super) fn apply_set_style_property(
                 .ok_or_else(not_found)?;
             set_character_style_field(def, path, value, style_id)?
         }
-        // Object / cell / table style-property editing is a follow-up;
-        // their panels are not yet built.
-        StyleCollection::Object | StyleCollection::Cell | StyleCollection::Table => {
-            return Err(OperationError::UnsupportedProperty {
-                node: style_node_marker(style_id),
-                path,
-            });
+        // ADR 132 — object, cell and table style definitions. They were
+        // parsed with every field and cascaded into the items that apply
+        // them, and this arm refused every path, so no surface could edit
+        // one.
+        StyleCollection::Object => {
+            let def = doc
+                .styles
+                .object_styles
+                .get_mut(style_id)
+                .ok_or_else(not_found)?;
+            set_object_style_field(def, path, value, style_id)?
+        }
+        StyleCollection::Cell => {
+            let def = doc
+                .styles
+                .cell_styles
+                .get_mut(style_id)
+                .ok_or_else(not_found)?;
+            set_cell_style_field(def, path, value, style_id)?
+        }
+        StyleCollection::Table => {
+            let def = doc
+                .styles
+                .table_styles
+                .get_mut(style_id)
+                .ok_or_else(not_found)?;
+            set_table_style_field(def, path, value, style_id)?
         }
     };
     Ok(AppliedOperation {

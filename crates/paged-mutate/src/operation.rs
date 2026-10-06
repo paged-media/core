@@ -124,6 +124,11 @@ pub enum NodeId {
         row: u32,
         col: u32,
     },
+    /// ADR 132 — the document itself (its `<DocumentPreference>`). The
+    /// string is unused and empty; it keeps the `{ kind, id }` shape.
+    Document(String),
+    /// ADR 132 — a `<TextVariable>` by its self id.
+    TextVariable(String),
 }
 
 impl NodeId {
@@ -143,7 +148,9 @@ impl NodeId {
             | NodeId::Spread(s)
             | NodeId::Page(s)
             | NodeId::Story(s)
-            | NodeId::Layer(s) => s,
+            | NodeId::Layer(s)
+            | NodeId::Document(s)
+            | NodeId::TextVariable(s) => s,
             NodeId::StoryRange { story_id, .. } => story_id,
             // The story is the container that owns the table; table /
             // cell ids are carried as metadata on the variant.
@@ -163,6 +170,8 @@ impl NodeId {
             NodeId::Page(_) => "Page",
             NodeId::Story(_) => "Story",
             NodeId::Layer(_) => "Layer",
+            NodeId::Document(_) => "Document",
+            NodeId::TextVariable(_) => "TextVariable",
             NodeId::StoryRange { .. } => "StoryRange",
             NodeId::Table { .. } => "Table",
             NodeId::TableCell { .. } => "TableCell",
@@ -1352,6 +1361,75 @@ pub enum PropertyPath {
     /// v43 — `RightLineEnd`: the arrowhead at the line's END anchor.
     /// Same contract as `FrameStrokeStartArrowhead`.
     FrameStrokeEndArrowhead,
+
+    // ---- ADR 132 — fields that were modelled and unsettable ---------
+    /// `<MarginPreference Top>` of a page (`NodeId::Page`), pt. The page
+    /// gains its own `MarginPreference` on first write, seeded from the
+    /// margins it was showing, so the other five fields keep their value.
+    PageMarginTop,
+    PageMarginBottom,
+    PageMarginLeft,
+    PageMarginRight,
+    /// `<MarginPreference ColumnCount>` — whole number >= 1.
+    PageColumnCount,
+    /// `<MarginPreference ColumnGutter>`, pt.
+    PageColumnGutter,
+    /// `<DocumentPreference DocumentBleedTopOffset>` (`NodeId::Document`), pt.
+    DocumentBleedTop,
+    DocumentBleedBottom,
+    DocumentBleedInsideOrLeft,
+    DocumentBleedOutsideOrRight,
+    /// `<DocumentPreference SlugTopOffset>`, pt.
+    DocumentSlugTop,
+    DocumentSlugBottom,
+    DocumentSlugInsideOrLeft,
+    DocumentSlugRightOrOutside,
+    /// `<TextVariable Name>` (`NodeId::TextVariable`).
+    TextVariableName,
+    /// `<TextVariable VariableType>` — the IDML enum (`CustomTextType`, …).
+    TextVariableType,
+    /// The literal value of a `CustomTextType` variable — what every
+    /// instance of it prints.
+    TextVariableContents,
+    TextVariableTextBefore,
+    TextVariableTextAfter,
+    /// Date pattern of the date variable types.
+    TextVariableDateFormat,
+    /// Object style only — `StrokeTint` (0–100).
+    ObjectStyleStrokeTint,
+    /// Object style only — `CornerRadius`, pt (one radius for all corners).
+    ObjectStyleCornerRadius,
+    /// Object style only — `CornerOption` (IDML spelling).
+    ObjectStyleCornerOption,
+    /// Cell style only — `RotationAngle` of the cell content, degrees.
+    CellStyleRotationAngle,
+    /// Table style only — the cell style each region applies.
+    TableStyleHeaderRegionCellStyle,
+    TableStyleBodyRegionCellStyle,
+    TableStyleFooterRegionCellStyle,
+    TableStyleLeftColumnRegionCellStyle,
+    TableStyleRightColumnRegionCellStyle,
+    /// Table style only — border strokes.
+    TableStyleTopBorderStrokeColor,
+    TableStyleTopBorderStrokeWeight,
+    TableStyleBottomBorderStrokeColor,
+    TableStyleBottomBorderStrokeWeight,
+    TableStyleLeftBorderStrokeColor,
+    TableStyleLeftBorderStrokeWeight,
+    TableStyleRightBorderStrokeColor,
+    TableStyleRightBorderStrokeWeight,
+    /// Table style only — `AlternatingFills` and the row pattern.
+    TableStyleAlternatingFills,
+    TableStyleStartRowFillColor,
+    TableStyleStartRowFillCount,
+    TableStyleStartRowFillTint,
+    TableStyleEndRowFillColor,
+    TableStyleEndRowFillCount,
+    TableStyleEndRowFillTint,
+    /// ADR 131/132 — a page item's IDML `Name` (`Spread::item_names`), on
+    /// all six page-item kinds. `Value::Text`; `""` removes the name. The
+    /// stable handle a stored selector (`frame[name="price"]`) points at.
+    ItemName,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1634,6 +1712,57 @@ impl PropertyPath {
             // v43 batch — stroke line ends (arrowheads).
             PropertyPath::FrameStrokeStartArrowhead => "frame.strokeStartArrowhead",
             PropertyPath::FrameStrokeEndArrowhead => "frame.strokeEndArrowhead",
+            PropertyPath::PageMarginTop => "page.marginTop",
+            PropertyPath::PageMarginBottom => "page.marginBottom",
+            PropertyPath::PageMarginLeft => "page.marginLeft",
+            PropertyPath::PageMarginRight => "page.marginRight",
+            PropertyPath::PageColumnCount => "page.columnCount",
+            PropertyPath::PageColumnGutter => "page.columnGutter",
+            PropertyPath::DocumentBleedTop => "document.bleedTop",
+            PropertyPath::DocumentBleedBottom => "document.bleedBottom",
+            PropertyPath::DocumentBleedInsideOrLeft => "document.bleedInsideOrLeft",
+            PropertyPath::DocumentBleedOutsideOrRight => "document.bleedOutsideOrRight",
+            PropertyPath::DocumentSlugTop => "document.slugTop",
+            PropertyPath::DocumentSlugBottom => "document.slugBottom",
+            PropertyPath::DocumentSlugInsideOrLeft => "document.slugInsideOrLeft",
+            PropertyPath::DocumentSlugRightOrOutside => "document.slugRightOrOutside",
+            PropertyPath::TextVariableName => "textVariable.name",
+            PropertyPath::TextVariableType => "textVariable.type",
+            PropertyPath::TextVariableContents => "textVariable.contents",
+            PropertyPath::TextVariableTextBefore => "textVariable.textBefore",
+            PropertyPath::TextVariableTextAfter => "textVariable.textAfter",
+            PropertyPath::TextVariableDateFormat => "textVariable.dateFormat",
+            PropertyPath::ObjectStyleStrokeTint => "objectStyle.strokeTint",
+            PropertyPath::ObjectStyleCornerRadius => "objectStyle.cornerRadius",
+            PropertyPath::ObjectStyleCornerOption => "objectStyle.cornerOption",
+            PropertyPath::CellStyleRotationAngle => "cellStyle.rotationAngle",
+            PropertyPath::TableStyleHeaderRegionCellStyle => "tableStyle.headerRegionCellStyle",
+            PropertyPath::TableStyleBodyRegionCellStyle => "tableStyle.bodyRegionCellStyle",
+            PropertyPath::TableStyleFooterRegionCellStyle => "tableStyle.footerRegionCellStyle",
+            PropertyPath::TableStyleLeftColumnRegionCellStyle => {
+                "tableStyle.leftColumnRegionCellStyle"
+            }
+            PropertyPath::TableStyleRightColumnRegionCellStyle => {
+                "tableStyle.rightColumnRegionCellStyle"
+            }
+            PropertyPath::TableStyleTopBorderStrokeColor => "tableStyle.topBorderStrokeColor",
+            PropertyPath::TableStyleTopBorderStrokeWeight => "tableStyle.topBorderStrokeWeight",
+            PropertyPath::TableStyleBottomBorderStrokeColor => "tableStyle.bottomBorderStrokeColor",
+            PropertyPath::TableStyleBottomBorderStrokeWeight => {
+                "tableStyle.bottomBorderStrokeWeight"
+            }
+            PropertyPath::TableStyleLeftBorderStrokeColor => "tableStyle.leftBorderStrokeColor",
+            PropertyPath::TableStyleLeftBorderStrokeWeight => "tableStyle.leftBorderStrokeWeight",
+            PropertyPath::TableStyleRightBorderStrokeColor => "tableStyle.rightBorderStrokeColor",
+            PropertyPath::TableStyleRightBorderStrokeWeight => "tableStyle.rightBorderStrokeWeight",
+            PropertyPath::TableStyleAlternatingFills => "tableStyle.alternatingFills",
+            PropertyPath::TableStyleStartRowFillColor => "tableStyle.startRowFillColor",
+            PropertyPath::TableStyleStartRowFillCount => "tableStyle.startRowFillCount",
+            PropertyPath::TableStyleStartRowFillTint => "tableStyle.startRowFillTint",
+            PropertyPath::TableStyleEndRowFillColor => "tableStyle.endRowFillColor",
+            PropertyPath::TableStyleEndRowFillCount => "tableStyle.endRowFillCount",
+            PropertyPath::TableStyleEndRowFillTint => "tableStyle.endRowFillTint",
+            PropertyPath::ItemName => "item.name",
         }
     }
 }
@@ -2271,6 +2400,38 @@ pub enum Value {
     /// additive new variant (rides the current protocol, no bump — the
     /// W0.2 `TabStops` / `ParagraphRule` precedent).
     Lengths(Vec<f32>),
+    /// ADR 132 — a typed plain number (percent, degrees, a count). Carries
+    /// what `Length` carried for non-length paths without claiming a unit;
+    /// the apply layer takes it wherever it takes `Length`
+    /// ([`Value::normalized`]). Additive: every `Length` payload keeps
+    /// applying.
+    Number(f64),
+    /// ADR 132 — an enum member in its IDML spelling. Normalises to `Text`
+    /// for the apply layer; the schema layer (`paged-introspect`) checks
+    /// membership before it gets there.
+    Enum(String),
+    /// ADR 132 — a reference to another document object by self id (a
+    /// style, a layer, a master). Normalises to `Text`.
+    Ref(String),
+    /// ADR 132 — a whole gradient-stop list, the value of the
+    /// `gradient.stops` virtual path (`EditGradient` underneath).
+    GradientStops(Vec<GradientStopSpec>),
+}
+
+impl Value {
+    /// The form the apply arms match on: the ADR 132 typed forms fold into
+    /// the variants that predate them (`Number` → `Length`, `Enum`/`Ref` →
+    /// `Text`), everything else is returned as is. Borrowed when nothing
+    /// changes, so the hot path does not clone.
+    #[must_use]
+    pub fn normalized(&self) -> std::borrow::Cow<'_, Value> {
+        use std::borrow::Cow;
+        match self {
+            Value::Number(n) => Cow::Owned(Value::Length(Some(*n as f32))),
+            Value::Enum(s) | Value::Ref(s) => Cow::Owned(Value::Text(s.clone())),
+            other => Cow::Borrowed(other),
+        }
+    }
 }
 
 /// Description of a node about to be inserted. The per-kind variants

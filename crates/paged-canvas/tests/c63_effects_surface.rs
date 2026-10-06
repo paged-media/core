@@ -181,7 +181,9 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
         );
     }
 
-    // A line stores the bag and nothing draws it: no rows, no arms.
+    // ADR 132 — a line's effects are drawn from its stroke band now, so
+    // it reads the inventory too — every row but the gradient feather
+    // (it fades a fill) and the blend mode (a line has no blend slot).
     let line = graphic_line(&mut m);
     let line_rows: Vec<PropertyPath> = m
         .element_properties(&line)
@@ -190,9 +192,20 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
         .iter()
         .map(|e| e.path)
         .collect();
+    for path in inventory
+        .iter()
+        .filter(|p| **p != PropertyPath::FrameGradientFeather)
+    {
+        assert_eq!(
+            line_rows.iter().filter(|p| *p == path).count(),
+            1,
+            "GraphicLine must read {path:?} exactly once"
+        );
+    }
     assert!(
-        !line_rows.iter().any(|p| is_effect_path(*p)),
-        "a GraphicLine must not advertise an effect it cannot draw"
+        !line_rows.contains(&PropertyPath::FrameGradientFeather)
+            && !line_rows.contains(&PropertyPath::FrameBlendMode),
+        "a GraphicLine must not advertise what it cannot draw"
     );
 }
 
@@ -288,20 +301,26 @@ fn every_effect_row_writes_reads_back_and_undoes_on_a_polygon() {
     }
 }
 
+/// ADR 132 — a line's effects are drawn now (from its stroke band), so
+/// the write applies, reads back and undoes like any other kind's.
 #[test]
-fn a_graphic_line_rejects_the_effect_write() {
+fn a_graphic_line_takes_the_effect_write_and_reads_it_back() {
     let mut m = model();
     let id = graphic_line(&mut m);
-    let err = m
-        .apply_mutation(&Mutation::SetElementProperty {
-            element_id: id,
-            path: PropertyPath::FrameOuterGlowEnabled,
-            value: Value::Bool(true),
-        })
-        .expect_err("a line's effects are stored and never drawn");
-    assert!(
-        format!("{err:?}").contains("is not supported on"),
-        "the rejection names the unsupported pair: {err:?}"
+    m.apply_mutation(&Mutation::SetElementProperty {
+        element_id: id.clone(),
+        path: PropertyPath::FrameOuterGlowEnabled,
+        value: Value::Bool(true),
+    })
+    .expect("a line takes a glow");
+    assert_eq!(
+        read(&m, &id, PropertyPath::FrameOuterGlowEnabled),
+        Some(Value::Bool(true))
+    );
+    assert!(m.undo().is_some());
+    assert_eq!(
+        read(&m, &id, PropertyPath::FrameOuterGlowEnabled),
+        Some(Value::Bool(false))
     );
 }
 

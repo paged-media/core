@@ -26,6 +26,9 @@ paged-compose = { path = "../paged-compose" }
 paged-text = { path = "../paged-text" }
 paged-mutate = { path = "../paged-mutate" }
 paged-wire = { path = "../paged-wire" }
+# ADR 132 — the property schemas and the virtual path table `Mutation::Set`
+# resolves against (and the v65 style-properties coverage gate).
+paged-introspect = { path = "../paged-introspect", default-features = false }
 paged-color = { path = "../paged-color" }
 paged-export-pdf = { path = "../paged-export-pdf" }
 # W3.B2 — IDML save-back. idml-export deps only idml-import +
@@ -74,8 +77,6 @@ web-sys = { version = "0.3", features = ["console"] }
 # bytes are committed. criterion drives the measurements.
 criterion = { workspace = true }
 paged-gen = { path = "../paged-gen" }
-# v65 style-properties coverage gate walks every PropertyPath.
-paged-introspect = { path = "../paged-introspect", default-features = false }
 # S4 overset-wire test builds a small inline overflowing IDML.
 zip = { workspace = true }
 

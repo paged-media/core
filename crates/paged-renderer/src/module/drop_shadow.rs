@@ -186,6 +186,46 @@ pub(crate) fn line_drop_shadow_module(
     });
 }
 
+/// ADR 132 — a line's transparency EFFECTS (inner/outer glow, inner
+/// shadow, bevel, satin, feathers), cast like its drop shadow: from the
+/// stroke's outline band, the only area a line covers. `pre` emits the
+/// under-paint effects (before the stroke), otherwise the over-paint ones.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn line_effects_module(
+    page: &mut BuiltPage,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+    effects: Option<&paged_model::FrameEffects>,
+    centreline: &PathData,
+    stroke: &Stroke,
+    cache_key: u64,
+    transform: Transform,
+    pre: bool,
+) {
+    let Some(effects) = effects else {
+        return;
+    };
+    if stroke.width <= 0.0 {
+        return;
+    }
+    let band = stroke_outline(centreline, stroke);
+    if band.segments.is_empty() {
+        return;
+    }
+    // Same salt as the shadow's band: one interned outline per line.
+    let (path_id, _) = page
+        .list
+        .paths
+        .intern(cache_key ^ 0x5AD0_57A0_0000_0000, band);
+    if pre {
+        crate::module::emit_effects_pre_fill(page, effects, path_id, transform, palette, color_ctx);
+    } else {
+        crate::module::emit_effects_post_fill(
+            page, effects, path_id, transform, palette, color_ctx, None,
+        );
+    }
+}
+
 /// The closed outline of `path` stroked with `stroke` (no dash).
 fn stroke_outline(path: &PathData, stroke: &Stroke) -> PathData {
     use kurbo::{BezPath, Cap, Join, PathEl, Point, StrokeOpts};

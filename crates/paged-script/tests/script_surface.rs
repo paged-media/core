@@ -65,7 +65,18 @@ fn ops_the_bridge_names() -> BTreeSet<String> {
     let src = include_str!("../src/lib.rs");
     paged_wire::MUTATION_NAMES
         .iter()
-        .filter(|name| src.contains(&format!("Mutation::{name}")))
+        // The whole name: `Mutation::Set` must not be credited by
+        // `Mutation::SetElementProperty` (ADR 132 added an op that is a
+        // prefix of four others).
+        .filter(|name| {
+            let needle = format!("Mutation::{name}");
+            src.match_indices(&needle).any(|(i, _)| {
+                !src[i + needle.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+        })
         .map(|name| (*name).to_string())
         .collect()
 }
@@ -144,9 +155,9 @@ fn every_reason_is_a_reason() {
 /// The bridge's own count, so the headline number in the module doc
 /// cannot drift from the code without a failure.
 #[test]
-fn the_script_surface_reaches_126_of_127() {
-    assert_eq!(ops_the_bridge_names().len(), 126);
-    assert_eq!(paged_wire::MUTATION_NAMES.len(), 127);
+fn the_script_surface_reaches_127_of_128() {
+    assert_eq!(ops_the_bridge_names().len(), 127);
+    assert_eq!(paged_wire::MUTATION_NAMES.len(), 128);
 }
 
 /// The names the bridge actually installs, read out of `install_bridge`

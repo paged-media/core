@@ -76,6 +76,10 @@ pub enum NodeIdJson {
     /// The story container — the structural parent an `InsertNode`
     /// targets to create a `<Table>` (v37 `InsertTable`).
     Story(String),
+    /// ADR 132 — the document (its preferences).
+    Document(String),
+    /// ADR 132 — a `<TextVariable>` definition.
+    TextVariable(String),
     StoryRange {
         story_id: String,
         start: u32,
@@ -109,6 +113,8 @@ impl From<NodeId> for NodeIdJson {
             NodeId::Page(s) => NodeIdJson::Page(s),
             NodeId::Layer(s) => NodeIdJson::Layer(s),
             NodeId::Story(s) => NodeIdJson::Story(s),
+            NodeId::Document(s) => NodeIdJson::Document(s),
+            NodeId::TextVariable(s) => NodeIdJson::TextVariable(s),
             NodeId::StoryRange {
                 story_id,
                 start,
@@ -147,6 +153,8 @@ impl From<&NodeIdJson> for NodeId {
             NodeIdJson::Page(s) => NodeId::Page(s.clone()),
             NodeIdJson::Layer(s) => NodeId::Layer(s.clone()),
             NodeIdJson::Story(s) => NodeId::Story(s.clone()),
+            NodeIdJson::Document(s) => NodeId::Document(s.clone()),
+            NodeIdJson::TextVariable(s) => NodeId::TextVariable(s.clone()),
             NodeIdJson::StoryRange {
                 story_id,
                 start,
