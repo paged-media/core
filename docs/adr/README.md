@@ -57,6 +57,7 @@ is not written yet.
 | [126](126-scene-text-in-its-own-face.md) | Scene-layer text draws in its own face | Accepted 2026-10-05 |
 | [127](127-fields-and-document-labels-for-data.md) | Field offsets, typing at a field, document labels and delete undo | Accepted 2026-10-05 |
 | [128](128-pages-a-merge-can-make.md) | Pages a merge can make: page handles, copied stories, margins | Accepted 2026-10-06 |
+| [129](129-pages-and-masters-for-presentations.md) | Pages and masters for presentations: reorder, page labels, page links, snapshot masks, master editing | Accepted 2026-10-06 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

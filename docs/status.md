@@ -1,7 +1,8 @@
 # Status
 
 What the engine ships and what it does not, read from the code at commit `d9f6a32`
-(`PROTOCOL_VERSION` 69 on branch `data/protocol-69`, not yet tagged; the newest release tag in
+(`PROTOCOL_VERSION` 69, not yet tagged: the data-publishing batch on `main` and the presentation
+batch on `slide/protocol-69`; the newest release tag in
 its history is `v0.68.0`). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
@@ -15,7 +16,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 121 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 127 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
@@ -32,6 +33,13 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   stories, including their hyperlink sources, and keeps its margins. An inserted page takes its
   master's margins. `duplicateElements` copies a story that holds hyperlink sources
   ([ADR 128](adr/128-pages-a-merge-can-make.md), protocol 69).
+- **Pages and masters for presentations.** `movePage` reorders pages. A page carries plugin
+  labels that travel with it (`setPageMetadata`), and a text range links to a page
+  (`insertHyperlink.page`). A snapshot can leave items out (`requestSnapshot.hideItems`).
+  `onMaster` edits a master's items with the ordinary mutations, and `createMaster`,
+  `deleteMaster` and `renameMaster` make, remove and name masters. A radial gradient is centred
+  at its `GradientFillStart`, and a cell edge draws in its stroke style (a double border as two
+  rules) ([ADR 129](adr/129-pages-and-masters-for-presentations.md), protocol 69).
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
