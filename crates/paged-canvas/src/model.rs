@@ -370,6 +370,43 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// The `(element, handle)` pairs a translated batch bound, in order.
+///
+/// Translation drops every `bindCreated` child (it contributes no
+/// operation), so the binding is recovered here by walking the batch's
+/// children beside the operations they translated to: each non-binding
+/// child produced exactly one operation, and a `bindCreated` names the
+/// most recent creation before it — the rule translation applied.
+fn translated_handle_bindings(
+    doc: &paged_scene::Document,
+    mutation: &Mutation,
+    op: &paged_mutate::Operation,
+) -> Vec<(crate::element_selection::ElementId, String)> {
+    let (Mutation::Batch { ops: children }, paged_mutate::Operation::Batch { ops: translated }) =
+        (mutation, op)
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut translated = translated.iter();
+    let mut last_created: Option<crate::element_selection::ElementId> = None;
+    for child in children {
+        if let Mutation::BindCreated { handle } = child {
+            if let Some(id) = &last_created {
+                out.push((id.clone(), handle.clone()));
+            }
+            continue;
+        }
+        let Some(child_op) = translated.next() else {
+            break;
+        };
+        if let Some(id) = created_element_id(doc, child_op) {
+            last_created = Some(id);
+        }
+    }
+    out
+}
+
 fn created_element_id(
     doc: &paged_scene::Document,
     op: &paged_mutate::Operation,
@@ -2464,15 +2501,17 @@ impl CanvasModel {
         // synthesise an empty text op into the response. Future
         // convergence folds both into one shape.
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
+            // The handle each `bindCreated` named, read off the translated
+            // children BEFORE apply (the ids are already in their specs,
+            // and that is the scene translation itself resolved them in).
+            let bindings = translated_handle_bindings(&self.scene, mutation, &op);
             let outcome = self.apply_operation(op)?;
             let created_id = created_element_id(&self.scene, &outcome.applied.op);
             // Perf-Batch — a batch that translates whole still mints one
             // id per creating child, and `created_id` names only the
-            // last. Report the list in mint order. The `handle` names
-            // stay `None` on this lane: translation resolves handles
-            // before apply and drops the `bindCreated` children, so the
-            // binding is not recoverable from the applied operation —
-            // ORDER is the contract a caller reads either way.
+            // last. Report the list in mint order, each with the handle
+            // it was bound to — the same reply the mixed lane gives, so a
+            // caller never needs to know which lane its batch took.
             let minted: Vec<crate::channel::MintedElement> = if matches!(
                 mutation,
                 Mutation::Batch { .. } | Mutation::DuplicateElements { .. }
@@ -2481,8 +2520,15 @@ impl CanvasModel {
                     .into_iter()
                     .map(|element| {
                         let story_id = self.story_of_element(&element);
+                        // Last binding wins, as the mixed lane's
+                        // `last_mut()` overwrite does.
+                        let handle = bindings
+                            .iter()
+                            .rev()
+                            .find(|(id, _)| *id == element)
+                            .map(|(_, h)| h.clone());
                         crate::channel::MintedElement {
-                            handle: None,
+                            handle,
                             element,
                             story_id,
                         }

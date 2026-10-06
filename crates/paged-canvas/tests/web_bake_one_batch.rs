@@ -177,3 +177,38 @@ fn a_whole_web_bake_is_one_batch_one_undo_step_with_every_id_returned() {
         .collect();
     assert!(texts.iter().any(|t| t == "Heading") && texts.iter().any(|t| t == "Body copy"));
 }
+
+/// The all-translatable lane: a bake of shapes only (no text, so every
+/// child translates into ONE `Operation::Batch`) must report its handles
+/// exactly as the mixed lane does. The path handle used to come back
+/// `None` on this lane.
+#[test]
+fn a_shapes_only_bake_reports_every_handle_on_the_translate_lane() {
+    let mut m = CanvasModel::load("d", &doc_bytes(), CanvasOptions::default()).unwrap();
+    let page = first_page_id(&m);
+    let path = |left: f32| {
+        serde_json::json!({ "op": "insertPath", "args": { "pageId": page, "open": false, "anchors": [
+            { "anchor": [left, 130.0], "left": [left, 130.0], "right": [left, 130.0] },
+            { "anchor": [left + 60.0, 130.0], "left": [left + 60.0, 130.0], "right": [left + 60.0, 130.0] },
+            { "anchor": [left + 30.0, 170.0], "left": [left + 30.0, 170.0], "right": [left + 30.0, 170.0] } ] } })
+    };
+    let batch: Mutation =
+        serde_json::from_value(serde_json::json!({ "op": "batch", "args": { "ops": [
+        path(20.0),
+        { "op": "bindCreated", "args": { "handle": "p0" } },
+        path(120.0),
+        { "op": "bindCreated", "args": { "handle": "p1" } },
+        { "op": "setElementProperty", "args": {
+            "elementId": { "kind": "polygon", "id": "$h:p0" },
+            "path": "frameFillColor", "value": { "type": "colorRef", "value": "Color/Black" } } }
+    ] } }))
+        .expect("decodes");
+    let outcome = m.apply_mutation(&batch).expect("applies");
+    let handles: Vec<Option<&str>> = outcome.minted.iter().map(|e| e.handle.as_deref()).collect();
+    assert_eq!(
+        handles,
+        vec![Some("p0"), Some("p1")],
+        "minted: {:?}",
+        outcome.minted
+    );
+}

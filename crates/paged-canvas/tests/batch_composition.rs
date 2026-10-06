@@ -232,11 +232,20 @@ fn a_handle_addresses_an_id_minted_earlier_in_the_same_batch() {
 #[test]
 fn a_translatable_handle_batch_stays_one_operation() {
     let mut model = load();
-    model
+    let outcome = model
         .apply_mutation(&Mutation::Batch {
             ops: vec![insert_path(0.0), bind("a"), fill("a", "Color/Black")],
         })
         .expect("applies");
+    // The one-operation lane still reports the handle each mint was bound
+    // to — the same reply the mixed lane gives, so a caller never has to
+    // know which lane its batch took.
+    assert_eq!(outcome.minted.len(), 1, "minted: {:?}", outcome.minted);
+    assert_eq!(
+        outcome.minted[0].handle.as_deref(),
+        Some("a"),
+        "the translate lane names the handle it bound"
+    );
     match model.applied_log_back().expect("log entry").kind.clone() {
         LoggedMutation::Frame(applied) => assert!(
             matches!(applied.op, paged_mutate::Operation::Batch { .. }),
