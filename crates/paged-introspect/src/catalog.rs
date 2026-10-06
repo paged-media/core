@@ -228,10 +228,10 @@ fn host_functions() -> Vec<HostFn> {
     }
     vec![
         // --- writes (property mutation) ---
-        f!("paged.set", "(id | target, path, value)", "bool", "write",
-           "Set a property on the addressed element (see settablePaths), or — with a target object ({kind:\"doc\"}, {kind:\"layer\",layerId}, {kind:\"swatch\",swatchId}, {kind:\"style\",family,styleId}, …) — any path propertySchemas lists for that kind (Mutation::Set). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears."),
-        f!("paged.get", "(id | target, path)", "value JSON | null", "read",
-           "Read one property of the addressed element or target object, as its wire value JSON."),
+        f!("paged.set", "(address, path, value)", "bool", "write",
+           "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated."),
+        f!("paged.get", "(address, path)", "value JSON | null", "read",
+           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire)."),
         // --- authoring (Stage 1/2) ---
         f!("paged.insertText", "(storyId, offset, text)", "bool", "author",
            "Insert plain text at a story body offset; \\n splits paragraphs."),

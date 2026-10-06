@@ -2,17 +2,17 @@
   "hostFunctions": [
     {
       "name": "paged.set",
-      "params": "(id | target, path, value)",
+      "params": "(address, path, value)",
       "returns": "bool",
       "kind": "write",
-      "summary": "Set a property on the addressed element (see settablePaths), or — with a target object ({kind:\"doc\"}, {kind:\"layer\",layerId}, {kind:\"swatch\",swatchId}, {kind:\"style\",family,styleId}, …) — any path propertySchemas lists for that kind (Mutation::Set). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears."
+      "summary": "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated."
     },
     {
       "name": "paged.get",
-      "params": "(id | target, path)",
+      "params": "(address, path)",
       "returns": "value JSON | null",
       "kind": "read",
-      "summary": "Read one property of the addressed element or target object, as its wire value JSON."
+      "summary": "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire)."
     },
     {
       "name": "paged.insertText",
@@ -1228,6 +1228,11 @@
       "form": "hyperlink:<id>",
       "example": "hyperlink:u6a",
       "note": "A hyperlink."
+    },
+    {
+      "form": "textVariable:<id>",
+      "example": "textVariable:dTextVariablenFile Name",
+      "note": "A text variable, by its Self id (the designmap's TextVariable). Its name is accepted in a selector: textVariable[name=\"Running Head\"]."
     },
     {
       "form": "plugin:<pluginId>/<kind>/<id>",

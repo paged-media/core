@@ -180,8 +180,12 @@ pub enum Command {
     },
     /// Set one property of any object (ADR 132, `Mutation::Set`).
     ///
-    /// TARGET is an element address (`rectangle:<id>`, `storyRange:…`),
-    /// `doc`, or a target object (`{"kind":"layer","layerId":"ua"}`).
+    /// TARGET is one address (ADR 131): `doc`, `rectangle:<id>`,
+    /// `frame:<id>`, `storyRange:…`, `page:#2`, `layer:<id>`,
+    /// `swatch:Color/Red`, `style:object/<id>`, `cell:<table>/0,1`,
+    /// `textVariable:<id>`, … — a selector is not a target (`paged query`
+    /// lists what one matches). The protocol-70 target object
+    /// (`{"kind":"layer","layerId":"ua"}`) is accepted, deprecated.
     /// PATH is any `propertySchemas` row for the target's kind. VALUE is
     /// JSON when it parses (`12`, `true`, `[0,0,100,100]`), a string
     /// otherwise (`3mm`, `CenterAlign`), coerced by the path's schema.
@@ -189,7 +193,7 @@ pub enum Command {
     Set {
         /// IDML or `.paged` document.
         doc: PathBuf,
-        /// `doc`, an element address (`rectangle:<id>`), or a target object.
+        /// An address: `doc`, `rectangle:<id>`, `swatch:<id>`, `layer:<id>`, …
         target: String,
         /// A `propertySchemas` path for the target's kind.
         path: String,
@@ -203,11 +207,12 @@ pub enum Command {
         #[command(flatten)]
         assets: DocumentOptions,
     },
-    /// Read one property of any object, as its wire value JSON.
+    /// Read one property of any object, as its wire value JSON
+    /// (`RequestGet`, the read twin of `set`).
     Get {
         /// IDML or `.paged` document.
         doc: PathBuf,
-        /// `doc`, an element address (`rectangle:<id>`), or a target object.
+        /// An address: `doc`, `rectangle:<id>`, `swatch:<id>`, `layer:<id>`, …
         target: String,
         /// A `propertySchemas` path for the target's kind.
         path: String,

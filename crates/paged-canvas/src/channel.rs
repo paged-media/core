@@ -618,7 +618,32 @@ export type WorkerToMain = WorkerToMainKind & {
 //     labels now round-trip through IDML (`<Document><Properties><Label>`).
 //   - New operations an older worker cannot apply, hence the bump (v0.69.0
 //     shipped the paged.data batch alone).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(70);
+// v71 — the object model (ADR 131 one address grammar + selectors, ADR 132
+//   typed property schemas + virtual paths), one batch:
+//   - `Mutation::Set { address, path, value }`: set ANY property of ANY
+//     object. `address` is an ADR 131 address STRING (`doc`, `page:#2`,
+//     `swatch:Color/Red`, `style:object/<id>`, `cell:<table>/0,1`,
+//     `textVariable:<id>`, …; `$h:` handles resolve in it); `path` is a
+//     `PropertyPath` name or a virtual path from the catalog's new
+//     `propertySchemas`. The engine resolves it to the ONE existing op that
+//     writes that property, so undo is that op's. A selector is not a
+//     target — `RequestQuery` first.
+//   - `RequestQuery { selector }` → `QueryResult { addresses, error }` and
+//     `RequestGet { address, path }` → `PropertyValue { value, error }`,
+//     both pure reads.
+//   - `Value` gains `number`, `enum`, `ref` and `gradientStops` (additive;
+//     the old `length`/`text` payloads coerce by schema).
+//   - New `PropertyPath`s for fields that were modelled and unsettable:
+//     page margins and columns, document bleed and slug, text variables,
+//     object/cell/table style definitions (`SetStyleProperty` accepts the
+//     object, cell and table collections), and a page item's `Name`
+//     (`item.name`, held in `Spread::item_names`; reading and writing it in
+//     IDML is the plugin-publish adapter's `item-names` step).
+//   - Behaviour: the remaining effect paths (beyond v70's drop shadow)
+//     apply to graphic lines, cast from the stroke band.
+//   - The catalog adds `propertySchemas` (one typed schema per (address
+//     kind, path)) and generates `idGrammar` from `Address`.
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(71);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -4165,8 +4190,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v70() {
-        assert_eq!(PROTOCOL_VERSION.0, 70);
+    fn protocol_version_is_v71() {
+        assert_eq!(PROTOCOL_VERSION.0, 71);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the
