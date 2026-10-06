@@ -112,3 +112,49 @@ fn address_resolves_aliases_and_element_objects() {
         ]
     );
 }
+
+/// Placeholder fields are queryable by kind and as story children, not
+/// only through `*` (coordinator finding, 2026-10-06).
+#[test]
+fn fields_answer_their_kind_and_the_story_step() {
+    let mut model = CanvasModel::new_blank("om-f", 612.0, 792.0, CanvasOptions::default()).unwrap();
+    let out = run(
+        &mut model,
+        r#"const pid = JSON.parse(paged.pages())[0].selfId;
+           paged.insertTextFrame(pid, [36, 36, 200, 300]);
+           const sid = JSON.parse(paged.stories())[0].selfId;
+           paged.insertText(sid, 0, "Price: ");
+           console.log(paged.insertField(sid, 7, { placeholder: { plugin: "paged.data", key: "price" } }));
+           const all = JSON.parse(paged.query("*")).filter(a => a.startsWith("field:"));
+           console.log(all.length);
+           console.log(JSON.stringify(JSON.parse(paged.query("field"))) === JSON.stringify(all));
+           console.log(JSON.stringify(JSON.parse(paged.query("story > field"))) === JSON.stringify(all));
+           console.log(JSON.parse(paged.query("field[name=price]")).length);"#,
+    );
+    assert_eq!(
+        out,
+        [
+            "[log] true",
+            "[log] 1",
+            "[log] true",
+            "[log] true",
+            "[log] 1"
+        ]
+    );
+}
+
+/// A swatch address accepts the swatch's NAME, as a style address does
+/// (coordinator finding, 2026-10-06): `swatch:Red` is `swatch:<Self id>`.
+#[test]
+fn a_swatch_address_accepts_its_name() {
+    let mut model = CanvasModel::new_blank("om-s", 612.0, 792.0, CanvasOptions::default()).unwrap();
+    let out = run(
+        &mut model,
+        r#"const id = paged.createSwatch({ space: 'CMYK', value: [0, 100, 100, 0], name: 'Red' });
+           console.log(paged.address('swatch:Red') === paged.address('swatch:' + id));
+           console.log(paged.set('swatch:Red', 'tint', 40));
+           console.log(JSON.parse(paged.get('swatch:' + id, 'tint')).value);
+           console.log(JSON.parse(paged.query('swatch[name=Red]')).length);"#,
+    );
+    assert_eq!(out, ["[log] true", "[log] true", "[log] 40", "[log] 1"]);
+}

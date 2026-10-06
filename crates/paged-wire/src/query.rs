@@ -585,6 +585,12 @@ impl<'a> Index<'a> {
                 } => f == family && (have == id || n.name == Some(id.as_str())),
                 _ => false,
             },
+            // A swatch answers to its `Self` id or its name, as a style
+            // does (`swatch:Red` is the swatch named Red).
+            Address::Swatch { id } => match &n.addr {
+                Address::Swatch { id: have } => have == id || n.name == Some(id.as_str()),
+                _ => false,
+            },
             Address::OnMaster { master, item } => match &n.addr {
                 Address::OnMaster { master: m, .. } => m == master && self.address_matches(n, item),
                 _ => false,
@@ -716,9 +722,11 @@ impl<'a> Index<'a> {
         if let Some(p) = self.passthrough(a) {
             return Some(p);
         }
+        // The exact address first, so an id always beats a name.
         self.nodes
             .iter()
-            .find(|n| self.address_matches(n, a))
+            .find(|n| &n.addr == a)
+            .or_else(|| self.nodes.iter().find(|n| self.address_matches(n, a)))
             .map(|n| n.addr.clone())
     }
 
@@ -761,6 +769,14 @@ impl<'a> Index<'a> {
     /// finds) or answers why it cannot (a plugin object, an unbound
     /// handle, an object this document does not have).
     pub fn to_virtual_target(&self, a: &Address) -> Result<VirtualTarget, String> {
+        // A swatch named by its name maps to the swatch's `Self` id.
+        if let Address::Swatch { .. } = a {
+            if let Some(resolved) = self.resolve(a) {
+                if let Some(t) = VirtualTarget::from_address_direct(&resolved)? {
+                    return Ok(t);
+                }
+            }
+        }
         if let Some(t) = VirtualTarget::from_address_direct(a)? {
             return Ok(t);
         }

@@ -5179,6 +5179,11 @@ impl CanvasModel {
         &self,
         address: &paged_wire::Address,
     ) -> Result<paged_wire::VirtualTarget, String> {
+        // A swatch may be named by its name (`swatch:Red`): the index maps
+        // it to the `Self` id (an id still wins over a name).
+        if let paged_wire::Address::Swatch { .. } = address {
+            return paged_wire::query::to_virtual_target(&self.scene, address);
+        }
         match paged_wire::VirtualTarget::from_address_direct(address)? {
             Some(t) => Ok(t),
             None => paged_wire::query::to_virtual_target(&self.scene, address),
