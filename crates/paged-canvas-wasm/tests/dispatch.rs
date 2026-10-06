@@ -1860,3 +1860,74 @@ fn request_snap_point_without_a_document_answers_the_point() {
     assert_eq!(r["kind"], "snapPoint");
     assert_eq!(r["payload"]["result"]["snapped"], false);
 }
+
+// ---------------------------------------------------------------------
+// v71 — the script host bridge on the wire (ADR 323)
+// ---------------------------------------------------------------------
+
+/// `executeScript { hostObjects: true }` touching a `plugin:` address
+/// replies `requestHostObjects`; the host's `hostObjectsResult` resumes the
+/// SAME session and the reply is the `scriptResult`. A stale session id is
+/// answered, not hung.
+#[test]
+fn a_script_suspends_on_the_host_and_resumes_on_its_answers() {
+    let mut core = WorkerCore::new();
+    let p = protocol();
+    let loaded = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 1, "protocol": p, "kind": "newBlankDocument",
+            "payload": { "widthPt": 612.0, "heightPt": 792.0 } }),
+    );
+    assert_eq!(loaded["kind"], "documentLoaded");
+    let source = "const v = await paged.get('plugin:paged.test/thing/1', 'name'); console.log(JSON.parse(v));";
+    let req = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 2, "protocol": p, "kind": "executeScript",
+            "payload": { "source": source, "hostObjects": true } }),
+    );
+    assert_eq!(req["kind"], "requestHostObjects", "{req}");
+    assert_eq!(req["seq"], 2);
+    let session = req["payload"]["session"].clone();
+    assert_eq!(
+        req["payload"]["calls"],
+        serde_json::json!([{ "op": "get", "address": "plugin:paged.test/thing/1", "path": "name" }])
+    );
+    let stale = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 3, "protocol": p, "kind": "hostObjectsResult",
+            "payload": { "session": 999, "answers": [] } }),
+    );
+    assert_eq!(stale["kind"], "scriptResult");
+    assert!(stale["payload"]["error"].as_str().unwrap().contains("999"));
+    // The stale answer dropped nothing it did not own? It did: one session
+    // at a time, and a wrong id abandons it — re-run to get a live one.
+    let req = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 4, "protocol": p, "kind": "executeScript",
+            "payload": { "source": source, "hostObjects": true } }),
+    );
+    let session2 = req["payload"]["session"].clone();
+    assert_ne!(session, session2);
+    let done = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 5, "protocol": p, "kind": "hostObjectsResult",
+            "payload": { "session": session2, "answers": [{ "value": { "kind": "value", "value": "Alpha" } }] } }),
+    );
+    assert_eq!(done["kind"], "scriptResult", "{done}");
+    assert_eq!(done["payload"]["error"], serde_json::Value::Null);
+    assert_eq!(
+        done["payload"]["output"],
+        serde_json::json!(["[log] Alpha"])
+    );
+    // Without `hostObjects` the same script fails with noHost, never suspends.
+    let no_host = roundtrip(
+        &mut core,
+        &serde_json::json!({ "seq": 6, "protocol": p, "kind": "executeScript",
+            "payload": { "source": source } }),
+    );
+    assert_eq!(no_host["kind"], "scriptResult");
+    assert!(no_host["payload"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("noHost"));
+}

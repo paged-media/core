@@ -5,14 +5,14 @@
       "params": "(address, path, value)",
       "returns": "bool",
       "kind": "write",
-      "summary": "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated."
+      "summary": "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated. A plugin:<pluginId>/<kind>/<id> address goes to the host's object registry (ADR 323): it returns a Promise<true>, consecutive plugin sets fold into ONE batched host round trip, a refusal rejects with an Error whose .code is the registry's code (an unawaited refusal fails the script), and core + plugin writes of one script undo as one step. With no host registry it throws code noHost."
     },
     {
       "name": "paged.get",
       "params": "(address, path)",
       "returns": "value JSON | null",
       "kind": "read",
-      "summary": "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire)."
+      "summary": "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."
     },
     {
       "name": "paged.insertText",
@@ -131,7 +131,14 @@
       "params": "(selector)",
       "returns": "string[] JSON",
       "kind": "read",
-      "summary": "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector."
+      "summary": "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."
+    },
+    {
+      "name": "paged.schema",
+      "params": "(addressOrKind)",
+      "returns": "PropertySchema[] JSON",
+      "kind": "read",
+      "summary": "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."
     },
     {
       "name": "paged.address",
@@ -828,10 +835,10 @@
     },
     {
       "name": "paged.batch",
-      "params": "([mutations])",
-      "returns": "bool",
+      "params": "([mutations] | [objectOps])",
+      "returns": "bool | per-op results JSON",
       "kind": "author",
-      "summary": "Apply an array of { op, args } mutation objects as ONE undoable step."
+      "summary": "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address the whole batch goes to the host's object registry (a Promise of the same JSON)."
     },
     {
       "name": "paged.setElementSelection",

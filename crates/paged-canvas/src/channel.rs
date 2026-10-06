@@ -649,6 +649,15 @@ export type WorkerToMain = WorkerToMainKind & {
 //     apply to graphic lines, cast from the stroke band.
 //   - The catalog adds `propertySchemas` (one typed schema per (address
 //     kind, path)) and generates `idGrammar` from `Address`.
+//   - The script host bridge (ADR 323): `ExecuteScript.hostObjects`
+//     (optional bool) says the host answers for `plugin:` addresses; such a
+//     script's reply may be `RequestHostObjects { session, calls }`
+//     (`HostObjectCall`: get / batch / query / schema), answered by the
+//     host with `HostObjectsResult { session, answers }`
+//     (`HostObjectAnswer { value?, error?: { code, reason, index? } }`),
+//     whose reply is again `ScriptResult` or `RequestHostObjects`. Boa
+//     gains `paged.schema`; a script that wrote through the host undoes
+//     as one step.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(71);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -673,6 +682,60 @@ pub struct ScriptBudgetWire {
     /// Milliseconds; `0` disables the wall clock.
     #[serde(default)]
     pub wall_clock_ms: Option<u64>,
+}
+
+/// v71 — one call a suspended script makes on the host's object
+/// registry (ADR 323 `host.objects`). Addresses, selectors and op values
+/// are the registry's own spelling; core never interprets a `plugin:`
+/// address.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum HostObjectCall {
+    /// `objects.get(address, path)`. Answer: the `ObjectValue`.
+    Get { address: String, path: String },
+    /// `objects.batch(ops)` — `ObjectOp[]` (`{ op: "set", address, path,
+    /// value }`, `create`, `delete`), committed as ONE undo step. Answer:
+    /// the `ObjectWriteResult`; a refusal is the answer's `error` (with
+    /// the failing op's `index`).
+    Batch {
+        #[tsify(type = "unknown[]")]
+        ops: Vec<serde_json::Value>,
+    },
+    /// `objects.query(selector)`. Answer: `string[]`.
+    Query { selector: String },
+    /// `objects.schema(addressOrKind)`. Answer: `PropertySchema[]`.
+    Schema { target: String },
+}
+
+/// v71 — the host's answer to one `HostObjectCall`: `value` on success,
+/// `error` when the registry refused (the script sees an exception
+/// carrying `code`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct HostObjectAnswer {
+    #[serde(default)]
+    #[tsify(optional, type = "unknown")]
+    pub value: serde_json::Value,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub error: Option<HostObjectError>,
+}
+
+/// v71 — a refused host-object call: the registry's `ObjectErrorCode`
+/// (`unknownAddress`, `unknownPath`, `invalidValue`, `readOnly`,
+/// `denied`, `unmapped`, `failed`, …), its reason, and for a batch the
+/// index of the op that failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct HostObjectError {
+    pub code: String,
+    pub reason: String,
+    #[serde(default)]
+    #[tsify(optional)]
+    pub index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
@@ -1403,6 +1466,22 @@ pub enum MainToWorkerKind {
         /// (the editor's 2 s REPL guard). See [`ScriptBudgetWire`].
         #[serde(default)]
         budget: Option<ScriptBudgetWire>,
+        /// v71 — the host answers `RequestHostObjects` (it has an ADR 323
+        /// object registry). When true, a script touching a `plugin:`
+        /// address SUSPENDS and the reply is `RequestHostObjects` instead
+        /// of `ScriptResult`; the host answers with `HostObjectsResult`.
+        /// Absent/false: such a call throws `noHost` in the script.
+        #[serde(default)]
+        #[tsify(optional)]
+        host_objects: bool,
+    },
+    /// v71 — the host's answers to a suspended script's
+    /// `RequestHostObjects`, one per call, in call order. `session` is
+    /// the id the request carried. Reply: `ScriptResult` (the script
+    /// finished) or another `RequestHostObjects` (it suspended again).
+    HostObjectsResult {
+        session: u32,
+        answers: Vec<HostObjectAnswer>,
     },
     /// Concept 3 — open a PDF export session. The worker re-runs the
     /// scene build one-shot (glyph side-channel on, splice caches
@@ -2167,6 +2246,17 @@ pub enum WorkerToMainKind {
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         budget_kind: Option<ScriptBudgetKind>,
+    },
+    /// v71 — the `ExecuteScript` (or `HostObjectsResult`) reply when the
+    /// script SUSPENDED on the host's object registry: it named a
+    /// `plugin:` address in `paged.get/set/batch/query/schema`. `calls`
+    /// is every call the script made since it last ran, batched (one
+    /// round trip per script step; consecutive `paged.set`s fold into one
+    /// `batch`). The host answers each through `host.objects` and sends
+    /// `HostObjectsResult { session, answers }`.
+    RequestHostObjects {
+        session: u32,
+        calls: Vec<HostObjectCall>,
     },
     /// Phase B — `BeginGesture` succeeded.
     GestureBegun {

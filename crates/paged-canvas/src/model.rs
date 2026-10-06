@@ -5074,6 +5074,34 @@ impl CanvasModel {
         self.redo_log.len()
     }
 
+    /// v71 (ADR 323 script bridge) — fold every undo record logged after
+    /// `applied_seq` `mark` into ONE `Composite` record, so a script step
+    /// whose writes landed partly in the worker (core `paged.set`) and
+    /// partly through the host's object registry (a `plugin:` write the
+    /// host committed as its own batch) undoes as one step. Only the
+    /// contiguous run of newer records at the tail is folded (a redo
+    /// re-logs an OLDER seq and ends the run). Returns how many records
+    /// were folded (0 or 1 means nothing changed).
+    pub fn group_undo_since(&mut self, mark: u64) -> usize {
+        let start = self
+            .applied_log
+            .iter()
+            .rposition(|r| r.applied_seq <= mark)
+            .map_or(0, |i| i + 1);
+        let n = self.applied_log.len() - start;
+        if n < 2 {
+            return n;
+        }
+        let records: Vec<AppliedRecord> = self.applied_log.drain(start..).collect();
+        let applied_seq = records.last().map_or(mark, |r| r.applied_seq);
+        let children = records.into_iter().map(|r| r.kind).collect();
+        self.applied_log.push(AppliedRecord {
+            applied_seq,
+            kind: LoggedMutation::Composite(children),
+        });
+        n
+    }
+
     /// Read-only inspection of the most recently logged mutation.
     /// Used by Phase B integration tests to confirm the bridge routed
     /// a frame mutation onto the canonical `LoggedMutation::Frame`

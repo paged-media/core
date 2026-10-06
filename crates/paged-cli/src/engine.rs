@@ -117,6 +117,8 @@ impl Session {
         let reply = self.send(MainToWorkerKind::ExecuteScript {
             source: source.to_string(),
             budget,
+            // The Rust CLI has no object registry: `plugin:` throws noHost.
+            host_objects: false,
         })?;
         // `expect_reply!` is defined below in this file, so name it
         // through the crate root rather than textual scope.

@@ -31,7 +31,9 @@
 //! text-outlines`, 35 of 65 with v66's `paged parts delete`, 37 of 67 with v67's `paged
 //! read snap-point`, whose `--grid` sends `SetSnapSettings` first, 38 of 68
 //! with the object model's `paged query` → `RequestQuery`, 39 of 69 with
-//! v71's `paged get` → `RequestGet`); what
+//! v71's `paged get` → `RequestGet`, 39 of 70 once v71's script host
+//! bridge added `HostObjectsResult`, which only a host with an object
+//! registry sends); what
 //! remains is almost entirely the first kind.
 //!
 //! **What this gate cannot see.** It counts message KINDS, and
@@ -124,10 +126,12 @@ const UNREACHED: &[(&str, &str)] = &[
      "only an interactive export dialog cancels a PDF mid-run; a subcommand either finishes or exits"),
     ("ClearFontRegistry",
      "no CLI verb: every subcommand builds a fresh `Session`, so a new process IS the reset this kind performs"),
+    ("HostObjectsResult",
+     "the answer half of the ADR 323 script host bridge: only a host with an object registry (the editor, the SDK's headless host, the Node CLI) can answer for plugin objects; the Rust CLI sends `executeScript` without `hostObjects`, so its scripts never suspend and a `plugin:` address throws noHost"),
 ];
 
 /// Pinned so the list cannot grow quietly.
-const UNREACHED_COUNT: usize = 30;
+const UNREACHED_COUNT: usize = 31;
 
 /// Every `kind` the wire accepts, read out of serde's own error rather
 /// than kept as a list here — the same trick `wire_vocabulary.rs` uses
@@ -261,9 +265,9 @@ fn every_reason_is_a_reason() {
 
 /// The headline in the module doc, pinned against the code.
 #[test]
-fn the_cli_reaches_39_of_69() {
+fn the_cli_reaches_39_of_70() {
     assert_eq!(kinds_the_cli_sends().len(), 39);
-    assert_eq!(every_kind().len(), 69);
+    assert_eq!(every_kind().len(), 70);
 }
 
 /// The second axis, started (ADR 132): the CLI's own source names

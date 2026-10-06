@@ -51,10 +51,17 @@ use std::cell::Cell;
 use std::cell::RefCell;
 
 use boa_engine::{
-    js_string, object::ObjectInitializer, property::Attribute, Context, JsArgs, JsNativeError,
-    JsResult, JsValue, NativeFunction, Source,
+    builtins::promise::PromiseState,
+    js_string,
+    object::{builtins::JsPromise, JsObject, ObjectInitializer},
+    property::Attribute,
+    Context, JsArgs, JsError, JsNativeError, JsResult, JsValue, NativeFunction, Script, Source,
 };
 use paged_canvas::channel::{CollectionName, Mutation};
+pub use paged_canvas::channel::{HostObjectAnswer, HostObjectCall, HostObjectError};
+
+mod host_bridge;
+pub use host_bridge::MAX_HOST_ROUNDS;
 use paged_canvas::CanvasModel;
 use paged_canvas::PageId;
 use serde::{Deserialize, Serialize};
@@ -347,34 +354,91 @@ fn native_clock() -> f64 {
 /// in milliseconds (`js_sys::Date::now` on wasm); the wall-clock
 /// deadline, if any, is `clock() + budget.wall_clock_ms` captured at
 /// entry and enforced at every host-function boundary.
+///
+/// No host object registry: a `plugin:` address throws `noHost`. Hosts
+/// that have one use [`start_script`].
 pub fn execute_script_with(
     model: &mut CanvasModel,
     source: &str,
     budget: ScriptBudget,
     clock: &Clock<'_>,
 ) -> ScriptResult {
+    match start_script(model, source, budget, clock, false, 0) {
+        (ScriptStep::Done(result), _) => result,
+        // Unreachable without a host: nothing can be queued.
+        (ScriptStep::Suspended { .. }, _) => ScriptResult {
+            error: Some("script suspended without a host".into()),
+            ..Default::default()
+        },
+    }
+}
+
+/// v71 — what one segment of a script run ended in.
+#[derive(Debug)]
+pub enum ScriptStep {
+    /// The script finished (or failed).
+    Done(ScriptResult),
+    /// The script waits on the host's object registry: answer every call,
+    /// in order, then [`ScriptSession::resume`].
+    Suspended { calls: Vec<HostObjectCall> },
+}
+
+/// How the script's top level ended: a value, a promise still settling
+/// (an async body, or a script whose last expression is a promise), or a
+/// synchronous throw.
+enum Outcome {
+    Value(JsValue),
+    Promise(JsObject),
+    Failed(String),
+}
+
+/// v71 — a script suspended on the host bridge (see `host_bridge`): its
+/// Boa context, the calls in flight, and what it printed so far. Owned by
+/// the worker between `RequestHostObjects` and `HostObjectsResult`.
+pub struct ScriptSession {
+    id: u32,
+    pending: Vec<host_bridge::Queued>,
+    outcome: Outcome,
+    output: Vec<String>,
+    budget: ScriptBudget,
+    /// Bridge promises the host's answers rejected, in rejection order.
+    rejected: Vec<JsObject>,
+    undo_mark: u64,
+    host_writes: bool,
+    rounds: u32,
+    // Last: everything above may hold GC handles of this context.
+    ctx: Context,
+}
+
+impl std::fmt::Debug for ScriptSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptSession")
+            .field("id", &self.id)
+            .field("pending", &self.pending.len())
+            .field("rounds", &self.rounds)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Arm the per-segment thread-locals (model, deadline) for one synchronous
+/// stretch of a script. [`leave_segment`] disarms them; both run on the
+/// same stack, which is what keeps the lifetime-erased pointers sound.
+fn enter_segment(model: &mut CanvasModel, budget: &ScriptBudget, clock: &Clock<'_>) {
     let ptr = model as *mut CanvasModel;
     MODEL_PTR.with(|p| *p.borrow_mut() = Some(ptr));
     OUTPUT.with(|o| o.borrow_mut().clear());
     DEADLINE_TRIPPED.with(|c| c.set(false));
     // Clear any stale deadline up front too, so a `wall_clock_ms: None`
-    // run never inherits a previous call's clock reference (defensive:
-    // the end-of-call cleanup already clears it on the normal path).
+    // run never inherits a previous call's clock reference.
     DEADLINE.with(|d| *d.borrow_mut() = None);
-
-    // Capture the deadline up front; the stored clock reference re-reads
-    // "now" on each host call (see `check_deadline`). The borrow of
-    // `clock` does not outlive this call — the DEADLINE slot is cleared
-    // before we return.
     if let Some(ms) = budget.wall_clock_ms {
         let deadline_ms = clock() + ms as f64;
         // Lifetime-erase the borrowed clock to `'static` so it can live
-        // in the thread-local for the duration of this call. SAFETY:
-        // the DEADLINE slot is cleared before this function returns
-        // (below), and `check_deadline` — the only reader — only runs
-        // synchronously inside `run` on this same stack. So the erased
-        // reference is never dereferenced after `clock` goes out of
-        // scope. Single-threaded, same contract as `MODEL_PTR`.
+        // in the thread-local for the duration of this segment. SAFETY:
+        // the DEADLINE slot is cleared by `leave_segment` before the
+        // segment's caller returns, and `check_deadline` — the only
+        // reader — only runs synchronously inside the segment on this
+        // same stack. Single-threaded, same contract as `MODEL_PTR`.
         let clock_static: &'static Clock<'static> =
             unsafe { std::mem::transmute::<&Clock<'_>, &'static Clock<'static>>(clock) };
         DEADLINE.with(|d| {
@@ -384,21 +448,149 @@ pub fn execute_script_with(
             });
         });
     }
+}
 
-    let mut ctx = budgeted_context(&budget);
-
-    let error = run(&mut ctx, source);
-    let budget_kind = error.as_deref().and_then(classify_budget_message);
-
+fn leave_segment() -> Vec<String> {
     let output = OUTPUT.with(|o| std::mem::take(&mut *o.borrow_mut()));
     MODEL_PTR.with(|p| *p.borrow_mut() = None);
     DEADLINE.with(|d| *d.borrow_mut() = None);
     DEADLINE_TRIPPED.with(|c| c.set(false));
+    output
+}
 
-    ScriptResult {
-        output,
-        error,
-        budget_kind,
+/// v71 — start a script. `host_objects`: the caller answers
+/// `ScriptStep::Suspended` (it has an ADR 323 object registry); without
+/// one a `plugin:` address throws `noHost`. `session_id` names the
+/// session in the `RequestHostObjects` the caller sends. Returns the
+/// session to keep when the step is `Suspended`.
+pub fn start_script(
+    model: &mut CanvasModel,
+    source: &str,
+    budget: ScriptBudget,
+    clock: &Clock<'_>,
+    host_objects: bool,
+    session_id: u32,
+) -> (ScriptStep, Option<ScriptSession>) {
+    let undo_mark = model.last_applied_seq();
+    enter_segment(model, &budget, clock);
+    host_bridge::open_queue(host_objects);
+    let mut ctx = budgeted_context(&budget);
+    let outcome = evaluate(&mut ctx, source);
+    let session = ScriptSession {
+        id: session_id,
+        pending: Vec::new(),
+        outcome,
+        output: Vec::new(),
+        budget,
+        rejected: Vec::new(),
+        undo_mark,
+        host_writes: false,
+        rounds: 0,
+        ctx,
+    };
+    session.drive(model)
+}
+
+impl ScriptSession {
+    /// The id the `RequestHostObjects` carried.
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Settle the in-flight calls from the host's `answers` (call order)
+    /// and run the script on until it suspends again or finishes.
+    pub fn resume(
+        mut self,
+        model: &mut CanvasModel,
+        answers: &[HostObjectAnswer],
+        clock: &Clock<'_>,
+    ) -> (ScriptStep, Option<ScriptSession>) {
+        enter_segment(model, &self.budget, clock);
+        host_bridge::open_queue(true);
+        for (i, queued) in std::mem::take(&mut self.pending).into_iter().enumerate() {
+            host_bridge::settle(queued, answers.get(i), &mut self.ctx, &mut self.rejected);
+        }
+        self.drive(model)
+    }
+
+    /// Run every runnable job; then suspend on what was queued, or finish.
+    fn drive(mut self, model: &mut CanvasModel) -> (ScriptStep, Option<ScriptSession>) {
+        if !matches!(self.outcome, Outcome::Failed(_)) {
+            if let Err(e) = self.ctx.run_jobs() {
+                self.outcome = Outcome::Failed(format_error(&e, &mut self.ctx));
+            }
+        }
+        let (queued, writes) = host_bridge::close_queue();
+        // A script that threw does not flush what it queued: its host
+        // writes never leave, as a synchronous script's later writes
+        // never run.
+        if !queued.is_empty() && !matches!(self.outcome, Outcome::Failed(_)) {
+            if self.rounds >= host_bridge::MAX_HOST_ROUNDS {
+                self.outcome = Outcome::Failed(format!(
+                    "runtime budget exceeded: more than {} host round trips",
+                    host_bridge::MAX_HOST_ROUNDS
+                ));
+            } else {
+                self.rounds += 1;
+                self.host_writes |= writes;
+                let calls = host_bridge::calls_of(&queued);
+                self.pending = queued;
+                self.output.extend(leave_segment());
+                return (ScriptStep::Suspended { calls }, Some(self));
+            }
+        }
+        let result = self.finish(model);
+        (ScriptStep::Done(result), None)
+    }
+
+    fn finish(mut self, model: &mut CanvasModel) -> ScriptResult {
+        let ctx = &mut self.ctx;
+        let error = match &self.outcome {
+            Outcome::Failed(e) => Some(e.clone()),
+            Outcome::Value(v) => {
+                if !v.is_undefined() {
+                    push_output(format_value(v, ctx));
+                }
+                None
+            }
+            Outcome::Promise(p) => {
+                let state = JsPromise::from_object(p.clone()).map(|p| p.state());
+                match state {
+                    Ok(PromiseState::Fulfilled(v)) => {
+                        if !v.is_undefined() {
+                            push_output(format_value(&v, ctx));
+                        }
+                        None
+                    }
+                    Ok(PromiseState::Rejected(v)) => {
+                        Some(format_error(&JsError::from_opaque(v), ctx))
+                    }
+                    Ok(PromiseState::Pending) | Err(_) => Some(
+                        "the script awaited a promise that never settles (no host call is pending)"
+                            .to_string(),
+                    ),
+                }
+            }
+        };
+        let error = error.or_else(|| {
+            host_bridge::first_unhandled(&self.rejected, ctx).map(|v| {
+                format!(
+                    "unhandled rejection: {}",
+                    format_error(&JsError::from_opaque(v), ctx)
+                )
+            })
+        });
+        let budget_kind = error.as_deref().and_then(classify_budget_message);
+        if self.host_writes {
+            model.group_undo_since(self.undo_mark);
+        }
+        let mut output = std::mem::take(&mut self.output);
+        output.extend(leave_segment());
+        ScriptResult {
+            output,
+            error,
+            budget_kind,
+        }
     }
 }
 
@@ -430,9 +622,13 @@ fn classify_budget_message(msg: &str) -> Option<ScriptBudgetKind> {
     }
 }
 
-fn run(ctx: &mut Context, source: &str) -> Option<String> {
+/// Install the bridge and evaluate `source`. A source that parses only
+/// with top-level `await` runs as the body of an async function (its
+/// `return` value is what prints), so `await paged.get(plugin, …)` works
+/// at the top level; every other source runs exactly as before.
+fn evaluate(ctx: &mut Context, source: &str) -> Outcome {
     if let Err(e) = install_bridge(ctx) {
-        return Some(format!("bridge install: {}", format_error(&e, ctx)));
+        return Outcome::Failed(format!("bridge install: {}", format_error(&e, ctx)));
     }
     let bootstrap = r#"
         (function () {
@@ -453,18 +649,35 @@ fn run(ctx: &mut Context, source: &str) -> Option<String> {
             };
         })();
     "#;
-    if let Err(e) = ctx.eval(Source::from_bytes(bootstrap.as_bytes())) {
-        return Some(format!("bootstrap: {}", format_error(&e, ctx)));
-    }
-    match ctx.eval(Source::from_bytes(source.as_bytes())) {
-        Ok(v) => {
-            if !v.is_undefined() {
-                let line = format_value(&v, ctx);
-                push_output(line);
-            }
-            None
+    for code in [bootstrap, host_bridge::TRACK_BOOTSTRAP] {
+        if let Err(e) = ctx.eval(Source::from_bytes(code.as_bytes())) {
+            return Outcome::Failed(format!("bootstrap: {}", format_error(&e, ctx)));
         }
-        Err(e) => Some(format_error(&e, ctx)),
+    }
+    let script = match Script::parse(Source::from_bytes(source.as_bytes()), None, ctx) {
+        Ok(script) => script,
+        Err(e) if source.contains("await") => {
+            let wrapped = format!("(async () => {{\n{source}\n}})()");
+            match ctx.eval(Source::from_bytes(wrapped.as_bytes())) {
+                Ok(v) => return outcome_of(v),
+                // Report the ORIGINAL parse error: the wrapper is ours.
+                Err(_) => return Outcome::Failed(format_error(&e, ctx)),
+            }
+        }
+        Err(e) => return Outcome::Failed(format_error(&e, ctx)),
+    };
+    match script.evaluate(ctx) {
+        Ok(v) => outcome_of(v),
+        Err(e) => Outcome::Failed(format_error(&e, ctx)),
+    }
+}
+
+fn outcome_of(v: JsValue) -> Outcome {
+    match v.as_object() {
+        Some(obj) if obj.is::<boa_engine::builtins::promise::Promise>() => {
+            Outcome::Promise(obj.clone())
+        }
+        _ => Outcome::Value(v),
     }
 }
 
@@ -508,6 +721,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
         .function(guarded(paged_layers), js_string!("layers"), 0)
         .function(guarded(paged_query), js_string!("query"), 1)
+        .function(guarded(paged_schema), js_string!("schema"), 1)
         .function(guarded(paged_address), js_string!("address"), 1)
         .function(guarded(paged_tree), js_string!("tree"), 0)
         .function(
@@ -1044,62 +1258,45 @@ fn js_address(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::Address>
 }
 
 /// `paged.set(address, path, value)` through `Mutation::Set`: coerce the
-/// JS value against the path's schema on the target's kind, then apply.
-fn set_virtual(
+/// JS value against the path's schema on the target's kind. The planned
+/// mutation, or `None` when the target, path or value does not resolve.
+fn plan_set_virtual(
     address: paged_wire::Address,
     path: &str,
     value: &JsValue,
     ctx: &mut Context,
-) -> bool {
-    let Ok(target) = with_model(|m| m.target_of(&address)) else {
-        return false;
-    };
+) -> Option<Mutation> {
+    let target = with_model(|m| m.target_of(&address)).ok()?;
     let family = match &target {
         paged_wire::VirtualTarget::Style { family, .. } => Some(family.as_str()),
         _ => None,
     };
-    let Some(schema) =
-        paged_introspect::virtual_paths::schema_for(target.address_kind(), family, path)
-    else {
-        return false;
-    };
-    let Some(value) = js_to_value_by_schema(value, &schema, ctx) else {
-        return false;
-    };
-    let mutation = Mutation::Set {
+    let schema = paged_introspect::virtual_paths::schema_for(target.address_kind(), family, path)?;
+    let value = js_to_value_by_schema(value, &schema, ctx)?;
+    Some(Mutation::Set {
         address,
         path: path.to_string(),
         value,
-    };
-    with_model(|m| m.apply_mutation(&mutation).is_ok())
+    })
 }
 
-fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    let target = args.get_or_undefined(0);
+/// The ONE mutation `paged.set(target, path, value)` applies, or `None`
+/// when it does not resolve. Shared by `paged.set` and the core half of
+/// an object `paged.batch`.
+fn plan_set(
+    target: &JsValue,
+    path: &str,
+    value_arg: &JsValue,
+    ctx: &mut Context,
+) -> Option<Mutation> {
     let element_id = target
         .as_string()
         .and_then(|s| parse_element_id(&s.to_std_string_escaped()));
-    if element_id.is_none() {
+    let Some(element_id) = element_id else {
         // Any other object (ADR 131 address string, or the deprecated
         // target object) goes through `Set`.
-        let Some(address) = js_address(target, ctx) else {
-            return Ok(JsValue::from(false));
-        };
-        let path = args
-            .get_or_undefined(1)
-            .to_string(ctx)?
-            .to_std_string_escaped();
-        let value = args.get_or_undefined(2).clone();
-        return Ok(JsValue::from(set_virtual(address, &path, &value, ctx)));
-    }
-    let path = args
-        .get_or_undefined(1)
-        .to_string(ctx)?
-        .to_std_string_escaped();
-    let value_arg = args.get_or_undefined(2).clone();
-
-    let Some(element_id) = element_id else {
-        return Ok(JsValue::from(false));
+        let address = js_address(target, ctx)?;
+        return plan_set_virtual(address, path, value_arg, ctx);
     };
 
     // W1.20 (groups v2) — `paged.set("group:<id>", "groupTransform",
@@ -1111,40 +1308,63 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     // `SetElementProperty`.
     if path == "groupTransform" {
         let paged_canvas::element_selection::ElementId::Group(group_id) = element_id else {
-            return Ok(JsValue::from(false));
+            return None;
         };
         // `null` clears to identity; a 6-element array sets the matrix.
         let transform = if value_arg.is_null() {
             None
         } else {
-            match js_value_to_wire(&value_arg, paged_mutate::PropertyPath::FrameTransform, ctx) {
+            match js_value_to_wire(value_arg, paged_mutate::PropertyPath::FrameTransform, ctx) {
                 Some(paged_mutate::Value::Transform(t)) => t,
-                _ => return Ok(JsValue::from(false)),
+                _ => return None,
             }
         };
-        let mutation = Mutation::SetGroupTransform {
+        return Some(Mutation::SetGroupTransform {
             group_id,
             transform,
-        };
-        return Ok(JsValue::from(with_model(|m| {
-            m.apply_mutation(&mutation).is_ok()
-        })));
+        });
     }
 
-    let Some(wire_path) = parse_property_path(&path) else {
+    let Some(wire_path) = parse_property_path(path) else {
         // Not an element `PropertyPath`: a virtual path on the element
         // (`imageUri`, `labels[x-paged:k]`) goes through `Set`.
         let address = paged_wire::Address::from(element_id);
-        return Ok(JsValue::from(set_virtual(address, &path, &value_arg, ctx)));
+        return plan_set_virtual(address, path, value_arg, ctx);
     };
-    let Some(wire_value) = js_value_to_wire(&value_arg, wire_path, ctx) else {
-        return Ok(JsValue::from(false));
-    };
-
-    let mutation = Mutation::SetElementProperty {
+    let wire_value = js_value_to_wire(value_arg, wire_path, ctx)?;
+    Some(Mutation::SetElementProperty {
         element_id,
         path: wire_path,
         value: wire_value,
+    })
+}
+
+/// v71 — a `plugin:` address string (ADR 131), which only the HOST's
+/// object registry can answer.
+fn plugin_address(value: &JsValue) -> Option<String> {
+    let s = value.as_string()?.to_std_string_escaped();
+    s.starts_with("plugin:").then_some(s)
+}
+
+fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let target = args.get_or_undefined(0);
+    let path = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value_arg = args.get_or_undefined(2).clone();
+    if let Some(address) = plugin_address(target) {
+        let value = to_json_value(&value_arg, ctx).unwrap_or(serde_json::Value::Null);
+        let op =
+            serde_json::json!({ "op": "set", "address": address, "path": path, "value": value });
+        return host_bridge::enqueue(
+            HostObjectCall::Batch { ops: vec![op] },
+            host_bridge::Shape::Set { index: 0 },
+            ctx,
+        );
+    }
+    let Some(mutation) = plan_set(target, &path, &value_arg, ctx) else {
+        return Ok(JsValue::from(false));
     };
     Ok(JsValue::from(with_model(|m| {
         m.apply_mutation(&mutation).is_ok()
@@ -3948,10 +4168,138 @@ fn paged_delete_text_variable(
 /// objects as ONE undoable step (`Mutation::Batch`). An unparseable array
 /// returns `false`.
 fn paged_batch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    if let Some(ops) = object_ops(args.get_or_undefined(0), ctx) {
+        return object_batch(ops, ctx);
+    }
     let Some(ops) = from_js::<Vec<Mutation>>(args.get_or_undefined(0), ctx) else {
         return Ok(JsValue::from(false));
     };
     Ok(apply_bool(&Mutation::Batch { ops }))
+}
+
+/// v71 — an `ObjectOp[]` (ADR 323: `{ op: "set", address, path, value }`,
+/// `create`, `delete`), told apart from a wire `Mutation[]` by having no
+/// `args`. `None` for anything else (the wire batch path).
+fn object_ops(value: &JsValue, ctx: &mut Context) -> Option<Vec<serde_json::Value>> {
+    let json = to_json_value(value, ctx)?;
+    let ops = json.as_array()?;
+    let is_object_op = |o: &serde_json::Value| {
+        o.get("args").is_none()
+            && matches!(
+                o.get("op").and_then(serde_json::Value::as_str),
+                Some("set" | "create" | "delete")
+            )
+    };
+    (!ops.is_empty() && ops.iter().all(is_object_op)).then(|| ops.clone())
+}
+
+/// `paged.batch(objectOps)` — all-or-nothing, ONE undo step, resolving to
+/// the per-op results (`[{ ok: true } | { ok: false, code, reason }]`
+/// JSON). An op on a plugin object sends the WHOLE batch to the host's
+/// registry, which commits core and plugin writes as one engine batch
+/// (a promise); a core-only batch applies here as one `Mutation::Batch`
+/// (synchronous).
+fn object_batch(ops: Vec<serde_json::Value>, ctx: &mut Context) -> JsResult<JsValue> {
+    let is_plugin = |o: &serde_json::Value| {
+        ["address", "kind"].iter().any(|k| {
+            o.get(*k)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| s.starts_with("plugin:"))
+        })
+    };
+    let n = ops.len();
+    if ops.iter().any(is_plugin) {
+        return host_bridge::enqueue(
+            HostObjectCall::Batch { ops },
+            host_bridge::Shape::Batch { n },
+            ctx,
+        );
+    }
+    let refuse = |index: usize, code: &str, reason: String| HostObjectError {
+        code: code.into(),
+        reason,
+        index: Some(index as u32),
+    };
+    let mut mutations = Vec::with_capacity(n);
+    let mut error = None;
+    for (i, op) in ops.iter().enumerate() {
+        let kind = op
+            .get("op")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if kind != "set" {
+            error = Some(refuse(i, "unmapped", format!(
+                "a core `{kind}` is not an object op here: use its paged.* fn (create/delete land with core's Set)"
+            )));
+            break;
+        }
+        let address = op
+            .get("address")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let path = op
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let value = op.get("value").cloned().unwrap_or(serde_json::Value::Null);
+        let target = JsValue::from(js_string!(address));
+        let value = JsValue::from_json(&value, ctx).unwrap_or(JsValue::null());
+        match plan_set(&target, path, &value, ctx) {
+            Some(m) => mutations.push(m),
+            None => {
+                error = Some(refuse(
+                    i,
+                    "invalidValue",
+                    format!("{address} {path}: the address, path or value does not resolve"),
+                ));
+                break;
+            }
+        }
+    }
+    if error.is_none() {
+        if let Err(e) = with_model(|m| m.apply_mutation(&Mutation::Batch { ops: mutations })) {
+            error = Some(HostObjectError {
+                code: "failed".into(),
+                reason: format!("{e:?}"),
+                index: None,
+            });
+        }
+    }
+    let results = host_bridge::per_op_results(n, error.as_ref());
+    Ok(JsValue::from(js_string!(
+        serde_json::to_string(&results).unwrap_or_default()
+    )))
+}
+
+/// `paged.schema(addressOrKind)` — the typed property schema rows (ADR
+/// 132) of an address's kind (`"frame:u1"`, `"swatch:Color/Red"`) or of a
+/// kind name (`"frame"`, `"page"`), as JSON. A `plugin:` address or kind
+/// asks the host's registry (a promise).
+fn paged_schema(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let target = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    if target.starts_with("plugin:") {
+        return host_bridge::enqueue(
+            HostObjectCall::Schema { target },
+            host_bridge::Shape::Json,
+            ctx,
+        );
+    }
+    let kind = match paged_wire::Address::parse(&target) {
+        Ok(address) => with_model(|m| m.target_of(&address))
+            .map(|t| t.address_kind().to_string())
+            .unwrap_or_else(|_| address.kind().prefix().to_string()),
+        Err(_) => target,
+    };
+    let rows: Vec<_> = paged_introspect::virtual_paths::property_schemas()
+        .into_iter()
+        .filter(|r| r.address_kind == kind)
+        .collect();
+    Ok(JsValue::from(js_string!(
+        serde_json::to_string(&rows).unwrap_or_default()
+    )))
 }
 
 // ---------------------------------------------------- selection setters
@@ -4004,6 +4352,17 @@ fn paged_set_content_selection(
 
 fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let target = args.get_or_undefined(0);
+    if let Some(address) = plugin_address(target) {
+        let path = args
+            .get_or_undefined(1)
+            .to_string(ctx)?
+            .to_std_string_escaped();
+        return host_bridge::enqueue(
+            HostObjectCall::Get { address, path },
+            host_bridge::Shape::Get,
+            ctx,
+        );
+    }
     let is_element = target
         .as_string()
         .is_some_and(|s| parse_element_id(&s.to_std_string_escaped()).is_some());
@@ -4123,6 +4482,15 @@ fn paged_query(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult
         .get_or_undefined(0)
         .to_string(ctx)?
         .to_std_string_escaped();
+    // v71 — a selector naming a plugin kind or object yields plugin
+    // addresses: the host's registry evaluates it (core steps included).
+    if selector.contains("plugin:") {
+        return host_bridge::enqueue(
+            HostObjectCall::Query { selector },
+            host_bridge::Shape::Json,
+            ctx,
+        );
+    }
     match with_model(|m| m.query(&selector)) {
         Ok(found) => {
             let list: Vec<String> = found.iter().map(ToString::to_string).collect();

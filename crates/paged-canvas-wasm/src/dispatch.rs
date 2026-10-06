@@ -100,6 +100,12 @@ pub struct WorkerCore {
     /// v67 — the session's snapping preferences. Kept here as well as on
     /// the model so they survive `LoadDocument` / `NewBlankDocument`.
     pub snap_settings: paged_canvas::snap_point::SnapSettings,
+    /// v71 — a script suspended on the host bridge (between its
+    /// `RequestHostObjects` and the host's `HostObjectsResult`). At most
+    /// one: a new `ExecuteScript` or a document load drops it.
+    pub script_session: Option<paged_script::ScriptSession>,
+    /// Monotone id source for script sessions.
+    pub next_script_session: u32,
 }
 
 impl Default for WorkerCore {
@@ -253,6 +259,8 @@ impl WorkerCore {
             export_sessions: std::collections::HashMap::new(),
             next_export_session: 1,
             snap_settings: Default::default(),
+            script_session: None,
+            next_script_session: 1,
         }
     }
 
@@ -341,6 +349,7 @@ impl WorkerCore {
                         model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
+                        self.script_session = None;
                         // Export sessions hold a build of the PREVIOUS
                         // document — drop them.
                         self.export_sessions.clear();
@@ -373,6 +382,7 @@ impl WorkerCore {
                         model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
+                        self.script_session = None;
                         self.export_sessions.clear();
                         effect = CacheEffect::ClearAll;
                         WorkerToMainKind::DocumentLoaded(handle)
@@ -1404,7 +1414,13 @@ impl WorkerCore {
                     .unwrap_or_default();
                 WorkerToMainKind::SceneTree { roots }
             }
-            MainToWorkerKind::ExecuteScript { source, budget } => {
+            MainToWorkerKind::ExecuteScript {
+                source,
+                budget,
+                host_objects,
+            } => {
+                // A suspended session the host never answered is abandoned.
+                self.script_session = None;
                 let Some(model) = self.model.as_mut() else {
                     reply!(WorkerToMainKind::ScriptResult {
                         output: Vec::new(),
@@ -1438,7 +1454,10 @@ impl WorkerCore {
                         effective.wall_clock_ms = (v > 0).then_some(v);
                     }
                 }
-                let result = paged_script::execute_script_with(model, &source, effective, clock);
+                let id = self.next_script_session;
+                self.next_script_session = self.next_script_session.wrapping_add(1).max(1);
+                let step =
+                    paged_script::start_script(model, &source, effective, clock, host_objects, id);
                 // A script may touch any page or story (or none); paged-script
                 // doesn't report which. Clear the GPU scene cache wholesale so
                 // `present_frame` rebuilds the visible pages — otherwise a
@@ -1447,11 +1466,22 @@ impl WorkerCore {
                 // repaints. Visible pages rebuild lazily, so the cost is one
                 // cheap rebuild of what's on screen.
                 effect = CacheEffect::ClearAll;
-                WorkerToMainKind::ScriptResult {
-                    output: result.output,
-                    error: result.error,
-                    budget_kind: result.budget_kind.map(map_budget_kind),
-                }
+                self.script_step(step)
+            }
+            MainToWorkerKind::HostObjectsResult { session, answers } => {
+                let live = self.script_session.take().filter(|s| s.id() == session);
+                let (Some(script), Some(model)) = (live, self.model.as_mut()) else {
+                    reply!(WorkerToMainKind::ScriptResult {
+                        output: Vec::new(),
+                        error: Some(format!(
+                            "no script session {session} is waiting on the host"
+                        )),
+                        budget_kind: None,
+                    });
+                };
+                let step = script.resume(model, &answers, clock);
+                effect = CacheEffect::ClearAll;
+                self.script_step(step)
             }
             MainToWorkerKind::BeginGesture {
                 nodes,
@@ -1632,6 +1662,34 @@ impl WorkerCore {
             .iter()
             .filter_map(|&i| m.built().pages.get(i).map(|p| p.id.clone()))
             .collect()
+    }
+
+    /// v71 — the reply for one script step: `ScriptResult`, or
+    /// `RequestHostObjects` with the session parked until the host answers.
+    fn script_step(
+        &mut self,
+        step: (
+            paged_script::ScriptStep,
+            Option<paged_script::ScriptSession>,
+        ),
+    ) -> WorkerToMainKind {
+        match step {
+            (paged_script::ScriptStep::Done(result), _) => WorkerToMainKind::ScriptResult {
+                output: result.output,
+                error: result.error,
+                budget_kind: result.budget_kind.map(map_budget_kind),
+            },
+            (paged_script::ScriptStep::Suspended { calls }, Some(session)) => {
+                let id = session.id();
+                self.script_session = Some(session);
+                WorkerToMainKind::RequestHostObjects { session: id, calls }
+            }
+            (paged_script::ScriptStep::Suspended { .. }, None) => WorkerToMainKind::ScriptResult {
+                output: Vec::new(),
+                error: Some("script suspended without a session".into()),
+                budget_kind: None,
+            },
+        }
     }
 
     /// v66 — `submitSceneImageDirect`: the frame's scene layer becomes ONE

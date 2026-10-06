@@ -229,9 +229,9 @@ fn host_functions() -> Vec<HostFn> {
     vec![
         // --- writes (property mutation) ---
         f!("paged.set", "(address, path, value)", "bool", "write",
-           "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated."),
+           "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated. A plugin:<pluginId>/<kind>/<id> address goes to the host's object registry (ADR 323): it returns a Promise<true>, consecutive plugin sets fold into ONE batched host round trip, a refusal rejects with an Error whose .code is the registry's code (an unawaited refusal fails the script), and core + plugin writes of one script undo as one step. With no host registry it throws code noHost."),
         f!("paged.get", "(address, path)", "value JSON | null", "read",
-           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire)."),
+           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."),
         // --- authoring (Stage 1/2) ---
         f!("paged.insertText", "(storyId, offset, text)", "bool", "author",
            "Insert plain text at a story body offset; \\n splits paragraphs."),
@@ -265,7 +265,9 @@ fn host_functions() -> Vec<HostFn> {
            "Loaded stories with selfId + characterCount + paragraphCount. The source of valid story ids."),
         f!("paged.layers", "()", "LayerSummary[] JSON", "read", "Document layers."),
         f!("paged.query", "(selector)", "string[] JSON", "read",
-           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector."),
+           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
+        f!("paged.schema", "(addressOrKind)", "PropertySchema[] JSON", "read",
+           "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."),
         f!("paged.address", "(id)", "string|null", "read",
            "Canonical address of an object, from any accepted spelling (`frame:u1`, `page:#2`, a style by name) or a {kind,id} element; null when nothing answers to it."),
         f!("paged.swatches", "()", "SwatchSummary[] JSON", "read", "Colour palette (selfId/name/kind)."),
@@ -390,7 +392,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- plugin metadata & batch ---
         f!("paged.setPluginMetadata", "(elemId, key, value?, caller?)", "bool", "write", "Write one Label key/value pair on a leaf page item (value null deletes)."),
         f!("paged.setDocumentMetadata", "(key, value?, caller?)", "bool", "write", "Write one document-scoped Label key/value pair (value null deletes); undoable."),
-        f!("paged.batch", "([mutations])", "bool", "author", "Apply an array of { op, args } mutation objects as ONE undoable step."),
+        f!("paged.batch", "([mutations] | [objectOps])", "bool | per-op results JSON", "author", "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address the whole batch goes to the host's object registry (a Promise of the same JSON)."),
         // --- selection setters (application state, NOT undoable) ---
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),
         f!("paged.clearSelection", "()", "bool", "write", "Clear the element selection."),
