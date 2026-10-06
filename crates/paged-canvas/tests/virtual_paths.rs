@@ -460,15 +460,9 @@ fn sample(row: &SchemaRow, current: &Value, t: &Targets) -> Value {
             };
             return Value::Lengths(vec![12.0; n]);
         }
-        ("swatch", "space" | "alternateSpace") => {
-            // Keep the channel count valid: a 4-channel space stays CMYK
-            // unless it is not CMYK now.
-            return Value::Enum(if *current == Value::Text("CMYK".into()) {
-                "CMYK".into()
-            } else {
-                "CMYK".into()
-            });
-        }
+        // Keep the channel count valid: the probe swatch is CMYK, and so
+        // is the space written back.
+        ("swatch", "space" | "alternateSpace") => return Value::Enum("CMYK".into()),
         ("gradient", "stops") => {
             return Value::GradientStops(vec![
                 GradientStopSpec {
@@ -634,7 +628,7 @@ fn every_virtual_row_sets_reads_back_and_undoes() {
             if !NOT_UNDOABLE_OPS.contains(&op) {
                 m.undo();
                 let after_undo = m.get_property(&target, &path);
-                if after_undo.as_ref().ok().is_none_or(|v| !same(&before, v)) {
+                if !after_undo.as_ref().is_ok_and(|v| same(&before, v)) {
                     failures.push(format!("{label}: undo left {after_undo:?}, was {before:?}"));
                     continue;
                 }

@@ -1024,9 +1024,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
 /// The string address forms arrive with ADR 131's `Address`; until then
 /// the object IS the address.
 fn js_virtual_target(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::VirtualTarget> {
-    if value.as_object().is_none() {
-        return None;
-    }
+    value.as_object()?;
     from_js::<paged_wire::VirtualTarget>(value, ctx)
 }
 

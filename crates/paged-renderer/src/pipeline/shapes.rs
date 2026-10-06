@@ -580,7 +580,7 @@ pub(super) fn emit_line_into(
         page.list.push(paged_compose::DisplayCommand::StrokePath {
             path_id,
             paint: stroke_paint,
-            stroke: stroke.clone(),
+            stroke,
             transform: outer,
         });
         if let Some(centreline) = band_source {
@@ -646,7 +646,7 @@ pub(super) fn emit_line_into(
         Transform::IDENTITY,
         true,
     );
-    emit_line(sx, sy, ex, ey, stroke.clone(), stroke_paint, &mut page.list);
+    emit_line(sx, sy, ex, ey, stroke, stroke_paint, &mut page.list);
     crate::module::line_effects_module(
         page,
         palette,

@@ -181,7 +181,9 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
         );
     }
 
-    // A line stores the bag and nothing draws it: no rows, no arms.
+    // ADR 132 — a line's effects are drawn from its stroke band now, so
+    // it reads the inventory too — every row but the gradient feather
+    // (it fades a fill) and the blend mode (a line has no blend slot).
     let line = graphic_line(&mut m);
     let line_rows: Vec<PropertyPath> = m
         .element_properties(&line)
@@ -190,9 +192,20 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
         .iter()
         .map(|e| e.path)
         .collect();
+    for path in inventory
+        .iter()
+        .filter(|p| **p != PropertyPath::FrameGradientFeather)
+    {
+        assert_eq!(
+            line_rows.iter().filter(|p| *p == path).count(),
+            1,
+            "GraphicLine must read {path:?} exactly once"
+        );
+    }
     assert!(
-        !line_rows.iter().any(|p| is_effect_path(*p)),
-        "a GraphicLine must not advertise an effect it cannot draw"
+        !line_rows.contains(&PropertyPath::FrameGradientFeather)
+            && !line_rows.contains(&PropertyPath::FrameBlendMode),
+        "a GraphicLine must not advertise what it cannot draw"
     );
 }
 

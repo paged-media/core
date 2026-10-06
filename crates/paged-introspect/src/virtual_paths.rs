@@ -690,7 +690,7 @@ pub fn property_schemas() -> Vec<SchemaRow> {
     }
     for family in STYLE_FAMILIES {
         for path in style_paths(family) {
-            debug_assert!(addressed_on(*path).is_none_or(|k| k == format!("style:{family}")));
+            debug_assert!(addressed_on(*path).map_or(true, |k| k == format!("style:{family}")));
             out.push(row(
                 "style",
                 vec![family],
