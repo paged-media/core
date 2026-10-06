@@ -3066,6 +3066,7 @@ mod tests {
                 source_id: "HyperlinkTextSource/u9".to_string(),
                 dest_id: "HyperlinkURLDestination/u9".to_string(),
                 hyperlink_id: "Hyperlink/u9".to_string(),
+                page: None,
             })
             .unwrap();
 

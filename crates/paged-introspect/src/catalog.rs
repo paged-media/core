@@ -414,7 +414,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- anchored frames & hyperlinks ---
         f!("paged.insertAnchoredFrame", "(storyId, offset, width, height, imageUri?)", "bool", "author",
            "Anchor a frame in the text at a story offset; with imageUri the frame is created holding that image."),
-        f!("paged.insertHyperlink", "(storyId, start, end, url)", "bool", "author",
+        f!("paged.insertHyperlink", "(storyId, start, end, url, pageId?)", "bool", "author",
            "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."),
         // --- layer attributes ---
         f!("paged.layerSetVisible", "(layerId, visible)", "bool", "write", "Show or hide a layer."),

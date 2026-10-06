@@ -919,7 +919,7 @@
     },
     {
       "name": "paged.insertHyperlink",
-      "params": "(storyId, start, end, url)",
+      "params": "(storyId, start, end, url, pageId?)",
       "returns": "bool",
       "kind": "author",
       "summary": "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."

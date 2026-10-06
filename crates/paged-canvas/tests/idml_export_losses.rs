@@ -179,6 +179,7 @@ fn author() -> Authored {
             start: 0,
             end: 5,
             url: "https://paged.media".into(),
+            page: None,
         })
         .expect("hyperlink");
     let hyperlink_id = model.scene().designmap.hyperlinks[0].self_id.clone();

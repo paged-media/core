@@ -1554,6 +1554,7 @@ fn text_cases(c: &mut Vec<Case>) {
             start: 0,
             end: chars.min(12),
             url: "https://paged.media".into(),
+            page: None,
         }
     }));
     c.push(paints("SetFieldValue", "text", |m| {

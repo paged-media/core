@@ -944,7 +944,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(
             guarded(paged_insert_hyperlink),
             js_string!("insertHyperlink"),
-            4,
+            5,
         )
         // layer attributes
         .function(
@@ -2491,8 +2491,9 @@ fn paged_insert_anchored_frame(
     }))
 }
 
-/// `paged.insertHyperlink(storyId, start, end, url)` — make a character
-/// range a clickable link (`Mutation::InsertHyperlink`). The read side is
+/// `paged.insertHyperlink(storyId, start, end, url, pageId?)` — make a
+/// character range a clickable link (`Mutation::InsertHyperlink`); with
+/// `pageId` it goes to that page (v69) and `url` may be empty. The read side is
 /// `paged.collection("hyperlinks")` — NOT `paged.links()`, which is the
 /// placed-asset link list and stays empty here.
 fn paged_insert_hyperlink(
@@ -2510,11 +2511,13 @@ fn paged_insert_hyperlink(
         .get_or_undefined(3)
         .to_string(ctx)?
         .to_std_string_escaped();
+    let page = opt_string(args.get_or_undefined(4), ctx).map(PageId);
     Ok(apply_bool(&Mutation::InsertHyperlink {
         story_id,
         start,
         end,
         url,
+        page,
     }))
 }
 

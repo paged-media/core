@@ -704,12 +704,16 @@ pub enum Mutation {
     /// `HyperlinkURLDestination`) and registers them, so the renderer's
     /// existing link resolution makes the span clickable. Undoable in one
     /// step (inverse drops the tag + the two designmap resources). Backs
-    /// paged.doc's `w:hyperlink` runs.
+    /// paged.doc's `w:hyperlink` runs. v69: with `page`, the link goes to
+    /// that page instead (`url` is then ignored and may be empty): a
+    /// slide's jump to another slide.
     InsertHyperlink {
         story_id: String,
         start: u32,
         end: u32,
         url: String,
+        #[serde(default)]
+        page: Option<PageId>,
     },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh

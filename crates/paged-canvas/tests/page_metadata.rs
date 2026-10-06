@@ -114,3 +114,57 @@ fn page_metadata_is_gated_like_item_metadata() {
     assert!(!set(&mut m, "nope", Some(NOTES), None));
     assert_eq!(meta(&m, &p), None);
 }
+
+/// v69 — `InsertHyperlink { page }`: a link to a page, read back with its
+/// target from the hyperlinks collection, undone in one step, refused
+/// for a page that does not exist.
+#[test]
+fn a_text_range_links_to_a_page() {
+    let mut m = model();
+    let pages = ids(&m);
+    let story = m
+        .scene()
+        .stories
+        .iter()
+        .find(|s| {
+            s.story
+                .paragraphs
+                .iter()
+                .flat_map(|p| &p.runs)
+                .map(|r| r.text.len())
+                .sum::<usize>()
+                >= 4
+        })
+        .map(|s| s.self_id.clone())
+        .expect("the layout sample has text");
+    let link = |page: &str| Mutation::InsertHyperlink {
+        story_id: story.clone(),
+        start: 0,
+        end: 3,
+        url: String::new(),
+        page: Some(PageId(page.to_string())),
+    };
+
+    assert!(m.apply_mutation(&link("nope")).is_err());
+    assert!(m.hyperlinks().is_empty());
+
+    m.apply_mutation(&link(&pages[1])).expect("link to page 2");
+    let links = m.hyperlinks();
+    assert_eq!(links.len(), 1);
+    assert_eq!(
+        links[0].destination_page.as_deref(),
+        Some(pages[1].as_str())
+    );
+    assert_eq!(links[0].destination_url, None);
+    assert!(links[0]
+        .destination
+        .starts_with("HyperlinkPageDestination/"));
+
+    m.undo().expect("undo");
+    assert!(m.hyperlinks().is_empty());
+    m.redo().expect("redo");
+    assert_eq!(
+        m.hyperlinks()[0].destination_page.as_deref(),
+        Some(pages[1].as_str())
+    );
+}

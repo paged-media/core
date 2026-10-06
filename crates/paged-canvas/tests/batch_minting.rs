@@ -314,6 +314,7 @@ fn hyperlink(start: u32, end: u32) -> Mutation {
         start,
         end,
         url: format!("https://paged.media/{start}-{end}"),
+        page: None,
     }
 }
 

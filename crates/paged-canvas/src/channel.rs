@@ -3063,6 +3063,12 @@ pub struct HyperlinkSummary {
     pub name: String,
     pub source: String,
     pub destination: String,
+    /// v69 — where the destination goes: a URL, or a page (its `Self`
+    /// id). Both absent for a text-anchor destination.
+    #[serde(default)]
+    pub destination_url: Option<String>,
+    #[serde(default)]
+    pub destination_page: Option<String>,
 }
 
 /// SDK Phase 5 (v1 sweep) — one `<Bookmark>` summary. Backs

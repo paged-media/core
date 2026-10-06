@@ -4032,6 +4032,7 @@ impl CanvasModel {
                 start,
                 end,
                 url,
+                page,
             } => {
                 // A native link needs three cross-referencing ids. One minted
                 // suffix keyed under three distinct designmap namespaces keeps
@@ -4047,8 +4048,12 @@ impl CanvasModel {
                     end: *end,
                     url: url.clone(),
                     source_id: format!("HyperlinkTextSource/{base}"),
-                    dest_id: format!("HyperlinkURLDestination/{base}"),
+                    dest_id: match page {
+                        Some(_) => format!("HyperlinkPageDestination/{base}"),
+                        None => format!("HyperlinkURLDestination/{base}"),
+                    },
                     hyperlink_id: format!("Hyperlink/{base}"),
+                    page: page.as_ref().map(|p| p.0.clone()),
                 })
             }
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
@@ -7824,11 +7829,29 @@ impl CanvasModel {
             .designmap
             .hyperlinks
             .iter()
-            .map(|h| HyperlinkSummary {
-                self_id: h.self_id.clone(),
-                name: h.name.clone().unwrap_or_else(|| h.self_id.clone()),
-                source: h.source.clone().unwrap_or_default(),
-                destination: h.destination.clone().unwrap_or_default(),
+            .map(|h| {
+                let kind = h.destination.as_deref().and_then(|d| {
+                    self.scene
+                        .designmap
+                        .hyperlink_destinations
+                        .iter()
+                        .find(|x| x.self_id == d)
+                        .map(|x| &x.kind)
+                });
+                HyperlinkSummary {
+                    self_id: h.self_id.clone(),
+                    name: h.name.clone().unwrap_or_else(|| h.self_id.clone()),
+                    source: h.source.clone().unwrap_or_default(),
+                    destination: h.destination.clone().unwrap_or_default(),
+                    destination_url: match kind {
+                        Some(paged_model::HyperlinkDestinationKind::Url(u)) => Some(u.clone()),
+                        _ => None,
+                    },
+                    destination_page: match kind {
+                        Some(paged_model::HyperlinkDestinationKind::Page(p)) => Some(p.clone()),
+                        _ => None,
+                    },
+                }
             })
             .collect()
     }

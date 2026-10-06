@@ -3638,6 +3638,9 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
+        /// v69 — a link to this page (its `Self` id) rather than `url`.
+        #[serde(default)]
+        page: Option<String>,
     },
     /// v53 — inverse-only companion to `InsertHyperlink`: clear the
     /// `hyperlink_source == source_id` tag from every run of `story_id` and
@@ -3652,6 +3655,9 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
+        /// v69 — the page the link went to, so the inverse recreates it.
+        #[serde(default)]
+        page: Option<String>,
     },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char

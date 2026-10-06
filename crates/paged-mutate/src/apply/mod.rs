@@ -395,6 +395,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page,
         } => hyperlink::apply_insert_hyperlink(
             doc,
             story_id,
@@ -404,6 +405,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page.as_deref(),
         ),
         Operation::RemoveHyperlink {
             story_id,
@@ -413,6 +415,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page,
         } => hyperlink::apply_remove_hyperlink(
             doc,
             story_id,
@@ -422,6 +425,7 @@ pub(crate) fn apply_inner(
             source_id,
             dest_id,
             hyperlink_id,
+            page.as_deref(),
         ),
         Operation::SetFieldValue {
             story_id,
