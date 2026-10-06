@@ -248,6 +248,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,

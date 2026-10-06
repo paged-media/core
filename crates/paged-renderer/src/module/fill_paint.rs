@@ -99,6 +99,9 @@ pub(crate) fn fill_paint_module(
         }
         _ => fill,
     };
+    if let Paint::RadialGradient(gid) = fill {
+        place_radial_at_start(page, gid, frame);
+    }
     let start = page.list.commands.len();
     emit_filled(
         &frame.geometry,
@@ -122,6 +125,43 @@ fn rebase_gradient_to_bbox(page: &mut BuiltPage, gid: paged_compose::GradientId,
     if let Some(g) = page.list.gradients.get_mut(idx) {
         g.start = (bbox.x + g.start.0 * bbox.w, bbox.y + g.start.1 * bbox.h);
         g.end = (bbox.x + g.end.0 * bbox.w, bbox.y + g.end.1 * bbox.h);
+    }
+}
+
+/// An explicit `GradientFillStart` + `GradientFillLength` centres a
+/// radial gradient at the start point (the frame's inner coordinates)
+/// with the length as its radius, replacing the default placement. A
+/// polygon's gradient is already in inner coordinates (see
+/// [`rebase_radial_gradient_to_bbox`]); a rect's and an oval's are in
+/// its unit rectangle, whose radius the rasteriser reads as the mean of
+/// the two axes' — hence `2·R / (w + h)`.
+fn place_radial_at_start(
+    page: &mut BuiltPage,
+    gid: paged_compose::GradientId,
+    frame: &ResolvedFrame<'_>,
+) {
+    let (Some([sx, sy]), Some(len)) = (frame.gradient_fill_start, frame.gradient_fill_length)
+    else {
+        return;
+    };
+    if len.is_nan() || len <= 0.0 {
+        return;
+    }
+    let Some(g) = page.list.radial_gradients.get_mut(gid.0 as usize) else {
+        return;
+    };
+    match frame.geometry {
+        Geometry::Polygon { .. } => {
+            g.center = (sx, sy);
+            g.radius = len;
+        }
+        Geometry::Rect { rect } | Geometry::TextFrameRect { rect } | Geometry::Oval { rect }
+            if rect.w > 0.0 && rect.h > 0.0 =>
+        {
+            g.center = ((sx - rect.x) / rect.w, (sy - rect.y) / rect.h);
+            g.radius = 2.0 * len / (rect.w + rect.h);
+        }
+        _ => {}
     }
 }
 

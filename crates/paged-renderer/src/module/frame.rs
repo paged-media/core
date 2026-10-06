@@ -53,6 +53,9 @@ pub(crate) struct ResolvedFrame<'a> {
     /// `GradientFillLength` in pt — page-space length of the gradient
     /// line through the frame centre. `None` ⇒ bbox diagonal.
     pub gradient_fill_length: Option<f32>,
+    /// `GradientFillStart` in the frame's inner coordinates; places a
+    /// radial gradient (see [`paged_model::Rectangle::gradient_fill_start`]).
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
     /// `gradient_fill_angle`, applied to the stroke gradient.
     pub gradient_stroke_angle: Option<f32>,
@@ -305,6 +308,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(frame.blend_mode.as_deref()),
             gradient_fill_angle: frame.gradient_fill_angle,
             gradient_fill_length: frame.gradient_fill_length,
+            gradient_fill_start: frame.gradient_fill_start,
             gradient_stroke_angle: frame.gradient_stroke_angle,
             gradient_stroke_length: frame.gradient_stroke_length,
             drop_shadow: frame.drop_shadow.as_ref(),
@@ -359,6 +363,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(rect.blend_mode.as_deref()),
             gradient_fill_angle: rect.gradient_fill_angle,
             gradient_fill_length: rect.gradient_fill_length,
+            gradient_fill_start: rect.gradient_fill_start,
             gradient_stroke_angle: rect.gradient_stroke_angle,
             gradient_stroke_length: rect.gradient_stroke_length,
             drop_shadow: rect.drop_shadow.as_ref(),
@@ -392,6 +397,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(oval.blend_mode.as_deref()),
             gradient_fill_angle: oval.gradient_fill_angle,
             gradient_fill_length: oval.gradient_fill_length,
+            gradient_fill_start: oval.gradient_fill_start,
             gradient_stroke_angle: oval.gradient_stroke_angle,
             gradient_stroke_length: oval.gradient_stroke_length,
             drop_shadow: oval.drop_shadow.as_ref(),
@@ -447,6 +453,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: crate::pipeline::blend_mode_from_idml(poly.blend_mode.as_deref()),
             gradient_fill_angle: poly.gradient_fill_angle,
             gradient_fill_length: poly.gradient_fill_length,
+            gradient_fill_start: poly.gradient_fill_start,
             gradient_stroke_angle: poly.gradient_stroke_angle,
             gradient_stroke_length: poly.gradient_stroke_length,
             drop_shadow: None,
@@ -496,6 +503,7 @@ impl<'a> ResolvedFrame<'a> {
             blend_mode: BlendMode::Normal,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             drop_shadow: None,
@@ -575,6 +583,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             text_paths: Vec::new(),
@@ -644,6 +653,7 @@ mod tests {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,

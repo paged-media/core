@@ -924,6 +924,9 @@ pub struct TextFrame {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -1051,6 +1054,7 @@ impl TextFrame {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             applied_toc_style: None,
@@ -1318,6 +1322,13 @@ pub struct Rectangle {
     /// than the diagonal compress the gradient (extreme stops paint
     /// flat regions outside the line); values larger expand it.
     pub gradient_fill_length: Option<f32>,
+    /// `GradientFillStart` — the gradient's start point in the item's
+    /// own (inner) coordinates. A radial gradient is centred there with
+    /// `gradient_fill_length` as its radius (PowerPoint's centred glows
+    /// arrive this way); a linear one still runs through the centre.
+    /// `None`, or a length of 0, keeps InDesign's default placement.
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
     /// `gradient_fill_angle` but applied to the stroke gradient.
     pub gradient_stroke_angle: Option<f32>,
@@ -1420,6 +1431,7 @@ impl Rectangle {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             text_paths: Vec::new(),
@@ -1674,6 +1686,9 @@ pub struct Oval {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -1775,6 +1790,7 @@ impl Oval {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             opacity: None,
@@ -2205,6 +2221,9 @@ pub struct Polygon {
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
     pub gradient_fill_length: Option<f32>,
+    /// See [`Rectangle::gradient_fill_start`].
+    #[serde(default)]
+    pub gradient_fill_start: Option<[f32; 2]>,
     /// See [`Rectangle::gradient_stroke_angle`].
     pub gradient_stroke_angle: Option<f32>,
     /// See [`Rectangle::gradient_stroke_length`].
@@ -2336,6 +2355,7 @@ impl Polygon {
             effects: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
+            gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
             opacity: None,
