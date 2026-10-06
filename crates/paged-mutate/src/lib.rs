@@ -7701,8 +7701,8 @@ mod tests {
                     .as_deref(),
                 Some("Rectangle/r1")
             );
-            // Inverse removes the cloned page.
-            assert!(matches!(applied.inverse, Operation::RemovePage { .. }));
+            // Inverse removes the cloned page (and any stories it owns).
+            assert!(matches!(applied.inverse, Operation::RemovePageClone { .. }));
             p.undo().expect("undo");
             assert_eq!(p.document().spreads.len(), 1);
             p.redo().expect("redo");

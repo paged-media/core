@@ -3791,7 +3791,9 @@ pub enum Operation {
     },
     /// W0.5 — duplicate a single-page spread (the page plus every page
     /// item) immediately after the source, minting fresh self ids for
-    /// the clone. Inverse: `RemovePage` of the cloned page.
+    /// the clone. Each text frame's story is COPIED (D-23), and every
+    /// side map keyed by `Self` (margins, labels, …) follows the clone.
+    /// Inverse: `RemovePageClone`.
     /// `clone_spread_json` is **echo/redo-only** — the apply layer
     /// fills it with the materialised clone so redo re-creates the
     /// exact ids and geometry.
@@ -3799,6 +3801,20 @@ pub enum Operation {
         page: String,
         #[serde(default)]
         clone_spread_json: Option<String>,
+    },
+    /// Inverse-only (internal; paged.data D-23) — the undo of a
+    /// `DuplicatePage`: remove the cloned page's spread (`cloned_page`),
+    /// the story copies its frames own (`story_ids`) and the hyperlinks
+    /// minted for their sources (`hyperlink_ids`). Its inverse is the
+    /// `DuplicatePage` of `page` carrying the capture, so redo re-creates
+    /// the exact ids.
+    RemovePageClone {
+        page: String,
+        cloned_page: String,
+        #[serde(default)]
+        story_ids: Vec<String>,
+        #[serde(default)]
+        hyperlink_ids: Vec<String>,
     },
     /// W0.5 — insert a `<Section>` anchored at `at_page`. Inverse:
     /// `DeleteSection`. `self_id` is minted when `None` and echoed.

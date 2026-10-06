@@ -477,6 +477,12 @@ pub(crate) fn apply_inner(
             page,
             clone_spread_json,
         } => apply_duplicate_page(doc, page, clone_spread_json.as_deref()),
+        Operation::RemovePageClone {
+            page,
+            cloned_page,
+            story_ids,
+            hyperlink_ids,
+        } => apply_remove_page_clone(doc, page, cloned_page, story_ids, hyperlink_ids),
         Operation::InsertSection {
             at_page,
             prefix,

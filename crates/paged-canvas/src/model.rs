@@ -2760,8 +2760,12 @@ impl CanvasModel {
                         // The name also travels back on the reply, so a
                         // caller reads its own handles rather than
                         // guessing which minted id is which.
-                        if let Some(last) = minted.last_mut() {
-                            last.handle = Some(handle.clone());
+                        // A page is not in `minted` (it is not an
+                        // element); its name stays in the scope only.
+                        if matches!(bound, crate::batch_handles::Binding::Element(_)) {
+                            if let Some(last) = minted.last_mut() {
+                                last.handle = Some(handle.clone());
+                            }
                         }
                         scope.bind(handle.clone(), bound);
                         continue;
@@ -2818,8 +2822,26 @@ impl CanvasModel {
                 });
                 continue;
             }
+            // D-22 — a page-creating child mints a PAGE, which no
+            // `created_id` reports (pages are not elements). Read it off
+            // the scene: the one page id that was not there before.
+            let pages_before = (uses_handles
+                && matches!(
+                    child,
+                    Mutation::InsertPage { .. } | Mutation::DuplicatePage { .. }
+                ))
+            .then(|| self.scene_page_ids());
             match self.apply_mutation(child) {
                 Ok(outcome) => {
+                    if let Some(before) = pages_before {
+                        if let Some(page) = self
+                            .scene_page_ids()
+                            .into_iter()
+                            .find(|p| !before.contains(p))
+                        {
+                            scope.set_created_page(page);
+                        }
+                    }
                     // The batch reports the LAST id minted by any child,
                     // matching the single-mutation contract (the editor
                     // selects the fresh element).
@@ -3616,6 +3638,18 @@ impl CanvasModel {
                     .any(|op| matches!(op, Mutation::BindCreated { .. }));
                 let mut scope = crate::batch_handles::HandleScope::default();
                 for child in ops {
+                    // D-22 — a page's id is minted by the applier, so this
+                    // lane cannot know it before apply. A handle-using batch
+                    // that creates a page takes the sequential (mixed) lane,
+                    // which reads the minted page back after each child.
+                    if uses_handles
+                        && matches!(
+                            child,
+                            Mutation::InsertPage { .. } | Mutation::DuplicatePage { .. }
+                        )
+                    {
+                        return None;
+                    }
                     if let Mutation::BindCreated { handle } = child {
                         // Nothing to name ⇒ the whole translation bails
                         // and `apply_mixed_batch` reports which child
@@ -4428,11 +4462,53 @@ impl CanvasModel {
     /// page's spread-origin (for the page-local → spread-coordinate
     /// conversion the structural inserts need; same rule as
     /// `marquee_hits`). Returns `(spread self_id, origin, spread idx)`.
+    /// Every page `Self` id in the scene, in document order.
+    fn scene_page_ids(&self) -> Vec<String> {
+        self.scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter().filter_map(|p| p.self_id.clone()))
+            .collect()
+    }
+
+    /// A page's origin in its spread, read off the SCENE: the page's
+    /// bounds through its `ItemTransform`, as the build computes
+    /// `spread_origin`. Used when the build does not know the page yet —
+    /// a page minted earlier in the same batch, whose rebuild is deferred
+    /// to the batch's end (D-22).
+    fn scene_page_origin(&self, page_id: &PageId) -> Option<(f32, f32)> {
+        let page = self
+            .scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter())
+            .find(|p| p.self_id.as_deref() == Some(page_id.as_str()))?;
+        let b = page.bounds;
+        let m = page
+            .item_transform
+            .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let corners = [
+            (b.left, b.top),
+            (b.right, b.top),
+            (b.left, b.bottom),
+            (b.right, b.bottom),
+        ];
+        let (mut x, mut y) = (f32::INFINITY, f32::INFINITY);
+        for (cx, cy) in corners {
+            x = x.min(m[0] * cx + m[2] * cy + m[4]);
+            y = y.min(m[1] * cx + m[3] * cy + m[5]);
+        }
+        Some((x, y))
+    }
+
     pub(crate) fn page_insert_context(
         &self,
         page_id: &PageId,
     ) -> Option<(String, (f32, f32), usize)> {
-        let origin = self.page(page_id)?.spread_origin;
+        let origin = match self.page(page_id) {
+            Some(p) => p.spread_origin,
+            None => self.scene_page_origin(page_id)?,
+        };
         let (idx, parsed) = self.scene.spreads.iter().enumerate().find(|(_, parsed)| {
             parsed
                 .spread
