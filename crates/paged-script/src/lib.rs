@@ -4193,6 +4193,24 @@ fn property_path_label(path: paged_mutate::PropertyPath) -> &'static str {
     paged_introspect::wire_name(path)
 }
 
+/// Evaluate a JS expression and convert it through the same bridge
+/// `paged.set` uses, for `path` (an advertised name). `None` when the
+/// expression does not evaluate or the bridge refuses the value.
+///
+/// Test surface only: it lets a gate assert, for every advertised
+/// path, that a script author has SOME literal the bridge turns into
+/// the wire value — without driving a whole script per path.
+#[doc(hidden)]
+#[must_use]
+pub fn js_literal_to_wire(expression: &str, path: &str) -> Option<paged_mutate::Value> {
+    let path = parse_property_path(path)?;
+    let mut ctx = Context::default();
+    let value = ctx
+        .eval(boa_engine::Source::from_bytes(&format!("({expression})")))
+        .ok()?;
+    js_value_to_wire(&value, path, &mut ctx)
+}
+
 fn js_value_to_wire(
     value: &JsValue,
     path: paged_mutate::PropertyPath,
@@ -4342,6 +4360,27 @@ fn js_value_to_wire(
         });
     }
     if let Some(obj) = value.as_object() {
+        // Structured paths whose natural JS form is not the `{ type,
+        // value }` wrapper: a script hands a path as its anchors, and a
+        // dash array as its numbers. Without these arms the bridge read
+        // `[6, 3]` as nothing and `[a, b, c, d]` as BOUNDS, and a bare
+        // `{ anchors }` failed the wrapper's decode — `paged.set` returned
+        // false on paths the catalog advertises as settable.
+        if matches!(path, P::FramePath | P::FrameStrokeDashArray) {
+            let json = value.to_json(ctx).ok()??;
+            let is_wrapper = json.get("type").is_some() && json.get("value").is_some();
+            if !is_wrapper {
+                return match path {
+                    P::FramePath => frame_path_from_json(&json),
+                    _ => json
+                        .as_array()?
+                        .iter()
+                        .map(|n| n.as_f64().map(|n| n as f32))
+                        .collect::<Option<Vec<f32>>>()
+                        .map(W::Lengths),
+                };
+            }
+        }
         if obj.is_array() {
             let len = obj
                 .get(js_string!("length"), ctx)
@@ -4370,6 +4409,63 @@ fn js_value_to_wire(
         return serde_json::from_value::<paged_mutate::Value>(json).ok();
     }
     None
+}
+
+/// A whole path in its script spellings: an anchor array, or
+/// `{ anchors, subpathStarts? }`. An anchor is `[x, y]` (a corner — both
+/// handles on the anchor) or `{ anchor, left?, right? }` (a missing
+/// handle sits on the anchor). `subpathStarts` defaults to `[0]`, one
+/// contour.
+fn frame_path_from_json(json: &serde_json::Value) -> Option<paged_mutate::Value> {
+    fn point(v: &serde_json::Value) -> Option<[f32; 2]> {
+        let a = v.as_array()?;
+        if a.len() != 2 {
+            return None;
+        }
+        Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32])
+    }
+    fn anchor(v: &serde_json::Value) -> Option<paged_mutate::operation::PathAnchorSpec> {
+        if v.is_array() {
+            let p = point(v)?;
+            return Some(paged_mutate::operation::PathAnchorSpec {
+                anchor: p,
+                left: p,
+                right: p,
+            });
+        }
+        let at = point(v.get("anchor")?)?;
+        let handle = |key: &str| match v.get(key) {
+            None | Some(serde_json::Value::Null) => Some(at),
+            Some(h) => point(h),
+        };
+        Some(paged_mutate::operation::PathAnchorSpec {
+            anchor: at,
+            left: handle("left")?,
+            right: handle("right")?,
+        })
+    }
+    let (anchors, starts) = match json {
+        serde_json::Value::Array(_) => (json, None),
+        serde_json::Value::Object(o) => (o.get("anchors")?, o.get("subpathStarts")),
+        _ => return None,
+    };
+    let anchors = anchors
+        .as_array()?
+        .iter()
+        .map(anchor)
+        .collect::<Option<Vec<_>>>()?;
+    let subpath_starts = match starts {
+        None | Some(serde_json::Value::Null) => vec![0],
+        Some(s) => s
+            .as_array()?
+            .iter()
+            .map(|n| n.as_u64().map(|n| n as usize))
+            .collect::<Option<Vec<usize>>>()?,
+    };
+    Some(paged_mutate::Value::FramePath {
+        anchors,
+        subpath_starts,
+    })
 }
 
 // ---------------------------------------------------------------- formatting

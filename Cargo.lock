@@ -2797,9 +2797,11 @@ version = "0.0.0"
 dependencies = [
  "boa_engine",
  "paged-canvas",
+ "paged-gen",
  "paged-introspect",
  "paged-model",
  "paged-mutate",
+ "paged-scene",
  "paged-wire",
  "serde",
  "serde_json",

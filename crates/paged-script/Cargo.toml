@@ -29,6 +29,10 @@ paged-wire = { path = "../paged-wire" }
 zip = { workspace = true }
 # W1.20 — the groups-v2 script test reads parsed `FrameRef` members.
 paged-model = { path = "../paged-model" }
+# The value-construct gate probes the apply layer on generated documents
+# (no dependency on the gitignored corpus).
+paged-gen = { path = "../paged-gen" }
+paged-scene = { path = "../paged-scene" }
 
 [lints]
 workspace = true
