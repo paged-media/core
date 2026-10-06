@@ -449,6 +449,55 @@ mod tests {
         scope
     }
 
+    fn set_address(child: &Mutation) -> String {
+        match child {
+            Mutation::Set { address, .. } => address.to_string(),
+            other => panic!("not a set: {other:?}"),
+        }
+    }
+
+    fn set_on(address: &str) -> Mutation {
+        serde_json::from_str(&format!(
+            r#"{{"op":"set","args":{{"address":"{address}","path":"name","value":{{"type":"text","value":"x"}}}}}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_set_address_resolves_whole_and_embedded_handles() {
+        let scope = scope_with("f", ElementId::TextFrame("u9".into()), Some("Story/u9s"));
+        let out = substitute(&set_on("$h:f"), &scope).unwrap();
+        assert_eq!(set_address(&out), "textFrame:u9");
+        // the placeholder kind loses to the bound one, as for an ElementId
+        let out = substitute(&set_on("rectangle:$h:f"), &scope).unwrap();
+        assert_eq!(set_address(&out), "textFrame:u9");
+        let out = substitute(&set_on("storyRange:$h:f@0..3"), &scope).unwrap();
+        assert_eq!(set_address(&out), "storyRange:Story/u9s@0..3");
+        let out = substitute(&set_on("story:$h:f"), &scope).unwrap();
+        assert_eq!(set_address(&out), "story:Story/u9s");
+
+        let mut t = scope_with(
+            "t",
+            ElementId::Table {
+                story_id: "Story/s".into(),
+                table_id: "ut1".into(),
+            },
+            Some("Story/s"),
+        );
+        let out = substitute(&set_on("cell:$h:t/1,0"), &t).unwrap();
+        assert_eq!(set_address(&out), "cell:ut1/1,0");
+        t.set_created_page("up7".into());
+        t.bind("p", Binding::Page("up7".into()));
+        let out = substitute(&set_on("$h:p"), &t).unwrap();
+        assert_eq!(set_address(&out), "page:up7");
+        // no handle → untouched; an unknown one names itself
+        let plain = set_on("swatch:Color/Red");
+        assert_eq!(set_address(&substitute(&plain, &t).unwrap()), "swatch:Color/Red");
+        assert!(substitute(&set_on("$h:zz"), &t)
+            .unwrap_err()
+            .contains("zz"));
+    }
+
     #[test]
     fn element_address_takes_the_bound_kind_not_the_placeholder() {
         let scope = scope_with("a", ElementId::Polygon("u9".into()), None);

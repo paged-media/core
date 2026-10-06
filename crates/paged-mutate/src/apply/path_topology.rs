@@ -3319,8 +3319,11 @@ pub(super) fn apply_insert_field(
     };
     // v43 (D-01) — plugin placeholders insert a TAGGED RUN (display
     // text + identity), not a single marker char; separate lane.
-    if let FieldKind::Placeholder { plugin, key, value } = field {
-        return insert_placeholder_run(doc, story_idx, story_id, offset, plugin, key, value);
+    if matches!(
+        field,
+        FieldKind::Placeholder { .. } | FieldKind::TextVariable { .. }
+    ) {
+        return insert_tagged_run(doc, story_idx, story_id, offset, field);
     }
     let marker = field
         .marker_char()
@@ -3407,28 +3410,55 @@ pub(super) fn apply_insert_field(
     })
 }
 
-/// v43 (D-01) — insert a `FieldKind::Placeholder` as its own tagged
-/// run at the story char `offset`, splitting the host run when the
-/// offset falls inside one. The new run clones the surrounding run's
-/// formatting (the field takes the character style at the insertion
-/// point, like the page-number marker) and displays the cached value
-/// (or the `<key>` token while unresolved).
-fn insert_placeholder_run(
+/// The text a text-variable instance bakes as its `ResultText`: the
+/// decorated custom contents (the renderer re-resolves the other types at
+/// emit time and falls back to this).
+pub(crate) fn text_variable_display(var: &paged_model::TextVariable) -> String {
+    format!(
+        "{}{}{}",
+        var.text_before.as_deref().unwrap_or(""),
+        var.contents.as_deref().unwrap_or(""),
+        var.text_after.as_deref().unwrap_or("")
+    )
+}
+
+/// v43 (D-01) / v71 — insert a `FieldKind::Placeholder` or a
+/// `FieldKind::TextVariable` instance as its own tagged run at the story
+/// char `offset`, splitting the host run when the offset falls inside
+/// one. The new run clones the surrounding run's formatting (the field
+/// takes the character style at the insertion point, like the
+/// page-number marker) and displays the placeholder's cached value (or
+/// the `<key>` token while unresolved), or the variable's value.
+fn insert_tagged_run(
     doc: &mut Document,
     story_idx: usize,
     story_id: &str,
     offset: u32,
-    plugin: &str,
-    key: &str,
-    value: &Option<String>,
+    field: &FieldKind,
 ) -> Result<AppliedOperation, OperationError> {
-    let story = &mut doc.stories[story_idx].story;
-    let tag = paged_model::PlaceholderField {
-        plugin: plugin.to_string(),
-        key: key.to_string(),
-        value: value.clone(),
+    let (display, tag, variable) = match field {
+        FieldKind::Placeholder { plugin, key, value } => {
+            let tag = paged_model::PlaceholderField {
+                plugin: plugin.to_string(),
+                key: key.to_string(),
+                value: value.clone(),
+            };
+            (tag.display_text(), Some(tag), None)
+        }
+        FieldKind::TextVariable { variable_id } => {
+            let var = doc
+                .designmap
+                .text_variables
+                .iter()
+                .find(|v| v.self_id == *variable_id)
+                .ok_or_else(|| {
+                    OperationError::NodeNotFound(NodeId::TextVariable(variable_id.clone()))
+                })?;
+            (text_variable_display(var), None, Some(variable_id.clone()))
+        }
+        _ => unreachable!("only tagged fields reach the tagged-run lane"),
     };
-    let display = tag.display_text();
+    let story = &mut doc.stories[story_idx].story;
 
     let total: u32 = story
         .paragraphs
@@ -3471,8 +3501,8 @@ fn insert_placeholder_run(
             // own to scrub except these two.
             let mut ph_run = runs[ri].clone();
             ph_run.text = display;
-            ph_run.text_variable = None;
-            ph_run.placeholder = Some(tag);
+            ph_run.text_variable = variable;
+            ph_run.placeholder = tag;
             let host_len = runs[ri].text.chars().count();
             if local == 0 {
                 runs.insert(ri, ph_run);
@@ -3502,17 +3532,14 @@ fn insert_placeholder_run(
             let para = story.paragraphs.last_mut().expect("ensured above");
             para.runs.push(paged_model::CharacterRun {
                 text: display,
-                placeholder: Some(tag),
+                placeholder: tag,
+                text_variable: variable,
                 ..Default::default()
             });
         }
     }
 
-    let field = FieldKind::Placeholder {
-        plugin: plugin.to_string(),
-        key: key.to_string(),
-        value: value.clone(),
-    };
+    let field = field.clone();
     let invalidation = reflow_hint_for_story(doc, story_id);
     Ok(AppliedOperation {
         op: Operation::InsertField {
@@ -3550,6 +3577,9 @@ pub(super) fn apply_delete_field(
         })?;
     if let FieldKind::Placeholder { plugin, key, .. } = field {
         return delete_placeholder_run(doc, story_idx, story_id, offset, plugin, key);
+    }
+    if let FieldKind::TextVariable { variable_id } = field {
+        return delete_variable_run(doc, story_idx, story_id, offset, variable_id);
     }
     let marker = field
         .marker_char()
@@ -3684,6 +3714,65 @@ fn delete_placeholder_run(
                 key: tag.key,
                 value: tag.value,
             },
+            content_offset: None,
+        },
+        invalidation,
+    })
+}
+
+/// v71 — remove the text-variable instance run of `variable_id` that
+/// starts at the story char `offset`.
+fn delete_variable_run(
+    doc: &mut Document,
+    story_idx: usize,
+    story_id: &str,
+    offset: u32,
+    variable_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let story = &mut doc.stories[story_idx].story;
+    let mut char_cursor: u32 = 0;
+    let mut removed = false;
+    'outer: for para in story.paragraphs.iter_mut() {
+        let mut ri = 0;
+        while ri < para.runs.len() {
+            let run = &para.runs[ri];
+            if char_cursor == offset && run.text_variable.as_deref() == Some(variable_id) {
+                para.runs.remove(ri);
+                removed = true;
+                break 'outer;
+            }
+            if char_cursor > offset {
+                break 'outer;
+            }
+            char_cursor += run.text.chars().count() as u32;
+            ri += 1;
+        }
+    }
+    if !removed {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: offset,
+                end: offset,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!("no instance of text variable {variable_id:?} at offset {offset}"),
+        });
+    }
+    let field = FieldKind::TextVariable {
+        variable_id: variable_id.to_string(),
+    };
+    let invalidation = reflow_hint_for_story(doc, story_id);
+    Ok(AppliedOperation {
+        op: Operation::DeleteField {
+            story_id: story_id.to_string(),
+            offset,
+            field: field.clone(),
+        },
+        inverse: Operation::InsertField {
+            story_id: story_id.to_string(),
+            offset,
+            field,
             content_offset: None,
         },
         invalidation,

@@ -548,6 +548,25 @@ pub(crate) fn apply_inner(
         Operation::SetDocumentMetadata { key, value, caller } => {
             layer::apply_document_metadata(doc, key, value, caller)
         }
+        Operation::CreateTextVariable {
+            self_id,
+            name,
+            variable_type,
+            contents,
+            text_before,
+            text_after,
+        } => layer::apply_create_text_variable(
+            doc,
+            self_id,
+            name,
+            variable_type,
+            contents,
+            text_before,
+            text_after,
+        ),
+        Operation::DeleteTextVariable { variable_id } => {
+            layer::apply_delete_text_variable(doc, variable_id)
+        }
         Operation::SetRowHeight {
             story_id,
             table_id,

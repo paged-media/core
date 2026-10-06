@@ -320,7 +320,11 @@ fn host_functions() -> Vec<HostFn> {
            "Pathfinder boolean (kind = union|intersect|subtract|exclude)."),
         // --- fields & images ---
         f!("paged.insertField", "(storyId, offset, fieldKind)", "bool", "author",
-           "Insert a field marker; fieldKind = \"pageNumber\" | \"nextPageNumber\" | { placeholder: { plugin, key, value? } }."),
+           "Insert a field marker; fieldKind = \"pageNumber\" | \"nextPageNumber\" | { placeholder: { plugin, key, value? } } | { textVariable: { variableId } } (an instance of a text variable; InDesign keeps it)."),
+        f!("paged.createTextVariable", "(name, contents?, textBefore?, textAfter?)", "string (address) | null", "author",
+           "Define a custom text variable; returns textVariable:dTextVariablen<name>. Switch its value with paged.set(address, \"textVariableContents\", v) — every instance re-bakes."),
+        f!("paged.deleteTextVariable", "(variableId)", "bool", "author",
+           "Remove a text variable definition (refused while an instance is in the text)."),
         f!("paged.setFieldValue", "(storyId, offset, value?)", "bool", "write", "Update a placeholder field's cached display value (null ⇒ unresolved)."),
         f!("paged.replaceImageBytes", "(frameId, bytes?)", "bool", "write", "Commit inline image bytes (number[] of u8) on a graphic frame; null clears."),
         // --- tables ---

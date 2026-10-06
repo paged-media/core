@@ -309,6 +309,71 @@ impl ElementSelection {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "mutations")]
+    #[test]
+    fn a_set_target_travels_as_an_address_string_and_the_v70_object_still_parses() {
+        let m = Mutation::Set {
+            address: Address::Swatch {
+                id: "Color/Red".into(),
+            },
+            path: "tint".into(),
+            value: paged_mutate::Value::Number(50.0),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains(r#""address":"swatch:Color/Red""#), "{json}");
+        let back: Mutation = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, Mutation::Set { address: Address::Swatch { .. }, .. }));
+        // deprecated: the protocol-70 target object
+        let legacy: Mutation = serde_json::from_str(
+            r#"{"op":"set","args":{"address":{"kind":"cell","storyId":"Story/s","tableId":"ut","row":1,"col":2},"path":"rowSpan","value":{"type":"number","value":2}}}"#,
+        )
+        .unwrap();
+        match legacy {
+            Mutation::Set { address, .. } => assert_eq!(address.to_string(), "cell:ut/1,2"),
+            other => panic!("{other:?}"),
+        }
+        // a selector is not a target
+        assert!(serde_json::from_str::<Mutation>(
+            r#"{"op":"set","args":{"address":"frame[name=x]","path":"name","value":{"type":"text","value":"y"}}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn every_virtual_target_maps_to_an_address_and_back() {
+        let targets = vec![
+            VirtualTarget::Doc,
+            VirtualTarget::Page { page_id: "p".into() },
+            VirtualTarget::Layer { layer_id: "l".into() },
+            VirtualTarget::Master { master_id: "m".into() },
+            VirtualTarget::Story { story_id: "Story/s".into() },
+            VirtualTarget::Field { story_id: "Story/s".into(), offset: 3 },
+            VirtualTarget::Swatch { swatch_id: "Color/Red".into() },
+            VirtualTarget::Gradient { gradient_id: "Gradient/g".into() },
+            VirtualTarget::ColorGroup { group_id: "ColorGroup/c".into() },
+            VirtualTarget::NumberingList { list_id: "NumberingList/n".into() },
+            VirtualTarget::Style { family: StyleFamily::Object, style_id: "ObjectStyle/o".into() },
+            VirtualTarget::Section { section_id: "s".into() },
+            VirtualTarget::Guide { guide_id: "Guide/Spread/u1/0".into() },
+            VirtualTarget::Condition { condition_id: "Condition/c".into() },
+            VirtualTarget::TextVariable { variable_id: "dTextVariablenX".into() },
+            VirtualTarget::Spread { spread_id: "sp".into() },
+            VirtualTarget::ConditionSet { set_id: "cs".into() },
+            VirtualTarget::Hyperlink { hyperlink_id: "h".into() },
+            VirtualTarget::Element { element_id: ElementId::Oval("o".into()) },
+        ];
+        for t in targets {
+            let a = Address::from(t.clone());
+            let back = VirtualTarget::from_address_direct(&a).unwrap();
+            if matches!(t, VirtualTarget::Style { .. }) {
+                // a display name may stand for the Self: the document decides
+                assert_eq!(back, None, "{a}");
+            } else {
+                assert_eq!(back.as_ref(), Some(&t), "{a}");
+            }
+        }
+    }
+
     use super::*;
 
     fn tf(id: &str) -> ElementId {
@@ -1890,6 +1955,28 @@ pub enum Mutation {
         #[serde(default)]
         copy_frame_options: Option<bool>,
     },
+    /// v71 — define a CUSTOM text variable (`<TextVariable
+    /// VariableType="CustomTextType">`). Its `Self` is
+    /// `dTextVariablen<name>` (InDesign's spelling), so the address is
+    /// known up front: `textVariable:dTextVariablen<name>`. The name must
+    /// be unique. Instances go into text with `InsertField { field: {
+    /// textVariable: { variableId } } }`; the value is switched with one
+    /// `Set` on `textVariableContents`, which re-bakes every instance.
+    /// InDesign keeps a text variable on save (a placeholder it drops).
+    CreateTextVariable {
+        name: String,
+        #[serde(default)]
+        contents: Option<String>,
+        #[serde(default)]
+        text_before: Option<String>,
+        #[serde(default)]
+        text_after: Option<String>,
+    },
+    /// v71 — remove a text variable definition. Refused while any
+    /// instance of it is still in the text.
+    DeleteTextVariable {
+        variable_id: String,
+    },
     /// W0.5 — "show only this set": activate one `<ConditionSet>`.
     ActivateConditionSet {
         set: String,
@@ -2177,6 +2264,8 @@ mutation_vocabulary! {
     SetPluginMetadata,
     SetPageMetadata,
     SetDocumentMetadata,
+    CreateTextVariable,
+    DeleteTextVariable,
     PathPointCurveType,
     PathPointSet,
     Batch,

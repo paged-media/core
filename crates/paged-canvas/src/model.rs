@@ -3713,6 +3713,24 @@ impl CanvasModel {
                     caller: caller.clone(),
                 })
             }
+            Mutation::CreateTextVariable {
+                name,
+                contents,
+                text_before,
+                text_after,
+            } => Some(Operation::CreateTextVariable {
+                self_id: format!("dTextVariablen{name}"),
+                name: name.clone(),
+                variable_type: None,
+                contents: contents.clone(),
+                text_before: text_before.clone(),
+                text_after: text_after.clone(),
+            }),
+            Mutation::DeleteTextVariable { variable_id } => {
+                Some(Operation::DeleteTextVariable {
+                    variable_id: variable_id.clone(),
+                })
+            }
             Mutation::PathPointCurveType {
                 element_id,
                 index,

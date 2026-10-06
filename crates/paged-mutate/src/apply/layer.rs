@@ -708,6 +708,113 @@ pub(super) fn apply_document_metadata(
     })
 }
 
+/// v71 — `Operation::CreateTextVariable`: add one `<TextVariable>`
+/// definition. The id must be free and the name unique — a second
+/// definition of a name would make `textVariable[name=…]` ambiguous and
+/// InDesign refuses it too.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_create_text_variable(
+    doc: &mut Document,
+    self_id: &str,
+    name: &str,
+    variable_type: &Option<String>,
+    contents: &Option<String>,
+    text_before: &Option<String>,
+    text_after: &Option<String>,
+) -> Result<AppliedOperation, OperationError> {
+    let refuse = |reason: String| OperationError::InvalidValue {
+        node: NodeId::TextVariable(self_id.to_string()),
+        path: PropertyPath::TextVariableName,
+        reason,
+    };
+    if name.is_empty() || self_id.is_empty() {
+        return Err(refuse("a text variable needs a name".into()));
+    }
+    let vars = &mut doc.designmap.text_variables;
+    if vars.iter().any(|v| v.self_id == self_id) {
+        return Err(refuse(format!("text variable {self_id:?} already exists")));
+    }
+    if vars.iter().any(|v| v.name.as_deref() == Some(name)) {
+        return Err(refuse(format!("a text variable named {name:?} already exists")));
+    }
+    let variable_type = variable_type
+        .clone()
+        .or_else(|| Some("CustomTextType".to_string()));
+    vars.push(paged_model::TextVariable {
+        self_id: self_id.to_string(),
+        name: Some(name.to_string()),
+        variable_type: variable_type.clone(),
+        contents: contents.clone(),
+        text_before: text_before.clone(),
+        text_after: text_after.clone(),
+        ..Default::default()
+    });
+    Ok(AppliedOperation {
+        op: Operation::CreateTextVariable {
+            self_id: self_id.to_string(),
+            name: name.to_string(),
+            variable_type,
+            contents: contents.clone(),
+            text_before: text_before.clone(),
+            text_after: text_after.clone(),
+        },
+        inverse: Operation::DeleteTextVariable {
+            variable_id: self_id.to_string(),
+        },
+        // A definition with no instance draws nothing.
+        invalidation: InvalidationHint::default(),
+    })
+}
+
+/// v71 — `Operation::DeleteTextVariable`. Refused while an instance of
+/// the variable is still in a story; the inverse re-creates the
+/// definition from the fields `CreateTextVariable` carries (type,
+/// contents, decoration) — enough for the custom variables this op pair
+/// authors; a built-in's date format or running-header style is not
+/// restored.
+pub(super) fn apply_delete_text_variable(
+    doc: &mut Document,
+    variable_id: &str,
+) -> Result<AppliedOperation, OperationError> {
+    let in_use = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .flat_map(|p| p.runs.iter())
+        .filter(|r| r.text_variable.as_deref() == Some(variable_id))
+        .count();
+    if in_use > 0 {
+        return Err(OperationError::InvalidValue {
+            node: NodeId::TextVariable(variable_id.to_string()),
+            path: PropertyPath::TextVariableName,
+            reason: format!(
+                "text variable {variable_id:?} still has {in_use} instance(s) in the text — \
+                 delete them first"
+            ),
+        });
+    }
+    let vars = &mut doc.designmap.text_variables;
+    let i = vars
+        .iter()
+        .position(|v| v.self_id == variable_id)
+        .ok_or_else(|| OperationError::NodeNotFound(NodeId::TextVariable(variable_id.into())))?;
+    let v = vars.remove(i);
+    Ok(AppliedOperation {
+        op: Operation::DeleteTextVariable {
+            variable_id: variable_id.to_string(),
+        },
+        inverse: Operation::CreateTextVariable {
+            self_id: v.self_id,
+            name: v.name.unwrap_or_default(),
+            variable_type: v.variable_type,
+            contents: v.contents,
+            text_before: v.text_before,
+            text_after: v.text_after,
+        },
+        invalidation: InvalidationHint::default(),
+    })
+}
+
 /// B-04 / W1.20 — group page items (leaf shapes OR existing groups,
 /// the latter producing a nested group-of-groups). Fully validated
 /// BEFORE any mutation (atomicity invariant). Members contiguous in

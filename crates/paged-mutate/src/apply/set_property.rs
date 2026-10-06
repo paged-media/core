@@ -807,6 +807,18 @@ pub(super) fn apply_set_property(
             };
             let prev = slot.clone().unwrap_or_default();
             *slot = (!new_val.is_empty()).then_some(new_val);
+            // v71 — re-bake every instance's ResultText, so the runs (and
+            // an IDML save of them) carry the value the renderer shows.
+            let display = super::path_topology::text_variable_display(var);
+            for run in doc
+                .stories
+                .iter_mut()
+                .flat_map(|s| s.story.paragraphs.iter_mut())
+                .flat_map(|p| p.runs.iter_mut())
+                .filter(|r| r.text_variable.as_deref() == Some(id.as_str()))
+            {
+                run.text.clone_from(&display);
+            }
             (
                 Value::Text(prev),
                 // Every instance re-resolves its text from the definition.

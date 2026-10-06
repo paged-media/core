@@ -271,6 +271,19 @@ impl<'a> Index<'a> {
                 page_nodes.push(node.unwrap_or(spread_node));
             }
             ix.walk_spread(spread, spread_node, &page_nodes, None, &layer_idx);
+            // Ruler guides: positional ids, `Guide/<spreadSelf>/<index>`,
+            // the same the guide ops and `RequestGuides` use.
+            if let Some(sid) = spread.self_id.as_deref() {
+                for gi in 0..spread.guides.len() {
+                    ix.simple(
+                        Address::Guide {
+                            id: format!("Guide/{sid}/{gi}"),
+                        },
+                        spread_node,
+                        None,
+                    );
+                }
+            }
         }
 
         let mut masters: Vec<_> = doc.master_spreads.values().collect();

@@ -857,6 +857,16 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("setDocumentMetadata"),
             3,
         )
+        .function(
+            guarded(paged_create_text_variable),
+            js_string!("createTextVariable"),
+            4,
+        )
+        .function(
+            guarded(paged_delete_text_variable),
+            js_string!("deleteTextVariable"),
+            1,
+        )
         .function(guarded(paged_batch), js_string!("batch"), 1)
         // selection setters
         .function(
@@ -3873,6 +3883,60 @@ fn paged_set_document_metadata(
         value,
         caller,
     }))
+}
+
+/// `paged.createTextVariable(name, contents?, textBefore?, textAfter?)` —
+/// define a custom text variable (`Mutation::CreateTextVariable`, v71).
+/// Returns its address (`textVariable:dTextVariablen<name>`), or `null`
+/// when refused (empty or taken name).
+fn paged_create_text_variable(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let name = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let contents = opt_string(args.get_or_undefined(1), ctx);
+    let text_before = opt_string(args.get_or_undefined(2), ctx);
+    let text_after = opt_string(args.get_or_undefined(3), ctx);
+    let address = paged_wire::Address::TextVariable {
+        id: format!("dTextVariablen{name}"),
+    }
+    .to_string();
+    let applied = with_model(|m| {
+        m.apply_mutation(&Mutation::CreateTextVariable {
+            name,
+            contents,
+            text_before,
+            text_after,
+        })
+        .is_ok()
+    });
+    Ok(if applied {
+        JsValue::from(js_string!(address))
+    } else {
+        JsValue::null()
+    })
+}
+
+/// `paged.deleteTextVariable(variableId)` — remove a text variable
+/// definition no text still uses (`Mutation::DeleteTextVariable`, v71).
+fn paged_delete_text_variable(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let variable_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let variable_id = variable_id
+        .strip_prefix("textVariable:")
+        .map(str::to_string)
+        .unwrap_or(variable_id);
+    Ok(apply_bool(&Mutation::DeleteTextVariable { variable_id }))
 }
 
 /// `paged.batch([mutations])` — apply an array of `{ op, args }` mutation

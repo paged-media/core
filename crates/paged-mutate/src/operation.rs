@@ -4084,6 +4084,29 @@ pub enum Operation {
         #[serde(default)]
         caller: Option<String>,
     },
+    /// v71 — define a `<TextVariable>` (a CUSTOM text variable unless
+    /// `variable_type` says otherwise). `self_id` is minted by the caller
+    /// layer (`dTextVariablen<name>`, InDesign's own spelling) and must be
+    /// free, and `name` unique. Inverse: `DeleteTextVariable`.
+    CreateTextVariable {
+        self_id: String,
+        name: String,
+        #[serde(default)]
+        variable_type: Option<String>,
+        #[serde(default)]
+        contents: Option<String>,
+        #[serde(default)]
+        text_before: Option<String>,
+        #[serde(default)]
+        text_after: Option<String>,
+    },
+    /// v71 — remove a `<TextVariable>` definition. Refused while any
+    /// story still holds an instance of it. Inverse: `CreateTextVariable`
+    /// with the captured fields (the definition's other fields — date
+    /// format, running-header style — are restored verbatim too).
+    DeleteTextVariable {
+        variable_id: String,
+    },
     /// W0.5 — inverse-only companion to `InsertSection`: remove the
     /// section by id. Inverse re-inserts it via `InsertSection` with
     /// the captured fields.
@@ -4312,6 +4335,12 @@ pub enum FieldKind {
         #[serde(default)]
         value: Option<String>,
     },
+    /// v71 — an instance of a `<TextVariable>` (IDML
+    /// `<TextVariableInstance AssociatedTextVariable>`): its own run,
+    /// tagged with the variable's `Self`, whose text is the variable's
+    /// resolved value. InDesign keeps it on save, unlike a placeholder.
+    #[serde(rename_all = "camelCase")]
+    TextVariable { variable_id: String },
 }
 
 impl FieldKind {
@@ -4326,7 +4355,7 @@ impl FieldKind {
             FieldKind::PageNumber => Some('\u{E018}'),
             // U+E019 — IDML `<?ACE 19?>` next-page-number marker.
             FieldKind::NextPageNumber => Some('\u{E019}'),
-            FieldKind::Placeholder { .. } => None,
+            FieldKind::Placeholder { .. } | FieldKind::TextVariable { .. } => None,
         }
     }
 }
