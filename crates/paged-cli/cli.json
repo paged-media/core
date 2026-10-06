@@ -3419,6 +3419,318 @@
       "subcommands": []
     },
     {
+      "about": "Set one property of any object (ADR 132, `Mutation::Set`)",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "`doc`, an element address (`rectangle:<id>`), or a target object",
+          "long": null,
+          "name": "target",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "TARGET"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "A `propertySchemas` path for the target's kind",
+          "long": null,
+          "name": "path",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "JSON (`12`, `true`, `[0,0,100,100]`) or a plain string (`3mm`)",
+          "long": null,
+          "name": "value",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "VALUE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Write the result here. The format follows the extension",
+          "long": "out",
+          "name": "out",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": "o",
+          "takesValues": true,
+          "valueNames": [
+            "OUT"
+          ]
+        },
+        {
+          "defaults": [
+            "pdf17"
+          ],
+          "help": "\"pdf17\" (default) or \"pdfx4\". X-4 needs a resolvable output intent — give one here or let the document's profile serve",
+          "long": "standard",
+          "name": "standard",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "STANDARD"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Output-intent profile NAME, resolved against what this run registered. Defaults to the working space",
+          "long": "output-intent",
+          "name": "output_intent",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_INTENT"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Human-readable output condition for the OutputIntent dict",
+          "long": "output-condition",
+          "name": "output_condition",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "OUTPUT_CONDITION"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Crop marks, registration marks, colour bars, page info",
+          "long": "marks",
+          "name": "marks",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "MARKS"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "0-based inclusive page range, e.g. `0-9`",
+          "long": "pages",
+          "name": "pages",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FROM-TO"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": "Set one property of any object (ADR 132, `Mutation::Set`).\n\nTARGET is an element address (`rectangle:<id>`, `storyRange:…`), `doc`, or a target object (`{\"kind\":\"layer\",\"layerId\":\"ua\"}`). PATH is any `propertySchemas` row for the target's kind. VALUE is JSON when it parses (`12`, `true`, `[0,0,100,100]`), a string otherwise (`3mm`, `CenterAlign`), coerced by the path's schema. Prints the value read back.",
+      "name": "set",
+      "subcommands": []
+    },
+    {
+      "about": "Read one property of any object, as its wire value JSON",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "`doc`, an element address (`rectangle:<id>`), or a target object",
+          "long": null,
+          "name": "target",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "TARGET"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "A `propertySchemas` path for the target's kind",
+          "long": null,
+          "name": "path",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": null,
+      "name": "get",
+      "subcommands": []
+    },
+    {
       "about": "List, read and write a `.paged` container's content parts",
       "args": [],
       "longAbout": null,

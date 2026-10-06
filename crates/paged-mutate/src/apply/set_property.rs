@@ -1538,13 +1538,18 @@ pub(super) fn apply_set_property(
         // presence of the block is the enabled bit (the parser drops it
         // when `Applied="false"`), so this mirrors `FrameDropShadow`.
         // All paint-only → `frame_style`. Wired on TextFrame /
-        // Rectangle / Oval / Polygon (the kinds
-        // `find_frame_effects_mut` reaches — C-63 added Polygon);
-        // other kinds fall through to UnsupportedProperty.
+        // Rectangle / Oval / Polygon / GraphicLine (the kinds
+        // `find_frame_effects_mut` reaches — C-63 added Polygon, ADR 132
+        // the line, whose effects are cast by its stroke's outline band);
+        // a Group falls through to UnsupportedProperty.
 
         // -- Inner shadow ------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1562,7 +1567,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1580,7 +1589,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1591,7 +1604,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerShadowOpacity
             | PropertyPath::FrameInnerShadowAngle
             | PropertyPath::FrameInnerShadowDistance
@@ -1617,7 +1634,11 @@ pub(super) fn apply_set_property(
 
         // -- Outer glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1635,7 +1656,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1653,7 +1678,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1664,7 +1693,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameOuterGlowOpacity
             | PropertyPath::FrameOuterGlowSpread
             | PropertyPath::FrameOuterGlowSize
@@ -1686,7 +1719,11 @@ pub(super) fn apply_set_property(
 
         // -- Inner glow --------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1704,7 +1741,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1722,7 +1763,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1733,7 +1778,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowSource,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1751,7 +1800,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameInnerGlowOpacity
             | PropertyPath::FrameInnerGlowChoke
             | PropertyPath::FrameInnerGlowSize
@@ -1773,7 +1826,11 @@ pub(super) fn apply_set_property(
 
         // -- Bevel / emboss ----------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1788,7 +1845,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelStyle
             | PropertyPath::FrameBevelTechnique
             | PropertyPath::FrameBevelDirection,
@@ -1813,7 +1874,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelHighlightColor | PropertyPath::FrameBevelShadowColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1828,7 +1893,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameBevelDepth
             | PropertyPath::FrameBevelSize
             | PropertyPath::FrameBevelSoften
@@ -1856,7 +1925,11 @@ pub(super) fn apply_set_property(
 
         // -- Satin -------------------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1871,7 +1944,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinBlendMode,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1889,7 +1966,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinColor,
         ) => {
             let new_color = expect_color_ref(path, value)?;
@@ -1900,7 +1981,11 @@ pub(super) fn apply_set_property(
             (Value::ColorRef(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinInvert,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1911,7 +1996,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameSatinOpacity
             | PropertyPath::FrameSatinAngle
             | PropertyPath::FrameSatinDistance
@@ -1933,7 +2022,11 @@ pub(super) fn apply_set_property(
 
         // -- Feather (basic) ---------------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -1948,7 +2041,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherCornerType,
         ) => {
             let new_val = expect_text(path, value)?;
@@ -1966,7 +2063,11 @@ pub(super) fn apply_set_property(
             )
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameFeatherWidth
             | PropertyPath::FrameFeatherNoise
             | PropertyPath::FrameFeatherChoke,
@@ -1986,7 +2087,11 @@ pub(super) fn apply_set_property(
 
         // -- Directional feather -----------------------------------
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameDirectionalFeatherEnabled,
         ) => {
             let new_val = expect_bool(path, value)?;
@@ -2004,7 +2109,11 @@ pub(super) fn apply_set_property(
             (Value::Bool(prev), frame_style_hint(node))
         }
         (
-            NodeId::TextFrame(_) | NodeId::Rectangle(_) | NodeId::Oval(_) | NodeId::Polygon(_),
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
             PropertyPath::FrameDirectionalFeatherLeftWidth
             | PropertyPath::FrameDirectionalFeatherRightWidth
             | PropertyPath::FrameDirectionalFeatherTopWidth

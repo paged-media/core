@@ -115,13 +115,20 @@ fn style_properties_cover_every_settable_style_path() {
             "{collection:?}: the read and the setter must name the same paths"
         );
     }
-    // Object styles (like cell and table ones): nothing settable, nothing read.
-    let id = first_style(&m, StyleCollection::Object);
-    assert!(settable(&m, StyleCollection::Object, &id).is_empty());
-    let props = m
-        .style_properties(StyleCollection::Object, &id)
-        .expect("resolves");
-    assert!(props.entries.is_empty());
+    // ADR 132 — object, cell and table definitions are settable now, and
+    // the read names exactly the paths the setter takes, like the others.
+    let tables = paged_gen::write_idml(&paged_gen::samples::tables::build()).expect("idml");
+    let t = CanvasModel::load("tables", &tables, CanvasOptions::default()).expect("load");
+    for (m, collection) in [(&m, StyleCollection::Object), (&t, StyleCollection::Table)] {
+        let id = first_style(m, collection);
+        let set = settable(m, collection, &id);
+        assert!(!set.is_empty(), "{collection:?}: nothing settable");
+        assert_eq!(
+            read_paths(m, collection, &id),
+            set,
+            "{collection:?}: the read and the setter must name the same paths"
+        );
+    }
 }
 
 #[test]

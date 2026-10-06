@@ -564,13 +564,38 @@ pub(super) fn emit_line_into(
             cache_key,
             outer,
         );
+        crate::module::line_effects_module(
+            page,
+            palette,
+            color_ctx,
+            line.effects.as_ref(),
+            &path,
+            &stroke,
+            cache_key,
+            outer,
+            true,
+        );
+        let band_source = (line.effects.is_some()).then(|| path.clone());
         let (path_id, _) = page.list.paths.intern(cache_key, path);
         page.list.push(paged_compose::DisplayCommand::StrokePath {
             path_id,
             paint: stroke_paint,
-            stroke,
+            stroke: stroke.clone(),
             transform: outer,
         });
+        if let Some(centreline) = band_source {
+            crate::module::line_effects_module(
+                page,
+                palette,
+                color_ctx,
+                line.effects.as_ref(),
+                &centreline,
+                &stroke,
+                cache_key,
+                outer,
+                false,
+            );
+        }
         // Arrowheads at the first / last anchor of the whole anchor
         // list, through the same `outer` transform as the stroke.
         emit_path_line_ends(
@@ -591,24 +616,48 @@ pub(super) fn emit_line_into(
     let (ox, oy) = page.spread_origin;
     let (sx, sy) = (spread_bounds.left - ox, spread_bounds.top - oy);
     let (ex, ey) = (spread_bounds.right - ox, spread_bounds.bottom - oy);
+    let diagonal = paged_compose::PathData {
+        segments: vec![
+            paged_compose::PathSegment::MoveTo { x: sx, y: sy },
+            paged_compose::PathSegment::LineTo { x: ex, y: ey },
+        ],
+    };
+    let key = resolved
+        .self_id
+        .map_or(0x11E5_0000, |id| fnv_1a_u64(id.as_bytes()));
     crate::module::line_drop_shadow_module(
         page,
         palette,
         color_ctx,
         resolved.drop_shadow,
-        &paged_compose::PathData {
-            segments: vec![
-                paged_compose::PathSegment::MoveTo { x: sx, y: sy },
-                paged_compose::PathSegment::LineTo { x: ex, y: ey },
-            ],
-        },
+        &diagonal,
         &stroke,
-        resolved
-            .self_id
-            .map_or(0x11E5_0000, |id| fnv_1a_u64(id.as_bytes())),
+        key,
         Transform::IDENTITY,
     );
-    emit_line(sx, sy, ex, ey, stroke, stroke_paint, &mut page.list);
+    crate::module::line_effects_module(
+        page,
+        palette,
+        color_ctx,
+        line.effects.as_ref(),
+        &diagonal,
+        &stroke,
+        key,
+        Transform::IDENTITY,
+        true,
+    );
+    emit_line(sx, sy, ex, ey, stroke.clone(), stroke_paint, &mut page.list);
+    crate::module::line_effects_module(
+        page,
+        palette,
+        color_ctx,
+        line.effects.as_ref(),
+        &diagonal,
+        &stroke,
+        key,
+        Transform::IDENTITY,
+        false,
+    );
     // Arrowheads at the diagonal's endpoints, in page-local coords
     // (identity transform). Start points back toward (sx,sy); end
     // points forward toward (ex,ey).

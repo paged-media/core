@@ -189,8 +189,11 @@ pub enum Command {
     Set {
         /// IDML or `.paged` document.
         doc: PathBuf,
+        /// `doc`, an element address (`rectangle:<id>`), or a target object.
         target: String,
+        /// A `propertySchemas` path for the target's kind.
         path: String,
+        /// JSON (`12`, `true`, `[0,0,100,100]`) or a plain string (`3mm`).
         value: String,
         /// Write the result here. The format follows the extension.
         #[arg(short, long)]
@@ -204,7 +207,9 @@ pub enum Command {
     Get {
         /// IDML or `.paged` document.
         doc: PathBuf,
+        /// `doc`, an element address (`rectangle:<id>`), or a target object.
         target: String,
+        /// A `propertySchemas` path for the target's kind.
         path: String,
         #[command(flatten)]
         assets: DocumentOptions,

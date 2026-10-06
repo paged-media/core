@@ -466,11 +466,12 @@ fn insert(doc: &mut Document, node: NodeSpec) {
     .expect("insert node");
 }
 
-/// A `GraphicLine` carries the `effects` bag and nothing draws it, so
-/// every effect path keeps rejecting — one honest "unsupported" instead
-/// of 59 writes into a field the renderer never opens.
+/// ADR 132 — a `GraphicLine`'s effects are cast from its stroke's outline
+/// band (the band its drop shadow already used), so every effect path
+/// applies on a line and undoes — except the gradient feather, which
+/// fades a FILL and stays refused.
 #[test]
-fn a_graphic_line_rejects_every_effect_path() {
+fn a_graphic_line_takes_every_effect_path_but_the_gradient_feather() {
     let mut doc = fixture();
     let corner = |x: f32, y: f32| PathAnchorSpec {
         anchor: [x, y],
@@ -492,12 +493,19 @@ fn a_graphic_line_rejects_every_effect_path() {
     );
     let node = NodeId::GraphicLine("c63line".to_string());
     for (_, path, value) in effect_rows() {
-        let err = apply(&mut doc, &set(&node, path, value))
-            .expect_err("a line has no fill path for an effect to composite against");
-        assert!(
-            matches!(err, OperationError::UnsupportedProperty { .. }),
-            "{path:?} on a GraphicLine must be UnsupportedProperty, got {err:?}"
-        );
+        if path == P::FrameGradientFeather {
+            let err = apply(&mut doc, &set(&node, path, value))
+                .expect_err("a line has no fill for a gradient feather to fade");
+            assert!(
+                matches!(err, OperationError::UnsupportedProperty { .. }),
+                "{path:?} on a GraphicLine must be UnsupportedProperty, got {err:?}"
+            );
+            continue;
+        }
+        let applied = apply(&mut doc, &set(&node, path, value))
+            .unwrap_or_else(|e| panic!("{path:?} on a GraphicLine: {e:?}"));
+        apply(&mut doc, &applied.inverse).expect("undo");
+        apply(&mut doc, &applied.op).expect("redo");
     }
 }
 

@@ -202,7 +202,8 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     }
     assert_eq!(
         catalog.settable_paths.len(),
-        220,
+        // 221: ADR 131/132 added `itemName`.
+        221,
         "the advertised roster changed; move the count with the decision"
     );
 }

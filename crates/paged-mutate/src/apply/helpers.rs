@@ -1078,10 +1078,11 @@ pub(super) fn expect_gradient_feather(
 /// pen (which IS a `Polygon`) rendered an effect it could be given in a
 /// file and never in the editor.
 ///
-/// `GraphicLine` stays out on purpose. It carries the same field and the
-/// importer fills it, but `emit_line_into` never reads it: every effect
-/// is defined against a FILL path and a line has none. An arm here would
-/// write a value no renderer consults, so the kind keeps rejecting.
+/// ADR 132 — `GraphicLine` joins. It carried the bag (the importer fills
+/// it) and nothing painted it, because every effect is defined against a
+/// FILL path and a line has none. The renderer now casts a line's effects
+/// from its stroke's outline band — the shape the line's drop shadow
+/// already uses (43d7042) — so the value written here is the value drawn.
 pub(super) fn find_frame_effects_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
@@ -1098,6 +1099,9 @@ pub(super) fn find_frame_effects_mut<'a>(
         }
         NodeId::Polygon(id) => {
             find_polygon_mut(doc, id).map(|p| p.effects.get_or_insert_with(Default::default))
+        }
+        NodeId::GraphicLine(id) => {
+            find_graphic_line_mut(doc, id).map(|l| l.effects.get_or_insert_with(Default::default))
         }
         _ => None,
     }

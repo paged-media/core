@@ -1051,6 +1051,23 @@ impl CanvasModel {
             .map(|s| s.self_id.clone())
     }
 
+    /// The settable fields of an object, cell or table style definition as
+    /// inspector rows — what `style_properties` publishes for those
+    /// families, read by the same arms `get_property` uses.
+    pub(super) fn definition_entries(
+        &self,
+        family: StyleFamily,
+        style_id: &str,
+    ) -> Vec<crate::channel::PropertyEntry> {
+        style_paths(family.as_str())
+            .iter()
+            .map(|p| crate::channel::PropertyEntry {
+                path: *p,
+                value: self.style_property(family, style_id, wire_name(*p)).ok(),
+            })
+            .collect()
+    }
+
     fn style_property(
         &self,
         family: StyleFamily,

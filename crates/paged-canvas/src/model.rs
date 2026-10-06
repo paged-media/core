@@ -5635,15 +5635,33 @@ impl CanvasModel {
             }
             C::Object => {
                 let d = styles.object_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Object, style_id),
+                )
             }
             C::Cell => {
                 let d = styles.cell_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Cell, style_id),
+                )
             }
             C::Table => {
                 let d = styles.table_styles.get(style_id)?;
-                (d.name.clone(), d.based_on.clone(), Vec::new())
+                // ADR 132 — the definition's settable fields, read through
+                // the same table `Mutation::Set` writes them by.
+                (
+                    d.name.clone(),
+                    d.based_on.clone(),
+                    self.definition_entries(paged_wire::StyleFamily::Table, style_id),
+                )
             }
         };
         Some(crate::channel::StyleProperties {
@@ -6709,6 +6727,15 @@ impl CanvasModel {
                         // on an open stroke-only contour. See
                         // `paged_model::GraphicLine::corner_radius`.
                         entries.extend(corner_entries(&l.corners));
+                        // ADR 132 — a line's effects are written and drawn
+                        // (cast from its stroke band) now, so they read
+                        // too. Not the blend-mode row: a line has no
+                        // blend-mode write arm.
+                        entries.extend(
+                            effect_property_entries(l.effects.as_ref(), None)
+                                .into_iter()
+                                .filter(|e| e.path != PropertyPath::FrameBlendMode),
+                        );
                         entries
                     }),
                 // C-18 / E-1 — an `<Oval>` had NO descriptor arm at all
