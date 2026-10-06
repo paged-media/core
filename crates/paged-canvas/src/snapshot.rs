@@ -118,6 +118,44 @@ pub fn render_snapshot_at_dpi(
     render_snapshot_inner(model, page_id, SnapshotSize::Dpi(dpi))
 }
 
+/// v69 — a snapshot of the page with `hide` items hidden (a slideshow
+/// build step). `dpi` wins over `target_width_px` when given, as in
+/// `RequestSnapshot`. With nothing to hide it is the plain snapshot.
+#[cfg(feature = "cpu")]
+pub fn render_snapshot_png_hiding(
+    model: &CanvasModel,
+    page_id: &PageId,
+    target_width_px: u32,
+    dpi: Option<f32>,
+    hide: &[crate::element_selection::ElementId],
+) -> Result<SnapshotPng, SnapshotError> {
+    if hide.is_empty() {
+        return match dpi {
+            Some(d) if d > 0.0 => render_snapshot_png_at_dpi(model, page_id, d),
+            _ => render_snapshot_png(model, page_id, target_width_px),
+        };
+    }
+    let page = model
+        .build_page_hiding(page_id, hide)
+        .map_err(|_| SnapshotError::UnknownPage {
+            page_id: page_id.clone(),
+        })?;
+    let dpi = match dpi {
+        Some(d) if d > 0.0 && d.is_finite() => d,
+        _ if target_width_px == 0 => return Err(SnapshotError::InvalidWidth(0)),
+        _ => (target_width_px as f32) / page.width_pt * 72.0,
+    };
+    let img = render_built_page(&page, dpi, paged_compose::Color::WHITE);
+    encode_snapshot_png(Snapshot {
+        page_id: page_id.clone(),
+        width_px: img.width(),
+        height_px: img.height(),
+        layout_generation: page.layout_generation,
+        numbering_generation: page.numbering_generation,
+        rgba: img.into_raw(),
+    })
+}
+
 #[cfg(feature = "cpu")]
 enum SnapshotSize {
     WidthPx(u32),

@@ -9543,6 +9543,88 @@ impl CanvasModel {
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
 
+    /// v69 — the page as it draws with some items hidden: a slideshow's
+    /// build steps (each frame is the slide without the items later steps
+    /// reveal). A copy of the scene with those items (a group: all its
+    /// members, master items included) set invisible is built once; the
+    /// document itself is untouched.
+    pub fn build_page_hiding(
+        &self,
+        page_id: &PageId,
+        hide: &[crate::element_selection::ElementId],
+    ) -> Result<paged_renderer::BuiltPage, crate::channel::LoadError> {
+        use std::collections::HashSet;
+        let mut scene = self.scene.clone();
+        let mut ids: HashSet<String> = hide.iter().map(|e| e.raw_id().to_string()).collect();
+        // A hidden group hides its members (nested groups too).
+        let spreads = scene
+            .spreads
+            .iter()
+            .map(|p| &p.spread)
+            .chain(scene.master_spreads.values().map(|m| &m.spread));
+        for sp in spreads {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for g in &sp.groups {
+                    if g.self_id.as_deref().is_some_and(|id| ids.contains(id)) {
+                        for m in &g.members {
+                            let id = frame_self_id(sp, *m);
+                            if let Some(id) = id {
+                                changed |= ids.insert(id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let hide_in = |sp: &mut paged_model::Spread| {
+            let off = |id: &Option<String>| id.as_deref().is_some_and(|i| ids.contains(i));
+            sp.text_frames
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.rectangles
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.ovals
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.graphic_lines
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+            sp.polygons
+                .iter_mut()
+                .filter(|f| off(&f.self_id))
+                .for_each(|f| f.visible = false);
+        };
+        for p in scene.spreads.iter_mut() {
+            hide_in(&mut p.spread);
+        }
+        for m in scene.master_spreads.values_mut() {
+            hide_in(&mut m.spread);
+        }
+        let resolver = build_font_resolver(&self.font_registry, self.font_bytes.as_deref());
+        let resource_providers = self.resource_tiles.provider_entries();
+        let options = self.pipeline_options(
+            PipelinePurpose::Export,
+            resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
+            &resource_providers,
+        );
+        let built = pipeline::build_document(&scene, &options)
+            .map_err(|e| crate::channel::LoadError::Build(e.to_string()))?;
+        built
+            .pages
+            .into_iter()
+            .find(|p| &p.id == page_id)
+            .ok_or_else(|| crate::channel::LoadError::Build(format!("no page {page_id}")))
+    }
+
     /// Concept 3 — read accessors for the export session's begin.
     pub fn font_table(&self) -> &paged_renderer::FontTable {
         &self.font_table
@@ -11387,6 +11469,19 @@ pub(crate) fn source_id_floor(package: &[u8]) -> u64 {
         }
     }
     max
+}
+
+/// The `Self` id of a frame of `spread`.
+fn frame_self_id(spread: &paged_model::Spread, fr: paged_model::FrameRef) -> Option<String> {
+    use paged_model::FrameRef;
+    match fr {
+        FrameRef::TextFrame(i) => spread.text_frames.get(i)?.self_id.clone(),
+        FrameRef::Rectangle(i) => spread.rectangles.get(i)?.self_id.clone(),
+        FrameRef::Oval(i) => spread.ovals.get(i)?.self_id.clone(),
+        FrameRef::GraphicLine(i) => spread.graphic_lines.get(i)?.self_id.clone(),
+        FrameRef::Polygon(i) => spread.polygons.get(i)?.self_id.clone(),
+        FrameRef::Group(i) => spread.groups.get(i)?.self_id.clone(),
+    }
 }
 
 #[cfg(test)]

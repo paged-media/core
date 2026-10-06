@@ -115,7 +115,7 @@ pub use resolve::{
 #[cfg(feature = "cpu")]
 pub use snapshot::{
     render_snapshot, render_snapshot_at_dpi, render_snapshot_png, render_snapshot_png_at_dpi,
-    Snapshot,
+    render_snapshot_png_hiding, Snapshot,
 };
 pub use snapshot::{SnapshotError, SnapshotPng};
 

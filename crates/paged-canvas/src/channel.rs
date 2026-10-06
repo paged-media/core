@@ -901,6 +901,11 @@ pub enum MainToWorkerKind {
         target_width_px: u32,
         #[serde(default)]
         dpi: Option<f32>,
+        /// v69 — draw the page without these items (a group: all its
+        /// members): a slideshow build step, rendered without touching the
+        /// document. Empty draws the page as it is.
+        #[serde(default)]
+        hide_items: Vec<crate::element_selection::ElementId>,
     },
     /// Replace the worker's current selection. Phase 3 Item 1 — the
     /// worker mirrors the main thread's `ContentSelection` so the
@@ -3774,6 +3779,7 @@ mod tests {
                 page_id: PageId("p1".into()),
                 target_width_px: 256,
                 dpi: None,
+                hide_items: Vec::new(),
             },
         };
         let json = serde_json::to_string(&msg).unwrap();
