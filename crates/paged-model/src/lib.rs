@@ -3799,6 +3799,15 @@ pub struct CellStyleDef {
     pub left_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
+    /// Edge stroke styles; see [`Cell::top_edge_stroke_type`].
+    #[serde(default)]
+    pub top_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub bottom_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub left_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub right_edge_stroke_type: Option<String>,
 }
 /// `<TableStyle>` — table-level defaults that flow through to
 /// cells. Carries the region → CellStyle map (Header / Body /
@@ -3906,6 +3915,10 @@ pub struct ResolvedCell {
     pub left_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
+    pub top_edge_stroke_type: Option<String>,
+    pub bottom_edge_stroke_type: Option<String>,
+    pub left_edge_stroke_type: Option<String>,
+    pub right_edge_stroke_type: Option<String>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
@@ -4700,6 +4713,22 @@ impl ResolvedCell {
         self.right_edge_stroke_weight = self
             .right_edge_stroke_weight
             .or(def.right_edge_stroke_weight);
+        for (mine, theirs) in [
+            (&mut self.top_edge_stroke_type, &def.top_edge_stroke_type),
+            (
+                &mut self.bottom_edge_stroke_type,
+                &def.bottom_edge_stroke_type,
+            ),
+            (&mut self.left_edge_stroke_type, &def.left_edge_stroke_type),
+            (
+                &mut self.right_edge_stroke_type,
+                &def.right_edge_stroke_type,
+            ),
+        ] {
+            if mine.is_none() {
+                mine.clone_from(theirs);
+            }
+        }
     }
 }
 impl ResolvedCharacter {
@@ -5540,6 +5569,17 @@ pub struct TableCell {
     pub right_edge_stroke_color: Option<String>,
     pub right_edge_stroke_weight: Option<f32>,
     pub right_edge_stroke_tint: Option<f32>,
+    /// `TopEdgeStrokeType` … `RightEdgeStrokeType` — the edge's stroke
+    /// style (`StrokeStyle/$ID/ThickThick` for a double line). `None` ⇒
+    /// inherit from the cell-style cascade, then solid.
+    #[serde(default)]
+    pub top_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub bottom_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub left_edge_stroke_type: Option<String>,
+    #[serde(default)]
+    pub right_edge_stroke_type: Option<String>,
     /// Inline `FillColor="Color/..."` on the `<Cell>` element.
     /// Wins over the cell-style cascade — used by header / body /
     /// alternating-fill rows when the table doesn't carry an

@@ -975,3 +975,37 @@ fn cell_paragraphs_take_their_left_and_first_line_indents() {
         "second line at {second} pt, want 20"
     );
 }
+
+/// v69 — a cell edge's `…EdgeStrokeType` decides how it draws: a
+/// `ThickThick` edge is two rules (PowerPoint's double line, InDesign's
+/// Thick - Thick), inline or through the cell style. Before, every cell
+/// edge drew as one solid rule of its weight.
+#[test]
+fn a_double_cell_edge_draws_two_rules() {
+    let no_style = r#"  <RootTableStyleGroup>
+    <TableStyle Self="TableStyle/$ID/[No table style]" Name="$ID/[No table style]"/>
+  </RootTableStyleGroup>"#;
+    let edge = r#"TopEdgeStrokeColor="Color/Magenta" TopEdgeStrokeWeight="3""#;
+    let fills = |styles: &str, cell: &str| {
+        count_fills(&build_commands(&build_table_idml(styles, "", cell)))
+    };
+
+    let solid = fills(no_style, edge);
+    let double = fills(
+        no_style,
+        &format!(r#"{edge} TopEdgeStrokeType="StrokeStyle/$ID/ThickThick""#),
+    );
+    assert_eq!(double, solid + 1, "inline: a double edge is one more rule");
+
+    let with_cell_style = format!(
+        r#"{no_style}
+  <RootCellStyleGroup>
+    <CellStyle Self="CellStyle/Dbl" Name="Dbl" TopEdgeStrokeType="StrokeStyle/$ID/ThickThick"/>
+  </RootCellStyleGroup>"#
+    );
+    let styled = fills(
+        &with_cell_style,
+        &format!(r#"{edge} AppliedCellStyle="CellStyle/Dbl""#),
+    );
+    assert_eq!(styled, solid + 1, "through the cell style");
+}

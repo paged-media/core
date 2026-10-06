@@ -821,11 +821,20 @@ pub(super) fn emit_table_into_chain(
             let cell_bot_weight = cell
                 .bottom_edge_stroke_weight
                 .or(resolved_cell.bottom_edge_stroke_weight);
+            // An edge's stroke style (a double line) — inline, then the
+            // cell style.
+            let edge_type = |inline: &Option<String>, style: &Option<String>| {
+                inline.clone().or_else(|| style.clone())
+            };
             let edges = [
                 (
                     cell_top_color,
                     cell_top_weight,
                     cell.top_edge_stroke_tint,
+                    edge_type(
+                        &cell.top_edge_stroke_type,
+                        &resolved_cell.top_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt,
                     cell_w_pt,
@@ -834,24 +843,27 @@ pub(super) fn emit_table_into_chain(
                     cell_bot_color,
                     cell_bot_weight,
                     cell.bottom_edge_stroke_tint,
+                    edge_type(
+                        &cell.bottom_edge_stroke_type,
+                        &resolved_cell.bottom_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt + cell_h_pt,
                     cell_w_pt,
                 ),
             ];
-            for (color, weight, tint, x, y, w) in edges {
+            for (color, weight, tint, stroke_type, x, y, w) in edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                         .map(|p| apply_fill_tint(p, tint))
                     {
-                        emit_rect(
-                            Rect {
-                                x,
-                                y: y - weight * 0.5,
-                                w,
-                                h: weight,
-                            },
+                        emit_table_horizontal_edge(
+                            x,
+                            y,
+                            w,
+                            stroke_type.as_deref(),
+                            weight,
                             paint,
                             &mut pages[target_page].list,
                         );
@@ -879,6 +891,10 @@ pub(super) fn emit_table_into_chain(
                     cell_left_color,
                     cell_left_weight,
                     cell.left_edge_stroke_tint,
+                    edge_type(
+                        &cell.left_edge_stroke_type,
+                        &resolved_cell.left_edge_stroke_type,
+                    ),
                     cell_x_pt,
                     cell_y_pt,
                     cell_h_pt,
@@ -887,24 +903,27 @@ pub(super) fn emit_table_into_chain(
                     cell_right_color,
                     cell_right_weight,
                     cell.right_edge_stroke_tint,
+                    edge_type(
+                        &cell.right_edge_stroke_type,
+                        &resolved_cell.right_edge_stroke_type,
+                    ),
                     cell_x_pt + cell_w_pt,
                     cell_y_pt,
                     cell_h_pt,
                 ),
             ];
-            for (color, weight, tint, x, y, h) in v_edges {
+            for (color, weight, tint, stroke_type, x, y, h) in v_edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
                     if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
                         .map(|p| apply_fill_tint(p, tint))
                     {
-                        emit_rect(
-                            Rect {
-                                x: x - weight * 0.5,
-                                y,
-                                w: weight,
-                                h,
-                            },
+                        emit_table_vertical_edge(
+                            x,
+                            y,
+                            h,
+                            stroke_type.as_deref(),
+                            weight,
                             paint,
                             &mut pages[target_page].list,
                         );

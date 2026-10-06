@@ -2005,11 +2005,31 @@ fn page_cases(c: &mut Vec<Case>) {
         bounds: (0.0, 0.0, 500.0, 400.0),
     }));
     c.push(paints("OnMaster", "masters", |m| {
-        // A master rectangle recoloured: every page using the master shows it.
-        let (master, rect) = m
+        // A master rectangle recoloured: every page using the master shows
+        // it. Only a master some page applies, chosen in id order (the
+        // map's own order is a hash's).
+        let applied: Vec<String> = m
+            .scene()
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.pages.iter())
+            .filter_map(|p| {
+                p.applied_master
+                    .as_deref()?
+                    .rsplit('/')
+                    .next()
+                    .map(str::to_string)
+            })
+            .collect();
+        let mut masters: Vec<_> = m
             .scene()
             .master_spreads
             .iter()
+            .filter(|(id, _)| applied.contains(id))
+            .collect();
+        masters.sort_by_key(|(id, _)| id.as_str());
+        let (master, rect) = masters
+            .into_iter()
             .find_map(|(id, ms)| {
                 ms.spread
                     .rectangles
