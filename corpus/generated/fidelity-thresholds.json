@@ -499,6 +499,14 @@
       "max_p99_de": 2.34,
       "min_ssim": 0.9804,
       "rationale": "Added 2026-10-03 (RFI C-62): a pen path's stroke end cap and line ends. One page, no text: open polygons in the three caps, with line ends (circle/triangle, barbed/simple-wide, square at 150 % + triangle at 50 %), a compound path of two open contours, a closed triangle with line ends set, graphic lines in round/projecting caps, and dashed ellipses in the three caps; the reference is InDesign 20.0.1's export. InDesign agrees on every cap, on line ends for EACH open contour of a compound path, and on none for a closed one. Measured mean 0.497 / p99 1.952 / ssim 0.9854 (the same IDML with the attributes the pre-C-62 reader ignored stripped: 0.710 / 8.739 / 0.981); sized at worst * 1.20 and ssim - 0.005. The residue is named, not C-62's: arrowhead geometry (InDesign trims the stroke under the head and draws Simple/SimpleWide/Barbed/hollow-Square differently) and the dash distribution on a closed path (InDesign spreads dashes evenly)."
+    },
+    {
+      "name": "line-shadows",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.061,
+      "max_p99_de": 2.25,
+      "min_ssim": 0.9941,
+      "rationale": "Added 2026-10-06 (ADR 130): what casts an object's drop shadow when the object has no fill. One page, no text, every item with the same shadow (offset 6/6 pt, Size 4, black 75 %): graphic lines at 6 pt round caps, 1 pt butt caps and a 6 pt projecting-cap diagonal; a 6 pt round-capped open polygon (a pen path); a closed stroke-only triangle; a filled triangle with no stroke; a filled, stroked oval. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the object paints: a line's and an unfilled polygon's from the stroke band including caps, a filled and stroked oval's from the ellipse plus the stroke's outer half. The engine matched the lines already (shadow profiles within 0.05 coverage); unfilled polygons cast nothing and the oval stamped its bounding rectangle: mean 0.382 / p99 13.140 / ssim 0.9864. With ovals and polygons stamping their painted outline: 0.051 / 1.879 / 0.9991; sized at worst * 1.20 and ssim - 0.005."
     }
   ]
 }

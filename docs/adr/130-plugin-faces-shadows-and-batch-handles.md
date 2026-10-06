@@ -45,11 +45,13 @@ into native page items met five gaps in the engine's doors:
   the last binding of an element wins, as on the mixed lane.
 - **A shadow on every shape.** Polygons and lines gain the object's `drop_shadow`. The toggle and
   the six field paths apply to all five shape kinds through one slot finder, with the same
-  inverses. A polygon's shadow is stamped under its own outline. A line has no fill, so its
+  inverses. A shape's shadow is cast from what it paints. A line has no fill, so its
   shadow is cast by the stroke: the centreline is stroked at the line's width, caps, join and
-  miter limit, and the resulting band is stamped (a dash is not cut out). The IDML adapter reads
-  a polygon's and a line's `TransparencySetting` shadow and writes it for source and inserted
-  ovals, polygons and lines.
+  miter limit, and the resulting band is stamped (a dash is not cut out). An oval or polygon
+  with a fill stamps its outline, pushed out by the part of a visible stroke that lies outside
+  it; one with no fill and a visible stroke stamps its stroke band, as a line does. The IDML
+  adapter reads a polygon's and a line's `TransparencySetting` shadow and writes it for source
+  and inserted ovals, polygons and lines.
 - **Script values.** The bridge reads a path as an anchor array or `{ anchors, subpathStarts? }`,
   an anchor as `[x, y]` or `{ anchor, left?, right? }`, and a dash array as its numbers. A gate
   (`paged-script/tests/advertised_values_construct.rs`) requires, for every advertised path, a
@@ -63,7 +65,15 @@ into native page items met five gaps in the engine's doors:
 - A plugin can draw in its own faces without changing what the document reports or how it lays
   out. A face the document needs is still the user's to supply.
 - A host gets the same reply whichever lane its batch took.
-- Shadows made on a pen path, an ellipse or a rule survive an IDML save and reopen. Whether
-  InDesign draws a line's object shadow from its stroke as the engine does has not been compared
-  against InDesign yet.
+- Shadows made on a pen path, an ellipse or a rule survive an IDML save and reopen.
+- The rule was compared with InDesign 20.0.1 on 2026-10-06 (the `line-shadows` fixture, gated in
+  `corpus/generated/fidelity-thresholds.json` and pinned by
+  `crates/paged-renderer/tests/line_shadows_pipeline.rs`). InDesign casts a line's shadow from the
+  stroke band, caps included, with the same offset, softness and opacity as the engine: shadow
+  profiles across a 6 pt and a 1 pt line agree within 0.05 coverage. The same comparison showed
+  that InDesign casts an unfilled polygon's shadow from its stroke, where the engine cast none,
+  and an oval's from the ellipse plus its stroke, where the engine stamped the bounding
+  rectangle. Both now follow InDesign: the page went from mean ΔE 0.382 / p99 13.14 / SSIM
+  0.9864 to 0.051 / 1.88 / 0.9991. A stroke-only rectangle or text frame still casts no shadow,
+  and a stroked rectangle's shadow does not include the stroke.
 - Every addition is optional on the wire. Hosts gate on protocol 70.
