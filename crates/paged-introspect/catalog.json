@@ -432,7 +432,21 @@
       "params": "(storyId, offset, fieldKind)",
       "returns": "bool",
       "kind": "author",
-      "summary": "Insert a field marker; fieldKind = \"pageNumber\" | \"nextPageNumber\" | { placeholder: { plugin, key, value? } }."
+      "summary": "Insert a field marker; fieldKind = \"pageNumber\" | \"nextPageNumber\" | { placeholder: { plugin, key, value? } } | { textVariable: { variableId } } (an instance of a text variable; InDesign keeps it)."
+    },
+    {
+      "name": "paged.createTextVariable",
+      "params": "(name, contents?, textBefore?, textAfter?)",
+      "returns": "string (address) | null",
+      "kind": "author",
+      "summary": "Define a custom text variable; returns textVariable:dTextVariablen<name>. Switch its value with paged.set(address, \"textVariableContents\", v) — every instance re-bakes."
+    },
+    {
+      "name": "paged.deleteTextVariable",
+      "params": "(variableId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Remove a text variable definition (refused while an instance is in the text)."
     },
     {
       "name": "paged.setFieldValue",
@@ -1527,6 +1541,8 @@
     "setPluginMetadata",
     "setPageMetadata",
     "setDocumentMetadata",
+    "createTextVariable",
+    "deleteTextVariable",
     "pathPointCurveType",
     "pathPointSet",
     "batch",

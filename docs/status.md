@@ -1,8 +1,8 @@
 # Status
 
-What the engine ships and what it does not, read from the code at commit `d9f6a32`
-(`PROTOCOL_VERSION` 70: the presentation batch and the platform doors for plugin content on
-top of `v0.69.0`, the data-publishing batch). This page stays
+What the engine ships and what it does not, read from the code of the protocol-71 batch
+(`PROTOCOL_VERSION` 71: the object model — one address grammar and typed property schemas —
+on top of `v0.70.0`, the presentation batch and the platform doors for plugin content). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -15,7 +15,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 127 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 130 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
@@ -44,6 +44,17 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `deleteMaster` and `renameMaster` make, remove and name masters. A radial gradient is centred
   at its `GradientFillStart`, and a cell edge draws in its stroke style (a double border as two
   rules) ([ADR 129](adr/129-pages-and-masters-for-presentations.md), protocol 70).
+- **One object model.** Every object has an address (`doc`, `page:#2`, `swatch:Color/Red`,
+  `style:object/<id>`, `cell:<table>/0,1`, `textVariable:<id>`, …) and selectors find them
+  (`page:#3 > frame[name="price"]`, `RequestQuery`, `paged.query`, `paged query`)
+  ([ADR 131](adr/131-one-address-grammar-and-selectors.md)). Every property has a typed schema
+  in the catalog's `propertySchemas`, and one `set` writes any of them by (address, path, value)
+  through the operation that already owns it, with `RequestGet` as its read twin —
+  `paged.set`/`paged.get`, `paged set`/`paged get`
+  ([ADR 132](adr/132-typed-property-schemas-and-virtual-paths.md), protocol 71). Object, cell
+  and table styles, page margins and columns, document bleed and slug, text-variable
+  definitions, effects on lines and item names became settable; a custom text variable can be
+  created and instanced in text, and one `set` switches every instance.
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
@@ -64,12 +75,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   ([ADR 130](adr/130-plugin-faces-shadows-and-batch-handles.md), protocol 70).
 - **Viewer.** `ViewerSession` (load, layout, present, RGBA readback) and the TypeScript
   wrapper with camera, input and events.
-- **Command line.** `paged` with thirteen top-level subcommands, the line-delimited JSON
+- **Command line.** `paged` with sixteen top-level subcommands, the line-delimited JSON
   session (`paged session`, `paged-run`), and the binaries `paged-inspect`, `paged-diff`,
   `paged-gen` and `paged-export`.
 - **Capability catalog.** `paged describe`, `describeCatalog()` and the committed
-  `crates/paged-introspect/catalog.json`: 147 host functions, 220 settable paths, 120
-  operations.
+  `crates/paged-introspect/catalog.json`: 158 host functions, 221 settable paths, 394
+  property schemas, 130 operations, and the 30 address forms of `idGrammar`.
 - **Fidelity tooling.** The fixture generator (60 samples), the image-diff tool, 59
   reference PDFs with thresholds, and the scripts that drive InDesign to export them.
 
@@ -95,6 +106,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which
   is one JSON document (`crates/paged-canvas/src/model.rs:5122-5125`). A model part with
   another format version is ignored on load, and the IDML parts are parsed instead.
+- **Some object-model state does not reach an IDML save yet.** The IDML adapter (in the
+  plugin-publish repository) writes neither a page item's `Visible="false"` when it was hidden
+  in paged, nor a text variable authored in paged (its definition or its instances), nor an item
+  name set in paged; the model and a `.paged` reload keep all three. Each is pinned by a test in
+  `crates/paged-canvas/tests/idml_export_object_model_state.rs` that turns red when the adapter
+  is fixed.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
 - **The fidelity gate needs the reference colour profile.** On a runner without a FOGRA39
