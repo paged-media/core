@@ -2841,6 +2841,11 @@ pub struct PageSummary {
     pub bleed_bottom_pt: f32,
     #[serde(default)]
     pub bleed_right_pt: f32,
+    /// v69 — the page's own `x-paged:` plugin-metadata entries
+    /// (`SetPageMetadata`): a slide's notes, transition, hidden flag. Empty
+    /// when it has none.
+    #[serde(default)]
+    pub plugin_metadata: Vec<PluginMetadataEntry>,
 }
 
 /// panels.md gaps 9/10/19 — one `<Section>` definition. Backs

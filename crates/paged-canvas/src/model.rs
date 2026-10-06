@@ -3545,6 +3545,21 @@ impl CanvasModel {
                     prev: None,
                 },
             }),
+            Mutation::SetPageMetadata {
+                page,
+                key,
+                value,
+                caller,
+            } => Some(Operation::SetProperty {
+                node: NodeId::Page(page.0.clone()),
+                path: PropertyPath::PluginMetadata,
+                value: Value::PluginMetadata {
+                    key: key.clone(),
+                    value: value.clone(),
+                    caller: caller.clone(),
+                    prev: None,
+                },
+            }),
             Mutation::PathPointCurveType {
                 element_id,
                 index,
@@ -7543,9 +7558,17 @@ impl CanvasModel {
         let scene = grown.as_ref().unwrap_or(&self.scene);
         let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
+        // v69 — page self id → the spread whose labels hold its metadata.
+        let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
+            std::collections::HashMap::new();
         for parsed in &scene.spreads {
             for (pid, m) in &parsed.spread.page_margins {
                 margins.insert(pid.as_str(), m);
+            }
+            for pg in &parsed.spread.pages {
+                if let Some(id) = pg.self_id.as_deref() {
+                    spread_of.insert(id, &parsed.spread);
+                }
             }
         }
         self.built
@@ -7568,6 +7591,10 @@ impl CanvasModel {
                     bleed_left_pt: bleed.bleed_inside_or_left,
                     bleed_bottom_pt: bleed.bleed_bottom,
                     bleed_right_pt: bleed.bleed_outside_or_right,
+                    plugin_metadata: spread_of
+                        .get(p.id.as_str())
+                        .map(|sp| tree_plugin_metadata(sp, p.id.as_str()))
+                        .unwrap_or_default(),
                 }
             })
             .collect()

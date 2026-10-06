@@ -559,6 +559,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             2,
         )
         .function(guarded(paged_move_page), js_string!("movePage"), 2)
+        .function(
+            guarded(paged_set_page_metadata),
+            js_string!("setPageMetadata"),
+            3,
+        )
         // frames & groups
         .function(
             guarded(paged_delete_element),
@@ -1624,6 +1629,31 @@ fn paged_move_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     Ok(apply_bool(&Mutation::MovePage {
         page: PageId(page),
         after,
+    }))
+}
+
+/// `paged.setPageMetadata(pageId, key, value?)` — set (or, with
+/// `value` omitted/null, delete) one plugin-metadata entry on a page
+/// (`Mutation::SetPageMetadata`; the value is the JSON envelope string).
+fn paged_set_page_metadata(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let key = args
+        .get_or_undefined(1)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let value = opt_string(args.get_or_undefined(2), ctx);
+    Ok(apply_bool(&Mutation::SetPageMetadata {
+        page: PageId(page),
+        key,
+        value,
+        caller: None,
     }))
 }
 

@@ -587,7 +587,18 @@ pub(super) fn apply_plugin_metadata(
             ));
         }
     }
-    let Some(si) = find_spread_for_leaf(doc, node) else {
+    // A page's labels live on its spread, keyed by the page's own id.
+    let si = match node {
+        NodeId::Page(pid) => doc.spreads.iter().position(|parsed| {
+            parsed
+                .spread
+                .pages
+                .iter()
+                .any(|p| p.self_id.as_deref() == Some(pid.as_str()))
+        }),
+        _ => find_spread_for_leaf(doc, node),
+    };
+    let Some(si) = si else {
         return Err(OperationError::NodeNotFound(node.clone()));
     };
 

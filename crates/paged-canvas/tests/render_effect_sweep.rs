@@ -1932,6 +1932,18 @@ fn frame_cases(c: &mut Vec<Case>) {
             caller: None,
         },
     ));
+    c.push(inert(
+        "SetPageMetadata",
+        "geometry",
+        "one Label KeyValuePair on a page — a carrier for plugin state (a \
+         slide's notes) with no paint of its own; the renderer never reads Label",
+        |m| Mutation::SetPageMetadata {
+            page: first_page(m),
+            key: "x-paged:sweep".into(),
+            value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
+            caller: None,
+        },
+    ));
     c.push(paints("Batch", "geometry", |m| {
         let id = rect_ids(m)[0].clone();
         let color = some_color(m);

@@ -89,8 +89,14 @@ pub(super) fn apply_duplicate_page(
     // InsertPage / id scans (`u<hex>`).
     let mut clone = doc.spreads[src_idx].clone();
     let mut next = next_id_seed(doc);
-    let remap = |slot: &mut Option<String>, next: &mut u64| {
-        *slot = Some(format!("u{:x}", *next));
+    // Old id → new id, so the spread's id-keyed side maps follow.
+    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut remap = |slot: &mut Option<String>, next: &mut u64| {
+        let fresh = format!("u{:x}", *next);
+        if let Some(old) = slot.take() {
+            renamed.insert(old, fresh.clone());
+        }
+        *slot = Some(fresh);
         *next += 1;
     };
     remap(&mut clone.spread.self_id, &mut next);
@@ -114,6 +120,30 @@ pub(super) fn apply_duplicate_page(
     }
     for g in &mut clone.spread.groups {
         remap(&mut g.self_id, &mut next);
+    }
+
+    // The side maps keyed by a page's or an item's Self id (labels with
+    // plugin metadata, page margins, placed-image metadata, pasted-in
+    // children, opacity masks) follow their owners to the new ids; they
+    // used to keep the old ones, so a duplicate lost its metadata.
+    fn rekey<V>(
+        map: &mut std::collections::HashMap<String, V>,
+        renamed: &std::collections::HashMap<String, String>,
+    ) {
+        *map = std::mem::take(map)
+            .into_iter()
+            .map(|(k, v)| (renamed.get(&k).cloned().unwrap_or(k), v))
+            .collect();
+    }
+    rekey(&mut clone.spread.labels, &renamed);
+    rekey(&mut clone.spread.page_margins, &renamed);
+    rekey(&mut clone.spread.image_metadata, &renamed);
+    rekey(&mut clone.spread.nested_children, &renamed);
+    rekey(&mut clone.spread.opacity_masks, &renamed);
+    for mask in clone.spread.opacity_masks.values_mut() {
+        if let Some(fresh) = renamed.get(&mask.mask_item) {
+            mask.mask_item = fresh.clone();
+        }
     }
 
     // Stack the clone below everything on the pasteboard (same rule as

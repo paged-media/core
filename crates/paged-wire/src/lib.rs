@@ -1201,6 +1201,19 @@ pub enum Mutation {
         #[serde(default)]
         caller: Option<String>,
     },
+    /// v69 — `SetPluginMetadata` for a page: one Label `KeyValuePair`
+    /// on the page itself (a slide's notes, transition, hidden flag), with
+    /// the same gates (reserved `x-paged:` namespace, 64 KiB cap, JSON
+    /// envelope, optional `caller`). It travels with the page through
+    /// move, duplicate, delete and undo. `value: None` deletes the entry.
+    SetPageMetadata {
+        page: PageId,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
     /// Track J — toggle the curve type of an anchor between corner
     /// (handles equal to anchor) and smooth (handles derived from
     /// neighbour tangents). UI dispatches from a double-click on
@@ -1787,6 +1800,7 @@ mutation_vocabulary! {
     DuplicateElements,
     SetGroupTransform,
     SetPluginMetadata,
+    SetPageMetadata,
     PathPointCurveType,
     PathPointSet,
     Batch,

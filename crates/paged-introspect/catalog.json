@@ -253,6 +253,13 @@
       "summary": "Move a page to follow another (omit/null: to the front)."
     },
     {
+      "name": "paged.setPageMetadata",
+      "params": "(pageId, key, value?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Set or delete one plugin-metadata entry on a page (value: the JSON envelope)."
+    },
+    {
       "name": "paged.deleteElement",
       "params": "(id)",
       "returns": "bool",
@@ -1333,6 +1340,7 @@
     "duplicateElements",
     "setGroupTransform",
     "setPluginMetadata",
+    "setPageMetadata",
     "pathPointCurveType",
     "pathPointSet",
     "batch",
