@@ -1991,6 +1991,12 @@ fn page_cases(c: &mut Vec<Case>) {
         page_id: first_page(m),
         bounds: (0.0, 0.0, 500.0, 400.0),
     }));
+    c.push(paints("MovePage", "layout", |m| Mutation::MovePage {
+        // The second page moves to the front: the first page shows what
+        // the second did.
+        page: page_at(m, 1),
+        after: None,
+    }));
     c.push(paints("DuplicatePage", "layout", |m| {
         Mutation::DuplicatePage {
             page: first_page(m),

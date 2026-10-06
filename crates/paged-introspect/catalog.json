@@ -246,6 +246,13 @@
       "summary": "Apply a master to a page (omit/null detaches)."
     },
     {
+      "name": "paged.movePage",
+      "params": "(pageId, afterPageId?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Move a page to follow another (omit/null: to the front)."
+    },
+    {
       "name": "paged.deleteElement",
       "params": "(id)",
       "returns": "bool",
@@ -1383,6 +1390,7 @@
     "activateConditionSet",
     "applyMasterToPage",
     "duplicatePage",
+    "movePage",
     "insertSection",
     "editSection",
     "deleteSection",

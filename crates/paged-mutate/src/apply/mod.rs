@@ -469,6 +469,11 @@ pub(crate) fn apply_inner(
         Operation::RestoreConditionVisibility { states } => {
             apply_restore_condition_visibility(doc, states)
         }
+        Operation::MovePage {
+            page_id,
+            after_page_id,
+        } => apply_move_page(doc, page_id, after_page_id.as_deref()),
+        Operation::SetSpreadOrder { spreads } => apply_set_spread_order(doc, spreads),
         Operation::ApplyMasterToPage { page, master } => {
             apply_master_to_page(doc, page, master.as_deref())
         }

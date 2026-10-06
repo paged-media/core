@@ -4190,6 +4190,10 @@ impl CanvasModel {
                 page: page.0.clone(),
                 master: master.clone(),
             }),
+            Mutation::MovePage { page, after } => Some(Operation::MovePage {
+                page_id: page.0.clone(),
+                after_page_id: after.as_ref().map(|a| a.0.clone()),
+            }),
             Mutation::DuplicatePage { page } => Some(Operation::DuplicatePage {
                 page: page.0.clone(),
                 clone_spread_json: None,

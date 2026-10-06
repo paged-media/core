@@ -1669,6 +1669,16 @@ mod tests {
                 page: "Page/u1".to_string(),
                 master: Some("MasterSpread/uA".to_string()),
             },
+            Operation::MovePage {
+                page_id: "Page/u1".to_string(),
+                after_page_id: None,
+            },
+            Operation::SetSpreadOrder {
+                spreads: vec![crate::operation::SpreadPlacement {
+                    self_id: "S1".to_string(),
+                    item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+                }],
+            },
             Operation::DuplicatePage {
                 page: "Page/u1".to_string(),
                 clone_spread_json: None,
@@ -7628,6 +7638,104 @@ mod tests {
                 p.document().styles.conditions["Condition/B"].visible,
                 Some(true)
             );
+        }
+
+        // ---- MovePage -----------------------------------------------------
+
+        /// Three single-page spreads `S1`/`P1` … `S3`/`P3`, stacked down the
+        /// pasteboard (100 pt pages, 72 pt apart) when `stacked`, all at
+        /// the origin otherwise.
+        fn three_spreads(stacked: bool) -> Document {
+            let mut doc = base_doc();
+            for k in 1..=3 {
+                let mut pg = page(&format!("P{k}"));
+                pg.bounds = paged_model::Bounds {
+                    top: 0.0,
+                    left: 0.0,
+                    bottom: 100.0,
+                    right: 100.0,
+                };
+                let ty = if stacked { (k - 1) as f32 * 172.0 } else { 0.0 };
+                let spread = Spread {
+                    self_id: Some(format!("S{k}")),
+                    item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, ty]),
+                    pages: vec![pg],
+                    ..Default::default()
+                };
+                doc.spreads.push(paged_scene::ParsedSpread {
+                    src: format!("Spreads/Spread_S{k}.xml"),
+                    spread,
+                });
+            }
+            doc
+        }
+
+        fn order(p: &Project) -> Vec<String> {
+            p.document()
+                .spreads
+                .iter()
+                .map(|s| s.spread.self_id.clone().unwrap())
+                .collect()
+        }
+
+        fn tys(p: &Project) -> Vec<f32> {
+            p.document()
+                .spreads
+                .iter()
+                .map(|s| s.spread.item_transform.unwrap()[5])
+                .collect()
+        }
+
+        #[test]
+        fn move_page_reorders_restacks_and_undoes_exactly() {
+            let mut p = Project::new(three_spreads(true));
+            p.apply(Operation::MovePage {
+                page_id: "P3".to_string(),
+                after_page_id: None,
+            })
+            .expect("move to front");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+            // Restacked in the new order: same slots as before.
+            assert_eq!(tys(&p), [0.0, 172.0, 344.0]);
+            p.apply(Operation::MovePage {
+                page_id: "P3".to_string(),
+                after_page_id: Some("P2".to_string()),
+            })
+            .expect("move after P2");
+            assert_eq!(order(&p), ["S1", "S2", "S3"]);
+            p.undo().expect("undo");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+            p.undo().expect("undo");
+            assert_eq!(order(&p), ["S1", "S2", "S3"]);
+            assert_eq!(tys(&p), [0.0, 172.0, 344.0]);
+            p.redo().expect("redo");
+            assert_eq!(order(&p), ["S3", "S1", "S2"]);
+        }
+
+        #[test]
+        fn move_page_keeps_shared_positions_and_refuses_bad_targets() {
+            let mut p = Project::new(three_spreads(false));
+            p.apply(Operation::MovePage {
+                page_id: "P1".to_string(),
+                after_page_id: Some("P3".to_string()),
+            })
+            .expect("move to end");
+            assert_eq!(order(&p), ["S2", "S3", "S1"]);
+            assert_eq!(tys(&p), [0.0, 0.0, 0.0]);
+            assert!(p
+                .apply(Operation::MovePage {
+                    page_id: "P2".to_string(),
+                    after_page_id: Some("P9".to_string()),
+                })
+                .is_err());
+            assert!(p
+                .apply(Operation::MovePage {
+                    page_id: "P2".to_string(),
+                    after_page_id: Some("P2".to_string()),
+                })
+                .is_err());
+            // A refused move leaves the order alone.
+            assert_eq!(order(&p), ["S2", "S3", "S1"]);
         }
 
         // ---- ApplyMasterToPage ------------------------------------------

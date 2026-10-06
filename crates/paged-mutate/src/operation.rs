@@ -3780,6 +3780,22 @@ pub enum Operation {
         #[serde(default)]
         master: Option<String>,
     },
+    /// v69 — move a page (its single-page spread) to follow
+    /// `after_page_id`, or to the front when `None`: the slide sorter's
+    /// reorder. The spreads restack in their new order when they were
+    /// stacked; spreads that share one position keep it. Inverse:
+    /// `SetSpreadOrder` with the previous order and transforms.
+    MovePage {
+        page_id: String,
+        #[serde(default)]
+        after_page_id: Option<String>,
+    },
+    /// v69 — put the document's spreads in exactly this order, each with
+    /// the transform given. `MovePage`'s inverse (and this op's own); every
+    /// spread must be named once.
+    SetSpreadOrder {
+        spreads: Vec<SpreadPlacement>,
+    },
     /// W0.5 — duplicate a single-page spread (the page plus every page
     /// item) immediately after the source, minting fresh self ids for
     /// the clone. Inverse: `RemovePage` of the cloned page.
@@ -4155,6 +4171,16 @@ pub enum PathfinderRegionVerb {
 pub enum FaceSelectMode {
     Keep,
     Remove,
+}
+
+/// A spread's place in the document: its id and transform.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadPlacement {
+    pub self_id: String,
+    #[serde(default)]
+    pub item_transform: Option<[f32; 6]>,
 }
 
 /// Hint to downstream caches about what the apply touched. Lists

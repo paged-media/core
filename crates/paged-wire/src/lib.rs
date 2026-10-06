@@ -1557,6 +1557,14 @@ pub enum Mutation {
     DuplicatePage {
         page: PageId,
     },
+    /// v69 — move a page (its single-page spread) to follow `after`, or to
+    /// the front when `after` is absent: a slide sorter's reorder. Spreads
+    /// stacked down the pasteboard restack in the new order. One undo step.
+    MovePage {
+        page: PageId,
+        #[serde(default)]
+        after: Option<PageId>,
+    },
     /// W0.5 — insert a `<Section>` anchored at `at_page`.
     InsertSection {
         at_page: PageId,
@@ -1836,6 +1844,7 @@ mutation_vocabulary! {
     ActivateConditionSet,
     ApplyMasterToPage,
     DuplicatePage,
+    MovePage,
     InsertSection,
     EditSection,
     DeleteSection,

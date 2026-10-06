@@ -558,6 +558,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             js_string!("applyMasterToPage"),
             2,
         )
+        .function(guarded(paged_move_page), js_string!("movePage"), 2)
         // frames & groups
         .function(
             guarded(paged_delete_element),
@@ -1608,6 +1609,21 @@ fn paged_apply_master_to_page(
     Ok(apply_bool(&Mutation::ApplyMasterToPage {
         page: PageId(page),
         master,
+    }))
+}
+
+/// `paged.movePage(pageId, afterPageId?)` — move a page to follow
+/// `afterPageId`, or to the front when it is omitted/null
+/// (`Mutation::MovePage`).
+fn paged_move_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let page = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let after = opt_string(args.get_or_undefined(1), ctx).map(PageId);
+    Ok(apply_bool(&Mutation::MovePage {
+        page: PageId(page),
+        after,
     }))
 }
 
