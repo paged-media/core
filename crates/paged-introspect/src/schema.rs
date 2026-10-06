@@ -715,6 +715,10 @@ pub fn validate(schema: &PropertySchema, value: &Value) -> Result<Value, String>
         return Err("read-only".to_string());
     }
     match value {
+        // The null forms every surface already sends.
+        Value::Length(None) | Value::ColorRef(None) if wire_of(value) != Some(schema.wire) => {
+            coerce(schema, Input::Null)
+        }
         Value::Number(n) => coerce(schema, Input::Number(*n)),
         Value::Enum(s) | Value::Ref(s) | Value::Text(s) if schema.wire == Wire::Text => {
             coerce(schema, Input::Text(s))

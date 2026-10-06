@@ -22,6 +22,10 @@
 //! The point of this phase is to nail down the **API surface** the
 //! main thread depends on; incrementality is Phase 3's problem.
 
+/// ADR 132 — `Mutation::Set` resolution and the property read twin.
+#[path = "virtual_set.rs"]
+pub mod virtual_set;
+
 use std::collections::HashMap;
 
 use idml_export::{ExportedLink, FontFace};
@@ -2284,6 +2288,44 @@ impl CanvasModel {
         // A value the operation layer would store but no caller may
         // author (an unknown composer) is refused before anything runs.
         refuse_unauthorable(mutation)?;
+        // ADR 132 — `Set { address, path, value }` resolves to the op that
+        // already writes the property and is applied as THAT op: same
+        // apply arm, same inverse, one undo step. Inside a batch it reaches
+        // here per child (a batch holding a `Set` takes the sequential
+        // lane, so each `Set` merges against the state its predecessors
+        // left — two `Set`s on one swatch must not both start from the
+        // pre-batch spec).
+        if let Mutation::Set {
+            address,
+            path,
+            value,
+        } = mutation
+        {
+            let resolved = self
+                .resolve_set(address, path, value)
+                .map_err(|what| crate::channel::WorkerError::NotImplemented { what })?;
+            return match resolved {
+                virtual_set::Resolved::Mutation(m) => self.apply_mutation(&m),
+                virtual_set::Resolved::Operation(op) => {
+                    let outcome = self.apply_operation(op)?;
+                    Ok(MutationOutcome {
+                        applied_seq: outcome.applied_seq,
+                        page_ids: outcome.page_ids,
+                        inverse: crate::mutate::TextOp::InsertText {
+                            story_id: String::new(),
+                            offset: 0,
+                            text: String::new(),
+                            cell: None,
+                            restore: None,
+                        },
+                        created_id: None,
+                        page_structure_changed: false,
+                        reflow: None,
+                        minted: Vec::new(),
+                    })
+                }
+            };
+        }
         // Editor-ops — document defaults are app-level state, not a
         // scene edit: no rebuild, no undo entry, no pixel change. The
         // editor reads the triple back via `DocumentMeta`.
