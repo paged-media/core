@@ -1362,6 +1362,7 @@ pub(super) fn emit_frame_scene_layer(
     registry: Option<&std::collections::HashMap<String, paged_compose::SceneLayer>>,
     font_bytes: Option<&[u8]>,
     assets: Option<&dyn crate::AssetResolver>,
+    scene_fonts: Option<&dyn crate::AssetResolver>,
 ) {
     let Some(registry) = registry else { return };
     let Some(id) = self_id else { return };
@@ -1387,7 +1388,7 @@ pub(super) fn emit_frame_scene_layer(
     // (the faces registered for the document). The document default font
     // draws a run only when its family is absent or does not resolve, and
     // a named family that falls back is reported once per frame and key.
-    let faces = SceneTextFaces::resolve(layer, assets, font_bytes);
+    let faces = SceneTextFaces::resolve(layer, scene_fonts, assets, font_bytes);
     for (family, style) in &faces.fallbacks {
         let label = match style.as_deref() {
             Some(s) => format!("{family} {s}"),
@@ -1497,6 +1498,7 @@ struct SceneTextFaces {
 impl SceneTextFaces {
     fn resolve(
         layer: &paged_compose::SceneLayer,
+        scene_fonts: Option<&dyn crate::AssetResolver>,
         assets: Option<&dyn crate::AssetResolver>,
         font_bytes: Option<&[u8]>,
     ) -> Self {
@@ -1516,13 +1518,20 @@ impl SceneTextFaces {
             if bytes.iter().any(|(k, _)| *k == key) || fallbacks_contains(&fallbacks, &key) {
                 continue;
             }
-            let own = match (&key.0, assets) {
-                (Some(family), Some(resolver)) => resolver
-                    .resolve_font_traced(family, key.1.as_deref())
-                    .filter(|rf| !rf.substituted)
-                    .map(|rf| rf.bytes),
-                _ => None,
-            };
+            // v70 — the scene-scoped faces first (a plugin's own), then
+            // the document registry. Either resolver's catch-all default
+            // is a miss.
+            let own = key.0.as_ref().and_then(|family| {
+                [scene_fonts, assets]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|resolver| {
+                        resolver
+                            .resolve_font_traced(family, key.1.as_deref())
+                            .filter(|rf| !rf.substituted)
+                            .map(|rf| rf.bytes)
+                    })
+            });
             if own.is_none() {
                 if let Some(family) = &key.0 {
                     fallbacks.push((family.clone(), key.1.clone()));

@@ -592,7 +592,33 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - `setDocumentMetadata`: a document-scoped, UNDOABLE plugin label
 //     (`DesignMap::labels`), read back in `DocumentMeta.pluginMetadata`;
 //     persisted in the `.paged` native model part (not yet in IDML).
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
+// v70 — the presentation batch and the platform doors for plugin content.
+//   - Pages and masters: `movePage` (reorder; `reorderSpreads` inverse),
+//     `setPageMetadata` (a page's `x-paged:` plugin label, in its spread's
+//     labels map; travels with duplicate, delete and undo),
+//     `insertHyperlink.page` (a link to a page), `requestSnapshot.hideItems`
+//     (a page drawn without some items), `onMaster` (edit a master's items
+//     through the ordinary ops) and `createMaster` / `deleteMaster` /
+//     `renameMaster`.
+//   - Model fields with no op of their own: a radial gradient's
+//     `GradientFillStart`, a cell / cell style's `…EdgeStrokeType`, and
+//     `ParsedMasterSpread.name`.
+//   - `RegisterFont.scope` (`"document"` default | `"sceneLayer"`) and an
+//     optional `ClearFontRegistry` payload `{ scope }`: scene-scoped faces
+//     resolve scene-layer text only, ahead of the document registry, and
+//     never reach document layout, `FontSummary.isMissing` or substitution
+//     tracing. A payload-less `clearFontRegistry` clears the document
+//     registry, as before.
+//   - Behaviour: a batch that translates whole (one `Operation::Batch`)
+//     reports each mint's `bindCreated` handle in `minted[].handle`, as
+//     the mixed lane always did (it reported `null`).
+//   - Behaviour: the `frameDropShadow*` paths apply to ovals, polygons and
+//     graphic lines (a line's shadow is cast by its stroke), and the IDML
+//     adapter reads and writes them; the document's `setDocumentMetadata`
+//     labels now round-trip through IDML (`<Document><Properties><Label>`).
+//   - New operations an older worker cannot apply, hence the bump (v0.69.0
+//     shipped the paged.data batch alone).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(70);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -806,6 +832,29 @@ pub struct MainToWorker {
     pub kind: MainToWorkerKind,
 }
 
+/// v70 — which registry a `RegisterFont` / `ClearFontRegistry` addresses.
+/// `document` is the registry document text lays out with (and the one
+/// `FontSummary.isMissing` and substitution tracing read); `sceneLayer` is
+/// consulted by plugin scene-layer text only, ahead of the document's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub enum FontScope {
+    #[default]
+    Document,
+    SceneLayer,
+}
+
+/// v70 — `ClearFontRegistry`'s optional payload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearFontRegistryPayload {
+    #[serde(default)]
+    #[tsify(optional)]
+    pub scope: FontScope,
+}
+
 /// The discriminated payload of a `MainToWorker` message. Tagged so
 /// TS can do `switch (msg.kind) { case "loadDocument": ... }` against
 /// camelCase field names. `rename_all_fields` cascades to struct
@@ -860,17 +909,34 @@ pub enum MainToWorkerKind {
     /// are re-laid out before the reply (no protocol change: the reply is
     /// still `FontRegistered`; re-render to see it).
     /// Reply: `FontRegistered`.
+    ///
+    /// v70 — `scope` (default `"document"`, today's behaviour). A
+    /// `"sceneLayer"` face goes to a separate table that only scene-layer
+    /// text resolves through (before the document registry): it never
+    /// lays out document text, never clears `FontSummary.isMissing` and
+    /// never enters substitution tracing — a plugin's face cannot stand in
+    /// for a font the document lacks.
     RegisterFont {
         family: String,
         #[serde(default)]
         style: Option<String>,
         #[tsify(type = "number[]")]
         bytes: ByteBuf,
+        #[serde(default)]
+        #[tsify(optional)]
+        scope: FontScope,
     },
-    /// Drop every font previously registered via `RegisterFont`. Reply:
-    /// `FontRegistryCleared`. Useful between two consecutive packs in a
-    /// long-running worker.
-    ClearFontRegistry,
+    /// Drop every font previously registered via `RegisterFont` in one
+    /// scope. Reply: `FontRegistryCleared`. Useful between two
+    /// consecutive packs in a long-running worker, and for dropping a
+    /// plugin's scene faces without touching the document's.
+    ///
+    /// v70 — the payload `{ scope }` is OPTIONAL: `{ kind:
+    /// "clearFontRegistry" }` (no payload, the message every older host
+    /// sends) clears the document registry, as before. It is a newtype
+    /// over an `Option` because an adjacently tagged struct variant
+    /// requires its `payload`, which would have refused that message.
+    ClearFontRegistry(#[tsify(optional)] Option<ClearFontRegistryPayload>),
     /// Concept 2 — register a named ICC profile with the worker's
     /// colour-profile registry (the `RegisterFont` pattern: sent any
     /// time, persists across loads). Profiles are assets shipped by
@@ -912,7 +978,7 @@ pub enum MainToWorkerKind {
         target_width_px: u32,
         #[serde(default)]
         dpi: Option<f32>,
-        /// v69 — draw the page without these items (a group: all its
+        /// v70 — draw the page without these items (a group: all its
         /// members): a slideshow build step, rendered without touching the
         /// document. Empty draws the page as it is.
         #[serde(default)]
@@ -2864,7 +2930,7 @@ pub struct PageSummary {
     pub bleed_bottom_pt: f32,
     #[serde(default)]
     pub bleed_right_pt: f32,
-    /// v69 — the page's own `x-paged:` plugin-metadata entries
+    /// v70 — the page's own `x-paged:` plugin-metadata entries
     /// (`SetPageMetadata`): a slide's notes, transition, hidden flag. Empty
     /// when it has none.
     #[serde(default)]
@@ -3086,7 +3152,7 @@ pub struct HyperlinkSummary {
     pub name: String,
     pub source: String,
     pub destination: String,
-    /// v69 — where the destination goes: a URL, or a page (its `Self`
+    /// v70 — where the destination goes: a URL, or a page (its `Self`
     /// id). Both absent for a text-anchor destination.
     #[serde(default)]
     pub destination_url: Option<String>,
@@ -4071,8 +4137,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v69() {
-        assert_eq!(PROTOCOL_VERSION.0, 69);
+    fn protocol_version_is_v70() {
+        assert_eq!(PROTOCOL_VERSION.0, 70);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

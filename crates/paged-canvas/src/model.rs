@@ -71,6 +71,9 @@ pub struct CanvasOptions {
     /// `paged-inspect --font-family "Family=path"`. Translates 1:1 to
     /// `BytesResolver::add_font` entries on every build/rebuild.
     pub font_registry: Vec<FontEntry>,
+    /// v70 — faces registered with `scope: "sceneLayer"`: scene-layer
+    /// text resolves them (before `font_registry`); nothing else does.
+    pub scene_font_registry: Vec<FontEntry>,
     /// CMYK ICC profile bytes for accurate colour. Optional; the
     /// renderer falls back to naive conversion when absent.
     pub cmyk_icc_profile: Option<Vec<u8>>,
@@ -370,6 +373,43 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// The `(element, handle)` pairs a translated batch bound, in order.
+///
+/// Translation drops every `bindCreated` child (it contributes no
+/// operation), so the binding is recovered here by walking the batch's
+/// children beside the operations they translated to: each non-binding
+/// child produced exactly one operation, and a `bindCreated` names the
+/// most recent creation before it — the rule translation applied.
+fn translated_handle_bindings(
+    doc: &paged_scene::Document,
+    mutation: &Mutation,
+    op: &paged_mutate::Operation,
+) -> Vec<(crate::element_selection::ElementId, String)> {
+    let (Mutation::Batch { ops: children }, paged_mutate::Operation::Batch { ops: translated }) =
+        (mutation, op)
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut translated = translated.iter();
+    let mut last_created: Option<crate::element_selection::ElementId> = None;
+    for child in children {
+        if let Mutation::BindCreated { handle } = child {
+            if let Some(id) = &last_created {
+                out.push((id.clone(), handle.clone()));
+            }
+            continue;
+        }
+        let Some(child_op) = translated.next() else {
+            break;
+        };
+        if let Some(id) = created_element_id(doc, child_op) {
+            last_created = Some(id);
+        }
+    }
+    out
+}
+
 fn created_element_id(
     doc: &paged_scene::Document,
     op: &paged_mutate::Operation,
@@ -1295,6 +1335,13 @@ pub struct CanvasModel {
     /// every (re)build. Owned by the model so the assets resolver
     /// borrowed in `PipelineOptions` doesn't need lifetimes leaking out.
     font_registry: Vec<FontEntry>,
+    /// v70 — the scene-scoped faces ([`CanvasOptions::scene_font_registry`])
+    /// and the resolver built over them (no default font: a miss falls
+    /// through to the document registry). Read by scene-layer text ONLY —
+    /// never by the font table, `fonts()` (`isMissing`) or substitution
+    /// tracing.
+    scene_font_registry: Vec<FontEntry>,
+    scene_font_resolver: Option<BytesResolver>,
     icc_bytes: Option<Vec<u8>>,
     /// Concept 2 — the load-time profile bytes (explicit
     /// `CanvasOptions::cmyk_icc_profile` or the designmap-name
@@ -1911,6 +1958,7 @@ impl CanvasModel {
         // lifetimes leaking through.
         let font_bytes = opts.fonts.into_iter().next();
         let font_registry = opts.font_registry;
+        let scene_font_registry = opts.scene_font_registry;
         // Concept 2 — profile registry + activation precedence:
         // explicit CanvasOptions::cmyk_icc_profile wins; else a
         // registered profile whose name matches the designmap's
@@ -2038,6 +2086,8 @@ impl CanvasModel {
             resource_render_scale: 1.0,
             font_bytes,
             font_registry,
+            scene_font_resolver: build_font_resolver(&scene_font_registry, None),
+            scene_font_registry,
             initial_icc_bytes: icc_bytes.clone(),
             icc_bytes,
             color_profiles,
@@ -2477,15 +2527,17 @@ impl CanvasModel {
         // synthesise an empty text op into the response. Future
         // convergence folds both into one shape.
         if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
+            // The handle each `bindCreated` named, read off the translated
+            // children BEFORE apply (the ids are already in their specs,
+            // and that is the scene translation itself resolved them in).
+            let bindings = translated_handle_bindings(&self.scene, mutation, &op);
             let outcome = self.apply_operation(op)?;
             let created_id = created_element_id(&self.scene, &outcome.applied.op);
             // Perf-Batch — a batch that translates whole still mints one
             // id per creating child, and `created_id` names only the
-            // last. Report the list in mint order. The `handle` names
-            // stay `None` on this lane: translation resolves handles
-            // before apply and drops the `bindCreated` children, so the
-            // binding is not recoverable from the applied operation —
-            // ORDER is the contract a caller reads either way.
+            // last. Report the list in mint order, each with the handle
+            // it was bound to — the same reply the mixed lane gives, so a
+            // caller never needs to know which lane its batch took.
             let minted: Vec<crate::channel::MintedElement> = if matches!(
                 mutation,
                 Mutation::Batch { .. } | Mutation::DuplicateElements { .. }
@@ -2494,8 +2546,15 @@ impl CanvasModel {
                     .into_iter()
                     .map(|element| {
                         let story_id = self.story_of_element(&element);
+                        // Last binding wins, as the mixed lane's
+                        // `last_mut()` overwrite does.
+                        let handle = bindings
+                            .iter()
+                            .rev()
+                            .find(|(id, _)| *id == element)
+                            .map(|(_, h)| h.clone());
                         crate::channel::MintedElement {
-                            handle: None,
+                            handle,
                             element,
                             story_id,
                         }
@@ -4594,7 +4653,7 @@ impl CanvasModel {
     }
 
     pub(crate) fn resolve_frame_node_id(&self, frame_id: &str) -> Option<paged_mutate::NodeId> {
-        // v69 — master items resolve too, for mutations wrapped in
+        // v70 — master items resolve too, for mutations wrapped in
         // `OnMaster`.
         let spreads = self
             .scene
@@ -7825,7 +7884,7 @@ impl CanvasModel {
         let scene = grown.as_ref().unwrap_or(&self.scene);
         let mut margins: std::collections::HashMap<&str, &paged_model::MarginPreference> =
             std::collections::HashMap::new();
-        // v69 — page self id → the spread whose labels hold its metadata.
+        // v70 — page self id → the spread whose labels hold its metadata.
         let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
             std::collections::HashMap::new();
         for parsed in &scene.spreads {
@@ -7935,7 +7994,7 @@ impl CanvasModel {
             .master_spreads
             .iter()
             .map(|(self_id, ms)| MasterPageSummary {
-                // v69 — the master's `Name` when it has one.
+                // v70 — the master's `Name` when it has one.
                 label: ms.name.clone().unwrap_or_else(|| self_id.clone()),
                 self_id: self_id.clone(),
                 page_count: ms.spread.pages.len() as u32,
@@ -9729,6 +9788,11 @@ impl CanvasModel {
             // printed/exported sheet includes them (document-grade vector
             // output).
             scene_layers: Some(&self.scene_layers),
+            // v70 — scene-scoped faces, for scene-layer text alone.
+            scene_fonts: self
+                .scene_font_resolver
+                .as_ref()
+                .map(|r| r as &dyn paged_renderer::AssetResolver),
             // C-6 — claimed image providers assemble pyramid tiles inside
             // their frames; missing tiles land on
             // `BuiltDocument::resource_tiles_needed`.
@@ -9817,7 +9881,7 @@ impl CanvasModel {
             .map_err(|e| crate::channel::LoadError::Build(e.to_string()))
     }
 
-    /// v69 — the page as it draws with some items hidden: a slideshow's
+    /// v70 — the page as it draws with some items hidden: a slideshow's
     /// build steps (each frame is the slide without the items later steps
     /// reveal). A copy of the scene with those items (a group: all its
     /// members, master items included) set invisible is built once; the
@@ -10816,6 +10880,70 @@ impl CanvasModel {
         let scene_frames = self.scene_layer_frames_naming(|family| family == entry.family);
         self.font_registry.push(entry);
         self.relayout_for_registry_change(scene_frames)
+    }
+
+    /// v70 — register a face in one scope. `Document` is
+    /// [`Self::register_font`]. `SceneLayer` adds it to the scene-only
+    /// table: the frames whose scene text names the family rebuild (their
+    /// ids are returned), and nothing the document sees changes — no story
+    /// re-lays out, `fonts()` still reports the family missing.
+    pub fn register_font_scoped(
+        &mut self,
+        entry: FontEntry,
+        scope: crate::channel::FontScope,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        match scope {
+            crate::channel::FontScope::Document => self.register_font(entry),
+            crate::channel::FontScope::SceneLayer => {
+                let frames = self.scene_layer_frames_naming(|family| family == entry.family);
+                self.scene_font_registry.push(entry);
+                self.scene_font_resolver = build_font_resolver(&self.scene_font_registry, None);
+                self.rebuild_scene_frames(frames)
+            }
+        }
+    }
+
+    /// v70 — clear one scope's registry. `Document` is
+    /// [`Self::clear_font_registry`]; `SceneLayer` drops the scene-only
+    /// faces and rebuilds the frames whose scene text named one.
+    pub fn clear_font_registry_scoped(
+        &mut self,
+        scope: crate::channel::FontScope,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        match scope {
+            crate::channel::FontScope::Document => self.clear_font_registry(),
+            crate::channel::FontScope::SceneLayer => {
+                if self.scene_font_registry.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let registered: std::collections::BTreeSet<String> = self
+                    .scene_font_registry
+                    .iter()
+                    .map(|e| e.family.clone())
+                    .collect();
+                let frames = self.scene_layer_frames_naming(|family| registered.contains(family));
+                self.scene_font_registry.clear();
+                self.scene_font_resolver = None;
+                self.rebuild_scene_frames(frames)
+            }
+        }
+    }
+
+    /// Rebuild for a scene-face change: only scene layers re-resolve, so
+    /// no story is touched; the frames' pages are not a story's, so every
+    /// page is reported (as for a scene re-resolve in
+    /// [`Self::relayout_for_registry_change`]). Nothing to do — and no
+    /// rebuild — when no frame names an affected family.
+    fn rebuild_scene_frames(
+        &mut self,
+        frames: Vec<String>,
+    ) -> Result<Vec<String>, crate::channel::LoadError> {
+        if frames.is_empty() {
+            return Ok(frames);
+        }
+        self.pending_dirty_scope = DirtyScope::Everything;
+        self.rebuild_after_mutation()?;
+        Ok(frames)
     }
 
     /// Drop every registered font from the LIVE model (the worker's

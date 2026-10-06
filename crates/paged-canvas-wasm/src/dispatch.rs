@@ -31,9 +31,9 @@
 //! of which changes a single serialised field.
 
 use paged_canvas::{
-    channel::LayoutCacheStats, CanvasModel, CanvasOptions, ColorProfileEntry, FontEntry,
-    MainToWorker, MainToWorkerKind, PageId, WorkerError, WorkerToMain, WorkerToMainKind,
-    PROTOCOL_VERSION,
+    channel::{FontScope, LayoutCacheStats},
+    CanvasModel, CanvasOptions, ColorProfileEntry, FontEntry, MainToWorker, MainToWorkerKind,
+    PageId, WorkerError, WorkerToMain, WorkerToMainKind, PROTOCOL_VERSION,
 };
 
 /// Wall-clock source for the `rebuild_ms` instrumentation. On wasm this
@@ -85,6 +85,9 @@ pub struct WorkerCore {
     /// Survives across `LoadDocument` calls so a Playwright suite can
     /// preload Inter / Poppins / Roboto once per worker.
     pub font_registry: Vec<FontEntry>,
+    /// v70 — faces registered with `scope: "sceneLayer"` (scene-layer
+    /// text only), kept like `font_registry` to seed every later load.
+    pub scene_font_registry: Vec<FontEntry>,
     /// Named ICC profiles registered via `RegisterColorProfile`. Same
     /// lifecycle as the font registry: survives across loads.
     pub color_profiles: Vec<ColorProfileEntry>,
@@ -245,6 +248,7 @@ impl WorkerCore {
         Self {
             model: None,
             font_registry: Vec::new(),
+            scene_font_registry: Vec::new(),
             color_profiles: Vec::new(),
             export_sessions: std::collections::HashMap::new(),
             next_export_session: 1,
@@ -327,6 +331,7 @@ impl WorkerCore {
                 let opts = CanvasOptions {
                     fonts: font.map(|b| vec![b.into_vec()]).unwrap_or_default(),
                     font_registry: self.font_registry.clone(),
+                    scene_font_registry: self.scene_font_registry.clone(),
                     cmyk_icc_profile: cmyk_icc_profile.map(|b| b.into_vec()),
                     color_profiles: self.color_profiles.clone(),
                 };
@@ -358,6 +363,7 @@ impl WorkerCore {
                 let opts = CanvasOptions {
                     fonts: font.map(|b| vec![b.into_vec()]).unwrap_or_default(),
                     font_registry: self.font_registry.clone(),
+                    scene_font_registry: self.scene_font_registry.clone(),
                     cmyk_icc_profile: None,
                     color_profiles: self.color_profiles.clone(),
                 };
@@ -665,6 +671,7 @@ impl WorkerCore {
                 family,
                 style,
                 bytes,
+                scope,
             } => {
                 let entry = FontEntry {
                     family: family.clone(),
@@ -676,14 +683,18 @@ impl WorkerCore {
                 // used to be ignored until the next load).
                 let report = match self.model.as_mut() {
                     Some(model) => {
-                        let (report, e) =
-                            font_change_report(model, |m| m.register_font(entry.clone()));
+                        let (report, e) = font_change_report(model, |m| {
+                            m.register_font_scoped(entry.clone(), scope)
+                        });
                         effect = e;
                         report
                     }
                     None => FontChangeReport::default(),
                 };
-                self.font_registry.push(entry);
+                match scope {
+                    FontScope::Document => self.font_registry.push(entry),
+                    FontScope::SceneLayer => self.scene_font_registry.push(entry),
+                }
                 WorkerToMainKind::FontRegistered {
                     family,
                     page_ids: report.page_ids,
@@ -691,11 +702,16 @@ impl WorkerCore {
                     page_sizes_pt: report.page_sizes_pt,
                 }
             }
-            MainToWorkerKind::ClearFontRegistry => {
-                self.font_registry.clear();
+            MainToWorkerKind::ClearFontRegistry(payload) => {
+                let scope = payload.unwrap_or_default().scope;
+                match scope {
+                    FontScope::Document => self.font_registry.clear(),
+                    FontScope::SceneLayer => self.scene_font_registry.clear(),
+                }
                 let report = match self.model.as_mut() {
                     Some(model) => {
-                        let (report, e) = font_change_report(model, |m| m.clear_font_registry());
+                        let (report, e) =
+                            font_change_report(model, |m| m.clear_font_registry_scoped(scope));
                         effect = e;
                         report
                     }

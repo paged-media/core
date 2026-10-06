@@ -976,7 +976,7 @@ fn cell_paragraphs_take_their_left_and_first_line_indents() {
     );
 }
 
-/// v69 — a cell edge's `…EdgeStrokeType` decides how it draws: a
+/// v70 — a cell edge's `…EdgeStrokeType` decides how it draws: a
 /// `ThickThick` edge is two rules (PowerPoint's double line, InDesign's
 /// Thick - Thick), inline or through the cell style. Before, every cell
 /// edge drew as one solid rule of its weight.

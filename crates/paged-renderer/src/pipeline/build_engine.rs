@@ -1632,6 +1632,7 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                             options.assets,
+                            options.scene_fonts,
                         );
                         // W2 — the z-slot this frame's story text belongs
                         // at. Recorded AFTER the box, the C-6 tiles and the
@@ -1738,6 +1739,7 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                             options.assets,
+                            options.scene_fonts,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1830,6 +1832,7 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                             options.assets,
+                            options.scene_fonts,
                         );
                     }
                     // B-18 paste-into: nested children paint inside
@@ -1908,6 +1911,7 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                             options.assets,
+                            options.scene_fonts,
                         );
                     }
                 }
@@ -1987,6 +1991,7 @@ pub(super) fn build_document_inner(
                             options.scene_layers,
                             options.font,
                             options.assets,
+                            options.scene_fonts,
                         );
                     }
                     // B-18 paste-into: nested children paint inside

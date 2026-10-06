@@ -1662,7 +1662,7 @@ dependencies = [
 [[package]]
 name = "idml-export"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=2f27d4da84c0e384d73eb8ff72e90f62d4e606ab#2f27d4da84c0e384d73eb8ff72e90f62d4e606ab"
+source = "git+https://github.com/paged-media/plugin-publish?rev=47ab9d90c8004c32b7d410cc8f2a554b6493a260#47ab9d90c8004c32b7d410cc8f2a554b6493a260"
 dependencies = [
  "base64",
  "idml-import",
@@ -1676,7 +1676,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=2f27d4da84c0e384d73eb8ff72e90f62d4e606ab#2f27d4da84c0e384d73eb8ff72e90f62d4e606ab"
+source = "git+https://github.com/paged-media/plugin-publish?rev=47ab9d90c8004c32b7d410cc8f2a554b6493a260#47ab9d90c8004c32b7d410cc8f2a554b6493a260"
 dependencies = [
  "base64",
  "bytes",
@@ -2758,6 +2758,7 @@ dependencies = [
  "idml-import",
  "image",
  "jpeg-decoder",
+ "kurbo 0.11.3",
  "paged-color",
  "paged-compose",
  "paged-fidelity",
@@ -2814,9 +2815,11 @@ version = "0.0.0"
 dependencies = [
  "boa_engine",
  "paged-canvas",
+ "paged-gen",
  "paged-introspect",
  "paged-model",
  "paged-mutate",
+ "paged-scene",
  "paged-wire",
  "serde",
  "serde_json",

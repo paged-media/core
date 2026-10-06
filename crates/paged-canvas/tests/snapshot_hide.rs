@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v69 — `RequestSnapshot.hideItems`: a snapshot of a page without some
+//! v70 — `RequestSnapshot.hideItems`: a snapshot of a page without some
 //! of its items (a slideshow's build steps), leaving the document alone.
 
 use paged_canvas::{render_snapshot_png_hiding, CanvasModel, CanvasOptions, ElementId};

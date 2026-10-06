@@ -48,7 +48,7 @@ pub(crate) use frame::{Geometry, RenderCtx, ResolvedFrame};
 
 #[allow(unused_imports)]
 pub(crate) use corner_path::{corner_path_module, CornerPaths};
-pub(crate) use drop_shadow::drop_shadow_module;
+pub(crate) use drop_shadow::{drop_shadow_module, line_drop_shadow_module};
 pub(crate) use effects::{emit_effects_post_fill, emit_effects_pre_fill};
 pub(crate) use fill_paint::fill_paint_module;
 pub(crate) use glyph_shadow::emit_glyph_shadow_pass;

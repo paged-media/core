@@ -105,7 +105,7 @@ pub(super) fn apply_set_property(
         }
         // Plugin-metadata carrier — its inverse carries the prev
         // snapshot inside the same Value, so it short-circuits like
-        // the Track J ops. All five leaf page-item kinds, and (v69)
+        // the Track J ops. All five leaf page-item kinds, and (v70)
         // pages: a slide's notes and transition travel with its page.
         (
             NodeId::Polygon(_)
@@ -1187,10 +1187,16 @@ pub(super) fn apply_set_property(
         // ---- SDK Phase 5 (v1 sweep) — drop-shadow per-field ----
         // Six fields on `frame.drop_shadow`. Each materialises a
         // default DropShadowSetting if the prior was `None`, then
-        // mutates the named field. v1 wires TextFrame + Rectangle
-        // (others fall through to UnsupportedProperty).
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowMode)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowMode) => {
+        // mutates the named field. Every shape kind is wired (a
+        // Group falls through to UnsupportedProperty).
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowMode,
+        ) => {
             let new_val = expect_text(path, value)?;
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1208,8 +1214,14 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowXOffset)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowXOffset) => {
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowXOffset,
+        ) => {
             let new_val = expect_length(path, value)?.unwrap_or(0.0);
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1223,8 +1235,14 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowYOffset)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowYOffset) => {
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowYOffset,
+        ) => {
             let new_val = expect_length(path, value)?.unwrap_or(0.0);
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1238,8 +1256,14 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowSize)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowSize) => {
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowSize,
+        ) => {
             let new_val = expect_length(path, value)?.unwrap_or(0.0);
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1253,8 +1277,14 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowOpacity)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowOpacity) => {
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowOpacity,
+        ) => {
             let new_val = expect_length(path, value)?.unwrap_or(100.0);
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1268,8 +1298,14 @@ pub(super) fn apply_set_property(
                 },
             )
         }
-        (NodeId::TextFrame(_), PropertyPath::FrameDropShadowColor)
-        | (NodeId::Rectangle(_), PropertyPath::FrameDropShadowColor) => {
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowColor,
+        ) => {
             let new_color = expect_color_ref(path, value)?;
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
@@ -1284,43 +1320,24 @@ pub(super) fn apply_set_property(
             )
         }
         // ---- SDK Phase 5 (v1 sweep) — drop-shadow toggle ---------
-        // TextFrame + Rectangle carry `drop_shadow: Option<...>`.
+        // Every shape carries `drop_shadow: Option<...>`.
         // Toggle semantics: true → default DropShadowSetting when
         // prior was None (preserves existing custom shadow);
-        // false → clear. Other kinds (Oval / Polygon / GraphicLine
-        // also carry the field but the apply layer's helper map
-        // doesn't reach them yet — they'd add a fan-out helper
-        // like find_text_wrap_mut).
-        (NodeId::TextFrame(id), PropertyPath::FrameDropShadow) => {
+        // false → clear.
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadow,
+        ) => {
             let new_val = expect_bool(path, value)?;
-            let frame = find_text_frame_mut(doc, id)
+            let slot = find_drop_shadow_slot_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = frame.drop_shadow.is_some();
-            frame.drop_shadow = if new_val {
-                frame
-                    .drop_shadow
-                    .clone()
-                    .or_else(|| Some(default_drop_shadow()))
-            } else {
-                None
-            };
-            (
-                Value::Bool(prev),
-                InvalidationHint {
-                    frame_style: vec![node.clone()],
-                    ..Default::default()
-                },
-            )
-        }
-        (NodeId::Rectangle(id), PropertyPath::FrameDropShadow) => {
-            let new_val = expect_bool(path, value)?;
-            let rect = find_rectangle_mut(doc, id)
-                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = rect.drop_shadow.is_some();
-            rect.drop_shadow = if new_val {
-                rect.drop_shadow
-                    .clone()
-                    .or_else(|| Some(default_drop_shadow()))
+            let prev = slot.is_some();
+            *slot = if new_val {
+                slot.clone().or_else(|| Some(default_drop_shadow()))
             } else {
                 None
             };

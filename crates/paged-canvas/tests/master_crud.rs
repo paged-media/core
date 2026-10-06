@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v69 — `CreateMaster` / `DeleteMaster` / `RenameMaster`: masters made,
+//! v70 — `CreateMaster` / `DeleteMaster` / `RenameMaster`: masters made,
 //! copied, named and removed over the wire, each one undo step.
 
 use std::collections::HashSet;

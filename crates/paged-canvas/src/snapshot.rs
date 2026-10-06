@@ -118,7 +118,7 @@ pub fn render_snapshot_at_dpi(
     render_snapshot_inner(model, page_id, SnapshotSize::Dpi(dpi))
 }
 
-/// v69 — a snapshot of the page with `hide` items hidden (a slideshow
+/// v70 — a snapshot of the page with `hide` items hidden (a slideshow
 /// build step). `dpi` wins over `target_width_px` when given, as in
 /// `RequestSnapshot`. With nothing to hide it is the plain snapshot.
 #[cfg(feature = "cpu")]

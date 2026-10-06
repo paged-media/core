@@ -58,6 +58,7 @@ is not written yet.
 | [127](127-fields-and-document-labels-for-data.md) | Field offsets, typing at a field, document labels and delete undo | Accepted 2026-10-05 |
 | [128](128-pages-a-merge-can-make.md) | Pages a merge can make: page handles, copied stories, margins | Accepted 2026-10-06 |
 | [129](129-pages-and-masters-for-presentations.md) | Pages and masters for presentations: reorder, page labels, page links, snapshot masks, master editing | Accepted 2026-10-06 |
+| [130](130-plugin-faces-shadows-and-batch-handles.md) | Scene-scoped faces, a drop shadow on every shape, handles on every batch lane | Accepted 2026-10-06 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

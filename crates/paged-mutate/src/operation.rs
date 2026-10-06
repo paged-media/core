@@ -3647,7 +3647,7 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
-        /// v69 — a link to this page (its `Self` id) rather than `url`.
+        /// v70 — a link to this page (its `Self` id) rather than `url`.
         #[serde(default)]
         page: Option<String>,
     },
@@ -3664,7 +3664,7 @@ pub enum Operation {
         source_id: String,
         dest_id: String,
         hyperlink_id: String,
-        /// v69 — the page the link went to, so the inverse recreates it.
+        /// v70 — the page the link went to, so the inverse recreates it.
         #[serde(default)]
         page: Option<String>,
     },
@@ -3795,7 +3795,7 @@ pub enum Operation {
         #[serde(default)]
         master: Option<String>,
     },
-    /// v69 — a new master spread `master_id`: one page of the given size,
+    /// v70 — a new master spread `master_id`: one page of the given size,
     /// or (with `duplicate_of`) a copy of that master with fresh ids for
     /// its pages and items. `restore_json` is echo/redo-only (the created
     /// master, so redo recreates its exact ids). Inverse: `DeleteMaster`.
@@ -3810,23 +3810,23 @@ pub enum Operation {
         #[serde(default)]
         restore_json: Option<String>,
     },
-    /// v69 — remove a master no page applies (refused otherwise).
+    /// v70 — remove a master no page applies (refused otherwise).
     /// Inverse: `RestoreMaster` with the removed master.
     DeleteMaster {
         master_id: String,
     },
-    /// v69 — `DeleteMaster`'s inverse: put back a removed master exactly.
+    /// v70 — `DeleteMaster`'s inverse: put back a removed master exactly.
     RestoreMaster {
         master_json: String,
     },
-    /// v69 — set (or with `None` clear) a master's name. Inverse: the
+    /// v70 — set (or with `None` clear) a master's name. Inverse: the
     /// previous name.
     RenameMaster {
         master_id: String,
         #[serde(default)]
         name: Option<String>,
     },
-    /// v69 — apply `op` to the items of master spread `master_id` (its
+    /// v70 — apply `op` to the items of master spread `master_id` (its
     /// `Self` id): the master is the only spread `op` sees, so every item,
     /// text and style operation edits a layout's logo or footer as it
     /// would a page's. Page- and spread-structure ops are refused inside
@@ -3835,7 +3835,7 @@ pub enum Operation {
         master_id: String,
         op: Box<Operation>,
     },
-    /// v69 — move a page (its single-page spread) to follow
+    /// v70 — move a page (its single-page spread) to follow
     /// `after_page_id`, or to the front when `None`: the slide sorter's
     /// reorder. The spreads restack in their new order when they were
     /// stacked; spreads that share one position keep it. Inverse:
@@ -3845,7 +3845,7 @@ pub enum Operation {
         #[serde(default)]
         after_page_id: Option<String>,
     },
-    /// v69 — put the document's spreads in exactly this order, each with
+    /// v70 — put the document's spreads in exactly this order, each with
     /// the transform given. `MovePage`'s inverse (and this op's own); every
     /// spread must be named once.
     SetSpreadOrder {

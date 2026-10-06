@@ -456,7 +456,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_fill_start: poly.gradient_fill_start,
             gradient_stroke_angle: poly.gradient_stroke_angle,
             gradient_stroke_length: poly.gradient_stroke_length,
-            drop_shadow: None,
+            drop_shadow: poly.drop_shadow.as_ref(),
             stroke_alignment: poly.stroke_alignment.as_deref(),
             stroke_type: poly.stroke_type.as_deref(),
             // C-62: the cap on an open contour's two ends (a pen path).
@@ -506,7 +506,7 @@ impl<'a> ResolvedFrame<'a> {
             gradient_fill_start: None,
             gradient_stroke_angle: None,
             gradient_stroke_length: None,
-            drop_shadow: None,
+            drop_shadow: line.drop_shadow.as_ref(),
             stroke_alignment: None,
             stroke_type: line.stroke_type.as_deref(),
             end_cap: line.end_cap.as_deref(),

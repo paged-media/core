@@ -602,39 +602,43 @@ pub(super) fn find_drop_shadow_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
 ) -> Option<&'a mut paged_model::DropShadowSetting> {
+    let slot = find_drop_shadow_slot_mut(doc, node)?;
+    Some(slot.get_or_insert_with(default_drop_shadow))
+}
+
+/// The `drop_shadow` slot of any shape that casts one — TextFrame,
+/// Rectangle, Oval, Polygon, GraphicLine (a Group does not: InDesign
+/// shadows its members). `None` when the node is absent or not a shape.
+pub(super) fn find_drop_shadow_slot_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+) -> Option<&'a mut Option<paged_model::DropShadowSetting>> {
     let raw = node.self_id();
-    for parsed in &mut doc.spreads {
-        match node {
-            NodeId::TextFrame(_) => {
-                if let Some(f) = parsed
-                    .spread
-                    .text_frames
-                    .iter_mut()
-                    .find(|p| p.self_id.as_deref() == Some(raw))
-                {
-                    if f.drop_shadow.is_none() {
-                        f.drop_shadow = Some(default_drop_shadow());
-                    }
-                    return f.drop_shadow.as_mut();
-                }
-            }
-            NodeId::Rectangle(_) => {
-                if let Some(f) = parsed
-                    .spread
-                    .rectangles
-                    .iter_mut()
-                    .find(|p| p.self_id.as_deref() == Some(raw))
-                {
-                    if f.drop_shadow.is_none() {
-                        f.drop_shadow = Some(default_drop_shadow());
-                    }
-                    return f.drop_shadow.as_mut();
-                }
-            }
-            _ => {}
-        }
+    let hit = |id: &Option<String>| id.as_deref() == Some(raw);
+    let items = doc.spreads.iter_mut().map(|p| &mut p.spread);
+    match node {
+        NodeId::TextFrame(_) => items
+            .flat_map(|s| s.text_frames.iter_mut())
+            .find(|f| hit(&f.self_id))
+            .map(|f| &mut f.drop_shadow),
+        NodeId::Rectangle(_) => items
+            .flat_map(|s| s.rectangles.iter_mut())
+            .find(|f| hit(&f.self_id))
+            .map(|f| &mut f.drop_shadow),
+        NodeId::Oval(_) => items
+            .flat_map(|s| s.ovals.iter_mut())
+            .find(|f| hit(&f.self_id))
+            .map(|f| &mut f.drop_shadow),
+        NodeId::Polygon(_) => items
+            .flat_map(|s| s.polygons.iter_mut())
+            .find(|f| hit(&f.self_id))
+            .map(|f| &mut f.drop_shadow),
+        NodeId::GraphicLine(_) => items
+            .flat_map(|s| s.graphic_lines.iter_mut())
+            .find(|f| hit(&f.self_id))
+            .map(|f| &mut f.drop_shadow),
+        _ => None,
     }
-    None
 }
 
 /// SDK Phase 5 (v1 sweep) — locate the `text_wrap: Option<TextWrap>`

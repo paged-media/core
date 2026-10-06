@@ -35,7 +35,7 @@ paged-fidelity = { path = "../paged-fidelity" }
 paged-gen = { path = "../paged-gen" }
 # Reads the declared `CMYKProfile` off a package's designmap BEFORE the
 # load that has to be told about it. Same rev as paged-canvas pins.
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "2f27d4da84c0e384d73eb8ff72e90f62d4e606ab" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "47ab9d90c8004c32b7d410cc8f2a554b6493a260" }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = "1"

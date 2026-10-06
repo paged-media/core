@@ -1847,6 +1847,11 @@ pub struct GraphicLine {
     /// `<TextWrapPreference>` parsed off the line.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// `<DropShadowSetting>` under the line's `<TransparencySetting>`
+    /// (the object's shadow). A line has no fill, so the renderer casts
+    /// it from the stroke's outline. `None` when absent or `Mode="None"`.
+    #[serde(default)]
+    pub drop_shadow: Option<DropShadowSetting>,
     /// Path-point anchors for lines that carry a curved or
     /// multi-segment `<PathGeometry>` (so a `<TextPath>` child can
     /// flow text along the actual stroke). Empty for synthetic
@@ -1938,6 +1943,7 @@ impl GraphicLine {
         GraphicLine {
             self_id: Some(self_id.into()),
             bounds,
+            drop_shadow: None,
             item_transform: None,
             stroke_color: None,
             stroke_weight: None,
@@ -2219,6 +2225,10 @@ pub struct Polygon {
     /// `None` ⇒ the polygon does not exclude text.
     pub text_wrap: Option<TextWrap>,
     pub item_layer: Option<String>,
+    /// `<DropShadowSetting>` under `<TransparencySetting>`; see
+    /// [`TextFrame::drop_shadow`]. Cast by the polygon's own outline.
+    #[serde(default)]
+    pub drop_shadow: Option<DropShadowSetting>,
     /// See [`Rectangle::effects`] (Q-04).
     pub effects: Option<FrameEffects>,
     /// See [`Rectangle::gradient_fill_angle`].
@@ -2339,6 +2349,7 @@ impl Polygon {
         Polygon {
             self_id: Some(self_id.into()),
             bounds,
+            drop_shadow: None,
             item_transform: None,
             fill_color: None,
             fill_tint: None,
@@ -6348,8 +6359,8 @@ pub struct DesignMap {
     /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
     /// `Operation::SetDocumentMetadata` and undone with the rest of the
     /// document. One entry per key, in write order. Persisted in the native
-    /// `.paged` model part; the IDML adapter does not carry it yet (a
-    /// designmap `<Document>` `Properties/Label` is the IDML home).
+    /// `.paged` model part, and in IDML as the designmap `<Document>`'s
+    /// `Properties/Label` (read and written by the IDML adapter).
     #[serde(default)]
     pub labels: Vec<(String, String)>,
     pub spreads: Vec<SpreadRef>,

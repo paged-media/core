@@ -1,9 +1,8 @@
 # Status
 
 What the engine ships and what it does not, read from the code at commit `d9f6a32`
-(`PROTOCOL_VERSION` 69, not yet tagged: the data-publishing batch on `main` and the presentation
-batch on `slide/protocol-69`; the newest release tag in
-its history is `v0.68.0`). This page stays
+(`PROTOCOL_VERSION` 70: the presentation batch and the platform doors for plugin content on
+top of `v0.69.0`, the data-publishing batch). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -27,9 +26,14 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **Plugin fields and labels.** Placeholder fields are placed at a story offset or at the caret
   (`insertField.contentOffset`). Text typed at a field's edge lands beside it. A
   document-scoped, undoable plugin label is written with `setDocumentMetadata` and read in
-  `DocumentMeta` ([ADR 127](adr/127-fields-and-document-labels-for-data.md), protocol 69).
+  `DocumentMeta` ([ADR 127](adr/127-fields-and-document-labels-for-data.md), protocol 69); the
+  IDML adapter carries it as the designmap `<Document>`'s label.
+- **A drop shadow on every shape.** The `frameDropShadow*` paths apply to text frames,
+  rectangles, ovals, polygons and lines (a line's shadow is cast by its stroke), and IDML carries
+  them ([ADR 130](adr/130-plugin-faces-shadows-and-batch-handles.md), protocol 70).
 - **Pages in a batch.** `bindCreated` names a page that `insertPage` or `duplicatePage` minted, so
-  pages and their content are one batch and one undo step. A duplicated page owns copies of its
+  pages and their content are one batch and one undo step. Every batch lane reports each mint's
+  handle in `minted[].handle` ([ADR 130](adr/130-plugin-faces-shadows-and-batch-handles.md)). A duplicated page owns copies of its
   stories, including their hyperlink sources, and keeps its margins. An inserted page takes its
   master's margins. `duplicateElements` copies a story that holds hyperlink sources
   ([ADR 128](adr/128-pages-a-merge-can-make.md), protocol 69).
@@ -39,7 +43,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `onMaster` edits a master's items with the ordinary mutations, and `createMaster`,
   `deleteMaster` and `renameMaster` make, remove and name masters. A radial gradient is centred
   at its `GradientFillStart`, and a cell edge draws in its stroke style (a double border as two
-  rules) ([ADR 129](adr/129-pages-and-masters-for-presentations.md), protocol 69).
+  rules) ([ADR 129](adr/129-pages-and-masters-for-presentations.md), protocol 70).
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
@@ -55,6 +59,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   A scene layer's text run draws in the face it names, resolved through the registered fonts;
   a family that does not resolve draws in the default font and is reported per frame
   ([ADR 126](adr/126-scene-text-in-its-own-face.md), protocol 68).
+  A face registered with `scope: "sceneLayer"` serves scene-layer text only and never the
+  document's layout, missing-font report or substitution trace
+  ([ADR 130](adr/130-plugin-faces-shadows-and-batch-handles.md), protocol 70).
 - **Viewer.** `ViewerSession` (load, layout, present, RGBA readback) and the TypeScript
   wrapper with camera, input and events.
 - **Command line.** `paged` with thirteen top-level subcommands, the line-delimited JSON

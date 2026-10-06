@@ -39,10 +39,13 @@
 //! and emitted as a `DropShadow { path_id, .. }` (σ-scale 1.0, the
 //! frame-body blur, distinct from the wider glyph-shadow `PathShadow`),
 //! so a triangle / Bezier frame's shadow hugs the shape rather than
-//! its bounding box. Lines still emit no shadow.
+//! its bounding box. A line has no fill, so its shadow is cast by its
+//! stroke: [`line_drop_shadow_module`] strokes the centreline into its
+//! outline band and stamps that.
 
 use paged_compose::{
-    emit_drop_shadow_rect_transformed, DisplayCommand, DropShadow, PathId, Rect, Transform,
+    emit_drop_shadow_rect_transformed, DisplayCommand, DropShadow, LineCap, LineJoin, PathData,
+    PathId, PathSegment, Rect, Stroke, Transform,
 };
 use paged_model::{DropShadowSetting, Graphic};
 
@@ -142,4 +145,111 @@ fn emit_shadow(target: ShadowTarget, outer: Transform, shadow: DropShadow, page:
             });
         }
     }
+}
+
+/// Emit a line's drop shadow: the stroke's outline band (the centreline
+/// stroked at the line's width, cap, join and miter limit; a dash is
+/// not cut out — the shadow is the solid band) stamped as a
+/// path-shaped `DropShadow` under `transform`, the transform the
+/// stroke itself is drawn with.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn line_drop_shadow_module(
+    page: &mut BuiltPage,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+    setting: Option<&DropShadowSetting>,
+    centreline: &PathData,
+    stroke: &Stroke,
+    cache_key: u64,
+    transform: Transform,
+) {
+    let Some(shadow) = resolve_frame_shadow(setting, None, palette, color_ctx) else {
+        return;
+    };
+    if stroke.width <= 0.0 {
+        return;
+    }
+    let band = stroke_outline(centreline, stroke);
+    if band.segments.is_empty() {
+        return;
+    }
+    // Salted so the band never collides with the centreline the stroke
+    // interned under the line's own key.
+    let (path_id, _) = page
+        .list
+        .paths
+        .intern(cache_key ^ 0x5AD0_57A0_0000_0000, band);
+    page.list.push(DisplayCommand::DropShadow {
+        path_id,
+        transform,
+        shadow,
+    });
+}
+
+/// The closed outline of `path` stroked with `stroke` (no dash).
+fn stroke_outline(path: &PathData, stroke: &Stroke) -> PathData {
+    use kurbo::{BezPath, Cap, Join, PathEl, Point, StrokeOpts};
+    let p = |x: f32, y: f32| Point::new(f64::from(x), f64::from(y));
+    let mut centre = BezPath::new();
+    for seg in &path.segments {
+        match *seg {
+            PathSegment::MoveTo { x, y } => centre.move_to(p(x, y)),
+            PathSegment::LineTo { x, y } => centre.line_to(p(x, y)),
+            PathSegment::QuadTo { cx, cy, x, y } => centre.quad_to(p(cx, cy), p(x, y)),
+            PathSegment::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => centre.curve_to(p(cx1, cy1), p(cx2, cy2), p(x, y)),
+            PathSegment::Close => centre.close_path(),
+        }
+    }
+    let style = kurbo::Stroke::new(f64::from(stroke.width))
+        .with_caps(match stroke.cap {
+            LineCap::Butt => Cap::Butt,
+            LineCap::Round => Cap::Round,
+            LineCap::Square => Cap::Square,
+        })
+        .with_join(match stroke.join {
+            LineJoin::Miter => Join::Miter,
+            LineJoin::Round => Join::Round,
+            LineJoin::Bevel => Join::Bevel,
+        })
+        .with_miter_limit(f64::from(stroke.miter_limit));
+    let band = kurbo::stroke(centre, &style, &StrokeOpts::default(), 0.05);
+    let f = |pt: Point| (pt.x as f32, pt.y as f32);
+    let segments = band
+        .elements()
+        .iter()
+        .map(|el| match *el {
+            PathEl::MoveTo(a) => {
+                let (x, y) = f(a);
+                PathSegment::MoveTo { x, y }
+            }
+            PathEl::LineTo(a) => {
+                let (x, y) = f(a);
+                PathSegment::LineTo { x, y }
+            }
+            PathEl::QuadTo(c, a) => {
+                let ((cx, cy), (x, y)) = (f(c), f(a));
+                PathSegment::QuadTo { cx, cy, x, y }
+            }
+            PathEl::CurveTo(c1, c2, a) => {
+                let ((cx1, cy1), (cx2, cy2), (x, y)) = (f(c1), f(c2), f(a));
+                PathSegment::CubicTo {
+                    cx1,
+                    cy1,
+                    cx2,
+                    cy2,
+                    x,
+                    y,
+                }
+            }
+            PathEl::ClosePath => PathSegment::Close,
+        })
+        .collect();
+    PathData { segments }
 }

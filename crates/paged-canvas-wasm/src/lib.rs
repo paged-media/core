@@ -293,6 +293,7 @@ mod wasm {
             let opts = CanvasOptions {
                 fonts: font.map(|b| vec![b]).unwrap_or_default(),
                 font_registry: self.core.font_registry.clone(),
+                scene_font_registry: self.core.scene_font_registry.clone(),
                 cmyk_icc_profile,
                 color_profiles: self.core.color_profiles.clone(),
             };

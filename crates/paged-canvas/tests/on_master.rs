@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v69 — `OnMaster`: a master's items edited through the ordinary
+//! v70 — `OnMaster`: a master's items edited through the ordinary
 //! mutations, repainting every page that uses the master, undone in one
 //! step; page operations refused inside it.
 
