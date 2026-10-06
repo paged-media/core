@@ -277,6 +277,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.resizePage", "(pageId, [t,l,b,r])", "bool", "write", "Set a page's GeometricBounds in page-inner points."),
         f!("paged.applyMasterToPage", "(pageId, masterId?)", "bool", "write", "Apply a master to a page (omit/null detaches)."),
         f!("paged.movePage", "(pageId, afterPageId?)", "bool", "write", "Move a page to follow another (omit/null: to the front)."),
+        f!("paged.onMaster", "(masterId, mutation)", "bool", "write", "Apply a mutation ({ op, args }) to a master spread's items."),
         f!("paged.setPageMetadata", "(pageId, key, value?)", "bool", "write", "Set or delete one plugin-metadata entry on a page (value: the JSON envelope)."),
         // --- frames & groups ---
         f!("paged.deleteElement", "(id)", "bool", "author", "Delete a page item (kind:id address or bare self id)."),

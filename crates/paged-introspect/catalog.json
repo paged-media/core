@@ -253,6 +253,13 @@
       "summary": "Move a page to follow another (omit/null: to the front)."
     },
     {
+      "name": "paged.onMaster",
+      "params": "(masterId, mutation)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Apply a mutation ({ op, args }) to a master spread's items."
+    },
+    {
       "name": "paged.setPageMetadata",
       "params": "(pageId, key, value?)",
       "returns": "bool",
@@ -1399,6 +1406,7 @@
     "applyMasterToPage",
     "duplicatePage",
     "movePage",
+    "onMaster",
     "insertSection",
     "editSection",
     "deleteSection",

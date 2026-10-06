@@ -4210,6 +4210,14 @@ impl CanvasModel {
                 page: page.0.clone(),
                 master: master.clone(),
             }),
+            Mutation::OnMaster { master, mutation } => {
+                let inner =
+                    self.try_translate_frame_mutation_to_operation(mutation, mint_offset)?;
+                Some(Operation::OnMaster {
+                    master_id: master.clone(),
+                    op: Box::new(inner),
+                })
+            }
             Mutation::MovePage { page, after } => Some(Operation::MovePage {
                 page_id: page.0.clone(),
                 after_page_id: after.as_ref().map(|a| a.0.clone()),
@@ -4458,8 +4466,15 @@ impl CanvasModel {
     }
 
     pub(crate) fn resolve_frame_node_id(&self, frame_id: &str) -> Option<paged_mutate::NodeId> {
-        for parsed in &self.scene.spreads {
-            let s = &parsed.spread;
+        // v69 — master items resolve too, for mutations wrapped in
+        // `OnMaster`.
+        let spreads = self
+            .scene
+            .spreads
+            .iter()
+            .map(|p| &p.spread)
+            .chain(self.scene.master_spreads.values().map(|m| &m.spread));
+        for s in spreads {
             if s.text_frames
                 .iter()
                 .any(|f| f.self_id.as_deref() == Some(frame_id))

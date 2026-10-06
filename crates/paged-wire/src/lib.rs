@@ -1574,6 +1574,16 @@ pub enum Mutation {
     DuplicatePage {
         page: PageId,
     },
+    /// v69 — apply `mutation` to the items of master spread `master` (its
+    /// `Self` id): edit a layout's logo, footer or background as a page's.
+    /// Any page-item, style or property mutation may be wrapped (a `batch`
+    /// too); page and spread mutations are refused. Text edits need no
+    /// wrapper: they address stories, and a master frame's story is one.
+    /// One undo step; every page using the master repaints.
+    OnMaster {
+        master: String,
+        mutation: Box<Mutation>,
+    },
     /// v69 — move a page (its single-page spread) to follow `after`, or to
     /// the front when `after` is absent: a slide sorter's reorder. Spreads
     /// stacked down the pasteboard restack in the new order. One undo step.
@@ -1863,6 +1873,7 @@ mutation_vocabulary! {
     ApplyMasterToPage,
     DuplicatePage,
     MovePage,
+    OnMaster,
     InsertSection,
     EditSection,
     DeleteSection,

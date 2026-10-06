@@ -559,6 +559,7 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             2,
         )
         .function(guarded(paged_move_page), js_string!("movePage"), 2)
+        .function(guarded(paged_on_master), js_string!("onMaster"), 2)
         .function(
             guarded(paged_set_page_metadata),
             js_string!("setPageMetadata"),
@@ -1629,6 +1630,26 @@ fn paged_move_page(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     Ok(apply_bool(&Mutation::MovePage {
         page: PageId(page),
         after,
+    }))
+}
+
+/// `paged.onMaster(masterId, mutation)` — apply a wire mutation (an
+/// `{ op, args }` object, as `paged.batch` takes) to the items of a master
+/// spread (`Mutation::OnMaster`).
+fn paged_on_master(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let master = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let Some(inner) = to_json_value(args.get_or_undefined(1), ctx) else {
+        return Ok(JsValue::from(false));
+    };
+    let Ok(mutation) = serde_json::from_value::<Mutation>(inner) else {
+        return Ok(JsValue::from(false));
+    };
+    Ok(apply_bool(&Mutation::OnMaster {
+        master,
+        mutation: Box::new(mutation),
     }))
 }
 

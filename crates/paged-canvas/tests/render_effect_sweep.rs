@@ -2004,6 +2004,30 @@ fn page_cases(c: &mut Vec<Case>) {
         page_id: first_page(m),
         bounds: (0.0, 0.0, 500.0, 400.0),
     }));
+    c.push(paints("OnMaster", "masters", |m| {
+        // A master rectangle recoloured: every page using the master shows it.
+        let (master, rect) = m
+            .scene()
+            .master_spreads
+            .iter()
+            .find_map(|(id, ms)| {
+                ms.spread
+                    .rectangles
+                    .first()
+                    .and_then(|r| r.self_id.clone())
+                    .map(|r| (id.clone(), r))
+            })
+            .expect("the masters fixture has a master rectangle");
+        let color = fresh_color(m);
+        Mutation::OnMaster {
+            master,
+            mutation: Box::new(Mutation::SetElementProperty {
+                element_id: ElementId::Rectangle(rect),
+                path: PropertyPath::FrameFillColor,
+                value: Value::ColorRef(Some(color)),
+            }),
+        }
+    }));
     c.push(paints("MovePage", "layout", |m| Mutation::MovePage {
         // The second page moves to the front: the first page shows what
         // the second did.

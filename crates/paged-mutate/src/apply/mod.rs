@@ -477,6 +477,7 @@ pub(crate) fn apply_inner(
             page_id,
             after_page_id,
         } => apply_move_page(doc, page_id, after_page_id.as_deref()),
+        Operation::OnMaster { master_id, op } => master::apply_on_master(doc, master_id, op),
         Operation::SetSpreadOrder { spreads } => apply_set_spread_order(doc, spreads),
         Operation::ApplyMasterToPage { page, master } => {
             apply_master_to_page(doc, page, master.as_deref())

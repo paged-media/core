@@ -3786,6 +3786,15 @@ pub enum Operation {
         #[serde(default)]
         master: Option<String>,
     },
+    /// v69 — apply `op` to the items of master spread `master_id` (its
+    /// `Self` id): the master is the only spread `op` sees, so every item,
+    /// text and style operation edits a layout's logo or footer as it
+    /// would a page's. Page- and spread-structure ops are refused inside
+    /// it. Inverse: `OnMaster` around the inner inverse.
+    OnMaster {
+        master_id: String,
+        op: Box<Operation>,
+    },
     /// v69 — move a page (its single-page spread) to follow
     /// `after_page_id`, or to the front when `None`: the slide sorter's
     /// reorder. The spreads restack in their new order when they were
