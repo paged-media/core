@@ -6354,8 +6354,8 @@ pub struct DesignMap {
     /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
     /// `Operation::SetDocumentMetadata` and undone with the rest of the
     /// document. One entry per key, in write order. Persisted in the native
-    /// `.paged` model part; the IDML adapter does not carry it yet (a
-    /// designmap `<Document>` `Properties/Label` is the IDML home).
+    /// `.paged` model part, and in IDML as the designmap `<Document>`'s
+    /// `Properties/Label` (read and written by the IDML adapter).
     #[serde(default)]
     pub labels: Vec<(String, String)>,
     pub spreads: Vec<SpreadRef>,

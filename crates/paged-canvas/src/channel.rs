@@ -592,6 +592,20 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - `setDocumentMetadata`: a document-scoped, UNDOABLE plugin label
 //     (`DesignMap::labels`), read back in `DocumentMeta.pluginMetadata`;
 //     persisted in the `.paged` native model part (not yet in IDML).
+// v69 — platform doors for plugin content (additive to the same version).
+//   - `RegisterFont.scope` (`"document"` default | `"sceneLayer"`) and an
+//     optional `ClearFontRegistry` payload `{ scope }`: scene-scoped faces
+//     resolve scene-layer text only, ahead of the document registry, and
+//     never reach document layout, `FontSummary.isMissing` or substitution
+//     tracing. A payload-less `clearFontRegistry` clears the document
+//     registry, as before.
+//   - Behaviour: a batch that translates whole (one `Operation::Batch`)
+//     reports each mint's `bindCreated` handle in `minted[].handle`, as
+//     the mixed lane always did (it reported `null`).
+//   - Behaviour: the `frameDropShadow*` paths apply to ovals, polygons and
+//     graphic lines (a line's shadow is cast by its stroke), and the IDML
+//     adapter reads and writes them; the document's `setDocumentMetadata`
+//     labels now round-trip through IDML (`<Document><Properties><Label>`).
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
 
 /// A per-run script budget on the wire (v63). Every field is optional
