@@ -676,7 +676,7 @@ pub enum Mutation {
         story_id: String,
         offset: u32,
         field: paged_mutate::operation::FieldKind,
-        /// v68 — the insertion point in the CARET unit instead: UTF-8 bytes
+        /// v69 — the insertion point in the CARET unit instead: UTF-8 bytes
         /// of the runs plus one synthetic `\n` per paragraph boundary (the
         /// `ContentSelection` / `insertText` / `host.text.caret()` unit).
         /// `offset` and every other field operation count characters with no
@@ -1211,7 +1211,7 @@ pub enum Mutation {
         #[serde(default)]
         caller: Option<String>,
     },
-    /// v68 — document-scoped plugin metadata: one Label `KeyValuePair` on
+    /// v69 — document-scoped plugin metadata: one Label `KeyValuePair` on
     /// the DOCUMENT rather than a page item, for state that belongs to no
     /// frame (a data session, the live version of a plugin's container
     /// parts). `value: None` deletes. Same gates as `SetPluginMetadata`

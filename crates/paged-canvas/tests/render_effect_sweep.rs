@@ -1938,7 +1938,7 @@ fn frame_cases(c: &mut Vec<Case>) {
     c.push(inert(
         "SetDocumentMetadata",
         "geometry",
-        "one Label KeyValuePair on the DOCUMENT (v68) — plugin state that \
+        "one Label KeyValuePair on the DOCUMENT (v69) — plugin state that \
          belongs to no frame; the renderer never reads Label",
         |_| Mutation::SetDocumentMetadata {
             key: "x-paged:sweep".into(),

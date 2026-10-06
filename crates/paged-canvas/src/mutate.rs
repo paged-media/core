@@ -70,7 +70,7 @@ pub enum TextOp {
         /// stream.
         #[serde(default)]
         cell: Option<TextCellAddr>,
-        /// v68 — set on the inverse of a `DeleteRange`: the paragraphs the
+        /// v69 — set on the inverse of a `DeleteRange`: the paragraphs the
         /// delete merged, exactly as they were (runs with their formatting
         /// and field identity, paragraph attributes, tables, anchors). The
         /// undo puts THEM back instead of re-typing `text` into one run —
@@ -112,7 +112,7 @@ pub enum TextOp {
     },
 }
 
-/// v68 — paragraphs captured by a `DeleteRange` for its undo. Compared by
+/// v69 — paragraphs captured by a `DeleteRange` for its undo. Compared by
 /// their serialisation (`CharacterRun` has no `PartialEq`; same approach as
 /// [`runs_mergeable`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -339,7 +339,7 @@ fn apply_insert_text(
     })
 }
 
-/// v68 — undo of a `DeleteRange`: the delete left ONE paragraph where the
+/// v69 — undo of a `DeleteRange`: the delete left ONE paragraph where the
 /// snapshot's paragraphs were (or none, when it also dropped a seeded
 /// stream); put the snapshot back in its place. The inverse is the same
 /// delete again, so redo re-captures whatever is there then.
@@ -454,7 +454,7 @@ fn is_field_run(run: &CharacterRun) -> bool {
     run.placeholder.is_some() || run.text_variable.is_some()
 }
 
-/// v68 — insert `seg` at a field run's edge, OUTSIDE the field. InDesign
+/// v69 — insert `seg` at a field run's edge, OUTSIDE the field. InDesign
 /// treats a text variable as one atomic character: a caret on either side
 /// of it types beside it. The text joins the neighbouring ordinary run when
 /// there is one; otherwise it becomes a run of its own carrying the field's

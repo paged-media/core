@@ -606,7 +606,7 @@ pub(super) fn apply_plugin_metadata(
 }
 
 /// The plugin-metadata write gate, shared by the page-item carrier and the
-/// v68 document-scoped one: reserved key namespace, the optional B-16
+/// v69 document-scoped one: reserved key namespace, the optional B-16
 /// caller namespace, the 64 KiB cap, and the JSON envelope. Runs BEFORE
 /// any mutation.
 pub(super) fn plugin_metadata_gate(
@@ -657,7 +657,7 @@ pub(super) fn plugin_metadata_gate(
     Ok(())
 }
 
-/// v68 — `Operation::SetDocumentMetadata`: set / replace / delete one
+/// v69 — `Operation::SetDocumentMetadata`: set / replace / delete one
 /// document-scoped Label entry (`DesignMap::labels`). Gated exactly like
 /// [`apply_plugin_metadata`]; the inverse restores the prior value.
 pub(super) fn apply_document_metadata(

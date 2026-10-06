@@ -3685,7 +3685,7 @@ fn paged_set_plugin_metadata(
 
 /// `paged.setDocumentMetadata(key, value?, caller?)` — write one
 /// document-scoped `Label` key/value pair (`value` null deletes;
-/// `Mutation::SetDocumentMetadata`, v68).
+/// `Mutation::SetDocumentMetadata`, v69).
 fn paged_set_document_metadata(
     _this: &JsValue,
     args: &[JsValue],

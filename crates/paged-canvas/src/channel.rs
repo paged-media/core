@@ -2590,8 +2590,8 @@ pub struct DocumentMeta {
     /// `BaselineColor` — grid-line colour ref / named colour.
     #[serde(default)]
     pub baseline_grid_color: Option<String>,
-    /// v68 — the document's own plugin metadata (`SetDocumentMetadata`
-    /// entries, write order). PRESENT (possibly empty) from a v68 worker,
+    /// v69 — the document's own plugin metadata (`SetDocumentMetadata`
+    /// entries, write order). PRESENT (possibly empty) from a v69 worker,
     /// absent from an older one, so a reader can tell "none" from "this
     /// engine has no document labels".
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4054,8 +4054,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v68() {
-        assert_eq!(PROTOCOL_VERSION.0, 68);
+    fn protocol_version_is_v69() {
+        assert_eq!(PROTOCOL_VERSION.0, 69);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

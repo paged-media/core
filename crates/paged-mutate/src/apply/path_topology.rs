@@ -3295,7 +3295,7 @@ pub(super) fn apply_insert_field(
                 end: offset,
             })
         })?;
-    // v68 — a caret-unit insertion point is converted against the story as
+    // v69 — a caret-unit insertion point is converted against the story as
     // it is NOW, and the echoed op carries the resolved char offset.
     let offset = match content_offset {
         None => offset,

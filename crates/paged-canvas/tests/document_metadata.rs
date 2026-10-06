@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v68 — document-scoped plugin metadata (`setDocumentMetadata`): a label
+//! v69 — document-scoped plugin metadata (`setDocumentMetadata`): a label
 //! on the DOCUMENT for state that belongs to no frame (paged.data's
 //! session, the live version of a plugin's container parts). It must be
 //! undoable — that is the whole point: a label that names the live parts
@@ -40,7 +40,7 @@ fn set(key: &str, value: Option<&str>) -> Mutation {
 fn label(m: &CanvasModel, key: &str) -> Option<String> {
     m.document_meta()
         .plugin_metadata
-        .expect("a v68 engine always reports document metadata")
+        .expect("a v69 engine always reports document metadata")
         .into_iter()
         .find(|e| e.key == key)
         .map(|e| e.value)

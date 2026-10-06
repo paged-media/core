@@ -3576,7 +3576,7 @@ pub enum Operation {
         story_id: String,
         offset: u32,
         field: FieldKind,
-        /// v68 — the insertion point in the `ContentSelection` unit
+        /// v69 — the insertion point in the `ContentSelection` unit
         /// (UTF-8 bytes plus one synthetic `\n` per paragraph boundary —
         /// the unit `insertText` and the editor's text caret use). When
         /// present it REPLACES `offset`: the engine converts it against the
@@ -3830,7 +3830,7 @@ pub enum Operation {
         #[serde(default, deserialize_with = "double_option::deserialize")]
         start_at: Option<Option<u32>>,
     },
-    /// v68 — document-scoped plugin metadata: set / replace / delete
+    /// v69 — document-scoped plugin metadata: set / replace / delete
     /// (`value: None`) one Label `KeyValuePair` on the DOCUMENT
     /// (`DesignMap::labels`). Same gates as the page-item carrier
     /// (`PropertyPath::PluginMetadata`): `x-paged:` key namespace, the

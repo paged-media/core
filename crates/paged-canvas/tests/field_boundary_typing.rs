@@ -12,10 +12,10 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! v68 (paged.data Wave 8) — text typed at a placeholder field's
+//! v69 (paged.data Wave 8) — text typed at a placeholder field's
 //! boundary lands OUTSIDE the field. InDesign treats a text variable as
 //! one atomic character: a caret at either edge of it inserts beside it,
-//! never into it. Before v68 `insertText` at the field's start (when the
+//! never into it. Before v69 `insertText` at the field's start (when the
 //! field opened its paragraph) or at its end grew the field's own run, so
 //! the next `setFieldValue` refresh overwrote what the user had typed.
 
@@ -197,7 +197,7 @@ fn typing_beside_a_field_undoes_to_the_field_alone() {
     );
 }
 
-// ---- v68: a field placed at the CARET (the `contentOffset` unit) ----
+// ---- v69: a field placed at the CARET (the `contentOffset` unit) ----
 //
 // The caret (`ContentSelection`, `host.text.caret()`) counts UTF-8 bytes plus
 // one synthetic `\n` per paragraph boundary — the `insertText` unit. The field
@@ -291,7 +291,7 @@ fn a_caret_on_the_paragraph_break_lands_at_the_end_of_the_paragraph() {
     assert_eq!(story_text(&m, "story2"), "GrüßeX\nStory two body");
 }
 
-// ---- v68: undo of a delete puts the deleted RUNS back, not their text ----
+// ---- v69: undo of a delete puts the deleted RUNS back, not their text ----
 //
 // A `deleteRange`'s undo re-typed the recovered characters into one run: a
 // placeholder field came back as plain text (no identity — a refresh could

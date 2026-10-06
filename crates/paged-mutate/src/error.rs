@@ -74,7 +74,7 @@ pub enum OperationError {
     #[error("{collection} entry {id:?} not found")]
     CollectionEntryNotFound { collection: String, id: String },
 
-    /// v68 — a document-scoped metadata write the gate refused.
+    /// v69 — a document-scoped metadata write the gate refused.
     #[error("invalid document metadata: {reason}")]
     InvalidDocumentMetadata { reason: String },
 

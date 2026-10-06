@@ -5253,7 +5253,7 @@ impl Paragraph {
         chars
     }
 }
-/// v68 — convert a `ContentSelection` stream offset (UTF-8 bytes of the
+/// v69 — convert a `ContentSelection` stream offset (UTF-8 bytes of the
 /// runs plus one synthetic `\n` per inter-paragraph boundary: what
 /// `insertText`, `deleteRange` and the editor's caret use) into the
 /// contiguous CHARACTER offset the field and range-styling operations use
@@ -6279,7 +6279,7 @@ pub struct FlowGrowRule {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DesignMap {
-    /// v68 — the DOCUMENT's own Label `KeyValuePair`s: document-scoped
+    /// v69 — the DOCUMENT's own Label `KeyValuePair`s: document-scoped
     /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
     /// `Operation::SetDocumentMetadata` and undone with the rest of the
     /// document. One entry per key, in write order. Persisted in the native
