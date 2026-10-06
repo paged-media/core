@@ -615,6 +615,7 @@ impl CanvasModel {
             let labels: &[(String, String)] = match address {
                 VirtualTarget::Doc => &scene.designmap.labels,
                 VirtualTarget::Page { page_id } => self.label_list(page_id).unwrap_or(&[]),
+                VirtualTarget::Spread { spread_id } => self.label_list(spread_id).unwrap_or(&[]),
                 VirtualTarget::Element { element_id } => {
                     self.label_list(element_id.raw_id()).unwrap_or(&[])
                 }
@@ -947,6 +948,11 @@ impl CanvasModel {
                     },
                 ))
             }
+            // Addressable (ADR 131) with no property rows yet: only their
+            // labels (spreads, above) read.
+            VirtualTarget::Spread { .. }
+            | VirtualTarget::ConditionSet { .. }
+            | VirtualTarget::Hyperlink { .. } => Err(unknown()),
             VirtualTarget::Table { story_id, table_id } => {
                 let t = self.find_table(story_id, table_id).ok_or_else(missing)?;
                 if let Some(seg) = segment(path) {

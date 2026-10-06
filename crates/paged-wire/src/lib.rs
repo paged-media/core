@@ -556,41 +556,22 @@ pub struct TextCellAddr {
     pub col: u32,
 }
 
-/// ADR 132 — the style families a `style:` target names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
-#[tsify(into_wasm_abi, from_wasm_abi)]
-#[serde(rename_all = "camelCase")]
-pub enum StyleFamily {
-    Paragraph,
-    Character,
-    Object,
-    Cell,
-    Table,
-}
-
-impl StyleFamily {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            StyleFamily::Paragraph => "paragraph",
-            StyleFamily::Character => "character",
-            StyleFamily::Object => "object",
-            StyleFamily::Cell => "cell",
-            StyleFamily::Table => "table",
-        }
-    }
-}
-
-/// ADR 132 — the TARGET of a `Mutation::Set` / a property read: every
-/// object kind a virtual path can live on, named by today's ids.
+/// ADR 132 — the RESOLVED target of a `Mutation::Set` / a property
+/// read: every object kind a property can live on, named by the ids the
+/// dedicated operations take.
 ///
-/// This is the seam for ADR 131's `Address`: each variant is one address
-/// kind (`doc`, `page:<id>`, `layer:<id>`, `style:<family>/<id>`,
-/// `field:<story>@<offset>`, `cell:<table>/<r>,<c>`, …), and
-/// `Element` carries the six page-item kinds plus `storyRange:` through
-/// the existing `ElementId`. When `Address` lands, `Address → VirtualTarget`
-/// is a total map and `Set` can take either; until then the JSON form is
-/// this enum's (`{ "kind": "layer", "layerId": "ua" }`). The id fields are
-/// spelled `…Id` so batch handle substitution (`$h:`) reaches them.
+/// The wire names a target by [`Address`] (ADR 131); the engine resolves
+/// that against the document into this enum ([`query::Index::to_virtual_target`],
+/// total over every core address kind) — `frame:` finds its kind,
+/// `page:#n` its page id, a style's display name its `Self`, and a
+/// `table:`/`cell:` the story that owns the table. `Element` carries the
+/// six page-item kinds plus `storyRange:` through the existing `ElementId`.
+///
+/// This enum's JSON (`{ "kind": "layer", "layerId": "ua" }`) was the
+/// `Set` target at protocol 70 before addresses landed; it is still
+/// accepted in that position as a DEPRECATED alias (see
+/// [`From<VirtualTarget> for Address`](Address)). The id fields are spelled
+/// `…Id` so batch handle substitution (`$h:`) reaches them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(
@@ -646,6 +627,15 @@ pub enum VirtualTarget {
     TextVariable {
         variable_id: String,
     },
+    Spread {
+        spread_id: String,
+    },
+    ConditionSet {
+        set_id: String,
+    },
+    Hyperlink {
+        hyperlink_id: String,
+    },
     Table {
         story_id: String,
         table_id: String,
@@ -684,6 +674,9 @@ impl VirtualTarget {
             VirtualTarget::Guide { .. } => "guide",
             VirtualTarget::Condition { .. } => "condition",
             VirtualTarget::TextVariable { .. } => "textVariable",
+            VirtualTarget::Spread { .. } => "spread",
+            VirtualTarget::ConditionSet { .. } => "conditionSet",
+            VirtualTarget::Hyperlink { .. } => "hyperlink",
             VirtualTarget::Table { .. } => "table",
             VirtualTarget::Cell { .. } => "cell",
             VirtualTarget::Element { element_id } => match element_id {
@@ -693,6 +686,162 @@ impl VirtualTarget {
                 ElementId::TableCell { .. } => "cell",
                 _ => "frame",
             },
+        }
+    }
+}
+
+/// Total: every resolved target has exactly one canonical address. This
+/// is what keeps the protocol-70 JSON target form working as an alias of
+/// the address string (and it is the inverse of the document resolver
+/// for every target that resolver produces).
+impl From<VirtualTarget> for Address {
+    fn from(t: VirtualTarget) -> Self {
+        match t {
+            VirtualTarget::Doc => Address::Doc,
+            VirtualTarget::Page { page_id } => Address::Page { id: page_id },
+            VirtualTarget::Layer { layer_id } => Address::Layer { id: layer_id },
+            VirtualTarget::Master { master_id } => Address::Master { id: master_id },
+            VirtualTarget::Story { story_id } => Address::Story { id: story_id },
+            VirtualTarget::Field { story_id, offset } => Address::Field { story_id, offset },
+            VirtualTarget::Swatch { swatch_id } => Address::Swatch { id: swatch_id },
+            VirtualTarget::Gradient { gradient_id } => Address::Gradient { id: gradient_id },
+            VirtualTarget::ColorGroup { group_id } => Address::ColorGroup { id: group_id },
+            VirtualTarget::NumberingList { list_id } => Address::NumberingList { id: list_id },
+            VirtualTarget::Style { family, style_id } => Address::Style {
+                family,
+                id: style_id,
+            },
+            VirtualTarget::Section { section_id } => Address::Section { id: section_id },
+            VirtualTarget::Guide { guide_id } => Address::Guide { id: guide_id },
+            VirtualTarget::Condition { condition_id } => Address::Condition { id: condition_id },
+            VirtualTarget::TextVariable { variable_id } => Address::TextVariable { id: variable_id },
+            VirtualTarget::Spread { spread_id } => Address::Spread { id: spread_id },
+            VirtualTarget::ConditionSet { set_id } => Address::ConditionSet { id: set_id },
+            VirtualTarget::Hyperlink { hyperlink_id } => Address::Hyperlink { id: hyperlink_id },
+            VirtualTarget::Table { table_id, .. } => Address::Table { id: table_id },
+            VirtualTarget::Cell {
+                table_id, row, col, ..
+            } => Address::Cell { table_id, row, col },
+            VirtualTarget::Element { element_id } => Address::from(element_id),
+        }
+    }
+}
+
+impl VirtualTarget {
+    /// The target an address names WITHOUT consulting a document, for
+    /// every kind whose address already carries the ids the operations
+    /// take. `Ok(None)` for the kinds that need the document to resolve —
+    /// `frame:` (its kind), `page:#n` (its id), `style:` (a display name
+    /// may stand for the `Self`), `table:` / `cell:` (the owning story);
+    /// [`query::Index::to_virtual_target`] handles those. `Err` for the
+    /// two kinds that are never a core target: a plugin object (routed by
+    /// the host registry) and an unresolved batch handle.
+    pub fn from_address_direct(a: &Address) -> Result<Option<VirtualTarget>, String> {
+        Ok(Some(match a {
+            Address::Doc => VirtualTarget::Doc,
+            Address::TextFrame { .. }
+            | Address::Rectangle { .. }
+            | Address::Oval { .. }
+            | Address::Polygon { .. }
+            | Address::GraphicLine { .. }
+            | Address::Group { .. }
+            | Address::StoryRange { .. } => VirtualTarget::Element {
+                element_id: a.to_element_id().expect("a page item or a story range"),
+            },
+            Address::OnMaster { item, .. } => match item.to_element_id() {
+                Some(element_id) => VirtualTarget::Element { element_id },
+                None => return Ok(None),
+            },
+            Address::Page { id } => VirtualTarget::Page {
+                page_id: id.clone(),
+            },
+            Address::Spread { id } => VirtualTarget::Spread {
+                spread_id: id.clone(),
+            },
+            Address::Layer { id } => VirtualTarget::Layer {
+                layer_id: id.clone(),
+            },
+            Address::Master { id } => VirtualTarget::Master {
+                master_id: id.clone(),
+            },
+            Address::Story { id } => VirtualTarget::Story {
+                story_id: id.clone(),
+            },
+            Address::Field { story_id, offset } => VirtualTarget::Field {
+                story_id: story_id.clone(),
+                offset: *offset,
+            },
+            Address::Swatch { id } => VirtualTarget::Swatch {
+                swatch_id: id.clone(),
+            },
+            Address::Gradient { id } => VirtualTarget::Gradient {
+                gradient_id: id.clone(),
+            },
+            Address::ColorGroup { id } => VirtualTarget::ColorGroup {
+                group_id: id.clone(),
+            },
+            Address::NumberingList { id } => VirtualTarget::NumberingList {
+                list_id: id.clone(),
+            },
+            Address::Guide { id } => VirtualTarget::Guide {
+                guide_id: id.clone(),
+            },
+            Address::Condition { id } => VirtualTarget::Condition {
+                condition_id: id.clone(),
+            },
+            Address::ConditionSet { id } => VirtualTarget::ConditionSet { set_id: id.clone() },
+            Address::Section { id } => VirtualTarget::Section {
+                section_id: id.clone(),
+            },
+            Address::Hyperlink { id } => VirtualTarget::Hyperlink {
+                hyperlink_id: id.clone(),
+            },
+            Address::TextVariable { id } => VirtualTarget::TextVariable {
+                variable_id: id.clone(),
+            },
+            Address::Frame { .. }
+            | Address::PageNumber { .. }
+            | Address::Style { .. }
+            | Address::Table { .. }
+            | Address::Cell { .. } => return Ok(None),
+            Address::Plugin { plugin_id, .. } => {
+                return Err(format!(
+                    "{a} is a {plugin_id} object, not a core one — plugin objects are set \
+                     through the host's object registry, not the engine"
+                ))
+            }
+            Address::Handle { name } => {
+                return Err(format!(
+                    "$h:{name} is a batch handle with nothing bound — a handle resolves only \
+                     inside the batch that bound it"
+                ))
+            }
+        }))
+    }
+}
+
+/// The `Set` target on the wire (ADR 131/132): the canonical address
+/// STRING (`"swatch:Color/Red"`, `"style:object/ObjectStyle/x"`, `"doc"`).
+/// Deserialisation also takes the protocol-70 `VirtualTarget` object
+/// (`{ "kind": "layer", "layerId": "ua" }`) as a deprecated alias.
+pub mod address_wire {
+    use super::{Address, VirtualTarget};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(a: &Address, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(a)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Address, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Form {
+            Text(String),
+            Legacy(VirtualTarget),
+        }
+        match Form::deserialize(d)? {
+            Form::Text(s) => Address::parse(&s).map_err(serde::de::Error::custom),
+            Form::Legacy(t) => Ok(t.into()),
         }
     }
 }
@@ -1487,8 +1636,18 @@ pub enum Mutation {
     /// `$h:` handles resolve inside `address`. The value is checked
     /// against the path's schema first (enum members, ranges; `Number`,
     /// `Enum`, `Ref` normalise).
+    ///
+    /// `address` is ONE address string (ADR 131) — `"doc"`,
+    /// `"swatch:Color/Red"`, `"cell:u2f/0,1"`, `"frame:u12"`,
+    /// `"page:#3"`. A SELECTOR is not a target: resolve it with
+    /// `RequestQuery` first and send one `Set` per address (in one
+    /// `Batch` for one undo step). The protocol-70 target object
+    /// (`{ "kind": "layer", "layerId": "ua" }`) still parses here as a
+    /// deprecated alias; replies and re-encodings use the string.
     Set {
-        address: VirtualTarget,
+        #[serde(with = "address_wire")]
+        #[tsify(type = "string")]
+        address: Address,
         path: String,
         value: paged_mutate::Value,
     },

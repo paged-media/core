@@ -1317,6 +1317,11 @@ pub enum MainToWorkerKind {
     /// match, in document order. Pure READ. No document ⇒ empty list.
     /// The grammar is `paged_wire::selector`'s. Reply: `QueryResult`.
     RequestQuery { selector: String },
+    /// Object model (ADR 132) — read ONE property of any object, the read
+    /// twin of `Mutation::Set`: `address` is an ADR 131 address string,
+    /// `path` a `PropertyPath` name or a virtual path from the catalog's
+    /// `propertySchemas`. Pure READ. Reply: `PropertyValue`.
+    RequestGet { address: String, path: String },
     /// SDK Phase 5 (v1 sweep) — resolved CMYK + RGB readout for a
     /// named swatch. Powers the Color panel's CMYK/RGB display.
     /// Editor sliders (which would mutate the swatch's channel
@@ -1901,6 +1906,16 @@ pub enum WorkerToMainKind {
     QueryResult {
         addresses: Vec<String>,
         error: Option<paged_wire::GrammarError>,
+    },
+    /// `RequestGet` reply. `value` is the property's wire `Value`;
+    /// `error` is set — and `value` absent — when the address does not
+    /// parse or names nothing, the path is not readable on that kind, or
+    /// no document is loaded.
+    PropertyValue {
+        address: String,
+        path: String,
+        value: Option<paged_mutate::Value>,
+        error: Option<String>,
     },
     /// v42 (C-5 / I-04) — `RequestPlacedAssetBytes` reply. `encoded` is the
     /// placed image's ORIGINAL file bytes (PSD / JPEG / PNG) with its

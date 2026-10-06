@@ -2315,7 +2315,8 @@ impl CanvasModel {
         } = mutation
         {
             let resolved = self
-                .resolve_set(address, path, value)
+                .target_of(address)
+                .and_then(|target| self.resolve_set(&target, path, value))
                 .map_err(|what| crate::channel::WorkerError::NotImplemented { what })?;
             return match resolved {
                 virtual_set::Resolved::Mutation(m) => self.apply_mutation(&m),
@@ -5125,6 +5126,34 @@ impl CanvasModel {
         selector: &str,
     ) -> Result<Vec<paged_wire::Address>, paged_wire::GrammarError> {
         paged_wire::query::query_str(&self.scene, selector)
+    }
+
+    /// ADR 131 → 132 — the engine target `address` names in this document
+    /// ([`paged_wire::query::Index::to_virtual_target`]). The kinds whose
+    /// address already carries the operation's ids skip the index build.
+    pub fn target_of(
+        &self,
+        address: &paged_wire::Address,
+    ) -> Result<paged_wire::VirtualTarget, String> {
+        match paged_wire::VirtualTarget::from_address_direct(address)? {
+            Some(t) => Ok(t),
+            None => paged_wire::query::to_virtual_target(&self.scene, address),
+        }
+    }
+
+    /// `get_property` by address: the read twin of `Mutation::Set`.
+    pub fn get_property_at(
+        &self,
+        address: &paged_wire::Address,
+        path: &str,
+    ) -> Result<paged_mutate::Value, String> {
+        self.get_property(&self.target_of(address)?, path)
+    }
+
+    /// [`Self::get_property_at`] from an address STRING (`RequestGet`).
+    pub fn read_property(&self, address: &str, path: &str) -> Result<paged_mutate::Value, String> {
+        let a = paged_wire::Address::parse(address).map_err(|e| e.to_string())?;
+        self.get_property_at(&a, path)
     }
 
     /// The canonical address `address` names here (`frame:` → its kind,

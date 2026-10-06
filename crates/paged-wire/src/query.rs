@@ -40,7 +40,7 @@ use paged_scene::Document;
 
 use crate::address::{Address, AddressKind, GrammarError, StyleFamily};
 use crate::selector::{Combinator, Filter, Head, Op, Selector, Step};
-use crate::ElementId;
+use crate::{ElementId, VirtualTarget};
 
 /// Decode InDesign's processing-instruction spelling of a UTF-16 code
 /// unit, `<?AID d83d?>`, back into text. InDesign writes every non-BMP
@@ -391,6 +391,7 @@ impl<'a> Index<'a> {
         resources!(st.conditions.values(), Condition);
         resources!(st.condition_sets.values(), ConditionSet);
         resources!(dm.hyperlinks.iter(), Hyperlink);
+        resources!(dm.text_variables.iter(), TextVariable);
         for s in &dm.sections {
             ix.simple(
                 Address::Section {
@@ -739,6 +740,54 @@ impl<'a> Index<'a> {
             _ => None,
         }
     }
+
+    /// ADR 131 → ADR 132: the engine target an address names in this
+    /// document. Total over the address kinds — every kind either maps
+    /// (directly, or through this index for `frame:`, `page:#n`, a style
+    /// named by display name, and a table or cell whose story the index
+    /// finds) or answers why it cannot (a plugin object, an unbound
+    /// handle, an object this document does not have).
+    pub fn to_virtual_target(&self, a: &Address) -> Result<VirtualTarget, String> {
+        if let Some(t) = VirtualTarget::from_address_direct(a)? {
+            return Ok(t);
+        }
+        let missing = || format!("{a} names nothing in this document");
+        let resolved = self.resolve(a).ok_or_else(missing)?;
+        match &resolved {
+            Address::Page { id } => Ok(VirtualTarget::Page {
+                page_id: id.clone(),
+            }),
+            Address::Style { family, id } => Ok(VirtualTarget::Style {
+                family: *family,
+                style_id: id.clone(),
+            }),
+            Address::Table { .. } | Address::Cell { .. } => {
+                match self.resolve_element_id(&resolved).ok_or_else(missing)? {
+                    ElementId::Table { story_id, table_id } => {
+                        Ok(VirtualTarget::Table { story_id, table_id })
+                    }
+                    ElementId::TableCell {
+                        story_id,
+                        table_id,
+                        row,
+                        col,
+                    } => Ok(VirtualTarget::Cell {
+                        story_id,
+                        table_id,
+                        row,
+                        col,
+                    }),
+                    _ => Err(missing()),
+                }
+            }
+            other => VirtualTarget::from_address_direct(other)?.ok_or_else(missing),
+        }
+    }
+}
+
+/// [`Index::to_virtual_target`] over a fresh index.
+pub fn to_virtual_target(doc: &Document, a: &Address) -> Result<VirtualTarget, String> {
+    Index::build(doc).to_virtual_target(a)
 }
 
 fn kind_matches(n: &Node<'_>, k: AddressKind) -> bool {

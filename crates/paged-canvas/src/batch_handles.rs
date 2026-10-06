@@ -278,6 +278,15 @@ fn walk(
                 walk(item, key, scope, touched)?;
             }
         }
+        // Rule 3 — an ADR 131 address string (`Mutation::Set`'s
+        // `address`): the reference may be the whole address (`$h:a`) or
+        // sit inside one (`cell:$h:t/0,1`, `storyRange:$h:f@0..4`).
+        serde_json::Value::String(s) if key == Some("address") => {
+            if let Some(rewritten) = substitute_address(s, scope)? {
+                *value = serde_json::Value::String(rewritten);
+                *touched = true;
+            }
+        }
         serde_json::Value::String(s) if is_reference(s) => {
             // Rule 2 — bare id string, and ONLY in an address position.
             let Some(key) = key.filter(|k| is_address_key(k)) else {
@@ -333,6 +342,95 @@ fn walk(
         _ => {}
     }
     Ok(())
+}
+
+/// Resolve the handle reference(s) an address string carries, or `None`
+/// when it carries none (or does not parse — the apply reports that).
+fn substitute_address(s: &str, scope: &HandleScope) -> Result<Option<String>, String> {
+    use paged_wire::Address;
+    if s == CREATED_SENTINEL {
+        return Ok(Some(match scope.resolve(s)? {
+            Binding::Element(b) => Address::from(b.element.clone()).to_string(),
+            Binding::Page(page) => Address::Page { id: page.clone() }.to_string(),
+        }));
+    }
+    let Ok(address) = Address::parse(s) else {
+        return Ok(None);
+    };
+    let element = |r: &str| -> Result<Address, String> {
+        Ok(Address::from(scope.resolve_element(r)?.element.clone()))
+    };
+    let story = |r: &str| -> Result<String, String> {
+        let b = scope.resolve_element(r)?;
+        b.story_id.clone().ok_or_else(|| {
+            format!(
+                "{r} names a {} which has no story — a story address needs a handle bound to a \
+                 text frame (or a table)",
+                b.element.kind_label()
+            )
+        })
+    };
+    let table = |r: &str| -> Result<String, String> {
+        match &scope.resolve_element(r)?.element {
+            ElementId::Table { table_id, .. } | ElementId::TableCell { table_id, .. } => {
+                Ok(table_id.clone())
+            }
+            other => Err(format!(
+                "{r} names a {} which is not a table — a table or cell address needs a handle \
+                 bound to an insertTable",
+                other.kind_label()
+            )),
+        }
+    };
+    let out = match &address {
+        Address::Handle { .. } => match scope.resolve(s)? {
+            Binding::Element(b) => Address::from(b.element.clone()),
+            Binding::Page(page) => Address::Page { id: page.clone() },
+        },
+        a if a.page_item_id().is_some_and(is_reference) => {
+            // The bound kind wins over the placeholder's, as for rule 1.
+            let r = a.page_item_id().unwrap_or_default().to_string();
+            match a {
+                Address::OnMaster { master, .. } => Address::OnMaster {
+                    master: master.clone(),
+                    item: Box::new(element(&r)?),
+                },
+                _ => element(&r)?,
+            }
+        }
+        Address::Page { id } if is_reference(id) => match scope.resolve(id)? {
+            Binding::Page(page) => Address::Page { id: page.clone() },
+            Binding::Element(b) => {
+                return Err(format!(
+                    "{id} names a {}, not a page — a page address needs a handle bound to an \
+                     insertPage or duplicatePage",
+                    b.element.kind_label()
+                ))
+            }
+        },
+        Address::Story { id } if is_reference(id) => Address::Story { id: story(id)? },
+        Address::StoryRange {
+            story_id,
+            start,
+            end,
+        } if is_reference(story_id) => Address::StoryRange {
+            story_id: story(story_id)?,
+            start: *start,
+            end: *end,
+        },
+        Address::Field { story_id, offset } if is_reference(story_id) => Address::Field {
+            story_id: story(story_id)?,
+            offset: *offset,
+        },
+        Address::Table { id } if is_reference(id) => Address::Table { id: table(id)? },
+        Address::Cell { table_id, row, col } if is_reference(table_id) => Address::Cell {
+            table_id: table(table_id)?,
+            row: *row,
+            col: *col,
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(out.to_string()))
 }
 
 #[cfg(test)]

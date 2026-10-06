@@ -868,6 +868,23 @@ impl WorkerCore {
                     },
                 }
             }
+            MainToWorkerKind::RequestGet { address, path } => {
+                // Object model (ADR 132) — pure READ, the twin of `Set`.
+                let read = match self.model.as_ref() {
+                    None => Err("no document is loaded".to_string()),
+                    Some(m) => m.read_property(&address, &path),
+                };
+                let (value, error) = match read {
+                    Ok(v) => (Some(v), None),
+                    Err(e) => (None, Some(e)),
+                };
+                WorkerToMainKind::PropertyValue {
+                    address,
+                    path,
+                    value,
+                    error,
+                }
+            }
             MainToWorkerKind::RequestFrameChain { story_id } => {
                 // v38 (Wave 2, C-2 / S-05) — pure READ. No document ⇒
                 // empty chain (same posture as RequestCollection).

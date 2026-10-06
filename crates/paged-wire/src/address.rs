@@ -208,6 +208,10 @@ pub enum Address {
     Hyperlink {
         id: String,
     },
+    /// A text variable (`<TextVariable>` in the designmap), by its `Self`.
+    TextVariable {
+        id: String,
+    },
     /// `master:<id> > <item>` — an item on a master spread.
     OnMaster {
         master: String,
@@ -262,6 +266,7 @@ pub enum AddressKind {
     ConditionSet,
     Section,
     Hyperlink,
+    TextVariable,
     Plugin,
     Handle,
 }
@@ -278,7 +283,7 @@ pub struct AddressForm {
 
 impl AddressKind {
     /// Every kind, in the order the grammar is published.
-    pub const ALL: [AddressKind; 29] = [
+    pub const ALL: [AddressKind; 30] = [
         AddressKind::TextFrame,
         AddressKind::Rectangle,
         AddressKind::Oval,
@@ -306,6 +311,7 @@ impl AddressKind {
         AddressKind::ConditionSet,
         AddressKind::Section,
         AddressKind::Hyperlink,
+        AddressKind::TextVariable,
         AddressKind::Plugin,
         AddressKind::Handle,
     ];
@@ -341,6 +347,7 @@ impl AddressKind {
             AddressKind::ConditionSet => "conditionSet",
             AddressKind::Section => "section",
             AddressKind::Hyperlink => "hyperlink",
+            AddressKind::TextVariable => "textVariable",
             AddressKind::Plugin => "plugin",
             AddressKind::Handle => "$h",
         }
@@ -439,6 +446,11 @@ impl AddressKind {
             AddressKind::ConditionSet => ("conditionSet:<id>", "conditionSet:u3d", "A condition set."),
             AddressKind::Section => ("section:<id>", "section:u4e", "A numbering section."),
             AddressKind::Hyperlink => ("hyperlink:<id>", "hyperlink:u6a", "A hyperlink."),
+            AddressKind::TextVariable => (
+                "textVariable:<id>",
+                "textVariable:dTextVariablenFile Name",
+                "A text variable, by its Self id (the designmap's TextVariable). Its name is accepted in a selector: textVariable[name=\"Running Head\"].",
+            ),
             AddressKind::Plugin => (
                 "plugin:<pluginId>/<kind>/<id>",
                 "plugin:paged.image/layer/7",
@@ -592,6 +604,7 @@ impl Address {
             Address::ConditionSet { .. } => AddressKind::ConditionSet,
             Address::Section { .. } => AddressKind::Section,
             Address::Hyperlink { .. } => AddressKind::Hyperlink,
+            Address::TextVariable { .. } => AddressKind::TextVariable,
             // A master-scoped item IS the item.
             Address::OnMaster { item, .. } => item.kind(),
             Address::Plugin { .. } => AddressKind::Plugin,
@@ -674,6 +687,7 @@ impl Address {
             "conditionSet" => Address::ConditionSet { id },
             "section" => Address::Section { id },
             "hyperlink" => Address::Hyperlink { id },
+            "textVariable" | "textvariable" => Address::TextVariable { id },
             "table" => Address::Table { id },
             "page" => match rest.strip_prefix('#') {
                 Some(n) => {
@@ -900,7 +914,8 @@ impl std::fmt::Display for Address {
             | Address::Condition { id }
             | Address::ConditionSet { id }
             | Address::Section { id }
-            | Address::Hyperlink { id } => write!(f, "{p}:{id}"),
+            | Address::Hyperlink { id }
+            | Address::TextVariable { id } => write!(f, "{p}:{id}"),
             Address::PageNumber { n } => write!(f, "page:#{n}"),
             Address::StoryRange {
                 story_id,
@@ -1170,6 +1185,7 @@ mod tests {
             11 => Address::Section { id },
             12 => Address::Hyperlink { id },
             13 => Address::Handle { name: id },
+            14 => Address::TextVariable { id },
             _ => Address::Doc,
         });
         prop_oneof![

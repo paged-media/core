@@ -1742,7 +1742,7 @@ fn frame_cases(c: &mut Vec<Case>) {
         })
         .expect("paint the rectangle with the fresh swatch");
         Mutation::Set {
-            address: paged_wire::VirtualTarget::Swatch { swatch_id: color },
+            address: paged_wire::Address::Swatch { id: color },
             path: "value".into(),
             value: Value::Lengths(vec![20.0, 200.0, 60.0]),
         }

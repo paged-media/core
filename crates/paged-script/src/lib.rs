@@ -1020,24 +1020,25 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
 
 // ---------------------------------------------------------------- paged.*
 
-/// ADR 132 — a `Set` target from a script: the `VirtualTarget` object
-/// (`{ kind: "layer", layerId: "ua" }`, `{ kind: "doc" }`,
-/// `{ kind: "style", family: "object", styleId: "ObjectStyle/x" }`, …).
-/// The string address forms arrive with ADR 131's `Address`; until then
-/// the object IS the address.
-fn js_virtual_target(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::VirtualTarget> {
-    value.as_object()?;
-    from_js::<paged_wire::VirtualTarget>(value, ctx)
+/// A `Set` / `get` target from a script that is not an element id
+/// string: an ADR 131 address string (`"swatch:Color/Red"`, `"doc"`,
+/// `"frame:u12"`, `"cell:u2f/0,1"`, `"style:object/ObjectStyle/x"`), or
+/// — DEPRECATED, the protocol-70 form — the target object
+/// (`{ kind: "layer", layerId: "ua" }`).
+fn js_address(value: &JsValue, ctx: &mut Context) -> Option<paged_wire::Address> {
+    if value.is_object() {
+        return from_js::<paged_wire::VirtualTarget>(value, ctx).map(Into::into);
+    }
+    let s = value.as_string()?.to_std_string_escaped();
+    paged_wire::Address::parse(&s).ok()
 }
 
-/// `paged.set(target, path, value)` through `Mutation::Set`: coerce the JS
-/// value against the path's schema on the target's kind, then apply.
-fn set_virtual(
-    target: paged_wire::VirtualTarget,
-    path: &str,
-    value: &JsValue,
-    ctx: &mut Context,
-) -> bool {
+/// `paged.set(address, path, value)` through `Mutation::Set`: coerce the
+/// JS value against the path's schema on the target's kind, then apply.
+fn set_virtual(address: paged_wire::Address, path: &str, value: &JsValue, ctx: &mut Context) -> bool {
+    let Ok(target) = with_model(|m| m.target_of(&address)) else {
+        return false;
+    };
     let family = match &target {
         paged_wire::VirtualTarget::Style { family, .. } => Some(family.as_str()),
         _ => None,
@@ -1051,7 +1052,7 @@ fn set_virtual(
         return false;
     };
     let mutation = Mutation::Set {
-        address: target,
+        address,
         path: path.to_string(),
         value,
     };
@@ -1059,25 +1060,30 @@ fn set_virtual(
 }
 
 fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    if let Some(target) = js_virtual_target(args.get_or_undefined(0), ctx) {
+    let target = args.get_or_undefined(0);
+    let element_id = target
+        .as_string()
+        .and_then(|s| parse_element_id(&s.to_std_string_escaped()));
+    if element_id.is_none() {
+        // Any other object (ADR 131 address string, or the deprecated
+        // target object) goes through `Set`.
+        let Some(address) = js_address(target, ctx) else {
+            return Ok(JsValue::from(false));
+        };
         let path = args
             .get_or_undefined(1)
             .to_string(ctx)?
             .to_std_string_escaped();
         let value = args.get_or_undefined(2).clone();
-        return Ok(JsValue::from(set_virtual(target, &path, &value, ctx)));
+        return Ok(JsValue::from(set_virtual(address, &path, &value, ctx)));
     }
-    let id = args
-        .get_or_undefined(0)
-        .to_string(ctx)?
-        .to_std_string_escaped();
     let path = args
         .get_or_undefined(1)
         .to_string(ctx)?
         .to_std_string_escaped();
     let value_arg = args.get_or_undefined(2).clone();
 
-    let Some(element_id) = parse_element_id(&id) else {
+    let Some(element_id) = element_id else {
         return Ok(JsValue::from(false));
     };
 
@@ -1113,8 +1119,8 @@ fn paged_set(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
     let Some(wire_path) = parse_property_path(&path) else {
         // Not an element `PropertyPath`: a virtual path on the element
         // (`imageUri`, `labels[x-paged:k]`) goes through `Set`.
-        let target = paged_wire::VirtualTarget::Element { element_id };
-        return Ok(JsValue::from(set_virtual(target, &path, &value_arg, ctx)));
+        let address = paged_wire::Address::from(element_id);
+        return Ok(JsValue::from(set_virtual(address, &path, &value_arg, ctx)));
     };
     let Some(wire_value) = js_value_to_wire(&value_arg, wire_path, ctx) else {
         return Ok(JsValue::from(false));
@@ -3928,12 +3934,19 @@ fn paged_set_content_selection(
 }
 
 fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
-    if let Some(target) = js_virtual_target(args.get_or_undefined(0), ctx) {
+    let target = args.get_or_undefined(0);
+    let is_element = target
+        .as_string()
+        .is_some_and(|s| parse_element_id(&s.to_std_string_escaped()).is_some());
+    if !is_element {
+        let Some(address) = js_address(target, ctx) else {
+            return Ok(JsValue::null());
+        };
         let path = args
             .get_or_undefined(1)
             .to_string(ctx)?
             .to_std_string_escaped();
-        return Ok(get_virtual(&target, &path));
+        return Ok(get_virtual(&address, &path));
     }
     let id = args
         .get_or_undefined(0)
@@ -3960,17 +3973,16 @@ fn paged_get(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
         ))),
         // A virtual path on the element (`imageUri`, `labels[key]`, a
         // group's `groupTransform`).
-        None if parse_property_path(&path).is_none() => Ok(get_virtual(
-            &paged_wire::VirtualTarget::Element { element_id },
-            &path,
-        )),
+        None if parse_property_path(&path).is_none() => {
+            Ok(get_virtual(&paged_wire::Address::from(element_id), &path))
+        }
         None => Ok(JsValue::null()),
     }
 }
 
 /// The read twin of `set_virtual`: the value's wire JSON, or `null`.
-fn get_virtual(target: &paged_wire::VirtualTarget, path: &str) -> JsValue {
-    match with_model(|m| m.get_property(target, path)) {
+fn get_virtual(address: &paged_wire::Address, path: &str) -> JsValue {
+    match with_model(|m| m.get_property_at(address, path)) {
         Ok(v) => JsValue::from(js_string!(serde_json::to_string(&v).unwrap_or_default())),
         Err(_) => JsValue::null(),
     }

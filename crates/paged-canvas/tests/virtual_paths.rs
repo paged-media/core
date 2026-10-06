@@ -605,7 +605,7 @@ fn every_virtual_row_sets_reads_back_and_undoes() {
             };
             let value = sample(row, &before, &t);
             let set = Mutation::Set {
-                address: target.clone(),
+                address: target.clone().into(),
                 path: path.clone(),
                 value: value.clone(),
             };
@@ -665,21 +665,20 @@ fn a_set_inside_a_batch_takes_a_handle_and_is_one_undo_step() {
             },
             Mutation::BindCreated { handle: "f".into() },
             Mutation::Set {
-                address: VirtualTarget::Element {
-                    element_id: ElementId::TextFrame("$h:f".into()),
-                },
+                // A whole-address handle: the bound kind wins.
+                address: paged_wire::Address::parse("$h:f").unwrap(),
                 path: "frameFillColor".into(),
                 value: Value::ColorRef(Some("Color/Black".into())),
             },
             // Two Sets on one swatch: the second must merge against the
             // first, not against the pre-batch spec.
             Mutation::Set {
-                address: swatch.clone(),
+                address: swatch.clone().into(),
                 path: "tint".into(),
                 value: Value::Number(40.0),
             },
             Mutation::Set {
-                address: swatch.clone(),
+                address: swatch.clone().into(),
                 path: "name".into(),
                 value: Value::Text("Batch probe".into()),
             },
@@ -723,7 +722,7 @@ fn the_schema_refuses_what_it_does_not_describe() {
     };
     let refuse = |m: &mut CanvasModel, address: &VirtualTarget, path: &str, value: Value| {
         let r = m.apply_mutation(&Mutation::Set {
-            address: address.clone(),
+            address: address.clone().into(),
             path: path.into(),
             value,
         });
@@ -759,13 +758,13 @@ fn the_schema_refuses_what_it_does_not_describe() {
     );
     // …and the typed forms are taken where the old ones were.
     m.apply_mutation(&Mutation::Set {
-        address: story_range.clone(),
+        address: story_range.clone().into(),
         path: "paragraphJustification".into(),
         value: Value::Enum("CenterAlign".into()),
     })
     .expect("an enum member applies");
     m.apply_mutation(&Mutation::Set {
-        address: story_range,
+        address: story_range.into(),
         path: "characterFontSize".into(),
         value: Value::Number(18.0),
     })
@@ -781,7 +780,7 @@ fn a_native_label_is_readable_whatever_its_namespace() {
     // Written the only way a script may (x-paged:), read back through the
     // same path…
     m.apply_mutation(&Mutation::Set {
-        address: frame.clone(),
+        address: frame.clone().into(),
         path: "labels[x-paged:media.paged.probe]".into(),
         value: Value::Text(ENVELOPE.into()),
     })
@@ -794,7 +793,7 @@ fn a_native_label_is_readable_whatever_its_namespace() {
     // …and a native key cannot be written, but an absent one reads null.
     assert!(m
         .apply_mutation(&Mutation::Set {
-            address: frame.clone(),
+            address: frame.clone().into(),
             path: "labels[Label]".into(),
             value: Value::Text("x".into()),
         })

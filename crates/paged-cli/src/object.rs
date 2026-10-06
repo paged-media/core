@@ -14,13 +14,16 @@
 
 //! `paged set` / `paged get` — one property of any object (ADR 132).
 //!
-//! The CLI's first typed setter. A target is an element address
-//! (`rectangle:<id>`, `storyRange:<story>@0..5`), `doc`, or the
-//! `VirtualTarget` JSON (`{"kind":"layer","layerId":"ua"}`) until ADR 131's
-//! string addresses land; the path is any row of the catalog's
-//! `propertySchemas` for that kind; the value is JSON when it parses as
-//! JSON (`12`, `true`, `null`, `[0,0,100,100]`) and a string otherwise
-//! (`3mm`, `CenterAlign`, `Color/Red`), coerced by the path's schema.
+//! The CLI's first typed setter. A target is any ADR 131 address
+//! (`doc`, `rectangle:<id>`, `frame:<id>`, `storyRange:<story>@0..5`,
+//! `swatch:Color/Red`, `layer:ua`, `style:object/ObjectStyle/x`,
+//! `cell:<table>/0,1`, `page:#2`, `textVariable:<id>`), or — deprecated —
+//! the protocol-70 target JSON (`{"kind":"layer","layerId":"ua"}`). A
+//! selector is not a target: `paged query` lists the addresses it
+//! matches. The path is any row of the catalog's `propertySchemas` for
+//! that kind; the value is JSON when it parses as JSON (`12`, `true`,
+//! `null`, `[0,0,100,100]`) and a string otherwise (`3mm`, `CenterAlign`,
+//! `Color/Red`), coerced by the path's schema.
 //! The write is `Mutation::Set` over the wire — the same door the editor
 //! and a script use.
 
@@ -28,30 +31,28 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use paged_canvas::channel::{MainToWorkerKind, Mutation, WorkerToMainKind};
-use paged_wire::{ElementId, VirtualTarget};
+use paged_wire::{Address, VirtualTarget};
 
 use crate::engine::Session;
 use crate::export::PdfOptions;
 use crate::options::DocumentOptions;
 
-/// Parse a target argument.
-pub fn parse_target(spec: &str) -> Result<VirtualTarget> {
+/// Parse a target argument: an address string, or the deprecated
+/// target object.
+pub fn parse_target(spec: &str) -> Result<Address> {
     let spec = spec.trim();
-    if spec == "doc" {
-        return Ok(VirtualTarget::Doc);
-    }
     if spec.starts_with('{') {
-        return serde_json::from_str(spec)
-            .with_context(|| format!("{spec:?} is not a target object"));
+        let legacy: VirtualTarget = serde_json::from_str(spec)
+            .with_context(|| format!("{spec:?} is not a target object"))?;
+        return Ok(legacy.into());
     }
-    ElementId::parse(spec)
-        .map(|element_id| VirtualTarget::Element { element_id })
-        .ok_or_else(|| {
-            anyhow!(
-                "{spec:?} is not a target — use an element address (rectangle:<id>), \
-                 `doc`, or a target object such as {{\"kind\":\"layer\",\"layerId\":\"ua\"}}"
-            )
-        })
+    Address::parse(spec).map_err(|e| {
+        anyhow!(
+            "{spec:?} is not an address ({e}) — use doc, rectangle:<id>, swatch:<id>, \
+             layer:<id>, style:<family>/<id>, cell:<table>/<row>,<col>, … (see `paged describe`, \
+             idGrammar)"
+        )
+    })
 }
 
 /// The value argument as JSON: parsed when it is JSON, a string otherwise.
@@ -87,14 +88,20 @@ pub fn set(
     out: Option<&PathBuf>,
     pdf: &PdfOptions,
 ) -> Result<()> {
-    let target = parse_target(target)?;
-    let schema = schema_of(&target, path)?;
-    let value = paged_introspect::schema::from_json(&schema, &parse_value_json(value))
-        .map_err(|e| anyhow!("{path}: {e}"))?;
+    let address = parse_target(target)?;
     let mut session = Session::new();
     assets.open(&mut session, doc)?;
+    // The schema is the resolved target's: `frame:`, `page:#n` and a style
+    // named by display name need the document to say what they are.
+    let resolved = session
+        .model()?
+        .target_of(&address)
+        .map_err(|e| anyhow!(e))?;
+    let schema = schema_of(&resolved, path)?;
+    let value = paged_introspect::schema::from_json(&schema, &parse_value_json(value))
+        .map_err(|e| anyhow!("{path}: {e}"))?;
     let reply = session.send(MainToWorkerKind::Mutate(Mutation::Set {
-        address: target.clone(),
+        address: address.clone(),
         path: path.to_string(),
         value,
     }))?;
@@ -103,7 +110,7 @@ pub fn set(
         WorkerToMainKind::MutationFailed { error } => bail!("set {path}: {error}"),
         other => bail!("set {path}: the engine answered {other:?}"),
     }
-    let read = session.model()?.get_property(&target, path).ok();
+    let read = read(&mut session, &address, path).ok();
     match out {
         None => {
             eprintln!(
@@ -122,14 +129,28 @@ pub fn set(
     Ok(())
 }
 
+/// `RequestGet` — the same read the editor and `paged.get` make.
+fn read(session: &mut Session, address: &Address, path: &str) -> Result<paged_mutate::Value> {
+    match session.send(MainToWorkerKind::RequestGet {
+        address: address.to_string(),
+        path: path.to_string(),
+    })? {
+        WorkerToMainKind::PropertyValue {
+            value: Some(v), ..
+        } => Ok(v),
+        WorkerToMainKind::PropertyValue { error, .. } => Err(anyhow!(
+            "{address}.{path}: {}",
+            error.unwrap_or_else(|| "no value".to_string())
+        )),
+        other => bail!("get {path}: the engine answered {other:?}"),
+    }
+}
+
 pub fn get(doc: &Path, assets: &DocumentOptions, target: &str, path: &str) -> Result<()> {
-    let target = parse_target(target)?;
+    let address = parse_target(target)?;
     let mut session = Session::new();
     assets.open(&mut session, doc)?;
-    let value = session
-        .model()?
-        .get_property(&target, path)
-        .map_err(|e| anyhow!(e))?;
+    let value = read(&mut session, &address, path)?;
     println!("{}", serde_json::to_string(&value)?);
     Ok(())
 }
