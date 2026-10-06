@@ -1899,15 +1899,16 @@ fn a_script_suspends_on_the_host_and_resumes_on_its_answers() {
     );
     assert_eq!(stale["kind"], "scriptResult");
     assert!(stale["payload"]["error"].as_str().unwrap().contains("999"));
-    // The stale answer dropped nothing it did not own? It did: one session
-    // at a time, and a wrong id abandons it — re-run to get a live one.
-    let req = roundtrip(
+    // Another script runs while the first waits (the editor's thread-line
+    // overlay reads `paged.stories()` on every document change — and the
+    // host's own commit for the waiting script IS one): both survive.
+    let other = roundtrip(
         &mut core,
         &serde_json::json!({ "seq": 4, "protocol": p, "kind": "executeScript",
-            "payload": { "source": source, "hostObjects": true } }),
+            "payload": { "source": "1 + 1", "hostObjects": true } }),
     );
-    let session2 = req["payload"]["session"].clone();
-    assert_ne!(session, session2);
+    assert_eq!(other["payload"]["output"], serde_json::json!(["2"]));
+    let session2 = session;
     let done = roundtrip(
         &mut core,
         &serde_json::json!({ "seq": 5, "protocol": p, "kind": "hostObjectsResult",

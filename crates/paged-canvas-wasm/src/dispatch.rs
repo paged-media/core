@@ -76,6 +76,10 @@ pub enum CacheEffect {
     InvalidatePages(Vec<usize>),
 }
 
+/// v71 — how many scripts may wait on the host at once (a host that never
+/// answers leaks no more than this many Boa contexts).
+pub const MAX_SCRIPT_SESSIONS: usize = 8;
+
 /// Target-agnostic worker state holder. Mirrors the non-GPU fields of
 /// the wasm `CanvasWorker`; the shell composes one of these alongside
 /// its presenter + scene cache.
@@ -100,10 +104,14 @@ pub struct WorkerCore {
     /// v67 — the session's snapping preferences. Kept here as well as on
     /// the model so they survive `LoadDocument` / `NewBlankDocument`.
     pub snap_settings: paged_canvas::snap_point::SnapSettings,
-    /// v71 — a script suspended on the host bridge (between its
-    /// `RequestHostObjects` and the host's `HostObjectsResult`). At most
-    /// one: a new `ExecuteScript` or a document load drops it.
-    pub script_session: Option<paged_script::ScriptSession>,
+    /// v71 — scripts suspended on the host bridge (between their
+    /// `RequestHostObjects` and the host's `HostObjectsResult`), by
+    /// session id. Several may wait at once: the editor runs read-only
+    /// helper scripts (`paged.stories()` for thread lines) whenever the
+    /// document changes, and the host's own commit for a waiting script IS
+    /// such a change. A document load drops them all; past
+    /// [`MAX_SCRIPT_SESSIONS`] the oldest is abandoned.
+    pub script_sessions: std::collections::BTreeMap<u32, paged_script::ScriptSession>,
     /// Monotone id source for script sessions.
     pub next_script_session: u32,
 }
@@ -259,7 +267,7 @@ impl WorkerCore {
             export_sessions: std::collections::HashMap::new(),
             next_export_session: 1,
             snap_settings: Default::default(),
-            script_session: None,
+            script_sessions: std::collections::BTreeMap::new(),
             next_script_session: 1,
         }
     }
@@ -349,7 +357,7 @@ impl WorkerCore {
                         model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
-                        self.script_session = None;
+                        self.script_sessions.clear();
                         // Export sessions hold a build of the PREVIOUS
                         // document — drop them.
                         self.export_sessions.clear();
@@ -382,7 +390,7 @@ impl WorkerCore {
                         model.set_snap_settings(self.snap_settings);
                         let handle = model.handle();
                         self.model = Some(model);
-                        self.script_session = None;
+                        self.script_sessions.clear();
                         self.export_sessions.clear();
                         effect = CacheEffect::ClearAll;
                         WorkerToMainKind::DocumentLoaded(handle)
@@ -1419,8 +1427,6 @@ impl WorkerCore {
                 budget,
                 host_objects,
             } => {
-                // A suspended session the host never answered is abandoned.
-                self.script_session = None;
                 let Some(model) = self.model.as_mut() else {
                     reply!(WorkerToMainKind::ScriptResult {
                         output: Vec::new(),
@@ -1469,7 +1475,7 @@ impl WorkerCore {
                 self.script_step(step)
             }
             MainToWorkerKind::HostObjectsResult { session, answers } => {
-                let live = self.script_session.take().filter(|s| s.id() == session);
+                let live = self.script_sessions.remove(&session);
                 let (Some(script), Some(model)) = (live, self.model.as_mut()) else {
                     reply!(WorkerToMainKind::ScriptResult {
                         output: Vec::new(),
@@ -1681,7 +1687,10 @@ impl WorkerCore {
             },
             (paged_script::ScriptStep::Suspended { calls }, Some(session)) => {
                 let id = session.id();
-                self.script_session = Some(session);
+                self.script_sessions.insert(id, session);
+                while self.script_sessions.len() > MAX_SCRIPT_SESSIONS {
+                    self.script_sessions.pop_first();
+                }
                 WorkerToMainKind::RequestHostObjects { session: id, calls }
             }
             (paged_script::ScriptStep::Suspended { .. }, None) => WorkerToMainKind::ScriptResult {
