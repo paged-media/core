@@ -1311,6 +1311,12 @@ pub enum MainToWorkerKind {
     /// edit; re-read before each `SetFieldValue` pass). Pure READ.
     /// Reply: `DocumentPlaceholders`.
     RequestDocumentPlaceholders,
+    /// Object model (ADR 131) — evaluate a SELECTOR (`page:#3 > frame`,
+    /// `frame[name="price"]`, `[label.x-paged:oid=a1b2]`, unions with `,`)
+    /// against the document and return the canonical address of every
+    /// match, in document order. Pure READ. No document ⇒ empty list.
+    /// The grammar is `paged_wire::selector`'s. Reply: `QueryResult`.
+    RequestQuery { selector: String },
     /// SDK Phase 5 (v1 sweep) — resolved CMYK + RGB readout for a
     /// named swatch. Powers the Color panel's CMYK/RGB display.
     /// Editor sliders (which would mutate the swatch's channel
@@ -1889,6 +1895,13 @@ pub enum WorkerToMainKind {
     /// v43 (D-01) — `RequestDocumentPlaceholders` reply: every
     /// placeholder field in the document, in story order.
     DocumentPlaceholders { items: Vec<PlaceholderItem> },
+    /// `RequestQuery` reply. `addresses` are canonical address strings
+    /// (`paged_wire::Address`); `error` is set — and `addresses` empty —
+    /// when the selector does not parse, with the byte offset it failed at.
+    QueryResult {
+        addresses: Vec<String>,
+        error: Option<paged_wire::GrammarError>,
+    },
     /// v42 (C-5 / I-04) — `RequestPlacedAssetBytes` reply. `encoded` is the
     /// placed image's ORIGINAL file bytes (PSD / JPEG / PNG) with its
     /// natural pixel `width`/`height`; `found:false` (empty fields) when

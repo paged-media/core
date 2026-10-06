@@ -91,7 +91,10 @@ pub enum Head {
     Kind(AddressKind),
     /// `plugin:<pluginId>/<kind>` — objects of a plugin kind. Core owns
     /// none; the host registry fans the step out to the plugin.
-    PluginKind { plugin_id: String, kind: String },
+    PluginKind {
+        plugin_id: String,
+        kind: String,
+    },
     Address(Address),
 }
 
@@ -182,7 +185,9 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 None => break,
                 Some(',') => self.pos += 1,
-                Some(c) => return self.err(format!("unexpected {c:?}: expected `,`, `>` or the end")),
+                Some(c) => {
+                    return self.err(format!("unexpected {c:?}: expected `,`, `>` or the end"))
+                }
             }
         }
         Ok(Selector { chains })
@@ -250,12 +255,14 @@ impl<'a> Parser<'a> {
                 Some('[') => filters.push(self.filter()?),
                 Some(':') if self.rest().starts_with(":nth(") => {
                     self.pos += ":nth(".len();
-                    let close = self.rest().find(')').ok_or_else(|| {
-                        GrammarError::new(self.pos, ":nth( is not closed")
-                    })?;
-                    let n: u32 = self.rest()[..close].trim().parse().map_err(|_| {
-                        GrammarError::new(self.pos, ":nth(n) takes a whole number")
-                    })?;
+                    let close = self
+                        .rest()
+                        .find(')')
+                        .ok_or_else(|| GrammarError::new(self.pos, ":nth( is not closed"))?;
+                    let n: u32 = self.rest()[..close]
+                        .trim()
+                        .parse()
+                        .map_err(|_| GrammarError::new(self.pos, ":nth(n) takes a whole number"))?;
                     if n == 0 {
                         return self.err(":nth(n) is 1-based");
                     }
@@ -326,7 +333,12 @@ impl<'a> Parser<'a> {
 
     fn op(&mut self) -> Option<Op> {
         self.skip_ws();
-        for (lit, op) in [("!=", Op::Ne), ("^=", Op::Prefix), ("*=", Op::Contains), ("=", Op::Eq)] {
+        for (lit, op) in [
+            ("!=", Op::Ne),
+            ("^=", Op::Prefix),
+            ("*=", Op::Contains),
+            ("=", Op::Eq),
+        ] {
             if self.rest().starts_with(lit) {
                 self.pos += lit.len();
                 return Some(op);
@@ -347,7 +359,11 @@ impl<'a> Parser<'a> {
         let key = &rest[..key_len];
         self.pos += key_len;
         let op = self.op().unwrap_or(Op::Exists);
-        let value = if op == Op::Exists { None } else { Some(self.value()?) };
+        let value = if op == Op::Exists {
+            None
+        } else {
+            Some(self.value()?)
+        };
         // `[label=k=v]`: a second `=` names the label's value.
         let mut second = None;
         if key == "label" && op == Op::Eq && self.rest().starts_with('=') {
@@ -426,7 +442,10 @@ mod tests {
         assert_eq!(s.chains[0].steps[1].1.head, Head::Kind(AddressKind::Frame));
 
         let s = p(r#"frame[name="price"]"#);
-        assert_eq!(s.chains[0].steps[0].1.filters, vec![Filter::Name(Op::Eq, "price".into())]);
+        assert_eq!(
+            s.chains[0].steps[0].1.filters,
+            vec![Filter::Name(Op::Eq, "price".into())]
+        );
 
         let s = p(r#"frame[label.x-paged:oid="a1b2"]"#);
         assert_eq!(
@@ -483,7 +502,10 @@ mod tests {
         let s = p("master:ua9 > textFrame:nth(2)");
         assert_eq!(s.chains[0].steps[1].1.filters, vec![Filter::Nth(2)]);
         assert_eq!(p("*").chains[0].steps[0].1.head, Head::Any);
-        assert_eq!(p("TEXTFRAME").chains[0].steps[0].1.head, Head::Kind(AddressKind::TextFrame));
+        assert_eq!(
+            p("TEXTFRAME").chains[0].steps[0].1.head,
+            Head::Kind(AddressKind::TextFrame)
+        );
     }
 
     #[test]

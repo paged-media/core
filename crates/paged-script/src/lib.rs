@@ -507,6 +507,8 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_redo), js_string!("redo"), 0)
         .function(guarded(paged_inspect), js_string!("inspect"), 1)
         .function(guarded(paged_layers), js_string!("layers"), 0)
+        .function(guarded(paged_query), js_string!("query"), 1)
+        .function(guarded(paged_address), js_string!("address"), 1)
         .function(guarded(paged_tree), js_string!("tree"), 0)
         .function(
             guarded(paged_planar_regions),
@@ -3961,6 +3963,48 @@ fn paged_tree(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResul
 /// `characterCount`, `paragraphCount`. Scripts use this to pick
 /// valid `StoryRange` addresses; tests use it to populate the
 /// content selection programmatically.
+/// `paged.query(selector)` — the canonical address of every object the
+/// selector matches (ADR 131), as a JSON-encoded `string[]` in document
+/// order. A selector that does not parse THROWS a SyntaxError naming the
+/// offset — a typo is a bug in the script, not an empty answer.
+fn paged_query(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let selector = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    match with_model(|m| m.query(&selector)) {
+        Ok(found) => {
+            let list: Vec<String> = found.iter().map(ToString::to_string).collect();
+            Ok(JsValue::from(js_string!(
+                serde_json::to_string(&list).unwrap_or_default()
+            )))
+        }
+        Err(e) => Err(JsNativeError::syntax()
+            .with_message(format!("paged.query({selector:?}): {e}"))
+            .into()),
+    }
+}
+
+/// `paged.address(id)` — the canonical address string of an object, or
+/// `null` when nothing in the document answers to it. Takes an address
+/// string in any accepted spelling (`frame:u1`, `page:#2`,
+/// `story:s@0..4`, a style by name) or a `{ kind, id }` element object as
+/// `paged.selection()` / `paged.tree()` return them.
+fn paged_address(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let arg = args.get_or_undefined(0);
+    let text = match arg.as_object() {
+        Some(obj) => match element_id_address_of(&obj, ctx) {
+            Some(s) => s,
+            None => return Ok(JsValue::null()),
+        },
+        None => arg.to_string(ctx)?.to_std_string_escaped(),
+    };
+    match with_model(|m| m.resolve_address(&text)) {
+        Some(a) => Ok(JsValue::from(js_string!(a.to_string()))),
+        None => Ok(JsValue::null()),
+    }
+}
+
 fn paged_stories(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {
     let s = with_model(|m| serde_json::to_string(&m.stories()).unwrap_or_default());
     Ok(JsValue::from(js_string!(s)))
@@ -4162,15 +4206,9 @@ fn parse_element_id(s: &str) -> Option<paged_canvas::element_selection::ElementI
     paged_canvas::element_selection::ElementId::parse(s)
 }
 
-/// Inverse of `parse_element_id`, with this bridge's own fallback for
-/// the two variants that have no address form.
-///
-/// `to_address` returns `None` for `Table` / `TableCell` deliberately —
-/// a lossy address is worse than none. Here the bare `raw_id` is the
-/// long-standing behaviour and is safe because the structural insert
-/// fns only ever mint a page item, so the fallback is unreachable in
-/// practice; keeping it means a future variant degrades rather than
-/// panicking.
+/// Inverse of `parse_element_id`: the canonical address (ADR 131).
+/// `to_address` is total since table and cell gained a form; the
+/// `raw_id` fallback only keeps the `Option` signature honest.
 fn element_id_to_address(id: &paged_canvas::element_selection::ElementId) -> String {
     id.to_address().unwrap_or_else(|| id.raw_id().to_string())
 }

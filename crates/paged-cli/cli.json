@@ -3881,6 +3881,112 @@
       ]
     },
     {
+      "about": "List the objects a selector names, one canonical address per line",
+      "args": [
+        {
+          "defaults": [],
+          "help": "IDML or `.paged` document",
+          "long": null,
+          "name": "doc",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DOC"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "The selector",
+          "long": null,
+          "name": "selector",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "SELECTOR"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Print the engine's reply envelope as JSON",
+          "long": "json",
+          "name": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": false,
+          "valueNames": [
+            "JSON"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Font file or directory to make available, repeatable",
+          "long": "fonts",
+          "name": "fonts",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "DIR|FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Bind one family (and optionally a style) to a file, repeatable: `--font-family \"Fraunces/Italic=/path/Fraunces-Italic.ttf\"`",
+          "long": "font-family",
+          "name": "font_family",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME[/STYLE]=PATH"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "Fallback face for text no registered family answers for",
+          "long": "font",
+          "name": "font",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "FILE"
+          ]
+        },
+        {
+          "defaults": [],
+          "help": "CMYK profile: a file path, or a name to resolve against the host's installed profiles (e.g. \"Coated FOGRA39\")",
+          "long": "cmyk-profile",
+          "name": "cmyk_profile",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "short": null,
+          "takesValues": true,
+          "valueNames": [
+            "NAME|FILE"
+          ]
+        }
+      ],
+      "longAbout": "List the objects a selector names, one canonical address per line.\n\nSelectors (ADR 131): a kind (`frame`, `page`, `style`, …), an address, `*`; filters `[name=…]`, `[label=key]`, `[label.key=value]`, `[layer=…]`, `[style=…]`, `:nth(n)`; `>` for child, a space for descendant, `,` for union. Example: `paged query doc.idml 'page:#2 > frame[name^=price]'`.",
+      "name": "query",
+      "subcommands": []
+    },
+    {
       "about": "Print the capability catalog — what this engine can be asked to do",
       "args": [
         {

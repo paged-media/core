@@ -32,6 +32,7 @@ pub mod new;
 pub mod options;
 pub mod parts;
 pub mod place;
+pub mod query;
 pub mod read;
 pub mod render;
 pub mod script;

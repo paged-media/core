@@ -255,6 +255,10 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.stories", "()", "StorySummary[] JSON", "read",
            "Loaded stories with selfId + characterCount + paragraphCount. The source of valid story ids."),
         f!("paged.layers", "()", "LayerSummary[] JSON", "read", "Document layers."),
+        f!("paged.query", "(selector)", "string[] JSON", "read",
+           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector."),
+        f!("paged.address", "(id)", "string|null", "read",
+           "Canonical address of an object, from any accepted spelling (`frame:u1`, `page:#2`, a style by name) or a {kind,id} element; null when nothing answers to it."),
         f!("paged.swatches", "()", "SwatchSummary[] JSON", "read", "Colour palette (selfId/name/kind)."),
         f!("paged.paragraphStyles", "()", "ParagraphStyleSummary[] JSON", "read",
            "Paragraph styles — the source of valid styleRefs for applyStyle."),
@@ -451,24 +455,20 @@ fn host_functions() -> Vec<HostFn> {
     ]
 }
 
+/// The published id grammar — GENERATED from `paged_wire::Address`'s
+/// form table (ADR 131), one entry per address kind, so the parser and
+/// the documentation cannot drift: `paged-wire` proves every example
+/// parses and prints back byte-identically, and a new kind does not
+/// compile until it has a form.
 fn id_grammar() -> Vec<IdForm> {
-    vec![
-        IdForm {
-            form: "textFrame:<id>",
-            example: "textFrame:u123",
-            note: "A text frame. Same scheme: rectangle:/oval:/polygon:/graphicLine:/group:.",
-        },
-        IdForm {
-            form: "group:<id>",
-            example: "group:u88",
-            note: "A group. `paged.set(\"group:<id>\", \"groupTransform\", [a,b,c,d,tx,ty])` moves it as a unit.",
-        },
-        IdForm {
-            form: "storyRange:<storyId>@<start>..<end>",
-            example: "storyRange:Story/u1@0..6",
-            note: "A character range within a story (half-open). storyId comes from paged.stories()[].selfId.",
-        },
-    ]
+    paged_wire::address_forms()
+        .into_iter()
+        .map(|f| IdForm {
+            form: f.form,
+            example: f.example,
+            note: f.note,
+        })
+        .collect()
 }
 
 fn constraints() -> Vec<&'static str> {

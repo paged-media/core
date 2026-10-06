@@ -183,6 +183,24 @@ pub enum Command {
         #[command(subcommand)]
         what: crate::parts::PartsCommand,
     },
+    /// List the objects a selector names, one canonical address per line.
+    ///
+    /// Selectors (ADR 131): a kind (`frame`, `page`, `style`, …), an
+    /// address, `*`; filters `[name=…]`, `[label=key]`,
+    /// `[label.key=value]`, `[layer=…]`, `[style=…]`, `:nth(n)`; `>` for
+    /// child, a space for descendant, `,` for union. Example:
+    /// `paged query doc.idml 'page:#2 > frame[name^=price]'`.
+    Query {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// The selector.
+        selector: String,
+        /// Print the engine's reply envelope as JSON.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
     /// Print the capability catalog — what this engine can be asked to do.
     Describe {
         /// One JSON line instead of an indented block.

@@ -311,7 +311,13 @@ impl<'a> Index<'a> {
             for para in &parsed.story.paragraphs {
                 if let Some(table) = &para.table {
                     if let Some(tid) = table.self_id.as_deref() {
-                        let t = ix.simple(Address::Table { id: tid.to_string() }, story, None);
+                        let t = ix.simple(
+                            Address::Table {
+                                id: tid.to_string(),
+                            },
+                            story,
+                            None,
+                        );
                         for cell in &table.cells {
                             if let Some((col, row)) = cell.coords() {
                                 ix.simple(
@@ -386,7 +392,13 @@ impl<'a> Index<'a> {
         resources!(st.condition_sets.values(), ConditionSet);
         resources!(dm.hyperlinks.iter(), Hyperlink);
         for s in &dm.sections {
-            ix.simple(Address::Section { id: s.self_id.clone() }, root, None);
+            ix.simple(
+                Address::Section {
+                    id: s.self_id.clone(),
+                },
+                root,
+                None,
+            );
         }
         ix
     }
@@ -427,11 +439,31 @@ impl<'a> Index<'a> {
         let mut seen: HashSet<(u8, usize)> = HashSet::new();
         let top: Vec<FrameRef> = spread.frames_in_order.clone();
         for fr in top {
-            self.walk_item(spread, fr, None, spread_node, page_nodes, master, layers, &mut seen, 0);
+            self.walk_item(
+                spread,
+                fr,
+                None,
+                spread_node,
+                page_nodes,
+                master,
+                layers,
+                &mut seen,
+                0,
+            );
         }
         for fr in all_refs(spread) {
             if !seen.contains(&ref_key(fr)) {
-                self.walk_item(spread, fr, None, spread_node, page_nodes, master, layers, &mut seen, 0);
+                self.walk_item(
+                    spread,
+                    fr,
+                    None,
+                    spread_node,
+                    page_nodes,
+                    master,
+                    layers,
+                    &mut seen,
+                    0,
+                );
             }
         }
     }
@@ -533,15 +565,14 @@ impl<'a> Index<'a> {
             Address::Frame { id } => n.addr.page_item_id() == Some(id.as_str()),
             Address::PageNumber { n: want } => n.page_number == Some(*want),
             Address::Style { family, id } => match &n.addr {
-                Address::Style { family: f, id: have } => {
-                    f == family && (have == id || n.name == Some(id.as_str()))
-                }
+                Address::Style {
+                    family: f,
+                    id: have,
+                } => f == family && (have == id || n.name == Some(id.as_str())),
                 _ => false,
             },
             Address::OnMaster { master, item } => match &n.addr {
-                Address::OnMaster { master: m, .. } => {
-                    m == master && self.address_matches(n, item)
-                }
+                Address::OnMaster { master: m, .. } => m == master && self.address_matches(n, item),
                 _ => false,
             },
             a if a.kind().is_page_item() => {
@@ -567,12 +598,20 @@ impl<'a> Index<'a> {
                 }
             }
             Filter::Kind(k) => kind_matches(n, *k),
-            Filter::Layer(op, v) => {
-                id_or_name(*op, n.layer, n.layer.and_then(|l| self.layer_names.get(l).copied().flatten()), v)
-            }
-            Filter::Style(op, v) => {
-                id_or_name(*op, n.style, n.style.and_then(|s| self.style_names.get(s).copied().flatten()), v)
-            }
+            Filter::Layer(op, v) => id_or_name(
+                *op,
+                n.layer,
+                n.layer
+                    .and_then(|l| self.layer_names.get(l).copied().flatten()),
+                v,
+            ),
+            Filter::Style(op, v) => id_or_name(
+                *op,
+                n.style,
+                n.style
+                    .and_then(|s| self.style_names.get(s).copied().flatten()),
+                v,
+            ),
             Filter::Nth(_) => true,
         }
     }
@@ -806,7 +845,8 @@ mod tests {
                 label("emoji", "<?AID d83d?><?AID de00?>!"),
             ],
         );
-        s.labels.insert("p2".into(), vec![label("x-paged:slide", "{}")]);
+        s.labels
+            .insert("p2".into(), vec![label("x-paged:slide", "{}")]);
 
         let mut ms = Spread::default();
         ms.text_frames = vec![TextFrame::new("mtf", None, b(0.0, 0.0, 5.0, 5.0))];
@@ -877,7 +917,10 @@ mod tests {
             self_id: "st1".into(),
             story,
         }];
-        for (id, name) in [("ParagraphStyle/Body", "Body"), ("ParagraphStyle/Head 1", "Head 1")] {
+        for (id, name) in [
+            ("ParagraphStyle/Body", "Body"),
+            ("ParagraphStyle/Head 1", "Head 1"),
+        ] {
             d.styles.paragraph_styles.insert(
                 id.into(),
                 ParagraphStyleDef {
@@ -919,7 +962,10 @@ mod tests {
         assert_eq!(q(&d, "field"), ["field:st1@3"]);
         assert_eq!(
             q(&d, "style"),
-            ["style:paragraph/ParagraphStyle/Body", "style:paragraph/ParagraphStyle/Head 1"]
+            [
+                "style:paragraph/ParagraphStyle/Body",
+                "style:paragraph/ParagraphStyle/Head 1"
+            ]
         );
     }
 
@@ -930,8 +976,14 @@ mod tests {
         assert_eq!(q(&d, "[name=badge]"), ["group:g1"]);
         assert_eq!(q(&d, "frame[name=folio]"), ["master:ma > textFrame:mtf"]);
         assert_eq!(q(&d, "frame[name^=he]"), ["textFrame:tf1"]);
-        assert_eq!(q(&d, "textFrame[name!=price]"), ["textFrame:tf1", "master:ma > textFrame:mtf"]);
-        assert_eq!(q(&d, "style[name='Head 1']"), ["style:paragraph/ParagraphStyle/Head 1"]);
+        assert_eq!(
+            q(&d, "textFrame[name!=price]"),
+            ["textFrame:tf1", "master:ma > textFrame:mtf"]
+        );
+        assert_eq!(
+            q(&d, "style[name='Head 1']"),
+            ["style:paragraph/ParagraphStyle/Head 1"]
+        );
         assert_eq!(q(&d, "field[name=price]"), ["field:st1@3"]);
         assert_eq!(q(&d, "master[name=A-Master]"), ["master:ma"]);
     }
@@ -941,7 +993,10 @@ mod tests {
         let d = doc();
         assert_eq!(q(&d, "[label=x-paged:oid]"), ["rectangle:r1"]);
         assert_eq!(q(&d, "*[label=vendor=acme]"), ["rectangle:r1"]);
-        assert_eq!(q(&d, r#"frame[label.x-paged:oid="a1b2"]"#), ["rectangle:r1"]);
+        assert_eq!(
+            q(&d, r#"frame[label.x-paged:oid="a1b2"]"#),
+            ["rectangle:r1"]
+        );
         assert_eq!(q(&d, "[label.vendor=nope]"), Vec::<String>::new());
         assert_eq!(q(&d, "page[label=x-paged:slide]"), ["page:p2"]);
         assert_eq!(q(&d, "doc[label=x-paged:data]"), ["doc"]);
@@ -952,7 +1007,10 @@ mod tests {
     fn containment_child_and_descendant() {
         let d = doc();
         assert_eq!(q(&d, "page:p1 > frame"), ["textFrame:tf1"]);
-        assert_eq!(q(&d, "page:#2 > frame"), ["textFrame:tf2", "rectangle:r1", "group:g1"]);
+        assert_eq!(
+            q(&d, "page:#2 > frame"),
+            ["textFrame:tf2", "rectangle:r1", "group:g1"]
+        );
         assert_eq!(
             q(&d, "page:#2 frame"),
             ["textFrame:tf2", "rectangle:r1", "group:g1", "oval:o1"]
@@ -973,11 +1031,22 @@ mod tests {
         let d = doc();
         assert_eq!(q(&d, "frame:o1"), ["oval:o1"]);
         // A space ends a bare token: `1` is read as a descendant step.
-        assert_eq!(query_str(&d, "style:paragraph/Head 1").unwrap_err().position, 21);
-        assert_eq!(q(&d, "\"style:paragraph/Head 1\""), ["style:paragraph/ParagraphStyle/Head 1"]);
+        assert_eq!(
+            query_str(&d, "style:paragraph/Head 1")
+                .unwrap_err()
+                .position,
+            21
+        );
+        assert_eq!(
+            q(&d, "\"style:paragraph/Head 1\""),
+            ["style:paragraph/ParagraphStyle/Head 1"]
+        );
         assert_eq!(q(&d, "storyRange:st1@0..2"), ["storyRange:st1@0..2"]);
         assert_eq!(q(&d, "storyRange:nope@0..2"), Vec::<String>::new());
-        assert_eq!(q(&d, "plugin:paged.image/layer/7"), ["plugin:paged.image/layer/7"]);
+        assert_eq!(
+            q(&d, "plugin:paged.image/layer/7"),
+            ["plugin:paged.image/layer/7"]
+        );
         assert_eq!(q(&d, "textFrame:gone"), Vec::<String>::new());
         assert_eq!(
             resolve_element_id(&d, &Address::parse("cell:tb1/0,1").unwrap()),
@@ -1010,6 +1079,10 @@ mod tests {
         assert_eq!(decode_aid("a<?AID d83d?><?AID de00?>b"), "a😀b");
         assert_eq!(decode_aid("plain"), "plain");
         assert_eq!(decode_aid("<?AID zz?>"), "<?AID zz?>");
-        assert_eq!(decode_aid("<?AID d83d?>x"), "<?AID d83d?>x", "a lone surrogate stays verbatim");
+        assert_eq!(
+            decode_aid("<?AID d83d?>x"),
+            "<?AID d83d?>x",
+            "a lone surrogate stays verbatim"
+        );
     }
 }

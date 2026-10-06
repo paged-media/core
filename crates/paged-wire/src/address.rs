@@ -462,7 +462,10 @@ impl AddressKind {
 /// Every published address form, in grammar order. The catalog's
 /// `idGrammar` is exactly this list.
 pub fn address_forms() -> Vec<AddressForm> {
-    AddressKind::ALL.into_iter().map(AddressKind::form).collect()
+    AddressKind::ALL
+        .into_iter()
+        .map(AddressKind::form)
+        .collect()
 }
 
 /// A malformed address or selector, with the byte offset the problem
@@ -726,9 +729,9 @@ impl Address {
                 }
             }
             "field" => {
-                let (story, offset) = rest.rsplit_once('@').ok_or_else(|| {
-                    GrammarError::new(at, "a field is field:<storyId>@<offset>")
-                })?;
+                let (story, offset) = rest
+                    .rsplit_once('@')
+                    .ok_or_else(|| GrammarError::new(at, "a field is field:<storyId>@<offset>"))?;
                 if story.is_empty() {
                     return Err(GrammarError::new(at, "a field needs a story id"));
                 }
@@ -738,9 +741,9 @@ impl Address {
                 }
             }
             "cell" => {
-                let (table, rc) = rest.rsplit_once('/').ok_or_else(|| {
-                    GrammarError::new(at, "a cell is cell:<tableId>/<row>,<col>")
-                })?;
+                let (table, rc) = rest
+                    .rsplit_once('/')
+                    .ok_or_else(|| GrammarError::new(at, "a cell is cell:<tableId>/<row>,<col>"))?;
                 let rc_at = at + table.len() + 1;
                 let (r, c) = rc
                     .split_once(',')
@@ -972,7 +975,12 @@ mod tests {
                 end: 9
             }
         );
-        assert_eq!(a("story:Story/u1"), Address::Story { id: "Story/u1".into() });
+        assert_eq!(
+            a("story:Story/u1"),
+            Address::Story {
+                id: "Story/u1".into()
+            }
+        );
         assert_eq!(
             a("cell:u2f/2,3"),
             Address::Cell {
@@ -1098,7 +1106,11 @@ mod tests {
             col: 2,
         });
         assert_eq!(cell.to_string(), "cell:t1/4,2");
-        assert_eq!(cell.to_element_id(), None, "needs the document for its story");
+        assert_eq!(
+            cell.to_element_id(),
+            None,
+            "needs the document for its story"
+        );
         assert_eq!(Address::Frame { id: "u1".into() }.to_element_id(), None);
         assert_eq!(Address::Doc.to_element_id(), None);
     }
@@ -1138,9 +1150,8 @@ mod tests {
     }
 
     fn page_item() -> impl Strategy<Value = Address> {
-        (0usize..6, any_id()).prop_map(|(k, id)| {
-            Address::page_item(AddressKind::ALL[k], id).expect("an item kind")
-        })
+        (0usize..6, any_id())
+            .prop_map(|(k, id)| Address::page_item(AddressKind::ALL[k], id).expect("an item kind"))
     }
 
     fn any_address() -> impl Strategy<Value = Address> {

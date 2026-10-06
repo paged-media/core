@@ -849,6 +849,25 @@ impl WorkerCore {
                     .unwrap_or_default();
                 WorkerToMainKind::DocumentPlaceholders { items }
             }
+            MainToWorkerKind::RequestQuery { selector } => {
+                // Object model (ADR 131) — pure READ. No document ⇒ empty
+                // list (same posture as RequestCollection); a selector that
+                // does not parse answers with the error, never a panic.
+                match self.model.as_ref().map(|m| m.query(&selector)) {
+                    None => WorkerToMainKind::QueryResult {
+                        addresses: Vec::new(),
+                        error: None,
+                    },
+                    Some(Ok(found)) => WorkerToMainKind::QueryResult {
+                        addresses: found.iter().map(ToString::to_string).collect(),
+                        error: None,
+                    },
+                    Some(Err(e)) => WorkerToMainKind::QueryResult {
+                        addresses: Vec::new(),
+                        error: Some(e),
+                    },
+                }
+            }
             MainToWorkerKind::RequestFrameChain { story_id } => {
                 // v38 (Wave 2, C-2 / S-05) — pure READ. No document ⇒
                 // empty chain (same posture as RequestCollection).

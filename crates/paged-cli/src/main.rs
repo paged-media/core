@@ -95,6 +95,12 @@ fn main() -> Result<()> {
             &pdf,
         ),
         Command::Parts { what } => paged_cli::parts::run(&what),
+        Command::Query {
+            doc,
+            selector,
+            json,
+            assets,
+        } => paged_cli::query::run(&doc, &assets, &selector, json),
         Command::Describe { compact } => paged_cli::inspect::describe(compact),
         Command::Digest {
             doc,

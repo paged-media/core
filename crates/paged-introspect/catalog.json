@@ -127,6 +127,20 @@
       "summary": "Document layers."
     },
     {
+      "name": "paged.query",
+      "params": "(selector)",
+      "returns": "string[] JSON",
+      "kind": "read",
+      "summary": "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector."
+    },
+    {
+      "name": "paged.address",
+      "params": "(id)",
+      "returns": "string|null",
+      "kind": "read",
+      "summary": "Canonical address of an object, from any accepted spelling (`frame:u1`, `page:#2`, a style by name) or a {kind,id} element; null when nothing answers to it."
+    },
+    {
       "name": "paged.swatches",
       "params": "()",
       "returns": "SwatchSummary[] JSON",
@@ -1086,14 +1100,144 @@
       "note": "A text frame. Same scheme: rectangle:/oval:/polygon:/graphicLine:/group:."
     },
     {
+      "form": "rectangle:<id>",
+      "example": "rectangle:u12",
+      "note": "A rectangle (graphic frame)."
+    },
+    {
+      "form": "oval:<id>",
+      "example": "oval:u13",
+      "note": "An oval."
+    },
+    {
+      "form": "polygon:<id>",
+      "example": "polygon:u14",
+      "note": "A polygon or open path."
+    },
+    {
+      "form": "graphicLine:<id>",
+      "example": "graphicLine:u15",
+      "note": "A graphic line."
+    },
+    {
       "form": "group:<id>",
       "example": "group:u88",
       "note": "A group. `paged.set(\"group:<id>\", \"groupTransform\", [a,b,c,d,tx,ty])` moves it as a unit."
     },
     {
+      "form": "frame:<id>",
+      "example": "frame:u123",
+      "note": "Any page item, kind unknown (alias). paged.address / paged.query resolve it to the kind-specific form."
+    },
+    {
       "form": "storyRange:<storyId>@<start>..<end>",
       "example": "storyRange:Story/u1@0..6",
-      "note": "A character range within a story (half-open). storyId comes from paged.stories()[].selfId."
+      "note": "A character range within a story (half-open). storyId comes from paged.stories()[].selfId. Alias: story:<storyId>@<start>..<end>."
+    },
+    {
+      "form": "doc",
+      "example": "doc",
+      "note": "The document itself."
+    },
+    {
+      "form": "page:<id>",
+      "example": "page:u1a2",
+      "note": "A body page, by its Self id (paged.pages()[].selfId), or page:#<n> for the n-th page (1-based)."
+    },
+    {
+      "form": "spread:<id>",
+      "example": "spread:u1a1",
+      "note": "A spread, by its Self id."
+    },
+    {
+      "form": "layer:<id>",
+      "example": "layer:ub3",
+      "note": "A layer, by its Self id (paged.layers())."
+    },
+    {
+      "form": "master:<id>",
+      "example": "master:ua9",
+      "note": "A master spread. `master:<id> > textFrame:<id>` names an item on it."
+    },
+    {
+      "form": "story:<id>",
+      "example": "story:Story/u1",
+      "note": "A story, by its Self id."
+    },
+    {
+      "form": "field:<storyId>@<offset>",
+      "example": "field:Story/u1@12",
+      "note": "A text field anchored at a story character offset (paged.placeholders / RequestDocumentPlaceholders)."
+    },
+    {
+      "form": "table:<id>",
+      "example": "table:u2f",
+      "note": "A table, by its Self id (unique per document)."
+    },
+    {
+      "form": "cell:<tableId>/<row>,<col>",
+      "example": "cell:u2f/0,1",
+      "note": "A table cell, zero-based row and column."
+    },
+    {
+      "form": "style:<family>/<selfId>",
+      "example": "style:paragraph/ParagraphStyle/Body",
+      "note": "A style; family is paragraph | character | object | cell | table. The display name is accepted in place of the Self id."
+    },
+    {
+      "form": "swatch:<id>",
+      "example": "swatch:Color/Red",
+      "note": "A colour or swatch, by its Self id."
+    },
+    {
+      "form": "gradient:<id>",
+      "example": "gradient:Gradient/u1",
+      "note": "A gradient, by its Self id."
+    },
+    {
+      "form": "colorGroup:<id>",
+      "example": "colorGroup:ColorGroup/u7",
+      "note": "A colour group."
+    },
+    {
+      "form": "numberingList:<id>",
+      "example": "numberingList:NumberingList/Steps",
+      "note": "A numbering list."
+    },
+    {
+      "form": "guide:<id>",
+      "example": "guide:u5c",
+      "note": "A ruler guide."
+    },
+    {
+      "form": "condition:<id>",
+      "example": "condition:Condition/Draft",
+      "note": "A text condition."
+    },
+    {
+      "form": "conditionSet:<id>",
+      "example": "conditionSet:u3d",
+      "note": "A condition set."
+    },
+    {
+      "form": "section:<id>",
+      "example": "section:u4e",
+      "note": "A numbering section."
+    },
+    {
+      "form": "hyperlink:<id>",
+      "example": "hyperlink:u6a",
+      "note": "A hyperlink."
+    },
+    {
+      "form": "plugin:<pluginId>/<kind>/<id>",
+      "example": "plugin:paged.image/layer/7",
+      "note": "An object a plugin owns. Opaque to core and carried through unchanged."
+    },
+    {
+      "form": "$h:<name>",
+      "example": "$h:newFrame",
+      "note": "A batch handle bound earlier in the same batch."
     }
   ],
   "settablePaths": [

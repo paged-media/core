@@ -380,7 +380,13 @@ mod tests {
     /// not element ids.
     #[test]
     fn non_element_addresses_are_not_element_ids() {
-        for s in ["doc", "page:u1", "layer:ub3", "style:paragraph/Body", "frame:u1"] {
+        for s in [
+            "doc",
+            "page:u1",
+            "layer:ub3",
+            "style:paragraph/Body",
+            "frame:u1",
+        ] {
             assert_eq!(ElementId::parse(s), None, "{s}");
         }
     }
