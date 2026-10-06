@@ -54,6 +54,16 @@
 use serde::{Deserialize, Serialize};
 use tsify_next::Tsify;
 
+mod address;
+pub use address::{address_forms, Address, AddressForm, AddressKind, GrammarError, StyleFamily};
+pub mod selector;
+pub use selector::Selector;
+/// Selector evaluation against a document — the `query` feature, so the
+/// read-only viewer (which takes this crate with no default features)
+/// does not pick up a scene dependency it never asked for.
+#[cfg(feature = "query")]
+pub mod query;
+
 #[derive(
     Debug,
     Default,
@@ -154,85 +164,31 @@ impl ElementId {
         }
     }
 
-    /// Parse the `kind:id` ADDRESS form every text surface uses — the
-    /// string `paged.set` / `paged.inspect` take, the one the scripting
-    /// catalog's id grammar documents, and the one a CLI subcommand
-    /// accepts on the command line.
+    /// Parse an address (ADR 131, see [`Address`]) and keep it when it
+    /// names an `ElementId` without needing a document: the six page-item
+    /// forms (`textFrame:<id>`, `rectangle:<id>` — alias `rect:`, `oval:`,
+    /// `polygon:`, `graphicLine:`, `group:`; also master-scoped) and
+    /// `storyRange:<storyId>@<start>..<end>` (alias `story:…@…`).
     ///
-    /// It lives here, beside the variant, because it is the same
-    /// grammar for all of them. It was a private function in the Boa
-    /// bridge, which meant the second surface to need it would have
-    /// written a second copy that agreed by hand — the shape this
-    /// campaign has found four times.
-    ///
-    /// Accepted:
-    /// - `textFrame:<id>` (also `textframe`), `rectangle:<id>` (also
-    ///   `rect`), `oval:`, `polygon:`, `graphicLine:` (also
-    ///   `graphicline`), `group:`
-    /// - `storyRange:<storyId>@<start>..<end>` (also `storyrange`),
-    ///   half-open, `end > start`
-    ///
-    /// `Table` and `TableCell` have NO address form and never will
-    /// through this door: they are addressed structurally, by the
-    /// `(storyId, tableId[, row, col])` tuple the wire carries.
+    /// The grammar itself lives in [`Address::parse`], so this, the Boa
+    /// bridge, the CLI and the catalog cannot disagree about it. A table
+    /// or cell address (`table:<id>`, `cell:<id>/<r>,<c>`) needs the
+    /// document to find its story and is resolved by the query module,
+    /// not here; `frame:<id>` likewise needs the document for its kind.
     ///
     /// `None` on anything else — this is user input, so a bad address
     /// is an answer, never a panic.
     pub fn parse(s: &str) -> Option<Self> {
-        let (kind, id) = s.split_once(':')?;
-        if id.is_empty() {
-            return None;
-        }
-        if kind == "storyRange" || kind == "storyrange" {
-            let (story_id, range) = id.split_once('@')?;
-            if story_id.is_empty() {
-                return None;
-            }
-            let (start_s, end_s) = range.split_once("..")?;
-            let start: u32 = start_s.parse().ok()?;
-            let end: u32 = end_s.parse().ok()?;
-            if end <= start {
-                return None;
-            }
-            return Some(ElementId::StoryRange {
-                story_id: story_id.to_string(),
-                start,
-                end,
-            });
-        }
-        let id = id.to_string();
-        Some(match kind {
-            "textFrame" | "textframe" => ElementId::TextFrame(id),
-            "rectangle" | "rect" => ElementId::Rectangle(id),
-            "oval" => ElementId::Oval(id),
-            "polygon" => ElementId::Polygon(id),
-            "graphicLine" | "graphicline" => ElementId::GraphicLine(id),
-            "group" => ElementId::Group(id),
-            _ => return None,
-        })
+        Address::parse(s).ok()?.to_element_id()
     }
 
-    /// The inverse of [`ElementId::parse`], in the CANONICAL spelling
-    /// (the aliases parse but are never emitted).
-    ///
-    /// `None` for `Table` / `TableCell`, which have no address form —
-    /// deliberately not a lossy fallback, so a caller cannot hand out a
-    /// string that will not parse back.
+    /// The canonical address string ([`Address`]'s `Display`). Always
+    /// `Some` since ADR 131 gave table and cell a form; the `Option` is
+    /// kept so no call site moves. A table or cell address drops the
+    /// story (the table `Self` is unique per document), so it parses back
+    /// through a document's resolver, not through [`ElementId::parse`].
     pub fn to_address(&self) -> Option<String> {
-        Some(match self {
-            ElementId::TextFrame(id) => format!("textFrame:{id}"),
-            ElementId::Rectangle(id) => format!("rectangle:{id}"),
-            ElementId::Oval(id) => format!("oval:{id}"),
-            ElementId::Polygon(id) => format!("polygon:{id}"),
-            ElementId::GraphicLine(id) => format!("graphicLine:{id}"),
-            ElementId::Group(id) => format!("group:{id}"),
-            ElementId::StoryRange {
-                story_id,
-                start,
-                end,
-            } => format!("storyRange:{story_id}@{start}..{end}"),
-            ElementId::Table { .. } | ElementId::TableCell { .. } => return None,
-        })
+        Some(Address::from(self.clone()).to_string())
     }
 
     /// Short human-readable kind label used by the Inspector panel
@@ -389,29 +345,44 @@ mod tests {
         }
     }
 
-    /// The two structural addresses have no textual form, and must not
-    /// get a lossy one — a string that will not parse back is worse
-    /// than no string.
+    /// Table and cell have a textual form now (ADR 131): `table:<id>`
+    /// and `cell:<tableId>/<row>,<col>`. Their story is the document's to
+    /// find, so `ElementId::parse` (which has no document) does not
+    /// produce them.
     #[test]
-    fn table_addresses_have_no_textual_form() {
+    fn table_addresses_have_a_textual_form() {
+        let table = ElementId::Table {
+            story_id: "Story/u1".into(),
+            table_id: "t1".into(),
+        };
+        assert_eq!(table.to_address().as_deref(), Some("table:t1"));
+        let cell = ElementId::TableCell {
+            story_id: "Story/u1".into(),
+            table_id: "t1".into(),
+            row: 0,
+            col: 3,
+        };
+        assert_eq!(cell.to_address().as_deref(), Some("cell:t1/0,3"));
+        assert_eq!(ElementId::parse("cell:t1/0,3"), None);
+    }
+
+    /// `story:<id>@a..b` (the plan's notation) is an alias of the
+    /// canonical `storyRange:` form.
+    #[test]
+    fn story_alias_parses_to_the_story_range() {
         assert_eq!(
-            ElementId::Table {
-                story_id: "Story/u1".into(),
-                table_id: "t1".into()
-            }
-            .to_address(),
-            None
+            ElementId::parse("story:Story/u1@0..6"),
+            ElementId::parse("storyRange:Story/u1@0..6")
         );
-        assert_eq!(
-            ElementId::TableCell {
-                story_id: "Story/u1".into(),
-                table_id: "t1".into(),
-                row: 0,
-                col: 0
-            }
-            .to_address(),
-            None
-        );
+    }
+
+    /// Addresses that name something `ElementId` has no variant for are
+    /// not element ids.
+    #[test]
+    fn non_element_addresses_are_not_element_ids() {
+        for s in ["doc", "page:u1", "layer:ub3", "style:paragraph/Body", "frame:u1"] {
+            assert_eq!(ElementId::parse(s), None, "{s}");
+        }
     }
 
     /// The aliases parse and are never emitted.
