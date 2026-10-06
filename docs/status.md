@@ -1,8 +1,8 @@
 # Status
 
-What the engine ships and what it does not, read from the code at commit `715e130`
-(`PROTOCOL_VERSION` 68 on branch `web/protocol-68`, not yet tagged; the newest release tag in
-its history is `v0.67.0`). This page stays
+What the engine ships and what it does not, read from the code at commit `d9f6a32`
+(`PROTOCOL_VERSION` 69 on branch `data/protocol-69`, not yet tagged; the newest release tag in
+its history is `v0.68.0`). This page stays
 at the level of the engine and its surfaces; it does not list which document constructs are
 rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
@@ -15,7 +15,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 120 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 121 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
@@ -23,6 +23,15 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   ([ADR 125](adr/125-snapping-lives-in-the-engine.md)): `requestSnapPoint` and the move, resize
   and path-edit gestures snap to every visible element's points and outlines, the page, ruler
   guides, the grid and the lines through those points, under `setSnapSettings`.
+- **Plugin fields and labels.** Placeholder fields are placed at a story offset or at the caret
+  (`insertField.contentOffset`). Text typed at a field's edge lands beside it. A
+  document-scoped, undoable plugin label is written with `setDocumentMetadata` and read in
+  `DocumentMeta` ([ADR 127](adr/127-fields-and-document-labels-for-data.md), protocol 69).
+- **Pages in a batch.** `bindCreated` names a page that `insertPage` or `duplicatePage` minted, so
+  pages and their content are one batch and one undo step. A duplicated page owns copies of its
+  stories, including their hyperlink sources, and keeps its margins. An inserted page takes its
+  master's margins. `duplicateElements` copies a story that holds hyperlink sources
+  ([ADR 128](adr/128-pages-a-merge-can-make.md), protocol 69).
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.

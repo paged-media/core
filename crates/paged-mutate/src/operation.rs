@@ -3576,6 +3576,15 @@ pub enum Operation {
         story_id: String,
         offset: u32,
         field: FieldKind,
+        /// v69 — the insertion point in the `ContentSelection` unit
+        /// (UTF-8 bytes plus one synthetic `\n` per paragraph boundary —
+        /// the unit `insertText` and the editor's text caret use). When
+        /// present it REPLACES `offset`: the engine converts it against the
+        /// story as it is at apply time (so a batch that typed first still
+        /// lands right) and echoes the resolved char `offset`. Lets a caller
+        /// holding a caret place a field without converting units itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// W0.5 — inverse-only companion to `InsertField`: remove the
     /// single field-marker character at `offset` (for a
@@ -3844,7 +3853,9 @@ pub enum Operation {
     },
     /// W0.5 — duplicate a single-page spread (the page plus every page
     /// item) immediately after the source, minting fresh self ids for
-    /// the clone. Inverse: `RemovePage` of the cloned page.
+    /// the clone. Each text frame's story is COPIED (D-23), and every
+    /// side map keyed by `Self` (margins, labels, …) follows the clone.
+    /// Inverse: `RemovePageClone`.
     /// `clone_spread_json` is **echo/redo-only** — the apply layer
     /// fills it with the materialised clone so redo re-creates the
     /// exact ids and geometry.
@@ -3852,6 +3863,20 @@ pub enum Operation {
         page: String,
         #[serde(default)]
         clone_spread_json: Option<String>,
+    },
+    /// Inverse-only (internal; paged.data D-23) — the undo of a
+    /// `DuplicatePage`: remove the cloned page's spread (`cloned_page`),
+    /// the story copies its frames own (`story_ids`) and the hyperlinks
+    /// minted for their sources (`hyperlink_ids`). Its inverse is the
+    /// `DuplicatePage` of `page` carrying the capture, so redo re-creates
+    /// the exact ids.
+    RemovePageClone {
+        page: String,
+        cloned_page: String,
+        #[serde(default)]
+        story_ids: Vec<String>,
+        #[serde(default)]
+        hyperlink_ids: Vec<String>,
     },
     /// W0.5 — insert a `<Section>` anchored at `at_page`. Inverse:
     /// `DeleteSection`. `self_id` is minted when `None` and echoed.
@@ -3882,6 +3907,21 @@ pub enum Operation {
         /// Same double-option semantics as `prefix`.
         #[serde(default, deserialize_with = "double_option::deserialize")]
         start_at: Option<Option<u32>>,
+    },
+    /// v69 — document-scoped plugin metadata: set / replace / delete
+    /// (`value: None`) one Label `KeyValuePair` on the DOCUMENT
+    /// (`DesignMap::labels`). Same gates as the page-item carrier
+    /// (`PropertyPath::PluginMetadata`): `x-paged:` key namespace, the
+    /// optional `caller` namespace gate, 64 KiB, the JSON envelope. The
+    /// inverse restores the prior value exactly (including "was absent"),
+    /// so a plugin can name the live version of its container parts in a
+    /// label that undo and redo keep true.
+    SetDocumentMetadata {
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
     },
     /// W0.5 — inverse-only companion to `InsertSection`: remove the
     /// section by id. Inverse re-inserts it via `InsertSection` with

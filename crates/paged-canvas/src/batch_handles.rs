@@ -87,33 +87,67 @@ pub struct BoundHandle {
     pub story_id: Option<String>,
 }
 
+/// What a handle names: an element (with the story it minted), or a
+/// PAGE (paged.data D-22). Pages are not elements — `ElementId` has no
+/// page variant — so a page binding is its own arm, addressable only from
+/// a page position (`pageId`, `afterPageId`, `page`, `atPage`), and an
+/// element binding is refused there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Binding {
+    Element(BoundHandle),
+    /// The `Self` id of the page an `insertPage` / `duplicatePage` minted.
+    Page(String),
+}
+
+impl From<BoundHandle> for Binding {
+    fn from(b: BoundHandle) -> Self {
+        Binding::Element(b)
+    }
+}
+
 /// Everything a rewrite can resolve against: the named handles plus the
 /// implicit "most recent creating child" the `$created` sentinel names.
 #[derive(Debug, Default, Clone)]
 pub struct HandleScope {
-    named: HashMap<String, BoundHandle>,
-    created: Option<BoundHandle>,
+    named: HashMap<String, Binding>,
+    created: Option<Binding>,
 }
 
 impl HandleScope {
     /// Bind `name`, replacing any earlier binding (last write wins —
     /// a loop that reuses one name addresses its current iteration).
-    pub fn bind(&mut self, name: impl Into<String>, bound: BoundHandle) {
-        self.named.insert(name.into(), bound);
+    pub fn bind(&mut self, name: impl Into<String>, bound: impl Into<Binding>) {
+        self.named.insert(name.into(), bound.into());
     }
 
     /// Record the id the most recent creating child minted (what
     /// `$created` names, and what the next `bindCreated` binds).
     pub fn set_created(&mut self, bound: Option<BoundHandle>) {
-        self.created = bound;
+        self.created = bound.map(Binding::Element);
+    }
+
+    /// Record the page the most recent page-creating child minted.
+    pub fn set_created_page(&mut self, page_id: String) {
+        self.created = Some(Binding::Page(page_id));
     }
 
     /// The pending `$created` binding, if any creating child has run.
-    pub fn created(&self) -> Option<&BoundHandle> {
+    pub fn created(&self) -> Option<&Binding> {
         self.created.as_ref()
     }
 
-    fn resolve(&self, reference: &str) -> Result<&BoundHandle, String> {
+    /// The element the reference names; a page binding is an error.
+    fn resolve_element(&self, reference: &str) -> Result<&BoundHandle, String> {
+        match self.resolve(reference)? {
+            Binding::Element(b) => Ok(b),
+            Binding::Page(page) => Err(format!(
+                "{reference} names page {page:?}, not an element — a page handle is addressable \
+                 only from a page position (pageId, afterPageId, page, atPage)"
+            )),
+        }
+    }
+
+    fn resolve(&self, reference: &str) -> Result<&Binding, String> {
         if reference == CREATED_SENTINEL {
             return self.created.as_ref().ok_or_else(|| {
                 format!("{CREATED_SENTINEL} addresses no element — no creating child ran before it")
@@ -174,6 +208,17 @@ fn is_address_key(key: &str) -> bool {
     key.ends_with("Id")
         || key.ends_with("Ids")
         || matches!(key, "from" | "to" | "frame" | "story_id" | "table_id")
+        || is_page_key(key)
+}
+
+/// A PAGE position: where a page handle resolves (and an element handle
+/// is refused). `duplicatePage` / `applyMasterToPage` spell it `page`,
+/// `insertSection` `atPage`.
+fn is_page_key(key: &str) -> bool {
+    matches!(
+        key,
+        "pageId" | "afterPageId" | "page" | "atPage" | "page_id"
+    )
 }
 
 /// Rewrite every handle reference in one batch child. Returns the child
@@ -216,7 +261,7 @@ fn walk(
                 })
                 .flatten();
             if let Some(reference) = element_ref {
-                let bound = scope.resolve(&reference)?;
+                let bound = scope.resolve_element(&reference)?;
                 *value = serde_json::to_value(&bound.element)
                     .map_err(|e| format!("cannot encode resolved handle: {e}"))?;
                 *touched = true;
@@ -238,7 +283,21 @@ fn walk(
             let Some(key) = key.filter(|k| is_address_key(k)) else {
                 return Ok(());
             };
-            let bound = scope.resolve(s)?;
+            if is_page_key(key) {
+                *value = match scope.resolve(s)? {
+                    Binding::Page(page) => serde_json::Value::String(page.clone()),
+                    Binding::Element(b) => {
+                        return Err(format!(
+                            "{s} names a {}, not a page — a {key} position needs a handle \
+                             bound to an insertPage or duplicatePage",
+                            b.element.kind_label()
+                        ))
+                    }
+                };
+                *touched = true;
+                return Ok(());
+            }
+            let bound = scope.resolve_element(s)?;
             let resolved = if matches!(key, "tableId" | "table_id") {
                 // A table address needs the TABLE's id. `raw_id` of a
                 // `Table` is its story (the container), so the generic

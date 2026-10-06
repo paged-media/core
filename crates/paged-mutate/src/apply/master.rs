@@ -163,7 +163,7 @@ pub(super) fn apply_create_master(
         Some(json) => serde_json::from_str::<paged_scene::ParsedMasterSpread>(json)
             .map_err(|e| master_error(&id, format!("master restore failed: {e}")))?,
         None => {
-            let mut next = super::duplicate_page::next_id_seed(doc);
+            let mut next = crate::ids::highest_u_hex_id(doc) + 1;
             let mut spread = match duplicate_of {
                 Some(src) => {
                     let src = bare(src);
@@ -171,7 +171,7 @@ pub(super) fn apply_create_master(
                         return Err(OperationError::NodeNotFound(NodeId::Page(src.to_string())));
                     };
                     let mut copy = m.spread.clone();
-                    super::duplicate_page::fresh_ids(&mut copy, &mut next);
+                    let _ = super::duplicate_page::fresh_ids(&mut copy, &mut next);
                     copy
                 }
                 None => {

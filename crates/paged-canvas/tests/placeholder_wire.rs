@@ -99,6 +99,7 @@ fn insert(m: &mut CanvasModel, story_id: &str, offset: u32, key: &str, value: Op
             key: key.into(),
             value: value.map(str::to_string),
         },
+        content_offset: None,
     })
     .expect("insert placeholder applies");
 }
@@ -174,6 +175,7 @@ fn placeholder_wire_shapes_are_pinned() {
             key: "price".into(),
             value: Some("€ 9,99".into()),
         },
+        content_offset: None,
     };
     assert_eq!(
         serde_json::to_value(&insert).unwrap(),

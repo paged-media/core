@@ -547,46 +547,7 @@ pub(super) fn apply_plugin_metadata(
     else {
         return Err(invalid("expected Value::PluginMetadata".into()));
     };
-    if !key.starts_with("x-paged:") || key.len() <= "x-paged:".len() {
-        return Err(invalid(format!(
-            "metadata keys live in the reserved namespace: expected \"x-paged:<plugin>\", got \"{key}\""
-        )));
-    }
-    // B-16 — caller-identity gate (additive). When the request names a
-    // calling plugin, the engine enforces that the key lives in THAT
-    // plugin's namespace, mirroring the SDK door's `foreignMetadataKey`.
-    // A bundle holding the raw handle can no longer write another
-    // plugin's `x-paged:<other>` by passing `caller`. `None` (the
-    // editor / pre-B-16 callers) keeps the prior behaviour.
-    if let Some(caller) = caller {
-        let own = format!("x-paged:{caller}");
-        if key != &own {
-            return Err(invalid(format!(
-                "caller \"{caller}\" may only write its own namespace \"{own}\", not \"{key}\""
-            )));
-        }
-    }
-    if let Some(v) = new_value {
-        if v.len() > PLUGIN_METADATA_MAX_BYTES {
-            return Err(invalid(format!(
-                "metadata value is {} bytes; the cap is {PLUGIN_METADATA_MAX_BYTES} (assets belong in the asset store, not inline)",
-                v.len()
-            )));
-        }
-        let parsed: serde_json::Value = serde_json::from_str(v)
-            .map_err(|e| invalid(format!("metadata value must be the JSON envelope: {e}")))?;
-        let envelope_ok = parsed.as_object().is_some_and(|o| {
-            o.get("v")
-                .and_then(serde_json::Value::as_u64)
-                .is_some_and(|n| n >= 1)
-                && o.get("data").is_some_and(serde_json::Value::is_object)
-        });
-        if !envelope_ok {
-            return Err(invalid(
-                "metadata envelope must be { v: <int >= 1>, data: {…}, engine?: {…} }".into(),
-            ));
-        }
-    }
+    plugin_metadata_gate(key, new_value.as_deref(), caller.as_deref()).map_err(invalid)?;
     // A page's labels live on its spread, keyed by the page's own id.
     let si = match node {
         NodeId::Page(pid) => doc.spreads.iter().position(|parsed| {
@@ -651,6 +612,98 @@ pub(super) fn apply_plugin_metadata(
             },
         },
         // Metadata is invisible to the renderer — no invalidation.
+        invalidation: InvalidationHint::default(),
+    })
+}
+
+/// The plugin-metadata write gate, shared by the page-item carrier and the
+/// v69 document-scoped one: reserved key namespace, the optional B-16
+/// caller namespace, the 64 KiB cap, and the JSON envelope. Runs BEFORE
+/// any mutation.
+pub(super) fn plugin_metadata_gate(
+    key: &str,
+    new_value: Option<&str>,
+    caller: Option<&str>,
+) -> Result<(), String> {
+    if !key.starts_with("x-paged:") || key.len() <= "x-paged:".len() {
+        return Err(format!(
+            "metadata keys live in the reserved namespace: expected \"x-paged:<plugin>\", got \"{key}\""
+        ));
+    }
+    // B-16 — caller-identity gate (additive). When the request names a
+    // calling plugin, the engine enforces that the key lives in THAT
+    // plugin's namespace, mirroring the SDK door's `foreignMetadataKey`.
+    // A bundle holding the raw handle can no longer write another
+    // plugin's `x-paged:<other>` by passing `caller`. `None` (the
+    // editor / pre-B-16 callers) keeps the prior behaviour.
+    if let Some(caller) = caller {
+        let own = format!("x-paged:{caller}");
+        if key != own {
+            return Err(format!(
+                "caller \"{caller}\" may only write its own namespace \"{own}\", not \"{key}\""
+            ));
+        }
+    }
+    if let Some(v) = new_value {
+        if v.len() > PLUGIN_METADATA_MAX_BYTES {
+            return Err(format!(
+                "metadata value is {} bytes; the cap is {PLUGIN_METADATA_MAX_BYTES} (assets belong in the asset store, not inline)",
+                v.len()
+            ));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(v)
+            .map_err(|e| format!("metadata value must be the JSON envelope: {e}"))?;
+        let envelope_ok = parsed.as_object().is_some_and(|o| {
+            o.get("v")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|n| n >= 1)
+                && o.get("data").is_some_and(serde_json::Value::is_object)
+        });
+        if !envelope_ok {
+            return Err(
+                "metadata envelope must be { v: <int >= 1>, data: {…}, engine?: {…} }".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// v69 — `Operation::SetDocumentMetadata`: set / replace / delete one
+/// document-scoped Label entry (`DesignMap::labels`). Gated exactly like
+/// [`apply_plugin_metadata`]; the inverse restores the prior value.
+pub(super) fn apply_document_metadata(
+    doc: &mut Document,
+    key: &str,
+    new_value: &Option<String>,
+    caller: &Option<String>,
+) -> Result<AppliedOperation, OperationError> {
+    plugin_metadata_gate(key, new_value.as_deref(), caller.as_deref())
+        .map_err(|reason| OperationError::InvalidDocumentMetadata { reason })?;
+    let labels = &mut doc.designmap.labels;
+    let prev = labels
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.clone());
+    match new_value {
+        Some(v) => match labels.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = v.clone(),
+            None => labels.push((key.to_string(), v.clone())),
+        },
+        None => labels.retain(|(k, _)| k != key),
+    }
+    Ok(AppliedOperation {
+        op: Operation::SetDocumentMetadata {
+            key: key.to_string(),
+            value: new_value.clone(),
+            caller: caller.clone(),
+        },
+        // An engine-authoritative restore, not a plugin call: no caller.
+        inverse: Operation::SetDocumentMetadata {
+            key: key.to_string(),
+            value: prev,
+            caller: None,
+        },
+        // Invisible to the renderer.
         invalidation: InvalidationHint::default(),
     })
 }

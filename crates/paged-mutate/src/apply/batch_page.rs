@@ -226,10 +226,41 @@ pub(super) fn apply_insert_page(
         name: None,
         show_master_items: None,
     };
+    // paged.data D-23 — a new page takes its master's margins, as in
+    // InDesign (a page's `<MarginPreference>` follows its master's until
+    // the page overrides it); with no master, or a master that declares
+    // none, the page it follows lends its own. Before, every inserted page
+    // had none — a margin box equal to the page.
+    let margins = master_id
+        .and_then(|m| doc.master_spread(m))
+        .and_then(|m| {
+            m.spread.pages.iter().find_map(|p| {
+                p.self_id
+                    .as_ref()
+                    .and_then(|id| m.spread.page_margins.get(id))
+            })
+        })
+        .or_else(|| {
+            let host = &doc.spreads.get(host_idx)?.spread;
+            let page = match after_page_id {
+                Some(pid) => host
+                    .pages
+                    .iter()
+                    .find(|p| p.self_id.as_deref() == Some(pid)),
+                None => host.pages.first(),
+            }?;
+            host.page_margins.get(page.self_id.as_deref()?)
+        })
+        .cloned();
+    let mut page_margins = std::collections::HashMap::new();
+    if let Some(m) = margins {
+        page_margins.insert(pid.clone(), m);
+    }
     let spread = Spread {
         self_id: Some(sid.clone()),
         item_transform: Some([1.0, 0.0, 0.0, 1.0, 0.0, max_bottom + SPREAD_STACK_GAP_PT]),
         pages: vec![page],
+        page_margins,
         ..Spread::default()
     };
     doc.spreads.insert(

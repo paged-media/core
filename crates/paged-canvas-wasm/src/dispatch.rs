@@ -1131,6 +1131,7 @@ impl WorkerCore {
                         baseline_grid_shown: None,
                         baseline_grid_relative_to: None,
                         baseline_grid_color: None,
+                        plugin_metadata: None,
                     },
                 );
                 WorkerToMainKind::DocumentMetaReply { meta }

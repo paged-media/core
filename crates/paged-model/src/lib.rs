@@ -5302,6 +5302,50 @@ impl Paragraph {
         chars
     }
 }
+/// v69 — convert a `ContentSelection` stream offset (UTF-8 bytes of the
+/// runs plus one synthetic `\n` per inter-paragraph boundary: what
+/// `insertText`, `deleteRange` and the editor's caret use) into the
+/// contiguous CHARACTER offset the field and range-styling operations use
+/// (`insertField`, `setFieldValue`, `applyStyle`, `storyRange`: chars, no
+/// separator between paragraphs). `None` when `content` is past the end or
+/// falls inside a multi-byte character. The synthetic break itself maps to
+/// the end of the paragraph before it.
+pub fn char_offset_of_content_offset(paragraphs: &[Paragraph], content: u32) -> Option<u32> {
+    let content = content as usize;
+    let mut consumed = 0usize;
+    let mut chars = 0u32;
+    for (i, p) in paragraphs.iter().enumerate() {
+        if i > 0 {
+            if content == consumed {
+                return Some(chars);
+            }
+            consumed += 1;
+        }
+        let len: usize = p.runs.iter().map(|r| r.text.len()).sum();
+        if content <= consumed + len {
+            let local = content - consumed;
+            let mut at = 0usize;
+            for r in &p.runs {
+                if local <= at + r.text.len() {
+                    if !r.text.is_char_boundary(local - at) {
+                        return None;
+                    }
+                    break;
+                }
+                at += r.text.len();
+            }
+            return Some(chars + p.char_offset_of_byte(local));
+        }
+        consumed += len;
+        chars += p
+            .runs
+            .iter()
+            .map(|r| r.text.chars().count() as u32)
+            .sum::<u32>();
+    }
+    (content == 0).then_some(0)
+}
+
 /// IDML `<Footnote>` — a self-contained paragraph stream anchored at
 /// a point inside a host paragraph. The renderer places footnotes in
 /// a per-page footnote pool at the bottom of the host frame.
@@ -6295,6 +6339,14 @@ pub struct FlowGrowRule {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DesignMap {
+    /// v69 — the DOCUMENT's own Label `KeyValuePair`s: document-scoped
+    /// plugin metadata (`x-paged:<plugin>` keys, JSON envelopes), written by
+    /// `Operation::SetDocumentMetadata` and undone with the rest of the
+    /// document. One entry per key, in write order. Persisted in the native
+    /// `.paged` model part; the IDML adapter does not carry it yet (a
+    /// designmap `<Document>` `Properties/Label` is the IDML home).
+    #[serde(default)]
+    pub labels: Vec<(String, String)>,
     pub spreads: Vec<SpreadRef>,
     pub stories: Vec<StoryRef>,
     pub master_spreads: Vec<String>,

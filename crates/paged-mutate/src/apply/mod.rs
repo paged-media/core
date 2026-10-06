@@ -360,7 +360,8 @@ pub(crate) fn apply_inner(
             story_id,
             offset,
             field,
-        } => apply_insert_field(doc, story_id, *offset, field),
+            content_offset,
+        } => apply_insert_field(doc, story_id, *offset, field, *content_offset),
         Operation::DeleteField {
             story_id,
             offset,
@@ -507,6 +508,12 @@ pub(crate) fn apply_inner(
             page,
             clone_spread_json,
         } => apply_duplicate_page(doc, page, clone_spread_json.as_deref()),
+        Operation::RemovePageClone {
+            page,
+            cloned_page,
+            story_ids,
+            hyperlink_ids,
+        } => apply_remove_page_clone(doc, page, cloned_page, story_ids, hyperlink_ids),
         Operation::InsertSection {
             at_page,
             prefix,
@@ -534,6 +541,9 @@ pub(crate) fn apply_inner(
             *start_at,
         ),
         Operation::DeleteSection { section_id } => apply_delete_section(doc, section_id),
+        Operation::SetDocumentMetadata { key, value, caller } => {
+            layer::apply_document_metadata(doc, key, value, caller)
+        }
         Operation::SetRowHeight {
             story_id,
             table_id,

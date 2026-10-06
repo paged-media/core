@@ -273,7 +273,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- complete mutation surface: pages & masters ---
         f!("paged.deletePage", "(pageId)", "bool", "author", "Delete a page."),
         f!("paged.duplicatePage", "(pageId)", "string | null", "author",
-           "Duplicate a single-page spread after the source; returns the new page selfId."),
+           "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."),
         f!("paged.resizePage", "(pageId, [t,l,b,r])", "bool", "write", "Set a page's GeometricBounds in page-inner points."),
         f!("paged.applyMasterToPage", "(pageId, masterId?)", "bool", "write", "Apply a master to a page (omit/null detaches)."),
         f!("paged.movePage", "(pageId, afterPageId?)", "bool", "write", "Move a page to follow another (omit/null: to the front)."),
@@ -372,6 +372,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.setUseStandardLabForSpots", "(enabled)", "bool", "write", "Prefer spots' Lab primary over their CMYK alternate in previews."),
         // --- plugin metadata & batch ---
         f!("paged.setPluginMetadata", "(elemId, key, value?, caller?)", "bool", "write", "Write one Label key/value pair on a leaf page item (value null deletes)."),
+        f!("paged.setDocumentMetadata", "(key, value?, caller?)", "bool", "write", "Write one document-scoped Label key/value pair (value null deletes); undoable."),
         f!("paged.batch", "([mutations])", "bool", "author", "Apply an array of { op, args } mutation objects as ONE undoable step."),
         // --- selection setters (application state, NOT undoable) ---
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),

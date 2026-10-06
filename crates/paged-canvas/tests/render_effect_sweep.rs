@@ -702,6 +702,7 @@ fn seed_page_number(m: &mut CanvasModel) {
         story_id,
         offset: 0,
         field: FieldKind::PageNumber,
+        content_offset: None,
     })
     .expect("seed a page-number marker");
 }
@@ -1524,6 +1525,7 @@ fn text_cases(c: &mut Vec<Case>) {
             story_id,
             offset: 0,
             field: FieldKind::PageNumber,
+            content_offset: None,
         }
     }));
     c.push(paints("InsertAnchoredFrame", "text", |m| {
@@ -1567,6 +1569,7 @@ fn text_cases(c: &mut Vec<Case>) {
                 key: "title".into(),
                 value: Some("BEFORE".into()),
             },
+            content_offset: None,
         })
         .expect("seed a placeholder");
         Mutation::SetFieldValue {
@@ -1940,6 +1943,17 @@ fn frame_cases(c: &mut Vec<Case>) {
          slide's notes) with no paint of its own; the renderer never reads Label",
         |m| Mutation::SetPageMetadata {
             page: first_page(m),
+            key: "x-paged:sweep".into(),
+            value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
+            caller: None,
+        },
+    ));
+    c.push(inert(
+        "SetDocumentMetadata",
+        "geometry",
+        "one Label KeyValuePair on the DOCUMENT (v69) — plugin state that \
+         belongs to no frame; the renderer never reads Label",
+        |_| Mutation::SetDocumentMetadata {
             key: "x-paged:sweep".into(),
             value: Some(r#"{"v":1,"data":{"swept":true}}"#.into()),
             caller: None,

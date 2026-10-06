@@ -229,7 +229,7 @@
       "params": "(pageId)",
       "returns": "string | null",
       "kind": "author",
-      "summary": "Duplicate a single-page spread after the source; returns the new page selfId."
+      "summary": "Duplicate a single-page spread after the source — its items, a copy of each frame's story, its margins; returns the new page selfId."
     },
     {
       "name": "paged.resizePage",
@@ -790,6 +790,13 @@
       "returns": "bool",
       "kind": "write",
       "summary": "Write one Label key/value pair on a leaf page item (value null deletes)."
+    },
+    {
+      "name": "paged.setDocumentMetadata",
+      "params": "(key, value?, caller?)",
+      "returns": "bool",
+      "kind": "write",
+      "summary": "Write one document-scoped Label key/value pair (value null deletes); undoable."
     },
     {
       "name": "paged.batch",
@@ -1369,6 +1376,7 @@
     "setGroupTransform",
     "setPluginMetadata",
     "setPageMetadata",
+    "setDocumentMetadata",
     "pathPointCurveType",
     "pathPointSet",
     "batch",

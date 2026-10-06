@@ -3284,6 +3284,7 @@ pub(super) fn apply_insert_field(
     story_id: &str,
     offset: u32,
     field: &FieldKind,
+    content_offset: Option<u32>,
 ) -> Result<AppliedOperation, OperationError> {
     let story_idx = doc
         .stories
@@ -3296,6 +3297,26 @@ pub(super) fn apply_insert_field(
                 end: offset,
             })
         })?;
+    // v69 — a caret-unit insertion point is converted against the story as
+    // it is NOW, and the echoed op carries the resolved char offset.
+    let offset = match content_offset {
+        None => offset,
+        Some(content) => paged_model::char_offset_of_content_offset(
+            &doc.stories[story_idx].story.paragraphs,
+            content,
+        )
+        .ok_or_else(|| OperationError::InvalidValue {
+            node: NodeId::StoryRange {
+                story_id: story_id.to_string(),
+                start: content,
+                end: content,
+            },
+            path: PropertyPath::AppliedCharacterStyle,
+            reason: format!(
+                "contentOffset {content} is past the end of the story or inside a character"
+            ),
+        })?,
+    };
     // v43 (D-01) — plugin placeholders insert a TAGGED RUN (display
     // text + identity), not a single marker char; separate lane.
     if let FieldKind::Placeholder { plugin, key, value } = field {
@@ -3374,6 +3395,7 @@ pub(super) fn apply_insert_field(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         // Undo removes the one marker char we inserted at `offset`.
         inverse: Operation::DeleteField {
@@ -3497,6 +3519,7 @@ fn insert_placeholder_run(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         // Undo removes the whole tagged run starting at `offset`.
         inverse: Operation::DeleteField {
@@ -3587,6 +3610,7 @@ pub(super) fn apply_delete_field(
             story_id: story_id.to_string(),
             offset,
             field: field.clone(),
+            content_offset: None,
         },
         invalidation,
     })
@@ -3660,6 +3684,7 @@ fn delete_placeholder_run(
                 key: tag.key,
                 value: tag.value,
             },
+            content_offset: None,
         },
         invalidation,
     })

@@ -232,6 +232,7 @@ fn zoom_independence_via_logical_replay() {
             offset: 5,
             text: ",".into(),
             cell: None,
+            restore: None,
         },
     )
     .unwrap();

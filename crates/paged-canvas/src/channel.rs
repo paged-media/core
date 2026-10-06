@@ -581,7 +581,18 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - All fields additive; the bump is for the BEHAVIOUR: a host cannot
 //     tell a worker that draws `family` from one that ignores it by shape,
 //     so it gates per-run faces on `protocol >= 68`.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(68);
+// v69 — the paged.data batch.
+//   - `insertField.contentOffset`: place a field at the CARET. The caret
+//     (`ContentSelection`, `host.text.caret()`) counts UTF-8 bytes plus a
+//     synthetic `\n` per paragraph; field ops count chars with no
+//     separator. The engine converts at apply time, so a batch that types
+//     first still lands right. Additive; an older worker ignores it.
+//   - Behaviour: text typed at a field's edge lands beside the field, not
+//     inside its run (a refresh used to overwrite it).
+//   - `setDocumentMetadata`: a document-scoped, UNDOABLE plugin label
+//     (`DesignMap::labels`), read back in `DocumentMeta.pluginMetadata`;
+//     persisted in the `.paged` native model part (not yet in IDML).
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(69);
 
 /// A per-run script budget on the wire (v63). Every field is optional
 /// and falls back to the engine's default, so a caller overrides only
@@ -2584,6 +2595,13 @@ pub struct DocumentMeta {
     /// `BaselineColor` — grid-line colour ref / named colour.
     #[serde(default)]
     pub baseline_grid_color: Option<String>,
+    /// v69 — the document's own plugin metadata (`SetDocumentMetadata`
+    /// entries, write order). PRESENT (possibly empty) from a v69 worker,
+    /// absent from an older one, so a reader can tell "none" from "this
+    /// engine has no document labels".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub plugin_metadata: Option<Vec<PluginMetadataEntry>>,
 }
 
 /// SDK Phase 3 — one swatch's identity + display name + kind.
@@ -3921,6 +3939,7 @@ mod tests {
                 story_id: "Story/u1".into(),
                 offset: 2,
                 field: paged_mutate::operation::FieldKind::PageNumber,
+                content_offset: None,
             },
             Mutation::InsertOval {
                 page_id: PageId("Page/u1".into()),
@@ -4052,8 +4071,8 @@ mod tests {
     /// release commitment, not a detail — the protocol-governance
     /// record exists because nine bumps once shipped untagged.
     #[test]
-    fn protocol_version_is_v68() {
-        assert_eq!(PROTOCOL_VERSION.0, 68);
+    fn protocol_version_is_v69() {
+        assert_eq!(PROTOCOL_VERSION.0, 69);
     }
 
     /// v59 (Arrange) — the `reorderElement` wire shape. The tag is the

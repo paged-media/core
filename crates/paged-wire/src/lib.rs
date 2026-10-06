@@ -676,6 +676,16 @@ pub enum Mutation {
         story_id: String,
         offset: u32,
         field: paged_mutate::operation::FieldKind,
+        /// v69 — the insertion point in the CARET unit instead: UTF-8 bytes
+        /// of the runs plus one synthetic `\n` per paragraph boundary (the
+        /// `ContentSelection` / `insertText` / `host.text.caret()` unit).
+        /// `offset` and every other field operation count characters with no
+        /// paragraph separator; the two agree only inside the first
+        /// paragraph of ASCII text. When present the engine converts this
+        /// against the story at apply time and ignores `offset` (send 0).
+        /// An older engine ignores the field, so gate it on `protocol >= 68`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content_offset: Option<u32>,
     },
     /// v52 — insert an image-bearing anchored Rectangle into a story, anchored
     /// at the paragraph containing character `offset`, sized `width`×`height`
@@ -774,6 +784,9 @@ pub enum Mutation {
     UnlinkFrames {
         frame: String,
     },
+    /// A new single-page spread after `after_page_id` (or at the end).
+    /// v69 (D-23) — the page takes its master's margins, else those of
+    /// the page it follows.
     InsertPage {
         after_page_id: Option<PageId>,
         master_id: Option<String>,
@@ -1171,9 +1184,12 @@ pub enum Mutation {
     /// completely: not a page item on a body spread; anchored in a
     /// story; serving as or carrying an opacity mask; a threaded text
     /// frame; a text frame whose story holds a table, an anchored
-    /// object, a footnote or a hyperlink; an element named together
-    /// with a group or container that holds it. Rides
-    /// `Operation::DuplicateNodes`.
+    /// object or a footnote; an element named together with a group or
+    /// container that holds it. Rides `Operation::DuplicateNodes`.
+    ///
+    /// v69 (D-24) — a story holding hyperlink SOURCES (every Data Merge
+    /// placeholder is one) is copied: the copy's sources get fresh ids
+    /// and each owning hyperlink is copied onto them, same destination.
     DuplicateElements {
         element_ids: Vec<ElementId>,
         offset: (f32, f32),
@@ -1212,6 +1228,20 @@ pub enum Mutation {
     /// move, duplicate, delete and undo. `value: None` deletes the entry.
     SetPageMetadata {
         page: PageId,
+        key: String,
+        #[serde(default)]
+        value: Option<String>,
+        #[serde(default)]
+        caller: Option<String>,
+    },
+    /// v69 — document-scoped plugin metadata: one Label `KeyValuePair` on
+    /// the DOCUMENT rather than a page item, for state that belongs to no
+    /// frame (a data session, the live version of a plugin's container
+    /// parts). `value: None` deletes. Same gates as `SetPluginMetadata`
+    /// (`x-paged:` namespace, optional `caller` gate, 64 KiB, JSON
+    /// envelope); ONE undoable step that composes in a `batch`. Read back
+    /// through `RequestDocumentMeta` → `DocumentMeta.pluginMetadata`.
+    SetDocumentMetadata {
         key: String,
         #[serde(default)]
         value: Option<String>,
@@ -1269,6 +1299,14 @@ pub enum Mutation {
     ///
     /// See `batch_handles` for the resolution rules — notably that a
     /// `$h:` in a text payload is content and is never rewritten.
+    ///
+    /// v69 (paged.data D-22) — a PAGE is named too: after an
+    /// `insertPage` / `duplicatePage` child, `bindCreated` binds the page
+    /// it minted, and `$h:<handle>` resolves in a page position
+    /// (`pageId`, `afterPageId`, `page`, `atPage`) — and only there; an
+    /// element handle in a page position, or a page handle anywhere
+    /// else, fails the batch. Pages and their content are then ONE undo
+    /// step. A page is not an element, so it is not listed in `minted`.
     BindCreated {
         handle: String,
     },
@@ -1571,6 +1609,11 @@ pub enum Mutation {
         master: Option<String>,
     },
     /// W0.5 — duplicate a single-page spread after the source.
+    /// v69 (D-23) — the copy owns COPIES of its frames' stories (hyperlink
+    /// sources re-minted with their hyperlinks), threads inside the page
+    /// kept, and keeps the page's margins; a story holding a table, an
+    /// anchored object or a footnote is refused, as `duplicateElements`
+    /// refuses it.
     DuplicatePage {
         page: PageId,
     },
@@ -1841,6 +1884,7 @@ mutation_vocabulary! {
     SetGroupTransform,
     SetPluginMetadata,
     SetPageMetadata,
+    SetDocumentMetadata,
     PathPointCurveType,
     PathPointSet,
     Batch,

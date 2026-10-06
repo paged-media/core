@@ -70,6 +70,16 @@ pub enum TextOp {
         /// stream.
         #[serde(default)]
         cell: Option<TextCellAddr>,
+        /// v69 — set on the inverse of a `DeleteRange`: the paragraphs the
+        /// delete merged, exactly as they were (runs with their formatting
+        /// and field identity, paragraph attributes, tables, anchors). The
+        /// undo puts THEM back instead of re-typing `text` into one run —
+        /// which turned a placeholder field into plain text and dropped
+        /// every run's own formatting. `text` still carries the recovered
+        /// characters, so offsets, selection shifts and edit spans read the
+        /// op as before. Internal to the undo log; not a wire field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        restore: Option<ParagraphSnapshot>,
     },
     DeleteRange {
         story_id: String,
@@ -100,6 +110,18 @@ pub enum TextOp {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         keep_run: bool,
     },
+}
+
+/// v69 — paragraphs captured by a `DeleteRange` for its undo. Compared by
+/// their serialisation (`CharacterRun` has no `PartialEq`; same approach as
+/// [`runs_mergeable`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParagraphSnapshot(pub Vec<paged_model::Paragraph>);
+
+impl PartialEq for ParagraphSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_vec(&self.0).ok() == serde_json::to_vec(&other.0).ok()
+    }
 }
 
 impl TextOp {
@@ -156,6 +178,14 @@ pub fn apply(doc: &mut Document, op: &TextOp) -> Result<AppliedText, TextOpError
             offset,
             text,
             cell,
+            restore: Some(snapshot),
+        } => apply_restore_paragraphs(doc, story_id, cell, *offset, text, snapshot),
+        TextOp::InsertText {
+            story_id,
+            offset,
+            text,
+            cell,
+            restore: None,
         } => apply_insert_text(doc, story_id, cell, *offset, text),
         TextOp::DeleteRange {
             story_id,
@@ -309,6 +339,48 @@ fn apply_insert_text(
     })
 }
 
+/// v69 — undo of a `DeleteRange`: the delete left ONE paragraph where the
+/// snapshot's paragraphs were (or none, when it also dropped a seeded
+/// stream); put the snapshot back in its place. The inverse is the same
+/// delete again, so redo re-captures whatever is there then.
+fn apply_restore_paragraphs(
+    doc: &mut Document,
+    story_id: &str,
+    cell: &Option<TextCellAddr>,
+    offset: u32,
+    text: &str,
+    snapshot: &ParagraphSnapshot,
+) -> Result<AppliedText, TextOpError> {
+    let paragraphs = find_paragraphs_mut(doc, story_id, cell)?;
+    let len = paragraphs_byte_len(paragraphs);
+    if offset > len {
+        return Err(TextOpError::OffsetOutOfRange {
+            story_id: story_id.into(),
+            offset,
+            len,
+        });
+    }
+    let unseed = paragraphs.is_empty();
+    let (at, remove) = if unseed {
+        (0, 0)
+    } else {
+        (locate_para_local(paragraphs, offset).0, 1)
+    };
+    paragraphs.splice(at..at + remove, snapshot.0.iter().cloned());
+    Ok(AppliedText {
+        story_id: story_id.into(),
+        inverse: TextOp::DeleteRange {
+            story_id: story_id.into(),
+            start: offset,
+            end: offset + text.len() as u32,
+            recovered: String::new(),
+            cell: cell.clone(),
+            unseed,
+            keep_run: false,
+        },
+    })
+}
+
 /// Insert plain (no-newline) text at `offset`. Internal helper —
 /// caller guarantees no `\n` in `seg`.
 fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, seg: &str) {
@@ -326,8 +398,12 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             let before: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
             let at = para.char_offset_of_byte(before + byte_in_run);
             para.shift_anchors(at, seg.chars().count() as i64);
-            let run = &mut para.runs[run_idx];
-            run.text.insert_str(byte_in_run, seg);
+            let run_len = para.runs[run_idx].text.len();
+            if is_field_run(&para.runs[run_idx]) && (byte_in_run == 0 || byte_in_run == run_len) {
+                insert_beside_field(para, run_idx, byte_in_run == 0, seg);
+            } else {
+                para.runs[run_idx].text.insert_str(byte_in_run, seg);
+            }
         }
         Locate::EndOfStory { paragraph_idx } => {
             let para = &mut paragraphs[paragraph_idx];
@@ -337,7 +413,10 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
                 .map(|r| r.text.chars().count() as u32)
                 .sum();
             para.shift_anchors(end, seg.chars().count() as i64);
-            if let Some(run) = para.runs.last_mut() {
+            if para.runs.last().is_some_and(is_field_run) {
+                let last = para.runs.len() - 1;
+                insert_beside_field(para, last, false, seg);
+            } else if let Some(run) = para.runs.last_mut() {
                 run.text.push_str(seg);
             } else {
                 let run = CharacterRun {
@@ -353,7 +432,9 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             let next_idx = after_paragraph_idx + 1;
             let next_para = &mut paragraphs[next_idx];
             next_para.shift_anchors(0, seg.chars().count() as i64);
-            if let Some(run) = next_para.runs.first_mut() {
+            if next_para.runs.first().is_some_and(is_field_run) {
+                insert_beside_field(next_para, 0, true, seg);
+            } else if let Some(run) = next_para.runs.first_mut() {
                 run.text.insert_str(0, seg);
             } else {
                 let run = CharacterRun {
@@ -364,6 +445,47 @@ fn insert_one_segment(paragraphs: &mut [paged_model::Paragraph], offset: u32, se
             }
         }
     }
+}
+
+/// A run that IS a field — a plugin placeholder (v43) or an imported
+/// InDesign text variable instance. Its text is the field's display, owned
+/// by the field: a refresh replaces all of it.
+fn is_field_run(run: &CharacterRun) -> bool {
+    run.placeholder.is_some() || run.text_variable.is_some()
+}
+
+/// v69 — insert `seg` at a field run's edge, OUTSIDE the field. InDesign
+/// treats a text variable as one atomic character: a caret on either side
+/// of it types beside it. The text joins the neighbouring ordinary run when
+/// there is one; otherwise it becomes a run of its own carrying the field's
+/// formatting (the character style at the insertion point) without the
+/// field's identity. The story-offset position of the inserted bytes is the
+/// same as before, so the inverse `DeleteRange` is unchanged.
+fn insert_beside_field(
+    para: &mut paged_model::Paragraph,
+    field_idx: usize,
+    before: bool,
+    seg: &str,
+) {
+    let neighbour = if before {
+        field_idx.checked_sub(1)
+    } else {
+        Some(field_idx + 1).filter(|&i| i < para.runs.len())
+    };
+    if let Some(n) = neighbour.filter(|&n| !is_field_run(&para.runs[n])) {
+        if before {
+            para.runs[n].text.push_str(seg);
+        } else {
+            para.runs[n].text.insert_str(0, seg);
+        }
+        return;
+    }
+    let mut run = para.runs[field_idx].clone();
+    run.placeholder = None;
+    run.text_variable = None;
+    run.text = seg.into();
+    let at = if before { field_idx } else { field_idx + 1 };
+    para.runs.insert(at, run);
 }
 
 /// Split a paragraph at `offset`. The bytes at/after `offset` move
@@ -480,6 +602,7 @@ fn apply_delete_range(
                 offset: start,
                 text: String::new(),
                 cell: cell.clone(),
+                restore: None,
             },
         });
     }
@@ -520,6 +643,7 @@ fn apply_delete_range(
     //      d. Drop paragraphs (start_para+1..=end_para).
     let (start_para, start_local) = locate_para_local(paragraphs, start);
     let (end_para, end_local) = locate_para_local(paragraphs, end);
+    let snapshot = ParagraphSnapshot(paragraphs[start_para..=end_para].to_vec());
     // The run the undone insert typed into, emptied — see `keep_run`.
     let kept_run = keep_run
         .then(|| {
@@ -607,6 +731,7 @@ fn apply_delete_range(
             offset: start,
             text: recovered,
             cell: cell.clone(),
+            restore: Some(snapshot),
         },
     })
 }
@@ -994,6 +1119,7 @@ mod tests {
                 offset: 5,
                 text: ",".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1051,6 +1177,7 @@ mod tests {
                 offset: 5,
                 text: ",".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1081,6 +1208,7 @@ mod tests {
                 offset: 5,
                 text: "\n".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1105,6 +1233,7 @@ mod tests {
                 offset: 5,
                 text: "X\nY".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1127,6 +1256,7 @@ mod tests {
                 offset: 5,
                 text: "\n".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1256,6 +1386,7 @@ mod tests {
                 offset: 2,
                 text: "Z".into(),
                 cell: Some(cell_addr(0, 0)),
+                restore: None,
             },
         )
         .unwrap();
@@ -1311,6 +1442,7 @@ mod tests {
                 offset: 3,
                 text: "\n".into(),
                 cell: Some(cell_addr(0, 0)),
+                restore: None,
             },
         )
         .unwrap();
@@ -1358,6 +1490,7 @@ mod tests {
                 offset: 4,
                 text: "r".into(),
                 cell: Some(cell_addr(0, 0)),
+                restore: None,
             },
         )
         .unwrap();
@@ -1371,6 +1504,7 @@ mod tests {
                 offset: 0,
                 text: "x".into(),
                 cell: Some(cell_addr(1, 0)),
+                restore: None,
             },
         );
         assert!(err.is_err(), "covered span coord has no addressable cell");
@@ -1386,6 +1520,7 @@ mod tests {
                 offset: 0,
                 text: "y".into(),
                 cell: Some(cell_addr(5, 5)),
+                restore: None,
             },
         );
         assert!(matches!(err, Err(TextOpError::UnknownStory(_))));
@@ -1423,6 +1558,7 @@ mod tests {
                 offset: 0,
                 text: "B".into(),
                 cell: None,
+                restore: None,
             },
         )
         .unwrap();
@@ -1434,6 +1570,7 @@ mod tests {
                 offset: 0,
                 text: "C".into(),
                 cell: Some(cell_addr(0, 0)),
+                restore: None,
             },
         )
         .unwrap();

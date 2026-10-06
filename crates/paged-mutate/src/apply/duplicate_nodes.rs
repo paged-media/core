@@ -58,8 +58,13 @@
 //! * a THREADED text frame (it shares its story with other frames, and
 //!   a copy of "this frame's part of the story" is not defined);
 //! * a text frame whose story holds something with an id of its own — a
-//!   table, an anchored object, a footnote, a hyperlink source. A plain
-//!   copy would put the same id in the document twice.
+//!   table, an anchored object, a footnote. A plain copy would put the
+//!   same id in the document twice.
+//!
+//! A hyperlink SOURCE is not refused (paged.data D-24 — every Data Merge
+//! placeholder is one): the copy's sources are re-minted and every
+//! `<Hyperlink>` that owned an original source is copied onto the new
+//! one, pointing at the same destination. See [`relink_copied_story`].
 //!
 //! ## Undo
 //!
@@ -168,7 +173,7 @@ fn is_anchored_in_a_story(doc: &Document, id: &str) -> bool {
 
 /// Why `story` cannot be copied as it stands, if it cannot: the first
 /// thing in it that carries an id of its own.
-fn story_blocker(story: &paged_model::Story) -> Option<&'static str> {
+pub(super) fn story_blocker(story: &paged_model::Story) -> Option<&'static str> {
     fn in_paragraphs(paragraphs: &[paged_model::Paragraph]) -> Option<&'static str> {
         for p in paragraphs {
             if p.table.is_some() {
@@ -180,13 +185,101 @@ fn story_blocker(story: &paged_model::Story) -> Option<&'static str> {
             if !p.footnotes.is_empty() {
                 return Some("a footnote");
             }
-            if p.runs.iter().any(|r| r.hyperlink_source.is_some()) {
-                return Some("a hyperlink");
-            }
         }
         None
     }
     in_paragraphs(&story.paragraphs)
+}
+
+/// Does a designmap `Source` ref (`HyperlinkTextSource/u1`, or InDesign's
+/// bare `u1`) name the run-level source `id` (spelled either way)?
+fn names_source(link_source: &str, id: &str) -> bool {
+    let tail = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
+    link_source == id || tail(link_source) == tail(id)
+}
+
+/// D-24 — make the copied `story` (now named `story_id`) own its
+/// hyperlink sources. Every distinct run-level source gets a fresh id,
+/// and every designmap `<Hyperlink>` that owned the original source is
+/// copied onto the new one (same destination, fresh `Self`). Returns the
+/// ids of the hyperlinks added.
+///
+/// The fresh ids are DERIVED from the story's id (`<story>_hs<k>`,
+/// `<story>_hl<k>`), not drawn from the shared `u<hex>` line: the story id
+/// is unique and fixed across undo/redo, so the derived ids are too, and
+/// a batch whose later children had their ids minted ahead of the apply
+/// (the canvas does that) cannot collide with them.
+pub(super) fn relink_copied_story(
+    designmap: &mut paged_model::DesignMap,
+    story: &mut paged_model::Story,
+    story_id: &str,
+) -> Vec<String> {
+    let bare = story_id.rsplit('/').next().unwrap_or(story_id).to_string();
+    let mut remap: Vec<(String, String)> = Vec::new();
+    for p in &mut story.paragraphs {
+        for r in &mut p.runs {
+            let Some(src) = r.hyperlink_source.as_mut() else {
+                continue;
+            };
+            let fresh = match remap.iter().find(|(old, _)| old == src) {
+                Some((_, fresh)) => fresh.clone(),
+                None => {
+                    let fresh = match src.rsplit_once('/') {
+                        Some((kind, _)) => format!("{kind}/{bare}_hs{}", remap.len()),
+                        None => format!("{bare}_hs{}", remap.len()),
+                    };
+                    remap.push((src.clone(), fresh.clone()));
+                    fresh
+                }
+            };
+            *src = fresh;
+        }
+    }
+    let mut added = Vec::new();
+    for (old, fresh) in &remap {
+        let owned: Vec<paged_model::Hyperlink> = designmap
+            .hyperlinks
+            .iter()
+            .filter(|h| h.source.as_deref().is_some_and(|s| names_source(s, old)))
+            .cloned()
+            .collect();
+        for mut link in owned {
+            let id = format!("{bare}_hl{}", added.len());
+            link.source = link.source.as_deref().map(|s| match s.rsplit_once('/') {
+                Some((kind, _)) => format!("{kind}/{}", fresh.rsplit('/').next().unwrap_or(fresh)),
+                None => fresh.rsplit('/').next().unwrap_or(fresh).to_string(),
+            });
+            // InDesign keeps hyperlink names unique in a document.
+            link.name = link.name.map(|n| format!("{n} {id}"));
+            link.self_id = id.clone();
+            designmap.hyperlinks.push(link);
+            added.push(id);
+        }
+    }
+    added
+}
+
+/// The inverse of [`relink_copied_story`]: drop every designmap
+/// hyperlink owned by a source in `story` (a copy's sources are its
+/// own, so nothing else is touched).
+pub(super) fn unlink_copied_story(
+    designmap: &mut paged_model::DesignMap,
+    story: &paged_model::Story,
+) {
+    let sources: Vec<&str> = story
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| r.hyperlink_source.as_deref())
+        .collect();
+    if sources.is_empty() {
+        return;
+    }
+    designmap.hyperlinks.retain(|h| {
+        !h.source
+            .as_deref()
+            .is_some_and(|s| sources.iter().any(|id| names_source(s, id)))
+    });
 }
 
 /// A `NextTextFrame` that names a frame. IDML spells "none" as `n`.
@@ -552,13 +645,8 @@ impl Cloner<'_> {
     }
 }
 
-/// The `u<hex>` ids and `Story/u<n>` ids a direct kernel caller did not
-/// supply. Mirrors the canvas minter's two number lines.
-fn mint_missing(doc: &Document, demand: DuplicateDemand) -> (Vec<String>, Vec<String>) {
-    let base = crate::ids::highest_u_hex_id(doc) + 1;
-    let ids = (0..demand.items as u64)
-        .map(|k| format!("u{:x}", base + k))
-        .collect();
+/// The first free number on the minter-owned `Story/u<n>` line.
+pub(super) fn next_story_number(doc: &Document) -> usize {
     let mut n = doc.stories.len();
     for s in &doc.stories {
         if let Some(v) = s
@@ -570,6 +658,17 @@ fn mint_missing(doc: &Document, demand: DuplicateDemand) -> (Vec<String>, Vec<St
             n = n.max(v + 1);
         }
     }
+    n
+}
+
+/// The `u<hex>` ids and `Story/u<n>` ids a direct kernel caller did not
+/// supply. Mirrors the canvas minter's two number lines.
+fn mint_missing(doc: &Document, demand: DuplicateDemand) -> (Vec<String>, Vec<String>) {
+    let base = crate::ids::highest_u_hex_id(doc) + 1;
+    let ids = (0..demand.items as u64)
+        .map(|k| format!("u{:x}", base + k))
+        .collect();
+    let n = next_story_number(doc);
     let story_ids = (0..demand.stories)
         .map(|k| format!("Story/u{}", n + k))
         .collect();
@@ -666,6 +765,12 @@ pub(super) fn apply_duplicate_nodes(
             // Unreachable after `ensure_frames_in_order` + validation;
             // on top is the safe place for a clone nothing lists.
             None => spread.frames_in_order.push(clone),
+        }
+    }
+    // D-24 — each copied story owns its hyperlink sources.
+    for id in &story_ids {
+        if let Some(parsed) = doc.stories.iter_mut().find(|s| s.self_id == *id) {
+            relink_copied_story(&mut doc.designmap, &mut parsed.story, id);
         }
     }
 
@@ -816,6 +921,13 @@ pub(super) fn apply_remove_duplicates(
         spread.labels.remove(id);
         spread.image_metadata.remove(id);
         spread.nested_children.remove(id);
+    }
+    for parsed in doc
+        .stories
+        .iter()
+        .filter(|s| story_ids.contains(&s.self_id))
+    {
+        unlink_copied_story(&mut doc.designmap, &parsed.story);
     }
     doc.stories.retain(|s| !story_ids.contains(&s.self_id));
 
