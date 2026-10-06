@@ -49,6 +49,8 @@
 
 use std::cell::Cell;
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 use boa_engine::{
     builtins::promise::PromiseState,
@@ -302,13 +304,33 @@ fn push_output(line: String) {
 /// boundaries. See `ScriptBudget` for the full mechanism + the precise
 /// wasm wall-clock guarantee.
 fn budgeted_context(budget: &ScriptBudget) -> Context {
-    let mut ctx = Context::default();
+    // v71 — the bridge runs promise jobs, and Boa's job loop reads the
+    // context clock; its default (`StdClock`, `SystemTime::now`) panics on
+    // wasm32-unknown-unknown. A fixed clock: no timer jobs are ever queued
+    // (scripts have no setTimeout), and the wall-clock budget has its own
+    // host-injected clock.
+    #[cfg(target_arch = "wasm32")]
+    let builder = Context::builder().clock(Rc::new(FixedClock));
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = Context::builder();
+    let mut ctx = builder.build().expect("a Boa context builds");
     let mut limits = boa_engine::vm::RuntimeLimits::default();
     limits.set_loop_iteration_limit(budget.loop_iterations);
     limits.set_recursion_limit(budget.recursion_depth);
     limits.set_stack_size_limit(budget.stack_size);
     ctx.set_runtime_limits(limits);
     ctx
+}
+
+/// See `budgeted_context`.
+#[cfg(target_arch = "wasm32")]
+struct FixedClock;
+
+#[cfg(target_arch = "wasm32")]
+impl boa_engine::context::time::Clock for FixedClock {
+    fn now(&self) -> boa_engine::context::time::JsInstant {
+        boa_engine::context::time::JsInstant::new(0, 0)
+    }
 }
 
 /// Run `source` against the given `CanvasModel` with the default
