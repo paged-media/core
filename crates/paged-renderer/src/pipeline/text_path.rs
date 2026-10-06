@@ -229,6 +229,9 @@ pub(super) fn emit_polygon_into(
     } else {
         None
     };
+    // The shadow stamps under the polygon's real outline (the module
+    // interns it under the same key as `path_id`), behind the fill.
+    crate::module::drop_shadow_module(&resolved, page, palette, color_ctx, None, outer, None);
     // Q-04: Polygon frame effects (GradientFeather, OuterGlow, etc.)
     // ride the interned polygon path. The path is already in inner-
     // coord space and `outer` carries the frame's ItemTransform plus

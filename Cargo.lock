@@ -2741,6 +2741,7 @@ dependencies = [
  "idml-import",
  "image",
  "jpeg-decoder",
+ "kurbo 0.11.3",
  "paged-color",
  "paged-compose",
  "paged-fidelity",

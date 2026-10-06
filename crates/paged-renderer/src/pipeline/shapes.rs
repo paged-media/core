@@ -553,8 +553,18 @@ pub(super) fn emit_line_into(
             Some(id) => fnv_1a_u64(id.as_bytes()),
             None => path_signature(&line.anchors),
         };
-        let (path_id, _) = page.list.paths.intern(cache_key, path);
         let outer = frame_outer_transform(page, resolved.item_transform);
+        crate::module::line_drop_shadow_module(
+            page,
+            palette,
+            color_ctx,
+            resolved.drop_shadow,
+            &path,
+            &stroke,
+            cache_key,
+            outer,
+        );
+        let (path_id, _) = page.list.paths.intern(cache_key, path);
         page.list.push(paged_compose::DisplayCommand::StrokePath {
             path_id,
             paint: stroke_paint,
@@ -581,6 +591,23 @@ pub(super) fn emit_line_into(
     let (ox, oy) = page.spread_origin;
     let (sx, sy) = (spread_bounds.left - ox, spread_bounds.top - oy);
     let (ex, ey) = (spread_bounds.right - ox, spread_bounds.bottom - oy);
+    crate::module::line_drop_shadow_module(
+        page,
+        palette,
+        color_ctx,
+        resolved.drop_shadow,
+        &paged_compose::PathData {
+            segments: vec![
+                paged_compose::PathSegment::MoveTo { x: sx, y: sy },
+                paged_compose::PathSegment::LineTo { x: ex, y: ey },
+            ],
+        },
+        &stroke,
+        resolved
+            .self_id
+            .map_or(0x11E5_0000, |id| fnv_1a_u64(id.as_bytes())),
+        Transform::IDENTITY,
+    );
     emit_line(sx, sy, ex, ey, stroke, stroke_paint, &mut page.list);
     // Arrowheads at the diagonal's endpoints, in page-local coords
     // (identity transform). Start points back toward (sx,sy); end
