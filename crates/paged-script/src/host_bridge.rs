@@ -45,11 +45,13 @@
 //! Rust CLI, an older editor) a plugin address throws `noHost`
 //! synchronously.
 //!
-//! Undo: when a session wrote through the host, every undo record logged
-//! since the script started is folded into one (`group_undo_since`), so
-//! the script's core writes (applied here) and its plugin writes (which
-//! the host committed as its own engine batch while the script waited)
-//! undo as ONE step.
+//! Undo: when a session wrote through the host, the script's own records
+//! are folded into one (`group_undo_runs_since`), so its core writes
+//! (applied here) and its plugin writes (which the host committed as its
+//! own engine batch while the script waited, and reported in
+//! `HostObjectsResult.committed`) undo as ONE step. A record the script
+//! did not make — a UI edit while it waited — is never folded: it ends
+//! the run, and the script's writes on either side stay separate steps.
 
 use std::cell::RefCell;
 

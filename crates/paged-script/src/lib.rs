@@ -426,6 +426,15 @@ pub struct ScriptSession {
     /// Bridge promises the host's answers rejected, in rejection order.
     rejected: Vec<JsObject>,
     undo_mark: u64,
+    /// The `applied_seq`s that are this script's own: every record logged
+    /// while one of its segments ran (`(after, upto]` ranges — the worker
+    /// is single-threaded, so nothing else writes then), plus the host
+    /// commits a `HostObjectsResult` reported. Everything else logged
+    /// while the script waited is a foreign edit the fold must not take.
+    own_segments: Vec<(u64, u64)>,
+    host_commits: Vec<u64>,
+    /// `applied_seq` when the running segment began.
+    segment_start: u64,
     host_writes: bool,
     rounds: u32,
     // Last: everything above may hold GC handles of this context.
@@ -506,6 +515,9 @@ pub fn start_script(
         budget,
         rejected: Vec::new(),
         undo_mark,
+        own_segments: Vec::new(),
+        host_commits: Vec::new(),
+        segment_start: undo_mark,
         host_writes: false,
         rounds: 0,
         ctx,
@@ -521,12 +533,18 @@ impl ScriptSession {
 
     /// Settle the in-flight calls from the host's `answers` (call order)
     /// and run the script on until it suspends again or finishes.
+    /// `committed`: the `applied_seq`s of the engine writes the host made
+    /// answering (see `HostObjectsResult.committed`) — the script's own.
     pub fn resume(
         mut self,
         model: &mut CanvasModel,
         answers: &[HostObjectAnswer],
+        committed: &[u64],
         clock: &Clock<'_>,
     ) -> (ScriptStep, Option<ScriptSession>) {
+        self.host_commits
+            .extend(committed.iter().copied().filter(|&s| s > self.undo_mark));
+        self.segment_start = model.last_applied_seq();
         enter_segment(model, &self.budget, clock);
         host_bridge::open_queue(true);
         for (i, queued) in std::mem::take(&mut self.pending).into_iter().enumerate() {
@@ -543,6 +561,10 @@ impl ScriptSession {
             }
         }
         let (queued, writes) = host_bridge::close_queue();
+        // The segment ends here (a suspended script runs nothing more until
+        // resumed; `finish` writes nothing): what it logged is its own.
+        self.own_segments
+            .push((self.segment_start, model.last_applied_seq()));
         // A script that threw does not flush what it queued: its host
         // writes never leave, as a synchronous script's later writes
         // never run.
@@ -604,7 +626,10 @@ impl ScriptSession {
         });
         let budget_kind = error.as_deref().and_then(classify_budget_message);
         if self.host_writes {
-            model.group_undo_since(self.undo_mark);
+            let (segments, commits) = (&self.own_segments, &self.host_commits);
+            model.group_undo_runs_since(self.undo_mark, |seq| {
+                commits.contains(&seq) || segments.iter().any(|&(a, b)| seq > a && seq <= b)
+            });
         }
         let mut output = std::mem::take(&mut self.output);
         output.extend(leave_segment());

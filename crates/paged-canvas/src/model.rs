@@ -5115,32 +5115,49 @@ impl CanvasModel {
         self.redo_log.len()
     }
 
-    /// v71 (ADR 323 script bridge) — fold every undo record logged after
-    /// `applied_seq` `mark` into ONE `Composite` record, so a script step
-    /// whose writes landed partly in the worker (core `paged.set`) and
-    /// partly through the host's object registry (a `plugin:` write the
-    /// host committed as its own batch) undoes as one step. Only the
-    /// contiguous run of newer records at the tail is folded (a redo
-    /// re-logs an OLDER seq and ends the run). Returns how many records
-    /// were folded (0 or 1 means nothing changed).
-    pub fn group_undo_since(&mut self, mark: u64) -> usize {
+    /// v71 (ADR 323 script bridge) — the fold a suspended script needs:
+    /// of the records logged after `mark`, fold each contiguous run that
+    /// `is_own` claims into ONE `Composite`, and leave every other record
+    /// where it is. A foreign record (a UI edit made while the script
+    /// waited on the host, a redo re-logging an older seq) therefore ends
+    /// a run: it is never swallowed into the script's step, and the
+    /// script's writes on either side of it stay separate steps, so undo
+    /// still reverses edits in the order they were made. Returns how many
+    /// records were folded away.
+    pub fn group_undo_runs_since(&mut self, mark: u64, is_own: impl Fn(u64) -> bool) -> usize {
         let start = self
             .applied_log
             .iter()
             .rposition(|r| r.applied_seq <= mark)
             .map_or(0, |i| i + 1);
-        let n = self.applied_log.len() - start;
-        if n < 2 {
-            return n;
+        if self.applied_log.len() - start < 2 {
+            return 0;
         }
-        let records: Vec<AppliedRecord> = self.applied_log.drain(start..).collect();
-        let applied_seq = records.last().map_or(mark, |r| r.applied_seq);
-        let children = records.into_iter().map(|r| r.kind).collect();
-        self.applied_log.push(AppliedRecord {
-            applied_seq,
-            kind: LoggedMutation::Composite(children),
-        });
-        n
+        let tail: Vec<AppliedRecord> = self.applied_log.drain(start..).collect();
+        let n = tail.len();
+        let mut run: Vec<AppliedRecord> = Vec::new();
+        let flush = |log: &mut Vec<AppliedRecord>, run: &mut Vec<AppliedRecord>| match run.len() {
+            0 => {}
+            1 => log.extend(run.drain(..)),
+            _ => {
+                let applied_seq = run.last().map_or(mark, |r| r.applied_seq);
+                let children = run.drain(..).map(|r| r.kind).collect();
+                log.push(AppliedRecord {
+                    applied_seq,
+                    kind: LoggedMutation::Composite(children),
+                });
+            }
+        };
+        for rec in tail {
+            if is_own(rec.applied_seq) {
+                run.push(rec);
+            } else {
+                flush(&mut self.applied_log, &mut run);
+                self.applied_log.push(rec);
+            }
+        }
+        flush(&mut self.applied_log, &mut run);
+        n - (self.applied_log.len() - start)
     }
 
     /// Read-only inspection of the most recently logged mutation.

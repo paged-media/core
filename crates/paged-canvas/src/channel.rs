@@ -653,11 +653,15 @@ export type WorkerToMain = WorkerToMainKind & {
 //     (optional bool) says the host answers for `plugin:` addresses; such a
 //     script's reply may be `RequestHostObjects { session, calls }`
 //     (`HostObjectCall`: get / batch / query / schema), answered by the
-//     host with `HostObjectsResult { session, answers }`
+//     host with `HostObjectsResult { session, answers, committed? }`
 //     (`HostObjectAnswer { value?, error?: { code, reason, index? } }`),
 //     whose reply is again `ScriptResult` or `RequestHostObjects`. Boa
 //     gains `paged.schema`; a script that wrote through the host undoes
-//     as one step.
+//     as one step. `committed` lists the `appliedSeq`s of the engine
+//     writes the host made answering the round: only those and the
+//     script's own writes fold into the script's undo step — an edit
+//     made while the script waited (a UI edit) is never folded, and the
+//     script's records on either side of it stay separate steps.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(71);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -1482,6 +1486,15 @@ pub enum MainToWorkerKind {
     HostObjectsResult {
         session: u32,
         answers: Vec<HostObjectAnswer>,
+        /// The `appliedSeq`s (from their `MutationApplied` replies) of
+        /// the engine writes the host committed while answering this
+        /// round — a plugin write the registry turned into an engine
+        /// batch. They fold into the script's ONE undo step; any other
+        /// record logged while the script waited is a foreign edit and
+        /// is left alone. Absent = none.
+        #[serde(default)]
+        #[tsify(optional)]
+        committed: Vec<u64>,
     },
     /// Concept 3 — open a PDF export session. The worker re-runs the
     /// scene build one-shot (glyph side-channel on, splice caches

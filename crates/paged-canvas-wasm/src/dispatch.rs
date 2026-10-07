@@ -1474,7 +1474,11 @@ impl WorkerCore {
                 effect = CacheEffect::ClearAll;
                 self.script_step(step)
             }
-            MainToWorkerKind::HostObjectsResult { session, answers } => {
+            MainToWorkerKind::HostObjectsResult {
+                session,
+                answers,
+                committed,
+            } => {
                 let live = self.script_sessions.remove(&session);
                 let (Some(script), Some(model)) = (live, self.model.as_mut()) else {
                     reply!(WorkerToMainKind::ScriptResult {
@@ -1485,7 +1489,7 @@ impl WorkerCore {
                         budget_kind: None,
                     });
                 };
-                let step = script.resume(model, &answers, clock);
+                let step = script.resume(model, &answers, &committed, clock);
                 effect = CacheEffect::ClearAll;
                 self.script_step(step)
             }

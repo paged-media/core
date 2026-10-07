@@ -109,6 +109,7 @@ console.log('core', paged.set('doc', 'documentBleedTop', '3mm'));
     let r = done(session.resume(
         &mut model,
         &[ok(json!({ "applied": true, "undoSteps": 1 }))],
+        &[],
         &clock,
     ));
     assert_eq!(r.error, None);
@@ -125,7 +126,7 @@ paged.set('plugin:paged.test/thing/1', 'name', 'A');
 paged.set('plugin:paged.test/thing/1', 'size', 'big');
 "#,
     ));
-    let r = done(session.resume(&mut model, &[refused("invalidValue", Some(1))], &clock));
+    let r = done(session.resume(&mut model, &[refused("invalidValue", Some(1))], &[], &clock));
     let err = r.error.expect("the refusal fails the script");
     assert!(err.contains("invalidValue"), "{err}");
     assert!(
@@ -144,7 +145,7 @@ try { await paged.set('plugin:paged.test/thing/1', 'size', -1); console.log('no'
 catch (e) { console.log('code', e.code, e instanceof Error); }
 "#,
     ));
-    let r = done(session.resume(&mut model, &[refused("readOnly", Some(0))], &clock));
+    let r = done(session.resume(&mut model, &[refused("readOnly", Some(0))], &[], &clock));
     assert_eq!(r.error, None);
     assert_eq!(r.output, vec!["[log] code readOnly true".to_string()]);
 }
@@ -183,6 +184,7 @@ return 'done';
             ok(json!({ "kind": "value", "value": "Alpha" })),
             ok(json!({ "kind": "absent" })),
         ],
+        &[],
         &clock,
     ));
     assert_eq!(
@@ -197,6 +199,7 @@ return 'done';
             "plugin:paged.test/thing/1",
             "plugin:paged.test/thing/2"
         ]))],
+        &[],
         &clock,
     ));
     assert_eq!(r.error, None);
@@ -215,6 +218,7 @@ fn a_refused_get_throws_its_code() {
         &[ok(
             json!({ "kind": "refused", "code": "unknownAddress", "reason": "no thing 9" }),
         )],
+        &[],
         &clock,
     ));
     assert!(r.error.unwrap_or_default().contains("unknownAddress"));
@@ -237,7 +241,7 @@ console.log(res);
         panic!("{calls:?}")
     };
     assert_eq!(ops.len(), 2, "a mixed batch goes to the host WHOLE");
-    let r = done(session.resume(&mut model, &[refused("invalidValue", Some(1))], &clock));
+    let r = done(session.resume(&mut model, &[refused("invalidValue", Some(1))], &[], &clock));
     assert_eq!(r.error, None, "a batch reports, it does not throw");
     let rows: serde_json::Value =
         serde_json::from_str(r.output[0].trim_start_matches("[log] ")).unwrap();
@@ -290,6 +294,7 @@ paged.set('plugin:paged.test/thing/1', 'name', 'A');
     // engine batch (here: the label-hash write a plugin state change makes).
     let host = execute_script(&mut model, "paged.set('doc', 'documentBleedBottom', '4mm')");
     assert_eq!(host.error, None);
+    let host_seq = model.last_applied_seq();
     assert_eq!(
         model.applied_log_len(),
         before + 2,
@@ -298,6 +303,7 @@ paged.set('plugin:paged.test/thing/1', 'name', 'A');
     let r = done(session.resume(
         &mut model,
         &[ok(json!({ "applied": true, "undoSteps": 1 }))],
+        &[host_seq],
         &clock,
     ));
     assert_eq!(r.error, None);
@@ -350,6 +356,7 @@ console.log(JSON.parse(await paged.schema('plugin:paged.test/thing'))[0].path);
     let r = done(session.resume(
         &mut model,
         &[ok(json!([{ "path": "name", "type": { "kind": "text" } }]))],
+        &[],
         &clock,
     ));
     assert_eq!(r.error, None);
@@ -378,14 +385,21 @@ fn the_bridge_messages_have_their_wire_shape() {
         ] }
     }))
     .unwrap();
-    let paged_canvas::channel::MainToWorkerKind::HostObjectsResult { session, answers } =
-        answer.kind
+    let paged_canvas::channel::MainToWorkerKind::HostObjectsResult {
+        session,
+        answers,
+        committed,
+    } = answer.kind
     else {
         panic!()
     };
     assert_eq!(session, 3);
     assert_eq!(answers[1].error.as_ref().unwrap().index, Some(0));
     assert_eq!(answers[2], HostObjectAnswer::default());
+    assert!(
+        committed.is_empty(),
+        "committed is optional (absent = none)"
+    );
     let req = WorkerToMain {
         seq: Some(2),
         protocol: paged_canvas::channel::PROTOCOL_VERSION,
@@ -419,4 +433,116 @@ fn the_bridge_messages_have_their_wire_shape() {
             { "op": "schema", "target": "plugin:a/b" },
         ] })
     );
+}
+
+/// The script's own writes (core, and the host's commit it reported) on
+/// either side of a foreign edit made while the script waited.
+fn foreign_edit_in_the_gap(foreign_after_host: bool) -> (CanvasModel, usize) {
+    let mut model = blank();
+    let before = model.applied_log_len();
+    let (_, session) = suspended(start(
+        &mut model,
+        r#"
+paged.set('doc', 'documentBleedTop', '3mm');
+paged.set('plugin:paged.test/thing/1', 'name', 'A');
+"#,
+    ));
+    let foreign = |m: &mut CanvasModel| {
+        // A UI edit while the script waits on the host.
+        let r = execute_script(m, "paged.set('doc', 'documentSlugTop', '5mm')");
+        assert_eq!(r.error, None);
+    };
+    if !foreign_after_host {
+        foreign(&mut model);
+    }
+    let host = execute_script(&mut model, "paged.set('doc', 'documentBleedBottom', '4mm')");
+    assert_eq!(host.error, None);
+    let host_seq = model.last_applied_seq();
+    if foreign_after_host {
+        foreign(&mut model);
+    }
+    let r = done(session.resume(
+        &mut model,
+        &[ok(json!({ "applied": true, "undoSteps": 1 }))],
+        &[host_seq],
+        &clock,
+    ));
+    assert_eq!(r.error, None);
+    (model, before)
+}
+
+fn doc_value(model: &mut CanvasModel, path: &str) -> String {
+    execute_script(model, &format!("paged.get('doc','{path}')"))
+        .output
+        .join("")
+}
+
+#[test]
+fn a_foreign_edit_after_the_hosts_commit_is_not_folded_into_the_script() {
+    let (mut model, before) = foreign_edit_in_the_gap(true);
+    let pristine_slug = {
+        let mut fresh = blank();
+        doc_value(&mut fresh, "documentSlugTop")
+    };
+    let pristine_top = {
+        let mut fresh = blank();
+        doc_value(&mut fresh, "documentBleedTop")
+    };
+    // [script core + host] folded, then the foreign edit: two steps.
+    assert_eq!(model.applied_log_len(), before + 2);
+    model.undo().expect("undo the foreign edit");
+    assert_eq!(doc_value(&mut model, "documentSlugTop"), pristine_slug);
+    assert_ne!(
+        doc_value(&mut model, "documentBleedTop"),
+        pristine_top,
+        "the first undo is the foreign edit alone"
+    );
+    model.undo().expect("undo the script");
+    assert_eq!(doc_value(&mut model, "documentBleedTop"), pristine_top);
+}
+
+#[test]
+fn a_foreign_edit_before_the_hosts_commit_splits_the_script_around_it() {
+    let (mut model, before) = foreign_edit_in_the_gap(false);
+    let pristine = {
+        let mut fresh = blank();
+        (
+            doc_value(&mut fresh, "documentSlugTop"),
+            doc_value(&mut fresh, "documentBleedBottom"),
+        )
+    };
+    // script core | foreign | host: nothing folds across the foreign edit.
+    assert_eq!(model.applied_log_len(), before + 3);
+    model.undo().expect("undo the host commit");
+    assert_eq!(doc_value(&mut model, "documentBleedBottom"), pristine.1);
+    assert_ne!(
+        doc_value(&mut model, "documentSlugTop"),
+        pristine.0,
+        "the foreign edit survives the script's undo"
+    );
+}
+
+#[test]
+fn an_unreported_gap_edit_is_never_folded() {
+    // A host that does not report its commits (`committed` absent): every
+    // record logged while the script waited is foreign.
+    let mut model = blank();
+    let before = model.applied_log_len();
+    let (_, session) = suspended(start(
+        &mut model,
+        r#"
+paged.set('doc', 'documentBleedTop', '3mm');
+paged.set('plugin:paged.test/thing/1', 'name', 'A');
+"#,
+    ));
+    let r = execute_script(&mut model, "paged.set('doc', 'documentSlugTop', '5mm')");
+    assert_eq!(r.error, None);
+    let r = done(session.resume(
+        &mut model,
+        &[ok(json!({ "applied": true, "undoSteps": 1 }))],
+        &[],
+        &clock,
+    ));
+    assert_eq!(r.error, None);
+    assert_eq!(model.applied_log_len(), before + 2);
 }
