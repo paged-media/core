@@ -51,6 +51,7 @@ pub mod nested_groups;
 pub mod numbering;
 pub mod paste_into;
 pub mod preflight;
+pub mod rect_shadows;
 pub mod reflow;
 pub mod shaped_bands;
 pub mod showcase_base;
@@ -150,6 +151,7 @@ pub const SAMPLES: &[&str] = &[
     "annual-base",
     "line-ends",
     "line-shadows",
+    "rect-shadows",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -216,6 +218,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "annual-base" => annual_base::build(),
         "line-ends" => line_ends::build(),
         "line-shadows" => line_shadows::build(),
+        "rect-shadows" => rect_shadows::build(),
         _ => return None,
     })
 }
@@ -244,7 +247,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            61,
+            62,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
