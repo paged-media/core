@@ -56,7 +56,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   definitions, effects on lines and item names became settable; a custom text variable can be
   created and instanced in text, and one `set` switches every instance. A swatch is
   addressed by its id or its name. A `set` is always one undo step, colour settings and the
-  other application state included.
+  other application state included. `null` clears a nullable row (text, enum or reference)
+  exactly as `""` does. A read tells a mixed value (`mixed: true`, a range whose runs
+  disagree) from a refusal, which carries a code (`noSuchPath`, `notFound`, `badAddress`,
+  `noDocument`).
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
@@ -68,7 +71,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   a script reaches plugin objects (`plugin:` addresses): it suspends with
   `RequestHostObjects`, the host answers with `HostObjectsResult`, and the script resumes
   (`await` works; the Boa clock is wasm-safe). Its writes undo as one step that holds only
-  the script's own records and the host commits it reports in `committed`.
+  the script's own records and the host commits it reports in `committed`. Typed commands
+  (`core.<op>` and plugin commands) are reached the same way: `paged.invoke(id, args)`,
+  `paged.commands(owner?)`, and `{ op: "invoke" }` ops in an object `paged.batch`.
 - **Export.** IDML (with a list of what the format could not carry), `.paged`, and PDF
   through an export session; `paged export --format idml|paged|pdf`.
 - **Container parts and plugin content.** Read, list, write and delete parts under
@@ -85,7 +90,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   session (`paged session`, `paged-run`), and the binaries `paged-inspect`, `paged-diff`,
   `paged-gen` and `paged-export`.
 - **Capability catalog.** `paged describe`, `describeCatalog()` and the committed
-  `crates/paged-introspect/catalog.json`: 158 host functions, 221 settable paths, 394
+  `crates/paged-introspect/catalog.json`: 161 host functions, 221 settable paths, 395
   property schemas, 130 operations, and the 30 address forms of `idGrammar`.
 - **Fidelity tooling.** The fixture generator (60 samples), the image-diff tool, 59
   reference PDFs with thresholds, and the scripts that drive InDesign to export them.
@@ -123,6 +128,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
+- **An edit made while a script waits splits the script's undo step.** The fold merges only
+  the script's own CONSECUTIVE records (and the host commits it reports). When a UI edit is
+  logged during a host wait, the script's writes made before it stay one undo step and its
+  writes after it another, with the UI edit between them: undoing the whole script then takes
+  two steps, and undoing once takes back only the later part. Folding across the foreign
+  record would swallow the UI edit into the script's step, which is worse.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
 - **The fidelity gate needs the reference colour profile.** On a runner without a FOGRA39

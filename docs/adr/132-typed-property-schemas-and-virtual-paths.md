@@ -107,6 +107,26 @@ in the `address` position as a deprecated alias (`VirtualTarget → Address` is 
   it keeps its place, and the script's writes on either side of it stay separate steps
   (`CanvasModel::group_undo_runs_since`). A host that reports nothing gets no folding of
   anything logged in the gap.
+  **Known limit:** the fold merges only the session's consecutive own records, so a script
+  write made BEFORE an interleaved UI edit (one logged while the script waited on the host)
+  becomes its own undo step: the script then undoes in two steps around the UI edit. This is
+  deliberate; merging across the foreign record would put the UI edit inside the script's
+  step (`a_foreign_edit_before_the_hosts_commit_splits_the_script_around_it` in
+  `crates/paged-script/tests/host_bridge.rs` pins it).
+- **`null` clears a nullable row.** The wire's `text`, `enum` and `ref` payloads take `null`
+  as the empty string, the engine's "no override", so `{ type, value: null }` clears exactly as
+  `""` does, on `Set`, in Boa and on the command line. A required row still refuses it;
+  `doc.activeConditionSet` is required, because activating a set is the only operation and
+  there is nothing to clear to (`null_clears_every_nullable_text_enum_and_ref_row`).
+- **A read tells mixed from missing.** `get_property` answers a `ReadError` with a stable code,
+  and `RequestGet`'s `PropertyValue` carries it additively: `mixed: true` (no value, no error)
+  when the object has the path but holds more than one value, such as a story range whose runs
+  disagree; `code` (`noSuchPath`, `notFound`, `badAddress`, `noDocument`) on a refusal.
+- **Typed commands through the script bridge.** `HostObjectCall` gains `invoke { id, args }`
+  and `commands { owner? }` (additive): `paged.invoke(id, args)` and `paged.commands(owner?)`
+  ask the host's registry, and an object `paged.batch` takes `{ op: "invoke", id, args,
+  handle? }` ops, which send the whole batch to the host so the command shares its one undo
+  step.
 
 ## The gates
 
