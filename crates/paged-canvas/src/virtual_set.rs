@@ -39,6 +39,51 @@ use paged_wire::{ElementId, PageId, StyleFamily, VirtualTarget};
 use super::CanvasModel;
 use crate::channel::Mutation;
 
+/// Why a read (`get_property`, `RequestGet`) has no value — each with a
+/// stable [`code`](Self::code) the wire carries, so a caller can tell a
+/// mixed range from a path the object does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadError {
+    /// The object has the path, but its value is not one value: a story
+    /// range whose runs (or paragraphs) disagree. An answer, not a refusal.
+    Mixed,
+    /// The path is not readable on this kind of object.
+    NoSuchPath(String),
+    /// The address parses but names nothing in this document.
+    NotFound(String),
+    /// The address does not parse.
+    BadAddress(String),
+    /// No document is loaded.
+    NoDocument,
+}
+
+impl ReadError {
+    /// The wire code: `mixed`, `noSuchPath`, `notFound`, `badAddress`,
+    /// `noDocument`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Mixed => "mixed",
+            Self::NoSuchPath(_) => "noSuchPath",
+            Self::NotFound(_) => "notFound",
+            Self::BadAddress(_) => "badAddress",
+            Self::NoDocument => "noDocument",
+        }
+    }
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mixed => f.write_str("mixed: the object carries more than one value here"),
+            Self::NoSuchPath(s) | Self::NotFound(s) | Self::BadAddress(s) => f.write_str(s),
+            Self::NoDocument => f.write_str("no document is loaded"),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}
+
 /// What a `Set` becomes.
 #[derive(Debug, Clone)]
 pub enum Resolved {
@@ -661,11 +706,12 @@ impl CanvasModel {
         })
     }
 
-    pub fn get_property(&self, address: &VirtualTarget, path: &str) -> Result<Value, String> {
+    pub fn get_property(&self, address: &VirtualTarget, path: &str) -> Result<Value, ReadError> {
         let kind = address.address_kind();
         let what = format!("{kind}.{path}");
-        let missing = || format!("{what}: the target does not exist");
-        let unknown = || format!("{what}: no such readable path on a {kind}");
+        let missing = || ReadError::NotFound(format!("{what}: the target does not exist"));
+        let unknown =
+            || ReadError::NoSuchPath(format!("{what}: no such readable path on a {kind}"));
         let text = |s: &Option<String>| Value::Text(s.clone().unwrap_or_default());
         let scene = &self.scene;
         // Script labels: every key, not only `x-paged:` ones — a native
@@ -745,12 +791,12 @@ impl CanvasModel {
             VirtualTarget::Element { element_id } => {
                 let p = lookup_path(path).ok_or_else(unknown)?;
                 let props = self.element_properties(element_id).ok_or_else(missing)?;
-                props
-                    .entries
-                    .into_iter()
-                    .find(|e| e.path == p)
-                    .and_then(|e| e.value)
-                    .ok_or_else(unknown)
+                // An entry with no value is MIXED (a range whose runs
+                // disagree); no entry is a path this element lacks.
+                match props.entries.into_iter().find(|e| e.path == p) {
+                    Some(e) => e.value.ok_or(ReadError::Mixed),
+                    None => Err(unknown()),
+                }
             }
             VirtualTarget::Doc => {
                 if let Some(p) = addressed_path("doc", path) {
@@ -1145,10 +1191,12 @@ impl CanvasModel {
         family: StyleFamily,
         style_id: &str,
         path: &str,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, ReadError> {
         let what = format!("style.{path}");
-        let missing = || format!("{what}: no {} style {style_id:?}", family.as_str());
-        let unknown = || format!("{what}: not a {} style path", family.as_str());
+        let missing =
+            || ReadError::NotFound(format!("{what}: no {} style {style_id:?}", family.as_str()));
+        let unknown =
+            || ReadError::NoSuchPath(format!("{what}: not a {} style path", family.as_str()));
         let st = &self.scene.styles;
         let text = |s: &Option<String>| Value::Text(s.clone().unwrap_or_default());
         let color = |s: &Option<String>| Value::ColorRef(s.clone());
@@ -1239,7 +1287,9 @@ impl CanvasModel {
                     .into_iter()
                     .find(|e| e.path == p)
                     .and_then(|e| e.value)
-                    .ok_or_else(|| format!("{what}: {} is not read back", wire_name(p)))
+                    .ok_or_else(|| {
+                        ReadError::NoSuchPath(format!("{what}: {} is not read back", wire_name(p)))
+                    })
             }
         }
     }

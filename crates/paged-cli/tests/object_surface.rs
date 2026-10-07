@@ -118,3 +118,40 @@ fn set_saves_and_get_reads_it_back_from_the_file() {
     let (good, _, err) = run(&["set", two, "doc", "noSuchPath", "1"]);
     assert!(!good && err.contains("not a property"), "{err}");
 }
+
+/// v71 polish — `paged get` tells a mixed range (`{"mixed":true}`, exit 0)
+/// from a path the object does not have (exit 1, `noSuchPath`).
+#[test]
+fn get_tells_mixed_from_no_such_path() {
+    let d = dir().join("mixed");
+    std::fs::create_dir_all(&d).unwrap();
+    let blank = d.join("blank.paged");
+    let doc = d.join("doc.paged");
+    let js = d.join("text.js");
+    let (blank, doc) = (blank.to_str().unwrap(), doc.to_str().unwrap());
+    ok(&["new", "--size", "612x792", "-o", blank]);
+    std::fs::write(
+        &js,
+        "const pid = JSON.parse(paged.pages())[0].selfId;\n\
+         paged.insertTextFrame(pid, [72, 72, 300, 300]);\n\
+         const sid = JSON.parse(paged.stories())[0].selfId;\n\
+         paged.insertText(sid, 0, 'Hello');\n\
+         paged.set('storyRange:' + sid + '@0..2', 'characterFontSize', 30);\n\
+         console.log('sid=' + sid);",
+    )
+    .unwrap();
+    let log = ok(&["script", blank, js.to_str().unwrap(), "-o", doc]);
+    let sid = log
+        .split("sid=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .expect("a story id")
+        .to_string();
+    let range = format!("storyRange:{sid}@0..5");
+    assert_eq!(
+        ok(&["get", doc, &range, "characterFontSize"]).trim(),
+        r#"{"mixed":true}"#
+    );
+    let (good, _, err) = run(&["get", doc, &range, "noSuchPath"]);
+    assert!(!good && err.contains("(noSuchPath)"), "{err}");
+}

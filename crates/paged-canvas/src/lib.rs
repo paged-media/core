@@ -104,6 +104,7 @@ pub use idml_export::{ExportedLink, FontFace};
 /// Reads faces off the filesystem, so it exists only where there is one.
 #[cfg(not(target_arch = "wasm32"))]
 pub use model::font_registry_from_paths;
+pub use model::virtual_set::ReadError;
 pub use model::{
     font_face_lookup, font_postscript_name, registry_faces, sniff_font_format, AppliedRecord,
     CanvasModel, CanvasOptions, ColorProfileEntry, ColorSettingsState, DocumentHandle,

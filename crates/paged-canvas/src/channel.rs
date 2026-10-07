@@ -632,8 +632,10 @@ export type WorkerToMain = WorkerToMainKind & {
 //     sent alone) logs a reversible record: a `Set` is always one undo
 //     step. A selector is not a target — `RequestQuery` first.
 //   - `RequestQuery { selector }` → `QueryResult { addresses, error }` and
-//     `RequestGet { address, path }` → `PropertyValue { value, error }`,
-//     both pure reads.
+//     `RequestGet { address, path }` → `PropertyValue { value, error,
+//     code?, mixed? }`, both pure reads. A mixed value (a range whose runs
+//     disagree) answers `mixed: true`; a refusal carries `code`
+//     (`badAddress` / `notFound` / `noSuchPath` / `noDocument`).
 //   - `Value` gains `number`, `enum`, `ref`, `gradientStops` and
 //     `swatchColor` (additive; the old `length`/`text` payloads coerce by
 //     schema). `swatch.color` writes space + components (+ model, tint)
@@ -2036,12 +2038,22 @@ pub enum WorkerToMainKind {
     /// `RequestGet` reply. `value` is the property's wire `Value`;
     /// `error` is set — and `value` absent — when the address does not
     /// parse or names nothing, the path is not readable on that kind, or
-    /// no document is loaded.
+    /// no document is loaded, and `code` says which (`badAddress`,
+    /// `notFound`, `noSuchPath`, `noDocument`). `mixed: true` — with
+    /// neither `value` nor `error` — is an ANSWER: the object has the
+    /// path but its value is not one value (a story range whose runs
+    /// disagree). `code` and `mixed` are additive within v71.
     PropertyValue {
         address: String,
         path: String,
         value: Option<paged_mutate::Value>,
         error: Option<String>,
+        #[serde(default)]
+        #[tsify(optional)]
+        code: Option<String>,
+        #[serde(default)]
+        #[tsify(optional)]
+        mixed: bool,
     },
     /// v42 (C-5 / I-04) — `RequestPlacedAssetBytes` reply. `encoded` is the
     /// placed image's ORIGINAL file bytes (PSD / JPEG / PNG) with its

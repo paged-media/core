@@ -134,3 +134,52 @@ fn table_and_cell_addresses_set_without_their_story() {
     let reply = m.read_property(&cell.to_string(), "cellVerticalJustification");
     assert_eq!(reply.unwrap(), Value::Text(next.into()));
 }
+
+/// v71 polish — `RequestGet` tells a MIXED value (a range whose runs
+/// disagree) from a path the object does not have, and both from an
+/// address that names nothing or does not parse: each refusal carries a
+/// code, and mixed is an answer, not a refusal.
+#[test]
+fn a_read_tells_mixed_from_no_such_path() {
+    use paged_canvas::ReadError;
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/generated/annual-base.idml"),
+    )
+    .unwrap();
+    let mut m = CanvasModel::load("om-mixed", &bytes, CanvasOptions::default()).unwrap();
+    let sid =
+        m.scene()
+            .stories
+            .iter()
+            .find(|s| {
+                s.story.paragraphs.first().is_some_and(|p| {
+                    p.runs.iter().map(|r| r.text.chars().count()).sum::<usize>() >= 6
+                })
+            })
+            .map(|s| s.self_id.clone())
+            .expect("a story with text");
+    m.apply_mutation(&Mutation::Set {
+        address: Address::parse(&format!("storyRange:{sid}@0..2")).unwrap(),
+        path: "characterFontSize".into(),
+        value: Value::Length(Some(31.0)),
+    })
+    .unwrap();
+    let range = format!("storyRange:{sid}@0..6");
+
+    let mixed = m.read_property(&range, "characterFontSize");
+    assert_eq!(mixed, Err(ReadError::Mixed), "{mixed:?}");
+    assert_eq!(ReadError::Mixed.code(), "mixed");
+
+    let one = m.read_property(&format!("storyRange:{sid}@0..2"), "characterFontSize");
+    assert_eq!(one, Ok(Value::Length(Some(31.0))));
+
+    let unknown = m.read_property(&range, "noSuchPath").unwrap_err();
+    assert_eq!(unknown.code(), "noSuchPath", "{unknown}");
+    let nothing = m
+        .read_property("frame:noSuchFrame", "frameFillColor")
+        .unwrap_err();
+    assert_eq!(nothing.code(), "notFound", "{nothing}");
+    let bad = m.read_property("%%", "frameFillColor").unwrap_err();
+    assert_eq!(bad.code(), "badAddress", "{bad}");
+}

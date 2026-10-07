@@ -129,16 +129,22 @@ pub fn set(
     Ok(())
 }
 
-/// `RequestGet` — the same read the editor and `paged.get` make.
-fn read(session: &mut Session, address: &Address, path: &str) -> Result<paged_mutate::Value> {
+/// `RequestGet` — the same read the editor and `paged.get` make. A mixed
+/// value (a range whose runs disagree) prints as `{"mixed":true}`; a
+/// refusal names its code.
+fn read(session: &mut Session, address: &Address, path: &str) -> Result<serde_json::Value> {
     match session.send(MainToWorkerKind::RequestGet {
         address: address.to_string(),
         path: path.to_string(),
     })? {
-        WorkerToMainKind::PropertyValue { value: Some(v), .. } => Ok(v),
-        WorkerToMainKind::PropertyValue { error, .. } => Err(anyhow!(
-            "{address}.{path}: {}",
-            error.unwrap_or_else(|| "no value".to_string())
+        WorkerToMainKind::PropertyValue { value: Some(v), .. } => Ok(serde_json::to_value(v)?),
+        WorkerToMainKind::PropertyValue { mixed: true, .. } => {
+            Ok(serde_json::json!({ "mixed": true }))
+        }
+        WorkerToMainKind::PropertyValue { error, code, .. } => Err(anyhow!(
+            "{address}.{path}: {}{}",
+            error.unwrap_or_else(|| "no value".to_string()),
+            code.map(|c| format!(" ({c})")).unwrap_or_default()
         )),
         other => bail!("get {path}: the engine answered {other:?}"),
     }

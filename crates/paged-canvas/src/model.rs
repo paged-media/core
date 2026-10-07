@@ -5253,13 +5253,21 @@ impl CanvasModel {
         &self,
         address: &paged_wire::Address,
         path: &str,
-    ) -> Result<paged_mutate::Value, String> {
-        self.get_property(&self.target_of(address)?, path)
+    ) -> Result<paged_mutate::Value, virtual_set::ReadError> {
+        let target = self
+            .target_of(address)
+            .map_err(virtual_set::ReadError::NotFound)?;
+        self.get_property(&target, path)
     }
 
     /// [`Self::get_property_at`] from an address STRING (`RequestGet`).
-    pub fn read_property(&self, address: &str, path: &str) -> Result<paged_mutate::Value, String> {
-        let a = paged_wire::Address::parse(address).map_err(|e| e.to_string())?;
+    pub fn read_property(
+        &self,
+        address: &str,
+        path: &str,
+    ) -> Result<paged_mutate::Value, virtual_set::ReadError> {
+        let a = paged_wire::Address::parse(address)
+            .map_err(|e| virtual_set::ReadError::BadAddress(e.to_string()))?;
         self.get_property_at(&a, path)
     }
 

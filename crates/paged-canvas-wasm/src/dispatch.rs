@@ -889,18 +889,22 @@ impl WorkerCore {
             MainToWorkerKind::RequestGet { address, path } => {
                 // Object model (ADR 132) — pure READ, the twin of `Set`.
                 let read = match self.model.as_ref() {
-                    None => Err("no document is loaded".to_string()),
+                    None => Err(paged_canvas::ReadError::NoDocument),
                     Some(m) => m.read_property(&address, &path),
                 };
-                let (value, error) = match read {
-                    Ok(v) => (Some(v), None),
-                    Err(e) => (None, Some(e)),
+                let (value, error, code, mixed) = match read {
+                    Ok(v) => (Some(v), None, None, false),
+                    // Mixed is an answer, not a refusal.
+                    Err(paged_canvas::ReadError::Mixed) => (None, None, None, true),
+                    Err(e) => (None, Some(e.to_string()), Some(e.code().to_string()), false),
                 };
                 WorkerToMainKind::PropertyValue {
                     address,
                     path,
                     value,
                     error,
+                    code,
+                    mixed,
                 }
             }
             MainToWorkerKind::RequestFrameChain { story_id } => {
