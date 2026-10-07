@@ -109,6 +109,15 @@ fn main() -> Result<()> {
             path,
             assets,
         } => paged_cli::object::get(&doc, &assets, &target, &path),
+        Command::Invoke {
+            doc,
+            op,
+            args,
+            out,
+            pdf,
+            assets,
+        } => paged_cli::invoke::run(&doc, &assets, &op, args.as_deref(), out.as_ref(), &pdf),
+        Command::Ops { json } => paged_cli::invoke::list(json),
         Command::Parts { what } => paged_cli::parts::run(&what),
         Command::Query {
             doc,

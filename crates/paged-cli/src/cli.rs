@@ -219,6 +219,36 @@ pub enum Command {
         #[command(flatten)]
         assets: DocumentOptions,
     },
+    /// Apply one wire operation to a document (`Mutation`, by its tag).
+    ///
+    /// OP is any operation the catalog lists (`paged ops`), so every op is
+    /// a verb here, not only through `paged script`. ARGS are the op's
+    /// arguments as the wire takes them: inline JSON
+    /// (`'{"pageId":"u1","bounds":[0,0,100,100]}'`), `-` for stdin, or a
+    /// JSON file; none means `{}`. Prints `{op, appliedSeq, createdId,
+    /// minted}`. `bindCreated` is invoked only inside a `batch`.
+    Invoke {
+        /// IDML or `.paged` document.
+        doc: PathBuf,
+        /// The operation's wire tag (`insertTextFrame`, `linkFrames`, …).
+        #[arg(value_parser = crate::invoke::op_parser())]
+        op: String,
+        /// The arguments: inline JSON, `-` for stdin, or a JSON file.
+        args: Option<String>,
+        /// Write the result here. The format follows the extension.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        #[command(flatten)]
+        pdf: PdfOptions,
+        #[command(flatten)]
+        assets: DocumentOptions,
+    },
+    /// List every wire operation and whether `paged invoke` sends it.
+    Ops {
+        /// Emit JSON (`[{op, invokable, reason?}]`) instead of one per line.
+        #[arg(long)]
+        json: bool,
+    },
     /// List, read and write a `.paged` container's content parts.
     Parts {
         #[command(subcommand)]
@@ -304,7 +334,15 @@ fn arg_json(arg: &clap::Arg) -> Value {
         .get_num_args()
         .map(|range| range.takes_values())
         .unwrap_or_else(|| arg.get_action().takes_values());
-    json!({
+    let possible: Vec<String> = if takes_values {
+        arg.get_possible_values()
+            .iter()
+            .map(|v| v.get_name().to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut row = json!({
         "name": arg.get_id().as_str(),
         "positional": arg.is_positional(),
         "required": arg.is_required_set(),
@@ -321,7 +359,13 @@ fn arg_json(arg: &clap::Arg) -> Value {
             .map(|v| v.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         "help": arg.get_help().map(|h| h.to_string()),
-    })
+    });
+    // The values a closed argument takes (`paged invoke`'s OP: the
+    // catalog's operations), so the generated reference lists them.
+    if !possible.is_empty() {
+        row["possibleValues"] = json!(possible);
+    }
+    row
 }
 
 fn command_json(cmd: &clap::Command) -> Value {

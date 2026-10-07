@@ -54,6 +54,14 @@
 //! it would also not move this gate, which counts the kinds the CLI's
 //! own source NAMES.
 //!
+//! `paged invoke <doc> <op> [args]` (v71) is not that door. It sends one
+//! kind (`Mutate`) and moves nothing here; what it closes is the SECOND
+//! axis: every operation in the catalog is a verb (`paged ops` lists
+//! them), where before this 86 of them were reachable only from a
+//! script. The op must be one the catalog lists, and its arguments are
+//! checked by the op's own type. `every_catalog_op_is_a_cli_verb` below
+//! holds that axis total.
+//!
 //! The population is the deserializer's, not a list kept here: serde
 //! names every `kind` it accepts in its "unknown variant" message, so a
 //! kind added to the engine appears here on the next run whether or not
@@ -285,4 +293,39 @@ fn the_cli_sends_the_generic_set() {
         src.contains("Mutation::Set {"),
         "`paged set` must send `Mutation::Set`, the one door to every property"
     );
+}
+
+/// The second axis, closed (v71): every catalog operation is a CLI verb
+/// through `paged invoke`, or excused in `paged_cli::invoke::NOT_INVOKABLE`
+/// with a sentence. The vocabulary is the catalog's, so an op added to
+/// the engine is a verb (and a `possibleValues` entry in `cli.json`)
+/// without touching the CLI.
+#[test]
+fn every_catalog_op_is_a_cli_verb() {
+    let ops = paged_introspect::catalog::api_catalog().operations;
+    let verbs = paged_cli::invoke::invokable();
+    let missing: Vec<&String> = ops
+        .iter()
+        .filter(|op| {
+            !verbs.contains(&op.as_str()) && paged_cli::invoke::not_invokable(op).is_none()
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "ops with no CLI verb and no reason: {missing:?}"
+    );
+    // The generated reference lists the same vocabulary.
+    let surface = paged_cli::cli::surface();
+    let invoke = surface["commands"]
+        .as_array()
+        .and_then(|c| c.iter().find(|c| c["name"] == "invoke"))
+        .expect("`invoke` is a command");
+    let listed = invoke["args"]
+        .as_array()
+        .and_then(|a| a.iter().find(|a| a["name"] == "op"))
+        .and_then(|a| a["possibleValues"].as_array())
+        .map(Vec::len)
+        .unwrap_or(0);
+    assert_eq!(listed, verbs.len(), "cli.json lists every invokable op");
+    assert_eq!(verbs.len() + 1, ops.len(), "only bindCreated is excused");
 }

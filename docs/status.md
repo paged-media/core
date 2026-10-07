@@ -59,7 +59,14 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   other application state included. `null` clears a nullable row (text, enum or reference)
   exactly as `""` does. A read tells a mixed value (`mixed: true`, a range whose runs
   disagree) from a refusal, which carries a code (`noSuchPath`, `notFound`, `badAddress`,
-  `noDocument`).
+  `noDocument`). A frame's image content (`imageBytes`), its thread links
+  (`nextTextFrame`, `previousTextFrame`), its opacity mask (`opacityMask`) and its path points
+  (`points[i].anchor`, `.left`, `.right`, `.curveType`) are rows too, so a binding can write
+  them; `null` unlinks, releases or clears.
+- **Every operation on the command line.** `paged invoke <doc> <op> [args]` applies any
+  operation the catalog lists with its wire arguments (inline JSON, a file, or stdin), and
+  `paged ops` lists them. The vocabulary is the catalog's, so a new op is a verb without a CLI
+  change; only `bindCreated` (legal only inside a batch) is not invoked on its own.
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
