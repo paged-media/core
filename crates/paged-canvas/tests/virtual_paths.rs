@@ -860,3 +860,107 @@ fn a_cell_answers_its_fill_tint() {
     let v = m.get_property(&cell, "cellFillTint");
     assert!(v.is_ok(), "cellFillTint on a cell: {v:?}");
 }
+
+/// v71 polish — the schema says a nullable row clears with `null`, so the
+/// wire takes `{ type, value: null }` for every nullable text-carried row
+/// kind (text, enum, ref), and it does EXACTLY what the empty string (the
+/// engine's "no override") does: same outcome, same read-back. And every
+/// non-element nullable row does clear.
+#[test]
+fn null_clears_every_nullable_text_enum_and_ref_row() {
+    let kinds = [
+        "doc",
+        "page",
+        "layer",
+        "master",
+        "story",
+        "field",
+        "swatch",
+        "gradient",
+        "colorGroup",
+        "numberingList",
+        "section",
+        "guide",
+        "condition",
+        "textVariable",
+        "table",
+        "cell",
+        "frame",
+        "group",
+        "style",
+    ];
+    let rows: Vec<SchemaRow> = property_schemas()
+        .into_iter()
+        .filter(|r| {
+            r.access == "readWrite"
+                && r.nullable
+                && r.wire == Wire::Text
+                && matches!(
+                    r.value_type.kind,
+                    ValueType::Text | ValueType::Enum | ValueType::Ref
+                )
+                && kinds.contains(&r.address_kind)
+        })
+        .collect();
+    let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
+    let mut failures = Vec::new();
+    let (mut m, t) = build();
+    for row in &rows {
+        let path = concrete(row.path);
+        for target in targets_for(row, &t) {
+            let address: paged_wire::Address = target.clone().into();
+            let tag = match row.value_type.kind {
+                ValueType::Enum => "enum",
+                ValueType::Ref => "ref",
+                _ => "text",
+            };
+            // Apply, read back, undo: the outcome of one clear.
+            let mut clear = |value: serde_json::Value| -> Result<String, String> {
+                let json = serde_json::json!({
+                    "op": "set",
+                    "args": { "address": address.to_string(), "path": path, "value": value }
+                });
+                let set: Mutation = serde_json::from_value(json)
+                    .map_err(|e| format!("the wire refused it: {e}"))?;
+                m.apply_mutation(&set)
+                    .map_err(|e| format!("apply: {e:?}"))?;
+                let read = m.get_property(&target, &path);
+                m.undo();
+                read.map(|v| format!("{v:?}"))
+                    .map_err(|e| format!("read: {e}"))
+            };
+            let empty = clear(serde_json::json!({ "type": "text", "value": "" }));
+            for ty in ["text", tag] {
+                let label = format!("{} {path} {{type:{ty},value:null}}", row.address_kind);
+                let null = clear(serde_json::json!({ "type": ty, "value": null }));
+                if null.as_ref().is_err_and(|e| e.starts_with("the wire")) {
+                    failures.push(format!("{label}: {}", null.unwrap_err()));
+                    continue;
+                }
+                if null != empty {
+                    failures.push(format!("{label}: null gave {null:?}, \"\" gave {empty:?}"));
+                    continue;
+                }
+                if row.virtual_op.is_some() {
+                    if let Err(e) = &null {
+                        failures.push(format!("{label}: a nullable row does not clear: {e}"));
+                        continue;
+                    }
+                }
+                *by_kind.entry(tag).or_default() += 1;
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} null clears failed:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    for k in ["text", "enum", "ref"] {
+        assert!(
+            by_kind.get(k).copied().unwrap_or(0) > 0,
+            "no nullable {k} row probed: {by_kind:?}"
+        );
+    }
+}

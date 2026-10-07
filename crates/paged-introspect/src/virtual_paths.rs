@@ -163,7 +163,9 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "doc",
         "activeConditionSet",
-        reference(RefKind::Condition),
+        // Required: activating a set is the only op; there is no
+        // "deactivate" to clear to (a read with no matching set is "").
+        reference(RefKind::Condition).required(),
         "activateConditionSet",
         "setId",
     ),

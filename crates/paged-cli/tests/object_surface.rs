@@ -92,6 +92,25 @@ fn set_saves_and_get_reads_it_back_from_the_file() {
         r#"{"type":"length","value":3.0}"#
     );
 
+    // v71 polish — `null` clears a nullable row (bare, and as a typed
+    // `{ type, value: null }`); a required row refuses it.
+    ok(&["set", two, &page, "appliedMaster", "null", "-o", two]);
+    assert_eq!(
+        ok(&["get", two, &page, "appliedMaster"]).trim(),
+        r#"{"type":"text","value":""}"#
+    );
+    ok(&[
+        "set",
+        two,
+        &page,
+        "appliedMaster",
+        r#"{"type":"ref","value":null}"#,
+        "-o",
+        two,
+    ]);
+    let (good, _, err) = run(&["set", two, "doc", "activeConditionSet", "null"]);
+    assert!(!good, "a required row refuses null: {err}");
+
     // A value the schema refuses: no write, a non-zero exit, a reason.
     let (good, _, err) = run(&["set", two, &page, "pageColumnCount", "0"]);
     assert!(!good, "a zero column count must be refused");

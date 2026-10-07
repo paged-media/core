@@ -2260,7 +2260,7 @@ pub enum Value {
     Bool(bool),
     /// Track M — plain text value (layer name, future story
     /// titles, etc.). Inverse via the previous text.
-    Text(String),
+    Text(#[serde(deserialize_with = "null_as_empty")] String),
     /// SDK Phase 5 (v1 sweep) — full path replacement on any
     /// path-bearing page item. Carries the new anchor list +
     /// `subpath_starts` for compound paths. Used by Pathfinder
@@ -2409,10 +2409,10 @@ pub enum Value {
     /// ADR 132 — an enum member in its IDML spelling. Normalises to `Text`
     /// for the apply layer; the schema layer (`paged-introspect`) checks
     /// membership before it gets there.
-    Enum(String),
+    Enum(#[serde(deserialize_with = "null_as_empty")] String),
     /// ADR 132 — a reference to another document object by self id (a
     /// style, a layer, a master). Normalises to `Text`.
-    Ref(String),
+    Ref(#[serde(deserialize_with = "null_as_empty")] String),
     /// ADR 132 — a whole gradient-stop list, the value of the
     /// `gradient.stops` virtual path (`EditGradient` underneath).
     GradientStops(Vec<GradientStopSpec>),
@@ -2421,6 +2421,14 @@ pub enum Value {
     /// half-written colour behind), with the colour model and tint kept
     /// unless given.
     SwatchColor(SwatchColorSpec),
+}
+
+/// v71 polish — a `text` / `enum` / `ref` payload of `null` is the empty
+/// string, the engine's "no override": a nullable row clears with `null`
+/// (what its schema says) as well as with `""`. A required row still
+/// refuses the empty string at the schema check.
+fn null_as_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
 
 /// v71 — the value of the `swatch.color` virtual path.

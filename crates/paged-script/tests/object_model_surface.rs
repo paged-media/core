@@ -165,3 +165,58 @@ console.log('tint', paged.get(S, 'tint'));
         "{out:?}"
     );
 }
+
+/// v71 polish — `null` clears a nullable row through the script door, as a
+/// bare `null` and as a typed `{ type, value: null }`, for every
+/// text-carried row kind: text (a label), enum (a paragraph's
+/// justification), ref (a page's applied master). A required row still
+/// refuses it.
+#[test]
+fn null_clears_a_nullable_text_enum_and_ref_row() {
+    let mut model = blank();
+    let out = run(
+        &mut model,
+        r#"
+const ok = (label, v) => console.log(label, v);
+const pid = JSON.parse(paged.pages())[0].selfId;
+const page = 'page:' + pid;
+const tf = paged.insertTextFrame(pid, [72, 72, 300, 300]);
+const sid = JSON.parse(paged.stories())[0].selfId;
+paged.insertText(sid, 0, 'Hello');
+const range = 'storyRange:' + sid + '@0..5';
+const label = 'labels[x-paged:media.paged.probe]';
+paged.set(tf, label, '{"v":1,"data":{"a":1}}');
+ok('text', paged.set(tf, label, null));
+ok('textRead', paged.get(tf, label));
+paged.set(tf, label, '{"v":1,"data":{"a":1}}');
+ok('textTyped', paged.set(tf, label, { type: 'text', value: null }));
+paged.set(range, 'paragraphJustification', 'CenterAlign');
+ok('enum', paged.set(range, 'paragraphJustification', null));
+paged.set(range, 'paragraphJustification', 'CenterAlign');
+ok('enumTyped', paged.set(range, 'paragraphJustification', { type: 'enum', value: null }));
+ok('ref', paged.set(page, 'appliedMaster', null));
+ok('refRead', paged.get(page, 'appliedMaster'));
+ok('refTyped', paged.set(page, 'appliedMaster', { type: 'ref', value: null }));
+ok('required', paged.set('doc', 'activeConditionSet', null));
+"#,
+    );
+    let line = |label: &str| {
+        out.iter()
+            .find_map(|l| {
+                l.strip_prefix(&format!("[log] {label} "))
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| panic!("no {label} in {out:?}"))
+    };
+    for label in ["text", "textTyped", "enum", "enumTyped", "ref", "refTyped"] {
+        assert_eq!(line(label), "true", "{label}: null must clear");
+    }
+    assert_eq!(line("required"), "false", "a required row refuses null");
+    for label in ["textRead", "refRead"] {
+        let read = line(label);
+        assert!(
+            read == "null" || read.contains(r#""value":"""#) || read.contains(r#""value":null"#),
+            "{label}: {read}"
+        );
+    }
+}
