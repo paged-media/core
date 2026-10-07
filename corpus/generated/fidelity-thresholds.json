@@ -507,6 +507,14 @@
       "max_p99_de": 2.25,
       "min_ssim": 0.9941,
       "rationale": "Added 2026-10-06 (ADR 130): what casts an object's drop shadow when the object has no fill. One page, no text, every item with the same shadow (offset 6/6 pt, Size 4, black 75 %): graphic lines at 6 pt round caps, 1 pt butt caps and a 6 pt projecting-cap diagonal; a 6 pt round-capped open polygon (a pen path); a closed stroke-only triangle; a filled triangle with no stroke; a filled, stroked oval. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the object paints: a line's and an unfilled polygon's from the stroke band including caps, a filled and stroked oval's from the ellipse plus the stroke's outer half. The engine matched the lines already (shadow profiles within 0.05 coverage); unfilled polygons cast nothing and the oval stamped its bounding rectangle: mean 0.382 / p99 13.140 / ssim 0.9864. With ovals and polygons stamping their painted outline: 0.051 / 1.879 / 0.9991; sized at worst * 1.20 and ssim - 0.005."
+    },
+    {
+      "name": "rect-shadows",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.175,
+      "max_p99_de": 4.62,
+      "min_ssim": 0.9922,
+      "rationale": "Added 2026-10-07 (ADR 130): what casts a rectangle's and a text frame's drop shadow. One page, every frame 120 x 80 pt with the same shadow (offset 6/6 pt, Size 4, black 75 %): stroke-only rectangles at 6 and 1 pt centred and 6 pt outside; filled (grey 40 %) rectangles with a 6 pt stroke centred, inside and outside; a filled, stroked and a stroke-only rounded rectangle (radius 16); a filled rectangle with no stroke; text frames holding Inter 48 pt 'Hi', stroke-only, filled and stroked, and neither. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the frame paints, as for ovals and polygons: the stroke band with no fill, the outline pushed out by the stroke's outer part with a fill, the rounded outline for rounded corners, and with no fill the text as well. The engine cast nothing for stroke-only frames, the fill rectangle for stroked ones, the bounding rectangle for rounded ones and no text shadow: mean 1.182 / p99 36.149 / ssim 0.9558. With frames stamping their painted outline and unfilled text frames shadowing their glyphs: 0.145 / 3.847 / 0.9972; sized at worst * 1.20 and ssim - 0.005. The residue: the engine's shadow falloff sits about 0.4 pt inside InDesign's on every shadow (the filled rectangle with no stroke included), and the rounded-corner and glyph outlines differ by a fraction of a point."
     }
   ]
 }

@@ -1,6 +1,7 @@
 # ADR 130 — Scene-scoped faces, a drop shadow on every shape, handles on every batch lane
 
-- **Status:** Accepted 2026-10-06.
+- **Status:** Accepted 2026-10-06. Amended 2026-10-07: rectangles and text frames cast their
+  shadow by the same rule (the `rect-shadows` comparison).
 - **Scope:** `crates/paged-canvas/src/channel.rs` (`FontScope`, `RegisterFont.scope`,
   `ClearFontRegistry`'s optional payload), `crates/paged-canvas/src/model.rs` (the scene face
   table, the translate lane's `minted`), `crates/paged-renderer/src/pipeline/text_frame.rs`
@@ -47,9 +48,11 @@ into native page items met five gaps in the engine's doors:
   the six field paths apply to all five shape kinds through one slot finder, with the same
   inverses. A shape's shadow is cast from what it paints. A line has no fill, so its
   shadow is cast by the stroke: the centreline is stroked at the line's width, caps, join and
-  miter limit, and the resulting band is stamped (a dash is not cut out). An oval or polygon
-  with a fill stamps its outline, pushed out by the part of a visible stroke that lies outside
-  it; one with no fill and a visible stroke stamps its stroke band, as a line does. The IDML
+  miter limit, and the resulting band is stamped (a dash is not cut out). An oval, polygon,
+  rectangle or text frame with a fill stamps its outline (a rounded one its rounded outline),
+  pushed out by the part of a visible stroke that lies outside it; one with no fill and a
+  visible stroke stamps its stroke band, as a line does. A text frame with no fill also casts
+  its text's shadow, each glyph stamped at the object shadow's softness. The IDML
   adapter reads a polygon's and a line's `TransparencySetting` shadow and writes it for source
   and inserted ovals, polygons and lines.
 - **Script values.** The bridge reads a path as an anchor array or `{ anchors, subpathStarts? }`,
@@ -74,6 +77,23 @@ into native page items met five gaps in the engine's doors:
   that InDesign casts an unfilled polygon's shadow from its stroke, where the engine cast none,
   and an oval's from the ellipse plus its stroke, where the engine stamped the bounding
   rectangle. Both now follow InDesign: the page went from mean ΔE 0.382 / p99 13.14 / SSIM
-  0.9864 to 0.051 / 1.88 / 0.9991. A stroke-only rectangle or text frame still casts no shadow,
-  and a stroked rectangle's shadow does not include the stroke.
+  0.9864 to 0.051 / 1.88 / 0.9991.
+- The rectangular kinds were compared with InDesign 20.0.1 on 2026-10-07 (the `rect-shadows`
+  fixture, gated the same way and pinned by
+  `crates/paged-renderer/tests/rect_shadows_pipeline.rs`). InDesign follows the same rule. A
+  stroke-only rectangle casts the shadow of its stroke band: across a 6 pt centred stroke the
+  shadow peaks at the stroke's offset position (0.58 darkness, as for a 6 pt line), a 1 pt
+  stroke casts a faint one (0.13), and an Outside stroke's band sits outside the frame edge.
+  A filled, stroked rectangle's shadow edge lies half the weight past the frame edge for a
+  centred stroke, the full weight for Outside and at the edge for Inside: the three profiles are
+  the fill-only profile shifted by 3, 6 and 0 pt. A rounded rectangle's shadow is rounded. A
+  text frame with no fill shadows its text as well as its stroke, and one with neither fill nor
+  stroke shadows only its text, glyph by glyph at the same softness as the frame's (σ = Size /
+  2). A filled text frame's shadow comes from the fill and stroke, the text inside adding
+  nothing. The engine cast nothing for the stroke-only frames, the fill rectangle for the
+  stroked ones, the bounding rectangle for the rounded one and no text shadow. With the rule
+  applied the page went from mean ΔE 1.18 / p99 36.15 / SSIM 0.956 to 0.145 / 3.85 / 0.997.
+  The residue is not the rule: every engine shadow, the plain filled rectangle's included, falls
+  off about 0.4 pt inside InDesign's, and rounded corners and glyph positions differ by a
+  fraction of a point.
 - Every addition is optional on the wire. Hosts gate on protocol 70.

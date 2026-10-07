@@ -16,12 +16,11 @@
 //!
 //! Resolves a frame's `<DropShadowSetting>` (or the document-wide
 //! fallback from `PipelineOptions::frame_drop_shadow`) into a
-//! [`DropShadow`] paint and emits the rectangular stamp behind the
-//! frame's bounding rect. The fill-shadow is skipped when the
-//! frame's fill is transparent — InDesign casts no shadow off a
-//! `Swatch/None` fill, and emitting the rect-stamp anyway leaks a
-//! solid backdrop through the otherwise invisible frame (see commit
-//! 9f98738 / 2c33465).
+//! [`DropShadow`] paint and emits the stamp behind what the frame
+//! paints. A frame with a transparent fill never stamps its fill
+//! outline — that would leak a solid backdrop through the otherwise
+//! invisible frame (see commit 9f98738 / 2c33465) — only its stroke
+//! band, when the stroke is visible.
 //!
 //! Stroke shadows (`<StrokeTransparencySetting><DropShadowSetting>`)
 //! are emitted only when the frame's stroke is actually visible
@@ -32,8 +31,8 @@
 //! visual match for fill-less / open-frame variants until path-
 //! shaped shadow support lands.
 //!
-//! Rectangles and text frames stamp the bbox rect; an oval stamps its
-//! ellipse. W1.1: Polygons
+//! A plain rectangle or text frame stamps its rect, a rounded one its
+//! corner outline; an oval stamps its ellipse. W1.1: Polygons
 //! (and pathed Rectangles / TextFrames lifted to `Geometry::Polygon`)
 //! cast a *path-shaped* shadow — the frame's real outline is interned
 //! and emitted as a `DropShadow { path_id, .. }` (σ-scale 1.0, the
@@ -48,10 +47,11 @@
 //! `line-shadows` fixture): an oval or a polygon with no fill and a
 //! visible stroke — a pen path, a stroke-only triangle — casts the
 //! shadow of its stroke band, exactly as a line does. The engine stamps
-//! that band for ovals and polygons, and a filled, stroked one stamps
-//! its outline pushed out by the stroke's outer part. Rectangles and
-//! text frames still stamp only their rect: a stroke-only one casts
-//! nothing yet.
+//! that band, and a filled, stroked shape stamps its outline pushed out
+//! by the stroke's outer part. The `rect-shadows` fixture measured the
+//! same rule for rectangles and text frames, rounded corners included;
+//! a text frame with no fill also shadows its text, which
+//! `BuildEngine::apply_blend_groups` casts glyph by glyph.
 
 use paged_compose::{
     emit_drop_shadow_rect_transformed, DisplayCommand, DropShadow, LineCap, LineJoin, PathData,
@@ -61,17 +61,17 @@ use paged_model::{DropShadowSetting, Graphic};
 
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
-    aligned_outline_path, ellipse_outline_path, fnv_1a_u64, frame_fill_is_transparent,
-    frame_stroke_is_visible, path_signature, polygon_path_from_anchors_with_open,
-    resolve_frame_shadow, stroke_for, BuiltPage, ColorCtx,
+    aligned_outline_path, corner_rect_path, ellipse_outline_path, fnv_1a_u64,
+    frame_fill_is_transparent, frame_stroke_is_visible, inset_rect, path_signature,
+    per_corner_kinds, per_corner_radii, polygon_path_from_anchors_with_open, resolve_frame_shadow,
+    stroke_alignment_offset, stroke_for, BuiltPage, ColorCtx,
 };
 
-/// Emit the drop-shadow stamp(s) for a frame. The fill-shadow stamps
-/// when the frame has a visible fill; the stroke-shadow stamps when
-/// the frame has a visible stroke (`StrokeColor != Swatch/None` AND
-/// `StrokeWeight > 0`). Both stamps share the frame's bounding rect
-/// today; emitting two when both are visible isn't typical IDML
-/// content, so we keep the geometry simple.
+/// Emit the drop-shadow stamp(s) for a frame. The object shadow stamps
+/// what the frame paints (its fill outline grown by the stroke's outer
+/// part, or its stroke band when unfilled); the stroke-transparency
+/// shadow stamps the frame's outline when the stroke is visible
+/// (`StrokeColor != Swatch/None` AND `StrokeWeight > 0`).
 pub(crate) fn drop_shadow_module(
     frame: &ResolvedFrame<'_>,
     page: &mut BuiltPage,
@@ -82,12 +82,22 @@ pub(crate) fn drop_shadow_module(
     stroke_drop_shadow: Option<&DropShadowSetting>,
 ) {
     // Resolve the shape the shadow stamps under: an axis-aligned rect
-    // for Rect / TextFrameRect, or the frame's real outline (interned
-    // once, reused by both fill and stroke shadows) for an Oval or a
-    // pathed Polygon. Lines cast theirs in `line_drop_shadow_module`.
+    // for a plain Rect / TextFrameRect, or the frame's real outline
+    // (interned once, reused by both fill and stroke shadows) for a
+    // rounded one, an Oval or a pathed Polygon. Lines cast theirs in
+    // `line_drop_shadow_module`.
     let cache_key = frame.self_id.map(|id| fnv_1a_u64(id.as_bytes()));
     let target: ShadowTarget = match &frame.geometry {
-        Geometry::Rect { rect } | Geometry::TextFrameRect { rect } => ShadowTarget::Rect(*rect),
+        Geometry::Rect { rect } | Geometry::TextFrameRect { rect } => {
+            match rect_outline(frame, *rect, 0.0) {
+                RectOutline::Plain(rect) => ShadowTarget::Rect(rect),
+                RectOutline::Path(path) => {
+                    let key = cache_key.unwrap_or_else(|| path_signature_of(frame))
+                        ^ 0x5AD0_C022_0000_0000;
+                    ShadowTarget::Path(page.list.paths.intern(key, path).0)
+                }
+            }
+        }
         Geometry::Oval { rect } => {
             let key = cache_key.unwrap_or_else(|| path_signature_of(frame)) ^ 0x5AD0_E111_0000_0000;
             let (path_id, _) = page.list.paths.intern(key, ellipse_outline_path(*rect));
@@ -118,7 +128,7 @@ pub(crate) fn drop_shadow_module(
     // Object shadow, cast from what the object paints. With a visible
     // fill it stamps the fill outline (never a solid backdrop through a
     // transparent frame); with no fill but a visible stroke it stamps
-    // the stroke band, as InDesign does for an oval or a polygon.
+    // the stroke band, as InDesign does for every closed shape.
     let stroke_visible =
         frame_stroke_is_visible(frame.stroke_color, frame.effective_stroke_weight());
     if !frame_fill_is_transparent(frame.fill_color) {
@@ -128,10 +138,13 @@ pub(crate) fn drop_shadow_module(
             let painted = stroke_visible
                 .then(|| filled_and_stroked_outline_of(frame))
                 .flatten()
-                .map(|outline| {
-                    let key = cache_key.unwrap_or_else(|| path_signature_of(frame))
-                        ^ 0x5AD0_F111_0000_0000;
-                    ShadowTarget::Path(page.list.paths.intern(key, outline).0)
+                .map(|outline| match outline {
+                    RectOutline::Plain(rect) => ShadowTarget::Rect(rect),
+                    RectOutline::Path(outline) => {
+                        let key = cache_key.unwrap_or_else(|| path_signature_of(frame))
+                            ^ 0x5AD0_F111_0000_0000;
+                        ShadowTarget::Path(page.list.paths.intern(key, outline).0)
+                    }
                 });
             emit_shadow(painted.unwrap_or(target), outer, shadow, page);
         }
@@ -156,14 +169,22 @@ pub(crate) fn drop_shadow_module(
     }
 }
 
-/// The stroke band of an oval's or a polygon's outline in inner
-/// coordinates: the outline (offset for Inside / Outside alignment, as
-/// the stroke itself is) stroked at the frame's weight, cap, join and
-/// miter limit. A dash is not cut out. `None` for the rectangular kinds.
+/// The stroke band of a frame's outline in inner coordinates: the
+/// outline (offset for Inside / Outside alignment, as the stroke itself
+/// is) stroked at the frame's weight, cap, join and miter limit. A dash
+/// is not cut out. `None` for a line.
 fn stroke_band_of(frame: &ResolvedFrame<'_>) -> Option<PathData> {
-    let outline = outline_of(frame)?;
     let weight = frame.effective_stroke_weight();
-    let outline = aligned_outline_path(&outline, frame.stroke_alignment, weight).unwrap_or(outline);
+    let outline = match &frame.geometry {
+        Geometry::Rect { rect } | Geometry::TextFrameRect { rect } => {
+            let offset = stroke_alignment_offset(frame.stroke_alignment, weight);
+            rect_outline(frame, *rect, offset).into_path()
+        }
+        _ => {
+            let outline = outline_of(frame)?;
+            aligned_outline_path(&outline, frame.stroke_alignment, weight).unwrap_or(outline)
+        }
+    };
     let stroke = stroke_for(
         None,
         weight,
@@ -177,21 +198,71 @@ fn stroke_band_of(frame: &ResolvedFrame<'_>) -> Option<PathData> {
     (!band.segments.is_empty()).then_some(band)
 }
 
-/// The outline of what a filled, stroked oval or polygon paints: its
-/// outline pushed out by the part of the stroke that lies outside it
-/// (half the weight centred, all of it Outside, none Inside), on every
-/// closed contour. `None` for the rectangular kinds and for Inside
-/// alignment, where the fill outline already is the painted outline.
-fn filled_and_stroked_outline_of(frame: &ResolvedFrame<'_>) -> Option<PathData> {
-    let outline = outline_of(frame)?;
+/// The outline of what a filled, stroked frame paints: its outline
+/// pushed out by the part of the stroke that lies outside it (half the
+/// weight centred, all of it Outside, none Inside), on every closed
+/// contour. `None` for a line and for Inside alignment, where the fill
+/// outline already is the painted outline.
+fn filled_and_stroked_outline_of(frame: &ResolvedFrame<'_>) -> Option<RectOutline> {
     let outside = match frame.stroke_alignment {
         Some("InsideAlignment") => return None,
         Some("OutsideAlignment") => frame.effective_stroke_weight(),
         _ => frame.effective_stroke_weight() * 0.5,
     };
+    if let Geometry::Rect { rect } | Geometry::TextFrameRect { rect } = &frame.geometry {
+        return Some(rect_outline(frame, *rect, -outside));
+    }
+    let outline = outline_of(frame)?;
     // `aligned_outline_path` offsets each closed contour by HALF the
     // weight it is given.
-    aligned_outline_path(&outline, Some("OutsideAlignment"), outside * 2.0)
+    aligned_outline_path(&outline, Some("OutsideAlignment"), outside * 2.0).map(RectOutline::Path)
+}
+
+/// A rectangular frame's outline: the plain rect, or the corner path
+/// when a corner effect resolves.
+enum RectOutline {
+    Plain(Rect),
+    Path(PathData),
+}
+
+impl RectOutline {
+    fn into_path(self) -> PathData {
+        match self {
+            RectOutline::Path(path) => path,
+            RectOutline::Plain(r) => PathData {
+                segments: vec![
+                    PathSegment::MoveTo { x: r.x, y: r.y },
+                    PathSegment::LineTo {
+                        x: r.x + r.w,
+                        y: r.y,
+                    },
+                    PathSegment::LineTo {
+                        x: r.x + r.w,
+                        y: r.y + r.h,
+                    },
+                    PathSegment::LineTo {
+                        x: r.x,
+                        y: r.y + r.h,
+                    },
+                    PathSegment::Close,
+                ],
+            },
+        }
+    }
+}
+
+/// A rectangle's or a text frame's outline moved in by `offset` (out
+/// when negative), each corner radius adjusted to stay concentric —
+/// the geometry `corner_path_module` strokes.
+fn rect_outline(frame: &ResolvedFrame<'_>, rect: Rect, offset: f32) -> RectOutline {
+    let radii = per_corner_radii(frame.corner_radius, frame.corner_option, &frame.corners);
+    let moved = inset_rect(rect, offset);
+    if radii.iter().all(Option::is_none) {
+        return RectOutline::Plain(moved);
+    }
+    let radii = radii.map(|r| r.map(|r| (r - offset).max(0.0)));
+    let kinds = per_corner_kinds(frame.corner_option, &frame.corners);
+    RectOutline::Path(corner_rect_path(moved, radii, kinds))
 }
 
 /// An oval's or a polygon's outline in inner coordinates, as its
@@ -217,16 +288,16 @@ fn outline_of(frame: &ResolvedFrame<'_>) -> Option<PathData> {
 fn path_signature_of(frame: &ResolvedFrame<'_>) -> u64 {
     match &frame.geometry {
         Geometry::Polygon { anchors, .. } => path_signature(anchors),
-        Geometry::Oval { rect } => {
+        Geometry::Oval { rect } | Geometry::Rect { rect } | Geometry::TextFrameRect { rect } => {
             fnv_1a_u64(format!("{} {} {} {}", rect.x, rect.y, rect.w, rect.h).as_bytes())
         }
         _ => 0,
     }
 }
 
-/// What a frame's drop shadow stamps under: an axis-aligned bounding
-/// rect (rectangle / text frame) or an interned path (an oval's or a
-/// polygon's outline, or a stroke band).
+/// What a frame's drop shadow stamps under: an axis-aligned rect (a
+/// plain rectangle / text frame) or an interned path (a rounded
+/// frame's, an oval's or a polygon's outline, or a stroke band).
 #[derive(Clone, Copy)]
 enum ShadowTarget {
     Rect(Rect),
