@@ -8083,7 +8083,7 @@
         "to": "condition"
       },
       "wire": "text",
-      "nullable": true,
+      "nullable": false,
       "access": "readWrite",
       "virtual": {
         "op": "activateConditionSet",
