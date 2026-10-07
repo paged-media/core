@@ -141,6 +141,20 @@
       "summary": "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."
     },
     {
+      "name": "paged.invoke",
+      "params": "(id, args?)",
+      "returns": "Promise<command result JSON>",
+      "kind": "write",
+      "summary": "Run a typed command — core.<op> (every catalog operation, args as the op's typed struct; id positions take addresses) or a plugin's — through the host's object registry (RequestHostObjects invoke): a Promise of its result JSON ({ created, undoSteps } for a core command). Commands live in the host's registry only: with no host it throws code noHost; a refusal rejects with .code. Inside paged.batch use { op: \"invoke\", id, args, handle? }."
+    },
+    {
+      "name": "paged.commands",
+      "params": "(owner?)",
+      "returns": "Promise<CommandInfo[] JSON>",
+      "kind": "read",
+      "summary": "The typed commands the host's object registry offers (core's first), optionally of one owner (\"core\" or a plugin id): a Promise of the CommandInfo[] JSON. With no host it throws code noHost."
+    },
+    {
       "name": "paged.address",
       "params": "(id)",
       "returns": "string|null",
@@ -838,7 +852,7 @@
       "params": "([mutations] | [objectOps])",
       "returns": "bool | per-op results JSON",
       "kind": "author",
-      "summary": "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address the whole batch goes to the host's object registry (a Promise of the same JSON)."
+      "summary": "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address, or is a typed command ({ op: \"invoke\", id, args, handle? }), the whole batch goes to the host's object registry (a Promise of the same JSON), so a command shares the one undo step with the sets."
     },
     {
       "name": "paged.setElementSelection",

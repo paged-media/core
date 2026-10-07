@@ -22,7 +22,10 @@
 //! the host. Instead:
 //!
 //! - `paged.get/set/batch/query/schema` with a `plugin:` address (or a
-//!   selector naming one) return a PROMISE and queue a [`HostObjectCall`].
+//!   selector naming one) return a PROMISE and queue a [`HostObjectCall`];
+//!   so do `paged.invoke(id, args)` and `paged.commands(owner?)` (typed
+//!   commands live in the host's registry only), and a `paged.batch`
+//!   holding an `{ op: "invoke" }` op.
 //!   Consecutive `paged.set`s fold into ONE `batch` call.
 //! - When the script has run as far as it can (its synchronous body, then
 //!   every runnable promise job), the queued calls leave as ONE
@@ -159,7 +162,10 @@ pub(crate) fn enqueue(call: HostObjectCall, shape: Shape, ctx: &mut Context) -> 
     HOST.with(|h| {
         let mut h = h.borrow_mut();
         let q = h.as_mut().expect("checked above");
-        if matches!(call, HostObjectCall::Batch { .. }) {
+        if matches!(
+            call,
+            HostObjectCall::Batch { .. } | HostObjectCall::Invoke { .. }
+        ) {
             q.writes = true;
         }
         if let (Shape::Set { .. }, HostObjectCall::Batch { ops }) = (&shape, &call) {

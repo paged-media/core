@@ -546,3 +546,144 @@ paged.set('plugin:paged.test/thing/1', 'name', 'A');
     assert_eq!(r.error, None);
     assert_eq!(model.applied_log_len(), before + 2);
 }
+
+/// v71 polish — typed COMMANDS through the bridge (SDK `host.objects`
+/// `invoke` / `commands`, DESIGN §21.12): `paged.invoke(id, args)` and
+/// `paged.commands(owner?)` ask the host's registry, and an `invoke` op
+/// joins an object `paged.batch` (one host batch, one undo step).
+#[test]
+fn invoke_and_commands_ask_the_host_and_invoke_joins_a_batch() {
+    let mut model = blank();
+    let (calls, session) = suspended(start(
+        &mut model,
+        r#"
+const made = JSON.parse(await paged.invoke('core.insertPages', { at: 1, count: 1 }));
+console.log('created', made.created.length, made.undoSteps);
+const all = JSON.parse(await paged.commands());
+const core = JSON.parse(await paged.commands('core'));
+console.log('commands', all.length, core.length);
+"#,
+    ));
+    assert_eq!(
+        calls,
+        vec![HostObjectCall::Invoke {
+            id: "core.insertPages".into(),
+            args: json!({ "at": 1, "count": 1 }),
+        }],
+    );
+    let (calls, session) = suspended(session.resume(
+        &mut model,
+        &[ok(json!({ "created": ["page:u9"], "undoSteps": 1 }))],
+        &[],
+        &clock,
+    ));
+    // `await` runs the commands calls one round each.
+    assert_eq!(calls, vec![HostObjectCall::Commands { owner: None }]);
+    let (calls, session) = suspended(session.resume(
+        &mut model,
+        &[ok(
+            json!([{ "id": "core.insertPages" }, { "id": "paged.test.go" }]),
+        )],
+        &[],
+        &clock,
+    ));
+    assert_eq!(
+        calls,
+        vec![HostObjectCall::Commands {
+            owner: Some("core".into())
+        }]
+    );
+    let r = done(session.resume(
+        &mut model,
+        &[ok(json!([{ "id": "core.insertPages" }]))],
+        &[],
+        &clock,
+    ));
+    assert_eq!(r.error, None);
+    assert_eq!(r.output, vec!["[log] created 1 1", "[log] commands 2 1"]);
+
+    // An `invoke` op makes an object batch the host's: core sets and the
+    // command travel in ONE batch call.
+    let (calls, session) = suspended(start(
+        &mut model,
+        r#"
+const res = JSON.parse(await paged.batch([
+  { op: 'set', address: 'doc', path: 'documentBleedTop', value: '3mm' },
+  { op: 'invoke', id: 'core.insertPages', args: { at: 1, count: 1 }, handle: 'p' },
+]));
+console.log(res.map(r => r.ok).join(','));
+"#,
+    ));
+    assert_eq!(
+        calls,
+        vec![HostObjectCall::Batch {
+            ops: vec![
+                json!({ "op": "set", "address": "doc", "path": "documentBleedTop", "value": "3mm" }),
+                json!({ "op": "invoke", "id": "core.insertPages", "args": { "at": 1, "count": 1 }, "handle": "p" }),
+            ]
+        }]
+    );
+    let r = done(session.resume(
+        &mut model,
+        &[ok(json!({ "applied": true, "undoSteps": 1 }))],
+        &[],
+        &clock,
+    ));
+    assert_eq!(r.error, None);
+    assert_eq!(r.output, vec!["[log] true,true"]);
+}
+
+#[test]
+fn without_a_host_invoke_and_commands_throw_no_host() {
+    let mut model = blank();
+    let r = execute_script(
+        &mut model,
+        r#"
+try { paged.invoke('core.insertPages', { at: 1 }); } catch (e) { console.log('invoke', e.code); }
+try { paged.commands(); } catch (e) { console.log('commands', e.code); }
+"#,
+    );
+    assert_eq!(r.error, None, "{r:?}");
+    assert_eq!(
+        r.output,
+        vec!["[log] invoke noHost", "[log] commands noHost"]
+    );
+}
+
+#[test]
+fn the_command_calls_have_their_wire_shape() {
+    let calls = vec![
+        HostObjectCall::Invoke {
+            id: "core.insertPages".into(),
+            args: json!({ "at": 1 }),
+        },
+        HostObjectCall::Commands { owner: None },
+        HostObjectCall::Commands {
+            owner: Some("core".into()),
+        },
+    ];
+    let v = serde_json::to_value(&calls).unwrap();
+    assert_eq!(
+        v,
+        json!([
+            { "op": "invoke", "id": "core.insertPages", "args": { "at": 1 } },
+            { "op": "commands" },
+            { "op": "commands", "owner": "core" },
+        ])
+    );
+    let back: Vec<HostObjectCall> = serde_json::from_value(json!([
+        { "op": "invoke", "id": "x.y" },
+        { "op": "commands", "owner": null }
+    ]))
+    .unwrap();
+    assert_eq!(
+        back,
+        vec![
+            HostObjectCall::Invoke {
+                id: "x.y".into(),
+                args: serde_json::Value::Null
+            },
+            HostObjectCall::Commands { owner: None },
+        ]
+    );
+}

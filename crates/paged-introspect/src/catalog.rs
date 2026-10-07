@@ -268,6 +268,10 @@ fn host_functions() -> Vec<HostFn> {
            "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
         f!("paged.schema", "(addressOrKind)", "PropertySchema[] JSON", "read",
            "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."),
+        f!("paged.invoke", "(id, args?)", "Promise<command result JSON>", "write",
+           "Run a typed command — core.<op> (every catalog operation, args as the op's typed struct; id positions take addresses) or a plugin's — through the host's object registry (RequestHostObjects invoke): a Promise of its result JSON ({ created, undoSteps } for a core command). Commands live in the host's registry only: with no host it throws code noHost; a refusal rejects with .code. Inside paged.batch use { op: \"invoke\", id, args, handle? }."),
+        f!("paged.commands", "(owner?)", "Promise<CommandInfo[] JSON>", "read",
+           "The typed commands the host's object registry offers (core's first), optionally of one owner (\"core\" or a plugin id): a Promise of the CommandInfo[] JSON. With no host it throws code noHost."),
         f!("paged.address", "(id)", "string|null", "read",
            "Canonical address of an object, from any accepted spelling (`frame:u1`, `page:#2`, a style by name) or a {kind,id} element; null when nothing answers to it."),
         f!("paged.swatches", "()", "SwatchSummary[] JSON", "read", "Colour palette (selfId/name/kind)."),
@@ -392,7 +396,7 @@ fn host_functions() -> Vec<HostFn> {
         // --- plugin metadata & batch ---
         f!("paged.setPluginMetadata", "(elemId, key, value?, caller?)", "bool", "write", "Write one Label key/value pair on a leaf page item (value null deletes)."),
         f!("paged.setDocumentMetadata", "(key, value?, caller?)", "bool", "write", "Write one document-scoped Label key/value pair (value null deletes); undoable."),
-        f!("paged.batch", "([mutations] | [objectOps])", "bool | per-op results JSON", "author", "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address the whole batch goes to the host's object registry (a Promise of the same JSON)."),
+        f!("paged.batch", "([mutations] | [objectOps])", "bool | per-op results JSON", "author", "Apply an array of { op, args } mutation objects as ONE undoable step (bool). An array of ADR 323 object ops ({ op: \"set\", address, path, value }) returns the per-op results JSON ([{ ok } | { ok: false, code, reason }]), all-or-nothing in ONE undo step; when any op names a plugin: address, or is a typed command ({ op: \"invoke\", id, args, handle? }), the whole batch goes to the host's object registry (a Promise of the same JSON), so a command shares the one undo step with the sets."),
         // --- selection setters (application state, NOT undoable) ---
         f!("paged.setElementSelection", "([id, ...])", "bool", "write", "Replace the element selection with the parseable ids."),
         f!("paged.clearSelection", "()", "bool", "write", "Clear the element selection."),

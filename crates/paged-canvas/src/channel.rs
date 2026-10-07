@@ -657,7 +657,9 @@ export type WorkerToMain = WorkerToMainKind & {
 //   - The script host bridge (ADR 323): `ExecuteScript.hostObjects`
 //     (optional bool) says the host answers for `plugin:` addresses; such a
 //     script's reply may be `RequestHostObjects { session, calls }`
-//     (`HostObjectCall`: get / batch / query / schema), answered by the
+//     (`HostObjectCall`: get / batch / query / schema / invoke /
+//     commands — the last two the typed commands of SDK §21.12; a
+//     batch takes `{ op: "invoke", id, args, handle? }` ops), answered by the
 //     host with `HostObjectsResult { session, answers, committed? }`
 //     (`HostObjectAnswer { value?, error?: { code, reason, index? } }`),
 //     whose reply is again `ScriptResult` or `RequestHostObjects`. Boa
@@ -715,6 +717,24 @@ pub enum HostObjectCall {
     Query { selector: String },
     /// `objects.schema(addressOrKind)`. Answer: `PropertySchema[]`.
     Schema { target: String },
+    /// `objects.invoke(id, args)` — a typed command (`core.<op>` or a
+    /// plugin's), run by the host's registry as ONE batch. Answer: the
+    /// command's result (`{ created, undoSteps }` for a core command).
+    /// Additive within v71.
+    Invoke {
+        id: String,
+        #[serde(default)]
+        #[tsify(type = "unknown")]
+        args: serde_json::Value,
+    },
+    /// `objects.commands(owner?)` — the typed commands the host offers
+    /// (core's first), optionally of one owner (`"core"`, a plugin id).
+    /// Answer: `CommandInfo[]`. Additive within v71.
+    Commands {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[tsify(optional)]
+        owner: Option<String>,
+    },
 }
 
 /// v71 — the host's answer to one `HostObjectCall`: `value` on success,

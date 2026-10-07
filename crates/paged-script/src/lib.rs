@@ -769,6 +769,8 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
         .function(guarded(paged_layers), js_string!("layers"), 0)
         .function(guarded(paged_query), js_string!("query"), 1)
         .function(guarded(paged_schema), js_string!("schema"), 1)
+        .function(guarded(paged_invoke), js_string!("invoke"), 2)
+        .function(guarded(paged_commands), js_string!("commands"), 1)
         .function(guarded(paged_address), js_string!("address"), 1)
         .function(guarded(paged_tree), js_string!("tree"), 0)
         .function(
@@ -4225,17 +4227,25 @@ fn paged_batch(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult
 }
 
 /// v71 — an `ObjectOp[]` (ADR 323: `{ op: "set", address, path, value }`,
-/// `create`, `delete`), told apart from a wire `Mutation[]` by having no
-/// `args`. `None` for anything else (the wire batch path).
+/// `create`, `delete`, and `{ op: "invoke", id, args, handle? }`), told
+/// apart from a wire `Mutation[]` by having no `args` (an `invoke` op
+/// carries its command's `args` and a string `id`). `None` for anything else (the wire batch path).
 fn object_ops(value: &JsValue, ctx: &mut Context) -> Option<Vec<serde_json::Value>> {
     let json = to_json_value(value, ctx)?;
     let ops = json.as_array()?;
+    // An `invoke` op carries `args` (the command's); any other op with
+    // `args` is a wire `Mutation`.
+    let is_invoke = |o: &serde_json::Value| {
+        o.get("op").and_then(serde_json::Value::as_str) == Some("invoke")
+            && o.get("id").is_some_and(serde_json::Value::is_string)
+    };
     let is_object_op = |o: &serde_json::Value| {
-        o.get("args").is_none()
-            && matches!(
-                o.get("op").and_then(serde_json::Value::as_str),
-                Some("set" | "create" | "delete")
-            )
+        is_invoke(o)
+            || o.get("args").is_none()
+                && matches!(
+                    o.get("op").and_then(serde_json::Value::as_str),
+                    Some("set" | "create" | "delete" | "invoke")
+                )
     };
     (!ops.is_empty() && ops.iter().all(is_object_op)).then(|| ops.clone())
 }
@@ -4254,8 +4264,12 @@ fn object_batch(ops: Vec<serde_json::Value>, ctx: &mut Context) -> JsResult<JsVa
                 .is_some_and(|s| s.starts_with("plugin:"))
         })
     };
+    // A typed command (`invoke`) is the host registry's: it makes the
+    // whole batch the host's, like a plugin op.
+    let is_invoke =
+        |o: &serde_json::Value| o.get("op").and_then(serde_json::Value::as_str) == Some("invoke");
     let n = ops.len();
-    if ops.iter().any(is_plugin) {
+    if ops.iter().any(|o| is_plugin(o) || is_invoke(o)) {
         return host_bridge::enqueue(
             HostObjectCall::Batch { ops },
             host_bridge::Shape::Batch { n },
@@ -4347,6 +4361,46 @@ fn paged_schema(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     Ok(JsValue::from(js_string!(
         serde_json::to_string(&rows).unwrap_or_default()
     )))
+}
+
+/// `paged.invoke(id, args)` — run a typed command (`core.<op>` or a
+/// plugin's, SDK DESIGN §21.12) through the host's object registry: a
+/// promise of the result's JSON (`{ created, undoSteps }` for a core
+/// command). Commands live in the host's registry only, so without a host
+/// this throws `noHost`; a refusal rejects with `.code`.
+fn paged_invoke(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    let arg = args.get_or_undefined(1);
+    let args = if arg.is_undefined() {
+        serde_json::Value::Null
+    } else {
+        to_json_value(arg, ctx).unwrap_or(serde_json::Value::Null)
+    };
+    host_bridge::enqueue(
+        HostObjectCall::Invoke { id, args },
+        host_bridge::Shape::Json,
+        ctx,
+    )
+}
+
+/// `paged.commands(owner?)` — the typed commands the host offers (core's
+/// first), optionally of one owner (`"core"`, a plugin id): a promise of
+/// the `CommandInfo[]` JSON. Without a host this throws `noHost`.
+fn paged_commands(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let owner = args.get_or_undefined(0);
+    let owner = if owner.is_undefined() || owner.is_null() {
+        None
+    } else {
+        Some(owner.to_string(ctx)?.to_std_string_escaped())
+    };
+    host_bridge::enqueue(
+        HostObjectCall::Commands { owner },
+        host_bridge::Shape::Json,
+        ctx,
+    )
 }
 
 // ---------------------------------------------------- selection setters
