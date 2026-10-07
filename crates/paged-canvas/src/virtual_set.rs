@@ -615,6 +615,52 @@ impl CanvasModel {
     /// Read one property of any object, in its wire `Value` form — the
     /// read twin of [`Self::resolve_set`], over the same table.
     #[allow(clippy::too_many_lines)]
+    /// v71 — for an application-state mutation (unlogged when applied on
+    /// its own), the same mutation built from the CURRENT state: the
+    /// inverse a `Set` logs so it undoes as the one step it promised.
+    /// `None` for every other mutation (those carry their own inverse).
+    pub(super) fn app_state_snapshot(&self, m: &Mutation) -> Option<Mutation> {
+        Some(match m {
+            Mutation::SetDocumentDefaults { .. } => {
+                let d = &self.document_defaults;
+                Mutation::SetDocumentDefaults {
+                    fill_color: d.fill_color.clone(),
+                    stroke_color: d.stroke_color.clone(),
+                    stroke_weight: d.stroke_weight,
+                }
+            }
+            Mutation::SetColorSettings { .. } => {
+                let c = &self.color_settings;
+                Mutation::SetColorSettings {
+                    cmyk_profile_name: c.cmyk_profile_name.clone(),
+                    rgb_policy: c.rgb_policy.clone(),
+                    intent: Some(c.intent.name().to_string()),
+                    bpc: Some(c.bpc),
+                }
+            }
+            Mutation::SetProofSetup { .. } => {
+                let p = self.proof_state.as_ref();
+                Mutation::SetProofSetup {
+                    profile_name: p.map(|p| p.name.clone()),
+                    simulate_paper_white: p.is_some_and(|p| p.simulate_paper_white),
+                    intent: p.map(|p| p.intent.name().to_string()),
+                }
+            }
+            Mutation::SetInkSetting { spot_id, .. } => {
+                let ink = self.ink_settings.get(spot_id).cloned().unwrap_or_default();
+                Mutation::SetInkSetting {
+                    spot_id: spot_id.clone(),
+                    convert_to_process: ink.convert_to_process,
+                    alias_to: ink.alias_to,
+                }
+            }
+            Mutation::SetUseStandardLabForSpots { .. } => Mutation::SetUseStandardLabForSpots {
+                enabled: self.use_standard_lab_for_spots,
+            },
+            _ => return None,
+        })
+    }
+
     pub fn get_property(&self, address: &VirtualTarget, path: &str) -> Result<Value, String> {
         let kind = address.address_kind();
         let what = format!("{kind}.{path}");

@@ -828,7 +828,7 @@ fn story_id_of_logged(entry: &LoggedMutation) -> Option<String> {
         LoggedMutation::Frame(_) => None,
         LoggedMutation::Composite(children) => children.iter().find_map(story_id_of_logged),
         // App state, not story content.
-        LoggedMutation::Defaults { .. } => None,
+        LoggedMutation::Defaults { .. } | LoggedMutation::AppState { .. } => None,
     }
 }
 
@@ -1887,6 +1887,18 @@ pub enum LoggedMutation {
         prev: DocumentDefaults,
         next: DocumentDefaults,
     },
+    /// v71 (ADR 132) — an application-state write that arrived as a
+    /// `Mutation::Set`: colour settings, proof setup, an ink setting, the
+    /// standard-Lab flag or the document defaults. Written by their own
+    /// mutation these stay unlogged app state, but a `Set` promises its
+    /// caller ONE undo step — and an undo that pops nothing of its own
+    /// pops the PREVIOUS edit instead. `prev` is the same mutation built
+    /// from the state the write replaced (whole-state, so replaying it
+    /// is the exact inverse); `next` is what the `Set` resolved to.
+    AppState {
+        prev: Box<Mutation>,
+        next: Box<Mutation>,
+    },
 }
 
 impl CanvasModel {
@@ -2319,7 +2331,21 @@ impl CanvasModel {
                 .and_then(|target| self.resolve_set(&target, path, value))
                 .map_err(|what| crate::channel::WorkerError::NotImplemented { what })?;
             return match resolved {
-                virtual_set::Resolved::Mutation(m) => self.apply_mutation(&m),
+                virtual_set::Resolved::Mutation(m) => match self.app_state_snapshot(&m) {
+                    Some(prev) => {
+                        let outcome = self.apply_mutation(&m)?;
+                        self.push_applied(AppliedRecord {
+                            applied_seq: outcome.applied_seq,
+                            kind: LoggedMutation::AppState {
+                                prev: Box::new(prev),
+                                next: Box::new(m),
+                            },
+                        });
+                        self.redo_log.clear();
+                        Ok(outcome)
+                    }
+                    None => self.apply_mutation(&m),
+                },
                 virtual_set::Resolved::Operation(op) => {
                     let outcome = self.apply_operation(op)?;
                     Ok(MutationOutcome {
@@ -3120,6 +3146,14 @@ impl CanvasModel {
                     next: next.clone(),
                 }
             }
+            // v71 — re-write what the `Set` wrote (whole-state: exact).
+            LoggedMutation::AppState { prev, next } => {
+                self.apply_mutation(next).ok()?;
+                LoggedMutation::AppState {
+                    prev: prev.clone(),
+                    next: next.clone(),
+                }
+            }
         })
     }
 
@@ -3143,6 +3177,11 @@ impl CanvasModel {
             // the mid-batch rollback share this path).
             LoggedMutation::Defaults { prev, .. } => {
                 self.document_defaults = prev.clone();
+            }
+            // v71 — re-write the state the `Set` replaced. The ops are
+            // unlogged app-state writes, so this adds no record of its own.
+            LoggedMutation::AppState { prev, .. } => {
+                let _ = self.apply_mutation(prev);
             }
         }
     }
@@ -4975,7 +5014,7 @@ impl CanvasModel {
             // C-15 — a top-level `Defaults` record cannot occur (only a
             // batch child logs one), but undo stays total rather than
             // silently skipping a record it cannot classify.
-            LoggedMutation::Defaults { .. } => {
+            LoggedMutation::Defaults { .. } | LoggedMutation::AppState { .. } => {
                 self.revert_logged(&rec.kind);
                 None
             }
@@ -5042,7 +5081,9 @@ impl CanvasModel {
             }
             // C-15 — see `undo`: unreachable as a top-level record, kept
             // total.
-            LoggedMutation::Defaults { .. } => (self.replay_logged(&rec.kind)?, None),
+            LoggedMutation::Defaults { .. } | LoggedMutation::AppState { .. } => {
+                (self.replay_logged(&rec.kind)?, None)
+            }
         };
         // Perf-MasterText + Perf-BodyStory — same invariant as undo():
         // the replayed op mutates content/structure under the caches.
@@ -7746,6 +7787,15 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::CellFillColor,
                 value: Some(Value::ColorRef(cell.fill_color.clone())),
+            },
+            // v71 — the schema row is read-write, so the read answers.
+            // The model has no per-cell tint yet (the IDML adapter does
+            // not parse the cell's `FillTint`), so it is always `None`:
+            // the fill swatch at 100 %. The write is the typed no-op the
+            // apply arm documents until `TableCell` carries the field.
+            PropertyEntry {
+                path: PropertyPath::CellFillTint,
+                value: Some(Value::Length(None)),
             },
             PropertyEntry {
                 path: PropertyPath::CellInsetTop,

@@ -39,16 +39,11 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// Rows whose op is application state the engine deliberately keeps out
-/// of the undo log (colour management, proofing, inks, document defaults
-/// outside a batch). Set and read back still hold for them.
-const NOT_UNDOABLE_OPS: &[&str] = &[
-    "setDocumentDefaults",
-    "setColorSettings",
-    "setProofSetup",
-    "setInkSetting",
-    "setUseStandardLabForSpots",
-];
+/// Rows whose op the engine keeps out of the undo log even through a
+/// `Set`. None since v71: the application-state lanes (colour management,
+/// proofing, inks, document defaults) log a reversible record when a `Set`
+/// resolves to them, so every row is probed for undo.
+const NOT_UNDOABLE_OPS: &[&str] = &[];
 
 /// Every object kind a row can live on, minted or found in one document.
 struct Targets {
@@ -811,4 +806,57 @@ fn a_native_label_is_readable_whatever_its_namespace() {
         m.get_property(&frame, "labels[Label]").unwrap(),
         Value::Length(None)
     );
+}
+
+/// v71 — a `Set` is one undo step whatever op it resolves to. The colour
+/// settings (and the other application-state lanes) are not logged when
+/// written by their own mutation, but a `Set` promises its caller one
+/// step: the write must undo, and redo, as one.
+#[test]
+fn a_set_of_colour_settings_is_one_undo_step() {
+    let (mut m, t) = build();
+    let before = m.get_property(&t.doc, "renderingIntent").unwrap();
+    let log = m.applied_log_len();
+    let next = if before == Value::Text("Perceptual".into()) {
+        "Saturation"
+    } else {
+        "Perceptual"
+    };
+    m.apply_mutation(&Mutation::Set {
+        address: t.doc.clone().into(),
+        path: "renderingIntent".into(),
+        value: Value::Enum(next.into()),
+    })
+    .expect("set renderingIntent");
+    assert_eq!(
+        m.get_property(&t.doc, "renderingIntent").unwrap(),
+        Value::Text(next.into())
+    );
+    assert_eq!(m.applied_log_len(), log + 1, "the write is one undo step");
+    m.undo().expect("undo");
+    assert_eq!(
+        m.get_property(&t.doc, "renderingIntent").unwrap(),
+        before,
+        "undo restores the colour settings"
+    );
+    m.redo().expect("redo");
+    assert_eq!(
+        m.get_property(&t.doc, "renderingIntent").unwrap(),
+        Value::Text(next.into())
+    );
+}
+
+/// v71 — the cell row `cellFillTint` is read-write in the schema, so a
+/// cell answers it (`null`: no tint of its own — the swatch at 100 %).
+#[test]
+fn a_cell_answers_its_fill_tint() {
+    let (m, t) = build();
+    let cell = VirtualTarget::Cell {
+        story_id: t.table.0.clone(),
+        table_id: t.table.1.clone(),
+        row: 0,
+        col: 0,
+    };
+    let v = m.get_property(&cell, "cellFillTint");
+    assert!(v.is_ok(), "cellFillTint on a cell: {v:?}");
 }
