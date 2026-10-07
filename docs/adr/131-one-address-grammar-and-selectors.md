@@ -109,6 +109,14 @@ selector, never by a raw `Self`.
   `paged.address`; `paged query <doc> <selector>`.
 - `textVariable:` joined the grammar with the property schemas (ADR 132), and guides are indexed
   so `guide:` addresses resolve.
+- A swatch is addressed by its `Self` id or by its name (`swatch:Red`); an id wins over a name,
+  as for styles. Resolution, `Set`/`RequestGet` targets and selectors all accept the name.
+- `field` and `story > field` answer every placeholder field of the document (pinned by a
+  regression test).
+- A script addresses plugin objects too: `paged.get/set/batch/query/schema` with a `plugin:`
+  address are answered by the host's object registry through the script host bridge
+  (`ExecuteScript.hostObjects`, `RequestHostObjects` / `HostObjectsResult`; the contract is the
+  plugin SDK's ADR 323). Core never resolves a `plugin:` address itself.
 - A page item's `Name` lives in `Spread::item_names`. Reading and writing it in IDML belongs to
   the IDML adapter (plugin-publish), which lands it behind its `item-names` step; until core pins
   that adapter revision, a name set in paged does not reach an IDML save.

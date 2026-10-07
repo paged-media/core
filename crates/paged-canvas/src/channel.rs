@@ -626,8 +626,11 @@ export type WorkerToMain = WorkerToMainKind & {
 //     `textVariable:<id>`, …; `$h:` handles resolve in it); `path` is a
 //     `PropertyPath` name or a virtual path from the catalog's new
 //     `propertySchemas`. The engine resolves it to the ONE existing op that
-//     writes that property, so undo is that op's. A selector is not a
-//     target — `RequestQuery` first.
+//     writes that property, so undo is that op's. A `Set` that resolves to
+//     an application-state op (colour settings, proof setup, an ink
+//     setting, the standard-Lab flag, document defaults — unlogged when
+//     sent alone) logs a reversible record: a `Set` is always one undo
+//     step. A selector is not a target — `RequestQuery` first.
 //   - `RequestQuery { selector }` → `QueryResult { addresses, error }` and
 //     `RequestGet { address, path }` → `PropertyValue { value, error }`,
 //     both pure reads.

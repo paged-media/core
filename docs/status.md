@@ -54,7 +54,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   ([ADR 132](adr/132-typed-property-schemas-and-virtual-paths.md), protocol 71). Object, cell
   and table styles, page margins and columns, document bleed and slug, text-variable
   definitions, effects on lines and item names became settable; a custom text variable can be
-  created and instanced in text, and one `set` switches every instance.
+  created and instanced in text, and one `set` switches every instance. A swatch is
+  addressed by its id or its name. A `set` is always one undo step, colour settings and the
+  other application state included.
 - **Read.** Document collections, element properties, the scene tree (each item with its
   plugin metadata), layers, frame chains, story content, a text frame's glyphs as outlines,
   colour previews and ink coverage as message kinds; most also in `paged read`.
@@ -62,7 +64,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   it fits or reaches its page cap.
 - **Scripting.** `ExecuteScript` and `paged script` run JavaScript against the document
   under a budget. Every operation but one (`BindCreated`, legal only inside a batch) has a
-  `paged.*` function; `paged.batch` accepts raw operations.
+  `paged.*` function; `paged.batch` accepts raw operations. With `ExecuteScript.hostObjects`
+  a script reaches plugin objects (`plugin:` addresses): it suspends with
+  `RequestHostObjects`, the host answers with `HostObjectsResult`, and the script resumes
+  (`await` works; the Boa clock is wasm-safe). Its writes undo as one step that holds only
+  the script's own records and the host commits it reports in `committed`.
 - **Export.** IDML (with a list of what the format could not carry), `.paged`, and PDF
   through an export session; `paged export --format idml|paged|pdf`.
 - **Container parts and plugin content.** Read, list, write and delete parts under
@@ -112,6 +118,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   name set in paged; the engine model keeps all three. The first two are pinned by tests in
   `crates/paged-canvas/tests/idml_export_object_model_state.rs` that turns red when the adapter
   is fixed.
+- **A cell's fill tint is not modelled.** `cellFillTint` reads `null` on every cell and its
+  write is accepted but not stored, rendered or saved; the cell keeps its fill at 100 %.
+  It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).
+- **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
+  undo step of its own, separate from the script's core writes.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
 - **The fidelity gate needs the reference colour profile.** On a runner without a FOGRA39
@@ -120,6 +131,22 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   (`effects`, `footnotes`, `swatches`) are advisory.
 - **The size gate measures a stand-in.** `spikes/wasm-size` links the viewer crate and
   wgpu 22; the size of the published viewer wasm is printed at release, not enforced.
+
+## Releasing protocol 71
+
+Not tagged yet. The order, because core and the IDML adapter pin each other:
+
+1. Tag core `v0.71.0` from this batch (the tag guard checks `PROTOCOL_VERSION` 71); the
+   publish workflow ships the four packages.
+2. In plugin-publish, merge the protocol-71 export fixes (`Visible`/`Locked`, text variables
+   authored in paged, the text-path `EndBracket`, item names always written), re-pin its core
+   git dependency to the `v0.71.0` commit, and push.
+3. In core, re-pin `idml-import`/`idml-export` to that plugin-publish commit (both `Cargo.toml`
+   pins and `Cargo.lock`), flip `crates/paged-canvas/tests/idml_export_object_model_state.rs`
+   to expect the state in the save, update the "does not reach an IDML save" limit above, and
+   tag `v0.71.1` (patch: no wire change).
+4. plugin-sdk re-syncs the vendored wire and catalog and bumps its contract; the editor moves
+   its pins and sends `HostObjectsResult.committed`.
 
 ## Not built
 

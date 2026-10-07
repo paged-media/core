@@ -5138,7 +5138,7 @@ impl CanvasModel {
         let mut run: Vec<AppliedRecord> = Vec::new();
         let flush = |log: &mut Vec<AppliedRecord>, run: &mut Vec<AppliedRecord>| match run.len() {
             0 => {}
-            1 => log.extend(run.drain(..)),
+            1 => log.append(run),
             _ => {
                 let applied_seq = run.last().map_or(mark, |r| r.applied_seq);
                 let children = run.drain(..).map(|r| r.kind).collect();

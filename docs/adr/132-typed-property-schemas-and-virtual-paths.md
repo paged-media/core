@@ -87,6 +87,27 @@ in the `address` position as a deprecated alias (`VirtualTarget → Address` is 
   clears the override.
 - The 45 dedicated property operations stay on the wire; new surfaces send `Set`.
 
+## Implemented (protocol 71)
+
+- **A `Set` is one undo step, whatever it resolves to.** The application-state operations
+  (`setColorSettings`, `setProofSetup`, `setInkSetting`, `setUseStandardLabForSpots`,
+  `setDocumentDefaults`) stay unlogged when sent on their own. A `Set` that resolves to one of
+  them logs an `AppState` record whose inverse is the same operation built from the state it
+  replaced, so `doc.renderingIntent` and the other colour rows undo and redo like every other
+  row. Before this, the write reported one step and an undo popped the previous edit.
+- **`cellFillTint` reads on a cell.** The read answers `null` (the fill swatch at 100 %). The
+  model has no per-cell tint yet: the IDML adapter does not parse a cell's `FillTint`, and the
+  write stays the typed no-op the apply arm documents. Modelling it needs a `TableCell` field
+  plus the adapter's parse and emit, which has to land with the plugin-publish pin (the adapter
+  builds `TableCell` without `..Default::default()`, so a new field breaks the pinned revision).
+- **A script's undo step holds only its own writes.** A script that wrote through the host's
+  object registry undoes as one step: its core writes, plus the engine writes the host made
+  answering it, which the host reports as `HostObjectsResult.committed` (their `appliedSeq`s).
+  A record logged while the script waited that is neither, such as a UI edit, is never folded:
+  it keeps its place, and the script's writes on either side of it stay separate steps
+  (`CanvasModel::group_undo_runs_since`). A host that reports nothing gets no folding of
+  anything logged in the gap.
+
 ## The gates
 
 - `catalog_json_artifact_is_current`, and the schema table is total over every `PropertyPath`
