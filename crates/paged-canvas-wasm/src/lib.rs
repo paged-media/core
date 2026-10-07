@@ -151,11 +151,8 @@ mod wasm {
         }
 
         fn insert(&mut self, key: usize, value: paged_gpu::VelloScene) {
-            if self.entries.insert(key, value).is_none() {
-                self.touch(key);
-            } else {
-                self.touch(key);
-            }
+            self.entries.insert(key, value);
+            self.touch(key);
             while self.entries.len() > self.max_entries {
                 if let Some(victim) = self.order.pop_back() {
                     self.entries.remove(&victim);
