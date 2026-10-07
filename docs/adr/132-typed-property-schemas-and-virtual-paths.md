@@ -122,6 +122,22 @@ in the `address` position as a deprecated alias (`VirtualTarget → Address` is 
   and `RequestGet`'s `PropertyValue` carries it additively: `mixed: true` (no value, no error)
   when the object has the path but holds more than one value, such as a story range whose runs
   disagree; `code` (`noSuchPath`, `notFound`, `badAddress`, `noDocument`) on a refusal.
+- **The bindable gaps closed.** Four things a data binding needs to write had no row:
+  - `frame.imageBytes` replaces an image's content (`replaceImageBytes`). Its type is `asset`:
+    a `data:<mime>;base64,` URI or bare base64, read back as a `data:` URI typed by the bytes'
+    magic. `null` clears the content.
+  - `frame.nextTextFrame` and `frame.previousTextFrame` are thread links (`linkFrames`), a
+    reference to a text frame by `Self` id or address.
+  - `frame.opacityMask` is a reference to the mask artwork (`applyOpacityMask`; a different mask
+    releases and re-applies in one step, keeping the mode and inversion).
+  - `frame.points[i].anchor`, `.left` and `.right` are `[x, y]` (`pathPointSet`), and
+    `frame.points[i].curveType` is `Corner` or `Smooth` (`pathPointCurveType`).
+  Clearing is a different operation for a link and a mask, so the row's `virtual` names it as
+  `clearOp`: `null` unlinks (`unlinkFrames`) or releases (`releaseOpacityMask`), and a `null`
+  with nothing to clear is an empty step. Two engine faults surfaced on the way and are fixed:
+  undoing a user unlink of a threaded story failed (its inverse was a `linkFrames`, which
+  refuses a target sharing a story with content; it now restores the pointer), and smoothing
+  the first point of a closed contour left it a corner (the neighbours now wrap).
 - **Typed commands through the script bridge.** `HostObjectCall` gains `invoke { id, args }`
   and `commands { owner? }` (additive): `paged.invoke(id, args)` and `paged.commands(owner?)`
   ask the host's registry, and an object `paged.batch` takes `{ op: "invoke", id, args,

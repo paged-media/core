@@ -8785,6 +8785,146 @@
         "field": "transform"
       },
       "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "imageBytes",
+      "type": {
+        "kind": "asset",
+        "shape": "data:<mime>;base64,<payload>"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "replaceImageBytes",
+        "field": "bytes"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "nextTextFrame",
+      "type": {
+        "kind": "ref",
+        "to": "textFrame"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "linkFrames",
+        "field": "to",
+        "clearOp": "unlinkFrames"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "previousTextFrame",
+      "type": {
+        "kind": "ref",
+        "to": "textFrame"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "linkFrames",
+        "field": "from",
+        "clearOp": "unlinkFrames"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "opacityMask",
+      "type": {
+        "kind": "ref",
+        "to": "pageItem"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "applyOpacityMask",
+        "field": "maskId",
+        "clearOp": "releaseOpacityMask"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "points[i].anchor",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length",
+        "shape": "[x, y]"
+      },
+      "wire": "lengths",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "pathPointSet",
+        "field": "position"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "points[i].left",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length",
+        "shape": "[x, y]"
+      },
+      "wire": "lengths",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "pathPointSet",
+        "field": "position"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "points[i].right",
+      "type": {
+        "kind": "list",
+        "unit": "pt",
+        "of": "length",
+        "shape": "[x, y]"
+      },
+      "wire": "lengths",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "pathPointSet",
+        "field": "position"
+      },
+      "bindable": true
+    },
+    {
+      "addressKind": "frame",
+      "path": "points[i].curveType",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Corner",
+          "Smooth"
+        ]
+      },
+      "wire": "text",
+      "nullable": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "pathPointCurveType",
+        "field": "smooth"
+      },
+      "bindable": true
     }
   ]
 }

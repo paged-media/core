@@ -61,6 +61,10 @@ pub enum ValueType {
     List,
     /// A whole-struct value (`shape` names the wire struct).
     Struct,
+    /// Content bytes (an image's pixels): a `data:` URI with a base64
+    /// payload (`data:image/png;base64,…`) or bare base64. Travels as
+    /// text; `null` clears the content.
+    Asset,
     /// Not a property at all: a path OPERATION carried as a
     /// `PropertyPath` for the apply/invert algebra.
     Operation,
@@ -93,6 +97,12 @@ pub enum RefKind {
     Font,
     Language,
     Uri,
+    /// A text frame (a thread link). The value is the frame's `Self` id
+    /// or any address that resolves to one (`textFrame:<id>`).
+    TextFrame,
+    /// Any page item (an opacity mask's artwork): its `Self` id or an
+    /// address (`rectangle:<id>`, `frame:<id>`).
+    PageItem,
 }
 
 /// The `paged_mutate::Value` variant the apply layer takes, spelled as
@@ -330,6 +340,29 @@ pub const fn transform() -> PropertySchema {
     PropertySchema {
         value_type: ValueType::Transform,
         wire: Wire::Transform,
+        ..BASE
+    }
+}
+
+/// Content bytes, carried as a `data:` URI or bare base64.
+pub const fn asset() -> PropertySchema {
+    PropertySchema {
+        value_type: ValueType::Asset,
+        shape: Some("data:<mime>;base64,<payload>"),
+        ..BASE
+    }
+}
+
+/// One `[x, y]` position in points (a path point or handle, in the
+/// item's inner coordinates). Required: a point cannot be cleared.
+pub const fn point() -> PropertySchema {
+    PropertySchema {
+        value_type: ValueType::List,
+        wire: Wire::Lengths,
+        item: Some(ValueType::Length),
+        unit: Some(Unit::Pt),
+        shape: Some("[x, y]"),
+        nullable: false,
         ..BASE
     }
 }
@@ -631,6 +664,9 @@ pub const TEXT_VARIABLE_TYPES: &[&str] = &[
     "XrefPageNumberType",
     "XrefChapterNumberType",
 ];
+/// A path point's curve type: `Corner` (both handles on the anchor) or
+/// `Smooth` (handles derived from the neighbours' tangent).
+pub const CURVE_TYPES: &[&str] = &["Corner", "Smooth"];
 pub const ALTERNATING_FILLS: &[&str] = &["None", "AlternatingRows", "AlternatingColumns"];
 
 // ---- coercion -------------------------------------------------------

@@ -67,6 +67,15 @@ struct Targets {
     table: (String, String),
     frame: ElementId,
     group: ElementId,
+    /// A text frame holding the probe story, and an empty one to thread
+    /// it into (`nextTextFrame` / `previousTextFrame`).
+    text_frame: String,
+    empty_text_frame: String,
+    /// A top-level rectangle on the frame's spread, to mask it with.
+    mask_item: String,
+    /// A closed four-point path (`points[i].*`; a minted rectangle
+    /// carries no point array).
+    path_item: ElementId,
 }
 
 fn apply(m: &mut CanvasModel, mutation: Mutation) {
@@ -163,13 +172,16 @@ fn build() -> (CanvasModel, Targets) {
         .find_map(|s| s.spread.groups.first().and_then(|g| g.self_id.clone()));
 
     // Mint what the fixture lacks, through the engine's own doors.
-    apply(
-        &mut m,
-        Mutation::InsertTextFrame {
+    let text_frame = m
+        .apply_mutation(&Mutation::InsertTextFrame {
             page_id: PageId(page.clone()),
             bounds: (10.0, 10.0, 200.0, 200.0),
-        },
-    );
+        })
+        .expect("text frame")
+        .created_id
+        .expect("its id")
+        .raw_id()
+        .to_string();
     let story = m
         .scene()
         .stories
@@ -322,6 +334,46 @@ fn build() -> (CanvasModel, Targets) {
         .expect("ungrouped frame")
         .created_id
         .expect("its id");
+    let mask_item = m
+        .apply_mutation(&Mutation::InsertFrame {
+            page_id: PageId(page.clone()),
+            bounds: (400.0, 130.0, 480.0, 240.0),
+        })
+        .expect("mask frame")
+        .created_id
+        .expect("its id")
+        .raw_id()
+        .to_string();
+    let corner = |x: f32, y: f32| paged_mutate::operation::PathAnchorSpec {
+        anchor: [x, y],
+        left: [x, y],
+        right: [x, y],
+    };
+    let path_item = m
+        .apply_mutation(&Mutation::InsertPath {
+            page_id: PageId(page.clone()),
+            anchors: vec![
+                corner(300.0, 300.0),
+                corner(400.0, 300.0),
+                corner(400.0, 400.0),
+                corner(300.0, 400.0),
+            ],
+            open: false,
+            smooth: false,
+        })
+        .expect("path")
+        .created_id
+        .expect("its id");
+    let empty_text_frame = m
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: PageId(page.clone()),
+            bounds: (500.0, 10.0, 600.0, 200.0),
+        })
+        .expect("empty text frame")
+        .created_id
+        .expect("its id")
+        .raw_id()
+        .to_string();
     (
         m,
         Targets {
@@ -345,6 +397,10 @@ fn build() -> (CanvasModel, Targets) {
             table: (story, table_id),
             frame,
             group,
+            text_frame,
+            empty_text_frame,
+            mask_item,
+            path_item,
         },
     )
 }
@@ -407,6 +463,16 @@ fn targets_for(row: &SchemaRow, t: &Targets) -> Vec<VirtualTarget> {
             table_id: t.table.1.clone(),
             row: 0,
             col: 0,
+        }),
+        // The thread rows live on text frames.
+        "frame" if row.path == "nextTextFrame" => one(VirtualTarget::Element {
+            element_id: ElementId::TextFrame(t.text_frame.clone()),
+        }),
+        "frame" if row.path == "previousTextFrame" => one(VirtualTarget::Element {
+            element_id: ElementId::TextFrame(t.empty_text_frame.clone()),
+        }),
+        "frame" if row.path.starts_with("points[") => one(VirtualTarget::Element {
+            element_id: t.path_item.clone(),
         }),
         "frame" => one(VirtualTarget::Element {
             element_id: t.frame.clone(),
@@ -478,6 +544,16 @@ fn sample(row: &SchemaRow, current: &Value, t: &Targets) -> Value {
             return Value::Transform(Some([1.0, 0.0, 0.0, 1.0, 7.0, 5.0]))
         }
         ("style", "name") => return Value::Text("Probe name".into()),
+        ("frame", "imageBytes") => return Value::Text(PNG_DATA_URI.into()),
+        ("frame", "nextTextFrame") => return Value::Ref(t.empty_text_frame.clone()),
+        ("frame", "previousTextFrame") => return Value::Ref(t.text_frame.clone()),
+        ("frame", "opacityMask") => return Value::Ref(t.mask_item.clone()),
+        ("frame", "points[i].anchor" | "points[i].left" | "points[i].right") => {
+            let Value::Lengths(p) = current else {
+                panic!("a point reads as [x, y], got {current:?}")
+            };
+            return Value::Lengths(vec![p[0] + 5.0, p[1] + 7.0]);
+        }
         (_, "labels[key]") => return Value::Text(ENVELOPE.into()),
         _ => {}
     }
@@ -566,6 +642,9 @@ fn sample(row: &SchemaRow, current: &Value, t: &Targets) -> Value {
 const PROFILE: &str = "Probe CMYK";
 
 const ENVELOPE: &str = r#"{"v":1,"data":{"probe":1}}"#;
+
+/// A 1×1 PNG, as the `imageBytes` row reads it back.
+const PNG_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 /// Compare a read against what was written, through the wire forms the
 /// typed values normalise to.
@@ -963,4 +1042,134 @@ fn null_clears_every_nullable_text_enum_and_ref_row() {
             "no nullable {k} row probed: {by_kind:?}"
         );
     }
+}
+
+/// The four bindable gaps closed in v71: a `null` on a thread link, a mask
+/// or the content is a real clear (the op the row names as `clearOp`, or
+/// an empty payload), not a refusal, and each clear is one undo step.
+#[test]
+fn null_unlinks_releases_and_clears_content() {
+    let (mut m, t) = build();
+    let set = |m: &mut CanvasModel, target: &VirtualTarget, path: &str, value: Value| {
+        m.apply_mutation(&Mutation::Set {
+            address: target.clone().into(),
+            path: path.into(),
+            value,
+        })
+        .unwrap_or_else(|e| panic!("{path}: {e:?}"));
+    };
+    let get = |m: &CanvasModel, target: &VirtualTarget, path: &str| {
+        m.get_property(target, path)
+            .unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let none = Value::Text(String::new());
+
+    // Threads: link through `nextTextFrame`, read it from both ends,
+    // unlink through `previousTextFrame: null`.
+    let head = VirtualTarget::Element {
+        element_id: ElementId::TextFrame(t.text_frame.clone()),
+    };
+    let tail = VirtualTarget::Element {
+        element_id: ElementId::TextFrame(t.empty_text_frame.clone()),
+    };
+    // An address names the frame as well as its bare id.
+    set(
+        &mut m,
+        &head,
+        "nextTextFrame",
+        Value::Ref(format!("textFrame:{}", t.empty_text_frame)),
+    );
+    assert_eq!(
+        get(&m, &head, "nextTextFrame"),
+        Value::Text(t.empty_text_frame.clone())
+    );
+    assert_eq!(
+        get(&m, &tail, "previousTextFrame"),
+        Value::Text(t.text_frame.clone())
+    );
+    let log = m.applied_log_len();
+    set(&mut m, &tail, "previousTextFrame", Value::Length(None));
+    assert_eq!(m.applied_log_len(), log + 1, "an unlink is one step");
+    assert_eq!(get(&m, &head, "nextTextFrame"), none);
+    assert_eq!(get(&m, &tail, "previousTextFrame"), none);
+    m.undo().expect("undo the unlink");
+    assert_eq!(
+        get(&m, &head, "nextTextFrame"),
+        Value::Text(t.empty_text_frame.clone())
+    );
+    // A thread target must be a text frame.
+    assert!(m
+        .apply_mutation(&Mutation::Set {
+            address: head.clone().into(),
+            path: "nextTextFrame".into(),
+            value: Value::Ref(t.mask_item.clone()),
+        })
+        .is_err());
+
+    // Mask: apply, then `null` releases.
+    let frame = VirtualTarget::Element {
+        element_id: t.frame.clone(),
+    };
+    set(
+        &mut m,
+        &frame,
+        "opacityMask",
+        Value::Ref(format!("rectangle:{}", t.mask_item)),
+    );
+    assert_eq!(
+        get(&m, &frame, "opacityMask"),
+        Value::Text(t.mask_item.clone())
+    );
+    set(&mut m, &frame, "opacityMask", Value::Length(None));
+    assert_eq!(get(&m, &frame, "opacityMask"), none);
+    m.undo().expect("undo the release");
+    assert_eq!(
+        get(&m, &frame, "opacityMask"),
+        Value::Text(t.mask_item.clone())
+    );
+
+    // Content: bytes in, `null` clears, and anything that is not base64
+    // is refused before it reaches the op.
+    set(
+        &mut m,
+        &frame,
+        "imageBytes",
+        Value::Text(PNG_DATA_URI.into()),
+    );
+    assert_eq!(
+        get(&m, &frame, "imageBytes"),
+        Value::Text(PNG_DATA_URI.into())
+    );
+    set(&mut m, &frame, "imageBytes", Value::Length(None));
+    assert_eq!(get(&m, &frame, "imageBytes"), none);
+    assert!(m
+        .apply_mutation(&Mutation::Set {
+            address: frame.clone().into(),
+            path: "imageBytes".into(),
+            value: Value::Text("data:image/png;base64,***".into()),
+        })
+        .is_err());
+
+    // Points: an index past the path is not found, a point is two numbers.
+    let path = VirtualTarget::Element {
+        element_id: t.path_item.clone(),
+    };
+    assert!(m.get_property(&path, "points[99].anchor").is_err());
+    assert!(m
+        .apply_mutation(&Mutation::Set {
+            address: path.clone().into(),
+            path: "points[0].anchor".into(),
+            value: Value::Lengths(vec![1.0, 2.0, 3.0]),
+        })
+        .is_err());
+    set(
+        &mut m,
+        &path,
+        "points[1].curveType",
+        Value::Enum("Smooth".into()),
+    );
+    assert_eq!(
+        get(&m, &path, "points[1].curveType"),
+        Value::Text("Smooth".into())
+    );
 }

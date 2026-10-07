@@ -1088,7 +1088,7 @@ pub(super) fn apply_path_point_curve_type(
             })
         }
     };
-    let (anchors, subpath_starts, _open) = find_path_anchors_mut(doc, node)
+    let (anchors, subpath_starts, open) = find_path_anchors_mut(doc, node)
         .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
     if index >= anchors.len() {
         return Err(OperationError::NodeNotFound(node.clone()));
@@ -1096,15 +1096,26 @@ pub(super) fn apply_path_point_curve_type(
     // Neighbour positions for the smooth derivation, restricted to
     // the same subpath. (Crossing subpath boundaries would derive a
     // tangent against an anchor on a different contour, which is
-    // nonsensical.)
+    // nonsensical.) On a CLOSED contour the first and last anchors are
+    // each other's neighbours: without the wrap, smoothing a closed
+    // shape's first corner silently left it a corner.
     let (sub_start, sub_end) = subpath_bounds_for(subpath_starts, anchors.len(), index);
+    let contour = subpath_starts
+        .iter()
+        .position(|&s| s == sub_start)
+        .unwrap_or(0);
+    let closed = !open.get(contour).copied().unwrap_or(false) && sub_end - sub_start >= 3;
     let prev_neighbour = if index > sub_start {
         Some(anchors[index - 1].anchor)
+    } else if closed {
+        Some(anchors[sub_end - 1].anchor)
     } else {
         None
     };
     let next_neighbour = if index + 1 < sub_end {
         Some(anchors[index + 1].anchor)
+    } else if closed {
+        Some(anchors[sub_start].anchor)
     } else {
         None
     };
@@ -3143,7 +3154,18 @@ pub(super) fn apply_unlink_frames(
     // Inverse re-links to the captured prior target (if any). When the
     // frame was already end-of-chain (captured None), the inverse is a
     // no-op UnlinkFrames so undo stays balanced.
+    //
+    // A user unlink restores the pointer alone (`prev_next`): the target
+    // kept the threaded story, so a `LinkFrames` would refuse it as a
+    // frame that "already owns story content" and the undo would fail.
+    // Undoing a link (`restore_target`) put the target back on its own
+    // story, so its inverse is a real link again.
     let inverse = match captured {
+        Some(to) if restore_target.is_none() => Operation::UnlinkFrames {
+            frame: frame.to_string(),
+            prev_next: Some(to),
+            restore_target: None,
+        },
         Some(to) => Operation::LinkFrames {
             from: frame.to_string(),
             to,

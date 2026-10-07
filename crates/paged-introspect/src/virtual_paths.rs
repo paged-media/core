@@ -52,6 +52,18 @@ pub struct VirtualPath {
     pub op: &'static str,
     /// The op's argument (or spec field) the value lands in.
     pub field: &'static str,
+    /// The op a `null` resolves to when clearing is a different op
+    /// (`nextTextFrame: null` unlinks, `opacityMask: null` releases).
+    pub clear_op: Option<&'static str>,
+}
+
+impl VirtualPath {
+    const fn clears_with(self, op: &'static str) -> Self {
+        Self {
+            clear_op: Some(op),
+            ..self
+        }
+    }
 }
 
 const fn v(
@@ -67,6 +79,7 @@ const fn v(
         schema,
         op,
         field,
+        clear_op: None,
     }
 }
 
@@ -79,8 +92,9 @@ const RENDERING_INTENTS: &[&str] = &[
 const RGB_POLICIES: &[&str] = &["PreserveEmbedded", "ConvertToWorking", "Off"];
 
 /// The op-backed rows. Generated cockpit tables (`object-model`) count
-/// these; `virtual_paths_cover_the_classified_ops` keeps them total
-/// against the ops this crate knows are property writes.
+/// these; `every_virtual_row_names_a_real_op` (catalog_apply_parity)
+/// keeps every row's op on the wire, and `paged-canvas`'s
+/// `virtual_paths` sweep sets, reads and undoes each one.
 pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     // ---- doc
     v(
@@ -388,6 +402,61 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "setGroupTransform",
         "transform",
     ),
+    // The content, the threads, the mask and the path points: what a
+    // binding needs to write that no property path carried.
+    v("frame", "imageBytes", asset(), "replaceImageBytes", "bytes"),
+    v(
+        "frame",
+        "nextTextFrame",
+        reference(RefKind::TextFrame),
+        "linkFrames",
+        "to",
+    )
+    .clears_with("unlinkFrames"),
+    v(
+        "frame",
+        "previousTextFrame",
+        reference(RefKind::TextFrame),
+        "linkFrames",
+        "from",
+    )
+    .clears_with("unlinkFrames"),
+    v(
+        "frame",
+        "opacityMask",
+        reference(RefKind::PageItem),
+        "applyOpacityMask",
+        "maskId",
+    )
+    .clears_with("releaseOpacityMask"),
+    v(
+        "frame",
+        "points[i].anchor",
+        point(),
+        "pathPointSet",
+        "position",
+    ),
+    v(
+        "frame",
+        "points[i].left",
+        point(),
+        "pathPointSet",
+        "position",
+    ),
+    v(
+        "frame",
+        "points[i].right",
+        point(),
+        "pathPointSet",
+        "position",
+    ),
+    v(
+        "frame",
+        "points[i].curveType",
+        enum_(CURVE_TYPES).required(),
+        "pathPointCurveType",
+        "smooth",
+    ),
 ];
 
 /// Find the op-backed row for `(address kind, path)`. A concrete indexed
@@ -625,9 +694,12 @@ pub struct RangeJson {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VirtualJson {
     pub op: &'static str,
     pub field: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clear_op: Option<&'static str>,
 }
 
 fn row(
@@ -697,6 +769,7 @@ pub fn property_schemas() -> Vec<SchemaRow> {
             Some(VirtualJson {
                 op: "setProperty",
                 field: "value",
+                clear_op: None,
             }),
         ));
     }
@@ -711,6 +784,7 @@ pub fn property_schemas() -> Vec<SchemaRow> {
                 Some(VirtualJson {
                     op: "setStyleProperty",
                     field: "value",
+                    clear_op: None,
                 }),
             ));
         }
@@ -724,6 +798,7 @@ pub fn property_schemas() -> Vec<SchemaRow> {
             Some(VirtualJson {
                 op: vp.op,
                 field: vp.field,
+                clear_op: vp.clear_op,
             }),
         ));
     }

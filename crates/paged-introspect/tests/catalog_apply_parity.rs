@@ -443,3 +443,51 @@ fn every_advertised_schema_names_the_wire_apply_takes() {
         "these schemas name a wire form no apply arm takes: {wrong:?}"
     );
 }
+
+/// Every op-backed virtual row (and its `clearOp`) names an op the wire
+/// has, so a binding that resolves a row through the catalog lands on a
+/// real door. `rename<Family>Style` stands for the five rename ops.
+#[test]
+fn every_virtual_row_names_a_real_op() {
+    use paged_introspect::virtual_paths::VIRTUAL_PATHS;
+    let ops = paged_introspect::catalog::api_catalog().operations;
+    let real = |op: &str| {
+        if op.contains("<Family>") {
+            ["Paragraph", "Character", "Object", "Cell", "Table"]
+                .iter()
+                .all(|f| ops.iter().any(|o| *o == op.replace("<Family>", f)))
+        } else {
+            ops.iter().any(|o| o == op)
+        }
+    };
+    let mut wrong = Vec::new();
+    for row in VIRTUAL_PATHS {
+        for op in std::iter::once(row.op).chain(row.clear_op) {
+            if !real(op) {
+                wrong.push(format!("{}.{} -> {op}", row.address_kind, row.path));
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "virtual rows name ops the wire lacks: {wrong:?}"
+    );
+    // The four bindable gaps closed in v71 are rows.
+    for path in [
+        "imageBytes",
+        "nextTextFrame",
+        "previousTextFrame",
+        "opacityMask",
+        "points[i].anchor",
+        "points[i].left",
+        "points[i].right",
+        "points[i].curveType",
+    ] {
+        assert!(
+            VIRTUAL_PATHS
+                .iter()
+                .any(|r| r.address_kind == "frame" && r.path == path),
+            "frame.{path} is not a virtual row"
+        );
+    }
+}

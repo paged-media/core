@@ -30,11 +30,12 @@
 //! Lives as a child of `model` so it reads the model's private state (the
 //! document defaults, colour settings, ink settings) without widening it.
 
+use base64::Engine as _;
 use paged_introspect::catalog::{addressed_on, lookup_path, schema, wire_name, ADDRESSED_PATHS};
 use paged_introspect::schema::{validate, PropertySchema};
 use paged_introspect::virtual_paths::{lookup_virtual, segment, style_paths};
-use paged_mutate::{NodeId, Operation, PropertyPath, StyleCollection, Value};
-use paged_wire::{ElementId, PageId, StyleFamily, VirtualTarget};
+use paged_mutate::{NodeId, Operation, PathPointRole, PropertyPath, StyleCollection, Value};
+use paged_wire::{Address, ByteBuf, ElementId, PageId, StyleFamily, VirtualTarget};
 
 use super::CanvasModel;
 use crate::channel::Mutation;
@@ -134,6 +135,59 @@ fn addressed_path(kind: &str, path: &str) -> Option<PropertyPath> {
         .iter()
         .find(|(name, _, k)| *name == path && *k == kind)
         .map(|(_, p, _)| *p)
+}
+
+const BASE64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+
+/// An `imageBytes` value: a `data:<mime>;base64,<payload>` URI or bare
+/// base64.
+fn decode_asset(s: &str) -> Result<Vec<u8>, String> {
+    let payload = match s.strip_prefix("data:") {
+        Some(rest) => {
+            let (meta, data) = rest
+                .split_once(',')
+                .ok_or("a data: URI needs a comma before its payload")?;
+            if !meta.ends_with(";base64") {
+                return Err("a data: URI must carry its bytes as base64 (`;base64,`)".into());
+            }
+            data
+        }
+        None => s,
+    };
+    let bytes = BASE64
+        .decode(payload.trim())
+        .map_err(|e| format!("not base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("no bytes: clear the content with null".into());
+    }
+    Ok(bytes)
+}
+
+/// The read form of content bytes: a `data:` URI typed by its magic.
+fn encode_asset(bytes: &[u8]) -> String {
+    let mime = match bytes {
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [b'G', b'I', b'F', b'8', ..] => "image/gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        [b'I', b'I', 42, 0, ..] | [b'M', b'M', 0, 42, ..] => "image/tiff",
+        [b'B', b'M', ..] => "image/bmp",
+        _ => "application/octet-stream",
+    };
+    format!("data:{mime};base64,{}", BASE64.encode(bytes))
+}
+
+/// `points[3].left` → (3, the handle).
+fn point_address(path: &str) -> Option<(u32, &str)> {
+    let index = segment(path)?.parse().ok()?;
+    let member = path.rsplit_once('.')?.1;
+    Some((index, member))
+}
+
+/// A `Set` that changes nothing but is still one (empty) undo step, so a
+/// `null` on a row with nothing to clear succeeds like any other clear.
+fn no_op() -> Resolved {
+    Resolved::Operation(Operation::Batch { ops: Vec::new() })
 }
 
 /// The schema-checked, normalised value for a virtual row.
@@ -641,8 +695,253 @@ impl CanvasModel {
                     transform: *t,
                 })
             }
+            // ---- v71: content, threads, mask, path points
+            (VirtualTarget::Element { element_id }, "replaceImageBytes") => {
+                let bytes = match text_of(v).ok_or_else(bad)? {
+                    Some(s) => Some(decode_asset(&s).map_err(|e| format!("{what}: {e}"))?),
+                    None => None,
+                };
+                m(Mutation::ReplaceImageBytes {
+                    element_id: element_id.raw_id().to_string(),
+                    bytes: bytes.map(ByteBuf::from),
+                })
+            }
+            (VirtualTarget::Element { element_id }, "linkFrames") => {
+                let ElementId::TextFrame(me) = element_id else {
+                    return Err(format!("{what}: only a text frame is threaded"));
+                };
+                let other = match text_of(v).ok_or_else(bad)? {
+                    Some(r) => Some(self.text_frame_ref(&r, what)?),
+                    None => None,
+                };
+                match (field, other) {
+                    ("to", Some(to)) => m(Mutation::LinkFrames {
+                        from: me.clone(),
+                        to,
+                    }),
+                    (_, Some(from)) => m(Mutation::LinkFrames {
+                        from,
+                        to: me.clone(),
+                    }),
+                    ("to", None) => m(Mutation::UnlinkFrames { frame: me.clone() }),
+                    (_, None) => match self.previous_text_frame(me) {
+                        Some(frame) => m(Mutation::UnlinkFrames { frame }),
+                        None => Ok(no_op()),
+                    },
+                }
+            }
+            (VirtualTarget::Element { element_id }, "applyOpacityMask") => {
+                let current = self.opacity_mask_of(element_id.raw_id());
+                let Some(r) = text_of(v).ok_or_else(bad)? else {
+                    return Ok(match current {
+                        Some(_) => Resolved::Mutation(Mutation::ReleaseOpacityMask {
+                            target_id: element_id.clone(),
+                        }),
+                        None => no_op(),
+                    });
+                };
+                let mask_id = self.element_ref(&r, what)?;
+                let Some(old) = current else {
+                    return m(Mutation::ApplyOpacityMask {
+                        target_id: element_id.clone(),
+                        mask_id,
+                        mask_type: None,
+                        invert: None,
+                    });
+                };
+                if old.mask_item == mask_id.raw_id() {
+                    return Ok(no_op());
+                }
+                // A different mask: release and re-apply, as one step,
+                // keeping the mode and the inversion.
+                m(Mutation::Batch {
+                    ops: vec![
+                        Mutation::ReleaseOpacityMask {
+                            target_id: element_id.clone(),
+                        },
+                        Mutation::ApplyOpacityMask {
+                            target_id: element_id.clone(),
+                            mask_id,
+                            mask_type: Some(
+                                match old.mask_type {
+                                    paged_model::OpacityMaskType::Luminosity => "luminosity",
+                                    paged_model::OpacityMaskType::Alpha => "alpha",
+                                }
+                                .to_string(),
+                            ),
+                            invert: Some(old.invert),
+                        },
+                    ],
+                })
+            }
+            (VirtualTarget::Element { element_id }, "pathPointSet" | "pathPointCurveType") => {
+                let (index, member) = point_address(path).ok_or_else(bad)?;
+                let count = self.path_anchors(element_id).map_or(0, |a| a.anchors.len());
+                if index as usize >= count {
+                    return Err(format!(
+                        "{what}: the path has {count} points, there is no point {index}"
+                    ));
+                }
+                if op == "pathPointCurveType" {
+                    return m(Mutation::PathPointCurveType {
+                        element_id: element_id.clone(),
+                        index,
+                        smooth: text_of(v).ok_or_else(bad)?.as_deref() == Some("Smooth"),
+                    });
+                }
+                let Value::Lengths(p) = v else {
+                    return Err(bad());
+                };
+                let [x, y] = p[..] else {
+                    return Err(format!(
+                        "{what}: a point is [x, y], got {} numbers",
+                        p.len()
+                    ));
+                };
+                let role = match member {
+                    "anchor" => PathPointRole::Anchor,
+                    "left" => PathPointRole::Left,
+                    _ => PathPointRole::Right,
+                };
+                m(Mutation::PathPointSet {
+                    element_id: element_id.clone(),
+                    index,
+                    role,
+                    position: [x, y],
+                })
+            }
             _ => Err(format!("{what}: no resolution for op {op}")),
         }
+    }
+
+    /// A page item named by a `Self` id or by an address.
+    fn element_ref(&self, r: &str, what: &str) -> Result<ElementId, String> {
+        let address = if r.contains(':') {
+            Address::parse(r).map_err(|e| format!("{what}: {r:?}: {e}"))?
+        } else {
+            Address::Frame { id: r.to_string() }
+        };
+        match self.target_of(&address) {
+            Ok(VirtualTarget::Element { element_id }) => Ok(element_id),
+            Ok(other) => Err(format!(
+                "{what}: {r:?} is a {}, not a page item",
+                other.address_kind()
+            )),
+            Err(e) => Err(format!("{what}: {r:?}: {e}")),
+        }
+    }
+
+    /// A text frame named by a `Self` id or by an address.
+    fn text_frame_ref(&self, r: &str, what: &str) -> Result<String, String> {
+        match self.element_ref(r, what)? {
+            ElementId::TextFrame(id) => Ok(id),
+            other => Err(format!("{what}: {r:?} is a {other:?}, not a text frame")),
+        }
+    }
+
+    fn text_frame(&self, id: &str) -> Option<&paged_model::TextFrame> {
+        self.scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.text_frames.iter())
+            .find(|f| f.self_id.as_deref() == Some(id))
+    }
+
+    /// The frame whose thread continues into `id` (the model keeps only
+    /// the forward link).
+    fn previous_text_frame(&self, id: &str) -> Option<String> {
+        self.scene
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.text_frames.iter())
+            .find(|f| f.next_text_frame.as_deref() == Some(id))
+            .and_then(|f| f.self_id.clone())
+    }
+
+    fn opacity_mask_of(&self, id: &str) -> Option<&paged_model::OpacityMask> {
+        self.scene
+            .spreads
+            .iter()
+            .find_map(|s| s.spread.opacity_masks.get(id))
+    }
+
+    fn image_bytes_of(&self, element_id: &ElementId) -> Option<Option<&Vec<u8>>> {
+        let id = Some(element_id.raw_id());
+        let spreads = || self.scene.spreads.iter().map(|s| &s.spread);
+        match element_id {
+            ElementId::Rectangle(_) => spreads()
+                .flat_map(|s| s.rectangles.iter())
+                .find(|r| r.self_id.as_deref() == id)
+                .map(|r| r.image_bytes.as_ref()),
+            ElementId::Oval(_) => spreads()
+                .flat_map(|s| s.ovals.iter())
+                .find(|r| r.self_id.as_deref() == id)
+                .map(|r| r.image_bytes.as_ref()),
+            ElementId::Polygon(_) => spreads()
+                .flat_map(|s| s.polygons.iter())
+                .find(|r| r.self_id.as_deref() == id)
+                .map(|r| r.image_bytes.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The read twin of the v71 frame rows (`None`: not one of them).
+    fn frame_row(&self, element_id: &ElementId, path: &str) -> Option<Result<Value, ReadError>> {
+        let what = format!("frame.{path}");
+        let missing = || ReadError::NotFound(format!("{what}: the target does not exist"));
+        let unknown = || ReadError::NoSuchPath(format!("{what}: not a path of this item"));
+        let text = |s: Option<String>| Value::Text(s.unwrap_or_default());
+        Some(match path {
+            "imageBytes" => match element_id {
+                ElementId::Rectangle(_) | ElementId::Oval(_) | ElementId::Polygon(_) => self
+                    .image_bytes_of(element_id)
+                    .ok_or_else(missing)
+                    .map(|b| text(b.map(|b| encode_asset(b)))),
+                _ => Err(unknown()),
+            },
+            "nextTextFrame" | "previousTextFrame" => match element_id {
+                ElementId::TextFrame(id) => {
+                    let f = self.text_frame(id);
+                    match (f, path) {
+                        (None, _) => Err(missing()),
+                        (Some(f), "nextTextFrame") => Ok(text(f.next_text_frame.clone())),
+                        _ => Ok(text(self.previous_text_frame(id))),
+                    }
+                }
+                _ => Err(unknown()),
+            },
+            "opacityMask" => Ok(text(
+                self.opacity_mask_of(element_id.raw_id())
+                    .map(|m| m.mask_item.clone()),
+            )),
+            _ if path.starts_with("points[") => {
+                let Some((index, member)) = point_address(path) else {
+                    return Some(Err(unknown()));
+                };
+                let Some(table) = self.path_anchors(element_id) else {
+                    return Some(Err(unknown()));
+                };
+                let Some(a) = table.anchors.get(index as usize) else {
+                    return Some(Err(missing()));
+                };
+                let pair = |p: [f32; 2]| Ok(Value::Lengths(p.to_vec()));
+                match member {
+                    "anchor" => pair(a.anchor),
+                    "left" => pair(a.left),
+                    "right" => pair(a.right),
+                    "curveType" => Ok(Value::Text(
+                        if a.left == a.anchor && a.right == a.anchor {
+                            "Corner"
+                        } else {
+                            "Smooth"
+                        }
+                        .to_string(),
+                    )),
+                    _ => Err(unknown()),
+                }
+            }
+            _ => return None,
+        })
     }
 
     fn find_table(&self, story_id: &str, table_id: &str) -> Option<&paged_model::Table> {
@@ -657,9 +956,6 @@ impl CanvasModel {
             .find(|t| t.self_id.as_deref() == Some(table_id))
     }
 
-    /// Read one property of any object, in its wire `Value` form — the
-    /// read twin of [`Self::resolve_set`], over the same table.
-    #[allow(clippy::too_many_lines)]
     /// v71 — for an application-state mutation (unlogged when applied on
     /// its own), the same mutation built from the CURRENT state: the
     /// inverse a `Set` logs so it undoes as the one step it promised.
@@ -706,6 +1002,9 @@ impl CanvasModel {
         })
     }
 
+    /// Read one property of any object, in its wire `Value` form — the
+    /// read twin of [`Self::resolve_set`], over the same table.
+    #[allow(clippy::too_many_lines)]
     pub fn get_property(&self, address: &VirtualTarget, path: &str) -> Result<Value, ReadError> {
         let kind = address.address_kind();
         let what = format!("{kind}.{path}");
@@ -731,6 +1030,11 @@ impl CanvasModel {
                 Some((_, v)) => Value::Text(v.clone()),
                 None => Value::Length(None),
             });
+        }
+        if let VirtualTarget::Element { element_id } = address {
+            if let Some(read) = self.frame_row(element_id, path) {
+                return read;
+            }
         }
         match address {
             VirtualTarget::Element { element_id } if path == "imageUri" => {

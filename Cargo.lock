@@ -2467,6 +2467,7 @@ dependencies = [
 name = "paged-canvas"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "bytes",
  "criterion",
  "idml-export",

@@ -2494,6 +2494,31 @@ mod tests {
         assert!((a.right.0 - r_expected[0]).abs() < 1e-4);
     }
 
+    /// On a closed contour the first anchor's neighbours are the last
+    /// and the second, so smoothing it derives real handles (it used to
+    /// stay a corner, as if it were an open path's endpoint).
+    #[test]
+    fn curve_type_smooth_wraps_on_a_closed_contour() {
+        let square = vec![
+            anchor_at(0.0, 0.0),
+            anchor_at(10.0, 0.0),
+            anchor_at(10.0, 10.0),
+            anchor_at(0.0, 10.0),
+        ];
+        let mut project = project_with_polygon("Polygon/p1", square, vec![]);
+        project
+            .apply(curve_op("Polygon/p1", 0, true))
+            .expect("smooth");
+        let (l, r) = smooth_handles_from_neighbours([0.0, 10.0], [0.0, 0.0], [10.0, 0.0]);
+        let a = &polygon_of(&project).anchors[0];
+        assert_eq!((a.left.0, a.left.1), (l[0], l[1]));
+        assert_eq!((a.right.0, a.right.1), (r[0], r[1]));
+        assert_ne!(
+            a.left, a.anchor,
+            "the first corner of a closed shape smooths"
+        );
+    }
+
     #[test]
     fn curve_type_corner_collapses_handles_to_anchor() {
         let mut project = project_with_polygon(
@@ -7369,6 +7394,39 @@ mod tests {
                     .as_deref(),
                 Some("TextFrame/to")
             );
+        }
+
+        /// A user unlink of a thread that carries text must undo. Its
+        /// inverse used to be a `LinkFrames`, which refuses a target that
+        /// shares a story with content — and after an unlink the target
+        /// still shares the threaded story, so the undo always failed.
+        #[test]
+        fn unlink_of_a_threaded_story_undoes_and_redoes() {
+            let mut p = Project::new(doc_two_frames());
+            p.apply(Operation::LinkFrames {
+                from: "TextFrame/from".to_string(),
+                to: "TextFrame/to".to_string(),
+            })
+            .expect("link");
+            p.apply(Operation::UnlinkFrames {
+                frame: "TextFrame/from".to_string(),
+                prev_next: None,
+                restore_target: None,
+            })
+            .expect("unlink");
+            let next = |p: &Project| {
+                p.document().spreads[0].spread.text_frames[0]
+                    .next_text_frame
+                    .clone()
+            };
+            assert_eq!(next(&p), None);
+            p.undo().expect("undo the unlink");
+            assert_eq!(next(&p).as_deref(), Some("TextFrame/to"));
+            p.redo().expect("redo the unlink");
+            assert_eq!(next(&p), None);
+            p.undo().expect("undo again");
+            p.undo().expect("undo the link");
+            assert_eq!(next(&p), None);
         }
 
         #[test]
