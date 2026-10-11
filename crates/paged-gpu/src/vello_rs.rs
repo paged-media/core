@@ -345,6 +345,52 @@ fn cached_image_data(img: &paged_compose::DecodedImage) -> Option<ImageData> {
     Some(data)
 }
 
+/// Render `scene` through `renderer`, the way every render in this crate
+/// goes to Vello.
+///
+/// Vello keeps placed images resident in one atlas texture across
+/// renders, and its resolver takes a fast path for a scene with no
+/// late-bound resource at all — no image, gradient or glyph run, which
+/// is what a picture-free page of outlined text and solid fills encodes
+/// to. That path reports an empty atlas, so the renderer frees the real
+/// one, while the residency bookkeeping still says every image is
+/// uploaded (vello 0.10, `Resolver::resolve`). The next frame showing
+/// those images gets a new, blank atlas and uploads nothing: they paint
+/// transparent until evicted. In the editor that was every picture on a
+/// page reached by scrolling past an image-free one.
+///
+/// So a scene without late-bound resources is rendered with one added:
+/// a transparent 1 × 1 image, drawn outside the target, whose blob is
+/// shared for the process's lifetime — it uploads once and then keeps
+/// the atlas, and with it every resident image, alive.
+pub(crate) fn render_scene(
+    renderer: &mut Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &Scene,
+    target: &wgpu::TextureView,
+    params: &RenderParams,
+) -> Result<(), vello::Error> {
+    if !scene.encoding().resources.patches.is_empty() {
+        return renderer.render_to_texture(device, queue, scene, target, params);
+    }
+    static ATLAS_KEEPALIVE: std::sync::OnceLock<ImageData> = std::sync::OnceLock::new();
+    let keepalive = ATLAS_KEEPALIVE.get_or_init(|| ImageData {
+        data: Blob::new(Arc::new([0u8; 4])),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: 1,
+        height: 1,
+    });
+    let mut kept = Scene::new();
+    kept.append(scene, None);
+    kept.draw_image(
+        &ImageBrush::new(keepalive.clone()),
+        kurbo::Affine::translate((-4.0, -4.0)),
+    );
+    renderer.render_to_texture(device, queue, &kept, target, params)
+}
+
 fn count_overprints(list: &DisplayList) -> usize {
     list.commands
         .iter()
@@ -1675,21 +1721,20 @@ fn render_scene_to_buffer(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-    state
-        .renderer
-        .render_to_texture(
-            &state.device,
-            &state.queue,
-            scene,
-            &view,
-            &RenderParams {
-                base_color: linear_to_peniko(options.background),
-                width,
-                height,
-                antialiasing_method: AaConfig::Area,
-            },
-        )
-        .map_err(|e| format!("render_to_texture: {e:?}"))?;
+    render_scene(
+        &mut state.renderer,
+        &state.device,
+        &state.queue,
+        scene,
+        &view,
+        &RenderParams {
+            base_color: linear_to_peniko(options.background),
+            width,
+            height,
+            antialiasing_method: AaConfig::Area,
+        },
+    )
+    .map_err(|e| format!("render_to_texture: {e:?}"))?;
 
     // Copy texture → buffer → CPU. Row pitch must be a multiple of
     // wgpu::COPY_BYTES_PER_ROW_ALIGNMENT (256); we copy with that
@@ -1826,21 +1871,20 @@ fn gpu_compute_overprint_path(
         "vello target",
     );
     let vello_view = vello_target.create_view(&wgpu::TextureViewDescriptor::default());
-    state
-        .renderer
-        .render_to_texture(
-            &state.device,
-            &state.queue,
-            &scene,
-            &vello_view,
-            &RenderParams {
-                base_color: linear_to_peniko(options.background),
-                width,
-                height,
-                antialiasing_method: AaConfig::Area,
-            },
-        )
-        .map_err(|e| format!("vello render_to_texture (main): {e:?}"))?;
+    render_scene(
+        &mut state.renderer,
+        &state.device,
+        &state.queue,
+        &scene,
+        &vello_view,
+        &RenderParams {
+            base_color: linear_to_peniko(options.background),
+            width,
+            height,
+            antialiasing_method: AaConfig::Area,
+        },
+    )
+    .map_err(|e| format!("vello render_to_texture (main): {e:?}"))?;
 
     // 2) Allocate buffer-backed plane state. The shader prefers
     //    buffers over storage textures because `rgba8unorm` read_write
@@ -1993,23 +2037,22 @@ fn gpu_compute_overprint_path(
 
     for batch in &batches {
         let batch_scene = build_overprint_batch_scene(list, batch, options);
-        state
-            .renderer
-            .render_to_texture(
-                &state.device,
-                &state.queue,
-                &batch_scene,
-                &scratch_view,
-                &RenderParams {
-                    // Transparent base so the scratch alpha truly
-                    // encodes only the batch's path coverage.
-                    base_color: PenikoColor::from_rgba8(0, 0, 0, 0),
-                    width,
-                    height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|e| format!("vello render_to_texture (scratch): {e:?}"))?;
+        render_scene(
+            &mut state.renderer,
+            &state.device,
+            &state.queue,
+            &batch_scene,
+            &scratch_view,
+            &RenderParams {
+                // Transparent base so the scratch alpha truly
+                // encodes only the batch's path coverage.
+                base_color: PenikoColor::from_rgba8(0, 0, 0, 0),
+                width,
+                height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| format!("vello render_to_texture (scratch): {e:?}"))?;
 
         // Copy scratch_op → scratch_buf via the row-aligned staging
         // buffer (same pattern as the main vello-target copy above).
