@@ -97,8 +97,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   session (`paged session`, `paged-run`), and the binaries `paged-inspect`, `paged-diff`,
   `paged-gen` and `paged-export`.
 - **Capability catalog.** `paged describe`, `describeCatalog()` and the committed
-  `crates/paged-introspect/catalog.json`: 161 host functions, 221 settable paths, 395
-  property schemas, 130 operations, and the 30 address forms of `idGrammar`.
+  `crates/paged-introspect/catalog.json`: 161 host functions, 221 settable paths, 403
+  property schemas, 130 operations, and the 30 address forms of `idGrammar`. 355 of the
+  schema rows name the IDML element and attribute their value is read from (`idml`).
 - **Fidelity tooling.** The fixture generator (60 samples), the image-diff tool, 59
   reference PDFs with thresholds, and the scripts that drive InDesign to export them.
 

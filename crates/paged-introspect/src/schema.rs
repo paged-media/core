@@ -145,6 +145,51 @@ pub enum DefaultValue {
     Text(&'static str),
 }
 
+/// Where an IDML attribute sits relative to its element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdmlKind {
+    /// An XML attribute on `element` (`<ParagraphStyleRange Justification="…">`).
+    Attr,
+    /// A child of `element`'s `<Properties>` (`<Properties><AppliedFont>`).
+    PropertiesChild,
+}
+
+/// One IDML spelling of a property: the element and attribute the IDML
+/// adapter reads the value from. Joined through the model field the
+/// path's apply arm writes, so a docs generator can link an element's
+/// attribute to this row's type, members, range and default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct IdmlAttr {
+    pub element: &'static str,
+    pub attribute: &'static str,
+    pub kind: IdmlKind,
+}
+
+/// `idml![attr(TextFrame | Rectangle, FillColor), child(ParagraphStyle, AppliedFont)]`:
+/// a `'static` slice of [`IdmlAttr`] for [`PropertySchema::idml`]. `attr`
+/// is an attribute on each listed element, `child` a `<Properties>` child.
+macro_rules! idml {
+    ($($k:ident($($e:ident)|+, $a:ident)),* $(,)?) => {
+        const { &[$($($crate::schema::idml!(@one $k $e $a),)+)*] }
+    };
+    (@one attr $e:ident $a:ident) => {
+        $crate::schema::IdmlAttr {
+            element: stringify!($e),
+            attribute: stringify!($a),
+            kind: $crate::schema::IdmlKind::Attr,
+        }
+    };
+    (@one child $e:ident $a:ident) => {
+        $crate::schema::IdmlAttr {
+            element: stringify!($e),
+            attribute: stringify!($a),
+            kind: $crate::schema::IdmlKind::PropertiesChild,
+        }
+    };
+}
+pub(crate) use idml;
+
 /// The typed description of one settable value.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +228,13 @@ pub struct PropertySchema {
     /// Computed from other state rather than stored.
     #[serde(skip_serializing_if = "is_false")]
     pub derived: bool,
+    /// The IDML attributes this value is read from, every element it
+    /// applies on (a page item kind, a range, a style definition).
+    /// Empty when the mapping is not one attribute (derived, engine-only,
+    /// composite). Published per row in `propertySchemas[].idml`, filtered
+    /// to the row's own elements.
+    #[serde(skip)]
+    pub idml: &'static [IdmlAttr],
 }
 
 fn is_false(b: &bool) -> bool {
@@ -204,6 +256,7 @@ const BASE: PropertySchema = PropertySchema {
     nullable: true,
     read_only: false,
     derived: false,
+    idml: &[],
 };
 
 // ---- constructors ---------------------------------------------------
@@ -476,6 +529,9 @@ impl PropertySchema {
     /// as `Value::Text`.
     pub const fn keywords(self, members: &'static [&'static str]) -> Self {
         Self { members, ..self }
+    }
+    pub const fn idml(self, idml: &'static [IdmlAttr]) -> Self {
+        Self { idml, ..self }
     }
     pub const fn of(self, kind: RefKind) -> Self {
         Self {

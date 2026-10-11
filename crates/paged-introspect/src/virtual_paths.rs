@@ -183,41 +183,57 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "activateConditionSet",
         "setId",
     ),
-    v("doc", "labels[key]", text(), "setDocumentMetadata", "value"),
+    v(
+        "doc",
+        "labels[key]",
+        text().idml(idml![child(Document, Label)]),
+        "setDocumentMetadata",
+        "value",
+    ),
     // ---- swatch (editSwatch is a whole-spec op: read, merge, write)
-    v("swatch", "name", text(), "editSwatch", "name"),
+    v(
+        "swatch",
+        "name",
+        text().idml(idml![attr(Color | Tint, Name)]),
+        "editSwatch",
+        "name",
+    ),
     v(
         "swatch",
         "space",
-        enum_(SWATCH_SPACES).required(),
+        enum_(SWATCH_SPACES)
+            .required()
+            .idml(idml![attr(Color | Tint, Space)]),
         "editSwatch",
         "space",
     ),
     v(
         "swatch",
         "value",
-        lengths().required(),
+        lengths()
+            .required()
+            .idml(idml![attr(Color | Tint, ColorValue)]),
         "editSwatch",
         "value",
     ),
     v(
         "swatch",
         "model",
-        enum_(SWATCH_MODELS),
+        enum_(SWATCH_MODELS).idml(idml![attr(Color | Tint, Model)]),
         "editSwatch",
         "model",
     ),
     v(
         "swatch",
         "alternateSpace",
-        enum_(SWATCH_SPACES),
+        enum_(SWATCH_SPACES).idml(idml![attr(Color | Tint, AlternateSpace)]),
         "editSwatch",
         "alternateSpace",
     ),
     v(
         "swatch",
         "alternateValue",
-        lengths(),
+        lengths().idml(idml![attr(Color | Tint, AlternateColorValue)]),
         "editSwatch",
         "alternateValue",
     ),
@@ -231,8 +247,20 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "editSwatch",
         "color",
     ),
-    v("swatch", "tint", pct(), "editSwatch", "tint"),
-    v("swatch", "alpha", pct(), "editSwatch", "alpha"),
+    v(
+        "swatch",
+        "tint",
+        pct().idml(idml![attr(Color | Tint, TintValue)]),
+        "editSwatch",
+        "tint",
+    ),
+    v(
+        "swatch",
+        "alpha",
+        pct().idml(idml![attr(Color | Tint, AlphaPercentage)]),
+        "editSwatch",
+        "alpha",
+    ),
     v(
         "swatch",
         "convertToProcess",
@@ -248,11 +276,19 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "aliasTo",
     ),
     // ---- gradient
-    v("gradient", "name", text(), "editGradient", "name"),
+    v(
+        "gradient",
+        "name",
+        text().idml(idml![attr(Gradient, Name)]),
+        "editGradient",
+        "name",
+    ),
     v(
         "gradient",
         "kind",
-        enum_(GRADIENT_KINDS).required(),
+        enum_(GRADIENT_KINDS)
+            .required()
+            .idml(idml![attr(Gradient, Type)]),
         "editGradient",
         "kind",
     ),
@@ -264,27 +300,43 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
         "stops",
     ),
     // ---- colour group
-    v("colorGroup", "name", text(), "editColorGroup", "name"),
+    v(
+        "colorGroup",
+        "name",
+        text().idml(idml![attr(ColorGroup, Name)]),
+        "editColorGroup",
+        "name",
+    ),
     v(
         "colorGroup",
         "members",
-        list_of("swatch ref", Wire::Text),
+        list_of("swatch ref", Wire::Text).idml(idml![attr(ColorGroup, ColorGroupSwatches)]),
         "editColorGroup",
         "members",
     ),
     // ---- numbering list
-    v("numberingList", "name", text(), "editNumberingList", "name"),
+    v(
+        "numberingList",
+        "name",
+        text().idml(idml![attr(NumberingList, Name)]),
+        "editNumberingList",
+        "name",
+    ),
     v(
         "numberingList",
         "continueAcrossStories",
-        bool_().default_bool(false),
+        bool_()
+            .default_bool(false)
+            .idml(idml![attr(NumberingList, ContinueNumbersAcrossStories)]),
         "editNumberingList",
         "continueAcrossStories",
     ),
     v(
         "numberingList",
         "continueAcrossDocuments",
-        bool_().default_bool(false),
+        bool_()
+            .default_bool(false)
+            .idml(idml![attr(NumberingList, ContinueNumbersAcrossDocuments)]),
         "editNumberingList",
         "continueAcrossDocuments",
     ),
@@ -293,16 +345,27 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "style",
         "name",
-        text().required(),
+        text().required().idml(idml![attr(
+            ParagraphStyle | CharacterStyle | ObjectStyle | CellStyle | TableStyle,
+            Name
+        )]),
         "rename<Family>Style",
         "name",
     ),
     // ---- guide / condition
-    v("guide", "position", length(), "moveGuide", "position"),
+    v(
+        "guide",
+        "position",
+        length().idml(idml![attr(Guide, Location)]),
+        "moveGuide",
+        "position",
+    ),
     v(
         "condition",
         "visible",
-        bool_().default_bool(true),
+        bool_()
+            .default_bool(true)
+            .idml(idml![attr(Condition, Visible)]),
         "setConditionVisible",
         "visible",
     ),
@@ -332,26 +395,44 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "page",
         "appliedMaster",
-        reference(RefKind::Master),
+        reference(RefKind::Master).idml(idml![attr(Page, AppliedMaster)]),
         "applyMasterToPage",
         "master",
     ),
-    v("page", "labels[key]", text(), "setPageMetadata", "value"),
+    v(
+        "page",
+        "labels[key]",
+        text().idml(idml![child(Page, Label)]),
+        "setPageMetadata",
+        "value",
+    ),
     // ---- master
-    v("master", "name", text(), "renameMaster", "name"),
+    v(
+        "master",
+        "name",
+        text().idml(idml![attr(MasterSpread, Name)]),
+        "renameMaster",
+        "name",
+    ),
     // ---- section
-    v("section", "prefix", text(), "editSection", "prefix"),
+    v(
+        "section",
+        "prefix",
+        text().idml(idml![attr(Section, SectionPrefix)]),
+        "editSection",
+        "prefix",
+    ),
     v(
         "section",
         "numberingStyle",
-        enum_open(PAGE_NUMBER_STYLES),
+        enum_open(PAGE_NUMBER_STYLES).idml(idml![child(Section, PageNumberStyle)]),
         "editSection",
         "numberingStyle",
     ),
     v(
         "section",
         "startAt",
-        count().min(1.0),
+        count().min(1.0).idml(idml![attr(Section, PageNumberStart)]),
         "editSection",
         "startAt",
     ),
@@ -359,28 +440,31 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "table",
         "rows[i].height",
-        length_pos(),
+        length_pos().idml(idml![attr(Row, SingleRowHeight)]),
         "setRowHeight",
         "height",
     ),
     v(
         "table",
         "columns[i].width",
-        length_pos(),
+        length_pos().idml(idml![attr(Column, SingleColumnWidth)]),
         "setColumnWidth",
         "width",
     ),
     v(
         "cell",
         "rowSpan",
-        count().min(1.0).required(),
+        count().min(1.0).required().idml(idml![attr(Cell, RowSpan)]),
         "setCellSpan",
         "rowSpan",
     ),
     v(
         "cell",
         "columnSpan",
-        count().min(1.0).required(),
+        count()
+            .min(1.0)
+            .required()
+            .idml(idml![attr(Cell, ColumnSpan)]),
         "setCellSpan",
         "columnSpan",
     ),
@@ -390,25 +474,43 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "frame",
         "imageUri",
-        reference(RefKind::Uri).required(),
+        reference(RefKind::Uri).required().idml(idml![attr(
+            Image | EPS | PDF | ImportedPage | Link,
+            LinkResourceURI
+        )]),
         "placeImage",
         "uri",
     ),
-    v("frame", "labels[key]", text(), "setPluginMetadata", "value"),
+    v(
+        "frame",
+        "labels[key]",
+        text().idml(idml![child(
+            TextFrame | Rectangle | Oval | GraphicLine | Polygon,
+            Label
+        )]),
+        "setPluginMetadata",
+        "value",
+    ),
     v(
         "group",
         "groupTransform",
-        transform(),
+        transform().idml(idml![attr(Group, ItemTransform)]),
         "setGroupTransform",
         "transform",
     ),
     // The content, the threads, the mask and the path points: what a
     // binding needs to write that no property path carried.
-    v("frame", "imageBytes", asset(), "replaceImageBytes", "bytes"),
+    v(
+        "frame",
+        "imageBytes",
+        asset().idml(idml![child(Image, Contents)]),
+        "replaceImageBytes",
+        "bytes",
+    ),
     v(
         "frame",
         "nextTextFrame",
-        reference(RefKind::TextFrame),
+        reference(RefKind::TextFrame).idml(idml![attr(TextFrame, NextTextFrame)]),
         "linkFrames",
         "to",
     )
@@ -432,21 +534,21 @@ pub const VIRTUAL_PATHS: &[VirtualPath] = &[
     v(
         "frame",
         "points[i].anchor",
-        point(),
+        point().idml(idml![attr(PathPointType, Anchor)]),
         "pathPointSet",
         "position",
     ),
     v(
         "frame",
         "points[i].left",
-        point(),
+        point().idml(idml![attr(PathPointType, LeftDirection)]),
         "pathPointSet",
         "position",
     ),
     v(
         "frame",
         "points[i].right",
-        point(),
+        point().idml(idml![attr(PathPointType, RightDirection)]),
         "pathPointSet",
         "position",
     ),
@@ -665,6 +767,12 @@ pub struct SchemaRow {
     #[serde(rename = "virtual", skip_serializing_if = "Option::is_none")]
     pub virtual_op: Option<VirtualJson>,
     pub bindable: bool,
+    /// The IDML attributes the value is read from, on the elements this
+    /// row reaches (a style row names its style element, an element row
+    /// the page items or ranges). Omitted when there is no single
+    /// attribute.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub idml: Vec<IdmlAttr>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -702,6 +810,43 @@ pub struct VirtualJson {
     pub clear_op: Option<&'static str>,
 }
 
+/// The IDML element a style family's definitions are written as.
+pub const STYLE_ELEMENTS: &[(&str, &str)] = &[
+    ("paragraph", "ParagraphStyle"),
+    ("character", "CharacterStyle"),
+    ("object", "ObjectStyle"),
+    ("cell", "CellStyle"),
+    ("table", "TableStyle"),
+];
+
+/// A path's IDML spellings narrowed to the elements one row reaches: a
+/// style row of one family keeps that family's style element, a row on
+/// any style (`style:<family>/<id>` `name`) keeps them all, and every
+/// other row drops the style definitions (they are the style rows' own).
+fn idml_for_row(address_kind: &str, applies_to: &[&str], s: &PropertySchema) -> Vec<IdmlAttr> {
+    let is_style_element = |e: &str| STYLE_ELEMENTS.iter().any(|(_, el)| *el == e);
+    match applies_to {
+        [family] => {
+            let el = STYLE_ELEMENTS
+                .iter()
+                .find(|(f, _)| f == family)
+                .map(|(_, el)| *el);
+            s.idml
+                .iter()
+                .filter(|a| Some(a.element) == el)
+                .copied()
+                .collect()
+        }
+        _ if address_kind == "style" => s.idml.to_vec(),
+        _ => s
+            .idml
+            .iter()
+            .filter(|a| !is_style_element(a.element))
+            .copied()
+            .collect(),
+    }
+}
+
 fn row(
     address_kind: &'static str,
     applies_to: Vec<&'static str>,
@@ -716,7 +861,9 @@ fn row(
     } else {
         "readWrite"
     };
+    let idml = idml_for_row(address_kind, &applies_to, &s);
     SchemaRow {
+        idml,
         address_kind,
         applies_to,
         path,
@@ -832,6 +979,93 @@ mod tests {
                     "{name} is addressed on {kind} but {family}'s list omits it"
                 );
             }
+        }
+    }
+
+    /// (element, attribute) pairs that legitimately reach more than one
+    /// path, each with the exact set of paths it reaches.
+    const SHARED_IDML_ATTRIBUTES: &[(&str, &str, &[&str])] = &[
+        // A group's own transform: the frame path accepts a group too.
+        (
+            "Group",
+            "ItemTransform",
+            &["frameTransform", "group:groupTransform"],
+        ),
+    ];
+
+    fn well_formed(name: &str) -> bool {
+        name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && name.chars().all(|c| c.is_ascii_alphanumeric())
+    }
+
+    #[test]
+    fn idml_mappings_are_well_formed_and_unambiguous() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let rows = property_schemas();
+
+        // Every declared spelling is well formed, listed once, and lands
+        // on at least one published row (a style element on a path no
+        // family lists would otherwise vanish silently).
+        let declared = crate::catalog::ALL_PATHS
+            .iter()
+            .map(|p| (wire_name(*p), schema(*p).idml))
+            .chain(VIRTUAL_PATHS.iter().map(|v| (v.path, v.schema.idml)));
+        for (path, idml) in declared {
+            let mut seen = std::collections::HashSet::new();
+            for a in idml {
+                assert!(
+                    well_formed(a.element) && well_formed(a.attribute),
+                    "{path}: malformed IDML mapping {a:?}"
+                );
+                assert!(seen.insert(*a), "{path}: {a:?} listed twice");
+                assert!(
+                    rows.iter().any(|r| r.path == path && r.idml.contains(a)),
+                    "{path}: {a:?} reaches no published row"
+                );
+            }
+        }
+
+        // No (element, attribute) pair names two different paths unless
+        // it is listed in SHARED_IDML_ATTRIBUTES with exactly those paths.
+        let mut by_pair: BTreeMap<(&str, &str), BTreeSet<String>> = BTreeMap::new();
+        for r in &rows {
+            for a in &r.idml {
+                let path = if r
+                    .virtual_op
+                    .as_ref()
+                    .is_some_and(|v| v.op != "setProperty" && v.op != "setStyleProperty")
+                {
+                    format!("{}:{}", r.address_kind, r.path)
+                } else {
+                    r.path.to_string()
+                };
+                by_pair
+                    .entry((a.element, a.attribute))
+                    .or_default()
+                    .insert(path);
+            }
+        }
+        for ((element, attribute), paths) in &by_pair {
+            if paths.len() < 2 {
+                continue;
+            }
+            let allowed = SHARED_IDML_ATTRIBUTES
+                .iter()
+                .find(|(e, a, _)| e == element && a == attribute)
+                .map(|(_, _, p)| p.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
+            assert_eq!(
+                allowed.as_ref(),
+                Some(paths),
+                "{element}@{attribute} maps to several paths: {paths:?}"
+            );
+        }
+        for (element, attribute, _) in SHARED_IDML_ATTRIBUTES {
+            assert!(
+                by_pair
+                    .get(&(*element, *attribute))
+                    .is_some_and(|p| p.len() > 1),
+                "{element}@{attribute} is listed as shared but is not"
+            );
         }
     }
 

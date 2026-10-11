@@ -143,6 +143,15 @@ in the `address` position as a deprecated alias (`VirtualTarget → Address` is 
   ask the host's registry, and an object `paged.batch` takes `{ op: "invoke", id, args,
   handle? }` ops, which send the whole batch to the host so the command shares its one undo
   step.
+- **The IDML mapping is published per row** (catalog only, no protocol change). A schema
+  row carries `idml: [{ element, attribute, kind }]`, `kind` being `attr` or
+  `properties-child`: the element and attribute the IDML adapter reads the value from, found by
+  joining the path's apply arm to the importer through the model field. A style row names its
+  style element, an element row its page items or ranges. Rows whose value is derived (rotation
+  from `ItemTransform`), composite (rules, tab stops, wrap offsets), an operation, or engine
+  state (colour settings, flow growth) carry none.
+  `idml_mappings_are_well_formed_and_unambiguous` keeps every (element, attribute) pair on one
+  path unless it is listed as shared.
 
 ## The gates
 
