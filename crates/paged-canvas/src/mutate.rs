@@ -644,6 +644,27 @@ fn apply_delete_range(
     let (start_para, start_local) = locate_para_local(paragraphs, start);
     let (end_para, end_local) = locate_para_local(paragraphs, end);
     let snapshot = ParagraphSnapshot(paragraphs[start_para..=end_para].to_vec());
+    // The formatting of the text where the deletion starts. A delete that
+    // empties the paragraph keeps it as an empty run, so what is typed
+    // next is set in it, as InDesign keeps a cleared paragraph's
+    // character attributes. Without it, select-all + delete + type
+    // dropped every character attribute (font, size, colour).
+    let start_format = {
+        let para = &paragraphs[start_para];
+        let mut acc = 0usize;
+        para.runs
+            .iter()
+            .find(|r| {
+                let hit = !r.text.is_empty() && start_local < acc + r.text.len();
+                acc += r.text.len();
+                hit
+            })
+            .or(para.runs.first())
+            .map(|r| CharacterRun {
+                text: String::new(),
+                ..r.clone()
+            })
+    };
     // The run the undone insert typed into, emptied — see `keep_run`.
     let kept_run = keep_run
         .then(|| {
@@ -716,7 +737,7 @@ fn apply_delete_range(
     }
 
     merge_adjacent_runs_in_target(paragraphs, start);
-    if let Some(run) = kept_run {
+    if let Some(run) = kept_run.or(start_format) {
         if paragraphs[start_para].runs.is_empty() {
             paragraphs[start_para].runs.push(run);
         }
@@ -1343,6 +1364,115 @@ mod tests {
             },
         }];
         doc
+    }
+
+    /// Clearing a paragraph and typing again keeps the cleared text's
+    /// character attributes, across two paragraphs too; undo brings the
+    /// original runs back.
+    #[test]
+    fn typing_after_clearing_keeps_the_formatting() {
+        let styled = |text: &str| CharacterRun {
+            text: text.into(),
+            point_size: Some(60.0),
+            font: Some("Aptos Display".into()),
+            fill_color: Some("Color/dk1".into()),
+            ..Default::default()
+        };
+        let plain = |text: &str| CharacterRun {
+            text: text.into(),
+            ..Default::default()
+        };
+        let mut doc = doc_with_paragraphs(vec![
+            Paragraph {
+                runs: vec![styled("Title"), plain(" tail")],
+                ..Default::default()
+            },
+            Paragraph {
+                runs: vec![plain("second")],
+                ..Default::default()
+            },
+        ]);
+        // Delete everything: "Title tail" + \n + "second".
+        let delete = TextOp::DeleteRange {
+            story_id: "t1".into(),
+            start: 0,
+            end: 17,
+            recovered: String::new(),
+            unseed: false,
+            keep_run: false,
+            cell: None,
+        };
+        let applied = apply(&mut doc, &delete).unwrap();
+        let paragraphs = &doc.stories[0].story.paragraphs;
+        assert_eq!(paragraphs.len(), 1);
+        let kept = &paragraphs[0].runs;
+        assert_eq!(kept.len(), 1, "an empty run keeps the formatting: {kept:?}");
+        assert_eq!(kept[0].text, "");
+        assert_eq!(kept[0].point_size, Some(60.0));
+
+        apply(
+            &mut doc,
+            &TextOp::InsertText {
+                story_id: "t1".into(),
+                offset: 0,
+                text: "Hello".into(),
+                cell: None,
+                restore: None,
+            },
+        )
+        .unwrap();
+        let runs = &doc.stories[0].story.paragraphs[0].runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "Hello");
+        assert_eq!(runs[0].point_size, Some(60.0));
+        assert_eq!(runs[0].font.as_deref(), Some("Aptos Display"));
+
+        // Undo the typing, then the delete: the original text and runs.
+        let typed_inverse = TextOp::DeleteRange {
+            story_id: "t1".into(),
+            start: 0,
+            end: 5,
+            recovered: String::new(),
+            unseed: false,
+            keep_run: true,
+            cell: None,
+        };
+        apply(&mut doc, &typed_inverse).unwrap();
+        apply(&mut doc, &applied.inverse).unwrap();
+        let back = &doc.stories[0].story.paragraphs;
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].runs[0].text, "Title");
+        assert_eq!(back[0].runs[0].point_size, Some(60.0));
+        assert_eq!(back[1].runs[0].text, "second");
+    }
+
+    /// A partial delete inside a paragraph changes nothing about its runs
+    /// beyond the deleted text.
+    #[test]
+    fn a_partial_delete_keeps_no_empty_run() {
+        let mut doc = doc_with_paragraphs(vec![Paragraph {
+            runs: vec![CharacterRun {
+                text: "Hello".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]);
+        apply(
+            &mut doc,
+            &TextOp::DeleteRange {
+                story_id: "t1".into(),
+                start: 1,
+                end: 5,
+                recovered: String::new(),
+                unseed: false,
+                keep_run: false,
+                cell: None,
+            },
+        )
+        .unwrap();
+        let runs = &doc.stories[0].story.paragraphs[0].runs;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "H");
     }
 
     fn cell_addr(col: u32, row: u32) -> TextCellAddr {

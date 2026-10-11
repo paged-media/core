@@ -54,6 +54,19 @@ use paged_compose::{BlendMode, DisplayCommand, DropShadow, Rect, Transform};
 
 use crate::pipeline::BuiltPage;
 
+/// Which shadow a glyph pass casts, which decides its softness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GlyphShadowKind {
+    /// The frame's object `<DropShadowSetting>` on a frame with no fill:
+    /// each glyph is stamped as a frame-body `DropShadow` (σ = Size / 2,
+    /// InDesign's mapping for every object shadow, measured by the
+    /// `rect-shadows` fixture).
+    Object,
+    /// The `<StrokeTransparencySetting>` shadow: a wider `PathShadow`,
+    /// calibrated separately (see `cpu.rs`).
+    Stroke,
+}
+
 /// Splice glyph-shaped shadow stamps in front of every glyph
 /// `FillPath` / `FillPathBlend` command in
 /// `page.list.commands[glyph_command_range]`, wrapped in a
@@ -79,6 +92,7 @@ pub(crate) fn emit_glyph_shadow_pass(
     page: &mut BuiltPage,
     glyph_command_range: std::ops::Range<usize>,
     shadow: DropShadow,
+    kind: GlyphShadowKind,
     group_bounds: Rect,
 ) -> usize {
     // First pass: collect the (insertion_index, transform, path_id)
@@ -139,14 +153,19 @@ pub(crate) fn emit_glyph_shadow_pass(
     // so the order at `abs_start..abs_start+n` matches the original
     // glyph emission order.
     for (_idx, transform, path_id) in inserts.into_iter().rev() {
-        page.list.insert_command(
-            abs_start,
-            DisplayCommand::PathShadow {
+        let stamp = match kind {
+            GlyphShadowKind::Object => DisplayCommand::DropShadow {
                 path_id,
                 transform,
                 shadow: shadow_full,
             },
-        );
+            GlyphShadowKind::Stroke => DisplayCommand::PathShadow {
+                path_id,
+                transform,
+                shadow: shadow_full,
+            },
+        };
+        page.list.insert_command(abs_start, stamp);
     }
     page.list.insert_command(
         abs_start + inserted_shadow_count,
@@ -217,7 +236,13 @@ mod tests {
         }
         let mut page = dummy_page(list);
         let shadow = DropShadow::default_soft();
-        let n = emit_glyph_shadow_pass(&mut page, 0..3, shadow, page_bounds());
+        let n = emit_glyph_shadow_pass(
+            &mut page,
+            0..3,
+            shadow,
+            GlyphShadowKind::Stroke,
+            page_bounds(),
+        );
         // 3 shadows + Begin + End.
         assert_eq!(n, 5);
         // After insertion: Begin, shadow, shadow, shadow, End, fill, fill, fill.
@@ -255,7 +280,13 @@ mod tests {
         let list = DisplayList::new();
         let mut page = dummy_page(list);
         let shadow = DropShadow::default_soft();
-        let n = emit_glyph_shadow_pass(&mut page, 0..0, shadow, page_bounds());
+        let n = emit_glyph_shadow_pass(
+            &mut page,
+            0..0,
+            shadow,
+            GlyphShadowKind::Stroke,
+            page_bounds(),
+        );
         assert_eq!(n, 0);
         assert!(page.list.commands.is_empty());
     }
@@ -281,7 +312,13 @@ mod tests {
             .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
         let mut page = dummy_page(list);
         let shadow = DropShadow::default_soft();
-        let n = emit_glyph_shadow_pass(&mut page, 0..2, shadow, page_bounds());
+        let n = emit_glyph_shadow_pass(
+            &mut page,
+            0..2,
+            shadow,
+            GlyphShadowKind::Stroke,
+            page_bounds(),
+        );
         assert_eq!(n, 0);
         assert_eq!(page.list.commands.len(), 2);
     }

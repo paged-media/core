@@ -4763,10 +4763,12 @@ impl<'a> StoryEmitter<'a> {
         //
         // Entry shape: `(start, end, glyph_shadow, glyph_shadow_bounds,
         // blend_group)`.
-        // - `glyph_shadow`: Some(DropShadow) if the frame has a
-        //   stroke-transparency drop shadow AND the visible
-        //   stroke + fill are both transparent (per InDesign
-        //   semantics for "shadow off the visible text outlines").
+        // - `glyph_shadow`: Some((DropShadow, kind)) if the frame has
+        //   no fill and either an object drop shadow (which InDesign
+        //   casts from the text as well as from the stroke) or a
+        //   stroke-transparency drop shadow with no visible stroke
+        //   (per InDesign semantics for "shadow off the visible text
+        //   outlines").
         // - `glyph_shadow_bounds`: page-space rect to seed the
         //   shadow wrapper's BlendGroup buffer; the helper pads
         //   further by `|offset| + 3σ` to guarantee soft edges fit.
@@ -4775,7 +4777,7 @@ impl<'a> StoryEmitter<'a> {
         type Entry = (
             usize,
             usize,
-            Option<DropShadow>,
+            Option<(DropShadow, crate::module::GlyphShadowKind)>,
             paged_compose::Rect,
             Option<(paged_compose::Rect, paged_compose::BlendMode, f32)>,
             // W2 — the chain frame this entry belongs to, so the
@@ -4839,7 +4841,26 @@ impl<'a> StoryEmitter<'a> {
             let stroke_w = frame.stroke_weight.unwrap_or(1.0);
             let stroke_visible = frame_stroke_is_visible(frame.stroke_color.as_deref(), stroke_w);
             let fill_transparent = frame_fill_is_transparent(frame.fill_color.as_deref());
-            let glyph_shadow =
+            //
+            // ADR 130: an OBJECT drop shadow on a frame with no fill is
+            // cast from everything the frame paints — InDesign shadows
+            // the text as well as the stroke (measured by the
+            // `rect-shadows` fixture). The stroke band is stamped by
+            // the body-time `drop_shadow_module`; the text's shadow is
+            // stamped here, glyph by glyph, at the object shadow's
+            // own softness.
+            let object_glyph_shadow = if fill_transparent {
+                resolve_frame_shadow(
+                    frame.drop_shadow.as_ref(),
+                    None,
+                    self.palette,
+                    self.color_ctx,
+                )
+                .map(|s| (s, crate::module::GlyphShadowKind::Object))
+            } else {
+                None
+            };
+            let glyph_shadow = object_glyph_shadow.or_else(|| {
                 if !stroke_visible && fill_transparent && frame.stroke_drop_shadow.is_some() {
                     resolve_frame_shadow(
                         frame.stroke_drop_shadow.as_ref(),
@@ -4847,9 +4868,11 @@ impl<'a> StoryEmitter<'a> {
                         self.palette,
                         self.color_ctx,
                     )
+                    .map(|s| (s, crate::module::GlyphShadowKind::Stroke))
                 } else {
                     None
-                };
+                }
+            });
             if glyph_shadow.is_none() && blend_group.is_none() {
                 continue;
             }
@@ -4881,7 +4904,7 @@ impl<'a> StoryEmitter<'a> {
                 // BeginBlendGroup / EndBlendGroup); every later
                 // index (incl. `end`) shifts forward by that count
                 // for Step 2.
-                let inserted = if let Some(shadow) = glyph_shadow {
+                let inserted = if let Some((shadow, kind)) = glyph_shadow {
                     // Group-buffer bounds for the shadow wrapper:
                     // the frame's bbox in page coords, padded by
                     // `(|offset| + 3*blur)` on each side so soft
@@ -4896,7 +4919,13 @@ impl<'a> StoryEmitter<'a> {
                         w: frame_bounds_in_page.w + 2.0 * pad,
                         h: frame_bounds_in_page.h + 2.0 * pad,
                     };
-                    crate::module::emit_glyph_shadow_pass(page, start..end, shadow, bounds_in_page)
+                    crate::module::emit_glyph_shadow_pass(
+                        page,
+                        start..end,
+                        shadow,
+                        kind,
+                        bounds_in_page,
+                    )
                 } else {
                     0
                 };

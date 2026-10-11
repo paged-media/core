@@ -86,8 +86,8 @@ use images::{emit_oval_image, emit_polygon_image, emit_rectangle_image};
 use tables::emit_table_into_chain;
 
 pub(crate) use shapes::{
-    blend_mode_from_idml, corner_rect_path, inset_rect, per_corner_kinds, per_corner_radii,
-    stroke_alignment_offset,
+    aligned_outline_path, blend_mode_from_idml, corner_rect_path, ellipse_outline_path, inset_rect,
+    per_corner_kinds, per_corner_radii, stroke_alignment_offset,
 };
 use shapes::{
     emit_line_into, emit_oval_into, emit_oval_missing_image_placeholder,
