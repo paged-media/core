@@ -26,6 +26,7 @@
 //! primitive. `paged-parse` re-exports everything moved here, so its dependents
 //! compile unchanged.
 
+pub mod fitting;
 pub mod image_bytes;
 
 use std::collections::BTreeMap;
@@ -1637,9 +1638,11 @@ pub struct FrameFittingOption {
     pub bottom_crop: Option<f32>,
     /// `FittingOnEmptyFrame` value: `None | Proportionally |
     /// FillProportionally | FitContent | FitContentToFrame |
-    /// ContentAwareFit`. We don't currently branch on this — the
-    /// crops alone reproduce InDesign's resolved placement for the
-    /// common cases. The string is kept for future fidelity work.
+    /// ContentAwareFit`. A frame with an inner image transform or with
+    /// crops is placed by those (InDesign's resolved placement). A frame
+    /// with neither is placed by this fit, through
+    /// [`crate::fitting::fit_transform`] — a picture placed through the
+    /// authoring doors before any transform is baked.
     pub fitting_on_empty_frame: Option<String>,
     /// `FittingAlignment` — the reference point the content is pinned
     /// to when the fit is reapplied (`TopLeftPoint`, `CenterPoint`,

@@ -23,6 +23,10 @@ paged-canvas = { path = "../paged-canvas" }
 # already; naming the crate makes the existing dependency honest rather
 # than adding one.
 paged-mutate = { path = "../paged-mutate" }
+# `paged place --fit` resolves the fit into the image transform with
+# `paged_model::fitting`, reading the picture's pixel size from its header.
+paged-model = { path = "../paged-model" }
+image = { workspace = true }
 # `ElementId::parse` — the address grammar `paged describe` publishes.
 paged-wire = { path = "../paged-wire" }
 # ADR 132 — `paged set` / `paged get` coerce by the property schemas.

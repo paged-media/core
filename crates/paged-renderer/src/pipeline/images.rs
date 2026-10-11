@@ -161,8 +161,15 @@ pub(super) fn emit_rectangle_image(
         }
     };
 
-    if let Some(image_t) = rect.image_item_transform {
-        // Path 1: honour the inner Image[ItemTransform]. The image's
+    if let Some(image_t) = rect
+        .image_item_transform
+        .or_else(|| named_fit_transform(rect, img_w, img_h))
+    {
+        // Path 1: honour the inner Image[ItemTransform] — or, for a
+        // frame that names a fit but carries no transform yet (a
+        // picture placed through the authoring doors), the transform
+        // that fit resolves to: a uniform cover for FillProportionally,
+        // clipped by the frame like any other overflow. The image's
         // natural pixel rect (0..w, 0..h) — IDML treats placed-image
         // pixels as 1pt at 72ppi — maps through `image_t` into
         // frame-inner coords, then through `outer` (= page_origin ·
@@ -214,9 +221,10 @@ pub(super) fn emit_rectangle_image(
         );
     } else {
         // Path 2: legacy synthetic-IDML placement. No inner
-        // transform ⇒ fit the image to the frame's bounds (minus
-        // FrameFitting crops). No clip — the image already
-        // occupies exactly the rect.
+        // transform and no named fit (or a fit with explicit crops) ⇒
+        // the image fills the frame's bounds minus the FrameFitting
+        // crops. No clip — the image already occupies exactly the
+        // rect.
         let frame_left = rect.bounds.left;
         let frame_top = rect.bounds.top;
         let frame_w = rect.bounds.width();
@@ -251,6 +259,31 @@ pub(super) fn emit_rectangle_image(
         );
         paged_compose::emit_image_at(r, outer, id, &mut page.list);
     }
+}
+
+/// The inner transform a Rectangle's NAMED fit resolves to, for a
+/// frame that has none stored. Only when the frame's fitting carries no
+/// crops: crops are the resolved placement InDesign bakes out (and the
+/// synthetic fixtures author), and they keep driving the legacy
+/// crop-rect placement. A `FittingOnEmptyFrame` the engine does not
+/// model as a content fit (`None`, `FrameToContent`) also keeps the
+/// legacy placement.
+fn named_fit_transform(rect: &Rectangle, img_w: f32, img_h: f32) -> Option<[f32; 6]> {
+    let ff = rect.frame_fitting.as_ref()?;
+    let mode = paged_model::fitting::FitMode::from_idml(ff.fitting_on_empty_frame.as_deref()?)?;
+    let cropped = [ff.left_crop, ff.top_crop, ff.right_crop, ff.bottom_crop]
+        .iter()
+        .any(|c| c.is_some_and(|v| v != 0.0));
+    if cropped {
+        return None;
+    }
+    paged_model::fitting::fit_transform(
+        mode,
+        ff.reference_point.as_deref(),
+        rect.bounds,
+        img_w,
+        img_h,
+    )
 }
 
 /// Polygon-hosted placed image. Mirrors [`emit_rectangle_image`] but

@@ -57,6 +57,11 @@ fn dir(who: &str) -> PathBuf {
 /// A 2×2 red PNG, by hand — no image crate in this test's dependencies,
 /// and a fixture file would be one more thing to keep in step.
 fn a_png() -> Vec<u8> {
+    png_of(2, 2)
+}
+
+/// A `w × h` RGB PNG (solid red), by hand.
+fn png_of(w: u32, h: u32) -> Vec<u8> {
     fn chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = (body.len() as u32).to_be_bytes().to_vec();
         out.extend_from_slice(kind);
@@ -81,8 +86,11 @@ fn a_png() -> Vec<u8> {
         !crc
     }
     // Stored (uncompressed) deflate blocks, so the pixels need no
-    // encoder: two scanlines of filter-0 + two RGB triples each.
-    let raw: Vec<u8> = vec![0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0];
+    // encoder: `h` scanlines of filter-0 + `w` RGB triples each.
+    let scanline: Vec<u8> = std::iter::once(0)
+        .chain((0..w).flat_map(|_| [255, 0, 0]))
+        .collect();
+    let raw: Vec<u8> = (0..h).flat_map(|_| scanline.clone()).collect();
     let mut z = vec![0x78, 0x01];
     z.push(0x01);
     z.extend_from_slice(&(raw.len() as u16).to_le_bytes());
@@ -96,8 +104,8 @@ fn a_png() -> Vec<u8> {
     z.extend_from_slice(&((adler.1 << 16) | adler.0).to_be_bytes());
 
     let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    let mut ihdr = 2u32.to_be_bytes().to_vec();
-    ihdr.extend_from_slice(&2u32.to_be_bytes());
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&h.to_be_bytes());
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit RGB
     png.extend_from_slice(&chunk(b"IHDR", &ihdr));
     png.extend_from_slice(&chunk(b"IDAT", &z));
@@ -178,4 +186,96 @@ fn a_format_the_engine_cannot_decode_is_refused_rather_than_placed_blank() {
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("Transcode"), "{err}");
+}
+
+/// The placed image's stored transform after `paged place --fit <fit>`
+/// of a PORTRAIT 3×4 picture into a LANDSCAPE 240×150 pt frame — read
+/// back from the SAVED file, the transform the IDML export writes.
+fn placed_transform(fit: &str) -> [f64; 6] {
+    let d = dir(&format!("place-fit-{fit}"));
+    let (blank, js) = (d.join("blank.paged"), d.join("frame.js"));
+    let (framed, placed) = (d.join("framed.paged"), d.join("placed.paged"));
+    let img = d.join("portrait.png");
+    std::fs::write(
+        &js,
+        r#"const pid = JSON.parse(paged.pages())[0].selfId;
+console.log('FRAME ' + paged.insertFrame(pid, [60, 60, 210, 300]));"#,
+    )
+    .unwrap();
+    std::fs::write(&img, png_of(3, 4)).unwrap();
+    let s = |p: &PathBuf| p.to_str().unwrap().to_string();
+
+    paged(&["new", "--size", "a4", "-o", &s(&blank)]);
+    let out = paged(&["script", &s(&blank), &s(&js), "-o", &s(&framed)]);
+    let log = String::from_utf8_lossy(&out.stdout);
+    let frame = log
+        .lines()
+        .find_map(|l| l.split("FRAME ").nth(1))
+        .unwrap_or_else(|| panic!("no frame minted: {log}"))
+        .trim()
+        .to_string();
+    paged(&[
+        "place",
+        &s(&framed),
+        &frame,
+        &s(&img),
+        "--fit",
+        fit,
+        "-o",
+        &s(&placed),
+    ]);
+    let got = paged(&["get", &s(&placed), &frame, "imageContentTransform"]);
+    let text = String::from_utf8_lossy(&got.stdout);
+    let nums: Vec<f64> = text
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect();
+    assert_eq!(nums.len(), 6, "a six-number transform, got {text}");
+    [nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]]
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-3
+}
+
+#[test]
+fn fill_proportionally_scales_uniformly_and_covers_the_frame() {
+    // 240/3 = 80 vs 150/4 = 37.5: the cover takes the LARGER, on BOTH
+    // axes. The old stretch stored [80, 0, 0, 37.5].
+    let t = placed_transform("FillProportionally");
+    assert!(
+        close(t[0], 80.0) && close(t[3], 80.0),
+        "uniform cover: {t:?}"
+    );
+    assert!(close(t[1], 0.0) && close(t[2], 0.0), "{t:?}");
+    // Width flush; the 320 pt height overflows the 150 pt frame and is
+    // centred, the frame clipping 85 pt off each end.
+    assert!(close(t[4], 60.0), "{t:?}");
+    assert!(close(t[5], 60.0 - 85.0), "{t:?}");
+}
+
+#[test]
+fn fit_content_proportionally_scales_uniformly_and_letterboxes() {
+    let t = placed_transform("Proportionally");
+    assert!(
+        close(t[0], 37.5) && close(t[3], 37.5),
+        "uniform contain: {t:?}"
+    );
+    assert!(close(t[4], 60.0 + (240.0 - 112.5) / 2.0), "{t:?}");
+    assert!(close(t[5], 60.0), "{t:?}");
+}
+
+#[test]
+fn fit_content_to_frame_is_the_one_fit_that_stretches() {
+    let t = placed_transform("FitContentToFrame");
+    assert!(close(t[0], 80.0) && close(t[3], 37.5), "stretch: {t:?}");
+    assert!(close(t[4], 60.0) && close(t[5], 60.0), "{t:?}");
+}
+
+#[test]
+fn center_content_keeps_the_native_size() {
+    let t = placed_transform("CenterContent");
+    assert!(close(t[0], 1.0) && close(t[3], 1.0), "native: {t:?}");
+    assert!(close(t[4], 60.0 + (240.0 - 3.0) / 2.0), "{t:?}");
+    assert!(close(t[5], 60.0 + (150.0 - 4.0) / 2.0), "{t:?}");
 }
