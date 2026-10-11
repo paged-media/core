@@ -348,20 +348,20 @@ impl SurfacePresenter {
             combined.append(scene, Some(affine));
         }
 
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                &combined,
-                &self.target_view,
-                &RenderParams {
-                    base_color: linear_to_peniko(background),
-                    width: self.width,
-                    height: self.height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+        crate::vello_rs::render_scene(
+            &mut self.renderer,
+            &self.device,
+            &self.queue,
+            &combined,
+            &self.target_view,
+            &RenderParams {
+                base_color: linear_to_peniko(background),
+                width: self.width,
+                height: self.height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
 
         let mut encoder = self
             .device
@@ -418,20 +418,20 @@ impl SurfacePresenter {
             combined.append(&scene, Some(affine));
         }
 
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                &combined,
-                &self.target_view,
-                &RenderParams {
-                    base_color: linear_to_peniko(background),
-                    width: self.width,
-                    height: self.height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+        crate::vello_rs::render_scene(
+            &mut self.renderer,
+            &self.device,
+            &self.queue,
+            &combined,
+            &self.target_view,
+            &RenderParams {
+                base_color: linear_to_peniko(background),
+                width: self.width,
+                height: self.height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
 
         let mut encoder = self
             .device
@@ -473,20 +473,20 @@ impl SurfacePresenter {
 
         // Vello renders into the intermediate Rgba8Unorm storage
         // texture (`target_view`); we then blit it onto the surface.
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                &scene,
-                &self.target_view,
-                &RenderParams {
-                    base_color: linear_to_peniko(background),
-                    width: self.width,
-                    height: self.height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+        crate::vello_rs::render_scene(
+            &mut self.renderer,
+            &self.device,
+            &self.queue,
+            &scene,
+            &self.target_view,
+            &RenderParams {
+                base_color: linear_to_peniko(background),
+                width: self.width,
+                height: self.height,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
 
         let mut encoder = self
             .device
@@ -544,20 +544,20 @@ impl SurfacePresenter {
         });
         let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                scene,
-                &target_view,
-                &RenderParams {
-                    base_color: linear_to_peniko(Color::WHITE),
-                    width: width_px,
-                    height: height_px,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
+        crate::vello_rs::render_scene(
+            &mut self.renderer,
+            &self.device,
+            &self.queue,
+            scene,
+            &target_view,
+            &RenderParams {
+                base_color: linear_to_peniko(Color::WHITE),
+                width: width_px,
+                height: height_px,
+                antialiasing_method: AaConfig::Area,
+            },
+        )
+        .map_err(|e| SurfaceError::Render(format!("{e:?}")))?;
 
         // `copy_texture_to_buffer` requires the row stride to be a
         // multiple of 256 bytes. Allocate a padded buffer, then strip
