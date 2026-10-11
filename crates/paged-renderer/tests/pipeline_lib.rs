@@ -726,6 +726,146 @@ fn image_content_transform_changes_emitted_image_command_with_real_image() {
     );
 }
 
+/// A landscape 120×60 pt frame (x 40..160, y 70..130) naming a fit with
+/// `<FrameFittingOption>` but no crops, holding a placed `<Image>` with NO
+/// inner `ItemTransform` — the shape `paged place` / `placeImage` +
+/// `FrameFittingType` leave before a transform is baked.
+fn build_fitted_image_idml(fit: &str) -> Vec<u8> {
+    let buf = std::io::Cursor::new(Vec::new());
+    let mut zip = ZipWriter::new(buf);
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+        .unwrap();
+    zip.start_file("designmap.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+</Document>"#,
+    )
+    .unwrap();
+    zip.start_file("Resources/Graphic.xml", deflated).unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Graphic xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Graphic/>
+</idPkg:Graphic>"#,
+    )
+    .unwrap();
+    let spread = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 200"/>
+    <Rectangle Self="rectImage" GeometricBounds="70 40 130 160" StrokeWeight="0">
+      <FrameFittingOption FittingOnEmptyFrame="{fit}"/>
+      <Image Self="imageA" LinkResourceURI="tall.png"/>
+    </Rectangle>
+  </Spread>
+</idPkg:Spread>"#
+    );
+    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
+    zip.write_all(spread.as_bytes()).unwrap();
+    zip.finish().unwrap().into_inner()
+}
+
+/// A PORTRAIT 1×3 PNG: red, green, blue rows top to bottom.
+fn tall_rgb_png() -> Vec<u8> {
+    let mut img = image::RgbaImage::new(1, 3);
+    img.put_pixel(0, 0, image::Rgba([230, 0, 0, 255]));
+    img.put_pixel(0, 1, image::Rgba([0, 220, 0, 255]));
+    img.put_pixel(0, 2, image::Rgba([0, 0, 230, 255]));
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    bytes
+}
+
+fn render_fitted(fit: &str) -> image::RgbaImage {
+    let mut br = paged_renderer::BytesResolver::new();
+    br.add_image("tall.png", tall_rgb_png());
+    let opts = PipelineOptions {
+        assets: Some(&br),
+        ..PipelineOptions::default()
+    };
+    let document = idml_import::import_idml_doc(&build_fitted_image_idml(fit)).unwrap();
+    let (_built, images) = pipeline::render_document(&document, &opts, 72.0, Color::WHITE).unwrap();
+    images.into_iter().next().unwrap()
+}
+
+fn is_green(p: image::Rgba<u8>) -> bool {
+    p.0[0] < 80 && p.0[1] > 160 && p.0[2] < 80
+}
+
+fn is_white(p: image::Rgba<u8>) -> bool {
+    p.0[0] > 240 && p.0[1] > 240 && p.0[2] > 240
+}
+
+#[test]
+fn fill_proportionally_covers_uniformly_and_clips_instead_of_stretching() {
+    // Fill: one scale, max(120/1, 60/3) = 120 → a 120×360 pt picture,
+    // centred: its middle (green) third spans y 40..160 and covers the
+    // whole 70..130 frame. The old stretch squeezed all three rows into
+    // the frame: red at the top, blue at the bottom.
+    let img = render_fitted("FillProportionally");
+    for (x, y) in [(60, 75), (100, 100), (150, 125)] {
+        assert!(
+            is_green(*img.get_pixel(x, y)),
+            "({x},{y}) should be the cover's middle row, got {:?}",
+            img.get_pixel(x, y)
+        );
+    }
+    // The overflow is clipped by the frame, not painted on the page.
+    for (x, y) in [(100, 60), (100, 140)] {
+        assert!(
+            is_white(*img.get_pixel(x, y)),
+            "({x},{y}) is outside the frame, got {:?}",
+            img.get_pixel(x, y)
+        );
+    }
+}
+
+#[test]
+fn fit_content_proportionally_letterboxes_uniformly() {
+    // Contain: min(120, 20) = 20 → a 20×60 pt picture centred at
+    // x 90..110; the frame's sides stay empty.
+    let img = render_fitted("Proportionally");
+    assert!(
+        is_green(*img.get_pixel(100, 100)),
+        "{:?}",
+        img.get_pixel(100, 100)
+    );
+    assert!(
+        is_white(*img.get_pixel(60, 100)),
+        "{:?}",
+        img.get_pixel(60, 100)
+    );
+    assert!(
+        is_white(*img.get_pixel(140, 100)),
+        "{:?}",
+        img.get_pixel(140, 100)
+    );
+}
+
+#[test]
+fn fit_content_to_frame_still_stretches() {
+    // The one distorting fit: all three rows squeezed into 60 pt.
+    let img = render_fitted("FitContentToFrame");
+    let top = *img.get_pixel(100, 75);
+    let bottom = *img.get_pixel(100, 125);
+    assert!(top.0[0] > 160 && top.0[1] < 80, "red on top, got {top:?}");
+    assert!(
+        bottom.0[2] > 160 && bottom.0[1] < 80,
+        "blue at the bottom, got {bottom:?}"
+    );
+}
+
 fn build_threaded_idml() -> Vec<u8> {
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buf);

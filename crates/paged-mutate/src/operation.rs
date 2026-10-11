@@ -461,11 +461,12 @@ pub enum PropertyPath {
     /// FittingOnEmptyFrame="…">` enum. Wire value is `Value::Text`
     /// carrying the IDML attribute string (`"None"`,
     /// `"Proportionally"`, `"FillProportionally"`, `"FitContent"`,
-    /// `"FitContentToFrame"`, `"ContentAwareFit"`). The renderer
-    /// currently doesn't branch on this attribute (the crops alone
-    /// drive placement); keeping the wire shape so the Frame
-    /// Fitting panel can declare it today. Empty string clears
-    /// the override.
+    /// `"FitContentToFrame"`, `"ContentAwareFit"`). An inner image
+    /// transform or crops drive placement when present; a frame with
+    /// neither is placed by this fit (`paged_model::fitting`: a uniform
+    /// cover for `FillProportionally`, never a stretch). Setting it does
+    /// not bake a transform — `paged place --fit` does, as InDesign
+    /// does on place. Empty string clears the override.
     FrameFittingType,
     /// SDK Phase 5 (v1 sweep) — `<TextWrapPreference Mode="…">` enum.
     /// Wire value is `Value::Text` carrying the IDML attribute string

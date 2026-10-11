@@ -93,6 +93,41 @@ fn parse_transform(spec: &str) -> Result<[f32; 6]> {
     Ok(out)
 }
 
+/// The inner image transform `fit` resolves to for the Rectangle
+/// `self_id` holding `bytes`, per [`paged_model::fitting`]. `None` when
+/// `fit` names no content fit (`None`, `FrameToContent`) or the frame is
+/// not a Rectangle (only Rectangles carry a fitting).
+fn fitted_transform(
+    session: &Session,
+    self_id: &str,
+    fit: &str,
+    bytes: &[u8],
+) -> Result<Option<[f32; 6]>> {
+    use paged_model::fitting::{fit_transform, FitMode};
+    let Some(mode) = FitMode::from_idml(fit) else {
+        return Ok(None);
+    };
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .context("sniff the image format")?
+        .into_dimensions()
+        .context("read the image's pixel size")?;
+    let model = session.model()?;
+    let rect = model
+        .scene()
+        .spreads
+        .iter()
+        .flat_map(|parsed| &parsed.spread.rectangles)
+        .find(|r| r.self_id.as_deref() == Some(self_id));
+    Ok(rect.and_then(|r| {
+        let reference = r
+            .frame_fitting
+            .as_ref()
+            .and_then(|f| f.reference_point.as_deref());
+        fit_transform(mode, reference, r.bounds, w as f32, h as f32)
+    }))
+}
+
 fn applied(reply: WorkerToMainKind, what: &str) -> Result<()> {
     match reply {
         WorkerToMainKind::MutationApplied { .. } => Ok(()),
@@ -148,6 +183,17 @@ pub fn run(
         }))?;
         applied(reply, "set the fitting")?;
     }
+    // A fit is not a flag the picture remembers: InDesign RESOLVES it on
+    // place, into the inner `<Image>`'s `ItemTransform`, and writes that
+    // transform out. Do the same, so the model, the render and the
+    // exported IDML all carry the fitted placement — a uniform cover for
+    // FillProportionally, never the frame-box stretch a missing transform
+    // used to stand for. An explicit `--transform` still wins.
+    let transform = match (transform, fit) {
+        (Some(t), _) => Some(t),
+        (None, Some(fit)) => fitted_transform(&session, element_id.raw_id(), fit, &bytes)?,
+        (None, None) => None,
+    };
     if let Some(t) = transform {
         let reply = session.send(MainToWorkerKind::Mutate(Mutation::SetElementProperty {
             element_id,
