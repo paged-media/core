@@ -79,14 +79,9 @@ fn a_document_label_is_in_the_exported_designmap() {
     }
 }
 
-/// KNOWN DEFECT, pinned (protocol 71): the IDML adapter (plugin-publish
-/// `idml-export`, `rewrite.rs` page-item attribute patcher) has no
-/// `Visible` arm, so the source attribute passes through and a hidden
-/// item comes back visible in InDesign. The fix lives in plugin-publish
-/// (thread `CommonAttrs.visible`/`locked` into the per-kind patchers as
-/// `preserving_bool_patch(raw, visible, true)` and emit them on minted
-/// items); when core re-pins onto it, this assertion goes red — flip it
-/// to `Visible="false"` then.
+/// A hidden item is written `Visible="false"`, so InDesign opens it
+/// hidden (the adapter's page-item patcher follows the model's
+/// `visible`/`locked` on source items and writes them on minted ones).
 #[test]
 fn a_hidden_item_is_visible_false_in_the_exported_spread() {
     let mut m = model();
@@ -114,20 +109,15 @@ fn a_hidden_item_is_visible_false_in_the_exported_spread() {
     let tag_end = at + xml[at..].find('>').unwrap();
     let tag = &xml[open..=tag_end];
     assert!(
-        tag.contains("Visible=\"true\""),
-        "{name}: the adapter now writes a hidden frame's Visible — the pinned \
-         defect is fixed upstream; assert Visible=\"false\" here instead: {tag}"
+        tag.contains("Visible=\"false\""),
+        "{name}: a hidden frame is not written Visible=\"false\": {tag}"
     );
 }
 
-/// KNOWN DEFECT, pinned (protocol 71): a text variable authored in
-/// paged (`createTextVariable` + an `InsertField` text-variable instance)
-/// lives in the model, but the IDML adapter (plugin-publish
-/// `idml-export`) writes neither the `<TextVariable>` definition into
-/// `designmap.xml` nor the `<TextVariableInstance AssociatedTextVariable
-/// ResultText>` into the story — it only patches definitions and
-/// instances the source package already had. When core re-pins onto the
-/// adapter fix this goes red: assert both are written then.
+/// A text variable authored in paged (`createTextVariable` + an
+/// `InsertField` text-variable instance) reaches the IDML: the
+/// `<TextVariable>` definition in `designmap.xml` and the
+/// `<TextVariableInstance AssociatedTextVariable>` in the story.
 #[test]
 fn an_authored_text_variable_reaches_the_idml() {
     let mut m = model();
@@ -155,10 +145,9 @@ fn an_authored_text_variable_reaches_the_idml() {
     let instance = stories
         .iter()
         .any(|(_, x)| x.contains("AssociatedTextVariable=\"dTextVariablenPrice\""));
-    eprintln!("definition written: {definition}; instance written: {instance}");
     assert!(
-        !definition && !instance,
-        "the adapter now writes authored text variables (definition {definition}, instance \
-         {instance}) — the pinned defect is fixed upstream; assert both are written"
+        definition && instance,
+        "an authored text variable is missing from the IDML (definition {definition}, \
+         instance {instance})"
     );
 }
