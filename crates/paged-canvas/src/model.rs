@@ -2313,6 +2313,11 @@ impl CanvasModel {
         // A value the operation layer would store but no caller may
         // author (an unknown composer) is refused before anything runs.
         refuse_unauthorable(mutation)?;
+        // A colour written as a swatch ADDRESS is stored as the swatch's
+        // `Self` id — the only form the renderer resolves.
+        if let Some(normalized) = self.normalize_color_refs(mutation) {
+            return self.apply_mutation(&normalized);
+        }
         // ADR 132 — `Set { address, path, value }` resolves to the op that
         // already writes the property and is applied as THAT op: same
         // apply arm, same inverse, one undo step. Inside a batch it reaches
@@ -5245,6 +5250,82 @@ impl CanvasModel {
         match paged_wire::VirtualTarget::from_address_direct(address)? {
             Some(t) => Ok(t),
             None => paged_wire::query::to_virtual_target(&self.scene, address),
+        }
+    }
+
+    /// The swatch `Self` id a colour value names, when it is written as
+    /// an ADR 131 swatch address (`swatch:Color/Red`, or `swatch:Red` by
+    /// name). `None` for anything else — an id already, or an address
+    /// that names no swatch (stored as given, so the caller's read-back
+    /// shows what it wrote).
+    fn swatch_id_of_address(&self, value: &str) -> Option<String> {
+        if !value.starts_with("swatch:") {
+            return None;
+        }
+        let address = paged_wire::Address::parse(value).ok()?;
+        match self.target_of(&address).ok()? {
+            paged_wire::VirtualTarget::Swatch { swatch_id } => Some(swatch_id),
+            _ => None,
+        }
+    }
+
+    /// `mutation` with every colour value written as a swatch address
+    /// replaced by the swatch's `Self` id, or `None` when there is none.
+    /// Scripts reach for the address form (it is how the catalog names a
+    /// swatch); stored verbatim it resolved to no colour, so the object
+    /// painted black or not at all while `set` reported success.
+    fn normalize_color_refs(&self, mutation: &Mutation) -> Option<Mutation> {
+        let fix = |v: &paged_mutate::Value| match v {
+            paged_mutate::Value::ColorRef(Some(s)) => self
+                .swatch_id_of_address(s)
+                .map(|id| paged_mutate::Value::ColorRef(Some(id))),
+            _ => None,
+        };
+        match mutation {
+            Mutation::SetElementProperty {
+                element_id,
+                path,
+                value,
+            } => fix(value).map(|value| Mutation::SetElementProperty {
+                element_id: element_id.clone(),
+                path: *path,
+                value,
+            }),
+            Mutation::Set {
+                address,
+                path,
+                value,
+            } => fix(value).map(|value| Mutation::Set {
+                address: address.clone(),
+                path: path.clone(),
+                value,
+            }),
+            Mutation::SetStyleProperty {
+                collection,
+                style_id,
+                path,
+                value,
+            } => fix(value).map(|value| Mutation::SetStyleProperty {
+                collection: *collection,
+                style_id: style_id.clone(),
+                path: *path,
+                value,
+            }),
+            Mutation::Batch { ops } => {
+                let fixed: Vec<Option<Mutation>> =
+                    ops.iter().map(|m| self.normalize_color_refs(m)).collect();
+                if fixed.iter().all(Option::is_none) {
+                    return None;
+                }
+                Some(Mutation::Batch {
+                    ops: ops
+                        .iter()
+                        .zip(fixed)
+                        .map(|(m, f)| f.unwrap_or_else(|| m.clone()))
+                        .collect(),
+                })
+            }
+            _ => None,
         }
     }
 
