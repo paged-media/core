@@ -912,6 +912,7 @@ mod move_node;
 mod nested;
 mod opacity_mask;
 mod paragraph;
+pub use paragraph::caret_paragraphs;
 pub(crate) use paragraph::COMPOSER_EXPECTED;
 mod path_topology;
 mod place_image;

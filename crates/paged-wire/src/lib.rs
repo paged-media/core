@@ -521,6 +521,13 @@ mod tests {
         );
     }
 
+    /// A zero-length range is a caret — the paragraph it stands in.
+    #[test]
+    fn a_caret_parses() {
+        assert!(ElementId::parse("storyRange:Story/u1@0..0").is_some());
+        assert!(ElementId::parse("storyRange:Story/u1@4..4").is_some());
+    }
+
     /// Bad input is an answer, not a panic — this grammar reads command
     /// lines and script arguments.
     #[test]
@@ -533,7 +540,6 @@ mod tests {
             "sprocket:u1",
             "storyRange:@0..6",
             "storyRange:Story/u1@6..0",
-            "storyRange:Story/u1@0..0",
             "storyRange:Story/u1@x..6",
             "storyRange:Story/u1",
         ] {

@@ -286,7 +286,7 @@ pub(super) fn apply_paragraph_style_at(
 /// very end of the story, the last paragraph. A table's host paragraph
 /// has no runs either but is not a line the caret can stand on, so it is
 /// never a caret target.
-fn caret_paragraphs(
+pub fn caret_paragraphs(
     paragraphs: &[paged_model::Paragraph],
     spans: &[(u32, u32)],
     at: u32,

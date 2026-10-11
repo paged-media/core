@@ -183,3 +183,75 @@ fn a_read_tells_mixed_from_no_such_path() {
     let bad = m.read_property("%%", "frameFillColor").unwrap_err();
     assert_eq!(bad.code(), "badAddress", "{bad}");
 }
+
+/// A blank document with one minted text frame whose story holds `text`.
+fn minted_story(text: &str) -> (CanvasModel, String) {
+    use paged_wire::{ElementId, PageId};
+    let idml = paged_canvas::blank::blank_idml(612.0, 792.0);
+    let mut m = CanvasModel::load("om-caret", &idml, CanvasOptions::default()).expect("load");
+    let page = m.scene().spreads[0].spread.pages[0]
+        .self_id
+        .clone()
+        .expect("page id");
+    let out = m
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: PageId(page),
+            bounds: (36.0, 36.0, 300.0, 300.0),
+        })
+        .expect("frame");
+    let Some(ElementId::TextFrame(frame)) = out.created_id else {
+        panic!("expected a text frame, got {:?}", out.created_id);
+    };
+    let story = m.scene().spreads[0]
+        .spread
+        .text_frames
+        .iter()
+        .find(|f| f.self_id.as_deref() == Some(frame.as_str()))
+        .and_then(|f| f.parent_story.clone())
+        .expect("minted story");
+    if !text.is_empty() {
+        m.apply_mutation(&Mutation::InsertText {
+            story_id: story.clone(),
+            offset: 0,
+            text: text.into(),
+            cell: None,
+        })
+        .expect("text");
+    }
+    (m, story)
+}
+
+/// A caret (`storyRange:<story>@n..n`) is an address: the editor's
+/// Character and Paragraph panels target one whenever nothing is
+/// selected, including in a new, empty text frame. Paragraph paths read
+/// and write the paragraph the caret stands in; a reversed range is
+/// still refused.
+#[test]
+fn a_caret_is_an_address_for_the_paragraph_it_stands_in() {
+    for (text, at) in [("", 0), ("Hello world", 3)] {
+        let (mut m, sid) = minted_story(text);
+        let caret = format!("storyRange:{sid}@{at}..{at}");
+        assert!(Address::parse(&caret).is_ok(), "{caret} parses");
+        m.apply_mutation(&Mutation::Set {
+            address: Address::parse(&caret).unwrap(),
+            path: "paragraphSpaceBefore".into(),
+            value: Value::Length(Some(7.0)),
+        })
+        .unwrap_or_else(|e| panic!("{caret}: {e:?}"));
+        assert_eq!(
+            m.read_property(&caret, "paragraphSpaceBefore"),
+            Ok(Value::Length(Some(7.0))),
+            "{caret}"
+        );
+        // A character path reads the character before the caret, so a
+        // caret in text answers what a typed character would carry.
+        if !text.is_empty() {
+            assert!(
+                m.read_property(&caret, "characterFontSize").is_ok(),
+                "{caret}: {:?}",
+                m.read_property(&caret, "characterFontSize")
+            );
+        }
+    }
+    assert!(Address::parse("storyRange:Story/u1@6..0").is_err());
+}

@@ -556,17 +556,19 @@ fn parse_u32(s: &str, at: usize, what: &str) -> Result<u32, GrammarError> {
         .map_err(|_| GrammarError::new(at, format!("{what} {s:?} is not a number")))
 }
 
-/// `"<a>..<b>"` → `(a, b)`, `b > a`.
+/// `"<a>..<b>"` → `(a, b)`, `b >= a`. A zero-length range is a caret: it
+/// names the paragraph the caret stands in (the mutation layer's caret
+/// rule), the only way to address an EMPTY paragraph or story.
 fn parse_range(s: &str, at: usize) -> Result<(u32, u32), GrammarError> {
     let (a, b) = s
         .split_once("..")
         .ok_or_else(|| GrammarError::new(at, "a story range is <start>..<end>"))?;
     let start = parse_u32(a, at, "range start")?;
     let end = parse_u32(b, at + a.len() + 2, "range end")?;
-    if end <= start {
+    if end < start {
         return Err(GrammarError::new(
             at,
-            format!("an empty range {start}..{end}: end must be greater than start"),
+            format!("a reversed range {start}..{end}: end must not be before start"),
         ));
     }
     Ok((start, end))

@@ -7320,8 +7320,32 @@ impl CanvasModel {
         let mut rule_belows: Vec<paged_model::ParagraphRule> = Vec::new();
         let mut tab_lists: Vec<Vec<paged_model::TabStop>> = Vec::new();
 
+        // A caret (start == end) reads what a write at it would change:
+        // the paragraph the mutation layer's caret rule names, and the
+        // character before it (the first one at offset 0), as InDesign
+        // shows the insertion point's attributes.
+        let caret_paras: Option<Vec<usize>> = (start == end).then(|| {
+            let mut at = 0u32;
+            let spans: Vec<(u32, u32)> = story
+                .paragraphs
+                .iter()
+                .map(|p| {
+                    let n: u32 = p.runs.iter().map(|r| r.text.chars().count() as u32).sum();
+                    let span = (at, at + n);
+                    at += n;
+                    span
+                })
+                .collect();
+            paged_mutate::apply::caret_paragraphs(&story.paragraphs, &spans, start)
+        });
+        let (char_start, char_end) = match (&caret_paras, start) {
+            (Some(_), 0) => (0, 1),
+            (Some(_), s) => (s - 1, s),
+            (None, _) => (start, end),
+        };
+
         let mut char_offset: u32 = 0;
-        for para in &story.paragraphs {
+        for (para_idx, para) in story.paragraphs.iter().enumerate() {
             let para_chars: u32 = para
                 .runs
                 .iter()
@@ -7333,7 +7357,11 @@ impl CanvasModel {
             // Paragraph intersects iff (para_end > start AND
             // para_start < end). Collect paragraph-level values for
             // every intersecting paragraph.
-            if para_end > start && para_start < end {
+            let in_range = match &caret_paras {
+                Some(targets) => targets.contains(&para_idx),
+                None => para_end > start && para_start < end,
+            };
+            if in_range {
                 space_before.push(para.space_before);
                 space_after.push(para.space_after);
                 first_line_indent.push(para.first_line_indent);
@@ -7378,7 +7406,7 @@ impl CanvasModel {
                 let run_start = char_offset;
                 let run_end = char_offset + run_len;
                 char_offset = run_end;
-                if run_end <= start || run_start >= end {
+                if run_end <= char_start || run_start >= char_end {
                     continue;
                 }
                 font_sizes.push(run.point_size);
