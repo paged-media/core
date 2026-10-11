@@ -2294,6 +2294,15 @@ pub enum WorkerToMainKind {
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         budget_kind: Option<ScriptBudgetKind>,
+        /// v0.71.5 — the document's counts after the script ran. A script
+        /// writes through the model without the `MutationApplied` /
+        /// selection round trip that refreshes a host's counters, so
+        /// panels reading `Stats` (and an assistant's overset diagnosis)
+        /// went stale after every script. Additive and optional: absent
+        /// when no document is loaded; older hosts ignore it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[tsify(optional)]
+        stats: Option<crate::model::DocumentStats>,
     },
     /// v71 — the `ExecuteScript` (or `HostObjectsResult`) reply when the
     /// script SUSPENDED on the host's object registry: it named a
@@ -5630,6 +5639,7 @@ mod tests {
                 output: vec!["[log] hi".into()],
                 error: Some("runtime budget exceeded: …".into()),
                 budget_kind: Some(ScriptBudgetKind::WallClock),
+                stats: None,
             },
         };
         let json = serde_json::to_string(&env).unwrap();
@@ -5667,6 +5677,7 @@ mod tests {
                 output: vec![],
                 error: None,
                 budget_kind: None,
+                stats: None,
             },
         };
         let json = serde_json::to_string(&env).unwrap();

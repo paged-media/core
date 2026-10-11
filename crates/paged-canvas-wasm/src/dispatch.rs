@@ -1436,6 +1436,7 @@ impl WorkerCore {
                         output: Vec::new(),
                         error: Some("no document loaded".to_string()),
                         budget_kind: None,
+                        stats: None,
                     });
                 };
                 // B-09 / W-08 — the worker's injected wall clock
@@ -1491,6 +1492,7 @@ impl WorkerCore {
                             "no script session {session} is waiting on the host"
                         )),
                         budget_kind: None,
+                        stats: None,
                     });
                 };
                 let step = script.resume(model, &answers, &committed, clock);
@@ -1692,6 +1694,9 @@ impl WorkerCore {
                 output: result.output,
                 error: result.error,
                 budget_kind: result.budget_kind.map(map_budget_kind),
+                // The counts after the script: it wrote without the
+                // round trip that refreshes the host's counters.
+                stats: self.model.as_ref().map(|m| m.document_stats()),
             },
             (paged_script::ScriptStep::Suspended { calls }, Some(session)) => {
                 let id = session.id();
@@ -1705,6 +1710,7 @@ impl WorkerCore {
                 output: Vec::new(),
                 error: Some("script suspended without a session".into()),
                 budget_kind: None,
+                stats: None,
             },
         }
     }

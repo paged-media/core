@@ -1932,3 +1932,53 @@ fn a_script_suspends_on_the_host_and_resumes_on_its_answers() {
         .unwrap()
         .contains("noHost"));
 }
+
+// ---------------------------------------------------------------------
+// The script result carries the document's counts (v0.71.5)
+// ---------------------------------------------------------------------
+
+/// A script writes without the `MutationApplied` / selection round trip
+/// that refreshes a host's counters, so the reply itself carries them:
+/// the editor's Publication health and the AI Assistant's overset
+/// diagnosis read `Stats`, and went stale after every script.
+#[test]
+fn script_result_carries_the_document_stats_after_the_script() {
+    let mut core = loaded_core();
+    let before = execute_script(&mut core, "console.log(1)", serde_json::Value::Null);
+    assert_eq!(before["kind"], "scriptResult", "{before}");
+    let frames_before = before["payload"]["stats"]["frames"]
+        .as_u64()
+        .expect("stats on the reply");
+
+    let after = execute_script(
+        &mut core,
+        "const p = JSON.parse(paged.pages())[0].selfId; if (!paged.insertTextFrame(p, [10, 10, 60, 200])) throw new Error('insert');",
+        serde_json::Value::Null,
+    );
+    assert_eq!(
+        after["payload"]["error"],
+        serde_json::Value::Null,
+        "{after}"
+    );
+    let frames_after = after["payload"]["stats"]["frames"]
+        .as_u64()
+        .expect("stats on the reply");
+    assert_eq!(
+        frames_after,
+        frames_before + 1,
+        "the counts are taken AFTER the script"
+    );
+    assert!(
+        after["payload"]["stats"]["overset_stories"].is_u64(),
+        "overset is counted too"
+    );
+}
+
+/// With no document there is nothing to count: the field is absent.
+#[test]
+fn script_result_without_a_document_has_no_stats() {
+    let mut core = WorkerCore::new();
+    let reply = execute_script(&mut core, "console.log(1)", serde_json::Value::Null);
+    assert_eq!(reply["kind"], "scriptResult", "{reply}");
+    assert!(reply["payload"].get("stats").is_none(), "{reply}");
+}

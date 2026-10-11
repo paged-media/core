@@ -128,6 +128,7 @@ impl Session {
                 output,
                 error,
                 budget_kind,
+                ..
             } => (output, error, budget_kind),
             "run script"
         )

@@ -2218,6 +2218,17 @@ impl CanvasModel {
         &self.doc_id
     }
 
+    /// The document's counts as of the last build — what the handle and
+    /// the `Stats` reply carry, and since v0.71.5 every `ScriptResult`.
+    pub fn document_stats(&self) -> DocumentStats {
+        let mut stats = DocumentStats::from(&self.built.stats);
+        // panels.md gap 1 — count distinct overset stories from the
+        // build's render diagnostics (the `From<&PipelineStats>` path
+        // can't see them).
+        stats.overset_stories = self.built.diagnostics.overset_story_ids().len();
+        stats
+    }
+
     pub fn handle(&self) -> DocumentHandle {
         let page_ids: Vec<PageId> = self.built.pages.iter().map(|p| p.id.clone()).collect();
         let page_sizes_pt: Vec<(f32, f32)> = self
@@ -2262,11 +2273,7 @@ impl CanvasModel {
                 });
             }
         }
-        let mut stats = DocumentStats::from(&self.built.stats);
-        // panels.md gap 1 — count distinct overset stories from the
-        // build's render diagnostics (the `From<&PipelineStats>` path
-        // can't see them).
-        stats.overset_stories = self.built.diagnostics.overset_story_ids().len();
+        let stats = self.document_stats();
         DocumentHandle {
             doc_id: self.doc_id.clone(),
             page_count: self.built.pages.len(),
