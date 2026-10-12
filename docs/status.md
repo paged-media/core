@@ -115,7 +115,8 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **A commit rebuilds the whole document.** Caches make unchanged paragraphs and stories
   cheap, and only a build of text edits in one story reuses previous pages.
 - **Two mutation lanes.** Text edits have no `Operation` form; they use `TextOp` in
-  `paged-canvas`. Undo keeps the newest 10,000 entries.
+  `paged-canvas`. Undo keeps the newest 10,000 steps; a batch is one step at any size and in
+  either lane.
 - **The command line sends 39 of the 70 message kinds.** The rest are listed with a reason
   each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 31) need a pointer or a caret.
 - **The Vello path is not at parity with the CPU path.** Ink separations and coverage are
