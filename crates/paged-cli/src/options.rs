@@ -61,9 +61,15 @@ pub struct DocumentOptions {
     #[arg(long = "font-family", value_name = "NAME[/STYLE]=PATH")]
     pub font_family: Vec<String>,
 
-    /// Fallback face for text no registered family answers for.
+    /// Fallback face for text no registered family answers for. Absent,
+    /// the face the CLI bundles (Inter) stands in.
     #[arg(long = "font", value_name = "FILE")]
     pub font: Option<PathBuf>,
+
+    /// No fallback face: text no registered family answers for is not
+    /// set, and the run says so (to see what a document is missing).
+    #[arg(long = "no-default-font", conflicts_with = "font")]
+    pub no_default_font: bool,
 
     /// CMYK profile: a file path, or a name to resolve against the
     /// host's installed profiles (e.g. "Coated FOGRA39").
@@ -75,9 +81,18 @@ pub struct DocumentOptions {
     pub cmyk_profile: Option<String>,
 }
 
+/// The face the CLI shapes with when no `--font` names one: Inter (SIL
+/// Open Font License 1.1, `corpus/fonts/OFL-inter.txt`), the face the
+/// editor bundles as its default too. Core itself ships no fallback, so
+/// before this a document naming a font the machine lacks rendered its
+/// text blank unless the caller passed `--font` — and every `query` or
+/// `export` printed a missing-font warning.
+pub const BUNDLED_FONT: &[u8] = include_bytes!("../../../corpus/fonts/Inter.ttf");
+
 /// A page with text but no glyphs renders white, and nothing else in
-/// the pipeline says why: core ships no fallback face, so text whose
-/// family no registered font answers for is simply not shaped. Silence
+/// the pipeline says why: with `--no-default-font` there is no fallback
+/// face, so text whose family no registered font answers for is simply
+/// not shaped. Silence
 /// here is how a blank render gets mistaken for a renderer bug — say it
 /// out loud.
 ///
@@ -89,7 +104,8 @@ pub fn warn_if_nothing_shaped(stats: &paged_canvas::DocumentStats) {
         eprintln!(
             "warning: {} text run(s) shaped 0 glyphs — no registered font answered for \
              them, so the text will not appear. Pass --fonts <dir> to register \
-             families, or --font <file> as a fallback face for text that names none.",
+             families, or --font <file> as a fallback face (without \
+             --no-default-font the bundled one stands in).",
             stats.runs
         );
     }
@@ -178,7 +194,8 @@ impl DocumentOptions {
     }
 
     /// The fallback face, read once, for the `font` field a load or a
-    /// blank document carries.
+    /// blank document carries: `--font`, else the bundled face, unless
+    /// `--no-default-font`.
     pub fn fallback_font(&self) -> Result<Option<paged_canvas::channel::ByteBuf>> {
         match &self.font {
             Some(p) => Ok(Some(
@@ -186,7 +203,8 @@ impl DocumentOptions {
                     .with_context(|| format!("read {}", p.display()))?
                     .into(),
             )),
-            None => Ok(None),
+            None if self.no_default_font => Ok(None),
+            None => Ok(Some(BUNDLED_FONT.to_vec().into())),
         }
     }
 
