@@ -2944,8 +2944,20 @@ pub(super) fn build_document_inner(
         // paragraphs go through the standard paragraph-emission
         // path so they get full shaping, tab handling, applied
         // paragraph-style cascade resolution, etc.
+        //
+        // Only an UNRESOLVED table of contents is built here: a story with
+        // no text. InDesign prints the text a TOC story holds until the
+        // user chooses Update Table of Contents (docs audit 2026-10, ADR
+        // 120), so a story with stored entries prints them, stale or not;
+        // rebuilding them at render would show entries InDesign does not.
+        let story_has_text = parsed
+            .story
+            .paragraphs
+            .iter()
+            .any(|p| p.runs.iter().any(|r| !r.text.trim().is_empty()));
         let toc_paragraphs: Option<Vec<paged_model::Paragraph>> = chain
             .first()
+            .filter(|_| !story_has_text)
             .and_then(|f| f.applied_toc_style.as_deref())
             .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
             .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
