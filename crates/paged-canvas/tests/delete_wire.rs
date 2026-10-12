@@ -479,3 +479,61 @@ fn deleting_a_container_takes_its_pasted_in_child_and_undo_renests_it() {
     assert!(m.redo().is_some());
     assert!(m.element_properties(&child).is_none());
 }
+
+/// RFI C-84 — paged.draw's pinned sequence: a grouped pair, then
+/// `batch(deleteFrame a, deleteFrame b, dissolveGroup g)`. It applied,
+/// and its ONE undo left the group and both members gone. InDesign
+/// removes a group with its last member, so the dissolve names a group
+/// that is gone and the batch is refused whole; deleting the members
+/// alone removes the group, and one undo puts all three back.
+#[test]
+fn deleting_a_groups_members_then_dissolving_it_is_refused_and_the_delete_alone_undoes() {
+    let mut m = model();
+    let lone = frame(&mut m, 40.0);
+    let a = frame(&mut m, 100.0);
+    let b = frame(&mut m, 160.0);
+    let g = m
+        .apply_mutation(&Mutation::CreateGroup {
+            member_ids: vec![a.clone(), b.clone()],
+        })
+        .expect("group")
+        .created_id
+        .expect("group id");
+    let all = [&lone, &g, &a, &b];
+    let before = tree(&m, &all);
+    assert_eq!(
+        before,
+        vec![raw(&lone), format!("{}[{}, {}]", raw(&g), raw(&a), raw(&b))]
+    );
+
+    let refused = m.apply_mutation(&Mutation::Batch {
+        ops: vec![
+            Mutation::DeleteFrame { frame_id: raw(&a) },
+            Mutation::DeleteFrame { frame_id: raw(&b) },
+            Mutation::DissolveGroup { group_id: raw(&g) },
+        ],
+    });
+    assert!(refused.is_err(), "refused: {refused:?}");
+    assert_eq!(tree(&m, &all), before, "nothing applied");
+
+    m.apply_mutation(&Mutation::Batch {
+        ops: vec![
+            Mutation::DeleteFrame { frame_id: raw(&a) },
+            Mutation::DeleteFrame { frame_id: raw(&b) },
+        ],
+    })
+    .expect("delete both members");
+    assert_eq!(
+        tree(&m, &all),
+        vec![raw(&lone)],
+        "the group went with its last member"
+    );
+    assert!(m.undo().is_some(), "one undo");
+    assert_eq!(
+        tree(&m, &all),
+        before,
+        "puts the group and both members back"
+    );
+    assert!(m.redo().is_some());
+    assert_eq!(tree(&m, &all), vec![raw(&lone)]);
+}
