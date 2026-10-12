@@ -331,10 +331,14 @@ fn delete_then_undo_restores_every_settable_property_of_every_kind() {
         for row in &rows {
             let Some(current) = &row.value else { continue };
             // The box and the plugin carrier are not "formatting"; the
-            // geometry is covered by the transform row.
+            // geometry is covered by the transform row. The lock is left
+            // off: a locked item is not deleted at all (C-77, pinned in
+            // `element_lock_wire.rs`), so the delete below would refuse.
             if matches!(
                 row.path,
-                PropertyPath::FrameBounds | PropertyPath::PluginMetadata
+                PropertyPath::FrameBounds
+                    | PropertyPath::PluginMetadata
+                    | PropertyPath::ElementLocked
             ) {
                 continue;
             }

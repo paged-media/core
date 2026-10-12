@@ -78,6 +78,15 @@ pub enum OperationError {
     #[error("invalid document metadata: {reason}")]
     InvalidDocumentMetadata { reason: String },
 
+    /// C-77 — the page item is locked: its own `elementLocked`, or that
+    /// of the container it is pasted into. InDesign refuses to move,
+    /// resize, reshape, rotate, scale, restack or remove a locked item
+    /// ("the object is locked") and still changes its attributes and its
+    /// text; so does the engine. Unlocking it is an ordinary property
+    /// write (`ElementLocked = false`).
+    #[error("{node:?} is locked — unlock it (elementLocked = false) to {action}")]
+    Locked { node: NodeId, action: String },
+
     #[error("batch failed at index {failed_at}: {source}")]
     BatchFailed {
         failed_at: usize,

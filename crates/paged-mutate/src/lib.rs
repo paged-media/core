@@ -59,6 +59,7 @@ pub mod pathfinder;
 pub mod planar;
 
 pub use apply::apply;
+pub use apply::is_locked;
 pub use apply::{duplicate_demand, duplicate_roots, DuplicateDemand};
 pub use error::OperationError;
 pub use history::{History, DEFAULT_HISTORY_CAPACITY};

@@ -393,6 +393,11 @@ pub enum GestureError {
     MissingAnchor,
     #[error("anchor refers to a page not in the document: {0:?}")]
     UnknownAnchorPage(PageId),
+    /// C-77 — a locked item is not dragged, resized, rotated or
+    /// reshaped. Refused at `begin_gesture`: its commit would be refused
+    /// by the engine anyway, after the preview had moved it.
+    #[error("element is locked — unlock it (elementLocked = false) to transform it: {0:?}")]
+    Locked(ElementId),
 }
 
 impl CanvasModel {
@@ -455,6 +460,15 @@ impl CanvasModel {
         // which expand recursively — each sub-group also has its
         // transform updated.
         let nodes = self.expand_group_ids(&nodes);
+        // C-77 — the engine refuses to move a locked item; refuse the
+        // drag before its preview moves one. A group's members are in
+        // `nodes` now, so a locked member stops the group too.
+        if let Some(locked) = nodes.iter().find(|id| {
+            self.resolve_frame_node_id(id.raw_id())
+                .is_some_and(|node| paged_mutate::is_locked(&self.scene, &node))
+        }) {
+            return Err(GestureError::Locked(locked.clone()));
+        }
         let snapshots = nodes
             .iter()
             .map(|id| self.snapshot_for(id))

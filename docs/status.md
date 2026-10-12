@@ -17,6 +17,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
 - **Edit.** 130 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
+- **Locks and deletes follow InDesign.** A locked item, and the content of a locked container,
+  is not moved, resized, reshaped, restacked or deleted: the operation is refused with
+  `OperationError::Locked`, and a gesture on it fails at `beginGesture`. Its attributes and its
+  text still change, and unlocking it is an ordinary property write. Deleting a container deletes
+  what is pasted into it, and a group goes with its last member. One undo restores either
+  ([ADR 133](adr/133-locks-and-deletes-follow-indesign.md)).
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
   about a given point) and snapping, as message kinds. Snapping is one engine resolver
@@ -142,6 +148,8 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   writes after it another, with the UI edit between them: undoing the whole script then takes
   two steps, and undoing once takes back only the later part. Folding across the foreign
   record would swallow the UI edit into the script's step, which is worse.
+- **A layer's lock is enforced by hit testing only.** A mutation addressed to an item on a locked
+  layer applies; only the item's own lock, or its container's, is refused by the engine.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
 - **The fidelity gate needs the reference colour profile.** On a runner without a FOGRA39
