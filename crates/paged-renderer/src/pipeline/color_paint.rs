@@ -355,39 +355,46 @@ pub fn lab_entry_to_paint(entry: &paged_model::ColorEntry) -> Option<Paint> {
     Some(Paint::Solid(Color::rgba(r, g, b, 1.0)))
 }
 
-/// Project an IDML gradient angle / length onto the path's
-/// local 0..1 unit rect. Endpoints lie at `(0.5 ± h_x, 0.5 ± h_y)`
-/// where the half-vector `(h_x, h_y)` is derived from the angle and
-/// length:
+/// A linear gradient's axis in the path's local 0..1 unit rect, placed
+/// where InDesign places it when the frame carries no
+/// `GradientFillStart`.
 ///
-/// * `angle_deg` — degrees CCW around the rect centre. IDML's
-///   convention is 0° horizontal-right, 90° vertical-down (the page
-///   y-axis points down, so a CCW rotation in screen-up coords reads
-///   as CW on the page). Defaults to 0° when absent.
-/// * `length_pt` — page-space length of the gradient line through the
-///   centre. When `Some(L)` and a bbox is supplied, the half-vector is
-///   `(cos θ · L / (2·w), sin θ · L / (2·h))` so the page-space line
-///   length is exactly `L` regardless of the rect's aspect ratio.
-///   When `None`, half-vector magnitude in unit-rect coords is `0.5`
-///   along the angle direction — gradient runs edge-to-edge along the
-///   cardinal axis (matches InDesign's swatch-panel default).
+/// Asked of InDesign 20.0.1 (`corpus/generated/gradient-geometry`,
+/// ADR 120), and confirmed by what it writes back when it re-exports
+/// such a frame:
+///
+/// * the angle turns COUNTER-clockwise as seen on the page — the y-up
+///   convention — so the axis direction in the frame's (y-down) inner
+///   coordinates is `(cos θ, −sin θ)`. 90° runs from the bottom to the
+///   top, 135° up and to the left, −90° downwards;
+/// * with no start the axis begins at the inner bounding box's
+///   BOTTOM-LEFT corner (InDesign writes `GradientFillStart="0 h"`);
+/// * with no length it is as long as the box is WIDE (it writes
+///   `GradientFillLength="w"`) whatever the angle — so a 120 × 60
+///   rectangle at 90° shows only the first half of its ramp, and one
+///   at 180° or −90° only the first stop.
+///
+/// `length_pt` is `GradientFillLength`; zero or less counts as absent.
+/// `dims_pt` is the box's `(w, h)` in pt; without it the box is taken
+/// as square. An explicit `GradientFillStart` moves the axis afterwards
+/// (`module::fill_paint::place_linear_at_start`), since it is in inner
+/// coordinates and needs the box's origin.
 pub(super) fn linear_gradient_endpoints(
     angle_deg: Option<f32>,
     length_pt: Option<f32>,
     dims_pt: Option<(f32, f32)>,
 ) -> ((f32, f32), (f32, f32)) {
-    let deg = angle_deg.unwrap_or(0.0);
-    let rad = deg.to_radians();
-    let (sin, cos) = rad.sin_cos();
-    let (cx, cy) = (0.5_f32, 0.5_f32);
-    let (hx, hy) = match (length_pt, dims_pt) {
-        (Some(l), Some((w, h))) if w > 0.0 && h > 0.0 => (cos * l / (2.0 * w), sin * l / (2.0 * h)),
-        _ => {
-            let half = 0.5_f32;
-            (cos * half, sin * half)
+    let (sin, cos) = angle_deg.unwrap_or(0.0).to_radians().sin_cos();
+    let length = length_pt.filter(|l| l.is_finite() && *l > 0.0);
+    let start = (0.0_f32, 1.0_f32);
+    let (dx, dy) = match dims_pt {
+        Some((w, h)) if w > 0.0 && h > 0.0 => {
+            let l = length.unwrap_or(w);
+            (cos * l / w, -sin * l / h)
         }
+        _ => (cos, -sin),
     };
-    ((cx - hx, cy - hy), (cx + hx, cy + hy))
+    (start, (start.0 + dx, start.1 + dy))
 }
 
 /// Resolver that also handles gradient swatches.
@@ -407,14 +414,15 @@ pub fn color_id_to_paint_with_list(
 
 /// Like [`color_id_to_paint_with_list`] but takes an explicit
 /// `gradient_angle_deg` from the frame's `GradientFillAngle` /
-/// `GradientStrokeAngle` attribute (0° horizontal-right; 90°
-/// vertical-down — IDML's convention), an explicit
+/// `GradientStrokeAngle` attribute (counter-clockwise on the page: 0°
+/// left → right, 90° bottom → top — see [`linear_gradient_endpoints`]),
+/// an explicit
 /// `gradient_length_pt` from the matching `GradientFillLength` /
 /// `GradientStrokeLength` attribute, and the path's local bbox
 /// `(width, height)` in pt.
 ///
 /// The bbox lets the radial-gradient default place its centre at the
-/// path's bottom-left corner with radius equal to the diagonal —
+/// path's bottom-left corner with radius equal to its longer side —
 /// matching what InDesign emits when `GradientFillStart` /
 /// `GradientFillLength` are absent. For linear gradients it converts
 /// the page-pt length into unit-rect endpoints (so the same
@@ -428,17 +436,25 @@ pub fn color_id_to_paint_with_list(
 /// InDesign gradient midpoint remap. Given the linear parameter `t`
 /// across a stop-to-next-stop segment and the segment's midpoint `mid`
 /// (0..1; 0.5 = linear), return the colour-blend fraction `f` so that
-/// `f == 0.5` exactly at `t == mid`. This is the standard PostScript /
-/// SVG midpoint emulation `f = t^(ln 0.5 / ln mid)` — the *colour*
-/// follows this curve while the stop's geometric `offset` stays linear
-/// in `t`. A near-0.5 midpoint short-circuits to linear so the common
-/// (no-midpoint) path is unchanged.
+/// `f == 0.5` exactly at `t == mid` — the *colour* follows this curve
+/// while the stop's geometric `offset` stays linear in `t`.
+///
+/// The curve is InDesign's own, read off its PDF export
+/// (`corpus/generated/gradient-geometry` cases 23 and 24): each segment
+/// is one exponential function with `N = ln 0.5 / ln m ≥ 1`, where `m`
+/// is the midpoint or its mirror `1 − mid`, whichever is above ½. A
+/// midpoint of 80 is `f = t^3.10628`; a midpoint of 20 is the same
+/// function run backwards (`Encode [1 0]`), `f = 1 − (1 − t)^3.10628`
+/// — not `t^0.43`, which also crosses ½ at 0.2 but bows the other way.
 pub(super) fn midpoint_blend(t: f32, mid: f32) -> f32 {
     if (mid - 0.5).abs() < 1e-4 {
         return t;
     }
-    let exponent = (0.5f32).ln() / mid.ln();
-    t.powf(exponent)
+    if mid > 0.5 {
+        t.powf(0.5f32.ln() / mid.ln())
+    } else {
+        1.0 - (1.0 - t).powf(0.5f32.ln() / (1.0 - mid).ln())
+    }
 }
 
 pub(super) fn color_lerp(
@@ -477,8 +493,13 @@ pub fn color_id_to_paint_with_list_dir(
             // participate in CMYK-space gradient interpolation just
             // like a process CMYK swatch would.
             cmyk: Option<[f32; 4]>,
-            /// Midpoint (0..1) governing the blend curve toward the
-            /// NEXT stop. 0.5 = linear (the default when omitted).
+            /// This stop's `Midpoint` (0..1; 0.5 = linear, the default
+            /// when omitted). It bends the segment that ENDS at this
+            /// stop: asked of InDesign (`gradient-geometry` cases 23–24),
+            /// `Midpoint="20"` on stop 1 puts the half-way colour at 20 %
+            /// of the segment from stop 0, and `Midpoint="80"` on the
+            /// last stop bends the segment before it. A first stop's
+            /// midpoint governs nothing.
             midpoint: f32,
         }
         let raw_stops: Vec<StopRef> = grad
@@ -500,7 +521,10 @@ pub fn color_id_to_paint_with_list_dir(
                 })
             })
             .collect();
-        let has_midpoint = raw_stops.iter().any(|s| (s.midpoint - 0.5).abs() > 1e-4);
+        let has_midpoint = raw_stops
+            .iter()
+            .skip(1)
+            .any(|s| (s.midpoint - 0.5).abs() > 1e-4);
         if raw_stops.len() < 2 {
             return None;
         }
@@ -552,7 +576,7 @@ pub fn color_id_to_paint_with_list_dir(
                     let t = i as f32 / SUB_STOPS as f32;
                     // Geometry stays linear in `t`; the CMYK channel
                     // blend follows the midpoint curve.
-                    let f = midpoint_blend(t, a.midpoint);
+                    let f = midpoint_blend(t, b.midpoint);
                     let interp = paged_color::Cmyk {
                         c: cmyk_a[0] * (1.0 - f) + cmyk_b[0] * f,
                         m: cmyk_a[1] * (1.0 - f) + cmyk_b[1] * f,
@@ -588,7 +612,7 @@ pub fn color_id_to_paint_with_list_dir(
                 let b = &win[1];
                 for i in 0..SUB_STOPS {
                     let t = i as f32 / SUB_STOPS as f32;
-                    let f = midpoint_blend(t, a.midpoint);
+                    let f = midpoint_blend(t, b.midpoint);
                     out.push(paged_compose::GradientStop {
                         offset: a.offset * (1.0 - t) + b.offset * t,
                         color: color_lerp(a.color, b.color, f),

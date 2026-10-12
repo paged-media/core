@@ -272,6 +272,14 @@
       "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.121 / p99 0.000 / SSIM 0.9916 across 16 page(s); sized at worst + ~20%."
     },
     {
+      "name": "gradient-geometry",
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 1.955,
+      "max_p99_de": 59.1,
+      "min_ssim": 0.9697,
+      "rationale": "Added 2026-10-12 (ADR 120, R-02a): where a linear gradient runs, asked of InDesign 20.0.1. Page 1: GradientFillAngle 0/45/90/135/180/-90 with no start or length on a square, a 2:1 rectangle and a square rotated 30 degrees; page 2: explicit GradientFillStart + Length, three-stop midpoints (default, 20 on stop 1, 80 on stop 2), a text frame fill, a gradient stroke, an inline anchored rectangle and two gradient feathers. InDesign turns the angle counter-clockwise on the page (axis (cos t, -sin t) in inner y-down coordinates, 90 degrees runs bottom to top), starts the default axis at the inner box's bottom-left corner with the box's WIDTH as its length (its own re-export writes GradientFillStart=\"0 h\" GradientFillLength=\"w\"), runs an explicit start in inner coordinates, and bends the segment BEFORE the stop that carries a Midpoint with N = ln 0.5 / ln m (3.10628 for 20 and 80). The engine drew 90 degrees top-down, ignored GradientFillStart on linear gradients and bent the segment after the stop: mean 7.789 / p99 84.138 / ssim 0.8768 (p1), 3.926 / 84.138 / 0.9390 (p2). After: 1.629 / 49.243 / 0.9748 (p1), 0.175 / 4.191 / 0.9970 (p2); sized at worst * 1.20 and ssim - 0.005. The residue on p1 is the rotated column alone (every unrotated case is within 1 RGB level on average): for a rotated frame with no start InDesign synthesises its default in page space (its re-export writes GradientFillStart=\"-7.32 12.68\" GradientFillLength=\"109.28\", the page bounding box's width, for an 80 pt square at 30 degrees) where the engine keeps the inner bottom-left / inner width. Real InDesign documents always carry an explicit start (91 of 91 gradient-filled items in the corpus packs). Case 28 (a gradient feather with no start) also differs: InDesign's undeclared feather default spans 69 pt over a 60 pt frame."
+    },
+    {
       "name": "strokes-fills",
       "max_pages_with_pdf": 19,
       "max_mean_de": 0.55,
