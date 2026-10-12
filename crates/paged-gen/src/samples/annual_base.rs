@@ -563,10 +563,12 @@ fn graphic() -> Vec<u8> {
             GradientStop {
                 stop_color: SWATCH_VERMILION.to_string(),
                 location_pct: 0.0,
+                midpoint_pct: None,
             },
             GradientStop {
                 stop_color: SWATCH_PAPER_WARM.to_string(),
                 location_pct: 100.0,
+                midpoint_pct: None,
             },
         ],
     }];

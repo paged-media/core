@@ -622,7 +622,11 @@ pub(super) fn emit_table_into_chain(
             let Some(paint) = color_id_to_paint(fill_id, em.palette, em.color_ctx) else {
                 continue;
             };
-            let paint = apply_fill_tint(paint, tint);
+            let paint = apply_fill_tint_ctx(
+                paint,
+                object_tint(em.palette, Some(fill_id), tint),
+                &em.color_ctx,
+            );
             let rect = Rect {
                 x: prow.table_left_pt,
                 y: prow.row_top_in_page,
@@ -660,7 +664,11 @@ pub(super) fn emit_table_into_chain(
                 let Some(paint) = color_id_to_paint(fill_id, em.palette, em.color_ctx) else {
                     continue;
                 };
-                let paint = apply_fill_tint(paint, tint);
+                let paint = apply_fill_tint_ctx(
+                    paint,
+                    object_tint(em.palette, Some(fill_id), tint),
+                    &em.color_ctx,
+                );
                 let rect = Rect {
                     x: prow.table_left_pt + col_x[c],
                     y: prow.row_top_in_page,
@@ -855,8 +863,14 @@ pub(super) fn emit_table_into_chain(
             for (color, weight, tint, stroke_type, x, y, w) in edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
-                        .map(|p| apply_fill_tint(p, tint))
+                    if let Some(paint) =
+                        color_id_to_paint(color_id, em.palette, em.color_ctx).map(|p| {
+                            apply_fill_tint_ctx(
+                                p,
+                                object_tint(em.palette, Some(color_id), tint),
+                                &em.color_ctx,
+                            )
+                        })
                     {
                         emit_table_horizontal_edge(
                             x,
@@ -915,8 +929,14 @@ pub(super) fn emit_table_into_chain(
             for (color, weight, tint, stroke_type, x, y, h) in v_edges {
                 let (color_id, weight) = cell_edge_stroke(color, weight);
                 if weight > 0.0 {
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
-                        .map(|p| apply_fill_tint(p, tint))
+                    if let Some(paint) =
+                        color_id_to_paint(color_id, em.palette, em.color_ctx).map(|p| {
+                            apply_fill_tint_ctx(
+                                p,
+                                object_tint(em.palette, Some(color_id), tint),
+                                &em.color_ctx,
+                            )
+                        })
                     {
                         emit_table_vertical_edge(
                             x,
@@ -957,8 +977,14 @@ pub(super) fn emit_table_into_chain(
                     let Some(color_id) = color else {
                         return;
                     };
-                    if let Some(paint) = color_id_to_paint(color_id, em.palette, em.color_ctx)
-                        .map(|p| apply_fill_tint(p, tint))
+                    if let Some(paint) =
+                        color_id_to_paint(color_id, em.palette, em.color_ctx).map(|p| {
+                            apply_fill_tint_ctx(
+                                p,
+                                object_tint(em.palette, Some(color_id), tint),
+                                &em.color_ctx,
+                            )
+                        })
                     {
                         paged_compose::emit_line(
                             x1,

@@ -217,8 +217,8 @@ fn build_gradient_idml_with_angle(angle_deg: Option<f32>) -> Vec<u8> {
 fn linear_gradient_fills_left_to_right_by_default() {
     // IDML's GradientFillAngle defaults to 0° = horizontal-right
     // (left = first stop, right = last). This test pins the default
-    // direction; gradient_fill_angle != 0 rotates the line through
-    // the rect centre per `color_id_to_paint_with_list_dir`.
+    // direction; a non-zero angle turns the axis counter-clockwise on
+    // the page about its start, the frame's bottom-left corner.
     let bytes = build_gradient_idml();
     let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
@@ -227,7 +227,7 @@ fn linear_gradient_fills_left_to_right_by_default() {
     assert_eq!(images.len(), 1);
     let img = &images[0];
 
-    // The gradient defaults to (0,0.5) → (1,0.5) in unit coords, so
+    // The gradient defaults to (0, 1) → (1, 1) in unit coords, so
     // the left of the 200 × 200 page should look like Color/Sun (warm
     // yellow) and the right should look like Color/Sky (cool blue).
     let left = *img.get_pixel(5, 100);
@@ -247,19 +247,18 @@ fn linear_gradient_fills_left_to_right_by_default() {
 }
 
 #[test]
-fn linear_gradient_rotated_90_degrees_runs_vertically() {
-    // Regression for Tier 1 #2: a rotated `GradientFillAngle`
-    // (= IDML's `<Gradient>` Angle) must rotate the gradient line
-    // through the rect centre. Before the fix the renderer hardcoded
-    // unit endpoints `(0, 0) → (0, 1)` which painted every gradient
-    // top-to-bottom regardless of the angle.
+fn linear_gradient_at_90_degrees_runs_bottom_to_top() {
+    // A `GradientFillAngle` turns the axis COUNTER-clockwise as seen on
+    // the page, so at 90° the warm `Color/Sun` (first stop) lies at the
+    // BOTTOM and the cool `Color/Sky` (last stop) at the TOP. Asked of
+    // InDesign (corpus/generated/gradient-geometry, case 7): its PDF
+    // axis for a square at 90° starts at the bottom-left corner and
+    // runs up the frame's width. This test used to pin the opposite
+    // ("90° = vertical-down per IDML convention"), which put the first
+    // stop of every vertical gradient at the wrong end.
     //
-    // At 90° (vertical-down per IDML convention) the warm `Color/Sun`
-    // (first stop) lives at the TOP and the cool `Color/Sky` (last
-    // stop) at the BOTTOM. The horizontal default test asserts the
-    // 0° = left→right axis; this one pins the 90° = top→bottom axis,
-    // so the two together reject a hardcoded direction in either
-    // orientation.
+    // The horizontal default test pins 0° = left → right; the two
+    // together reject a hardcoded direction in either orientation.
     let bytes = build_gradient_idml_with_angle(Some(90.0));
     let document = idml_import::import_idml_doc(&bytes).unwrap();
     let opts = PipelineOptions::default();
@@ -269,14 +268,14 @@ fn linear_gradient_rotated_90_degrees_runs_vertically() {
     let top = *img.get_pixel(100, 5);
     let bottom = *img.get_pixel(100, 195);
     assert!(
-        top.0[0] > top.0[2] + 50,
-        "expected warm top pixel at 90°, got {:?}",
-        top
+        bottom.0[0] > bottom.0[2] + 50,
+        "expected warm bottom pixel at 90°, got {:?}",
+        bottom
     );
     assert!(
-        bottom.0[2] > bottom.0[0] + 50,
-        "expected cool bottom pixel at 90°, got {:?}",
-        bottom
+        top.0[2] > top.0[0] + 50,
+        "expected cool top pixel at 90°, got {:?}",
+        top
     );
 
     // Sibling cross-check: the horizontal strip at the rect centre
