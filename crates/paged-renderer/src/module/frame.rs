@@ -51,10 +51,11 @@ pub(crate) struct ResolvedFrame<'a> {
     pub blend_mode: BlendMode,
     pub gradient_fill_angle: Option<f32>,
     /// `GradientFillLength` in pt — page-space length of the gradient
-    /// line through the frame centre. `None` ⇒ bbox diagonal.
+    /// axis from the start. `None` ⇒ the frame's width.
     pub gradient_fill_length: Option<f32>,
-    /// `GradientFillStart` in the frame's inner coordinates; places a
-    /// radial gradient (see [`paged_model::Rectangle::gradient_fill_start`]).
+    /// `GradientFillStart` in the frame's inner coordinates; anchors a
+    /// linear axis or centres a radial gradient (see
+    /// [`paged_model::Rectangle::gradient_fill_start`]).
     pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
     /// `gradient_fill_angle`, applied to the stroke gradient.

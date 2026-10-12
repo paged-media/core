@@ -6899,13 +6899,24 @@ fn emit_paragraph_lines(
                 .as_deref()
                 .and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
                 .unwrap_or(em.options.fallback_text_paint);
-            return Some((bullet_len as u32, apply_fill_tint(base, m.fill_tint)));
+            return Some((
+                bullet_len as u32,
+                apply_fill_tint_ctx(
+                    base,
+                    object_tint(em.palette, m.fill_color.as_deref(), m.fill_tint),
+                    &em.color_ctx,
+                ),
+            ));
         }
         let style_id = bullet_marker_character_style(&resolved_paragraph)?;
         let resolved = em.document.styles.resolve_character(style_id);
         let fill_id = resolved.fill_color.as_deref()?;
         let base = color_id_to_paint(fill_id, em.palette, em.color_ctx)?;
-        let paint = apply_fill_tint(base, resolved.fill_tint);
+        let paint = apply_fill_tint_ctx(
+            base,
+            object_tint(em.palette, Some(fill_id), resolved.fill_tint),
+            &em.color_ctx,
+        );
         Some((bullet_len as u32, paint))
     });
 
@@ -6952,7 +6963,15 @@ fn emit_paragraph_lines(
                 if tint < 0.0 {
                     p
                 } else {
-                    apply_fill_tint(p, Some(tint))
+                    apply_fill_tint_ctx(
+                        p,
+                        object_tint(
+                            em.palette,
+                            resolved_paragraph.shading.color.as_deref(),
+                            Some(tint),
+                        ),
+                        &em.color_ctx,
+                    )
                 }
             })
     } else {
@@ -6977,7 +6996,11 @@ fn emit_paragraph_lines(
         if tint < 0.0 {
             Some(base)
         } else {
-            Some(apply_fill_tint(base, Some(tint)))
+            Some(apply_fill_tint_ctx(
+                base,
+                object_tint(em.palette, Some(id), Some(tint)),
+                &em.color_ctx,
+            ))
         }
     };
     let rule_above_paint = resolve_rule_paint(&resolved_paragraph.rule_above);
@@ -6996,7 +7019,15 @@ fn emit_paragraph_lines(
                 if tint < 0.0 {
                     p
                 } else {
-                    apply_fill_tint(p, Some(tint))
+                    apply_fill_tint_ctx(
+                        p,
+                        object_tint(
+                            em.palette,
+                            resolved_paragraph.border.color.as_deref(),
+                            Some(tint),
+                        ),
+                        &em.color_ctx,
+                    )
                 }
             })
     } else {

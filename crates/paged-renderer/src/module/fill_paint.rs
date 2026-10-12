@@ -25,8 +25,8 @@ use paged_model::Graphic;
 use super::geometry::{emit_filled, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
-    apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
-    ColorCtx,
+    apply_fill_tint_ctx, color_id_to_paint_with_list_dir, frame_fill_is_transparent, object_tint,
+    BuiltPage, ColorCtx,
 };
 
 /// Resolve and emit the frame fill. `fill_path`, when `Some`, routes
@@ -75,7 +75,11 @@ pub(crate) fn fill_paint_module(
             )
         })
         .unwrap_or(fallback);
-    let fill = apply_fill_tint(fill, frame.fill_tint);
+    let fill = apply_fill_tint_ctx(
+        fill,
+        object_tint(palette, frame.fill_color, frame.fill_tint),
+        &color_ctx,
+    );
     // Q-08: Polygon fills route through `emit_fill_path`, whose
     // path_transform = `outer` directly (the path lives in inner-
     // anchor coords). A gradient paint's endpoints are stored in
@@ -99,8 +103,10 @@ pub(crate) fn fill_paint_module(
         }
         _ => fill,
     };
-    if let Paint::RadialGradient(gid) = fill {
-        place_radial_at_start(page, gid, frame);
+    match fill {
+        Paint::LinearGradient(gid) => place_linear_at_start(page, gid, frame),
+        Paint::RadialGradient(gid) => place_radial_at_start(page, gid, frame),
+        _ => {}
     }
     let start = page.list.commands.len();
     emit_filled(
@@ -125,6 +131,66 @@ fn rebase_gradient_to_bbox(page: &mut BuiltPage, gid: paged_compose::GradientId,
     if let Some(g) = page.list.gradients.get_mut(idx) {
         g.start = (bbox.x + g.start.0 * bbox.w, bbox.y + g.start.1 * bbox.h);
         g.end = (bbox.x + g.end.0 * bbox.w, bbox.y + g.end.1 * bbox.h);
+    }
+}
+
+/// An explicit `GradientFillStart` anchors a linear gradient's axis: it
+/// runs from the start (the frame's inner coordinates) for
+/// `GradientFillLength` pt in the direction `(cos θ, −sin θ)` — asked of
+/// InDesign, `gradient-geometry` cases 19–21: `start 50 80, length 60`
+/// at 90° on a 100 × 100 frame ramps from y 80 UP to y 20. A missing or
+/// non-positive length is the frame's width, as for the default
+/// placement (`pipeline::color_paint::linear_gradient_endpoints`).
+///
+/// A polygon's gradient is already in inner coordinates (see
+/// [`rebase_gradient_to_bbox`]); a rect's, a text frame's and an oval's
+/// are in its unit rectangle, which the rasterisers map back to the
+/// page by the endpoints alone, so the axis keeps its angle on a
+/// non-square frame.
+fn place_linear_at_start(
+    page: &mut BuiltPage,
+    gid: paged_compose::GradientId,
+    frame: &ResolvedFrame<'_>,
+) {
+    let Some([sx, sy]) = frame.gradient_fill_start else {
+        return;
+    };
+    if !(sx.is_finite() && sy.is_finite()) {
+        return;
+    }
+    let bbox = match frame.geometry {
+        Geometry::Rect { rect }
+        | Geometry::TextFrameRect { rect }
+        | Geometry::Oval { rect }
+        | Geometry::Polygon { bbox: rect, .. } => rect,
+        Geometry::Line { .. } => return,
+    };
+    if !(bbox.w > 0.0 && bbox.h > 0.0) {
+        return;
+    }
+    let len = frame
+        .gradient_fill_length
+        .filter(|l| l.is_finite() && *l > 0.0)
+        .unwrap_or(bbox.w);
+    let (sin, cos) = frame
+        .gradient_fill_angle
+        .unwrap_or(0.0)
+        .to_radians()
+        .sin_cos();
+    let (ex, ey) = (sx + len * cos, sy - len * sin);
+    let Some(g) = page.list.gradients.get_mut(gid.0 as usize) else {
+        return;
+    };
+    match frame.geometry {
+        Geometry::Polygon { .. } => {
+            g.start = (sx, sy);
+            g.end = (ex, ey);
+        }
+        _ => {
+            let unit = |x: f32, y: f32| ((x - bbox.x) / bbox.w, (y - bbox.y) / bbox.h);
+            g.start = unit(sx, sy);
+            g.end = unit(ex, ey);
+        }
     }
 }
 
