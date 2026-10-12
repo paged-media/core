@@ -76,11 +76,21 @@ max_mean_for() {
 # (fidelity-thresholds.json: "0.25 pt frame strokes the CPU rasteriser
 # paints lighter"). Sized by that lane's rule: mean = worst * 1.20,
 # SSIM = worst - 0.005. Any other fixture keeps the global budget.
+# Text as text (core PR #51, 2026-10-12): the exporter now embeds the face
+# instead of drawing every glyph as an outline, and poppler draws embedded
+# glyphs through FreeType's hinted rasteriser rather than filling paths.
+# Placement is unchanged (reflow p1: best horizontal shift between the
+# outline-era and the text-era raster is 0 px; ink 11.32 → 10.82 against
+# the renderer's 10.64, i.e. CLOSER), but hinted stems move SSIM on the
+# densest text pages: reflow 0.9525 → 0.9125, list-overrides 0.9118 →
+# 0.9058, list-marker-styles 0.9117 → 0.9048 (mean ΔE stays inside its
+# budget). Same sizing rule as above, SSIM = worst - 0.005.
 min_ssim_for() {
   case "$1" in
     list-markers) echo 0.915 ;;
-    list-overrides) echo 0.906 ;;
-    list-marker-styles) echo 0.906 ;;
+    list-overrides) echo 0.900 ;;
+    list-marker-styles) echo 0.899 ;;
+    reflow) echo 0.907 ;;
     *) echo "$MIN_SSIM" ;;
   esac
 }
