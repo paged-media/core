@@ -1,5 +1,6 @@
 {
   "_comment": [
+    "\"text_gate\": true opts a fixture into corpus/generated/text-diff.sh, which compares what InDesign's reference PRINTS (pdftotext) with the lines the engine lays out, page by page, as a character multiset; \"lines\" also compares the line breaks. Opt a fixture in once it passes; never opt one out to make a failure go away.",
     "Per-fixture worst-page tolerances for the generated IDML/PDF corpus.",
     "Each fixture's renderer-vs-pdftoppm output is gated on these numbers in",
     "CI (.github/workflows/fidelity.yml -> corpus/generated/diff.sh).",
@@ -30,6 +31,7 @@
   "fixtures": [
     {
       "name": "anchored",
+      "text_gate": true,
       "max_pages_with_pdf": 12,
       "max_mean_de": 0.309,
       "max_p99_de": 5.18,
@@ -38,6 +40,7 @@
     },
     {
       "name": "inline-objects",
+      "text_gate": true,
       "max_pages_with_pdf": 7,
       "max_mean_de": 0.297,
       "max_p99_de": 9.81,
@@ -70,6 +73,7 @@
     },
     {
       "name": "corners",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.993,
       "max_p99_de": 22.83,
@@ -94,6 +98,7 @@
     },
     {
       "name": "geometry",
+      "text_gate": true,
       "max_pages_with_pdf": 20,
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
@@ -102,6 +107,7 @@
     },
     {
       "name": "geometry-groups",
+      "text_gate": true,
       "max_pages_with_pdf": 6,
       "max_mean_de": 0.2,
       "max_p99_de": 1.0,
@@ -110,6 +116,7 @@
     },
     {
       "name": "gradients",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.2,
       "max_p99_de": 1.3,
@@ -118,6 +125,7 @@
     },
     {
       "name": "image-clipping",
+      "text_gate": true,
       "max_pages_with_pdf": 4,
       "max_mean_de": 0.683,
       "max_p99_de": 42.72,
@@ -134,6 +142,7 @@
     },
     {
       "name": "layers-z",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
@@ -142,6 +151,7 @@
     },
     {
       "name": "layout",
+      "text_gate": true,
       "max_pages_with_pdf": 11,
       "max_mean_de": 0.764,
       "max_p99_de": 54.38,
@@ -150,6 +160,7 @@
     },
     {
       "name": "keeps",
+      "text_gate": true,
       "max_pages_with_pdf": 8,
       "max_mean_de": 0.176,
       "max_p99_de": 0.3,
@@ -158,6 +169,7 @@
     },
     {
       "name": "reflow",
+      "text_gate": true,
       "max_pages_with_pdf": 3,
       "max_mean_de": 0.636,
       "max_p99_de": 17.45,
@@ -166,6 +178,7 @@
     },
     {
       "name": "keeps-reflow",
+      "text_gate": true,
       "max_pages_with_pdf": 9,
       "max_mean_de": 1.374,
       "max_p99_de": 47.6,
@@ -174,6 +187,7 @@
     },
     {
       "name": "links-broken",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.52,
       "max_p99_de": 22.83,
@@ -182,6 +196,7 @@
     },
     {
       "name": "links-ok",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.262,
       "max_p99_de": 0.3,
@@ -198,6 +213,7 @@
     },
     {
       "name": "masters",
+      "text_gate": true,
       "max_pages_with_pdf": 3,
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
@@ -214,6 +230,7 @@
     },
     {
       "name": "nested-groups",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.075,
       "max_p99_de": 0.3,
@@ -222,6 +239,7 @@
     },
     {
       "name": "numbering",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
@@ -238,6 +256,7 @@
     },
     {
       "name": "preflight",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.942,
       "max_p99_de": 41.26,
@@ -262,6 +281,7 @@
     },
     {
       "name": "styles-cascade",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.89,
       "max_p99_de": 22.83,
@@ -270,6 +290,7 @@
     },
     {
       "name": "swatches",
+      "text_gate": true,
       "max_pages_with_pdf": 3,
       "max_mean_de": 0.18,
       "max_p99_de": 0.3,
@@ -278,6 +299,7 @@
     },
     {
       "name": "tables",
+      "text_gate": true,
       "max_pages_with_pdf": 13,
       "max_mean_de": 0.215,
       "max_p99_de": 3.0,
@@ -286,6 +308,7 @@
     },
     {
       "name": "tables-overset",
+      "text_gate": true,
       "max_pages_with_pdf": 6,
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
@@ -294,6 +317,7 @@
     },
     {
       "name": "tables-rows",
+      "text_gate": true,
       "max_pages_with_pdf": 12,
       "max_mean_de": 0.19,
       "max_p99_de": 3.8,
@@ -302,6 +326,7 @@
     },
     {
       "name": "text",
+      "text_gate": true,
       "max_pages_with_pdf": 19,
       "max_mean_de": 0.401,
       "max_p99_de": 0.3,
@@ -318,6 +343,7 @@
     },
     {
       "name": "text-autosize",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.568,
       "max_p99_de": 0.3,
@@ -358,6 +384,7 @@
     },
     {
       "name": "text-wrap",
+      "text_gate": true,
       "max_pages_with_pdf": 6,
       "max_mean_de": 0.257,
       "max_p99_de": 8.92,
@@ -366,6 +393,7 @@
     },
     {
       "name": "transparency",
+      "text_gate": true,
       "max_pages_with_pdf": 12,
       "max_mean_de": 0.05,
       "max_p99_de": 1.08,
@@ -374,6 +402,7 @@
     },
     {
       "name": "variables",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.156,
       "max_p99_de": 3.98,
@@ -382,6 +411,7 @@
     },
     {
       "name": "start-paragraph",
+      "text_gate": true,
       "max_pages_with_pdf": 40,
       "max_mean_de": 0.119,
       "max_p99_de": 0.3,
@@ -390,6 +420,7 @@
     },
     {
       "name": "forced-line-break",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.484,
       "max_p99_de": 15.13,
@@ -398,6 +429,7 @@
     },
     {
       "name": "soft-hyphens",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.529,
       "max_p99_de": 7.67,
@@ -406,6 +438,7 @@
     },
     {
       "name": "list-markers",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.739,
       "max_p99_de": 15.14,
@@ -430,6 +463,7 @@
     },
     {
       "name": "span-columns",
+      "text_gate": true,
       "max_pages_with_pdf": 17,
       "max_mean_de": 0.195,
       "max_p99_de": 0.3,
@@ -438,6 +472,7 @@
     },
     {
       "name": "split-boundaries",
+      "text_gate": true,
       "max_pages_with_pdf": 24,
       "max_mean_de": 0.149,
       "max_p99_de": 0.3,
@@ -446,6 +481,7 @@
     },
     {
       "name": "tab-breaks",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.211,
       "max_p99_de": 3.842,
@@ -454,6 +490,7 @@
     },
     {
       "name": "stroke-inset",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.273,
       "max_p99_de": 5.37,
@@ -462,6 +499,7 @@
     },
     {
       "name": "shaped-bands",
+      "text_gate": true,
       "max_pages_with_pdf": 3,
       "max_mean_de": 0.546,
       "max_p99_de": 14.87,
@@ -470,6 +508,7 @@
     },
     {
       "name": "blank-paragraphs",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.006,
       "max_p99_de": 0.01,
@@ -478,6 +517,7 @@
     },
     {
       "name": "mixed-leading",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.043,
       "max_p99_de": 0.01,
@@ -486,6 +526,7 @@
     },
     {
       "name": "hard-hyphen",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.156,
       "max_p99_de": 1.78,
@@ -494,6 +535,7 @@
     },
     {
       "name": "line-ends",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.596,
       "max_p99_de": 2.34,
@@ -502,6 +544,7 @@
     },
     {
       "name": "line-shadows",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.061,
       "max_p99_de": 2.25,
@@ -510,6 +553,7 @@
     },
     {
       "name": "rect-shadows",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.175,
       "max_p99_de": 4.62,

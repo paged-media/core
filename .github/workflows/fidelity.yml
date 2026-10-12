@@ -120,6 +120,15 @@ jobs:
           fi
           exit "$rc"
 
+      - name: text-layer gate (hard for opted-in fixtures)
+        # The pixel gate above cannot see missing words: twelve glyphs on
+        # an A4 page move neither its mean ΔE nor its p99. This compares
+        # WHAT is printed — pdftotext of InDesign's reference against the
+        # lines the engine laid out — page by page, for every fixture with
+        # "text_gate" in fidelity-thresholds.json. Colour-independent, so
+        # it gates even where the pixel gate is inconclusive.
+        run: ./corpus/generated/text-diff.sh
+
       - name: upload generated-corpus heatmaps on failure
         if: failure()
         uses: actions/upload-artifact@v4
