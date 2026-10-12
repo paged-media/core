@@ -1121,6 +1121,25 @@ pub(super) fn apply_dissolve_group(
     let Some((spread_idx, group_idx)) = found else {
         return Err(OperationError::NodeNotFound(node));
     };
+    // C-84 — an EMPTY group (a file can hold one; a removal no longer
+    // leaves one behind) has nothing to release, so dissolving it removes
+    // it — through the removal that captures it whole. Its inverse used to
+    // be a `CreateGroup` with no members, which is refused: the undo
+    // failed and the group was gone.
+    if doc.spreads[spread_idx].spread.groups[group_idx]
+        .members
+        .is_empty()
+    {
+        let removed = super::remove_node::apply_remove_node(doc, &node)?;
+        return Ok(AppliedOperation {
+            op: Operation::DissolveGroup {
+                group_id: group_id.to_string(),
+                restore_slots: restore_slots.map(<[u32]>::to_vec),
+            },
+            inverse: removed.inverse,
+            invalidation: removed.invalidation,
+        });
+    }
     let spread = &doc.spreads[spread_idx].spread;
 
     // Where does this group live? Either nested inside a parent group

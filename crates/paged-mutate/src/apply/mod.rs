@@ -109,6 +109,9 @@ pub(crate) fn apply_inner(
     doc: &mut Document,
     op: &Operation,
 ) -> Result<AppliedOperation, OperationError> {
+    // C-77 — a locked page item is not moved, reshaped, restacked or
+    // removed, whichever surface asks (see `lock`).
+    lock::refuse_if_locked(doc, op)?;
     match op {
         // ADR 132 — the typed value forms (`Number`, `Enum`, `Ref`) fold into
         // the variants the arms match on, so one apply path serves both.
@@ -903,10 +906,12 @@ mod helpers;
 mod hyperlink;
 mod insert_node;
 mod layer;
+mod lock;
 /// ADR 132 — model → wire-spec readers, for the `Set` resolver: a
 /// virtual path on a swatch, gradient or numbering list is an edit of the
 /// whole spec, read here, merged and written back.
 pub use layer::{gradient_spec_from_entry, numbering_list_spec_from_def, swatch_spec_from_entry};
+pub use lock::is_locked;
 mod master;
 mod move_node;
 mod nested;

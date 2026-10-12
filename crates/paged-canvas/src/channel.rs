@@ -2400,6 +2400,10 @@ pub enum GestureFailure {
     UnknownAnchorPage {
         page_id: PageId,
     },
+    /// C-77 — the element (or a member of the dragged group) is locked.
+    Locked {
+        id: crate::element_selection::ElementId,
+    },
     Other {
         message: String,
     },
@@ -2421,6 +2425,7 @@ impl From<crate::gesture::GestureError> for GestureFailure {
             Mutate(msg) => GestureFailure::Other { message: msg },
             MissingAnchor => GestureFailure::MissingAnchor,
             UnknownAnchorPage(page_id) => GestureFailure::UnknownAnchorPage { page_id },
+            Locked(id) => GestureFailure::Locked { id },
         }
     }
 }

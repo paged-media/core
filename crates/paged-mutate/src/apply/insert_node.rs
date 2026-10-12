@@ -425,6 +425,152 @@ fn insert_captured_table(
     })
 }
 
+/// C-84 — one group a removal left empty, as
+/// [`take_emptied_groups`](super::remove_node::take_emptied_groups)
+/// captured it.
+struct EmptiedGroup {
+    group: paged_model::Group,
+    /// Its index in `spread.groups`.
+    index: usize,
+    /// The group that held it; `None` — the spread's z-order.
+    parent_group: Option<String>,
+    /// Its slot in that list.
+    slot: Option<usize>,
+    labels: Option<Vec<(String, String)>>,
+}
+
+/// The `emptiedGroups` of a capture envelope with the spread they were
+/// on; `None` when the removal emptied no group.
+#[allow(clippy::type_complexity)]
+fn decode_emptied_groups(
+    envelope: &mut serde_json::Value,
+) -> Result<Option<(String, Vec<EmptiedGroup>)>, String> {
+    let Some(list) = envelope
+        .get_mut("emptiedGroups")
+        .map(serde_json::Value::take)
+    else {
+        return Ok(None);
+    };
+    let spread = envelope
+        .get("spread")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("emptied groups without their spread")?
+        .to_string();
+    let serde_json::Value::Array(entries) = list else {
+        return Err("emptiedGroups is not a list".to_string());
+    };
+    let mut groups = Vec::with_capacity(entries.len());
+    for mut entry in entries {
+        let group: paged_model::Group = serde_json::from_value(entry["item"].take())
+            .map_err(|e| format!("emptied group: {e}"))?;
+        if group.self_id.is_none() || !group.members.is_empty() {
+            return Err("an emptied group has an id and no members".to_string());
+        }
+        let index = entry["index"]
+            .as_u64()
+            .ok_or("emptied group without its index")? as usize;
+        let parent_group = entry["parentGroup"].as_str().map(str::to_string);
+        let slot = entry["slot"].as_u64().map(|v| v as usize);
+        let labels = serde_json::from_value(entry["labels"].take())
+            .map_err(|e| format!("emptied group labels: {e}"))?;
+        groups.push(EmptiedGroup {
+            group,
+            index,
+            parent_group,
+            slot,
+            labels,
+        });
+    }
+    if groups.is_empty() {
+        return Err("emptiedGroups is empty".to_string());
+    }
+    Ok(Some((spread, groups)))
+}
+
+/// Check, before anything is touched, that the emptied groups can go
+/// back: their spread exists, none of their ids is taken, each one's
+/// parent group exists or is re-created before it, and — when an item
+/// follows them in (`item`: its position and the length of its kind vec)
+/// — that position is in range.
+#[allow(clippy::type_complexity)]
+fn check_emptied_groups(
+    doc: &Document,
+    spread_id: &str,
+    groups: &[EmptiedGroup],
+    item: Option<(usize, &dyn Fn(&Spread) -> usize)>,
+) -> Result<(), OperationError> {
+    let spread_node = NodeId::Spread(spread_id.to_string());
+    let spread = &doc
+        .spreads
+        .iter()
+        .find(|p| p.spread.self_id.as_deref() == Some(spread_id))
+        .ok_or_else(|| OperationError::NodeNotFound(spread_node.clone()))?
+        .spread;
+    let group_exists = |id: &str| {
+        doc.spreads.iter().any(|p| {
+            p.spread
+                .groups
+                .iter()
+                .any(|g| g.self_id.as_deref() == Some(id))
+        })
+    };
+    let mut restored: Vec<&str> = Vec::new();
+    for g in groups {
+        let id = g.group.self_id.as_deref().expect("decoded with an id");
+        if group_exists(id) || restored.contains(&id) {
+            return Err(OperationError::DuplicateNodeId { id: id.to_string() });
+        }
+        if let Some(pid) = &g.parent_group {
+            let on_spread = spread
+                .groups
+                .iter()
+                .any(|x| x.self_id.as_deref() == Some(pid.as_str()));
+            if !on_spread && !restored.contains(&pid.as_str()) {
+                return Err(OperationError::NodeNotFound(NodeId::Group(pid.clone())));
+            }
+        }
+        restored.push(id);
+    }
+    if let Some((position, len)) = item {
+        let len = len(spread);
+        if position > len {
+            return Err(OperationError::InvalidPosition {
+                parent: spread_node,
+                position,
+                len,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Re-create, outermost first, the groups a removal emptied — each at
+/// the index it held in `spread.groups`, in the list that named it (the
+/// spread's z-order or its parent group's members) at its slot there.
+fn restore_emptied_groups(spread: &mut Spread, groups: Vec<EmptiedGroup>) {
+    for g in groups {
+        let index = g.index.min(spread.groups.len());
+        let id = g.group.self_id.clone().expect("decoded with an id");
+        spread.groups.insert(index, g.group);
+        let r = FrameRef::Group(index);
+        match &g.parent_group {
+            None => register_frame_ref(spread, r, index, g.slot),
+            Some(pid) => {
+                register_frame_ref(spread, r, index, None);
+                let parent = spread
+                    .groups
+                    .iter()
+                    .position(|x| x.self_id.as_deref() == Some(pid.as_str()))
+                    .expect("checked: the parent exists or was re-created first");
+                seat_in_group(spread, r, parent, g.slot);
+            }
+        }
+        if let Some(labels) = g.labels {
+            spread.labels.insert(id, labels);
+        }
+    }
+}
+
 /// C-75 — re-insert a node `RemoveNode` captured whole
 /// ([`NodeSpec::Captured`]): the model struct goes back verbatim, with
 /// its image bytes and the side-map rows that left the spread with it.
@@ -452,14 +598,40 @@ fn apply_insert_captured(
         return insert_captured_table(doc, parent, position, node, story_id, table_id, json)
             .map_err(|e| e.unwrap_or_else(|| malformed("no paragraph".to_string())));
     }
-    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
+    let mut envelope: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| malformed(e.to_string()))?;
+    // C-84 — the groups the removal emptied ride in the capture,
+    // outermost first; they are re-created before the item goes back
+    // into the innermost one.
+    let emptied = decode_emptied_groups(&mut envelope).map_err(malformed)?;
+    if let NodeId::Group(_) = node {
+        // An emptied group on its own: what dissolving an empty group
+        // (or re-inserting this capture's inverse) removed.
+        let Some((spread_id, groups)) = emptied else {
+            return Err(malformed("no groups".to_string()));
+        };
+        check_emptied_groups(doc, &spread_id, &groups, None)?;
+        let spread = find_spread_mut(doc, &spread_id).expect("checked above");
+        restore_emptied_groups(&mut spread.spread, groups);
+        return Ok(AppliedOperation {
+            op: Operation::InsertNode {
+                parent: parent.clone(),
+                position,
+                node: spec.clone(),
+                z_slot,
+            },
+            inverse: Operation::RemoveNode { node: node.clone() },
+            invalidation: InvalidationHint {
+                structural: true,
+                ..Default::default()
+            },
+        });
+    }
     if node_exists(doc, node) {
         return Err(OperationError::DuplicateNodeId {
             id: node.self_id().to_string(),
         });
     }
-    let mut envelope: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| malformed(e.to_string()))?;
     let item = envelope
         .get_mut("item")
         .map(serde_json::Value::take)
@@ -508,6 +680,19 @@ fn apply_insert_captured(
         .transpose()
         .map_err(decode)?
         .flatten();
+    if let Some((spread_id, groups)) = emptied {
+        let len = |s: &Spread| match &item {
+            Item::TextFrame(_) => s.text_frames.len(),
+            Item::Rectangle(_) => s.rectangles.len(),
+            Item::Oval(_) => s.ovals.len(),
+            Item::GraphicLine(_) => s.graphic_lines.len(),
+            Item::Polygon(_) => s.polygons.len(),
+        };
+        check_emptied_groups(doc, &spread_id, &groups, Some((position, &len)))?;
+        let spread = find_spread_mut(doc, &spread_id).expect("checked above");
+        restore_emptied_groups(&mut spread.spread, groups);
+    }
+    let (parent_id, group_home) = resolve_parent(doc, parent, spec)?;
 
     let mut minted: Option<String> = None;
     if let Item::TextFrame(frame) = &item {
