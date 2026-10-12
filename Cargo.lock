@@ -1662,7 +1662,7 @@ dependencies = [
 [[package]]
 name = "idml-export"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=9be97e91ceff16d630a7353763cf1d6bc39c7214#9be97e91ceff16d630a7353763cf1d6bc39c7214"
+source = "git+https://github.com/paged-media/plugin-publish?rev=197e236b83c9532d71a5dd4b90c2d858f52329b1#197e236b83c9532d71a5dd4b90c2d858f52329b1"
 dependencies = [
  "base64",
  "idml-import",
@@ -1677,7 +1677,7 @@ dependencies = [
 [[package]]
 name = "idml-import"
 version = "0.0.0"
-source = "git+https://github.com/paged-media/plugin-publish?rev=9be97e91ceff16d630a7353763cf1d6bc39c7214#9be97e91ceff16d630a7353763cf1d6bc39c7214"
+source = "git+https://github.com/paged-media/plugin-publish?rev=197e236b83c9532d71a5dd4b90c2d858f52329b1#197e236b83c9532d71a5dd4b90c2d858f52329b1"
 dependencies = [
  "base64",
  "bytes",

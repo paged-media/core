@@ -19,7 +19,7 @@ cpu = ["paged-renderer/cpu"]
 
 [dependencies]
 paged-renderer = { path = "../paged-renderer", default-features = false }
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "9be97e91ceff16d630a7353763cf1d6bc39c7214" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "197e236b83c9532d71a5dd4b90c2d858f52329b1" }
 paged-model = { path = "../paged-model" }
 paged-scene = { path = "../paged-scene" }
 paged-compose = { path = "../paged-compose" }
@@ -35,7 +35,7 @@ paged-export-pdf = { path = "../paged-export-pdf" }
 # paged-scene, so this introduces no cycle; both are wasm-clean
 # (no native-only deps), so the export path compiles into the wasm
 # worker too.
-idml-export = { git = "https://github.com/paged-media/plugin-publish", rev = "9be97e91ceff16d630a7353763cf1d6bc39c7214" }
+idml-export = { git = "https://github.com/paged-media/plugin-publish", rev = "197e236b83c9532d71a5dd4b90c2d858f52329b1" }
 # S7 — persist the composition (`document.pgd`) into the `.paged` container.
 # paged-composition is a pure leaf (paged-flow + serde, no IDML/render), so
 # it is wasm-clean and introduces no cycle.
