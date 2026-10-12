@@ -3645,6 +3645,83 @@ fn footnotes_are_captured_onto_their_host_page() {
     );
 }
 
+/// A paragraph split at a forced line break (`<Br/>`) is emitted piece by
+/// piece; its footnotes are still set, numbered through the story, once
+/// each.
+#[test]
+fn footnotes_survive_a_forced_line_break_in_their_paragraph() {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let mut file = |name: &str, body: &str, opts| {
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(body.as_bytes()).unwrap();
+    };
+    file(
+        "mimetype",
+        "application/vnd.adobe.indesign-idml-package",
+        stored,
+    );
+    file(
+        "designmap.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
+  <idPkg:Story src="Stories/Story_s1.xml"/>
+</Document>"#,
+        deflated,
+    );
+    file(
+        "Spreads/Spread_sp1.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 400 612"/>
+    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 380 572"/>
+  </Spread>
+</idPkg:Spread>"#,
+        deflated,
+    );
+    file(
+        "Stories/Story_s1.xml",
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="s1">
+    <ParagraphStyleRange>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12">
+        <Content>First line of the host.</Content>
+        <Br/>
+        <Content>Second line of the host.</Content>
+        <Footnote Self="Footnote/fn1">
+          <ParagraphStyleRange>
+            <CharacterStyleRange>
+              <Content>The only footnote.</Content>
+            </CharacterStyleRange>
+          </ParagraphStyleRange>
+        </Footnote>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#,
+        deflated,
+    );
+    let bytes = zip.finish().unwrap().into_inner();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let font_bytes = inter_font_bytes();
+    let options = PipelineOptions {
+        font: Some(&font_bytes),
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let notes: Vec<_> = built.pages.iter().flat_map(|p| &p.footnotes).collect();
+    assert_eq!(notes.len(), 1, "the split paragraph's footnote is set once");
+    assert_eq!(notes[0].number, 1);
+    assert_eq!(notes[0].footnote_self_id.as_deref(), Some("Footnote/fn1"));
+}
+
 /// W1.7 — shared fixture for the footnote space-reservation tests:
 /// a SHORT frame whose body paragraph anchors `footnote_count`
 /// footnotes, each with a long body so the accumulated pool is a

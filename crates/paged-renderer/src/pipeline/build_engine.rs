@@ -3329,6 +3329,7 @@ pub(super) fn build_document_inner(
             // ADR 028 — the breaks the next pass must force; equal to
             // `forced_breaks` when this pass satisfied every keep option.
             let next_forced = emitter.keep_breaks();
+            let reserve_caps = emitter.footnote_reserve_caps();
             let keeps_changed = next_forced != forced_breaks;
             forced_breaks = next_forced;
 
@@ -3358,8 +3359,12 @@ pub(super) fn build_document_inner(
                     let mut next_reserved = vec![0i32; reserved_64.len()];
                     for (frame_idx, key) in frame_host_keys.iter().enumerate() {
                         if let Some(h_pt) = pool_heights.get(key) {
-                            next_reserved[frame_idx] =
+                            let pool_64 =
                                 (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+                            next_reserved[frame_idx] = match reserve_caps.get(frame_idx) {
+                                Some(Some(cap_64)) => pool_64.min(*cap_64),
+                                _ => pool_64,
+                            };
                         }
                     }
                     if next_reserved == reserved_64 || p + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
@@ -3759,11 +3764,14 @@ pub(super) fn build_document_inner(
 /// Hand the pending footnotes whose anchor is at or before byte `up_to`
 /// (all of them for `None`) to the page of the frame being filled: the
 /// frame their reference's line is in. They are numbered in the order
-/// they are captured, through the story.
+/// they are captured, through the story. `ref_baseline_64` is how far down
+/// the frame the references stand (the line's baseline): the frame's pool
+/// may never reserve that room (see [`StoryEmitter::footnote_reserve_caps`]).
 pub(super) fn capture_footnotes(
     em: &mut StoryEmitter,
     pages: &mut [BuiltPage],
     up_to: Option<u32>,
+    ref_baseline_64: i32,
 ) {
     let take = em
         .pending_footnotes
@@ -3787,6 +3795,9 @@ pub(super) fn capture_footnotes(
         w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
         h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
     };
+    if let Some(slot) = em.footnote_ref_baseline_64.get_mut(em.frame_idx) {
+        *slot = (*slot).max(ref_baseline_64);
+    }
     for (_, note) in em.pending_footnotes.drain(..take) {
         em.footnote_counter += 1;
         pages[page].footnotes.push(EmittedFootnote {
@@ -4017,6 +4028,11 @@ pub(super) struct StoryEmitter<'a> {
     /// one more. InDesign numbers footnotes through the story by default
     /// (`restartNumbering = DONT_RESTART`, measured, ADR 034 case 7).
     pub(super) footnote_counter: u32,
+    /// Per chain frame (1/64 pt): the lowest baseline of a line that
+    /// carried a captured footnote reference this pass. The frame's pool
+    /// reservation is capped above it, so a note never pushes its own
+    /// reference out of the frame (InDesign oversets the note instead).
+    pub(super) footnote_ref_baseline_64: Vec<i32>,
     /// Track 2: per-line records collected when
     /// `options.collect_breaks` is set. Drained by `take_breaks` once
     /// the story finishes emitting.
@@ -4278,6 +4294,7 @@ impl<'a> StoryEmitter<'a> {
             pending_footnotes: Vec::new(),
             in_segments: false,
             footnote_counter: 0,
+            footnote_ref_baseline_64: vec![0; len],
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
@@ -4463,6 +4480,24 @@ impl<'a> StoryEmitter<'a> {
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
     /// options to hold (`forced` itself when every rule held).
+    /// The most each chain frame's footnote pool may reserve (1/64 pt):
+    /// the room below the lowest line that carried one of its references.
+    /// `None` for a frame that holds no reference.
+    pub(super) fn footnote_reserve_caps(&self) -> Vec<Option<i32>> {
+        self.chain
+            .iter()
+            .zip(&self.footnote_ref_baseline_64)
+            .map(|(frame, &baseline_64)| {
+                (baseline_64 > 0).then(|| {
+                    let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
+                        * paged_text::shape::ADVANCE_PRECISION)
+                        .round() as i32;
+                    (frame_height_64 - baseline_64).max(0)
+                })
+            })
+            .collect()
+    }
+
     pub(super) fn keep_breaks(&self) -> super::keeps::ForcedBreaks {
         super::keeps::keep_breaks(
             &self.placements,
@@ -5317,6 +5352,22 @@ fn emit_paragraph_lines(
     // stay lines of ONE paragraph: `SegmentState` withholds what only
     // the paragraph's first / last line carries, and keeps the lines'
     // bytes and indices paragraph-wide.
+    // A footnote is set at the foot of the frame holding its REFERENCE's
+    // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
+    // the line holding each one's anchor is placed (`capture_footnotes`).
+    // Queued once for the whole paragraph, before a split: the pieces of a
+    // split paragraph report paragraph-wide bytes, so the anchors hold.
+    if !em.in_segments {
+        em.pending_footnotes = paragraph
+            .footnotes
+            .iter()
+            .map(|f| {
+                let byte = paragraph.byte_of_char_offset(f.anchor.unwrap_or(0)) as u32;
+                (byte, f.clone())
+            })
+            .collect();
+        em.pending_footnotes.sort_by_key(|(byte, _)| *byte);
+    }
     if paragraph
         .runs
         .iter()
@@ -5340,20 +5391,6 @@ fn emit_paragraph_lines(
         return;
     }
 
-    // A footnote is set at the foot of the frame holding its REFERENCE's
-    // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
-    // the line holding each one's anchor is placed (`capture_footnotes`).
-    if !em.in_segments {
-        em.pending_footnotes = paragraph
-            .footnotes
-            .iter()
-            .map(|f| {
-                let byte = paragraph.byte_of_char_offset(f.anchor.unwrap_or(0)) as u32;
-                (byte, f.clone())
-            })
-            .collect();
-        em.pending_footnotes.sort_by_key(|(byte, _)| *byte);
-    }
     // Empty paragraph: a sub-paragraph produced by `<Br/><Br/>` and
     // similar patterns. Advance the baseline cursor by one line of
     // auto-leading at the paragraph style's resolved point size so
@@ -5366,8 +5403,10 @@ fn emit_paragraph_lines(
         .iter()
         .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
     if !runs_have_text {
-        // No line will carry them: its notes go with the frame it is in.
-        capture_footnotes(em, pages, None);
+        // No line will carry them: the notes anchored up to here go with the
+        // frame it is in (all that are left, when it closes the paragraph).
+        let up_to = (!em.segment.closes_paragraph).then_some(em.segment.byte_base);
+        capture_footnotes(em, pages, up_to, em.y_cursor);
         let resolved_paragraph = em
             .segment
             .mask(em.document.resolved_paragraph_attrs(paragraph));
@@ -7421,11 +7460,14 @@ fn emit_paragraph_lines(
                 clusters,
                 marker,
             });
-            // The notes whose reference stands on this line; all that are
-            // left on the paragraph's last line.
-            let line_end = seg.byte_base + model_byte(line.byte_range.end as u32);
+        }
+        // The notes whose reference stands on this line go to its frame; all
+        // that are left, on the paragraph's last line. Every build does this,
+        // not only one that collects line records.
+        {
+            let line_end = em.segment.byte_base + model_byte(line.byte_range.end as u32);
             let last_line = em.segment.closes_paragraph && current_line_idx == last_line_index;
-            capture_footnotes(em, pages, (!last_line).then_some(line_end));
+            capture_footnotes(em, pages, (!last_line).then_some(line_end), line.baseline_y);
         }
 
         // Where this line's in-line objects landed; their placeholder
