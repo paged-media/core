@@ -1736,7 +1736,47 @@ pub(super) fn apply_insert_table(
         .ok_or_else(|| OperationError::NodeNotFound(parent.clone()))?;
 
     let table = spec.to_parse_table();
-    // Append the table on a fresh paragraph at the END of the story.
+    let op = Operation::InsertNode {
+        parent: parent.clone(),
+        position: _position,
+        node: spec.clone(),
+        z_slot: None,
+    };
+    // The table goes where the insertion point at the story's end is.
+    // When the last paragraph is empty — a fresh frame's story is one
+    // empty paragraph — that is its line, and InDesign sets the table
+    // there; a fresh paragraph would leave an empty line above the table.
+    // The paragraph keeps its own attributes (style, spacing), so the
+    // inverse puts the whole story back as it was, rather than deleting
+    // the table's host paragraph.
+    if doc.stories[si]
+        .story
+        .paragraphs
+        .last()
+        .is_some_and(is_empty_paragraph)
+    {
+        let before = serde_json::to_string(&doc.stories[si]).expect("a parsed story serializes");
+        if let Some(last) = doc.stories[si].story.paragraphs.last_mut() {
+            last.table = Some(table);
+        }
+        let invalidation = reflow_hint_for_story(doc, story_id);
+        return Ok(AppliedOperation {
+            op,
+            inverse: Operation::Batch {
+                ops: vec![
+                    Operation::RemoveStory {
+                        story_id: story_id.clone(),
+                    },
+                    Operation::RestoreStory {
+                        position: si,
+                        story_json: before,
+                    },
+                ],
+            },
+            invalidation,
+        });
+    }
+    // Otherwise the table takes a fresh paragraph at the END of the story.
     doc.stories[si]
         .story
         .paragraphs
@@ -1747,15 +1787,22 @@ pub(super) fn apply_insert_table(
 
     let invalidation = reflow_hint_for_story(doc, story_id);
     Ok(AppliedOperation {
-        op: Operation::InsertNode {
-            parent: parent.clone(),
-            position: _position,
-            node: spec.clone(),
-            z_slot: None,
-        },
+        op,
         inverse: Operation::RemoveNode { node },
         invalidation,
     })
+}
+
+/// A paragraph holding nothing: no characters, field, table, anchored
+/// object, footnote or index marker — only attributes.
+fn is_empty_paragraph(p: &paged_model::Paragraph) -> bool {
+    p.table.is_none()
+        && p.anchored_frames.is_empty()
+        && p.footnotes.is_empty()
+        && p.index_markers.is_empty()
+        && p.runs
+            .iter()
+            .all(|r| r.text.is_empty() && r.placeholder.is_none())
 }
 
 /// W3.A1 — `AppliedTableStyle` write on a `NodeId::Table`. The only
