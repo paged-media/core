@@ -3842,6 +3842,9 @@ fn footnotes_survive_a_forced_line_break_in_their_paragraph() {
 /// meaningful fraction of the frame height. `with_footnotes=false`
 /// produces the identical body with the footnotes stripped — the
 /// regression control.
+/// The references stand after the FIRST sentence: a note is set at the foot of
+/// the frame holding its reference's line and never pushes that line out
+/// (bee1e5d1, 4fa49151), so the pool can only push the text after it.
 fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8> {
     use std::io::Write;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
@@ -3896,8 +3899,9 @@ fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8>
   <Story Self="s1">
     <ParagraphStyleRange>
       <CharacterStyleRange AppliedFont="Inter" PointSize="12">
-        <Content>Body line one of the host paragraph. Body line two continues the host text. Body line three keeps the frame filled so the footnote pool must reserve space and push these lines upward.</Content>
+        <Content>Body line one of the host paragraph.</Content>
         {footnotes_xml}
+        <Content> Body line two continues the host text. Body line three keeps the frame filled so the footnote pool must reserve space and push these lines upward.</Content>
       </CharacterStyleRange>
     </ParagraphStyleRange>
   </Story>
