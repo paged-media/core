@@ -527,6 +527,28 @@ fn faces_remove_builds_the_complement() {
     assert!((polygon_area(&after.rectangles[0]) - 600.0).abs() < 0.01);
 }
 
+/// The contract a Shape Builder that keeps uncrossed faces builds on
+/// (paged.draw assembles those pieces itself, then unites the crossed
+/// ones here): `remove` with no face named selects every face, so the op
+/// unites its inputs into one element.
+#[test]
+fn faces_remove_naming_nothing_unites_the_inputs() {
+    let (mut doc, elements) = two_squares();
+    let after = assert_one_undo_restores(
+        &mut doc,
+        Operation::PathfinderFaces {
+            elements,
+            faces: vec![],
+            mode: FaceSelectMode::Remove,
+        },
+    );
+    assert_eq!(after.rectangles.len(), 1, "one element");
+    assert!(after.polygons.is_empty());
+    assert_eq!(after.rectangles[0].starts.len(), 1, "one outline");
+    // A ∪ B: 400 + 400 − the 100 pt² overlap.
+    assert!((polygon_area(&after.rectangles[0]) - 700.0).abs() < 0.01);
+}
+
 #[test]
 fn faces_rejects_an_unknown_face_id() {
     let (mut doc, elements) = two_squares();

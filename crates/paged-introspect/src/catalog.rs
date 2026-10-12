@@ -427,7 +427,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.pathfinderMinusBack", "([id, ...])", "bool", "author",
            "Subtract the shapes behind from the frontmost one."),
         f!("paged.pathfinderFaces", "([id, ...], [faceId, ...], mode)", "bool", "author",
-           "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."),
+           "Build ONE element from faces of the planar arrangement, united: mode keep = the named faces, remove = every other face (none named: every face, so the inputs unite). The result goes onto the topmost input covering a selected face; every other input is removed, so faces outside the selection are not kept. Face ids come from paged.planarRegions."),
         f!("paged.planarRegions", "([id, ...], [x, y]?)", "PlanarRegionsResult JSON", "read",
            "The planar arrangement of the named paths: found, faces (each with an id), inputCount, complete, reason. With a point, only the face under it. This is how a script names a face for pathfinderFaces."),
         // --- opacity masks & text on a path ---

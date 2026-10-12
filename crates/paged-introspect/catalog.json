@@ -957,7 +957,7 @@
       "params": "([id, ...], [faceId, ...], mode)",
       "returns": "bool",
       "kind": "author",
-      "summary": "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."
+      "summary": "Build ONE element from faces of the planar arrangement, united: mode keep = the named faces, remove = every other face (none named: every face, so the inputs unite). The result goes onto the topmost input covering a selected face; every other input is removed, so faces outside the selection are not kept. Face ids come from paged.planarRegions."
     },
     {
       "name": "paged.planarRegions",
