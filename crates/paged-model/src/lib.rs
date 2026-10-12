@@ -241,7 +241,8 @@ pub enum FirstBaselineOffset {
     CapHeight,
     /// Baseline at one x-height below the top inset.
     XHeight,
-    /// Baseline at one em-box-height below the top inset.
+    /// Baseline below the top inset by the em box's top: an em tall,
+    /// centred on half the cap height. InDesign spells it `EmboxHeight`.
     EmBoxHeight,
     /// Distance is `MinimumFirstBaselineOffset` pt below the inset.
     LeadingOffset,
@@ -256,7 +257,11 @@ impl FirstBaselineOffset {
             "AscentOffset" => Some(Self::AscentOffset),
             "CapHeight" => Some(Self::CapHeight),
             "XHeight" => Some(Self::XHeight),
-            "EmBoxHeight" => Some(Self::EmBoxHeight),
+            // InDesign's spelling (its own export, 2026-10-12). InDesign
+            // reads `EmBoxHeight` — the wire and catalog name — as
+            // `AscentOffset`; it is still accepted here so a file written
+            // with it reads back as it was meant.
+            "EmboxHeight" | "EmBoxHeight" => Some(Self::EmBoxHeight),
             "LeadingOffset" => Some(Self::LeadingOffset),
             "FixedHeight" => Some(Self::FixedHeight),
             _ => None,
