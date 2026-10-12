@@ -2452,8 +2452,8 @@ fn pathfinder_cases(c: &mut Vec<Case>) {
 
 fn structure_cases(c: &mut Vec<Case>) {
     c.push(paints("SetConditionVisible", "conditions", |m| {
-        // The fixture declares one condition that is ALREADY hidden;
-        // hiding it again is an honest no-op, so pick a visible one.
+        // The fixture's hidden conditions are ALREADY hidden; hiding one
+        // again is an honest no-op, so pick a visible one.
         let cond = m
             .scene()
             .styles
@@ -2486,6 +2486,8 @@ fn structure_cases(c: &mut Vec<Case>) {
         }
     }));
     c.push(paints("ActivateConditionSet", "conditions", |m| {
+        // The fixture's set holds the two hidden conditions: activating
+        // it hides `Visible`, and the text under that alone goes.
         let set = m
             .scene()
             .styles

@@ -975,80 +975,87 @@ fn conditions_emit_is_byte_deterministic() {
 
 #[test]
 fn conditions_round_trips_through_parser() {
-    // W4.3 — the conditions sample is the first generated fixture to
-    // carry `<Condition>` defs. Parse it back and assert both defs
-    // survive with their `Visible` flags, AND that the three body runs
-    // carry the expected `AppliedConditions` (one absent, one →Visible,
-    // one →Hidden) — the inputs the renderer's drop rule consumes.
+    // The `conditions` matrix, read back. The three defs keep their
+    // `Visible` flags and the set its members. The cases InDesign prints
+    // reach the model with their `AppliedConditions` (a visible + hidden
+    // pair in either order, an undeclared id); the cases it hides are
+    // written inside `<HiddenText>`, which the reader drops — the inline
+    // build keeps them, under their conditions.
     use paged_gen::samples::conditions;
-    let sample = conditions::build();
-    let bytes = paged_gen::write_idml(&sample).unwrap();
-    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    let read = |sample| {
+        let bytes = paged_gen::write_idml(&sample).unwrap();
+        idml_import::import_idml_doc(&bytes).expect("Document::open")
+    };
+    let doc = read(conditions::build());
 
     let cond = &doc.styles.conditions;
-    assert_eq!(
-        cond.get(conditions::CONDITION_VISIBLE)
-            .and_then(|c| c.visible),
-        Some(true),
-        "the Visible condition must round-trip Visible=true",
-    );
-    assert_eq!(
-        cond.get(conditions::CONDITION_HIDDEN)
-            .and_then(|c| c.visible),
-        Some(false),
-        "the Hidden condition must round-trip Visible=false",
+    for (id, visible) in [
+        (conditions::CONDITION_VISIBLE, true),
+        (conditions::CONDITION_HIDDEN, false),
+        (conditions::CONDITION_HIDDEN2, false),
+    ] {
+        assert_eq!(
+            cond.get(id).and_then(|c| c.visible),
+            Some(visible),
+            "{id} must round-trip Visible={visible}",
+        );
+    }
+    assert!(
+        !cond.contains_key(conditions::CONDITION_UNKNOWN),
+        "the undeclared condition must stay undeclared",
     );
 
-    // W4.8 — the `<ConditionSet>` grouping both conditions round-trips.
     let set = doc
         .styles
         .condition_sets
         .get(conditions::CONDITION_SET)
         .expect("condition set must round-trip");
-    assert_eq!(set.conditions.len(), 2, "the set lists both conditions");
-    assert!(set
-        .conditions
-        .iter()
-        .any(|c| c == conditions::CONDITION_VISIBLE));
-    assert!(set
-        .conditions
-        .iter()
-        .any(|c| c == conditions::CONDITION_HIDDEN));
-
-    // Collect every run's (text, applied_conditions) across the story.
-    let runs: Vec<(String, Vec<String>)> = doc
-        .stories
-        .iter()
-        .flat_map(|s| s.story.paragraphs.iter())
-        .flat_map(|p| p.runs.iter())
-        .map(|r| (r.text.clone(), r.applied_conditions.clone()))
-        .collect();
-    let find = |needle: &str| -> Vec<String> {
-        runs.iter()
-            .find(|(t, _)| t.contains(needle))
-            .map(|(_, c)| c.clone())
-            .unwrap_or_else(|| panic!("run {needle:?} not found in {runs:?}"))
-    };
-    assert!(
-        find(conditions::UNGATED_TEXT).is_empty(),
-        "the ungated run must carry no AppliedConditions",
-    );
     assert_eq!(
-        find(conditions::VISIBLE_TEXT),
-        vec![conditions::CONDITION_VISIBLE.to_string()],
-    );
-    assert_eq!(
-        find(conditions::HIDDEN_TEXT),
-        vec![conditions::CONDITION_HIDDEN.to_string()],
-    );
-    // W4.8 — the multi-gated run carries BOTH conditions, in order.
-    assert_eq!(
-        find(conditions::MULTI_TEXT),
+        set.conditions,
         vec![
-            conditions::CONDITION_VISIBLE.to_string(),
             conditions::CONDITION_HIDDEN.to_string(),
+            conditions::CONDITION_HIDDEN2.to_string(),
         ],
+        "the set lists the two hidden conditions",
     );
+
+    // Every run's (text, applied_conditions), cells included.
+    let runs_of = |doc: &paged_scene::Document| {
+        let mut runs = Vec::new();
+        for p in doc.stories.iter().flat_map(|s| s.story.paragraphs.iter()) {
+            let cells = p
+                .table
+                .iter()
+                .flat_map(|t| t.cells.iter())
+                .flat_map(|c| c.paragraphs.iter());
+            for r in std::iter::once(p).chain(cells).flat_map(|q| q.runs.iter()) {
+                runs.push((r.text.clone(), r.applied_conditions.clone()));
+            }
+        }
+        runs
+    };
+    let find = |runs: &[(String, Vec<String>)], word: &str| {
+        runs.iter()
+            .find(|(t, _)| t.contains(word))
+            .map(|(_, c)| c.clone())
+    };
+    let inline = read(conditions::build_inline());
+    let (fixture_runs, inline_runs) = (runs_of(&doc), runs_of(&inline));
+    for case in conditions::cases() {
+        let applied: Vec<String> = case.conditions.iter().map(|c| c.to_string()).collect();
+        assert_eq!(
+            find(&inline_runs, case.word),
+            Some(applied.clone()),
+            "inline: case {} carries its conditions in order",
+            case.number,
+        );
+        assert_eq!(
+            find(&fixture_runs, case.word),
+            case.prints.then_some(applied),
+            "fixture: case {} is in the model exactly when InDesign prints it",
+            case.number,
+        );
+    }
 }
 
 // ── W4.7: swatches.idml (colour / swatch sub-system) ─────────────
@@ -1727,6 +1734,7 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
         ("styles_cascade", styles_cascade::build),
         ("styles_cascade_otf_off", styles_cascade::build_otf_off),
         ("swatches", swatches::build),
+        ("conditions_inline", conditions::build_inline),
         ("tables", tables::build),
         ("text", text::build),
         ("text_advanced", text_advanced::build),
