@@ -22,9 +22,9 @@
 //!   * custom stroke weights
 //!   * solid fills in CMYK + RGB swatches
 //!   * tinted fills
-//!   * W1.2 stroke STYLES (appended after the baked-PDF pages): a
-//!     thick-thin striped style (two parallel rules), a wavy style
-//!     (sine ribbon), and a dashed style with a gap colour
+//!   * W1.2 stroke STYLES (appended after the first 19 pages): a
+//!     thick-thin striped style (two parallel rules), InDesign's built-in
+//!     wavy style (sine ribbon), and a dashed style with a gap colour
 //!     (under-stroke second pass).
 //!
 //! Each variant lands on its own page with the descriptor in
@@ -40,8 +40,8 @@ use crate::builders::{
     master::{write_master, Master},
     page_item::{Oval, Polygon, PolygonSubPath, Rect},
     resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, preferences_xml,
-        styles_xml_with_stroke_styles, ExtraColor, StrokeStyleSpec,
+        container_xml, fonts_xml, graphic_xml_with_stroke_styles, preferences_xml, styles_xml,
+        ExtraColor, StrokeStyleSpec,
     },
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Story},
@@ -134,7 +134,11 @@ fn variants() -> Vec<Variant> {
             fill_color: None,
         },
         // Built-in dash patterns. The canonical IDML names live in
-        // Resources/Graphic.xml as `StrokeStyle/$ID/<name>`.
+        // Resources/Graphic.xml as `StrokeStyle/$ID/<name>`, which the
+        // package declares (InDesign resolves a built-in only against
+        // its declaration). `Dotted` is not one of InDesign's names
+        // (its dotted built-in is `Canned Dotted`): InDesign draws that
+        // page solid.
         Variant {
             name: "strokes · type · solid",
             overrides: vec![("StrokeType", "StrokeStyle/$ID/Solid")],
@@ -208,10 +212,12 @@ fn variants() -> Vec<Variant> {
         },
         // ---- W1.2 stroke-STYLE variants ----
         //
-        // These land AFTER the original 19 pages so the baked reference
-        // PDF (capped at 19 in fidelity-thresholds.json) is unaffected —
-        // same append-only pattern as tables / images. They have no
-        // reference page and so don't participate in the capped diff.
+        // These land AFTER the original 19 pages, the reference's page
+        // count when they were added (same append-only pattern as
+        // tables / images). The styles live in Graphic.xml and are
+        // spelled as InDesign writes them (see `StrokeStyleSpec`); from
+        // Styles.xml, where they used to sit, InDesign took only their
+        // names and drew its default dash and stripes.
         //
         // Thick-Thin striped: a custom `<StripedStrokeStyle>` with two
         // stripes (60% top rule, 20% bottom rule). Heavier weight so the
@@ -222,19 +228,27 @@ fn variants() -> Vec<Variant> {
             stroke_weight_pt: Some(14.0),
             fill_color: None,
         },
-        // Wavy: a custom `<WavyStrokeStyle>` sampled as a sine ribbon.
+        // Wavy: InDesign's built-in wave. A user-defined wavy style does
+        // not exist in InDesign (there is no `wavyStrokeStyles`
+        // collection), so the custom `<WavyStrokeStyle>` this page used
+        // to declare was the engine's alone.
         Variant {
             name: "strokes · wavy",
-            overrides: vec![("StrokeType", WAVY_STYLE_ID)],
+            overrides: vec![("StrokeType", "StrokeStyle/$ID/Wavy")],
             stroke_weight_pt: Some(10.0),
             fill_color: None,
         },
         // Dashed with a gap colour: the gaps are filled by an under-
-        // stroke in the custom style's `GapColor` (cyan), beneath the
-        // black dash pattern.
+        // stroke in the gap colour (cyan), beneath the black dash
+        // pattern. The gap colour is the STROKE's (`GapColor` on the
+        // page item), as InDesign keeps it — a dashed style has none.
         Variant {
             name: "strokes · dashed · gap-color",
-            overrides: vec![("StrokeType", GAP_DASH_STYLE_ID)],
+            overrides: vec![
+                ("StrokeType", GAP_DASH_STYLE_ID),
+                ("GapColor", "Color/RGBCyan"),
+                ("GapTint", "100"),
+            ],
             stroke_weight_pt: Some(8.0),
             fill_color: None,
         },
@@ -252,49 +266,30 @@ fn variants() -> Vec<Variant> {
     ]
 }
 
-/// Self-ids for the custom stroke styles the W1.2 variants reference.
-const STRIPED_STYLE_ID: &str = "StrokeStyle/ThickThin";
-const WAVY_STYLE_ID: &str = "StrokeStyle/Wavy";
-const GAP_DASH_STYLE_ID: &str = "StrokeStyle/GapDash";
+/// Self-ids for the custom stroke styles the W1.2 variants reference,
+/// in InDesign's `<Kind>StrokeStyle/<Name>` spelling.
+const STRIPED_STYLE_ID: &str = "StripedStrokeStyle/Thick Thin";
+const GAP_DASH_STYLE_ID: &str = "DashedStrokeStyle/Gap Dash";
 
-/// Custom `<…StrokeStyle>` resources for the W1.2 variants.
+/// Custom stroke styles for the W1.2 variants (Resources/Graphic.xml).
 fn stroke_styles() -> Vec<StrokeStyleSpec> {
     vec![
         StrokeStyleSpec {
             self_id: STRIPED_STYLE_ID,
             name: "Thick Thin",
             kind: "Striped",
-            pattern: None,
-            gap_color: None,
-            gap_tint: None,
+            dash_array: None,
             // Two rules: a 60%-weight top rule and a 20%-weight bottom
-            // rule, separated by a gap. Fractions of the total weight.
+            // rule, separated by a gap. Fractions of the total weight
+            // (`StripeArray="0 60 80 100"`).
             stripes: &[(0.0, 0.6), (0.8, 0.2)],
-            wave_width: None,
-            wave_length: None,
-        },
-        StrokeStyleSpec {
-            self_id: WAVY_STYLE_ID,
-            name: "Wavy",
-            kind: "Wavy",
-            pattern: None,
-            gap_color: None,
-            gap_tint: None,
-            stripes: &[],
-            // Amplitude = 0.5× weight; wavelength = 2× weight.
-            wave_width: Some("0.5"),
-            wave_length: Some("2"),
         },
         StrokeStyleSpec {
             self_id: GAP_DASH_STYLE_ID,
             name: "Gap Dash",
             kind: "Dashed",
-            pattern: Some("8 6"),
-            gap_color: Some("Color/RGBCyan"),
-            gap_tint: Some("100"),
+            dash_array: Some("8 6"),
             stripes: &[],
-            wave_width: None,
-            wave_length: None,
         },
     ]
 }
@@ -454,9 +449,9 @@ pub fn build() -> Sample {
     Sample {
         container_xml: container_xml(),
         designmap_xml: designmap,
-        graphic_xml: graphic_xml_with_extras(&extra_colors()),
+        graphic_xml: graphic_xml_with_stroke_styles(&extra_colors(), &stroke_styles()),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml_with_stroke_styles(&stroke_styles()),
+        styles_xml: styles_xml(),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
