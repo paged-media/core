@@ -194,7 +194,7 @@ pub(super) fn emit_table_into_chain(
             .unwrap_or_default();
         let insets = effective_cell_insets(cell, &resolved_cell);
         let inner_w = (col_x[last_c] - col_x[cu] - insets.left - insets.right).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
         cell_blocks.insert((c, r), (block, insets));
     }
     for r in 0..total_rows {
@@ -1095,6 +1095,7 @@ pub(super) fn emit_table_into_chain(
                         cell_addr_base.as_ref().map(|addr| (addr, *index as u32)),
                         *by_leading,
                         inner_h - origin,
+                        block.first_baseline,
                     ),
                     // Phase 5 — nested table inside a cell paragraph, laid
                     // out at its measured top; further nesting recurses
@@ -1884,7 +1885,7 @@ fn emit_nested_table_inline(
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
         let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
@@ -1991,6 +1992,7 @@ fn emit_nested_table_inline(
                     None,
                     *by_leading,
                     inner_h - origin,
+                    block.first_baseline,
                 ),
             }
         }
@@ -2042,7 +2044,7 @@ fn measure_nested_table_height(
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w);
+        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
         let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
@@ -2111,6 +2113,34 @@ enum CellItem<'t> {
 /// sized from it and the same positions drawn.
 struct CellBlock<'t> {
     items: Vec<CellItem<'t>>,
+    /// Where its first line sits, used again when it is drawn.
+    first_baseline: CellFirstBaseline,
+}
+
+/// How a cell places its first baseline: `FirstBaselineOffset` and
+/// `MinimumFirstBaselineOffset` as the `<Cell>` spells them.
+///
+/// A cell style's own values are not reached yet: the IDML reader does
+/// not take `FirstBaselineOffset` off a `<CellStyle>`, and InDesign's
+/// export leaves it there rather than on each cell (measured
+/// 2026-10-12, `table-cell-baseline` page 1), so a styled cell sets its
+/// first line by `AscentOffset` here.
+#[derive(Clone, Copy, Default)]
+pub(super) struct CellFirstBaseline {
+    policy: Option<paged_model::FirstBaselineOffset>,
+    minimum: Option<f32>,
+}
+
+impl CellFirstBaseline {
+    pub(super) fn of(cell: &paged_model::TableCell) -> Self {
+        Self {
+            policy: cell
+                .first_baseline_offset
+                .as_deref()
+                .and_then(paged_model::FirstBaselineOffset::from_idml),
+            minimum: cell.minimum_first_baseline_offset,
+        }
+    }
 }
 
 impl CellBlock<'_> {
@@ -2172,6 +2202,7 @@ fn plan_cell_block<'t>(
     em: &StoryEmitter,
     paragraphs: &'t [paged_model::Paragraph],
     inner_w: f32,
+    first_baseline: CellFirstBaseline,
 ) -> CellBlock<'t> {
     let mut items = Vec::new();
     // The previous paragraph's last baseline and space after, while the
@@ -2221,7 +2252,7 @@ fn plan_cell_block<'t>(
         } else {
             paragraph
         };
-        let lines = measure_cell_paragraph(em, measured, inner_w, by_leading);
+        let lines = measure_cell_paragraph(em, measured, inner_w, by_leading, first_baseline);
         let Some(&last) = lines.last() else {
             continue;
         };
@@ -2234,7 +2265,10 @@ fn plan_cell_block<'t>(
         });
         prev_text = Some((origin + last, attrs.space_after.unwrap_or(0.0).max(0.0)));
     }
-    CellBlock { items }
+    CellBlock {
+        items,
+        first_baseline,
+    }
 }
 
 /// A cell's text insets as InDesign applies them — `CellInsets` in
@@ -2307,10 +2341,13 @@ struct CellInsets {
 /// Where a cell paragraph's first line sits below its origin, and the
 /// leading of its lines.
 ///
-/// The cell's FIRST line follows the same rule as a frame's: the real
-/// face's ascender under the default "Ascent" policy (measured
-/// 2026-09-06 — a top-aligned cell's first line sits at `row_top +
-/// top_inset + ascender`). A substituted face keeps the `0.8 × pt`
+/// The cell's FIRST line follows the same rule as a frame's, under the
+/// cell's own `FirstBaselineOffset` ([`CellFirstBaseline`]; `AscentOffset`
+/// by default): the real face's ascender, cap height, x height or em
+/// box, the leading, or the fixed minimum (measured 2026-09-06 for the
+/// ascent — a top-aligned cell's first line sits at `row_top +
+/// top_inset + ascender` — and 2026-10-12 for the rest,
+/// `table-cell-baseline`). A substituted face keeps the `0.8 × pt`
 /// heuristic, as frames do: a stand-in's ascender says nothing about
 /// where InDesign, which had the real one, put the baseline.
 ///
@@ -2328,27 +2365,42 @@ fn set_cell_first_baseline(
     paragraph_size: f32,
     head_metrics: Option<&FontMetrics>,
     by_leading: bool,
+    first_baseline: CellFirstBaseline,
 ) {
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
     let leading_pt = cell_paragraph_leading_pt(resolved_runs, paragraph_size);
     // Cascaded `Leading` governs a cell's line spacing exactly as it
     // governs a frame's; the cells used 1.2 × pt regardless.
     if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
         if leading_pt > 0.0 {
-            lopts.leading_override =
-                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+            lopts.leading_override = Some(to_64(leading_pt));
         }
     }
     lopts.first_baseline = if by_leading {
-        (leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32
+        to_64(leading_pt)
     } else {
-        super::text_frame::first_baseline_offset_64(
-            Some(paged_model::FirstBaselineOffset::AscentOffset),
-            None,
+        // The cell's own `FirstBaselineOffset`, by the frame's rules
+        // (InDesign 20.0.1, `table-cell-baseline`: ascent, cap height,
+        // x height, the leading, the em box and `FixedHeight` all land
+        // where a frame's would) — and `MinimumFirstBaselineOffset` is a
+        // floor under EVERY policy in a cell: 30 lifted an Open Sans
+        // 20 pt first line from its 21.38 pt ascent and its 14.28 pt cap
+        // height to 30 alike.
+        let offset = super::text_frame::first_baseline_offset_64(
+            Some(
+                first_baseline
+                    .policy
+                    .unwrap_or(paged_model::FirstBaselineOffset::AscentOffset),
+            ),
+            first_baseline.minimum,
             paragraph_size,
-            ((paragraph_size * 0.8) * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+            to_64(paragraph_size * 0.8),
             head_metrics,
-            None,
-        )
+            Some(to_64(leading_pt)),
+        );
+        first_baseline
+            .minimum
+            .map_or(offset, |min| offset.max(to_64(min)))
     };
 }
 
@@ -2373,6 +2425,7 @@ fn measure_cell_paragraph(
     paragraph: &paged_model::Paragraph,
     column_width_pt: f32,
     by_leading: bool,
+    first_baseline: CellFirstBaseline,
 ) -> Vec<f32> {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return Vec::new();
@@ -2537,6 +2590,7 @@ fn measure_cell_paragraph(
         paragraph_size,
         head_metrics,
         by_leading,
+        first_baseline,
     );
     let laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
     laid_out
@@ -2578,6 +2632,8 @@ pub(super) fn emit_cell_paragraph(
     // line below it is overset and not drawn, as InDesign draws none of
     // a cell's overset text.
     max_baseline_pt: f32,
+    // The cell's first-baseline settings.
+    first_baseline: CellFirstBaseline,
 ) {
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return;
@@ -2778,6 +2834,7 @@ pub(super) fn emit_cell_paragraph(
         paragraph_size,
         head_metrics,
         by_leading,
+        first_baseline,
     );
 
     let mut laid_out = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);

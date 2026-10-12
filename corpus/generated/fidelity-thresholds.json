@@ -57,11 +57,12 @@
     },
     {
       "name": "conditions",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.105,
-      "max_p99_de": 0.3,
-      "min_ssim": 0.9869,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.087 / p99 0.000 / SSIM 0.9949 across 1 page(s); sized at worst + ~20%."
+      "max_mean_de": 0.493,
+      "max_p99_de": 3.7,
+      "min_ssim": 0.9817,
+      "rationale": "Re-sized 2026-10-12 with a NEW page and reference, asked of InDesign 20.0.1 (Wave 1 R-05). The old numbers (mean 0.105 / p99 0.3 / SSIM 0.9869) held a four-word page whose reference was a broken oracle: InDesign printed the run gated by the hidden condition, because it does not hide inline text on open, and the pixel gate could not see the twelve glyphs. The page is now a 14-case matrix (several conditions, an undeclared one, an anchor marker, table cells, a footnote reference) with the hidden cases in InDesign's own <HiddenText> spelling, so its plain export prints what the toggled document prints. origin/main's engine (a run hidden when ANY condition is hidden): mean 0.515 / p99 4.921 / SSIM 0.9802, and the text gate fails on DELTA ECHO JULIETT LIMA. With the measured rule (printed while ANY condition is visible): 0.428 / 3.220 / 0.9847, text ok; sized at worst x 1.15 and SSIM - 0.003 so each metric still fails the old rule. The residue: the hidden anchored square in case 09 is drawn (plugin-publish idml-import attaches an anchored object inside <HiddenText>), and the table sits about 1 pt short of InDesign's, moving the line below it."
     },
     {
       "name": "composer",
@@ -577,6 +578,15 @@
       "max_p99_de": 4.62,
       "min_ssim": 0.9922,
       "rationale": "Added 2026-10-07 (ADR 130): what casts a rectangle's and a text frame's drop shadow. One page, every frame 120 x 80 pt with the same shadow (offset 6/6 pt, Size 4, black 75 %): stroke-only rectangles at 6 and 1 pt centred and 6 pt outside; filled (grey 40 %) rectangles with a 6 pt stroke centred, inside and outside; a filled, stroked and a stroke-only rounded rectangle (radius 16); a filled rectangle with no stroke; text frames holding Inter 48 pt 'Hi', stroke-only, filled and stroked, and neither. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the frame paints, as for ovals and polygons: the stroke band with no fill, the outline pushed out by the stroke's outer part with a fill, the rounded outline for rounded corners, and with no fill the text as well. The engine cast nothing for stroke-only frames, the fill rectangle for stroked ones, the bounding rectangle for rounded ones and no text shadow: mean 1.182 / p99 36.149 / ssim 0.9558. With frames stamping their painted outline and unfilled text frames shadowing their glyphs: 0.145 / 3.847 / 0.9972; sized at worst * 1.20 and ssim - 0.005. The residue: the engine's shadow falloff sits about 0.4 pt inside InDesign's on every shadow (the filled rectangle with no stroke included), and the rounded-corner and glyph outlines differ by a fraction of a point."
+    },
+    {
+      "name": "table-cell-baseline",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.176,
+      "max_p99_de": 3.55,
+      "min_ssim": 0.991,
+      "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing."
     }
   ]
 }

@@ -544,11 +544,11 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 
 /// Split a paragraph at every `\n` boundary in any run's text into
 /// a sequence of sub-paragraphs, each inheriting the parent's
-/// style. Used to honour IDML `<Br/>` (which serialises as `\n`)
-/// as a forced line break: the layout engine sees each sub-
-/// paragraph independently, so successive bullet items / address
-/// lines / etc. land on their own rows rather than collapsing
-/// into glue-separated runs of one paragraph.
+/// style. A `\n` is IDML's paragraph mark `<Br/>`, so each piece is a
+/// paragraph of its own: the layout engine sees each one
+/// independently, so successive bullet items / address lines / etc.
+/// land on their own rows rather than collapsing into
+/// glue-separated runs of one paragraph.
 ///
 /// `SpaceBefore` is suppressed on every sub-paragraph past the
 /// first so consecutive lines in the same logical paragraph don't
@@ -556,7 +556,8 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 /// metadata copy through unchanged.
 ///
 /// A [`FORCED_LINE_BREAK`] splits the same way; the segments record it
-/// so the emitter can treat the pieces as lines of ONE paragraph.
+/// so the emitter can treat the pieces as lines of ONE paragraph (and
+/// count it once in the build's stats).
 #[cfg(test)]
 pub(super) fn split_paragraph_at_breaks(
     paragraph: &paged_model::Paragraph,
