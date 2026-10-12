@@ -1135,7 +1135,14 @@ pub(super) fn build_document_inner(
             .iter()
             .map(|p| transform_bounds(p.bounds, p.item_transform))
             .collect();
-        let local_master_page_idx = geom.local_page_idx.min(master.spread.pages.len() - 1);
+        let body_page_bounds: Vec<paged_model::Bounds> = document.spreads[geom.host_spread_idx]
+            .spread
+            .pages
+            .iter()
+            .map(|p| transform_bounds(p.bounds, p.item_transform))
+            .collect();
+        let local_master_page_idx =
+            master_page_index(&body_page_bounds, geom.local_page_idx, &master_page_bounds);
         let master_page_origin = (
             master_page_bounds[local_master_page_idx].left,
             master_page_bounds[local_master_page_idx].top,
