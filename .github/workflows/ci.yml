@@ -385,17 +385,16 @@ jobs:
   # honest degradation the third-party-sample lane in fidelity.yml uses
   # for absent assets).
   #
-  # KNOWN PRE-EXISTING DRIFT (audit A4; measured 2026-08-18, both with
-  # FOGRA39 and with the GS SWOP profile — profile-independent):
-  #   effects   p16 ΔE 2.19 / p17 ΔE 2.09 / p22 ΔE 3.23  (v1 exporter gap:
-  #             inner-shadow/glow/bevel/satin/feather commands are
-  #             documented not-yet-exported — see page.rs walk())
-  #   footnotes p1 SSIM 0.921 (< 0.93)
-  #   swatches  p1/p3 ΔE 1.53 (hovers at the 1.5 ceiling; profile-
-  #             sensitive spot-ink pages — 1.53 GS vs 1.85 FOGRA on p2)
-  # These three fixtures run in a separate ADVISORY step below so the
-  # drift stays loudly visible without blocking unrelated work; every
-  # other fixture is a HARD gate. Thresholds are NOT loosened (repo rule:
+  # KNOWN PRE-EXISTING DRIFT (audit A4; measured 2026-08-18):
+  #   footnotes p1 SSIM 0.921 (< 0.93); 0.925 on 2026-10-12. Footnote
+  #             splitting and options are the core parity campaign's L-01.
+  # `effects` and `swatches` left this list on 2026-10-12: the object
+  # effects export since 640d81f6/72cd7b37, and on this workflow's own
+  # advisory run every page of both was inside the hard budget (effects
+  # worst p8 ΔE 0.78, swatches all ok).
+  # The fixture runs in a separate ADVISORY step below so the drift stays
+  # loudly visible without blocking unrelated work; every other fixture
+  # is a HARD gate. Thresholds are NOT loosened (repo rule:
   # never loosen a fidelity threshold to hide a regression) — draining
   # the advisory list back into the hard set is the tracked follow-up.
   # PER-FIXTURE BUDGETS (still HARD-gated, sized by measurement): gradients (mean) and
@@ -467,7 +466,7 @@ jobs:
           set -euo pipefail
           # Known-drift fixtures run ADVISORY in the next step — keep
           # this list in sync with the job header comment.
-          KNOWN_DRIFT="effects footnotes swatches"
+          KNOWN_DRIFT="footnotes"
           gate=()
           for f in corpus/generated/*.idml; do
             n=$(basename "$f" .idml)
@@ -492,7 +491,7 @@ jobs:
           PROFILE_FOUND: ${{ steps.profile.outputs.found }}
         run: |
           set -euo pipefail
-          KNOWN_DRIFT="effects footnotes swatches"
+          KNOWN_DRIFT="footnotes"
           if [ "$PROFILE_FOUND" = "true" ]; then
             export PAGED_CMYK_PROFILE=/tmp/default_cmyk.icc
           fi
@@ -510,7 +509,7 @@ jobs:
             echo "block merges until the drift is fixed and they rejoin the hard gate above."
           } >> "$GITHUB_STEP_SUMMARY"
           if grep -q FAIL /tmp/export-diff-advisory.txt; then
-            echo "::warning title=export-diff known drift::effects/footnotes/swatches still exceed the export-diff thresholds (audit 17082026 A4). Advisory only — fix the drift, then move them back into the hard gate."
+            echo "::warning title=export-diff known drift::footnotes still exceeds the export-diff thresholds (audit 17082026 A4). Advisory only — fix the drift, then move them back into the hard gate."
           fi
 
       - name: upload diff output on failure
