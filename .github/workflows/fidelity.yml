@@ -131,6 +131,36 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      # ── The gate's numbers, kept ────────────────────────────────────
+      # Everything above uploads only `if: failure()`, so every PASSING
+      # run's ΔE2000 and SSIM was computed and thrown away, and the gate's
+      # per-fixture verdict (`gate.json` `passed`) never reached cockpit:
+      # the `core/fidelity-*` lanes it declares stayed empty. This writes
+      # the verdicts as contract-v1 evidence and the numbers as
+      # measurements (worst page per fixture), JSON only.
+      - name: derive fidelity evidence + measurements
+        if: always()
+        run: |
+          node scripts/measurements-from-fidelity.mjs \
+            --in /tmp/idml-generated-diff \
+            --out-dir "$RUNNER_TEMP" \
+            --commit "$GITHUB_SHA" \
+            --branch "$GITHUB_REF_NAME" \
+            --run-id "$GITHUB_RUN_ID" \
+            --os "${{ matrix.os }}"
+
+      - name: upload fidelity evidence + measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paged-fidelity-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/paged-results-fidelity.json
+            ${{ runner.temp }}/paged-measurements-fidelity.json
+          if-no-files-found: warn
+          # Longer than the heatmaps': these are the trend inputs.
+          retention-days: 90
+
       - name: third-party sample diff (advisory)
         # Runs ./corpus/generated/render-diff.sh against any third-party
         # IDML pair (idml + matching pdf) under corpus/samples/.
