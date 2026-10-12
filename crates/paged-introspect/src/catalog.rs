@@ -231,7 +231,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.set", "(address, path, value)", "bool", "write",
            "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated. A plugin:<pluginId>/<kind>/<id> address goes to the host's object registry (ADR 323): it returns a Promise<true>, consecutive plugin sets fold into ONE batched host round trip, a refusal rejects with an Error whose .code is the registry's code (an unawaited refusal fails the script), and core + plugin writes of one script undo as one step. With no host registry it throws code noHost."),
         f!("paged.get", "(address, path)", "value JSON | null", "read",
-           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."),
+           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). Text is read with path \"text\" (read-only): a story answers its paragraphs joined by \\n, a text frame its story's (the whole thread), a storyRange its characters. A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."),
         // --- authoring (Stage 1/2) ---
         f!("paged.insertText", "(storyId, offset, text)", "bool", "author",
            "Insert plain text at a story body offset; \\n splits paragraphs."),
@@ -256,7 +256,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.redo", "()", "bool", "history", "Redo the last undone mutation."),
         // --- reads / introspection (return JSON strings unless noted) ---
         f!("paged.inspect", "(id)", "ElementProperties JSON", "read",
-           "Full property snapshot for one element (or storyRange)."),
+           "Full property snapshot for one element (or storyRange), or for a story (story:<id>: its text, then its story rows); null when the address names nothing."),
         f!("paged.tree", "()", "SceneTreeNode[] JSON", "read",
            "Document hierarchy: spreads → pages → frames."),
         f!("paged.pages", "()", "PageSummary[] JSON", "read",
@@ -265,7 +265,7 @@ fn host_functions() -> Vec<HostFn> {
            "Loaded stories with selfId + characterCount + paragraphCount. The source of valid story ids."),
         f!("paged.layers", "()", "LayerSummary[] JSON", "read", "Document layers."),
         f!("paged.query", "(selector)", "string[] JSON", "read",
-           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
+           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, `textFrame[style=Price]` (a style matches a page item's object style and, on a text frame or story, the paragraph and character styles its story applies), unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
         f!("paged.schema", "(addressOrKind)", "PropertySchema[] JSON", "read",
            "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."),
         f!("paged.invoke", "(id, args?)", "Promise<command result JSON>", "write",
