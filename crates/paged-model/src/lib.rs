@@ -5288,7 +5288,8 @@ impl Paragraph {
     /// it) or removed (negative; an anchor inside the removed range moves
     /// to its start).
     pub fn shift_anchors(&mut self, at: u32, delta: i64) {
-        for offset in &mut self.anchored_frame_offsets {
+        let footnotes = self.footnotes.iter_mut().filter_map(|f| f.anchor.as_mut());
+        for offset in self.anchored_frame_offsets.iter_mut().chain(footnotes) {
             if delta >= 0 {
                 if *offset >= at {
                     *offset = offset.saturating_add(delta as u32);
@@ -5306,6 +5307,23 @@ impl Paragraph {
 
     /// The character offset of byte `byte` of the paragraph's text
     /// (its runs' text, concatenated).
+    /// The byte offset of character `chars` of the paragraph's text (its
+    /// runs' text, concatenated); the text's length past its end.
+    pub fn byte_of_char_offset(&self, chars: u32) -> usize {
+        let mut left = chars as usize;
+        let mut at = 0usize;
+        for run in &self.runs {
+            for (b, _) in run.text.char_indices() {
+                if left == 0 {
+                    return at + b;
+                }
+                left -= 1;
+            }
+            at += run.text.len();
+        }
+        at
+    }
+
     pub fn char_offset_of_byte(&self, byte: usize) -> u32 {
         let mut at = 0usize;
         let mut chars = 0u32;
@@ -5371,6 +5389,13 @@ pub fn char_offset_of_content_offset(paragraphs: &[Paragraph], content: u32) -> 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Footnote {
     pub self_id: Option<String>,
+    /// Where the footnote's reference stands in its host paragraph: the
+    /// character offset in the paragraph's text (Unicode scalars, counted
+    /// contiguously over its runs). The note is set at the foot of the
+    /// frame holding THAT line, as InDesign sets it. `None` (the IDML
+    /// importer does not record it yet): the paragraph's start.
+    #[serde(default)]
+    pub anchor: Option<u32>,
     /// The footnote body, parsed identically to top-level story
     /// paragraphs. Inherits the host story's character / paragraph
     /// style cascade just like any other paragraph stream.

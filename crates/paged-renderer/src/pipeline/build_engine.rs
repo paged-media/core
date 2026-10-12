@@ -3756,6 +3756,50 @@ pub(super) fn build_document_inner(
     })
 }
 
+/// Hand the pending footnotes whose anchor is at or before byte `up_to`
+/// (all of them for `None`) to the page of the frame being filled: the
+/// frame their reference's line is in. They are numbered in the order
+/// they are captured, through the story.
+pub(super) fn capture_footnotes(
+    em: &mut StoryEmitter,
+    pages: &mut [BuiltPage],
+    up_to: Option<u32>,
+) {
+    let take = em
+        .pending_footnotes
+        .iter()
+        .take_while(|(byte, _)| up_to.map_or(true, |end| *byte <= end))
+        .count();
+    if take == 0 {
+        return;
+    }
+    let Some(&page) = em.chain_pages.get(em.frame_idx) else {
+        return;
+    };
+    // The host frame's page-local content rect: where the pool is drawn.
+    let frame = em.chain[em.frame_idx];
+    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (ox, oy) = pages[page].spread_origin;
+    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let host_frame_rect_pt = Rect {
+        x: sx - ox + insets[1],
+        y: sy - oy + insets[0],
+        w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
+        h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
+    };
+    for (_, note) in em.pending_footnotes.drain(..take) {
+        em.footnote_counter += 1;
+        pages[page].footnotes.push(EmittedFootnote {
+            number: em.footnote_counter,
+            host_story_id: em.current_story_id.clone(),
+            host_paragraph_idx: em.paragraph_idx,
+            footnote_self_id: note.self_id,
+            paragraphs: note.paragraphs,
+            host_frame_rect_pt,
+        });
+    }
+}
+
 /// Emits a story's paragraphs into the page list, flowing across
 /// the frame chain on overflow and applying TextFramePreference
 /// vertical justification once the story finishes.
@@ -3962,6 +4006,17 @@ pub(super) struct StoryEmitter<'a> {
     /// The inline and above-line objects of the paragraph being emitted,
     /// set while its lines are composed (see [`anchored::InlineObjects`]).
     pub(super) inline_objects: Option<anchored::InlineObjects>,
+    /// The footnotes of the paragraph being emitted that no line has
+    /// carried yet: `(the anchor's byte in the paragraph's text, the
+    /// note)`, in text order. See [`capture_footnotes`].
+    pub(super) pending_footnotes: Vec<(u32, paged_model::Footnote)>,
+    /// The paragraph is being emitted piece by piece (forced line breaks):
+    /// the pieces share its pending footnotes.
+    pub(super) in_segments: bool,
+    /// Footnotes captured in this story so far: the next one's number is
+    /// one more. InDesign numbers footnotes through the story by default
+    /// (`restartNumbering = DONT_RESTART`, measured, ADR 034 case 7).
+    pub(super) footnote_counter: u32,
     /// Track 2: per-line records collected when
     /// `options.collect_breaks` is set. Drained by `take_breaks` once
     /// the story finishes emitting.
@@ -4220,6 +4275,9 @@ impl<'a> StoryEmitter<'a> {
             anchored_recursion_depth: 0,
             anchored_image_queue: Vec::new(),
             inline_objects: None,
+            pending_footnotes: Vec::new(),
+            in_segments: false,
+            footnote_counter: 0,
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
@@ -5265,6 +5323,7 @@ fn emit_paragraph_lines(
         .any(|r| r.text.contains(['\n', super::geom::FORCED_LINE_BREAK]))
     {
         let mut line_base = 0;
+        em.in_segments = true;
         for seg in split_paragraph_into_segments(paragraph) {
             em.segment = SegmentState {
                 opens_paragraph: seg.opens_paragraph,
@@ -5277,44 +5336,23 @@ fn emit_paragraph_lines(
             line_base += em.segment.lines;
         }
         em.segment = SegmentState::default();
+        em.in_segments = false;
         return;
     }
 
-    // Phase 5 — capture any `<Footnote>` anchors on this paragraph
-    // onto the page where the anchor character is going to land.
-    // The anchor's page is the paragraph's *starting* frame's page
-    // (em.chain_pages[em.frame_idx] at this point in the emit
-    // sequence); per-page numbering restarts at 1.
-    if !paragraph.footnotes.is_empty() {
-        let anchor_page = em.chain_pages[em.frame_idx];
-        let host_story = em.current_story_id.clone();
-        let host_para_idx = em.paragraph_idx;
-        // Capture the host frame's page-local content rect so the
-        // post-pass footnote pool render knows where to draw.
-        let frame = em.chain[em.frame_idx];
-        let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-        let (ox, oy) = pages[anchor_page].spread_origin;
-        let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-        let frame_w = frame.bounds.width();
-        let frame_h = frame.bounds.height();
-        let host_frame_rect_pt = Rect {
-            x: sx - ox + insets[1],
-            y: sy - oy + insets[0],
-            w: (frame_w - insets[1] - insets[3]).max(0.0),
-            h: (frame_h - insets[0] - insets[2]).max(0.0),
-        };
-        let pool = &mut pages[anchor_page].footnotes;
-        for fn_body in &paragraph.footnotes {
-            let next_number = pool.len() as u32 + 1;
-            pool.push(EmittedFootnote {
-                number: next_number,
-                host_story_id: host_story.clone(),
-                host_paragraph_idx: host_para_idx,
-                footnote_self_id: fn_body.self_id.clone(),
-                paragraphs: fn_body.paragraphs.clone(),
-                host_frame_rect_pt,
-            });
-        }
+    // A footnote is set at the foot of the frame holding its REFERENCE's
+    // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
+    // the line holding each one's anchor is placed (`capture_footnotes`).
+    if !em.in_segments {
+        em.pending_footnotes = paragraph
+            .footnotes
+            .iter()
+            .map(|f| {
+                let byte = paragraph.byte_of_char_offset(f.anchor.unwrap_or(0)) as u32;
+                (byte, f.clone())
+            })
+            .collect();
+        em.pending_footnotes.sort_by_key(|(byte, _)| *byte);
     }
     // Empty paragraph: a sub-paragraph produced by `<Br/><Br/>` and
     // similar patterns. Advance the baseline cursor by one line of
@@ -5328,6 +5366,8 @@ fn emit_paragraph_lines(
         .iter()
         .any(|r| r.text.chars().any(|c| c != ' ' && c != '\n'));
     if !runs_have_text {
+        // No line will carry them: its notes go with the frame it is in.
+        capture_footnotes(em, pages, None);
         let resolved_paragraph = em
             .segment
             .mask(em.document.resolved_paragraph_attrs(paragraph));
@@ -7381,6 +7421,11 @@ fn emit_paragraph_lines(
                 clusters,
                 marker,
             });
+            // The notes whose reference stands on this line; all that are
+            // left on the paragraph's last line.
+            let line_end = seg.byte_base + model_byte(line.byte_range.end as u32);
+            let last_line = em.segment.closes_paragraph && current_line_idx == last_line_index;
+            capture_footnotes(em, pages, (!last_line).then_some(line_end));
         }
 
         // Where this line's in-line objects landed; their placeholder
