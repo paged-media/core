@@ -1735,6 +1735,7 @@ fn all_emitted_packages() -> Vec<(String, Vec<u8>)> {
         ("styles_cascade_otf_off", styles_cascade::build_otf_off),
         ("swatches", swatches::build),
         ("conditions_inline", conditions::build_inline),
+        ("table_cell_baseline", table_cell_baseline::build),
         ("tables", tables::build),
         ("text", text::build),
         ("text_advanced", text_advanced::build),
