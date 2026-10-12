@@ -42,8 +42,11 @@ fn ok(args: &[&str]) -> String {
     out
 }
 
-fn dir() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("paged-object-{}", std::process::id()));
+/// One directory per TEST: the tests of a binary run on parallel threads of
+/// one process, so a directory keyed by the process alone is shared, and
+/// each test's `remove_dir_all` deleted the other's files mid-run.
+fn dir(test: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("paged-object-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).expect("mkdir");
     d
@@ -51,7 +54,7 @@ fn dir() -> PathBuf {
 
 #[test]
 fn set_saves_and_get_reads_it_back_from_the_file() {
-    let d = dir();
+    let d = dir("set_saves_and_get_reads_it_back_from_the_file");
     let blank = d.join("blank.paged");
     let one = d.join("one.paged");
     let two = d.join("two.paged");
@@ -123,7 +126,7 @@ fn set_saves_and_get_reads_it_back_from_the_file() {
 /// from a path the object does not have (exit 1, `noSuchPath`).
 #[test]
 fn get_tells_mixed_from_no_such_path() {
-    let d = dir().join("mixed");
+    let d = dir("get_tells_mixed_from_no_such_path");
     std::fs::create_dir_all(&d).unwrap();
     let blank = d.join("blank.paged");
     let doc = d.join("doc.paged");
