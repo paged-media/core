@@ -71,6 +71,11 @@ pub struct GradientStop {
     pub stop_color: String,
     /// `Location` attribute, 0..=100 in IDML.
     pub location_pct: f32,
+    /// `Midpoint` attribute, 0..=100 in IDML (50 = linear). `None`
+    /// omits it, which InDesign reads as 50. InDesign stores the
+    /// diamond between two stops on the LATER of the two (measured on
+    /// the `gradient-geometry` fixture).
+    pub midpoint_pct: Option<f32>,
 }
 
 /// One `<TableStyle>` declaration for the styles manifest. Only the
@@ -282,14 +287,7 @@ pub fn graphic_xml_rich_full(
             ],
         );
         for stop in &grad.stops {
-            let loc = crate::xml::format_f32(stop.location_pct);
-            b.empty(
-                "GradientStop",
-                &[
-                    ("StopColor", stop.stop_color.as_str()),
-                    ("Location", loc.as_str()),
-                ],
-            );
+            write_gradient_stop(&mut b, stop);
         }
         b.end("Gradient");
     }
@@ -322,6 +320,21 @@ pub fn graphic_xml_rich_full(
     }
     b.end("idPkg:Graphic");
     b.into_bytes()
+}
+
+/// One `<GradientStop>`; `Midpoint` only when the stop carries one, so
+/// every existing fixture's Graphic.xml stays byte-identical.
+fn write_gradient_stop(b: &mut XmlBuilder, stop: &GradientStop) {
+    let loc = crate::xml::format_f32(stop.location_pct);
+    let mid = stop.midpoint_pct.map(crate::xml::format_f32);
+    let mut attrs = vec![
+        ("StopColor", stop.stop_color.as_str()),
+        ("Location", loc.as_str()),
+    ];
+    if let Some(m) = mid.as_deref() {
+        attrs.push(("Midpoint", m));
+    }
+    b.empty("GradientStop", &attrs);
 }
 
 /// `Resources/Graphic.xml` — registers `Color/Black` and `Color/Paper`,
@@ -393,14 +406,7 @@ fn write_graphic(extras: &[ExtraColor], gradients: &[ExtraGradient]) -> Vec<u8> 
             ],
         );
         for stop in &grad.stops {
-            let loc = crate::xml::format_f32(stop.location_pct);
-            b.empty(
-                "GradientStop",
-                &[
-                    ("StopColor", stop.stop_color.as_str()),
-                    ("Location", loc.as_str()),
-                ],
-            );
+            write_gradient_stop(&mut b, stop);
         }
         b.end("Gradient");
     }
