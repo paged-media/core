@@ -76,6 +76,7 @@ pub mod text_letterspacing;
 pub mod text_on_path;
 pub mod text_overset;
 pub mod text_wrap;
+pub mod tints;
 pub mod transparency;
 pub mod variables;
 
@@ -154,6 +155,7 @@ pub const SAMPLES: &[&str] = &[
     "line-shadows",
     "rect-shadows",
     "gradient-geometry",
+    "tints",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -222,6 +224,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
+        "tints" => tints::build(),
         _ => return None,
     })
 }
@@ -250,7 +253,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            63,
+            64,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
