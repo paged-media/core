@@ -273,6 +273,7 @@
     },
     {
       "name": "gradient-geometry",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 1.955,
       "max_p99_de": 59.1,
@@ -281,6 +282,7 @@
     },
     {
       "name": "tints",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.211,
       "max_p99_de": 2.48,
