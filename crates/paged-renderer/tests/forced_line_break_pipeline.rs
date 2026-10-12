@@ -162,3 +162,26 @@ fn forced_line_breaks_land_where_indesign_puts_them() {
         right(just[1])
     );
 }
+
+/// A forced line break ends a line, not a paragraph, so the build's
+/// paragraph count is InDesign's: 21 for this fixture (its DOM, through
+/// `tools/indesign-export/conditions-probe.sh`, 2026-10-12: one label
+/// paragraph and two body paragraphs on each of the 7 cases). Every
+/// piece a break leaves used to count as a paragraph of its own, which
+/// `paged-inspect` printed as 27.
+#[test]
+fn forced_break_is_one_paragraph_in_stats() {
+    const INDESIGN_PARAGRAPHS: usize = 21;
+    let bytes =
+        paged_gen::write_idml(&paged_gen::samples::forced_line_break::build()).expect("idml");
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let font = inter_font();
+    let opts = PipelineOptions {
+        font: Some(&font),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).expect("build");
+    assert_eq!(built.stats.paragraphs, INDESIGN_PARAGRAPHS);
+    let per_page: usize = built.pages.iter().map(|p| p.stats.paragraphs).sum();
+    assert_eq!(per_page, INDESIGN_PARAGRAPHS, "the pages' counts add up");
+}

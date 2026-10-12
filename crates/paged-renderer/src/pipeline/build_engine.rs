@@ -4125,6 +4125,10 @@ pub(super) struct SegmentState {
     pub(super) opens_paragraph: bool,
     /// `false` before a forced line break: no space after or rule below.
     pub(super) closes_paragraph: bool,
+    /// Whether the segment counts its paragraph in the build's stats:
+    /// the one that opens it — or, when that one held nothing (the
+    /// paragraph starts with a forced line break), the next.
+    pub(super) counts_paragraph: bool,
     /// Added to the segment's line bytes and line indices so its
     /// `LineLayout`s address the whole paragraph.
     pub(super) byte_base: u32,
@@ -4138,6 +4142,7 @@ impl Default for SegmentState {
         Self {
             opens_paragraph: true,
             closes_paragraph: true,
+            counts_paragraph: true,
             byte_base: 0,
             line_base: 0,
             lines: 0,
@@ -5317,21 +5322,17 @@ fn emit_paragraph_lines(
             }
         }
     };
-    // IDML <Br/> serialises as `\n` inside run text; it's a forced
-    // line break, not a paragraph break. paragraph_breaker treats
-    // it as ordinary whitespace, which would let it merge into a
-    // glue and lay text either side of it on the same line. Split
-    // the paragraph at every `\n` boundary and emit each segment
-    // as a sub-paragraph at the same paragraph style — same effect
-    // as a hard break in the composer, no layout-engine change
-    // required. Sub-paragraphs inherit the parent's style; only
-    // SpaceBefore is suppressed for the second-and-later segments
-    // so consecutive bullet rows don't accumulate extra leading.
+    // IDML's paragraph mark `<Br/>` reads as `\n` inside run text, so
+    // one style range can hold several paragraphs. The composer treats
+    // `\n` as ordinary whitespace, which would let it merge into a
+    // glue and lay text either side of it on the same line. Split the
+    // paragraph at every `\n` and emit each piece as a paragraph of the
+    // same style — no layout-engine change required.
     //
     // A forced line break (U+2028) splits the same way, but its pieces
     // stay lines of ONE paragraph: `SegmentState` withholds what only
-    // the paragraph's first / last line carries, and keeps the lines'
-    // bytes and indices paragraph-wide.
+    // the paragraph's first / last line carries, keeps the lines'
+    // bytes and indices paragraph-wide, and counts the paragraph once.
     // A footnote is set at the foot of the frame holding its REFERENCE's
     // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
     // the line holding each one's anchor is placed (`capture_footnotes`).
@@ -5354,16 +5355,22 @@ fn emit_paragraph_lines(
         .any(|r| r.text.contains(['\n', super::geom::FORCED_LINE_BREAK]))
     {
         let mut line_base = 0;
+        // The paragraph is still to be counted: its opening piece was empty.
+        let mut uncounted = false;
         em.in_segments = true;
         for seg in split_paragraph_into_segments(paragraph) {
+            let counts_paragraph = seg.opens_paragraph || uncounted;
             em.segment = SegmentState {
                 opens_paragraph: seg.opens_paragraph,
                 closes_paragraph: seg.closes_paragraph,
+                counts_paragraph,
                 byte_base: seg.byte_base,
                 line_base,
                 lines: 0,
             };
+            let counted = total_stats.paragraphs;
             emit_paragraph_into_chain(em, &seg.paragraph, pages, total_stats);
+            uncounted = counts_paragraph && total_stats.paragraphs == counted;
             line_base += em.segment.lines;
         }
         em.segment = SegmentState::default();
@@ -5511,9 +5518,12 @@ fn emit_paragraph_lines(
         em.y_cursor += space_after_64.round() as i32;
         return;
     }
-    total_stats.paragraphs += 1;
+    // A forced line break's pieces are lines of ONE paragraph, as
+    // InDesign counts them: only one piece counts it.
+    let counts = usize::from(em.segment.counts_paragraph);
+    total_stats.paragraphs += counts;
     total_stats.runs += paragraph.runs.len();
-    pages[em.chain_pages[em.frame_idx]].stats.paragraphs += 1;
+    pages[em.chain_pages[em.frame_idx]].stats.paragraphs += counts;
     pages[em.chain_pages[em.frame_idx]].stats.runs += paragraph.runs.len();
 
     let resolved_runs: Vec<paged_scene::ResolvedRunAttrs> = paragraph
