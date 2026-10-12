@@ -326,15 +326,9 @@ pub enum PropertyPath {
     /// why the invalidation is `structural`: this rewrites PAINT ORDER
     /// across the whole spread, not one frame's appearance.
     ItemLayer,
-    /// SDK Phase 5 (D3 completion) — applied cell style ref. Wire-
-    /// shape only for v1: the apply layer errors with
-    /// `UnsupportedProperty` until the Table NodeId surface
-    /// (Tier 2d) lands. Reserved so Cell Style panels can declare
-    /// their write surface today and the audit pipeline picks them up.
+    /// The cell style applied to a cell (`NodeId::TableCell`).
     AppliedCellStyle,
-    /// SDK Phase 5 (D3 completion) — applied table style ref. Same
-    /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
-    /// apply layer errors until Tier 2d.
+    /// The table style applied to a table (`NodeId::Table`).
     AppliedTableStyle,
     /// SDK Phase 5 (v1 sweep) — whole-path replacement on any path-
     /// bearing page item. Value is `Value::FramePath { anchors,

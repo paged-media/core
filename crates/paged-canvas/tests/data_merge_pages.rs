@@ -370,11 +370,8 @@ fn duplicate_elements_copies_a_story_that_holds_placeholders() {
 // ---------------------------------------------------------------------------
 
 /// The reader lives in plugin-publish (`idml-import`); the fix is
-/// plugin-publish `29710d1` (branch `data/br-between-sources`). Verified
-/// green here with a local `[patch]` onto that commit; un-ignore when the
-/// workspace's `idml-import` pin moves to a rev that contains it.
+/// plugin-publish `29710d1` (branch `data/br-between-sources`).
 #[test]
-#[ignore = "D-25: needs the idml-import pin to include plugin-publish 29710d1"]
 fn a_paragraph_mark_between_adjacent_placeholders_stays_between_them() {
     let m = template();
     assert_eq!(

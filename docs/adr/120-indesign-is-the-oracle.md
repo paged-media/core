@@ -27,7 +27,7 @@ and an effect's `Size` used as a Gaussian sigma when it is the width of the effe
 
 InDesign's own output is the reference for the engine's behaviour. It is obtained in three steps.
 
-- **A generator authors.** `paged-gen` writes the IDML sample documents (59 built-in samples).
+- **A generator authors.** `paged-gen` writes the IDML sample documents (62 built-in samples).
   Its package writer is byte-deterministic (fixed timestamp, stable entry order) and a hash test
   checks that. The library depends on `zip` and `quick-xml`, not on the engine's model or
   importer; the importer is a dev-dependency. Generated `.idml` files are not committed.
@@ -43,7 +43,7 @@ InDesign's own output is the reference for the engine's behaviour. It is obtaine
 
 ## Evidence
 
-- `crates/paged-gen/src/samples.rs:89-149`, `:238-245` — the sample list; its length pinned at 59
+- `crates/paged-gen/src/samples.rs:89-149`, `:238-245` — the sample list; its length pinned at 62
 - `crates/paged-gen/src/package.rs:25-33`, `crates/paged-gen/tests/snapshot.rs:41-46`,
   `crates/paged-gen/Cargo.toml:13-22` — determinism, its test, and the dependencies
 - `tools/indesign-export/export-pdfs.jsx:113-138`, `corpus/generated/.gitignore:1-4` — the export
@@ -66,7 +66,7 @@ the gate and say they do not replace it ("This is not the InDesign fidelity gate
 
 The gate runs wherever the Rust toolchain, poppler and python3 are installed
 (`corpus/generated/diff.sh:59-60`). Adding or re-measuring a reference needs InDesign, and the
-shell drivers are macOS-only (`tools/indesign-export/run-export.sh:19`). All 58 committed
+shell drivers are macOS-only (`tools/indesign-export/run-export.sh:19`). All 61 committed
 references record InDesign 20.0.1.32; the rule is to re-export one fixture at a time and to pin
 the version (`tools/indesign-export/README.md:56-67`). A reference also depends on the exporting machine's
 fonts (`CLAUDE.md:132-136`) and on a colour profile that may not be redistributed
