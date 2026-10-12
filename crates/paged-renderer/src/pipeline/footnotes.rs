@@ -421,7 +421,11 @@ pub(super) fn resolve_footnote_metrics(
                 b: 0.0,
                 a: 1.0,
             }));
-        let paint = apply_fill_tint(base_paint, fo.rule_tint);
+        let paint = apply_fill_tint_ctx(
+            base_paint,
+            object_tint(palette, fo.rule_color.as_deref(), fo.rule_tint),
+            &color_ctx,
+        );
         Some(FootnoteRuleSpec {
             weight_pt,
             left_indent_pt,

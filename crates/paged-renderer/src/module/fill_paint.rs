@@ -25,8 +25,8 @@ use paged_model::Graphic;
 use super::geometry::{emit_filled, rewrite_tail_for_overprint};
 use super::{Geometry, ResolvedFrame};
 use crate::pipeline::{
-    apply_fill_tint, color_id_to_paint_with_list_dir, frame_fill_is_transparent, BuiltPage,
-    ColorCtx,
+    apply_fill_tint_ctx, color_id_to_paint_with_list_dir, frame_fill_is_transparent, object_tint,
+    BuiltPage, ColorCtx,
 };
 
 /// Resolve and emit the frame fill. `fill_path`, when `Some`, routes
@@ -75,7 +75,11 @@ pub(crate) fn fill_paint_module(
             )
         })
         .unwrap_or(fallback);
-    let fill = apply_fill_tint(fill, frame.fill_tint);
+    let fill = apply_fill_tint_ctx(
+        fill,
+        object_tint(palette, frame.fill_color, frame.fill_tint),
+        &color_ctx,
+    );
     // Q-08: Polygon fills route through `emit_fill_path`, whose
     // path_transform = `outer` directly (the path lives in inner-
     // anchor coords). A gradient paint's endpoints are stored in

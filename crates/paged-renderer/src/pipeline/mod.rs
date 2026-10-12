@@ -105,7 +105,7 @@ pub(crate) use blend_shadow::{
 };
 pub use build_engine::build_index_paragraphs;
 use build_engine::*;
-pub(crate) use color_paint::{apply_fill_tint, stroke_for};
+pub(crate) use color_paint::{apply_fill_tint_ctx, object_tint, stroke_for};
 use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{
     build_footnote_paint_picker, build_run_paint_picker_resolved, build_run_stroke_picker,

@@ -907,7 +907,12 @@ pub(super) fn build_run_paint_picker_resolved(
                     .or_else(|| gradient_midpoint_paint(id, palette, color_ctx))
             })
             .unwrap_or(default);
-        let paint = apply_fill_tint(base, resolved_runs[i].fill_tint);
+        let tint = object_tint(
+            palette,
+            resolved_runs[i].fill_color.as_deref(),
+            resolved_runs[i].fill_tint,
+        );
+        let paint = apply_fill_tint_ctx(base, tint, &color_ctx);
         bands.push((cursor, paint));
         cursor += run.text.len() as u32;
     }
@@ -939,7 +944,8 @@ pub(super) fn build_footnote_paint_picker(
                     .or_else(|| gradient_midpoint_paint(id, palette, color_ctx))
             })
             .unwrap_or(default);
-        let paint = apply_fill_tint(base, attrs.fill_tint);
+        let tint = object_tint(palette, attrs.fill_color.as_deref(), attrs.fill_tint);
+        let paint = apply_fill_tint_ctx(base, tint, &color_ctx);
         bands.push((cursor, paint));
         cursor += run_text_lens.get(i).copied().unwrap_or(0) as u32;
     }
@@ -1089,24 +1095,76 @@ fn end_join_from(name: Option<&str>) -> Option<paged_compose::LineJoin> {
     }
 }
 
-/// Scale a paint toward paper white per the IDML `FillTint`
-/// percentage. `tint = 100` is identity; lower values blend toward
-/// white in linear-RGB space, matching InDesign's preview behaviour.
-/// `None` returns the input unchanged. Only applied to solid paints
-/// today — gradient stops are left as-is until the gradient
-/// resolution itself learns about per-stop tints.
+/// The tint to apply over swatch `id`'s resolved paint for an object's
+/// tint of `tint_pct` (a `FillTint`, `StrokeTint`, rule or cell tint).
 ///
-/// For [`Paint::Cmyk`] the tint scales each channel toward 0 (paper
-/// white in CMYK) — matching the swatch-level `TintValue` semantics
-/// `ColorEntry::effective_cmyk` already applies before we get here.
-/// This keeps run-level `FillTint` tinting consistent across the
-/// CMYK and RGB swatch paths.
+/// An object's tint is measured against the BASE colour of a `<Tint>`
+/// swatch, not against the tint: asked of InDesign (`tints` case 59),
+/// the teal 50 % `<Tint>` swatch at `FillTint="50"` exports teal at
+/// 50 % (`0.425 0.05 0.2 0 k` for teal `85 10 40 0`), not at 25 %, and
+/// its IDML re-export keeps `FillColor="Tint/Brand Teal 50%"
+/// FillTint="50"`. The swatch's own value applies only when the object
+/// carries no tint. Since the swatch's value is already folded into its
+/// resolved paint ([`paged_model::ColorEntry::effective_cmyk`]), the
+/// object's tint becomes the ratio of the two — above 100 when it is
+/// the stronger.
+pub(crate) fn object_tint(
+    palette: &Graphic,
+    id: Option<&str>,
+    tint_pct: Option<f32>,
+) -> Option<f32> {
+    let t = tint_pct?;
+    let swatch = id.and_then(|id| palette.resolve(id)).and_then(|e| e.tint);
+    match swatch {
+        Some(st) if st > 0.0 && st < 100.0 => Some(t * 100.0 / st),
+        _ => Some(t),
+    }
+}
+
+/// Scale a paint toward paper white per the IDML `FillTint`
+/// percentage, with no colour context — the no-ICC path. See
+/// [`apply_fill_tint_ctx`]; without a transform the CMYK arm keeps its
+/// cached display colour's blend toward white.
+#[cfg(test)]
 pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
+    apply_fill_tint_ctx(paint, tint_pct, &ColorCtx::default())
+}
+
+/// Scale a paint toward paper white per the IDML `FillTint` /
+/// `StrokeTint` / rule / shading tint percentage. `tint = 100` and
+/// `None` are identity.
+///
+/// A tint of a CMYK colour is a tint of its INKS, and it prints the
+/// same whichever way the document spells it. Asked of InDesign
+/// (`corpus/generated/tints`, ADR 120): the object's `FillTint="40"` on
+/// a full-strength swatch and a `<Tint TintValue="40">` swatch applied
+/// at 100 % export the identical device colour — the base's CMYK
+/// percentages scaled by the tint — for every process colour, rich
+/// black and a spot's CMYK alternate. The page colour is that scaled
+/// ink through the document CMYK profile. The `<Tint>` swatch already
+/// took that route ([`paged_model::ColorEntry::effective_cmyk`] before
+/// the profile); this function now does too, so the two agree.
+///
+/// The CMYK arm used to blend the cached DISPLAY colour toward white in
+/// linear RGB — a different curve from the profile's, and visibly too
+/// light in the mid tints under FOGRA39.
+///
+/// Without a transform (`color_ctx.icc == None`) CMYK swatches resolve
+/// to [`Paint::Solid`] in the first place, and a stray
+/// [`Paint::Cmyk`] keeps the display-colour blend: there is no
+/// profile to send the scaled inks through.
+pub(crate) fn apply_fill_tint_ctx(
+    paint: Paint,
+    tint_pct: Option<f32>,
+    color_ctx: &ColorCtx<'_>,
+) -> Paint {
     let Some(t) = tint_pct else {
         return paint;
     };
-    let t = (t / 100.0).clamp(0.0, 1.0);
-    if (t - 1.0).abs() < f32::EPSILON {
+    // Above 1 only when [`object_tint`] lifts a tint swatch back toward
+    // its base; the inks it scales never pass the base's.
+    let t = (t / 100.0).max(0.0);
+    if !t.is_finite() || (t - 1.0).abs() < f32::EPSILON {
         return paint;
     }
     match paint {
@@ -1123,16 +1181,8 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
         //
         // Blending toward white in the pipeline's linear working space
         // is a full ΔE 8.6 out because linear RGB is the one space the
-        // ramp is definitely not in. CMYK paints keep scaling their
-        // channels (the arm below) — that IS ink coverage, and it is
-        // what InDesign does for a process colour.
-        Paint::Solid(c) => {
-            let [l, a, b] = paged_color::lab::linear_srgb_to_lab_d50([c.r, c.g, c.b]);
-            // Paper is L=100, a=b=0; 0% tint is paper, 100% is the ink.
-            let paged_color::LinearRgb([r, g, bl]) =
-                paged_color::lab::lab_d50_to_linear_srgb(100.0 + (l - 100.0) * t, a * t, b * t);
-            Paint::Solid(Color::rgba(r, g, bl, c.a))
-        }
+        // ramp is definitely not in.
+        Paint::Solid(c) => Paint::Solid(lab_tint(c, t)),
         Paint::Cmyk {
             c,
             m,
@@ -1140,28 +1190,80 @@ pub(crate) fn apply_fill_tint(paint: Paint, tint_pct: Option<f32>) -> Paint {
             k,
             rgb,
             spot,
-        } => Paint::Cmyk {
-            c: c * t,
-            m: m * t,
-            y: y * t,
-            k: k * t,
-            // Tint the cached display RGB in step — same blend toward
-            // paper white as the `Paint::Solid` arm so the visible
-            // result for non-overprint draws stays consistent.
-            rgb: Color::rgba(
-                1.0 + (rgb.r - 1.0) * t,
-                1.0 + (rgb.g - 1.0) * t,
-                1.0 + (rgb.b - 1.0) * t,
-                rgb.a,
-            ),
-            // Per-use FillTint preserves the spot identity. The spot
-            // plane is tinted by the new C/M/Y/K (whose value is
-            // already the tint-scaled CMYK alternate) — that's the
-            // late-bound "PANTONE at N%" preview path.
-            spot,
-        },
+        } => {
+            let rgb = match color_ctx.icc {
+                // Under "Use Standard Lab Values for Spots" a Lab spot's
+                // display colour is its measured Lab, not the alternate
+                // through the profile; it tints in Lab like any other
+                // measured colour.
+                Some(xform) if !shows_its_lab(xform, color_ctx, [c, m, y, k], rgb) => {
+                    let ink = |v: f32| (v * t).clamp(0.0, 1.0) * 100.0;
+                    let paged_color::LinearRgb([r, g, b]) =
+                        xform.cmyk_percent_to_linear_rgb(paged_color::Cmyk {
+                            c: ink(c),
+                            m: ink(m),
+                            y: ink(y),
+                            k: ink(k),
+                        });
+                    Color::rgba(r, g, b, rgb.a)
+                }
+                Some(_) => lab_tint(rgb, t),
+                None => Color::rgba(
+                    (1.0 + (rgb.r - 1.0) * t).clamp(0.0, 1.0),
+                    (1.0 + (rgb.g - 1.0) * t).clamp(0.0, 1.0),
+                    (1.0 + (rgb.b - 1.0) * t).clamp(0.0, 1.0),
+                    rgb.a,
+                ),
+            };
+            Paint::Cmyk {
+                c: (c * t).clamp(0.0, 1.0),
+                m: (m * t).clamp(0.0, 1.0),
+                y: (y * t).clamp(0.0, 1.0),
+                k: (k * t).clamp(0.0, 1.0),
+                rgb,
+                // Per-use FillTint preserves the spot identity. The spot
+                // plane is tinted by the new C/M/Y/K (whose value is
+                // already the tint-scaled CMYK alternate) — that's the
+                // late-bound "PANTONE at N%" preview path.
+                spot,
+            }
+        }
         other => other,
     }
+}
+
+/// `c` mixed toward paper white in Lab: paper is L=100, a=b=0; `t = 0`
+/// is paper, `1` the colour.
+fn lab_tint(c: Color, t: f32) -> Color {
+    let [l, a, b] = paged_color::lab::linear_srgb_to_lab_d50([c.r, c.g, c.b]);
+    let paged_color::LinearRgb([r, g, bl]) = paged_color::lab::lab_d50_to_linear_srgb(
+        (100.0 + (l - 100.0) * t).clamp(0.0, 100.0),
+        a * t,
+        b * t,
+    );
+    Color::rgba(r, g, bl, c.a)
+}
+
+/// Whether a CMYK paint's cached display colour is NOT its inks through
+/// the profile — the standard-Lab spot case, the only one
+/// [`color_id_to_paint`] produces. Checked only with the Ink Manager
+/// setting on, so the ordinary path pays nothing.
+fn shows_its_lab(
+    xform: &paged_color::IccTransform,
+    color_ctx: &ColorCtx<'_>,
+    [c, m, y, k]: [f32; 4],
+    rgb: Color,
+) -> bool {
+    if !color_ctx.standard_lab_for_spots {
+        return false;
+    }
+    let paged_color::LinearRgb([r, g, b]) = xform.cmyk_percent_to_linear_rgb(paged_color::Cmyk {
+        c: c * 100.0,
+        m: m * 100.0,
+        y: y * 100.0,
+        k: k * 100.0,
+    });
+    (r - rgb.r).abs() + (g - rgb.g).abs() + (b - rgb.b).abs() > 1e-3
 }
 
 #[cfg(test)]
@@ -1179,6 +1281,154 @@ mod tests {
         assert_eq!(opts.cmyk_intent, paged_color::Intent::RelativeColorimetric);
         assert!(opts.cmyk_bpc);
         assert!(opts.cmyk_icc_profile.is_none());
+    }
+
+    fn cmyk_entry(id: &str, cmyk: [f32; 4], tint: Option<f32>) -> paged_model::ColorEntry {
+        paged_model::ColorEntry {
+            self_id: id.into(),
+            name: None,
+            space: paged_model::ColorSpace::Cmyk,
+            value: cmyk.to_vec(),
+            model: paged_model::ColorModel::Process,
+            alternate_space: None,
+            alternate_value: vec![],
+            tint,
+            alpha: None,
+        }
+    }
+
+    fn cmyk_parts(p: Paint) -> ([f32; 4], Color) {
+        match p {
+            Paint::Cmyk {
+                c, m, y, k, rgb, ..
+            } => ([c, m, y, k], rgb),
+            other => panic!("expected a CMYK paint, got {other:?}"),
+        }
+    }
+
+    /// Asked of InDesign (`corpus/generated/tints`, cases 1–54): an
+    /// object's `FillTint` on a full-strength CMYK swatch and a `<Tint>`
+    /// swatch of the same value export the identical device colour —
+    /// the base's inks scaled by the tint — for process C, M, Y, K, a
+    /// rich black and brand colours, at every value from 80 to 5. Under
+    /// a profile the page colour is that scaled ink through it, so the
+    /// two must paint identically. The `FillTint` path used to blend the
+    /// full-strength DISPLAY colour toward white in linear RGB instead,
+    /// which matched neither the swatch nor InDesign.
+    #[test]
+    fn fill_tint_equals_tint_swatch_under_icc() {
+        let Some(profile) =
+            paged_color::test_profiles::read_cmyk_profile(env!("CARGO_MANIFEST_DIR"))
+        else {
+            eprintln!("{}", paged_color::test_profiles::NO_PROFILE_HINT);
+            return;
+        };
+        let xform = paged_color::IccTransform::cmyk_to_linear_rgb(&profile).expect("transform");
+        let ctx = ColorCtx::icc(Some(&xform));
+        let bases: [(&str, [f32; 4]); 6] = [
+            ("Color/C", [100.0, 0.0, 0.0, 0.0]),
+            ("Color/M", [0.0, 100.0, 0.0, 0.0]),
+            ("Color/Y", [0.0, 0.0, 100.0, 0.0]),
+            ("Color/K", [0.0, 0.0, 0.0, 100.0]),
+            ("Color/Rich", [60.0, 40.0, 40.0, 100.0]),
+            ("Color/Teal", [85.0, 10.0, 40.0, 0.0]),
+        ];
+        let mut palette = Graphic::default();
+        for (id, cmyk) in bases {
+            palette.colors.insert(id.into(), cmyk_entry(id, cmyk, None));
+            for t in [80.0, 60.0, 40.0, 20.0, 5.0] {
+                let tid = format!("{id}T{t}");
+                palette
+                    .colors
+                    .insert(tid.clone(), cmyk_entry(&tid, cmyk, Some(t)));
+            }
+        }
+        for (id, cmyk) in bases {
+            let full = color_id_to_paint(id, &palette, ctx).expect("base");
+            for t in [80.0, 60.0, 40.0, 20.0, 5.0] {
+                let by_fill_tint =
+                    apply_fill_tint_ctx(full, object_tint(&palette, Some(id), Some(t)), &ctx);
+                let swatch = color_id_to_paint(&format!("{id}T{t}"), &palette, ctx).expect("tint");
+                let (inks_a, rgb_a) = cmyk_parts(by_fill_tint);
+                let (inks_b, rgb_b) = cmyk_parts(swatch);
+                for ch in 0..4 {
+                    assert!(
+                        (inks_a[ch] - cmyk[ch] * t / 10_000.0).abs() < 1e-5,
+                        "{id} at {t}: inks {inks_a:?}"
+                    );
+                    assert!((inks_a[ch] - inks_b[ch]).abs() < 1e-5);
+                }
+                for (a, b) in [(rgb_a.r, rgb_b.r), (rgb_a.g, rgb_b.g), (rgb_a.b, rgb_b.b)] {
+                    assert!((a - b).abs() < 1e-5, "{id} at {t}: {rgb_a:?} vs {rgb_b:?}");
+                }
+            }
+        }
+    }
+
+    /// An object's tint over a `<Tint>` swatch is measured against the
+    /// swatch's BASE: InDesign exports the teal 50 % `<Tint>` at
+    /// `FillTint="50"` as teal at 50 %, not 25 % (`tints` case 59), and
+    /// at a stronger object tint the colour comes back toward the base.
+    #[test]
+    fn object_tint_over_a_tint_swatch_is_relative_to_its_base() {
+        let teal = [85.0, 10.0, 40.0, 0.0];
+        let mut palette = Graphic::default();
+        palette
+            .colors
+            .insert("Color/Teal".into(), cmyk_entry("Color/Teal", teal, None));
+        palette.colors.insert(
+            "Color/T50".into(),
+            cmyk_entry("Color/T50", teal, Some(50.0)),
+        );
+        assert_eq!(
+            object_tint(&palette, Some("Color/T50"), Some(50.0)),
+            Some(100.0)
+        );
+        assert_eq!(
+            object_tint(&palette, Some("Color/T50"), Some(80.0)),
+            Some(160.0)
+        );
+        assert_eq!(
+            object_tint(&palette, Some("Color/Teal"), Some(80.0)),
+            Some(80.0)
+        );
+        assert_eq!(object_tint(&palette, Some("Color/T50"), None), None);
+        let Some(profile) =
+            paged_color::test_profiles::read_cmyk_profile(env!("CARGO_MANIFEST_DIR"))
+        else {
+            eprintln!("{}", paged_color::test_profiles::NO_PROFILE_HINT);
+            return;
+        };
+        let xform = paged_color::IccTransform::cmyk_to_linear_rgb(&profile).expect("transform");
+        let ctx = ColorCtx::icc(Some(&xform));
+        let swatch = color_id_to_paint("Color/T50", &palette, ctx).expect("tint");
+        let at_80 = apply_fill_tint_ctx(
+            swatch,
+            object_tint(&palette, Some("Color/T50"), Some(80.0)),
+            &ctx,
+        );
+        let (inks, _) = cmyk_parts(at_80);
+        for ch in 0..4 {
+            assert!((inks[ch] - teal[ch] * 0.8 / 100.0).abs() < 1e-5, "{inks:?}");
+        }
+    }
+
+    /// Without a profile there are no inks to scale: a solid paint keeps
+    /// the Lab ramp toward paper.
+    #[test]
+    fn fill_tint_without_a_profile_keeps_the_lab_ramp() {
+        let ink = Color::rgba(0.1, 0.2, 0.6, 1.0);
+        let Paint::Solid(half) = apply_fill_tint(Paint::Solid(ink), Some(50.0)) else {
+            panic!("solid");
+        };
+        let [l0, a0, b0] = paged_color::lab::linear_srgb_to_lab_d50([ink.r, ink.g, ink.b]);
+        let [l, a, b] = paged_color::lab::linear_srgb_to_lab_d50([half.r, half.g, half.b]);
+        assert!((l - (100.0 + (l0 - 100.0) * 0.5)).abs() < 0.05);
+        assert!((a - a0 * 0.5).abs() < 0.05 && (b - b0 * 0.5).abs() < 0.05);
+        assert!(matches!(
+            apply_fill_tint(Paint::Solid(ink), None),
+            Paint::Solid(c) if c == ink
+        ));
     }
 
     /// Lab swatches resolve analytically at the chokepoint — and
