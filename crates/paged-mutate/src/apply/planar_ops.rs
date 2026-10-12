@@ -654,11 +654,9 @@ fn locate(doc: &Document, node: &NodeId) -> Option<ElementInfo> {
                 .find(|f| f.self_id.as_deref() == Some(raw))
                 .map(|f| ElementInfo {
                     node: node.clone(),
-                    // An Oval has no parsed anchor table; the same
-                    // bounds-rectangle approximation `apply_pathfinder`
-                    // uses stands in (a follow-up emits the proper
-                    // four-arc ellipse).
-                    path: path_or_bounds(&[], &[], f.bounds),
+                    // An Oval has no parsed anchor table: its outline is
+                    // the inscribed four-arc ellipse.
+                    path: (super::oval_anchors(f.bounds), vec![0]),
                     spread: spread_id.clone(),
                     fill: f.fill_color.clone(),
                     stroke: f.stroke_color.clone(),

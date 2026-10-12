@@ -9859,10 +9859,11 @@ impl CanvasModel {
         type FramePathGeom<'a> = (
             paged_model::Bounds,
             Option<[f32; 6]>,
-            &'a [PathAnchor],
+            std::borrow::Cow<'a, [PathAnchor]>,
             &'a [usize],
             &'a [bool],
         );
+        use std::borrow::Cow;
 
         let raw = id.raw_id();
         for parsed in &self.scene().spreads {
@@ -9876,7 +9877,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -9889,16 +9890,27 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
                     }),
-                // Ovals don't carry a parsed PathGeometry — they're
-                // declared by GeometricBounds; render shows them as
-                // ellipses. Drop them silently rather than synthesise
-                // 4 fake anchors.
-                ElementId::Oval(_) => None,
+                // The model keeps an oval as bounds; its path is the
+                // inscribed four-arc ellipse — the outline the renderer
+                // draws and the planar arrangement reads.
+                ElementId::Oval(_) => spread
+                    .ovals
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            Cow::Owned(paged_mutate::apply::oval_anchors(f.bounds)),
+                            &[][..],
+                            &[false][..],
+                        )
+                    }),
                 ElementId::Polygon(_) => spread
                     .polygons
                     .iter()
@@ -9907,7 +9919,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -9920,7 +9932,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )

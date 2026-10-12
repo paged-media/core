@@ -759,12 +759,7 @@ fn read_path(
                     .iter()
                     .find(|p| p.self_id.as_deref() == Some(raw))
                 {
-                    // Oval's parse layer doesn't expose an
-                    // explicit anchors vec — synthesise a four-
-                    // corner approximation from bounds for now.
-                    // A future polish emits the proper four-arc
-                    // ellipse anchors.
-                    return Ok((rect_anchors_from_bounds(f.bounds), vec![0]));
+                    return Ok((oval_anchors(f.bounds), vec![0]));
                 }
             }
             NodeId::Polygon(_) => {
@@ -796,6 +791,31 @@ fn read_path(
         right: (0.0, 0.0),
     };
     Err(OperationError::NodeNotFound(node.clone()))
+}
+
+/// The path an `<Oval>` is: the ellipse inscribed in its bounds as four
+/// cubic arcs, spelled the way InDesign spells one — edge midpoints
+/// bottom → right → top → left, each handle κ·r along the tangent. The
+/// model keeps an oval as bounds only, so every reader that needs its
+/// outline (the `pathAnchors` door, the planar arrangement, the
+/// pathfinder) takes it from here, in the oval's raw path space.
+pub fn oval_anchors(b: paged_model::Bounds) -> Vec<paged_model::PathAnchor> {
+    use paged_model::PathAnchor;
+    const KAPPA: f32 = 0.552_284_8;
+    let (cx, cy) = ((b.left + b.right) * 0.5, (b.top + b.bottom) * 0.5);
+    let kx = (b.right - b.left) * 0.5 * KAPPA;
+    let ky = (b.bottom - b.top) * 0.5 * KAPPA;
+    let point = |anchor: (f32, f32), left: (f32, f32), right: (f32, f32)| PathAnchor {
+        anchor,
+        left,
+        right,
+    };
+    vec![
+        point((cx, b.bottom), (cx - kx, b.bottom), (cx + kx, b.bottom)),
+        point((b.right, cy), (b.right, cy + ky), (b.right, cy - ky)),
+        point((cx, b.top), (cx + kx, b.top), (cx - kx, b.top)),
+        point((b.left, cy), (b.left, cy - ky), (b.left, cy + ky)),
+    ]
 }
 
 fn rect_anchors_from_bounds(b: paged_model::Bounds) -> Vec<paged_model::PathAnchor> {
