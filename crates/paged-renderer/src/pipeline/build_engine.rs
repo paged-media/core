@@ -5232,6 +5232,18 @@ pub(super) fn emit_paragraph_into_chain(
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
+    // Conditional text goes first: a hidden run takes its anchored
+    // objects and footnote references with it, before anything below
+    // counts placeholders or reads an anchor's offset (`conditions`).
+    // Undeclared conditions hide nothing, so a document declaring none
+    // skips the pass.
+    let declared = &em.document.styles.conditions;
+    let shown = if declared.is_empty() {
+        None
+    } else {
+        super::conditions::without_hidden_runs(paragraph, declared)
+    };
+    let paragraph = shown.as_ref().unwrap_or(paragraph);
     // An inline or above-line anchored object is a character of its
     // line, as InDesign sets it: the paragraph composes with one
     // placeholder character per object at its anchor, and the objects
@@ -5277,38 +5289,6 @@ fn emit_paragraph_lines(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
-    // Phase 5 — conditional text. Drop runs whose `AppliedConditions`
-    // include any `<Condition Visible="false">`. Empty conditions list
-    // means "always visible"; the filter pass is a no-op when no run
-    // carries any conditions (almost every paragraph).
-    let paragraph_filtered_owned;
-    let paragraph: &paged_model::Paragraph = {
-        let has_conditions = paragraph
-            .runs
-            .iter()
-            .any(|r| !r.applied_conditions.is_empty());
-        if !has_conditions {
-            paragraph
-        } else {
-            let conditions = &em.document.styles.conditions;
-            let filtered: Vec<paged_model::CharacterRun> = paragraph
-                .runs
-                .iter()
-                .filter(|r| {
-                    r.applied_conditions
-                        .iter()
-                        .all(|cid| conditions.get(cid).and_then(|c| c.visible).unwrap_or(true))
-                })
-                .cloned()
-                .collect();
-            paragraph_filtered_owned = paged_model::Paragraph {
-                runs: filtered,
-                ..paragraph.clone()
-            };
-            &paragraph_filtered_owned
-        }
-    };
-
     // Phase 4 typography — nested character styles. If the paragraph
     // style declares `<NestedStyle>` children, splice the runs at
     // overlay boundaries and override the `character_style` field on

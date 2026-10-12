@@ -57,11 +57,12 @@
     },
     {
       "name": "conditions",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.105,
-      "max_p99_de": 0.3,
-      "min_ssim": 0.9869,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.087 / p99 0.000 / SSIM 0.9949 across 1 page(s); sized at worst + ~20%."
+      "max_mean_de": 0.493,
+      "max_p99_de": 3.7,
+      "min_ssim": 0.9817,
+      "rationale": "Re-sized 2026-10-12 with a NEW page and reference, asked of InDesign 20.0.1 (Wave 1 R-05). The old numbers (mean 0.105 / p99 0.3 / SSIM 0.9869) held a four-word page whose reference was a broken oracle: InDesign printed the run gated by the hidden condition, because it does not hide inline text on open, and the pixel gate could not see the twelve glyphs. The page is now a 14-case matrix (several conditions, an undeclared one, an anchor marker, table cells, a footnote reference) with the hidden cases in InDesign's own <HiddenText> spelling, so its plain export prints what the toggled document prints. origin/main's engine (a run hidden when ANY condition is hidden): mean 0.515 / p99 4.921 / SSIM 0.9802, and the text gate fails on DELTA ECHO JULIETT LIMA. With the measured rule (printed while ANY condition is visible): 0.428 / 3.220 / 0.9847, text ok; sized at worst x 1.15 and SSIM - 0.003 so each metric still fails the old rule. The residue: the hidden anchored square in case 09 is drawn (plugin-publish idml-import attaches an anchored object inside <HiddenText>), and the table sits about 1 pt short of InDesign's, moving the line below it."
     },
     {
       "name": "composer",

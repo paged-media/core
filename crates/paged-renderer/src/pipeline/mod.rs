@@ -45,6 +45,7 @@ mod blend_shadow;
 mod build_engine;
 mod color_paint;
 mod compose_opts;
+mod conditions;
 mod datefmt;
 mod decorations;
 mod deltas;

@@ -1711,6 +1711,10 @@ fn split_runs_overlay_spanning_two_runs_splits_both() {
 }
 
 // ── Phase 5 — conditional text filter ─────────────────────────
+//
+// The rule is InDesign's (`conditions::run_prints`, the `conditions`
+// fixture): a run prints while ANY condition it names is visible, and an
+// undeclared condition counts as a visible one.
 
 fn cond_run(text: &str, conditions: &[&str]) -> paged_model::CharacterRun {
     paged_model::CharacterRun {
@@ -1728,78 +1732,102 @@ fn cond(id: &str, visible: bool) -> paged_model::ConditionDef {
     }
 }
 
-/// Tiny smoke that mirrors the filter logic inline in
-/// `emit_paragraph_into_chain`. Keeps the test independent of
-/// constructing a full Document, while still exercising the
-/// "all conditions visible ⇒ keep; any invisible ⇒ drop" rule.
-fn filter_by_conditions(
-    runs: &[paged_model::CharacterRun],
+/// The run texts the renderer's own filter leaves standing.
+fn shown_runs(
+    runs: Vec<paged_model::CharacterRun>,
     table: &std::collections::BTreeMap<String, paged_model::ConditionDef>,
-) -> Vec<paged_model::CharacterRun> {
-    runs.iter()
-        .filter(|r| {
-            r.applied_conditions
-                .iter()
-                .all(|cid| table.get(cid).and_then(|c| c.visible).unwrap_or(true))
-        })
-        .cloned()
+) -> Vec<String> {
+    let paragraph = paged_model::Paragraph {
+        runs,
+        ..Default::default()
+    };
+    let shown = super::conditions::without_hidden_runs(&paragraph, table);
+    shown
+        .as_ref()
+        .unwrap_or(&paragraph)
+        .runs
+        .iter()
+        .map(|r| r.text.clone())
         .collect()
 }
 
 #[test]
 fn conditions_no_applied_keeps_run() {
-    let runs = vec![cond_run("body", &[])];
     let table = std::collections::BTreeMap::new();
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].text, "body");
+    assert_eq!(shown_runs(vec![cond_run("body", &[])], &table), ["body"]);
 }
 
 #[test]
 fn conditions_visible_keeps_run() {
-    let runs = vec![cond_run("draft text", &["Condition/Draft"])];
     let mut table = std::collections::BTreeMap::new();
     table.insert("Condition/Draft".to_string(), cond("Condition/Draft", true));
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
+    let runs = vec![cond_run("draft text", &["Condition/Draft"])];
+    assert_eq!(shown_runs(runs, &table), ["draft text"]);
 }
 
 #[test]
 fn conditions_invisible_drops_run() {
-    let runs = vec![
-        cond_run("keep", &[]),
-        cond_run("hide", &["Condition/Draft"]),
-    ];
     let mut table = std::collections::BTreeMap::new();
     table.insert(
         "Condition/Draft".to_string(),
         cond("Condition/Draft", false),
     );
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].text, "keep");
-}
-
-#[test]
-fn conditions_multiple_all_must_be_visible() {
-    // Two conditions on one run; one is hidden ⇒ drop.
-    let runs = vec![cond_run("dual", &["Condition/A", "Condition/B"])];
-    let mut table = std::collections::BTreeMap::new();
-    table.insert("Condition/A".to_string(), cond("Condition/A", true));
-    table.insert("Condition/B".to_string(), cond("Condition/B", false));
-    let out = filter_by_conditions(&runs, &table);
-    assert!(out.is_empty());
+    let runs = vec![
+        cond_run("keep", &[]),
+        cond_run("hide", &["Condition/Draft"]),
+    ];
+    assert_eq!(shown_runs(runs, &table), ["keep"]);
 }
 
 #[test]
 fn conditions_unknown_id_treated_as_visible() {
-    // A reference to a condition not in the document's table
-    // shouldn't silently hide content. InDesign treats unknown
-    // condition refs as visible.
-    let runs = vec![cond_run("orphan", &["Condition/Missing"])];
-    let table = std::collections::BTreeMap::new();
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
+    // InDesign drops the whole `AppliedConditions` list of a run that
+    // names a condition the document does not declare, so the run prints —
+    // alone or beside a hidden condition.
+    let mut table = std::collections::BTreeMap::new();
+    table.insert("Condition/H".to_string(), cond("Condition/H", false));
+    let runs = vec![
+        cond_run("orphan", &["Condition/Missing"]),
+        cond_run("beside", &["Condition/H", "Condition/Missing"]),
+    ];
+    assert_eq!(shown_runs(runs, &table), ["orphan", "beside"]);
+}
+
+/// Every glyph's character on page 1 of the `conditions` sample in its
+/// inline spelling (no `<HiddenText>`: the flags alone say what is
+/// hidden), as built by the pipeline.
+fn conditions_inline_printed_text() -> String {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::conditions::build_inline()).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let font = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/OpenSans.ttf"),
+    )
+    .expect("OpenSans.ttf fixture");
+    let options = PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let table = built.pages[0].list.glyph_runs.as_ref().expect("glyph runs");
+    let mut entries: Vec<_> = table.entries.iter().collect();
+    entries.sort_by_key(|e| e.command_index);
+    entries.iter().filter_map(|e| e.unicode).collect()
+}
+
+#[test]
+fn multiple_conditions_any_visible_keeps() {
+    // InDesign 20.0.1 prints a run under a visible AND a hidden
+    // condition, in either order — in body text, in a table cell and on
+    // an anchored object's marker. Built through the whole pipeline.
+    let text = conditions_inline_printed_text();
+    for word in ["DELTA", "ECHO", "JULIETT", "LIMA"] {
+        assert!(text.contains(word), "{word} must print; got {text:?}");
+    }
+    for word in ["CHARLIE", "FOXTROT", "INDIA", "KILO", "MIKE", "NOVEMBER"] {
+        assert!(!text.contains(word), "{word} must not print; got {text:?}");
+    }
 }
 
 #[test]
