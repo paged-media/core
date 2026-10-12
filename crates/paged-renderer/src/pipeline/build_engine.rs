@@ -7636,7 +7636,7 @@ fn emit_paragraph_lines(
             // place the IDML BlendingSetting takes effect.
             emit_glyph_slice(
                 &line.glyphs[start..end],
-                fid,
+                em.font_table.font_ref(fid),
                 line.glyphs[start].point_size,
                 |cluster| picker.pick(cluster),
                 text_origin_pt,
@@ -7653,7 +7653,7 @@ fn emit_paragraph_lines(
             if any_text_stroke {
                 emit_glyph_slice_stroke(
                     &line.glyphs[start..end],
-                    fid,
+                    em.font_table.font_ref(fid),
                     line.glyphs[start].point_size,
                     |cluster| stroke_picker.pick(cluster),
                     text_origin_pt,
@@ -7935,7 +7935,7 @@ fn emit_paragraph_lines(
         let before_cap_cmds = pages[target_page].list.commands.len();
         emit_glyph_slice(
             &positioned,
-            cap_font_id,
+            em.font_table.font_ref(cap_font_id),
             cap_point_size,
             |_cluster| cap_paint,
             text_origin_pt,
@@ -7949,7 +7949,7 @@ fn emit_paragraph_lines(
         if any_text_stroke {
             emit_glyph_slice_stroke(
                 &positioned,
-                cap_font_id,
+                em.font_table.font_ref(cap_font_id),
                 cap_point_size,
                 |cluster| stroke_picker.pick(cluster),
                 text_origin_pt,

@@ -2911,7 +2911,7 @@ pub(super) fn emit_cell_paragraph(
             let outliner = TtfOutliner::new(outline);
             emit_glyph_slice(
                 &line.glyphs[start..end],
-                fid,
+                em.font_table.font_ref(fid),
                 line.glyphs[start].point_size,
                 |cluster| picker.pick(cluster),
                 cell_origin,
@@ -2921,7 +2921,7 @@ pub(super) fn emit_cell_paragraph(
             if any_text_stroke {
                 emit_glyph_slice_stroke(
                     &line.glyphs[start..end],
-                    fid,
+                    em.font_table.font_ref(fid),
                     line.glyphs[start].point_size,
                     |cluster| stroke_picker.pick(cluster),
                     cell_origin,

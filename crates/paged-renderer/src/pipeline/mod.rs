@@ -1683,7 +1683,9 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             let origin = frame_spread_top_left(frame.bounds, frame.item_transform);
             emit_paragraph(
                 &laid_out,
-                font_id,
+                // This path never mixes a wght into its id — it is the
+                // plain hash of `options.font` — so both halves agree.
+                paged_compose::FontRef::plain(font_id),
                 paragraph_size,
                 |cluster| picker.pick(cluster),
                 origin,

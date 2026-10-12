@@ -968,6 +968,7 @@ fn font_table_with(cache: &[(&str, Option<&str>, &[u8])], fallback: Option<&[u8]
     }
     FontTable {
         faces: HashMap::new(),
+        outline_to_bytes: HashMap::new(),
         face_bytes: HashMap::new(),
         keys: hm.keys().cloned().collect(),
         cache: hm,

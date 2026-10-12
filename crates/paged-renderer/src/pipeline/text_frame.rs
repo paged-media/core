@@ -1452,7 +1452,10 @@ pub(super) fn emit_frame_scene_layer(
             let paint = Paint::Solid(paged_compose::scene_paint_to_color(t.paint));
             emit_glyph_slice(
                 &positioned,
-                face.font_id,
+                // A scene-layer face is the plugin's (ADR 126): its id keys
+                // the outline cache but resolves to no document bytes, so
+                // nothing embeds it — outlines, as before the text layer.
+                paged_compose::FontRef::varied(face.font_id),
                 t.size,
                 |_| paint,
                 origin,

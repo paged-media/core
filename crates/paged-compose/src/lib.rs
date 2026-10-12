@@ -55,6 +55,7 @@ pub use scene_layer::{
     emit_scene_layer, scene_paint_to_color, SceneBlendMode, SceneGradient, SceneGradientStop,
     SceneItem, SceneLayer, ScenePaint, ScenePathSeg, SceneTextItem,
 };
+pub use text::FontRef;
 pub use text::{
     emit_glyph_slice, emit_glyph_slice_blend, emit_glyph_slice_stroke, emit_paragraph,
     emit_paragraph_blend,

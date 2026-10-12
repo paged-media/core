@@ -1387,8 +1387,20 @@ pub struct GlyphRunEntry {
     /// Index of the parallel outline command in
     /// `DisplayList::commands`.
     pub command_index: u32,
-    /// The renderer's font-table id (resolves to face bytes).
+    /// The glyph-outline cache id — `fnv(face bytes) ^ wght_bits`.
+    /// Groups glyphs that share an outline set, which is what the PDF
+    /// exporter keys one embedded font on.
+    ///
+    /// It does NOT resolve to face bytes. It used to claim it did, and
+    /// the exporter believed it: every lookup missed, so every PDF this
+    /// engine produced had its text drawn as outlines with no text
+    /// layer at all. Use [`Self::face_id`] for bytes.
     pub font_id: u32,
+    /// The id that DOES resolve to face bytes (`fnv(face bytes)`), or
+    /// `None` when these outlines came from a baked `wght` variation —
+    /// where the bytes alone would render the wrong weight, so the
+    /// exporter must keep drawing outlines.
+    pub face_id: Option<u32>,
     pub glyph_id: u32,
     pub font_size: f32,
     /// The EXACT affine the outline command received — reused

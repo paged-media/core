@@ -238,7 +238,7 @@ pub(super) fn emit_ruby_for_line(
         }
         emit_glyph_slice(
             &positioned,
-            u32::MAX,
+            paged_compose::FontRef::varied(u32::MAX),
             ruby_pt,
             |_| ruby_paint,
             (ox + ruby_origin_x_pt, oy + ruby_origin_y_pt),
