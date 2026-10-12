@@ -45,6 +45,11 @@ pub struct FontUsage {
     pub to_unicode: BTreeMap<u16, char>,
     pub embeddable: Option<bool>,
     pub outlined_runs: usize,
+    /// The id that resolves to FACE BYTES for this usage — not the
+    /// pool's own key, which is the glyph-outline id. One variable face
+    /// at two weights is two pooled fonts and one set of bytes; using
+    /// the key to fetch them finds nothing at all.
+    pub face_id: Option<u32>,
 }
 
 impl FontPool {
@@ -55,11 +60,13 @@ impl FontPool {
         &mut self,
         refs: &mut RefAllocator,
         font_id: u32,
+        face_id: Option<u32>,
         glyph_id: u32,
         unicode: Option<char>,
     ) -> (String, Ref, u16) {
         let usage = self.fonts.entry(font_id).or_insert_with(|| FontUsage {
             type0_ref: refs.alloc(),
+            face_id,
             remapper: subsetter::GlyphRemapper::new(),
             to_unicode: BTreeMap::new(),
             embeddable: None,
@@ -147,7 +154,7 @@ pub fn write_fonts(
     };
     for (font_id, usage) in &pool.fonts {
         let name = format!("F{font_id}");
-        let Some(face_bytes) = fonts.font_bytes(*font_id) else {
+        let Some(face_bytes) = usage.face_id.and_then(|f| fonts.font_bytes(f)) else {
             diagnostics.push(ExportDiagnostic::FontNotEmbeddable {
                 font_id: *font_id,
                 runs_outlined: usage.remapper.num_gids() as usize,
@@ -350,17 +357,17 @@ mod tests {
         let mut refs = crate::writer::RefAllocator::new();
         // .notdef is pinned at 0, so the first real glyph gets 1,
         // the second 2, and a REPEAT of the first stays 1.
-        let (_, _, a) = pool.use_glyph(&mut refs, 7, 42, Some('A'));
-        let (_, _, b) = pool.use_glyph(&mut refs, 7, 17, Some('B'));
-        let (_, _, a2) = pool.use_glyph(&mut refs, 7, 42, Some('A'));
+        let (_, _, a) = pool.use_glyph(&mut refs, 7, Some(7), 42, Some('A'));
+        let (_, _, b) = pool.use_glyph(&mut refs, 7, Some(7), 17, Some('B'));
+        let (_, _, a2) = pool.use_glyph(&mut refs, 7, Some(7), 42, Some('A'));
         assert_eq!((a, b, a2), (1, 2, 1));
         // ToUnicode keys by the REMAPPED gid.
         let usage = pool.fonts.get(&7).unwrap();
         assert_eq!(usage.to_unicode.get(&1), Some(&'A'));
         assert_eq!(usage.to_unicode.get(&2), Some(&'B'));
         // Same font ⇒ same resource name + ref; other font differs.
-        let (name_a, ref_a, _) = pool.use_glyph(&mut refs, 7, 99, None);
-        let (name_b, ref_b, _) = pool.use_glyph(&mut refs, 8, 99, None);
+        let (name_a, ref_a, _) = pool.use_glyph(&mut refs, 7, Some(7), 99, None);
+        let (name_b, ref_b, _) = pool.use_glyph(&mut refs, 8, Some(8), 99, None);
         assert_eq!(name_a, "F7");
         assert_eq!(name_b, "F8");
         assert_ne!(ref_a, ref_b);
@@ -375,6 +382,7 @@ mod tests {
         let entry = paged_compose::GlyphRunEntry {
             command_index: 0,
             font_id: 1,
+            face_id: Some(1),
             glyph_id: 5,
             font_size: 12.0,
             // sx = 12/1000 (point_size/upem), y negated, at (100, 200).

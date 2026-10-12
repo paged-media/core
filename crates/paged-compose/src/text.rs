@@ -40,11 +40,57 @@ use crate::glyph::GlyphOutliner;
 /// 1/64 pt. We divide by this when converting to float pt.
 const ADVANCE_PRECISION: f32 = 64.0;
 
+/// Which font a run of glyphs belongs to, in BOTH id spaces.
+///
+/// They are not interchangeable, and passing one where the other was
+/// wanted is a bug that hides completely: the display list renders
+/// correctly either way, because the outline cache only needs
+/// [`Self::outline`]. It is the PDF exporter that needs
+/// [`Self::bytes`], and when it asked with the outline id every lookup
+/// missed — silently, since a miss means "outline this text", which is
+/// also what a font that legitimately forbids embedding produces. Every
+/// PDF the engine exported carried no text layer.
+///
+/// So the two ids travel together in one value that a caller cannot
+/// mix up, rather than as two `u32` parameters side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontRef {
+    /// Glyph-outline cache key: `fnv(face bytes) ^ wght_bits`. Mixing
+    /// the weight in is what stops one variable face fed at two
+    /// weights from sharing one set of cached outlines.
+    pub outline: u32,
+    /// The id that resolves to face BYTES (`fnv(face bytes)`), or
+    /// `None` when a `wght` variation is baked into these outlines and
+    /// the bytes alone would reproduce the wrong weight.
+    pub bytes: Option<u32>,
+}
+
+impl FontRef {
+    /// A face rendered as its own bytes give it — one id serves both.
+    #[must_use]
+    pub fn plain(id: u32) -> Self {
+        Self {
+            outline: id,
+            bytes: Some(id),
+        }
+    }
+
+    /// A varied instance: the outlines are not what the bytes alone
+    /// would produce, so nothing may embed them.
+    #[must_use]
+    pub fn varied(outline: u32) -> Self {
+        Self {
+            outline,
+            bytes: None,
+        }
+    }
+}
+
 /// Emit `FillPath` commands for every glyph in `laid_out`.
 ///
-/// - `font_id` identifies the font for glyph caching; callers pick a
-///   scheme (hash of the font bytes, index into a font table, etc.)
-///   and keep it stable for a single render.
+/// - `font` identifies the font in both id spaces — see [`FontRef`].
+///   The outline half is the glyph-cache key and must stay stable for
+///   a single render; the bytes half is what the PDF exporter embeds.
 /// - `point_size` is the em size the glyphs were shaped at.
 /// - `paint_for(cluster)` returns the paint for the glyph at `cluster`
 ///   (byte offset into the source paragraph). Single-colour callers
@@ -54,7 +100,7 @@ const ADVANCE_PRECISION: f32 = 64.0;
 ///   commands live in page coordinates.
 pub fn emit_paragraph<O, F>(
     laid_out: &LaidOutParagraph,
-    font_id: u32,
+    font: FontRef,
     point_size: f32,
     paint_for: F,
     frame_origin_pt: (f32, f32),
@@ -66,7 +112,7 @@ pub fn emit_paragraph<O, F>(
 {
     emit_paragraph_blend(
         laid_out,
-        font_id,
+        font,
         point_size,
         paint_for,
         frame_origin_pt,
@@ -84,7 +130,7 @@ pub fn emit_paragraph<O, F>(
 /// honour a TextFrame's `<BlendingSetting>` on its body text.
 pub fn emit_paragraph_blend<O, F>(
     laid_out: &LaidOutParagraph,
-    font_id: u32,
+    font: FontRef,
     point_size: f32,
     paint_for: F,
     frame_origin_pt: (f32, f32),
@@ -98,7 +144,7 @@ pub fn emit_paragraph_blend<O, F>(
     for line in &laid_out.lines {
         emit_glyph_slice_blend(
             &line.glyphs,
-            font_id,
+            font,
             point_size,
             &paint_for,
             frame_origin_pt,
@@ -110,11 +156,11 @@ pub fn emit_paragraph_blend<O, F>(
 }
 
 /// Emit `FillPath` commands for a contiguous slice of glyphs that all
-/// share `font_id` (and therefore one outliner). Multi-font callers
+/// share `font` (and therefore one outliner). Multi-font callers
 /// group glyphs by `glyph.font_id` and call this once per group.
 pub fn emit_glyph_slice<O, F>(
     glyphs: &[PositionedGlyph],
-    font_id: u32,
+    font: FontRef,
     point_size: f32,
     paint_for: F,
     frame_origin_pt: (f32, f32),
@@ -126,7 +172,7 @@ pub fn emit_glyph_slice<O, F>(
 {
     emit_glyph_slice_blend(
         glyphs,
-        font_id,
+        font,
         point_size,
         paint_for,
         frame_origin_pt,
@@ -140,7 +186,7 @@ pub fn emit_glyph_slice<O, F>(
 /// blend modes.
 pub fn emit_glyph_slice_blend<O, F>(
     glyphs: &[PositionedGlyph],
-    font_id: u32,
+    font: FontRef,
     point_size: f32,
     paint_for: F,
     frame_origin_pt: (f32, f32),
@@ -156,7 +202,8 @@ pub fn emit_glyph_slice_blend<O, F>(
     let (ox, oy) = frame_origin_pt;
     let normal = matches!(blend_mode, crate::display_list::BlendMode::Normal);
     for g in glyphs {
-        let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list) else {
+        let Some(path_id) = get_or_intern_glyph_outline(font.outline, g.glyph_id, outliner, list)
+        else {
             continue;
         };
         let gx = ox + g.x as f32 / ADVANCE_PRECISION;
@@ -185,7 +232,8 @@ pub fn emit_glyph_slice_blend<O, F>(
         if let Some(runs) = list.glyph_runs.as_mut() {
             runs.push(crate::display_list::GlyphRunEntry {
                 command_index: list.commands.len() as u32,
-                font_id,
+                font_id: font.outline,
+                face_id: font.bytes,
                 glyph_id: g.glyph_id,
                 font_size: point_size,
                 transform,
@@ -222,7 +270,7 @@ pub fn emit_glyph_slice_blend<O, F>(
 /// silhouette).
 pub fn emit_glyph_slice_stroke<O, S>(
     glyphs: &[PositionedGlyph],
-    font_id: u32,
+    font: FontRef,
     point_size: f32,
     stroke_for: S,
     frame_origin_pt: (f32, f32),
@@ -239,7 +287,8 @@ pub fn emit_glyph_slice_stroke<O, S>(
         let Some((paint, stroke)) = stroke_for(g.cluster) else {
             continue;
         };
-        let Some(path_id) = get_or_intern_glyph_outline(font_id, g.glyph_id, outliner, list) else {
+        let Some(path_id) = get_or_intern_glyph_outline(font.outline, g.glyph_id, outliner, list)
+        else {
             continue;
         };
         let gx = ox + g.x as f32 / ADVANCE_PRECISION;
@@ -265,7 +314,8 @@ pub fn emit_glyph_slice_stroke<O, S>(
         if let Some(runs) = list.glyph_runs.as_mut() {
             runs.push(crate::display_list::GlyphRunEntry {
                 command_index: list.commands.len() as u32,
-                font_id,
+                font_id: font.outline,
+                face_id: font.bytes,
                 glyph_id: g.glyph_id,
                 font_size: point_size,
                 transform,
@@ -364,7 +414,7 @@ mod tests {
         let mut list = DisplayList::new();
         emit_paragraph(
             &p,
-            1,
+            FontRef::plain(1),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
@@ -383,7 +433,7 @@ mod tests {
         let mut list = DisplayList::new();
         emit_paragraph(
             &p,
-            1,
+            FontRef::plain(1),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
@@ -405,7 +455,7 @@ mod tests {
         let mut list = DisplayList::new();
         emit_paragraph(
             &p,
-            1,
+            FontRef::plain(1),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (100.0, 200.0),
@@ -431,7 +481,7 @@ mod tests {
         let blue = Paint::Solid(Color::rgba(0.0, 0.0, 1.0, 1.0));
         emit_paragraph(
             &p,
-            1,
+            FontRef::plain(1),
             12.0,
             |c| if c == 0 { red } else { blue },
             (0.0, 0.0),
@@ -457,7 +507,7 @@ mod tests {
         let mut list = DisplayList::new();
         emit_paragraph(
             &p,
-            1,
+            FontRef::plain(1),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
@@ -496,7 +546,7 @@ mod tests {
         for g in [glyph(1.0, 1.0), glyph(1.0, 2.0)] {
             emit_glyph_slice(
                 &[g],
-                1,
+                FontRef::plain(1),
                 12.0,
                 |_| Paint::Solid(Color::BLACK),
                 (0.0, 0.0),
@@ -546,7 +596,7 @@ mod tests {
         for g in [glyph(1.0, 1.0), glyph(2.0, 1.0)] {
             emit_glyph_slice(
                 &[g],
-                1,
+                FontRef::plain(1),
                 12.0,
                 |_| Paint::Solid(Color::BLACK),
                 (0.0, 0.0),
@@ -595,7 +645,7 @@ mod tests {
         for g in [glyph(0.0), glyph(15.0), glyph(-15.0)] {
             emit_glyph_slice(
                 &[g],
-                1,
+                FontRef::plain(1),
                 12.0,
                 |_| Paint::Solid(Color::BLACK),
                 (0.0, 0.0),
@@ -659,7 +709,7 @@ mod tests {
         for g in [glyph(0), glyph(-64)] {
             emit_glyph_slice(
                 &[g],
-                1,
+                FontRef::plain(1),
                 12.0,
                 |_| Paint::Solid(Color::BLACK),
                 (0.0, 100.0),
@@ -717,7 +767,7 @@ mod tests {
         }];
         emit_glyph_slice(
             &glyphs_a,
-            111,
+            FontRef::plain(111),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),
@@ -726,7 +776,7 @@ mod tests {
         );
         emit_glyph_slice(
             &glyphs_b,
-            222,
+            FontRef::plain(222),
             12.0,
             |_| Paint::Solid(Color::BLACK),
             (0.0, 0.0),

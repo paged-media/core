@@ -803,6 +803,9 @@ pub(super) fn emit_text_path_into(
             runs.push(paged_compose::GlyphRunEntry {
                 command_index: page.list.commands.len() as u32,
                 font_id: face_font_ids[g.face_idx],
+                // text-on-path never mixes a wght into its ids, so the
+                // outline id IS the byte-resolvable one.
+                face_id: Some(face_font_ids[g.face_idx]),
                 glyph_id: g.glyph_id,
                 font_size: g.point_size,
                 transform: final_xf,

@@ -108,6 +108,17 @@ pub struct FontTable {
     ///      exposed). Two runs with the same bytes but different
     ///      `wght` use distinct cache keys → distinct cached Faces.
     pub(super) faces: HashMap<(u32, u32), paged_text::Face<'static>>,
+    /// Glyph-outline id (`fnv(bytes) ^ wght_bits`) to the id that
+    /// resolves to FACE BYTES (`fnv(bytes)`) — `None` for an instance
+    /// whose outlines have a `wght` variation baked in, where the bytes
+    /// alone would reproduce the wrong weight.
+    ///
+    /// This map is the inverse the exporter could not compute: an XOR
+    /// with an unknown weight is not invertible, so the table that
+    /// mixed the ids has to be the one that unmixes them.
+    /// [`Self::font_ref`] is the question every glyph-emitting site
+    /// asks.
+    pub(super) outline_to_bytes: HashMap<u32, Option<u32>>,
     /// Bytes kept alive for `faces` to point into. One entry per
     /// distinct `font_id` (the wght variant is irrelevant — same
     /// buffer, just different variation state on the Face).
@@ -332,6 +343,7 @@ impl FontTable {
         let face_bytes: HashMap<u32, Bytes> = id_to_bytes;
         let mut faces: HashMap<(u32, u32), paged_text::Face<'static>> =
             HashMap::with_capacity(face_keys.len());
+        let mut outline_to_bytes: HashMap<u32, Option<u32>> = HashMap::new();
         let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
         for (font_id, wght_bits) in face_keys {
             let Some(buf) = face_bytes.get(&font_id) else {
@@ -367,17 +379,31 @@ impl FontTable {
             // Only bake a wght variation when the face actually exposes
             // a `wght` axis — otherwise `set_variations` silently no-ops
             // and the bold/light slot reuses Regular metrics (P-06).
-            let has_wght_axis = face
+            let wght_axis = face
                 .variation_axes()
                 .into_iter()
-                .any(|axis| axis.tag == wght_tag);
+                .find(|axis| axis.tag == wght_tag);
             let wght = f32::from_bits(wght_bits);
-            if has_wght_axis {
+            if wght_axis.is_some() {
                 face.set_variations(&[paged_text::Variation {
                     tag: wght_tag,
                     value: wght,
                 }]);
             }
+            // Whether the face's own BYTES still produce these outlines.
+            //
+            // Having a `wght` axis is not enough to say they don't —
+            // almost every modern face has one, and the common request
+            // is its DEFAULT (Inter, Open Sans and Source Serif 4 all
+            // default to 400, which is exactly what an unstyled run
+            // asks for). Setting an axis to the value it already has
+            // changes no outline. Testing for the axis rather than for
+            // a MOVED axis would keep the embed path shut for nearly
+            // every document.
+            let at_default = wght_axis.map_or(true, |a| (a.def_value - wght).abs() < 0.01);
+            // The same mixing `build_engine` does when it builds
+            // `font_ids`, recorded so it can be undone.
+            outline_to_bytes.insert(font_id ^ wght_bits, at_default.then_some(font_id));
             faces.insert((font_id, wght_bits), face);
         }
         // Parse metrics for every distinct byte buffer we ended up
@@ -442,6 +468,7 @@ impl FontTable {
         }
         Self {
             faces,
+            outline_to_bytes,
             face_bytes,
             keys,
             cache,
@@ -462,6 +489,30 @@ impl FontTable {
     /// (`&Face`, not `&mut Face`) enforces that at compile time.
     pub(super) fn face(&self, font_id: u32, wght_bits: u32) -> Option<&paged_text::Face<'_>> {
         self.faces.get(&(font_id, wght_bits))
+    }
+
+    /// Both id spaces for a glyph-outline id, as one value a caller
+    /// cannot mix up.
+    ///
+    /// The glyph-outline cache is keyed on `fnv(bytes) ^ wght_bits` so
+    /// one variable face fed two weights does not conflate its
+    /// outlines; `face_bytes` and `metrics` are keyed on the plain
+    /// `fnv(bytes)`. The PDF exporter needs the second and was handed
+    /// the first — every lookup missed, and a miss means "draw
+    /// outlines", so every PDF this engine exported carried no text
+    /// layer at all and nothing went red.
+    ///
+    /// An id this table never issued (the synthetic `u32::MAX` the ruby
+    /// and scene-layer lanes use) has no bytes to embed and comes back
+    /// with `bytes: None` — outlines, exactly as before.
+    pub(super) fn font_ref(&self, outline_id: u32) -> paged_compose::FontRef {
+        match self.outline_to_bytes.get(&outline_id) {
+            Some(Some(bytes)) => paged_compose::FontRef {
+                outline: outline_id,
+                bytes: Some(*bytes),
+            },
+            _ => paged_compose::FontRef::varied(outline_id),
+        }
     }
 
     /// Look up the bytes a paragraph should shape with, plus whether

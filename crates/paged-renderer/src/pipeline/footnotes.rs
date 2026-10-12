@@ -782,6 +782,7 @@ pub(super) fn emit_footnote_pools(
                     emit_footnote_paragraph(
                         laid,
                         &ttf_faces,
+                        font_table,
                         &picker,
                         (rect.x, para_top),
                         &mut page.list,
@@ -805,6 +806,10 @@ pub(super) fn emit_footnote_pools(
 pub(super) fn emit_footnote_paragraph(
     laid: &paged_text::LaidOutParagraph,
     ttf_faces: &HashMap<u32, ttf_parser::Face>,
+    // Only to unmix a glyph's outline id back into a `FontRef` — see
+    // `FontTable::font_ref`. Without it a footnote's text is the one
+    // text on the page the PDF exporter cannot embed.
+    font_table: &FontTable,
     picker: &RunPaintPicker,
     frame_origin_pt: (f32, f32),
     list: &mut DisplayList,
@@ -833,7 +838,7 @@ pub(super) fn emit_footnote_paragraph(
                 let outliner = TtfOutliner::new(face);
                 emit_glyph_slice(
                     &line.glyphs[start..end],
-                    fid,
+                    font_table.font_ref(fid),
                     size,
                     |cluster| picker.pick(cluster),
                     frame_origin_pt,
