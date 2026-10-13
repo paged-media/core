@@ -50,6 +50,12 @@ pub(crate) struct RaggedLines<'a> {
     /// How far a word space may shrink, as a fraction of its width
     /// (`1 − MinimumWordSpacing`).
     pub space_shrink: f32,
+    /// In a plain frame, the paragraph's size (pt): a line may then overrun
+    /// its measure by InDesign's allowance for its last word
+    /// (`overrun_allowance`), its spaces squeezed onto it, at no cost.
+    /// `None`: the spaces may shrink by `space_shrink`, at `SQUEEZE_WEIGHT`
+    /// (a shaped or wrapped frame's measured squeeze).
+    pub overrun_size: Option<f32>,
 }
 
 /// What squeezing a line costs per pt² it is over its measure, against
@@ -63,12 +69,31 @@ pub(crate) struct RaggedLines<'a> {
 const SQUEEZE_WEIGHT: f64 = 10_000.0;
 
 /// What a hyphenated break costs per point of hyphenation penalty, in
-/// pt² of slack: the default penalty of 50 weighs like twenty-two points
-/// of slack on one line. Fitted on `text-in-shape` (InDesign hyphenates
-/// its oval's `win-dow` twice and its donut never): anything from 4 to 24
-/// sets both as InDesign does, 2 hyphenates the donut, 30 loses the
-/// oval's hyphens.
-const HYPHEN_WEIGHT: f64 = 10.0;
+/// pt² of slack: the default penalty of 50 weighs like nineteen points of
+/// slack on one line. Fitted on `text-in-shape` (InDesign hyphenates its
+/// oval's `win-dow` twice and its donut never): anything from 4 to 24 sets
+/// both as InDesign does, 2 hyphenates the donut, 30 loses the oval's
+/// hyphens. Since every ragged paragraph breaks this way (ADR 142) two more
+/// fixtures narrow it to 6 to 8: the `tints` labels hyphenate "Ma-genta" and
+/// "Yel-low" in their one-line frames as InDesign does up to 8 (not at
+/// 10), and `text-letterspacing` keeps "Trebek" whole as InDesign does from
+/// 6 (not at 4).
+const HYPHEN_WEIGHT: f64 = 7.0;
+
+/// How far (1/64 pt) InDesign lets a plain frame's ragged line overrun its
+/// measure to keep its last word, `word` wide after `before` of the line
+/// (both 1/64 pt), at `size` pt: a 99th of the word, and a little more the
+/// more the line holds before it. Fitted on 45 lines at 8, 12 and 18 pt
+/// (`tools/indesign-export/ragged-squeeze-probe.*`), every one within
+/// 0.12 pt. InDesign takes the overrun from the word spaces, evenly and
+/// past `MinimumWordSpacing` (1.4 pt from one 3.1 pt space).
+fn overrun_allowance(size: f32, word: i64, before: i64) -> i64 {
+    if word <= 0 {
+        return 0;
+    }
+    let (w, p) = (word as f64, before.max(0) as f64);
+    (w / 99.0 + 64.0 * f64::from(size) / 320.0 * (1.0 + p / w).ln()).floor() as i64
+}
 
 /// Break `items` so the sum over lines of `slack²` (in pt) is smallest.
 ///
@@ -111,13 +136,33 @@ pub(crate) fn min_ragged_breaks<T>(
                 _ => 0,
             };
     }
+    // word_at[i] = where the last word in items[..i] starts: the box
+    // after the last glue that a box follows.
+    let mut word_at = vec![0usize; n + 1];
+    for (i, it) in items.iter().enumerate() {
+        let starts_word =
+            matches!(it, Item::Box { .. }) && (i == 0 || matches!(items[i - 1], Item::Glue { .. }));
+        word_at[i + 1] = if starts_word { i } else { word_at[i] };
+    }
     let shrink = lines.space_shrink.clamp(0.0, 1.0) as f64;
     let forced = |i: usize| matches!(items[i], Item::Penalty { penalty, .. } if penalty <= -INFINITE_PENALTY);
-    // Legal breaks, in item order: a glue after a box, any penalty
+    // box_after[i]: a box follows item `i` before the paragraph ends.
+    let mut box_after = vec![false; n + 1];
+    for i in (0..n).rev() {
+        box_after[i] = match items[i] {
+            Item::Box { .. } => true,
+            _ if forced(i) => false,
+            _ => box_after[i + 1],
+        };
+    }
+    // Legal breaks, in item order: a glue between two boxes (the one
+    // that closes the paragraph would leave an empty line), any penalty
     // short of +infinity.
     let candidates: Vec<usize> = (0..n)
         .filter(|&i| match &items[i] {
-            Item::Glue { .. } => i > 0 && matches!(items[i - 1], Item::Box { .. }),
+            Item::Glue { .. } => {
+                i > 0 && matches!(items[i - 1], Item::Box { .. }) && box_after[i + 1]
+            }
             Item::Penalty { penalty, .. } => *penalty < INFINITE_PENALTY,
             Item::Box { .. } => false,
         })
@@ -167,7 +212,17 @@ pub(crate) fn min_ragged_breaks<T>(
                 }
                 let w = prefix[j] - prefix[s] + pen_w;
                 // The narrowest the line can be set: its spaces squeezed.
-                let tightest = w - ((glue[j] - glue[s]) as f64 * shrink).floor() as i64;
+                let tightest = match lines.overrun_size {
+                    Some(size) => {
+                        let ws = word_at[j].max(s);
+                        w - overrun_allowance(
+                            size,
+                            prefix[j] - prefix[ws] + pen_w,
+                            prefix[ws] - prefix[s],
+                        )
+                    }
+                    None => w - ((glue[j] - glue[s]) as f64 * shrink).floor() as i64,
+                };
                 if tightest > m && !first {
                     break;
                 }
@@ -177,8 +232,12 @@ pub(crate) fn min_ragged_breaks<T>(
                 } else if forced(j) && w <= m || line >= free_after {
                     0.0
                 } else if w > m {
-                    let over = (w - m) as f64 / 64.0;
-                    SQUEEZE_WEIGHT * over * over
+                    if lines.overrun_size.is_some() {
+                        0.0
+                    } else {
+                        let over = (w - m) as f64 / 64.0;
+                        SQUEEZE_WEIGHT * over * over
+                    }
                 } else {
                     let slack = (m - w) as f64 / 64.0;
                     let hyphen_cost = if hyphen {
@@ -267,6 +326,7 @@ mod tests {
             joined: &[],
             hyphen_penalty: 50,
             space_shrink: 0.0,
+            overrun_size: None,
         }
     }
 
@@ -316,5 +376,47 @@ mod tests {
         let items = words(&[3 * 64, 2 * 64, 2 * 64, 5 * 64]);
         let breaks = min_ragged_breaks(&items, &[6 * 64], &lines(1));
         assert_eq!(line_words(&items, &breaks), vec![2, 1, 1]);
+    }
+
+    #[test]
+    fn the_overrun_allowance_follows_the_last_word() {
+        // InDesign 20.0.1, Open Sans 12 pt (`ragged-squeeze-probe.json`):
+        // the allowance it measured, against the fit, in pt.
+        let pt = |word: f64, before: f64| {
+            overrun_allowance(12.0, (word * 64.0) as i64, (before * 64.0) as i64) as f64 / 64.0
+        };
+        for (word, before, measured) in [
+            (152.0098, 34.8515, 1.5370),
+            (34.6758, 126.6855, 0.3973),
+            (11.1094, 126.6855, 0.2673),
+            (22.2188, 294.2695, 0.3433),
+        ] {
+            let fit = pt(word, before);
+            assert!(
+                (fit - measured).abs() < 0.12,
+                "{word}/{before}: {fit} vs {measured}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_frame_keeps_a_word_inside_its_allowance() {
+        // Two 34.7 pt words, as "never shrink" at 12 pt, whose last word
+        // InDesign keeps while the line overruns by 0.3755 pt: kept at
+        // 0.31 pt over, broken off at 0.63 pt.
+        let items = words(&[2223, 2219]);
+        let keep = RaggedLines {
+            overrun_size: Some(12.0),
+            ..lines(usize::MAX)
+        };
+        let natural = 2223 + 64 + 2219;
+        let one = min_ragged_breaks(&items, &[natural - 20], &keep);
+        assert_eq!(line_words(&items, &one), vec![2]);
+        let two = min_ragged_breaks(&items, &[natural - 40], &keep);
+        assert_eq!(line_words(&items, &two), vec![1, 1]);
+        // A shaped frame's squeeze prices the overrun instead: no
+        // shrinkable space, no overrun.
+        let shaped = min_ragged_breaks(&items, &[natural - 20], &lines(usize::MAX));
+        assert_eq!(line_words(&items, &shaped), vec![1, 1]);
     }
 }

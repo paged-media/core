@@ -72,16 +72,11 @@ const INDESIGN: [[&str; 5]; 6] = [
 /// the hyphen rule: `(row, column, the engine's lines)`.
 /// - (3, 1): justified. The Paragraph Composer refuses the loose line
 ///   `The two-` (one space to stretch) that InDesign sets.
-/// - (4, 0): `of-the-art` fits InDesign's 50 pt line and misses the
-///   engine's by a fraction of a point (InDesign squeezes such overflows,
-///   see `tab-breaks`).
 ///
-/// (5, 3) — `pages 10-20 and / so-on` — matches since a line may overrun
-/// its measure by InDesign's allowance (ADR 141).
-const KNOWN: [(usize, usize, &str); 2] = [
-    (3, 1, "The / two-way / street"),
-    (4, 0, "A / state-of- / the-art / x-ray"),
-];
+/// (5, 3) matches since a line may overrun its measure by InDesign's
+/// allowance (ADR 141), and (4, 0) since ragged text breaks by minimum
+/// raggedness (ADR 142).
+const KNOWN: [(usize, usize, &str); 1] = [(3, 1, "The / two-way / street")];
 
 fn inter_font() -> Vec<u8> {
     let p =

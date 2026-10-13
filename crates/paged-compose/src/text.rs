@@ -395,6 +395,7 @@ mod tests {
                 visible_lines: None,
                 joined_lines: None,
                 fit_tolerance: 0,
+                overrun_size: None,
                 single_line: None,
             },
             line_height: 64 * 14,

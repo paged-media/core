@@ -6500,6 +6500,21 @@ fn emit_paragraph_lines(
     }
     lopts.first_baseline = em.y_cursor;
     lopts.first_baseline_exact = Some(em.y_exact());
+    // Ragged text breaks by minimum raggedness, the rule InDesign's
+    // Paragraph Composer was measured to follow in shaped frames, in every
+    // frame: the lines the chain holds, and the first one past it, are
+    // priced by the space they leave (ADR 142).
+    if lopts.alignment != paged_text::Alignment::Justify {
+        lopts.compose.minimum_raggedness = true;
+        lopts.compose.overrun_size = Some(paragraph_size);
+        lopts.compose.visible_lines = super::text_frame::visible_rows(
+            em,
+            lopts.first_baseline,
+            lopts.leading_override.unwrap_or(lopts.line_height),
+            paragraph_size,
+            head_font_metrics,
+        );
+    }
 
     // Drop cap: when the paragraph carries
     // `<ParagraphStyleRange DropCapCharacters="N" DropCapLines="M">`,
@@ -6532,17 +6547,19 @@ fn emit_paragraph_lines(
         && !styled_runs.is_empty()
         && !styled_runs[0].text.is_empty()
     {
-        let body_line_height_pt = lopts.line_height as f32 / paged_text::shape::ADVANCE_PRECISION;
+        // The lines the cap drops through are the paragraph's leading,
+        // stated or auto: `nested-styles` n13, 11/14 in Inter, sets its
+        // cap at 30.24 pt in InDesign 20.0.1 (the body beside it starts
+        // 19.17 pt in), which 14 pt gives and the 13.2 pt auto leading
+        // does not.
+        let body_line_height_pt = lopts.leading_override.unwrap_or(lopts.line_height) as f32
+            / paged_text::shape::ADVANCE_PRECISION;
         // InDesign scales the cap so its CAP HEIGHT — not its em box —
         // spans the dropped lines, so the size depends on the real
-        // face's cap-height ratio. A substituted face keeps the 0.7
+        // face's cap-height ratio (the same lookup the frame's first
+        // baseline makes). A face with no metric keeps the 0.7
         // heuristic the frame rule already uses.
-        let cap_ratio = resolved_runs
-            .first()
-            .and_then(|r| r.font.as_deref())
-            .and_then(|f| em.font_table.metrics_for_family(f))
-            .and_then(|m| m.cap_height)
-            .unwrap_or(0.7);
+        let cap_ratio = head_font_metrics.and_then(|m| m.cap_height).unwrap_or(0.7);
         let cap_point_size = paged_text::drop_cap_point_size(
             body_line_height_pt,
             styled_runs[0].point_size,

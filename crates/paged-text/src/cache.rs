@@ -490,6 +490,13 @@ fn fold_compose_options(h: &mut LayoutKeyHasher, options: &ComposeOptions) {
     h.add_i32(options.hyphenation_zone);
     h.add_bool(options.kinsoku_enforce);
     h.add_bool(options.minimum_raggedness);
+    match options.overrun_size {
+        Some(size) => {
+            h.add_bool(true);
+            h.add_f32(size);
+        }
+        None => h.add_bool(false),
+    }
     match options.visible_lines {
         Some(n) => {
             h.add_bool(true);

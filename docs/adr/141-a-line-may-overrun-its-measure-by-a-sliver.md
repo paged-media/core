@@ -1,6 +1,7 @@
 # ADR 141 — A line may overrun its measure by a sliver; the hyphenation zone does not widen the gaps
 
-- **Status:** Accepted 2026-10-13.
+- **Status:** Accepted 2026-10-13. Amended by ADR 142 for ragged text: the allowance follows the
+  line's last word, and the overrun comes out of the word spaces.
 - **Scope:** `paged-text` (`ComposeOptions::fit_tolerance`, the Knuth–Plass path of `layout_runs`,
   the zone in `layout_runs` and `compose_paragraph`), `paged-renderer` (`metrics::fit_tolerance_64`,
   set per paragraph). No model, wire or protocol change.

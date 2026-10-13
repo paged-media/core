@@ -1510,6 +1510,7 @@ fn knuth_plass_breaks(
                 joined: opts.joined_lines.as_deref().unwrap_or(&[]),
                 hyphen_penalty: opts.hyphen_penalty,
                 space_shrink: opts.shrink_ratio,
+                overrun_size: opts.overrun_size,
             },
         );
         if !breaks.is_empty() {
@@ -2530,6 +2531,7 @@ mod tests {
                 visible_lines: None,
                 joined_lines: None,
                 fit_tolerance: 0,
+                overrun_size: None,
                 single_line: None,
             },
             line_height: 20,
