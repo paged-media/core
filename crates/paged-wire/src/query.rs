@@ -359,6 +359,9 @@ impl<'a> Index<'a> {
                     }
                     cursor += run.text.chars().count() as u32;
                 }
+                for frame in &para.anchored_frames {
+                    ix.walk_anchored(frame, story, 0);
+                }
             }
         }
 
@@ -553,6 +556,38 @@ impl<'a> Index<'a> {
                 seen,
                 depth + 1,
             );
+        }
+    }
+
+    /// A frame anchored in a story, under that story: a page item in
+    /// InDesign's model (a kind selector lists it, its address resolves),
+    /// but which page it lands on is a layout fact the containment tree
+    /// does not have. An anchored group's members nest under it.
+    fn walk_anchored(
+        &mut self,
+        frame: &'a paged_model::AnchoredFrame,
+        parent: usize,
+        depth: usize,
+    ) {
+        use paged_model::AnchoredFrameKind;
+        if depth > 64 {
+            return;
+        }
+        let Some(id) = frame.self_id.as_deref() else {
+            return;
+        };
+        let kind = match frame.frame_kind {
+            AnchoredFrameKind::TextFrame => AddressKind::TextFrame,
+            AnchoredFrameKind::Rectangle => AddressKind::Rectangle,
+            AnchoredFrameKind::Group => AddressKind::Group,
+        };
+        let Some(addr) = Address::page_item(kind, id) else {
+            return;
+        };
+        let node = self.simple(addr, parent, None);
+        self.nodes[node].style = frame.applied_object_style.as_deref();
+        for child in &frame.children {
+            self.walk_anchored(child, node, depth + 1);
         }
     }
 

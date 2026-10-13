@@ -47,7 +47,8 @@
 //! - `:nth(n)` keeps the n-th match (1-based) under each parent.
 //! - The containment tree: doc → spread → page → page items (groups and
 //!   paste-into hosts nest); doc → master → master items; doc → layer →
-//!   the items on it; doc → story → table → cell, story → field; doc →
+//!   the items on it; doc → story → table → cell, story → field, story →
+//!   the frames anchored in it (an anchored group's members nest); doc →
 //!   styles, swatches, gradients and the other resources.
 //!
 //! Examples: `page:#3 > frame`, `frame[name="price"]`,
