@@ -184,7 +184,11 @@ pub(super) fn spread_linear_transform(m: Option<[f32; 6]>) -> Transform {
 /// (`BindingLocation="0"`) holds a right-hand page, and InDesign gives it
 /// the master's right page; as index 0 it used to take the left one. A
 /// master with no page on that side (a one-page master under a verso)
-/// falls back to the index.
+/// falls back to the index, and so does a page ON the spine — a
+/// single-sided document's, centred on x = 0 — which belongs to neither
+/// side: InDesign 20.0.1 prints a two-page master's LEFT page on it
+/// (tools/indesign-export/master-items-probe, whose single-sided page
+/// keeps the default facing master).
 pub(super) fn master_page_index(
     body: &[paged_model::Bounds],
     local: usize,
@@ -194,6 +198,9 @@ pub(super) fn master_page_index(
     let Some(page) = body.get(local) else {
         return by_index;
     };
+    if page.left < 0.0 && page.right > 0.0 {
+        return by_index;
+    }
     let centre = |b: &paged_model::Bounds| (b.left + b.right) * 0.5;
     let right_of_spine = |b: &paged_model::Bounds| centre(b) >= 0.0;
     let side = right_of_spine(page);
