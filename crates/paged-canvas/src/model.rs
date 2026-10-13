@@ -8375,8 +8375,32 @@ impl CanvasModel {
     /// SDK Phase 5 (v1 sweep) — list every built page (the same
     /// surface the Navigator panel reads from). Index is 1-based
     /// (matches the "Go to page #" convention).
+    /// Every built page's folio, by page id: its baked `Name`, else the
+    /// label the section rules give it — the walk the renderer makes for
+    /// page-number markers, so a page reads the number it prints.
+    fn page_folios(&self) -> HashMap<String, String> {
+        let names: HashMap<&str, Option<&str>> = self
+            .scene
+            .spreads
+            .iter()
+            .flat_map(|parsed| parsed.spread.pages.iter())
+            .filter_map(|p| Some((p.self_id.as_deref()?, p.name.as_deref())))
+            .collect();
+        let mut walk = paged_model::SectionWalk::new(&self.scene.designmap.sections);
+        self.built
+            .pages
+            .iter()
+            .map(|p| {
+                let id = p.id.as_str();
+                let name = names.get(id).copied().flatten();
+                (id.to_string(), walk.next_label(Some(id), name))
+            })
+            .collect()
+    }
+
     pub fn pages(&self) -> Vec<crate::channel::PageSummary> {
         use crate::channel::PageSummary;
+        let folios = self.page_folios();
         // panels.md gap 10 — document bleed is document-level
         // (`<DocumentPreference>`); carry it on every page so the
         // overlay has it without a second request.
@@ -8412,6 +8436,7 @@ impl CanvasModel {
                 PageSummary {
                     self_id: p.id.as_str().to_string(),
                     index: (i + 1) as u32,
+                    name: folios.get(p.id.as_str()).cloned().unwrap_or_default(),
                     size_pt: [p.width_pt, p.height_pt],
                     margin_top_pt: m.map(|m| m.top).unwrap_or(0.0),
                     margin_left_pt: m.map(|m| m.left).unwrap_or(0.0),
@@ -9435,6 +9460,7 @@ impl CanvasModel {
     pub fn scene_tree(&self) -> Vec<crate::channel::SceneTreeNode> {
         use crate::channel::SceneTreeNode;
         use paged_model::FrameRef;
+        let folios = self.page_folios();
         let mut spread_nodes = Vec::with_capacity(self.scene.spreads.len());
         for (si, parsed) in self.scene.spreads.iter().enumerate() {
             let spread = &parsed.spread;
@@ -9465,7 +9491,7 @@ impl CanvasModel {
             let label = spread
                 .pages
                 .first()
-                .and_then(|p| p.name.clone())
+                .and_then(|p| folios.get(p.self_id.as_deref()?).cloned())
                 .unwrap_or_else(|| "Page".to_string());
             page_nodes.push(SceneTreeNode {
                 id: None,

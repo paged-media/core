@@ -3126,6 +3126,12 @@ pub struct PageSummary {
     pub self_id: String,
     /// 1-based index — what the user types in "Go to page #".
     pub index: u32,
+    /// The page's name as InDesign gives it: its folio, the label a
+    /// page-number marker on it prints (`"3"`, `"iv"`, `"A-2"`) — the
+    /// baked `Name` of a page InDesign wrote, else the number the section
+    /// rules give it where it stands. Never the page's id. Additive.
+    #[serde(default)]
+    pub name: String,
     /// `[width, height]` in points.
     pub size_pt: [f32; 2],
     /// panels.md gap 10 — page margins in pt (from the page's
