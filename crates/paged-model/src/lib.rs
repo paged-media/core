@@ -3799,7 +3799,78 @@ pub struct ObjectStyleDef {
     /// rect path; the decorative variants currently fall back to
     /// `Rounded` until per-shape parsers land.
     pub corner_option: Option<String>,
+    /// The option categories the style governs (`Enable*`). A category
+    /// switched off is not part of the style: its values, though written,
+    /// reach no item, and the categories of the style it is based on stop
+    /// there too.
+    #[serde(default, skip_serializing_if = "ObjectStyleCategories::is_unset")]
+    pub enable: ObjectStyleCategories,
+    /// The style's `<TextFramePreference>`: what a text frame takes when
+    /// it does not state an option itself. InDesign leaves an option the
+    /// style supplies off the frame (asked of InDesign 20.0.1: a frame of
+    /// an object style with vertical justification `CenterAlign` is
+    /// written without `VerticalJustification`), so without it such a frame
+    /// sets top-aligned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame: Option<TextFrameOptions>,
 }
+
+/// `Enable*` on an `<ObjectStyle>`: whether each option category is part
+/// of the style. `None` (absent): part of it, as InDesign writes every
+/// flag and a style that sets a category's values means them.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectStyleCategories {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_and_corner_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_style: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_general_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_baseline_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_auto_sizing_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap_and_others: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchored_object_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_fitting_options: Option<bool>,
+}
+
+impl ObjectStyleCategories {
+    pub fn is_unset(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The text-frame options an object style sets — the same fields a
+/// [`TextFrame`] carries, each `None` when the style leaves it unset.
+/// Grouped as InDesign's categories group them: general options
+/// (vertical justification, insets, columns), baseline options (first
+/// baseline) and auto-sizing.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextFrameOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_justification: Option<VerticalJustification>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset_spacing: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_gutter: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_baseline_offset: Option<FirstBaselineOffset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_first_baseline_offset: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_sizing: Option<AutoSizingType>,
+}
+
 /// Effective object-level attributes after walking BasedOn.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedObject {
@@ -3810,6 +3881,9 @@ pub struct ResolvedObject {
     pub stroke_weight: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<String>,
+    /// The text-frame options the style chain supplies, each from the
+    /// nearest style that sets it with its category on.
+    pub text_frame: TextFrameOptions,
 }
 /// `<CellStyle>` — per-cell defaults for fill, edge strokes, and
 /// vertical justification. Cells can override individual fields
@@ -4733,19 +4807,61 @@ pub struct ResolvedParagraph {
     pub style_lists_settled: [bool; 3],
 }
 impl ResolvedObject {
-    pub fn merge_below(&mut self, def: &ObjectStyleDef) {
-        if self.fill_color.is_none() {
-            self.fill_color = def.fill_color.clone();
+    /// Fill in what `def` sets and the closer styles did not, category by
+    /// category, skipping the categories already `closed` (switched off by
+    /// a closer style) and closing the ones `def` switches off.
+    pub fn merge_below(&mut self, def: &ObjectStyleDef, closed: &mut ObjectStyleCategories) {
+        let open = |flag: Option<bool>, slot: &mut Option<bool>| -> bool {
+            if *slot == Some(false) {
+                return false;
+            }
+            if flag == Some(false) {
+                *slot = Some(false);
+                return false;
+            }
+            true
+        };
+        let e = def.enable;
+        if open(e.fill, &mut closed.fill) {
+            if self.fill_color.is_none() {
+                self.fill_color = def.fill_color.clone();
+            }
+            self.fill_tint = self.fill_tint.or(def.fill_tint);
         }
-        self.fill_tint = self.fill_tint.or(def.fill_tint);
-        if self.stroke_color.is_none() {
-            self.stroke_color = def.stroke_color.clone();
+        if open(e.stroke, &mut closed.stroke) {
+            if self.stroke_color.is_none() {
+                self.stroke_color = def.stroke_color.clone();
+            }
+            self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
+            self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
         }
-        self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
-        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
-        self.corner_radius = self.corner_radius.or(def.corner_radius);
-        if self.corner_option.is_none() {
-            self.corner_option = def.corner_option.clone();
+        if open(e.stroke_and_corner_options, &mut closed.stroke_and_corner_options) {
+            self.corner_radius = self.corner_radius.or(def.corner_radius);
+            if self.corner_option.is_none() {
+                self.corner_option = def.corner_option.clone();
+            }
+        }
+        let Some(tf) = def.text_frame.as_ref() else {
+            // The categories still close where the style switches them off.
+            open(e.text_frame_general_options, &mut closed.text_frame_general_options);
+            open(e.text_frame_baseline_options, &mut closed.text_frame_baseline_options);
+            open(e.text_frame_auto_sizing_options, &mut closed.text_frame_auto_sizing_options);
+            return;
+        };
+        let acc = &mut self.text_frame;
+        if open(e.text_frame_general_options, &mut closed.text_frame_general_options) {
+            acc.vertical_justification = acc.vertical_justification.or(tf.vertical_justification);
+            acc.inset_spacing = acc.inset_spacing.or(tf.inset_spacing);
+            acc.column_count = acc.column_count.or(tf.column_count);
+            acc.column_gutter = acc.column_gutter.or(tf.column_gutter);
+        }
+        if open(e.text_frame_baseline_options, &mut closed.text_frame_baseline_options) {
+            acc.first_baseline_offset = acc.first_baseline_offset.or(tf.first_baseline_offset);
+            acc.minimum_first_baseline_offset =
+                acc.minimum_first_baseline_offset.or(tf.minimum_first_baseline_offset);
+        }
+        if open(e.text_frame_auto_sizing_options, &mut closed.text_frame_auto_sizing_options) {
+            acc.auto_sizing = acc.auto_sizing.or(tf.auto_sizing);
         }
     }
 }
@@ -6235,13 +6351,14 @@ impl StyleSheet {
     /// pattern as `resolve_paragraph` / `resolve_character`.
     pub fn resolve_object(&self, id: &str) -> ResolvedObject {
         let mut acc = ResolvedObject::default();
+        let mut closed = ObjectStyleCategories::default();
         let mut cursor = Some(id.to_string());
         for _ in 0..MAX_BASED_ON_DEPTH {
             let Some(cur_id) = cursor else { break };
             let Some(s) = self.object_styles.get(&cur_id) else {
                 break;
             };
-            acc.merge_below(s);
+            acc.merge_below(s, &mut closed);
             cursor = s.based_on.clone();
         }
         acc
