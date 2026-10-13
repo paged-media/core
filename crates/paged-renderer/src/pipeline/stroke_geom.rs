@@ -223,6 +223,34 @@ pub(crate) fn offset_polyline(line: &Polyline, distance: f32) -> Polyline {
     }
 }
 
+/// A parallel copy of `line` at signed `distance` (positive = right of
+/// travel, the [`vertex_normals`] convention) — one rule of a striped
+/// stroke. An open line is offset vertex by vertex
+/// ([`offset_polyline`]); a CLOSED contour is offset with mitred corners
+/// ([`miter_offset_closed`]), the shape InDesign draws: each stripe of a
+/// `StripedStrokeStyle` on a rectangle is a rectangle of its own with
+/// square corners (asked of InDesign 20.0.1, 2026-10-12, the strokes-fills
+/// reference's thick-thin page).
+///
+/// The per-vertex offset is wrong on a closed contour for the reason
+/// [`offset_closed_outline`] gives: `flatten_path` repeats the first
+/// vertex at the end, so the start corner's two copies each move along
+/// ONE edge normal and the rule cuts across the corner, and an averaged
+/// normal moves every other corner by `d` instead of `d·√2`.
+pub(crate) fn offset_parallel(line: &Polyline, distance: f32) -> Polyline {
+    if !line.closed || line.points.len() < 3 || distance.abs() < 1e-6 {
+        return offset_polyline(line, distance);
+    }
+    let points = miter_offset_closed(&line.points, distance);
+    if points.len() < 3 {
+        return offset_polyline(line, distance);
+    }
+    Polyline {
+        points,
+        closed: true,
+    }
+}
+
 /// Drop vertices of a CLOSED polyline that are near-duplicates of their
 /// predecessor or that lie (within a tolerance) on the straight line
 /// between their neighbours. The result keeps only genuine corners +
@@ -774,6 +802,47 @@ mod w15_offset_tests {
         assert!((maxy - 90.0).abs() < 1e-3, "maxy={maxy}");
         // The trailing duplicate vertex is dropped → 4 distinct corners.
         assert_eq!(inw.points.len(), 4);
+    }
+
+    /// A stripe of a closed rectangle is a rectangle: every corner moves
+    /// by the full mitre, the start corner included (the flattened
+    /// contour's repeated first vertex used to pin it to one edge, so the
+    /// rule cut across the corner — the strokes-fills thick-thin page).
+    #[test]
+    fn offset_parallel_keeps_a_closed_rect_square() {
+        let line = Polyline {
+            points: vec![
+                (0.0, 0.0),
+                (200.0, 0.0),
+                (200.0, 100.0),
+                (0.0, 100.0),
+                (0.0, 0.0),
+            ],
+            closed: true,
+        };
+        // Clockwise in y-down space: positive = right of travel = inside.
+        for (d, want) in [
+            (4.0, (4.0, 4.0, 196.0, 96.0)),
+            (-4.0, (-4.0, -4.0, 204.0, 104.0)),
+        ] {
+            let off = offset_parallel(&line, d);
+            assert_eq!(off.points.len(), 4, "{off:?}");
+            assert!(off.closed);
+            for &(x, y) in &off.points {
+                let on_x = (x - want.0).abs() < 1e-3 || (x - want.2).abs() < 1e-3;
+                let on_y = (y - want.1).abs() < 1e-3 || (y - want.3).abs() < 1e-3;
+                assert!(on_x && on_y, "corner ({x}, {y}) off the {want:?} rectangle");
+            }
+        }
+        // An open line still takes the per-vertex offset.
+        let open = Polyline {
+            points: vec![(0.0, 0.0), (10.0, 0.0)],
+            closed: false,
+        };
+        assert_eq!(
+            offset_parallel(&open, 2.0).points,
+            vec![(0.0, 2.0), (10.0, 2.0)]
+        );
     }
 
     /// Outward offset grows the rect by exactly `distance` on every edge.

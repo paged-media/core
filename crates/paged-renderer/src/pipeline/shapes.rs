@@ -1642,7 +1642,7 @@ pub(crate) fn emit_styled_stroke(
                 sub_stroke.width = sub_weight.max(0.05);
                 sub_stroke.dash = paged_compose::DashPattern::default();
                 for (line_idx, line) in lines.iter().enumerate() {
-                    let off = stroke_geom::offset_polyline(line, offset);
+                    let off = stroke_geom::offset_parallel(line, offset);
                     let path = stroke_geom::polyline_to_path(&off);
                     if path.is_empty() {
                         continue;
