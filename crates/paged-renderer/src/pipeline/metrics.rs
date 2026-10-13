@@ -83,7 +83,11 @@ pub fn shaping_features_from(
     use paged_text::KerningMethod as K;
     paged_text::ShapingFeatures {
         ligatures_on: ligatures_on.unwrap_or(true),
-        kerning: match kerning_method {
+        // InDesign writes the value with its `$ID/` prefix (`$ID/None`,
+        // `$ID/Optical`, `$ID/Metrics`; `kerning` fixture); hand-written
+        // files spell it bare. Optical falls back to metrics in the shaper
+        // until optical kerning lands (R-40).
+        kerning: match kerning_method.map(|m| m.strip_prefix("$ID/").unwrap_or(m)) {
             Some("None") => K::Off,
             Some("Optical") => K::Optical,
             // "Metrics" or anything else (incl. None) → default.
@@ -116,15 +120,75 @@ pub fn shaping_features_from(
     }
 }
 
-pub fn map_justification(j: Option<paged_model::Justification>) -> paged_text::Alignment {
-    use paged_model::Justification as J;
-    match j {
-        Some(J::RightAlign) | Some(J::RightJustified) | Some(J::AwayFromBindingSide) => {
-            paged_text::Alignment::Right
+/// The edge of a page its binding (the spine) runs along.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum BindingEdge {
+    /// A recto, and a page alone in its spread: the spine is to its left.
+    #[default]
+    Left,
+    /// A verso: the spine is to its right.
+    Right,
+}
+
+impl BindingEdge {
+    /// From where a page sits in its spread (`spread_left` and `width`,
+    /// spread-inner pt). IDML puts the spine at spread x = 0: a reader
+    /// spread's verso spans `-W..0` and its recto `0..W`, and a facing
+    /// document's lone first page is a recto at `0..W`. A page left of
+    /// the spine binds on its right edge. A non-facing page centred on
+    /// the spine keeps the left binding.
+    pub fn of_page(spread_left: f32, width: f32) -> Self {
+        if spread_left + width / 2.0 < -0.5 {
+            BindingEdge::Right
+        } else {
+            BindingEdge::Left
         }
-        Some(J::CenterAlign) | Some(J::CenterJustified) => paged_text::Alignment::Center,
-        Some(J::FullyJustified) | Some(J::LeftJustified) => paged_text::Alignment::Justify,
-        Some(J::LeftAlign) | Some(J::ToBindingSide) | None => paged_text::Alignment::Left,
+    }
+
+    fn toward(self) -> paged_text::Alignment {
+        match self {
+            BindingEdge::Left => paged_text::Alignment::Left,
+            BindingEdge::Right => paged_text::Alignment::Right,
+        }
+    }
+
+    fn away(self) -> paged_text::Alignment {
+        match self {
+            BindingEdge::Left => paged_text::Alignment::Right,
+            BindingEdge::Right => paged_text::Alignment::Left,
+        }
+    }
+}
+
+/// Map an IDML `Justification` to the composer's alignment and the
+/// alignment of a justified paragraph's last line
+/// ([`paged_text::LayoutOptions::last_line_alignment`]), as InDesign
+/// 20.0.1 sets them (`justification` fixture):
+///
+/// * Left-, Center- and RightJustified break and stretch alike and set
+///   the last line left, centred or right;
+/// * FullyJustified stretches the last line too;
+/// * ToBindingSide / AwayFromBindingSide align toward / away from the
+///   spine: left / right on a recto, right / left on a verso.
+///
+/// `None` (no attribute anywhere in the cascade) is IDML's `LeftAlign`.
+pub fn map_justification(
+    j: Option<paged_model::Justification>,
+    binding: BindingEdge,
+) -> (paged_text::Alignment, paged_text::Alignment) {
+    use paged_model::Justification as J;
+    use paged_text::Alignment as A;
+    let ragged = |a: A| (a, a);
+    match j {
+        Some(J::LeftAlign) | None => ragged(A::Left),
+        Some(J::CenterAlign) => ragged(A::Center),
+        Some(J::RightAlign) => ragged(A::Right),
+        Some(J::LeftJustified) => (A::Justify, A::Left),
+        Some(J::CenterJustified) => (A::Justify, A::Center),
+        Some(J::RightJustified) => (A::Justify, A::Right),
+        Some(J::FullyJustified) => (A::Justify, A::Justify),
+        Some(J::ToBindingSide) => ragged(binding.toward()),
+        Some(J::AwayFromBindingSide) => ragged(binding.away()),
     }
 }
 
@@ -134,5 +198,78 @@ pub(super) fn map_tab_alignment(a: Option<&str>) -> paged_text::layout::TabAlign
         Some("CenterAlign") => paged_text::layout::TabAlignment::Center,
         Some("CharacterAlign") => paged_text::layout::TabAlignment::Decimal,
         _ => paged_text::layout::TabAlignment::Left,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paged_model::Justification as J;
+    use paged_text::Alignment as A;
+
+    /// The spine is at spread x = 0: a reader spread's verso (`-W..0`)
+    /// binds on its right, its recto (`0..W`) and a facing document's
+    /// lone first page on their left; a non-facing page centred on the
+    /// spine keeps the left binding.
+    /// `kerning` fixture: InDesign's `$ID/None` turns kerning off, exactly
+    /// as the bare spelling does.
+    #[test]
+    fn kerning_method_id_none_is_off() {
+        let otf = paged_model::OtfFeatures::default();
+        for spelling in ["None", "$ID/None"] {
+            let f = shaping_features_from(None, Some(spelling), &otf, None, None);
+            assert_eq!(f.kerning, paged_text::KerningMethod::Off, "{spelling}");
+        }
+        let f = shaping_features_from(None, Some("$ID/Optical"), &otf, None, None);
+        assert_eq!(f.kerning, paged_text::KerningMethod::Optical);
+    }
+
+    #[test]
+    fn binding_edge_follows_the_spine() {
+        assert_eq!(BindingEdge::of_page(-612.0, 612.0), BindingEdge::Right);
+        assert_eq!(BindingEdge::of_page(0.0, 612.0), BindingEdge::Left);
+        assert_eq!(BindingEdge::of_page(-306.0, 612.0), BindingEdge::Left);
+    }
+
+    /// InDesign 20.0.1 (`justification`): the X-Justified values stretch
+    /// their lines and set the last one to X; FullyJustified stretches it
+    /// too; the binding-side values follow the page side.
+    #[test]
+    fn justification_maps_body_and_last_line() {
+        let recto = BindingEdge::Left;
+        let verso = BindingEdge::Right;
+        assert_eq!(map_justification(None, recto), (A::Left, A::Left));
+        assert_eq!(
+            map_justification(Some(J::LeftJustified), recto),
+            (A::Justify, A::Left)
+        );
+        assert_eq!(
+            map_justification(Some(J::CenterJustified), recto),
+            (A::Justify, A::Center)
+        );
+        assert_eq!(
+            map_justification(Some(J::RightJustified), recto),
+            (A::Justify, A::Right)
+        );
+        assert_eq!(
+            map_justification(Some(J::FullyJustified), recto),
+            (A::Justify, A::Justify)
+        );
+        assert_eq!(
+            map_justification(Some(J::ToBindingSide), recto),
+            (A::Left, A::Left)
+        );
+        assert_eq!(
+            map_justification(Some(J::ToBindingSide), verso),
+            (A::Right, A::Right)
+        );
+        assert_eq!(
+            map_justification(Some(J::AwayFromBindingSide), recto),
+            (A::Right, A::Right)
+        );
+        assert_eq!(
+            map_justification(Some(J::AwayFromBindingSide), verso),
+            (A::Left, A::Left)
+        );
     }
 }

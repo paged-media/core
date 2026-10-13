@@ -402,6 +402,7 @@ mod tests {
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             justify_last_line: false,
+            last_line_alignment: paged_text::Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
         };
