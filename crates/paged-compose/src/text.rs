@@ -394,6 +394,7 @@ mod tests {
                 minimum_raggedness: false,
                 visible_lines: None,
                 joined_lines: None,
+                fit_tolerance: 0,
                 single_line: None,
             },
             line_height: 64 * 14,
