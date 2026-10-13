@@ -66,6 +66,33 @@ Pin the InDesign version when the corpus is committed and re-export
 only on conscious upgrades — InDesign's PDF output is not
 deterministic across point releases.
 
+## The InDesign round-trip lane
+
+`lane.sh` asks InDesign whether it reads the engine's IDML **export** the
+way the engine meant it. The engine's own round trip proves nothing about
+that: a spelling the writer and the reader share can be one InDesign
+ignores.
+
+```bash
+bash tools/indesign-export/lane.sh              # every scenario
+bash tools/indesign-export/lane.sh bleed        # one
+```
+
+Each scenario (`crates/paged-canvas/tests/indesign_lane.rs`) is a gen sample,
+edited through the canvas model and exported by the writer. `lane.jsx` opens
+the export in InDesign, records InDesign's view of it (`lib/oracle.jsx`,
+schema `paged.indesign-view/1`), saves and reopens it, records again, and
+exports InDesign's own re-save. The recording lands in
+`crates/paged-canvas/tests/fixtures/indesign-lane/<scenario>/`.
+
+The test `indesign_lane::recordings_agree_with_indesign` runs in CI without
+InDesign. On the fields a scenario declares, it compares the engine's view
+of its export with InDesign's `opened` view, and the engine's view of
+InDesign's re-save with InDesign's `reopened` view. When the writer's output
+no longer matches the recorded digest the first comparison is skipped and
+the scenario reported STALE; record it again with the change that moved it.
+`PAGED_LANE_REQUIRE_FRESH=1` fails on a stale recording, for a release.
+
 ## Caveats
 
 - The driver runs with `userInteractionLevel = NEVER_INTERACT`, which
