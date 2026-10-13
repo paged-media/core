@@ -14,16 +14,6 @@
 
 //! Nested-style overlay computation + run splitting — extracted from pipeline/mod.rs (1.6b).
 
-/// Map an IDML `Justification` enum value to `paged_text::Alignment`.
-/// `None` (no attribute on the cascade) falls back to `Left`, the
-/// IDML default.
-///
-/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values
-/// that ideally consult the spread's page side (left vs. right). We
-/// don't plumb binding side through to the composer today, so they
-/// resolve to `Left` / `Right` respectively — matches the historical
-/// stringly-typed behaviour, which fell through to `Left` for any
-/// unrecognised string.
 /// Phase 4 typography — one nested-style application: the half-open
 /// byte range of the paragraph text that the override character style
 /// should apply to. `byte_range.start` is inclusive; `byte_range.end`

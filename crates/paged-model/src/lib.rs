@@ -3362,12 +3362,11 @@ pub struct StoryRef {
 /// `<ParagraphStyleRange>` and `<ParagraphStyle>`. The IDML default
 /// is `LeftAlign`. Parsed once at XML-read time; the renderer maps
 /// these down to `paged_text::Alignment` (Left / Right / Center /
-/// Justify).
+/// Justify) plus the alignment of a justified paragraph's last line.
 ///
-/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values
-/// (left page vs. right page in a spread). The renderer currently
-/// treats them as `LeftAlign` / `RightAlign` respectively — binding
-/// side is a document-level setting that's not yet plumbed through.
+/// `ToBindingSide` / `AwayFromBindingSide` are binding-aware values: the
+/// renderer resolves them from the page's side of the spine (left /
+/// right on a recto, right / left on a verso).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Justification {
     LeftAlign,
@@ -3380,15 +3379,11 @@ pub enum Justification {
     /// Justify with last line right-aligned.
     RightJustified,
     /// "Fully justified" — every line including the last is stretched
-    /// to fill the column. The composer currently treats this the
-    /// same as `LeftJustified`; kept as a distinct variant so
-    /// round-tripping the parsed attribute is lossless.
+    /// to fill the column; a one-word last line is letter-spaced.
     FullyJustified,
-    /// Binding-aware: aligns toward the spine. Falls back to
-    /// `LeftAlign` until binding side is plumbed through.
+    /// Binding-aware: aligns toward the spine.
     ToBindingSide,
-    /// Binding-aware: aligns away from the spine. Falls back to
-    /// `RightAlign`.
+    /// Binding-aware: aligns away from the spine.
     AwayFromBindingSide,
 }
 impl Justification {

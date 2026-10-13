@@ -768,6 +768,14 @@ pub struct BuiltPage {
     pub scene_layer_frames: Vec<String>,
 }
 
+impl BuiltPage {
+    /// The page edge its binding runs along, from where it sits in its
+    /// spread (see [`BindingEdge::of_page`]).
+    pub fn binding_edge(&self) -> BindingEdge {
+        BindingEdge::of_page(self.spread_origin.0, self.width_pt)
+    }
+}
+
 /// W3.A1 — one table cell's page-local rect plus its addressing keys.
 /// Page-local pt, `(0, 0)` = page top-left (same frame as
 /// [`LineLayout`]). Captured once per emitted physical row × column.
@@ -1671,7 +1679,8 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             };
             let measurer = paged_text::HarfrustMeasurer::new(face, paragraph_size);
             let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
-            lopts.alignment = map_justification(paragraph.justification);
+            (lopts.alignment, lopts.last_line_alignment) =
+                map_justification(paragraph.justification, BindingEdge::default());
             let laid_out = paged_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
             stats.lines += laid_out.lines.len();
 

@@ -331,8 +331,9 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height (NOT first_baseline: the
 ///   cached layout is translated to it),
-///   leading_override, auto_leading_from_byte, justify_last_line, the tab layout (stops,
-///   default grid, line starts), and the inline objects' advances.
+///   leading_override, auto_leading_from_byte, justify_last_line,
+///   last_line_alignment, the tab layout (stops, default grid, line
+///   starts), and the inline objects' advances.
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
@@ -411,6 +412,7 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_u32(options.auto_leading_from_byte);
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
+    h.add_u32(alignment_tag(options.last_line_alignment));
     match &options.tabs {
         Some(t) => {
             h.add_bool(true);

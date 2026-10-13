@@ -123,9 +123,9 @@ pub enum Alignment {
     Left,
     Right,
     Center,
-    /// Fully justified — the last line of a paragraph stays
-    /// left-aligned (common typographic convention). Intermediate
-    /// lines distribute extra width across inter-word glue.
+    /// Justified — every line but the last distributes its extra width
+    /// across its word spaces; the last line is set by
+    /// [`LayoutOptions::last_line_alignment`].
     Justify,
 }
 
@@ -179,6 +179,14 @@ pub struct LayoutOptions<'a> {
     /// does for a line ending in a forced line break (U+2028): it ends
     /// the line, not the paragraph, so the line keeps full measure.
     pub justify_last_line: bool,
+    /// How a justified paragraph ([`Alignment::Justify`]) sets its LAST
+    /// line; ragged alignments ignore it. InDesign 20.0.1
+    /// (`justification`): Left-, Center- and RightJustified break alike
+    /// and set the last line at natural spacing, flush left, centred or
+    /// flush right — `Left`, `Center`, `Right`; FullyJustified stretches
+    /// it to the measure as well — `Justify` — letter-spacing it when it
+    /// is one word.
+    pub last_line_alignment: Alignment,
     /// The paragraph's tab stops, when the composer should measure each
     /// tab at the width it takes on its line (see [`TabLayout`]). `None`
     /// measures a tab as its glyph's own advance and leaves the snapping
@@ -238,6 +246,7 @@ impl LayoutOptions<'_> {
             auto_leading_from_byte: 0,
             alignment: Alignment::Left,
             justify_last_line: false,
+            last_line_alignment: Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
         }
@@ -281,13 +290,12 @@ pub fn layout_paragraph<S: TextShaper>(
                 last.cluster = line.byte_range.end.saturating_sub(1) as u32;
             }
         }
-        let is_last = i == last_index;
         apply_alignment(
             &mut glyphs,
             shaped.total_advance,
             options.column_width(),
             options.alignment,
-            is_last && !options.justify_last_line,
+            options.last_line_setting(i == last_index),
             text.as_bytes(),
             false,
             options.compose.single_line.is_some(),
@@ -309,6 +317,13 @@ impl LayoutOptions<'_> {
     /// Column width in 1/64 pt (convenience for layout passes).
     pub fn column_width(&self) -> i32 {
         self.compose.column_width
+    }
+
+    /// How a justified paragraph sets this line when it is its last
+    /// (`None` for any other line, and for the line a forced line break
+    /// ends, which keeps full measure).
+    fn last_line_setting(&self, is_last: bool) -> Option<Alignment> {
+        (is_last && !self.justify_last_line).then_some(self.last_line_alignment)
     }
 }
 
@@ -352,14 +367,16 @@ pub fn position_line(
 /// `natural_width` is the sum of advances (= `ShapedRun::total_advance`).
 /// `column_width` is the target column width. Both in 1/64 pt.
 ///
-/// For `Justify`, the last line of a paragraph stays left-aligned
-/// (indicated by `is_last_line`) to avoid stretching a short tail line.
+/// For `Justify`, `last_line` carries how the paragraph sets the line
+/// when it is its last ([`LayoutOptions::last_line_alignment`]); `None`
+/// stretches it like any other.
+#[allow(clippy::too_many_arguments)]
 fn apply_alignment(
     glyphs: &mut [PositionedGlyph],
     natural_width: i32,
     column_width: i32,
     alignment: Alignment,
-    is_last_line: bool,
+    last_line: Option<Alignment>,
     paragraph_bytes: &[u8],
     squeeze_ragged: bool,
     squeeze_justified: bool,
@@ -381,31 +398,67 @@ fn apply_alignment(
         spread_spaces(glyphs, extra, paragraph_bytes);
         extra = 0;
     }
-    match alignment {
-        Alignment::Left => {}
-        Alignment::Right => {
-            for g in glyphs.iter_mut() {
-                g.x += extra;
+    match (alignment, last_line) {
+        (Alignment::Justify, Some(Alignment::Justify)) => {
+            // FullyJustified: the last line reaches the measure too, a
+            // one-word line by its letters (InDesign 20.0.1,
+            // `justification` 1.26 / 1.28: "extraordinarily" 4.57 pt and
+            // "Typography" 8.47 pt between letters).
+            if extra > 0 && !spread_spaces(glyphs, extra, paragraph_bytes) {
+                spread_letters(glyphs, extra);
             }
         }
-        Alignment::Center => {
-            let shift = extra / 2;
-            for g in glyphs.iter_mut() {
-                g.x += shift;
+        (Alignment::Justify, Some(last)) => shift_ragged(glyphs, extra, last),
+        (Alignment::Justify, None) => {
+            if extra > 0 {
+                spread_spaces(glyphs, extra, paragraph_bytes);
             }
         }
-        Alignment::Justify => {
-            if is_last_line || extra <= 0 {
-                return;
-            }
-            spread_spaces(glyphs, extra, paragraph_bytes);
+        (ragged, _) => shift_ragged(glyphs, extra, ragged),
+    }
+}
+
+/// Place a line that does not fill its measure: flush left, flush right
+/// (`extra` to the right) or centred (half of it).
+fn shift_ragged(glyphs: &mut [PositionedGlyph], extra: i32, alignment: Alignment) {
+    let shift = match alignment {
+        Alignment::Left | Alignment::Justify => return,
+        Alignment::Right => extra,
+        Alignment::Center => extra / 2,
+    };
+    for g in glyphs.iter_mut() {
+        g.x += shift;
+    }
+}
+
+/// Spread `extra` (1/64 pt) over the gaps between the line's characters,
+/// so its last glyph moves by exactly `extra`: a glyph that starts a new
+/// cluster opens a gap, so a mark stays on its base.
+fn spread_letters(glyphs: &mut [PositionedGlyph], extra: i32) {
+    let gaps = glyphs
+        .windows(2)
+        .filter(|w| w[1].cluster != w[0].cluster)
+        .count() as i32;
+    if gaps == 0 {
+        return;
+    }
+    let per_gap = extra / gaps;
+    let remainder = extra - per_gap * gaps;
+    let mut shift = 0i32;
+    let mut seen = 0i32;
+    for i in 1..glyphs.len() {
+        if glyphs[i].cluster != glyphs[i - 1].cluster {
+            shift += per_gap + i32::from(seen < remainder.abs()) * remainder.signum();
+            seen += 1;
         }
+        glyphs[i].x += shift;
     }
 }
 
 /// Spread `extra` (1/64 pt; negative squeezes) over the line's word
-/// spaces, so its last glyph moves by exactly `extra`.
-fn spread_spaces(glyphs: &mut [PositionedGlyph], extra: i32, paragraph_bytes: &[u8]) {
+/// spaces, so its last glyph moves by exactly `extra`. `false` when the
+/// line has no word space to spread it over.
+fn spread_spaces(glyphs: &mut [PositionedGlyph], extra: i32, paragraph_bytes: &[u8]) -> bool {
     // Only the glue after the line's last tab stretches: what
     // precedes it is pinned by the stop (measured on `tab-breaks`
     // c09/c10, InDesign 20.0.1: the spaces before the tab keep
@@ -422,7 +475,7 @@ fn spread_spaces(glyphs: &mut [PositionedGlyph], extra: i32, paragraph_bytes: &[
         .filter(|g| is_ws_at(paragraph_bytes, g.cluster as usize))
         .count() as i32;
     if space_count == 0 {
-        return;
+        return false;
     }
     let per_space = extra / space_count;
     let remainder = extra - per_space * space_count;
@@ -444,6 +497,7 @@ fn spread_spaces(glyphs: &mut [PositionedGlyph], extra: i32, paragraph_bytes: &[
         }
         g.x += shift;
     }
+    true
 }
 
 fn is_ws_at(bytes: &[u8], i: usize) -> bool {
@@ -1233,7 +1287,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             natural_width,
             line_column,
             options.alignment,
-            i == last_break && !options.justify_last_line,
+            options.last_line_setting(i == last_break),
             bytes,
             opts.minimum_raggedness,
             single_line.is_some(),
@@ -2258,6 +2312,7 @@ mod tests {
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             justify_last_line: false,
+            last_line_alignment: Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
         }
@@ -2334,6 +2389,94 @@ mod tests {
         let out = layout_paragraph("ab cd", &shaper, &opts(20, Alignment::Justify));
         let first = &out.lines[0].glyphs[0];
         assert_eq!(first.x, 0);
+    }
+
+    fn justified(column_chars: i32, last: Alignment) -> LayoutOptions<'static> {
+        LayoutOptions {
+            last_line_alignment: last,
+            ..opts(column_chars, Alignment::Justify)
+        }
+    }
+
+    /// Where a line's ink ends: its last glyph's right edge.
+    fn right_edge(line: &LaidOutLine) -> i32 {
+        line.glyphs.last().map_or(0, |g| g.x + g.x_advance)
+    }
+
+    /// CenterJustified (InDesign 20.0.1, `justification` 1.17): the
+    /// lines before the last reach the measure, the last is centred at
+    /// natural spacing.
+    #[test]
+    fn center_justified_last_line_centred() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let text = "ab cd ef gh ij kl";
+        let out = layout_paragraph(text, &shaper, &justified(8, Alignment::Center));
+        assert!(out.lines.len() >= 2, "need a line before the last");
+        let (last, body) = out.lines.split_last().unwrap();
+        for line in body {
+            assert_eq!(right_edge(line), 80, "a body line reaches the measure");
+        }
+        let left = last.glyphs[0].x;
+        assert_eq!(left, (80 - last.width) / 2, "the last line is centred");
+        assert_eq!(right_edge(last) - left, last.width, "at natural spacing");
+    }
+
+    /// RightJustified (`justification` 1.21): the last line sits flush
+    /// right at natural spacing.
+    #[test]
+    fn right_justified_last_line_flush_right() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let out = layout_paragraph(
+            "ab cd ef gh ij kl",
+            &shaper,
+            &justified(8, Alignment::Right),
+        );
+        let last = out.lines.last().unwrap();
+        assert_eq!(right_edge(last), 80);
+        assert_eq!(last.glyphs[0].x, 80 - last.width);
+    }
+
+    /// FullyJustified (`justification` 1.25): the last line reaches the
+    /// measure like the others, its word spaces stretched.
+    #[test]
+    fn fully_justified_last_line_spread() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let out = layout_paragraph(
+            "ab cd ef gh ij kl",
+            &shaper,
+            &justified(8, Alignment::Justify),
+        );
+        assert!(out.lines.len() >= 2);
+        for line in &out.lines {
+            assert_eq!(right_edge(line), 80, "every line reaches the measure");
+        }
+        let last = out.lines.last().unwrap();
+        assert_eq!(last.glyphs[0].x, 0, "and starts at the left edge");
+    }
+
+    /// FullyJustified with a one-word last line (`justification` 1.28,
+    /// "Typography" 8.47 pt between letters): the letters spread, the
+    /// last one ending at the measure.
+    #[test]
+    fn fully_justified_one_word_is_letter_spaced() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let out = layout_paragraph("abcd", &shaper, &justified(8, Alignment::Justify));
+        let xs: Vec<i32> = out.lines[0].glyphs.iter().map(|g| g.x).collect();
+        // 40 of slack over 3 gaps: 14 + 13 + 13.
+        assert_eq!(xs, [0, 24, 47, 70]);
+    }
+
+    /// A line a forced line break ends keeps full measure in every
+    /// justified mode (`justification` 1.15 / 1.19 / 1.23).
+    #[test]
+    fn forced_break_line_justified_whatever_the_last_line_does() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let opts = LayoutOptions {
+            justify_last_line: true,
+            ..justified(8, Alignment::Center)
+        };
+        let out = layout_paragraph("ab cd", &shaper, &opts);
+        assert_eq!(right_edge(&out.lines[0]), 80);
     }
 
     #[test]
