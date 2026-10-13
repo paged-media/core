@@ -2416,3 +2416,66 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
         assert!(non_white, "page idx {idx} rasterises non-blank");
     }
 }
+
+#[test]
+fn nested_styles_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::nested_styles::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::nested_styles::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+/// The fixture's styles read back in InDesign's spelling: every case's
+/// list, the cleared child's `EmptyNestedStyles`, and the range's own
+/// list on n20.
+#[test]
+fn nested_styles_round_trip_through_the_importer() {
+    use paged_gen::samples::nested_styles as ns;
+    let bytes = paged_gen::write_idml(&ns::build()).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    let cases = ns::cases();
+    for c in &cases {
+        let resolved = doc.styles.resolve_paragraph(c.style);
+        match c.spec {
+            ns::Spec::Style(list) | ns::Spec::StyleWithCap(list, _, _) => {
+                assert_eq!(resolved.nested_styles.len(), list.len(), "{}", c.label)
+            }
+            ns::Spec::Child(attrs) if attrs.contains("true") => {
+                assert!(resolved.nested_styles.is_empty(), "{}", c.label)
+            }
+            ns::Spec::Child(_) => assert_eq!(resolved.nested_styles.len(), 1, "{}", c.label),
+            ns::Spec::Local(_) => {}
+        }
+    }
+    let local = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .find(|p| p.runs.iter().any(|r| r.text.starts_with("Local one")))
+        .expect("n20's paragraph");
+    assert_eq!(local.nested_styles.len(), 1);
+}
+
+#[test]
+fn opentype_emit_is_byte_deterministic() {
+    let a = paged_gen::write_idml(&paged_gen::samples::opentype::build()).unwrap();
+    let b = paged_gen::write_idml(&paged_gen::samples::opentype::build()).unwrap();
+    assert_eq!(sha256(&a), sha256(&b));
+}
+
+/// The fixture's paragraph styles carry their typography.
+#[test]
+fn opentype_paragraph_styles_read_back() {
+    use paged_gen::samples::opentype as ot;
+    let bytes = paged_gen::write_idml(&ot::build()).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    let p = |id: &str| doc.styles.resolve_paragraph(id);
+    assert_eq!(p(ot::NO_LIGATURES).ligatures_on, Some(false));
+    assert_eq!(
+        p(ot::FIGURES).otf.figure_style.as_deref(),
+        Some("TabularLining")
+    );
+    assert_eq!(p(ot::SALT).otf.stylistic_alternate, Some(true));
+    assert_eq!(p(ot::HIST).otf.historical, Some(true));
+    assert_eq!(p(ot::SUPERSCRIPT).position.as_deref(), Some("OTSuperscript"));
+    assert_eq!(p(ot::FRACTION).otf.fraction, Some(true));
+}

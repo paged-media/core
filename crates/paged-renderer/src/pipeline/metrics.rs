@@ -14,14 +14,6 @@
 
 //! Sub/superscript position metrics, shaping features, justification + tab-alignment mapping — extracted from pipeline/mod.rs (1.6b).
 
-/// Phase 4 typography — translate a `ResolvedRunAttrs`'s `Ligatures` /
-/// `KerningMethod` into the shaper's [`paged_text::ShapingFeatures`].
-/// Inputs are `None`-tolerant: missing `ligatures_on` defaults to true
-/// (InDesign's CharacterStyle default); unrecognised `kerning_method`
-/// strings fall through to `Metrics`. `"Optical"` falls through to
-/// `Optical` even though the renderer currently shapes it the same as
-/// `Metrics` — the cache key still distinguishes the two so the
-/// optical-kerning pass can land later without invalidating the cache.
 /// Resolve an IDML `Position` (super/subscript) into a `(size_factor,
 /// baseline_offset_fraction)` pair, both relative to the run's base
 /// point size. A positive offset lifts the glyphs (superscript); a
@@ -31,20 +23,21 @@
 /// InDesign derives the exact factors from the document's Superscript /
 /// Subscript Size & Position text preferences; we use its factory
 /// defaults (58.3 % size, ±33.3 % of the base size) because
-/// `Resources/Preferences.xml` is not parsed yet (a separate gap). The
-/// OpenType variants (`OT*`, `Numerator`/`Denominator`) reuse the same
-/// geometric fallback until real OT feature lookup lands.
+/// `Resources/Preferences.xml` is not parsed yet (a separate gap).
+///
+/// The OpenType positions (`OTSuperscript`, `OTSubscript`,
+/// `OTNumerator`, `OTDenominator`) are NOT scaled or shifted: they are
+/// the font's `sups` / `subs` / `numr` / `dnom` glyphs at the run's size
+/// on its baseline, and a face without the feature prints its plain
+/// glyph (asked of InDesign 20.0.1, the `opentype` fixture; see
+/// [`paged_text::OtPosition`]).
 pub fn position_metrics(position: Option<&str>) -> (f32, f32) {
     const SIZE_FACTOR: f32 = 0.583;
     const OFFSET_FACTOR: f32 = 0.333;
     match position {
-        Some("Superscript") | Some("OTSuperscript") | Some("OTNumerator") => {
-            (SIZE_FACTOR, OFFSET_FACTOR)
-        }
-        Some("Subscript") | Some("OTSubscript") | Some("OTDenominator") => {
-            (SIZE_FACTOR, -OFFSET_FACTOR)
-        }
-        // `Normal` / `None` / unknown ⇒ identity.
+        Some("Superscript") => (SIZE_FACTOR, OFFSET_FACTOR),
+        Some("Subscript") => (SIZE_FACTOR, -OFFSET_FACTOR),
+        // `Normal` / `None` / the OpenType positions / unknown ⇒ identity.
         _ => (1.0, 0.0),
     }
 }
@@ -71,11 +64,21 @@ pub fn position_adjusted_metrics(
     (point_size, baseline_shift_pt)
 }
 
+/// Phase 4 typography — translate a `ResolvedRunAttrs`'s `Ligatures` /
+/// `KerningMethod`, `OTF*` toggles, `Capitalization` and `Position` into
+/// the shaper's [`paged_text::ShapingFeatures`]. Inputs are
+/// `None`-tolerant: missing `ligatures_on` defaults to true (InDesign's
+/// CharacterStyle default); unrecognised `kerning_method` strings fall
+/// through to `Metrics`. `"Optical"` falls through to `Optical` even
+/// though the renderer currently shapes it the same as `Metrics` — the
+/// cache key still distinguishes the two so the optical-kerning pass can
+/// land later without invalidating the cache.
 pub fn shaping_features_from(
     ligatures_on: Option<bool>,
     kerning_method: Option<&str>,
     otf: &paged_model::OtfFeatures,
     capitalization: Option<&str>,
+    position: Option<&str>,
 ) -> paged_text::ShapingFeatures {
     use paged_text::KerningMethod as K;
     paged_text::ShapingFeatures {
@@ -104,6 +107,12 @@ pub fn shaping_features_from(
         // transform: `AllCaps` is uppercased upstream, these two ask
         // the font for its small-capital glyphs.
         small_caps: paged_text::SmallCaps::from_idml(capitalization),
+        stylistic_alternates: otf.stylistic_alternate.unwrap_or(false),
+        historical: otf.historical.unwrap_or(false),
+        position: paged_text::OtPosition::from_idml(position),
+        // InDesign 20.0.1 sets All Caps with `case` and `cpsp`, typed
+        // capitals with neither (see `ShapingFeatures::all_caps`).
+        all_caps: capitalization == Some("AllCaps"),
     }
 }
 

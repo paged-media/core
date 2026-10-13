@@ -769,20 +769,73 @@ pub struct ParagraphStyleSpec {
     pub applied_font: &'static str,
     pub point_size: f32,
     pub fill_color: &'static str,
-    /// `<NestedStyle>` children — per-delimiter character-style runs. Empty
-    /// emits the style as a leaf (byte-identical to the prior shape).
+    /// Nested styles, written as InDesign's `<Properties><AllNestedStyles>`
+    /// list. Empty writes none.
     pub nested_styles: Vec<NestedStyleSpec>,
 }
 
-/// One `<NestedStyle>` inside a [`ParagraphStyleSpec`]: a character style
+/// One nested style inside a [`ParagraphStyleSpec`]: a character style
 /// applied to a leading portion of the paragraph, bounded by a delimiter.
 pub struct NestedStyleSpec {
     pub applied_character_style: &'static str,
-    /// `Delimiter` — e.g. a literal char, or a count token like
-    /// `"1"` (words). Emitted verbatim.
+    /// `Delimiter` — one of InDesign's enumerations (`AnyWord`, `Tabs`,
+    /// `Dropcap`, …; see [`NESTED_DELIMITER_ENUMERATIONS`]) or literal
+    /// characters (`:`).
     pub delimiter: &'static str,
     pub repetition: i32,
     pub inclusive: bool,
+}
+
+/// The `<Delimiter type="enumeration">` values InDesign 20.0.1 writes for
+/// the 17 delimiters its DOM offers (asked 2026-10-12). Anything else is
+/// a `type="string"` delimiter: literal characters, any one of which ends
+/// a repetition.
+pub const NESTED_DELIMITER_ENUMERATIONS: [&str; 17] = [
+    "AnyCharacter",
+    "AnyWord",
+    "AutoPageNumber",
+    "Digits",
+    "Dropcap",
+    "EmSpace",
+    "EndNestedStyle",
+    "EnSpace",
+    "ForcedLineBreak",
+    "IndentHereTab",
+    "InlineGraphic",
+    "Letters",
+    "NonbreakingSpace",
+    "Repeat",
+    "SectionMarker",
+    "Sentence",
+    "Tabs",
+];
+
+/// `<AllNestedStyles type="list">…</AllNestedStyles>` — InDesign's
+/// spelling of a nested-style list, for a style's (or a range's)
+/// `<Properties>` block. The engine's older `<NestedStyle>` children are
+/// not read by InDesign.
+pub fn all_nested_styles_xml(entries: &[NestedStyleSpec]) -> String {
+    let mut out = String::from("<AllNestedStyles type=\"list\">");
+    for ns in entries {
+        let kind = if NESTED_DELIMITER_ENUMERATIONS.contains(&ns.delimiter) {
+            "enumeration"
+        } else {
+            "string"
+        };
+        out.push_str(&format!(
+            "<ListItem type=\"record\">\
+<AppliedCharacterStyle type=\"object\">{}</AppliedCharacterStyle>\
+<Delimiter type=\"{kind}\">{}</Delimiter>\
+<Repetition type=\"long\">{}</Repetition>\
+<Inclusive type=\"boolean\">{}</Inclusive></ListItem>",
+            crate::xml::escape_text(ns.applied_character_style),
+            crate::xml::escape_text(ns.delimiter),
+            ns.repetition,
+            ns.inclusive,
+        ));
+    }
+    out.push_str("</AllNestedStyles>");
+    out
 }
 
 /// Combined builder behind the [`styles_xml`] family — table styles
@@ -877,19 +930,10 @@ fn styles_xml_full_with(
             b.start("AppliedFont", &[("type", "string")]);
             b.text(ps.applied_font);
             b.end("AppliedFont");
-            b.end("Properties");
-            for ns in &ps.nested_styles {
-                let rep = ns.repetition.to_string();
-                b.empty(
-                    "NestedStyle",
-                    &[
-                        ("AppliedCharacterStyle", ns.applied_character_style),
-                        ("Delimiter", ns.delimiter),
-                        ("Repetition", rep.as_str()),
-                        ("Inclusive", if ns.inclusive { "true" } else { "false" }),
-                    ],
-                );
+            if !ps.nested_styles.is_empty() {
+                b.raw(&all_nested_styles_xml(&ps.nested_styles));
             }
+            b.end("Properties");
             b.end("ParagraphStyle");
         }
     }
