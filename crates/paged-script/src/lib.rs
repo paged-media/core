@@ -2153,7 +2153,8 @@ fn paged_dissolve_group(_this: &JsValue, args: &[JsValue], ctx: &mut Context) ->
 }
 
 /// `paged.moveFrame(frameId, [a,b,c,d,tx,ty])` — set a frame's affine
-/// placement transform (`Mutation::MoveFrame`).
+/// placement transform (`Mutation::MoveFrame`), in the space of the page
+/// it sits on (the space element geometry reads).
 fn paged_move_frame(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let id = args
         .get_or_undefined(0)

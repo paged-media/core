@@ -377,6 +377,26 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// An item's spread-space `ItemTransform` as seen from the page it sits
+/// on: the page's origin inside its spread folded in, so `bounds`
+/// through it lands in page coordinates — the space the hit test's
+/// `frameBounds`, carets, selection rects, cell rects and the inserts
+/// use. Unchanged for a pasteboard item (`page` is `None`) and for a page
+/// at its spread's origin, so a document made here reads as before.
+pub(crate) fn page_space_transform(
+    page: Option<&BuiltPage>,
+    t: Option<[f32; 6]>,
+) -> Option<[f32; 6]> {
+    let Some((ox, oy)) = page.map(|p| p.spread_origin) else {
+        return t;
+    };
+    if ox == 0.0 && oy == 0.0 {
+        return t;
+    }
+    let [a, b, c, d, tx, ty] = t.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    Some([a, b, c, d, tx - ox, ty - oy])
+}
+
 /// The append slots of a batch's spread inserts, kept true while earlier
 /// children of the same batch remove page items.
 ///
@@ -3366,7 +3386,9 @@ impl CanvasModel {
                 Some(Operation::SetProperty {
                     node,
                     path: PropertyPath::FrameTransform,
-                    value: Value::Transform(Some(*transform)),
+                    value: Value::Transform(Some(
+                        self.spread_space_transform(frame_id, *transform),
+                    )),
                 })
             }
             Mutation::InsertFrame { page_id, bounds } => {
@@ -9603,6 +9625,78 @@ impl CanvasModel {
         Some(text)
     }
 
+    /// The built page a spread item belongs to: the page of its PARENT
+    /// spread that holds its transformed centroid, the rule
+    /// `element_geometry`, `path_anchors` and `moveFrame` share.
+    /// Restricting the search to the parent spread is what makes
+    /// cross-spread duplicates route correctly: a clone in spread B's
+    /// vecs carries bounds in spread-B coords, which would alias
+    /// spread A's page rectangles in a flat all-pages search. `None`
+    /// is the pasteboard.
+    fn host_page(
+        &self,
+        spread: &paged_model::Spread,
+        bounds: paged_model::Bounds,
+        item_transform: Option<[f32; 6]>,
+    ) -> Option<&BuiltPage> {
+        let aabb = crate::hit::transform_bbox(bounds, item_transform);
+        let cx = (aabb.left + aabb.right) * 0.5;
+        let cy = (aabb.top + aabb.bottom) * 0.5;
+        let host = spread.pages.iter().find(|p| {
+            let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+            cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
+        })?;
+        let sid = host.self_id.as_deref()?;
+        self.built().pages.iter().find(|bp| bp.id.as_str() == sid)
+    }
+
+    /// `moveFrame` writes the transform `element_geometry` reads, which
+    /// is in the space of the page the item sits on; the document stores
+    /// it in spread space. Map one back to the other through the origin
+    /// of the item's CURRENT page, so a read, a step and a write move the
+    /// item by exactly the step (a pasteboard item reads and writes in
+    /// spread space).
+    fn spread_space_transform(&self, frame_id: &str, transform: [f32; 6]) -> [f32; 6] {
+        let placed = self.scene.spreads.iter().find_map(|parsed| {
+            let s = &parsed.spread;
+            let hit = |id: &Option<String>| id.as_deref() == Some(frame_id);
+            s.text_frames
+                .iter()
+                .find(|f| hit(&f.self_id))
+                .map(|f| (f.bounds, f.item_transform))
+                .or_else(|| {
+                    s.rectangles
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.ovals
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.polygons
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.graphic_lines
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .map(|(b, t)| (s, b, t))
+        });
+        let origin = placed
+            .and_then(|(s, b, t)| self.host_page(s, b, t))
+            .map_or((0.0, 0.0), |bp| bp.spread_origin);
+        let [a, b, c, d, tx, ty] = transform;
+        [a, b, c, d, tx + origin.0, ty + origin.1]
+    }
+
     pub fn element_geometry(
         &self,
         ids: &[crate::element_selection::ElementId],
@@ -9657,6 +9751,7 @@ impl CanvasModel {
                                 .and_then(|p| p.spread.self_id.clone()),
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
+                            page_origin: None,
                             has_image: false,
                             story_id: None,
                         });
@@ -9746,26 +9841,7 @@ impl CanvasModel {
                 let Some((bounds, item_transform, has_image)) = resolved else {
                     continue;
                 };
-                // Locate the page the element sits on by checking
-                // which of its PARENT SPREAD's pages contains the
-                // transformed centroid, then resolve the BuiltPage by
-                // matching self_id. Restricting the search to the
-                // parent spread is what makes cross-spread duplicates
-                // route correctly: a clone in spread B's `text_frames`
-                // vec carries bounds in spread-B-local coords, and
-                // those coords would alias spread-A's page-bounds
-                // rectangles in a flat all-pages search (Track K
-                // open follow-up).
-                let aabb = crate::hit::transform_bbox(bounds, item_transform);
-                let cx = (aabb.left + aabb.right) * 0.5;
-                let cy = (aabb.top + aabb.bottom) * 0.5;
-                let host_page = parsed.spread.pages.iter().find(|p| {
-                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
-                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
-                });
-                let built_page = host_page
-                    .and_then(|p| p.self_id.as_deref())
-                    .and_then(|sid| self.built().pages.iter().find(|bp| bp.id.as_str() == sid));
+                let built_page = self.host_page(&parsed.spread, bounds, item_transform);
                 // C-23 — an element whose centroid lands on no page is
                 // ON THE PASTEBOARD, not absent. This used to `if let`
                 // the push away, so the door answered nothing for an
@@ -9775,7 +9851,8 @@ impl CanvasModel {
                     page_id: built_page.map(|bp| bp.id.clone()),
                     spread_id: parsed.spread.self_id.clone(),
                     bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
-                    item_transform,
+                    item_transform: page_space_transform(built_page, item_transform),
+                    page_origin: built_page.map(|bp| [bp.spread_origin.0, bp.spread_origin.1]),
                     has_image,
                     story_id,
                 });
@@ -10064,30 +10141,9 @@ impl CanvasModel {
             else {
                 continue;
             };
-            // Same spread-scoped page-resolution as element_geometry:
-            // search the PARENT spread's pages so a clone in another
-            // spread's vec doesn't alias the source spread's page
-            // bounds (Track K cross-spread fix).
-            let aabb = crate::hit::transform_bbox(bounds, item_transform);
-            let cx = (aabb.left + aabb.right) * 0.5;
-            let cy = (aabb.top + aabb.bottom) * 0.5;
-            // C-23 — pageless is an ANSWER, not a miss. Both lookups
-            // used to `?` out of the whole function, so a path on the
-            // pasteboard had no readable anchors at all.
-            let page = parsed
-                .spread
-                .pages
-                .iter()
-                .find(|p| {
-                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
-                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
-                })
-                .and_then(|hp| {
-                    self.built()
-                        .pages
-                        .iter()
-                        .find(|bp| Some(bp.id.as_str()) == hp.self_id.as_deref())
-                });
+            // C-23 — pageless is an ANSWER, not a miss: a path on the
+            // pasteboard reads its anchors in spread space.
+            let page = self.host_page(&parsed.spread, bounds, item_transform);
             let anchors_out: Vec<PathAnchorTriple> = anchors
                 .iter()
                 .map(|a| PathAnchorTriple {
@@ -10103,7 +10159,8 @@ impl CanvasModel {
                 anchors: anchors_out,
                 subpath_starts: subpath_starts.iter().map(|&n| n as u32).collect(),
                 subpath_open: subpath_open.to_vec(),
-                item_transform,
+                item_transform: page_space_transform(page, item_transform),
+                page_origin: page.map(|bp| [bp.spread_origin.0, bp.spread_origin.1]),
             });
         }
         None

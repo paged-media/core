@@ -72,7 +72,8 @@ pub struct HitTestResult {
     pub frame_bounds: Option<[f32; 4]>,
     /// The frame's raw `GeometricBounds` (content-box space), in IDML
     /// `[top, left, bottom, right]` order. Combine with
-    /// `item_transform` to draw an oriented box.
+    /// `item_transform` (page space: the hit page's origin folded in) to
+    /// draw an oriented box on the page.
     pub bounds: Option<[f32; 4]>,
     pub item_transform: Option<[f32; 6]>,
     pub group_chain: Vec<String>,
@@ -298,7 +299,11 @@ impl CanvasModel {
                     story_id: c.parent_story.clone(),
                     frame_bounds: Some(bbox_to_page_local(bbox, page_origin_x, page_origin_y)),
                     bounds: Some([c.bounds.top, c.bounds.left, c.bounds.bottom, c.bounds.right]),
-                    item_transform: c.item_transform,
+                    // In the hit page's space, like `frame_bounds`.
+                    item_transform: crate::model::page_space_transform(
+                        Some(built_page),
+                        c.item_transform,
+                    ),
                     group_chain: c.group_chain.clone(),
                     offset_within_story: offset,
                     table_context,

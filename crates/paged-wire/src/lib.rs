@@ -1149,6 +1149,13 @@ pub enum Mutation {
         #[tsify(type = "number[] | null")]
         bytes: Option<ByteBuf>,
     },
+    /// Set a page item's whole placement transform, in the space
+    /// `elementGeometry` reads it: the page the item sits on, its origin
+    /// at `(0, 0)` (spread space for an item on the pasteboard). The
+    /// engine adds the page's origin inside its spread back before
+    /// storing the `ItemTransform`, so read, translate, write moves the
+    /// item by exactly the step on any page. The `frameTransform`
+    /// property is the stored, spread-space matrix.
     MoveFrame {
         frame_id: String,
         transform: [f32; 6],
