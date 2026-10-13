@@ -1009,13 +1009,22 @@ fn conditions_round_trips_through_parser() {
         .condition_sets
         .get(conditions::CONDITION_SET)
         .expect("condition set must round-trip");
+    // As InDesign records a set: every condition, each with its
+    // visibility. This one shows the two conditions hidden in the
+    // document and hides the visible one.
     assert_eq!(
         set.conditions,
         vec![
+            conditions::CONDITION_VISIBLE.to_string(),
             conditions::CONDITION_HIDDEN.to_string(),
             conditions::CONDITION_HIDDEN2.to_string(),
         ],
-        "the set lists the two hidden conditions",
+        "the set records every condition",
+    );
+    assert_eq!(
+        set.hidden,
+        vec![conditions::CONDITION_VISIBLE.to_string()],
+        "the set shows the two hidden conditions",
     );
 
     // Every run's (text, applied_conditions), cells included.
@@ -2227,13 +2236,32 @@ fn annual_base_round_trips_named_entities() {
         .condition_sets
         .get(ab::CONDITION_SET_PRESS)
         .expect("Press set");
-    assert_eq!(press.conditions, vec![ab::CONDITION_PRINT_ONLY.to_string()]);
+    // Every condition is recorded; Press shows only Print-only.
+    assert_eq!(
+        press.conditions,
+        vec![
+            ab::CONDITION_PRINT_ONLY.to_string(),
+            ab::CONDITION_SCREEN_ONLY.to_string(),
+            ab::CONDITION_SPEC_NOTES.to_string(),
+        ]
+    );
+    assert_eq!(
+        press.hidden,
+        vec![
+            ab::CONDITION_SCREEN_ONLY.to_string(),
+            ab::CONDITION_SPEC_NOTES.to_string(),
+        ]
+    );
     let working = doc
         .styles
         .condition_sets
         .get(ab::CONDITION_SET_WORKING_COPY)
         .expect("Working Copy set");
     assert_eq!(working.conditions.len(), 3);
+    assert!(
+        working.hidden.is_empty(),
+        "Working Copy shows every condition"
+    );
 
     // Swatches: the spot vermilion (with its CMYK alternate), the
     // CMYK-built 20% tint, the Lab primary, the RGB warning specimen,

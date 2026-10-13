@@ -395,10 +395,17 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
         b.start("ConditionSet", &[("Self", set.self_id), ("Name", set.name)]);
         b.start("Properties", &[]);
         b.start("SetConditions", &[]);
-        for member in set.conditions {
+        // InDesign records every condition the document has when a set is
+        // made, each with its visibility; the set "shows" its listed ones.
+        for c in &markers.conditions {
+            let shown = if set.conditions.contains(&c.self_id) {
+                "true"
+            } else {
+                "false"
+            };
             b.empty(
                 "VisibilityPair",
-                &[("Condition", member), ("Visibility", "true")],
+                &[("Condition", c.self_id), ("Visibility", shown)],
             );
         }
         b.end("SetConditions");
