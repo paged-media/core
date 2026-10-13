@@ -175,7 +175,7 @@ pub(crate) fn emit_effects_post_fill(
             page.list
                 .paths
                 .get(fill_path_id)
-                .and_then(|path| path_local_bounds(path))
+                .and_then(path_local_bounds)
         });
         let params = gradient_feather_from_parser(p, unit_normalize, frame_box, stroke_outset_pt);
         page.list.commands.push(DisplayCommand::GradientFeather {
@@ -635,7 +635,7 @@ fn path_local_bounds(path: &paged_compose::PathData) -> Option<Rect> {
             _ => {}
         }
     }
-    (x1 > x0 && y1 > y0).then(|| Rect {
+    (x1 > x0 && y1 > y0).then_some(Rect {
         x: x0,
         y: y0,
         w: x1 - x0,

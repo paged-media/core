@@ -1311,15 +1311,14 @@ pub(super) fn apply_vertical_writing_rotation(
         let pivot_x = sx - ox;
         let pivot_y = sy - oy;
         let frame_w = frame.bounds.width();
-        for cmd in &mut pages[page_idx].list.commands[pre..total] {
-            let xf = cmd.transform_mut();
+        pages[page_idx].list.map_transforms(pre..total, |xf| {
             rotate_transform_around(xf, linear, pivot_x, pivot_y);
             // After rotation around the frame's top-left, rotated
             // content lives in x ∈ [pivot_x - h, pivot_x], y ∈
             // [pivot_y, pivot_y + w]. Shift +frame_w on x to bring
             // it into the right half of the frame.
             xf.0[4] += frame_w;
-        }
+        });
     }
 }
 

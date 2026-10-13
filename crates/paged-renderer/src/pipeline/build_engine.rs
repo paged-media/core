@@ -4686,16 +4686,14 @@ impl<'a> StoryEmitter<'a> {
                 if gap_64 == 0 {
                     continue;
                 }
-                let cmds = &mut pages[self.chain_pages[i]].list.commands;
+                let list = &mut pages[self.chain_pages[i]].list;
                 for (idx, &(seg_start, seg_end)) in segments.iter().enumerate() {
                     let dy_64 = gap_64 * idx as i32;
                     if dy_64 == 0 {
                         continue;
                     }
                     let dy_pt = dy_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
-                    for cmd in &mut cmds[seg_start..seg_end] {
-                        cmd.transform_mut().0[5] += dy_pt;
-                    }
+                    list.map_transforms(seg_start..seg_end, |t| t.0[5] += dy_pt);
                 }
                 continue;
             }
@@ -4708,9 +4706,9 @@ impl<'a> StoryEmitter<'a> {
                 continue;
             }
             let dy_pt = dy_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
-            for cmd in &mut pages[self.chain_pages[i]].list.commands[start..end] {
-                cmd.transform_mut().0[5] += dy_pt;
-            }
+            pages[self.chain_pages[i]]
+                .list
+                .map_transforms(start..end, |t| t.0[5] += dy_pt);
         }
     }
 
@@ -7846,10 +7844,11 @@ fn emit_paragraph_lines(
         if !frame_is_upright {
             let pivot_x = sx - ox;
             let pivot_y = sy - oy;
-            for cmd in &mut pages[target_page].list.commands[before_cmds..after_glyph_cmds] {
-                let xf = cmd.transform_mut();
-                rotate_transform_around(xf, frame_linear, pivot_x, pivot_y);
-            }
+            pages[target_page]
+                .list
+                .map_transforms(before_cmds..after_glyph_cmds, |xf| {
+                    rotate_transform_around(xf, frame_linear, pivot_x, pivot_y)
+                });
         }
 
         let after_cmds = pages[target_page].list.commands.len();

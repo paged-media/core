@@ -1569,6 +1569,35 @@ impl DisplayList {
         }
     }
 
+    /// Apply `f` to the transform of every command in `range`, and of every
+    /// glyph-run entry that belongs to one of them.
+    ///
+    /// An entry keeps its own copy of its outline command's transform (the
+    /// PDF writer sets its text matrix from it), so a post-emit pass that
+    /// moves commands — vertical justification, a rotated frame, a rotated
+    /// cell — must move the entries too, or the exported text stays where
+    /// the outlines were before the move. Use this rather than editing
+    /// `commands[..].transform_mut()` wherever the list may carry glyph
+    /// runs.
+    pub fn map_transforms(
+        &mut self,
+        range: std::ops::Range<usize>,
+        mut f: impl FnMut(&mut Transform),
+    ) {
+        let end = range.end.min(self.commands.len());
+        let start = range.start.min(end);
+        for cmd in &mut self.commands[start..end] {
+            f(cmd.transform_mut());
+        }
+        if let Some(table) = self.glyph_runs.as_mut() {
+            for entry in table.entries.iter_mut() {
+                if (start..end).contains(&(entry.command_index as usize)) {
+                    f(&mut entry.transform);
+                }
+            }
+        }
+    }
+
     /// Append a linear gradient and return its id.
     pub fn push_linear_gradient(&mut self, g: LinearGradient) -> GradientId {
         let id = GradientId(self.gradients.len() as u32);
