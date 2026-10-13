@@ -126,3 +126,6 @@ take the InDesign GUI for a few seconds and share the lock
 - `cjk-composer-probe`: ruby and emphasis marks (kenten) print only under
   InDesign's Japanese composers (`HL Composer J`, `HL Single J`), never
   under the Paragraph or World-Ready Composer.
+- `master-items-probe`: InDesign writes `ShowMasterItems` on `<Spread>`
+  and ignores it on `<Page>`; a spread that shows master items prints them
+  whatever its page says.
