@@ -1824,7 +1824,13 @@ pub(super) fn build_document_inner(
                             options.fallback_frame_fill,
                             color_ctx,
                             &mut |page: &mut BuiltPage| {
-                                emit_oval_image(page, oval, options, image_cache, decoded_image_cache)
+                                emit_oval_image(
+                                    page,
+                                    oval,
+                                    options,
+                                    image_cache,
+                                    decoded_image_cache,
+                                )
                             },
                         );
                         let after = pages[page_idx].list.commands.len();

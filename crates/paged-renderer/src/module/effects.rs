@@ -111,6 +111,7 @@ pub(crate) fn emit_effects_post_fill(
     palette: &Graphic,
     color_ctx: ColorCtx<'_>,
     unit_normalize: Option<Rect>,
+    stroke_outset_pt: f32,
 ) {
     if let Some(p) = effects.inner_shadow.as_ref() {
         let params = inner_shadow_from_parser(p, palette, color_ctx, &mut page.list);
@@ -167,7 +168,16 @@ pub(crate) fn emit_effects_post_fill(
         // out toward paper rather than to a dark tint. Emit
         // unconditionally — non-fading stop lists become a no-op
         // (factor = 1 leaves pixels untouched).
-        let params = gradient_feather_from_parser(p, unit_normalize);
+        // The frame's own box, in the coordinates its start point is
+        // written in: the rect the unit path stands for, or the bounds
+        // of the path itself.
+        let frame_box = unit_normalize.or_else(|| {
+            page.list
+                .paths
+                .get(fill_path_id)
+                .and_then(|path| path_local_bounds(path))
+        });
+        let params = gradient_feather_from_parser(p, unit_normalize, frame_box, stroke_outset_pt);
         page.list.commands.push(DisplayCommand::GradientFeather {
             path_id: fill_path_id,
             transform,
@@ -280,8 +290,7 @@ fn inner_shadow_from_parser(
         color,
         opacity: pct_to_unit(p.opacity_pct, DEFAULT_OPACITY),
         choke: pct_to_unit(p.choke_pct, 0.0),
-        blend_mode: blend_mode_from_idml(p.blend_mode.as_deref())
-            .or_default_to(BlendMode::Multiply),
+        blend_mode: effect_blend_mode(p.blend_mode.as_deref(), BlendMode::Multiply),
     }
 }
 
@@ -303,7 +312,7 @@ fn outer_glow_from_parser(
         blur_radius: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         color,
         opacity: pct_to_unit(p.opacity_pct, DEFAULT_OPACITY),
-        blend_mode: blend_mode_from_idml(p.blend_mode.as_deref()).or_default_to(BlendMode::Screen),
+        blend_mode: effect_blend_mode(p.blend_mode.as_deref(), BlendMode::Screen),
         spread: pct_to_unit(p.spread_pct, 0.0),
     }
 }
@@ -326,7 +335,7 @@ fn inner_glow_from_parser(
         blur_radius: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
         color,
         opacity: pct_to_unit(p.opacity_pct, DEFAULT_OPACITY),
-        blend_mode: blend_mode_from_idml(p.blend_mode.as_deref()).or_default_to(BlendMode::Screen),
+        blend_mode: effect_blend_mode(p.blend_mode.as_deref(), BlendMode::Screen),
         choke: pct_to_unit(p.choke_pct, 0.0),
     }
 }
@@ -394,6 +403,10 @@ fn bevel_emboss_from_parser(
         // `Soften` is an IDML pt value; the rasterizer adds it as an
         // extra Gaussian over the shaded layer.
         soften: p.soften.unwrap_or(0.0),
+        // R-11: written only when not InDesign's Screen / Multiply
+        // (asked of InDesign, `effects-attrs` cases 21-24).
+        highlight_blend: effect_blend_mode(p.highlight_blend_mode.as_deref(), BlendMode::Screen),
+        shadow_blend: effect_blend_mode(p.shadow_blend_mode.as_deref(), BlendMode::Multiply),
     }
 }
 
@@ -410,8 +423,7 @@ fn satin_from_parser(
         distance: p.distance.unwrap_or(11.0),
         color,
         opacity: pct_to_unit(p.opacity_pct, 0.5),
-        blend_mode: blend_mode_from_idml(p.blend_mode.as_deref())
-            .or_default_to(BlendMode::Multiply),
+        blend_mode: effect_blend_mode(p.blend_mode.as_deref(), BlendMode::Multiply),
         // W1.4 parity — `Invert` flips the satin wave band (dark
         // centre instead of bright). Absent ⇒ false (InDesign default).
         invert: p.invert.unwrap_or(false),
@@ -473,11 +485,39 @@ fn directional_feather_from_parser(p: &DirectionalFeatherParams) -> ComposeDirec
 fn gradient_feather_from_parser(
     p: &GradientFeatherParams,
     unit_normalize: Option<Rect>,
+    frame_box: Option<Rect>,
+    stroke_outset_pt: f32,
 ) -> ComposeGradientFeather {
     let kind = match p.gradient_type.as_deref() {
         Some("Radial") => GradientFeatherKind::Radial,
         // "Linear" and any unrecognised value fall through to Linear.
         _ => GradientFeatherKind::Linear,
+    };
+    // A radial feather with no start of its own is InDesign's default,
+    // which its PDF writes as a unit-circle shading under a matrix
+    // (InDesign 20.0.1, six frames and the `effects-attrs` fixture). The
+    // circle is centred on a box around the frame: its visible bounds
+    // (the stroke's outer edge) widened by 9 pt left and right, 8 pt
+    // above and 1 pt below, in the frame's own axes. Its radius is half
+    // that box's larger side. On a frame taller than it is wide the
+    // circle becomes an ellipse, its vertical radius stretched by the
+    // frame's height over its width. (`HiliteLength` / `HiliteAngle`
+    // move the shading's focal point to the circle's edge; that focal
+    // gradient is not drawn yet.)
+    let mut radial_aspect = 1.0;
+    let default_radial = match (kind, p.start_point, frame_box) {
+        (GradientFeatherKind::Radial, None, Some(b)) if b.w > 0.0 && b.h > 0.0 => {
+            let o = stroke_outset_pt.max(0.0);
+            let (x0, x1) = (b.x - o - 9.0, b.x + b.w + o + 9.0);
+            let (y0, y1) = (b.y - o - 8.0, b.y + b.h + o + 1.0);
+            let centre = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let radius = (x1 - x0).max(y1 - y0) / 2.0;
+            if b.h > b.w {
+                radial_aspect = b.h / b.w;
+            }
+            Some((centre, (centre.0 + radius, centre.1)))
+        }
+        _ => None,
     };
     // Pick the gradient axis. Prefer explicit start/end points; if
     // only an angle is supplied, derive a unit-square axis through
@@ -486,8 +526,9 @@ fn gradient_feather_from_parser(
     //
     // The fallback (angle / no-axis) cases produce coordinates already
     // in unit-rect space, so they bypass `unit_normalize` below.
-    let (start, end, already_unit) = match (p.start_point, p.end_point) {
-        (Some(s), Some(e)) => (s, e, false),
+    let (start, end, already_unit) = match (default_radial, p.start_point, p.end_point) {
+        (Some((s, e)), ..) => (s, e, false),
+        (None, Some(s), Some(e)) => (s, e, false),
         _ => match p.angle_deg {
             Some(angle) => {
                 let rad = angle.to_radians();
@@ -556,25 +597,61 @@ fn gradient_feather_from_parser(
         end_x: end.0,
         end_y: end.1,
         stops,
+        radial_aspect,
     }
 }
 
-/// Tiny helper trait so a `BlendMode::Normal` from the parser maps to
-/// a sensible per-effect default (Multiply for shadows / satin, Screen
-/// for glows). The parser's `blend_mode_from_idml` returns `Normal`
-/// both for "absent" and for an explicit `BlendMode="Normal"` — the
-/// per-effect defaults below are what InDesign ships out of the box.
-trait BlendModeDefault {
-    fn or_default_to(self, default: BlendMode) -> BlendMode;
-}
-
-impl BlendModeDefault for BlendMode {
-    fn or_default_to(self, default: BlendMode) -> BlendMode {
-        match self {
-            BlendMode::Normal => default,
-            other => other,
+/// The bounds of a path in its own coordinates, from its end and control
+/// points (a control point can only widen them, which a frame's straight
+/// or circular sides never need).
+fn path_local_bounds(path: &paged_compose::PathData) -> Option<Rect> {
+    use paged_compose::PathSegment as S;
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut add = |x: f32, y: f32| {
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    };
+    for seg in &path.segments {
+        match *seg {
+            S::MoveTo { x, y } | S::LineTo { x, y } => add(x, y),
+            S::QuadTo { cx, cy, x, y } => {
+                add(cx, cy);
+                add(x, y);
+            }
+            S::CubicTo {
+                cx1,
+                cy1,
+                cx2,
+                cy2,
+                x,
+                y,
+            } => {
+                add(cx1, cy1);
+                add(cx2, cy2);
+                add(x, y);
+            }
+            _ => {}
         }
     }
+    (x1 > x0 && y1 > y0).then(|| Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
+/// An effect's blend mode: the attribute when it is written, else the
+/// effect's own default (Multiply for shadows and satin, Screen for
+/// glows). InDesign writes `BlendMode` only when it differs from that
+/// default, so an explicit `"Normal"` is a choice, not an absence
+/// (InDesign 20.0.1, `effects-attrs` cases 17–20: a cyan glow in Normal
+/// prints cyan; read as Screen it printed white over white and over
+/// magenta).
+fn effect_blend_mode(name: Option<&str>, default: BlendMode) -> BlendMode {
+    name.map_or(default, |n| blend_mode_from_idml(Some(n)))
 }
 
 #[cfg(test)]
@@ -630,7 +707,7 @@ mod tests {
             stops: Vec::new(),
             ..Default::default()
         };
-        let g = gradient_feather_from_parser(&p, None);
+        let g = gradient_feather_from_parser(&p, None, None, 0.0);
         assert_eq!(g.stops.len(), 2, "the default gradient has two stops");
         assert_eq!((g.stops[0].location, g.stops[0].alpha), (0.0, 1.0));
         assert_eq!((g.stops[1].location, g.stops[1].alpha), (1.0, 0.0));
@@ -659,9 +736,53 @@ mod tests {
             ],
             ..Default::default()
         };
-        let g = gradient_feather_from_parser(&p, None);
+        let g = gradient_feather_from_parser(&p, None, None, 0.0);
         assert_eq!(g.stops.len(), 2);
         assert!((g.stops[0].alpha - 0.8).abs() < 1e-6);
         assert!((g.stops[1].location - 0.9).abs() < 1e-6);
+    }
+
+    /// InDesign 20.0.1's default radial feather, read off the shading
+    /// matrices of its own PDF: a 110 x 80 frame at (20, 20) is a circle
+    /// of radius 64 centred at (75, 56.5); an 80 x 110 frame at (180, 20)
+    /// an ellipse of radii 59.5 and 81.8125 centred at (220, 71.5); a
+    /// centred 4 pt stroke widens the box by 2 pt a side.
+    #[test]
+    fn a_radial_feather_with_no_start_takes_indesigns_default_circle() {
+        let p = GradientFeatherParams {
+            gradient_type: Some("Radial".into()),
+            ..Default::default()
+        };
+        let in_pt = |b: Rect, outset: f32| {
+            let g = gradient_feather_from_parser(&p, None, Some(b), outset);
+            ((g.start_x, g.start_y), g.end_x - g.start_x, g.radial_aspect)
+        };
+        let wide = Rect {
+            x: 20.0,
+            y: 20.0,
+            w: 110.0,
+            h: 80.0,
+        };
+        assert_eq!(in_pt(wide, 0.0), ((75.0, 56.5), 64.0, 1.0));
+        let tall = Rect {
+            x: 180.0,
+            y: 20.0,
+            w: 80.0,
+            h: 110.0,
+        };
+        let ((cx, cy), r, aspect) = in_pt(tall, 0.0);
+        assert_eq!((cx, cy, r), (220.0, 71.5, 59.5));
+        assert!((r * aspect - 81.8125).abs() < 1e-4);
+        let square = Rect {
+            x: 20.0,
+            y: 150.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        assert_eq!(in_pt(square, 2.0).1, 61.0);
+        // On the unit path the same circle comes out in unit coordinates.
+        let g = gradient_feather_from_parser(&p, Some(wide), Some(wide), 0.0);
+        assert!((g.start_x - 0.5).abs() < 1e-6 && (g.start_y - 36.5 / 80.0).abs() < 1e-6);
+        assert!(((g.end_x - g.start_x) * 110.0 - 64.0).abs() < 1e-4);
     }
 }

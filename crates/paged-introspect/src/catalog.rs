@@ -1286,7 +1286,14 @@ mod tests {
         // ADR 132 closed on other kinds (page margins, document setup,
         // text variables, style definitions) are not element paths: they
         // are `propertySchemas` rows on their own address kinds.
-        assert_eq!(cat.settable_paths.len(), 221, "settable path count drifted");
+        //
+        // 221 -> 234: ADR 135 (R-10, R-11) — the fill, stroke and content
+        // transparency targets' opacity and blend mode (6), a group's
+        // isolate and knockout (2), and the drop shadow's blend mode,
+        // spread, noise, knocked-out and global-light flag (5). The
+        // document's global light is a `doc` schema row, not an element
+        // path.
+        assert_eq!(cat.settable_paths.len(), 234, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

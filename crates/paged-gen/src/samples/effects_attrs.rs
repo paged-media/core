@@ -41,9 +41,7 @@ use crate::builders::{
     designmap::{write_designmap, DesignMap},
     master::{write_master, Master},
     page_item::{PageItem, Polygon, PolygonSubPath, Rect, TextFramePref},
-    resources::{
-        container_xml, fonts_xml, graphic_xml_with_extras, styles_xml, ExtraColor,
-    },
+    resources::{container_xml, fonts_xml, graphic_xml_with_extras, styles_xml, ExtraColor},
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
@@ -90,11 +88,15 @@ fn shadow(extra: &str) -> String {
 }
 
 fn sized_shadow(size: f32, extra: &str) -> String {
-    format!(r#"<DropShadowSetting Mode="Drop" XOffset="7" YOffset="7" Size="{size}" Opacity="75" EffectColor="Color/Black"{extra}/>"#)
+    format!(
+        r#"<DropShadowSetting Mode="Drop" XOffset="7" YOffset="7" Size="{size}" Opacity="75" EffectColor="Color/Black"{extra}/>"#
+    )
 }
 
 fn cyan_shadow(extra: &str) -> String {
-    format!(r#"<DropShadowSetting Mode="Drop" XOffset="7" YOffset="7" Size="4" Opacity="90" EffectColor="Color/Cyan"{extra}/>"#)
+    format!(
+        r#"<DropShadowSetting Mode="Drop" XOffset="7" YOffset="7" Size="4" Opacity="90" EffectColor="Color/Cyan"{extra}/>"#
+    )
 }
 
 /// Every case, in number order.
@@ -122,44 +124,213 @@ pub fn cases() -> Vec<Case> {
     };
     let raw: Vec<(usize, &'static str, String, Option<&'static str>, Shape)> = vec![
         // Page 1, row 1: shadow blend modes.
-        (0, "shadow Normal", cyan_shadow(r#" BlendMode="Normal""#), None, Shape::Rect),
-        (0, "shadow Multiply", cyan_shadow(r#" BlendMode="Multiply""#), None, Shape::Rect),
-        (0, "shadow Screen", cyan_shadow(r#" BlendMode="Screen""#), None, Shape::Rect),
-        (0, "shadow default blend", cyan_shadow(""), None, Shape::Rect),
+        (
+            0,
+            "shadow Normal",
+            cyan_shadow(r#" BlendMode="Normal""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "shadow Multiply",
+            cyan_shadow(r#" BlendMode="Multiply""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "shadow Screen",
+            cyan_shadow(r#" BlendMode="Screen""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "shadow default blend",
+            cyan_shadow(""),
+            None,
+            Shape::Rect,
+        ),
         // Row 2: spread and noise.
-        (0, "Size 10 Spread 0", sized_shadow(10.0, ""), None, Shape::Rect),
-        (0, "Size 10 Spread 30", sized_shadow(10.0, r#" Spread="30""#), None, Shape::Rect),
-        (0, "Size 10 Noise 20", sized_shadow(10.0, r#" Noise="20""#), None, Shape::Rect),
-        (0, "Size 10 Spread 30 Noise 20", sized_shadow(10.0, r#" Spread="30" Noise="20""#), None, Shape::Rect),
+        (
+            0,
+            "Size 10 Spread 0",
+            sized_shadow(10.0, ""),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "Size 10 Spread 30",
+            sized_shadow(10.0, r#" Spread="30""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "Size 10 Noise 20",
+            sized_shadow(10.0, r#" Noise="20""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "Size 10 Spread 30 Noise 20",
+            sized_shadow(10.0, r#" Spread="30" Noise="20""#),
+            None,
+            Shape::Rect,
+        ),
         // Row 3: knocked out under a see-through fill; honouring a feather.
-        (0, "fill 40 %, knocked out", shadow(""), Some(r#"<BlendingSetting Opacity="40"/>"#), Shape::Rect),
-        (0, "fill 40 %, not knocked out", shadow(r#" KnockedOut="false""#), Some(r#"<BlendingSetting Opacity="40"/>"#), Shape::Rect),
-        (0, "feather, shadow ignores it", format!("{}{feather}", shadow("")), None, Shape::Rect),
-        (0, "feather, shadow honours it", format!("{}{feather}", shadow(r#" HonorOtherEffects="true""#)), None, Shape::Rect),
+        (
+            0,
+            "fill 40 %, knocked out",
+            shadow(""),
+            Some(r#"<BlendingSetting Opacity="40"/>"#),
+            Shape::Rect,
+        ),
+        (
+            0,
+            "fill 40 %, not knocked out",
+            shadow(r#" KnockedOut="false""#),
+            Some(r#"<BlendingSetting Opacity="40"/>"#),
+            Shape::Rect,
+        ),
+        (
+            0,
+            "feather, shadow ignores it",
+            format!("{}{feather}", shadow("")),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "feather, shadow honours it",
+            format!("{}{feather}", shadow(r#" HonorOtherEffects="true""#)),
+            None,
+            Shape::Rect,
+        ),
         // Row 4: global light (document 45° / 20°).
         (0, "7/7 local light", shadow(""), None, Shape::Rect),
-        (0, "7/7 global light", shadow(r#" UseGlobalLight="true""#), None, Shape::Rect),
-        (0, "10/0 global light", shadow(r#" UseGlobalLight="true""#).replace(r#"XOffset="7" YOffset="7""#, r#"XOffset="10" YOffset="0""#), None, Shape::Rect),
-        (0, "bevel global light", bevel(r#" UseGlobalLight="true""#), None, Shape::Rect),
+        (
+            0,
+            "7/7 global light",
+            shadow(r#" UseGlobalLight="true""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "10/0 global light",
+            shadow(r#" UseGlobalLight="true""#)
+                .replace(r#"XOffset="7" YOffset="7""#, r#"XOffset="10" YOffset="0""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            0,
+            "bevel global light",
+            bevel(r#" UseGlobalLight="true""#),
+            None,
+            Shape::Rect,
+        ),
         // Page 2, row 1: glow technique.
-        (1, "outer glow Softer", glow("OuterGlowSetting", ""), None, Shape::Rect),
-        (1, "outer glow Precise", glow("OuterGlowSetting", r#" Technique="Precise""#), None, Shape::Rect),
-        (1, "inner glow Softer", glow("InnerGlowSetting", ""), None, Shape::Rect),
-        (1, "inner glow Precise", glow("InnerGlowSetting", r#" Technique="Precise""#), None, Shape::Rect),
+        (
+            1,
+            "outer glow Softer",
+            glow("OuterGlowSetting", ""),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "outer glow Precise",
+            glow("OuterGlowSetting", r#" Technique="Precise""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "inner glow Softer",
+            glow("InnerGlowSetting", ""),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "inner glow Precise",
+            glow("InnerGlowSetting", r#" Technique="Precise""#),
+            None,
+            Shape::Rect,
+        ),
         // Row 2: bevel blend modes.
         (1, "bevel default modes", bevel(""), None, Shape::Rect),
-        (1, "bevel highlight Normal", bevel(r#" HighlightBlendMode="Normal""#), None, Shape::Rect),
-        (1, "bevel shadow Normal", bevel(r#" ShadowBlendMode="Normal""#), None, Shape::Rect),
-        (1, "bevel both Overlay", bevel(r#" HighlightBlendMode="Overlay" ShadowBlendMode="Overlay""#), None, Shape::Rect),
+        (
+            1,
+            "bevel highlight Normal",
+            bevel(r#" HighlightBlendMode="Normal""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "bevel shadow Normal",
+            bevel(r#" ShadowBlendMode="Normal""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "bevel both Overlay",
+            bevel(r#" HighlightBlendMode="Overlay" ShadowBlendMode="Overlay""#),
+            None,
+            Shape::Rect,
+        ),
         // Row 3: gradient-feather highlight.
         (1, "radial feather", gradient_feather(""), None, Shape::Rect),
-        (1, "radial hilite 30 at 45°", gradient_feather(r#" HiliteLength="30" HiliteAngle="45""#), None, Shape::Rect),
-        (1, "radial hilite 30 at 180°", gradient_feather(r#" HiliteLength="30" HiliteAngle="180""#), None, Shape::Rect),
-        (1, "radial hilite 0 at 45°", gradient_feather(r#" HiliteLength="0" HiliteAngle="45""#), None, Shape::Rect),
+        (
+            1,
+            "radial hilite 30 at 45°",
+            gradient_feather(r#" HiliteLength="30" HiliteAngle="45""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "radial hilite 30 at 180°",
+            gradient_feather(r#" HiliteLength="30" HiliteAngle="180""#),
+            None,
+            Shape::Rect,
+        ),
+        (
+            1,
+            "radial hilite 0 at 45°",
+            gradient_feather(r#" HiliteLength="0" HiliteAngle="45""#),
+            None,
+            Shape::Rect,
+        ),
         // Row 4: directional feather follow-shape mode on a triangle.
-        (1, "dir. feather LeadingEdge", directional(""), None, Shape::Triangle),
-        (1, "dir. feather AllEdges", directional(r#" FollowShapeMode="AllEdges""#), None, Shape::Triangle),
-        (1, "dir. feather None", directional(r#" FollowShapeMode="None""#), None, Shape::Triangle),
+        (
+            1,
+            "dir. feather LeadingEdge",
+            directional(""),
+            None,
+            Shape::Triangle,
+        ),
+        (
+            1,
+            "dir. feather AllEdges",
+            directional(r#" FollowShapeMode="AllEdges""#),
+            None,
+            Shape::Triangle,
+        ),
+        (
+            1,
+            "dir. feather None",
+            directional(r#" FollowShapeMode="None""#),
+            None,
+            Shape::Triangle,
+        ),
     ];
     let mut per_page = [0usize; 2];
     raw.into_iter()
@@ -229,6 +400,9 @@ fn rect(id: String, w: f32, h: f32, x: f32, y: f32) -> Rect {
 }
 
 /// Build the full `Sample` ready for `write_idml`.
+/// One page's items and its (story id, label) pairs.
+type PageContent = (Vec<PageItem>, Vec<(String, String)>);
+
 pub fn build() -> Sample {
     let master_id = self_id(SAMPLE, "MasterSpread", 0);
     let master_page_id = self_id(SAMPLE, "MasterPage", 0);
@@ -237,13 +411,18 @@ pub fn build() -> Sample {
         next += 1;
         self_id(SAMPLE, kind, next)
     };
-    let mut pages: Vec<(Vec<PageItem>, Vec<(String, String)>)> =
-        (0..2).map(|_| Default::default()).collect();
+    let mut pages: Vec<PageContent> = (0..2).map(|_| Default::default()).collect();
     let mut stories = Vec::new();
     let mut story_refs = Vec::new();
     for (items, _) in pages.iter_mut() {
         for y in ROWS {
-            let mut band = rect(id("Rectangle"), PAGE_W_PT - 40.0, H / 2.0 + 24.0, 20.0, y + H / 2.0);
+            let mut band = rect(
+                id("Rectangle"),
+                PAGE_W_PT - 40.0,
+                H / 2.0 + 24.0,
+                20.0,
+                y + H / 2.0,
+            );
             band.fill_color = Some("Color/Yellow".into());
             items.push(band.into());
         }
@@ -317,7 +496,9 @@ pub fn build() -> Sample {
         }
         let mut block = format!("<TransparencySetting>{}</TransparencySetting>", c.object);
         if let Some(fill) = c.fill {
-            block.push_str(&format!("<FillTransparencySetting>{fill}</FillTransparencySetting>"));
+            block.push_str(&format!(
+                "<FillTransparencySetting>{fill}</FillTransparencySetting>"
+            ));
         }
         splices.push((item_id, block));
     }
@@ -409,21 +590,49 @@ mod tests {
             .filter_map(|r| r.drop_shadow.as_ref())
             .collect();
         assert_eq!(shadows.len(), 15);
-        let modes: Vec<_> = shadows.iter().take(4).map(|s| s.blend_mode.as_deref()).collect();
-        assert_eq!(modes, [Some("Normal"), Some("Multiply"), Some("Screen"), None]);
-        assert_eq!(shadows.iter().filter(|s| s.spread_pct == Some(30.0)).count(), 2);
-        assert_eq!(shadows.iter().filter(|s| s.noise_pct == Some(20.0)).count(), 2);
-        assert_eq!(shadows.iter().filter(|s| s.knocked_out == Some(false)).count(), 1);
-        assert_eq!(shadows.iter().filter(|s| s.use_global_light == Some(true)).count(), 2);
+        let modes: Vec<_> = shadows
+            .iter()
+            .take(4)
+            .map(|s| s.blend_mode.as_deref())
+            .collect();
+        assert_eq!(
+            modes,
+            [Some("Normal"), Some("Multiply"), Some("Screen"), None]
+        );
+        assert_eq!(
+            shadows
+                .iter()
+                .filter(|s| s.spread_pct == Some(30.0))
+                .count(),
+            2
+        );
+        assert_eq!(
+            shadows.iter().filter(|s| s.noise_pct == Some(20.0)).count(),
+            2
+        );
+        assert_eq!(
+            shadows
+                .iter()
+                .filter(|s| s.knocked_out == Some(false))
+                .count(),
+            1
+        );
+        assert_eq!(
+            shadows
+                .iter()
+                .filter(|s| s.use_global_light == Some(true))
+                .count(),
+            2
+        );
         let effects: Vec<_> = doc.spreads[1]
             .spread
             .rectangles
             .iter()
             .filter_map(|r| r.effects.as_ref())
             .collect();
-        assert!(effects
-            .iter()
-            .any(|e| e.outer_glow.as_ref().and_then(|g| g.technique.as_deref()) == Some("Precise")));
+        assert!(effects.iter().any(
+            |e| e.outer_glow.as_ref().and_then(|g| g.technique.as_deref()) == Some("Precise")
+        ));
         assert!(effects.iter().any(|e| {
             e.gradient_feather
                 .as_ref()

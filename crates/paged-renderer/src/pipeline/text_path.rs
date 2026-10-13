@@ -250,7 +250,9 @@ pub(super) fn emit_polygon_into(
         pop_blend_group(page);
     }
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
-        crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, color_ctx, None);
+        crate::module::emit_effects_post_fill(
+            page, effects, pid, outer, palette, color_ctx, None, 0.0,
+        );
     }
     // W1.5 — Inside/Outside StrokeAlignment on the polygon outline:
     // offset each closed contour inward / outward by weight/2 and

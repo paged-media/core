@@ -676,6 +676,11 @@ pub struct BevelEmboss {
     pub technique: BevelTechnique,
     /// Extra soften in pt applied to the shaded bevel layer.
     pub soften: f32,
+    /// How the highlight and the shadow composite (InDesign's defaults
+    /// are Screen and Multiply; its `HighlightBlendMode` and
+    /// `ShadowBlendMode` change them).
+    pub highlight_blend: BlendMode,
+    pub shadow_blend: BlendMode,
 }
 
 impl BevelEmboss {
@@ -693,6 +698,8 @@ impl BevelEmboss {
             direction: BevelDirection::Up,
             technique: BevelTechnique::Smooth,
             soften: 0.0,
+            highlight_blend: BlendMode::Screen,
+            shadow_blend: BlendMode::Multiply,
         }
     }
 }
@@ -830,6 +837,13 @@ pub struct GradientFeather {
     pub end_x: f32,
     pub end_y: f32,
     pub stops: Vec<GradientFeatherStop>,
+    /// A `Radial` feather's radius across the path's local y axis over
+    /// its radius along the local x axis (`start → end` sets the
+    /// latter, in page space). `1.0` is a circle; anything else is an
+    /// ellipse aligned with the path's own axes, as InDesign draws its
+    /// default radial feather on a frame taller than it is wide. Ignored
+    /// by `Linear`.
+    pub radial_aspect: f32,
 }
 
 /// Pixel-space transform applied to an offscreen layer after the

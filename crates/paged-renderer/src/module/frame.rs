@@ -286,6 +286,25 @@ impl<'a> ResolvedFrame<'a> {
         self.stroke_weight.unwrap_or(1.0)
     }
 
+    /// How far the painted stroke reaches outside the frame's path: half
+    /// its weight centred, all of it outside, none inside; nothing when
+    /// no stroke paints. What InDesign's visible bounds add to its
+    /// geometric ones.
+    pub(crate) fn stroke_outset_pt(&self) -> f32 {
+        let paints = self
+            .stroke_color
+            .is_some_and(|c| c != "Swatch/None" && c != "n");
+        let weight = self.effective_stroke_weight();
+        if !paints || weight <= 0.0 {
+            return 0.0;
+        }
+        match self.stroke_alignment {
+            Some("InsideAlignment") => 0.0,
+            Some("OutsideAlignment") => weight,
+            _ => weight / 2.0,
+        }
+    }
+
     pub(crate) fn from_text_frame(frame: &'a TextFrame) -> Self {
         // W1.1: a TextFrame whose `<PathGeometry>` is genuinely non-
         // rectangular (triangle, pentagon, Bezier outline, or a

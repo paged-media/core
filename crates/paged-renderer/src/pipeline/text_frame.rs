@@ -1048,7 +1048,9 @@ pub(super) fn emit_text_frame_into(
         );
     }
     let target_bounds = match &resolved.geometry {
-        Geometry::TextFrameRect { rect } | Geometry::Rect { rect } | Geometry::Oval { rect } => *rect,
+        Geometry::TextFrameRect { rect } | Geometry::Rect { rect } | Geometry::Oval { rect } => {
+            *rect
+        }
         Geometry::Polygon { bbox, .. } => *bbox,
         Geometry::Line { .. } => Rect {
             x: 0.0,
@@ -1074,6 +1076,7 @@ pub(super) fn emit_text_frame_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            resolved.stroke_outset_pt(),
         );
     }
     let stroke_group = push_target_group(page, resolved.stroke_target, target_bounds, outer);

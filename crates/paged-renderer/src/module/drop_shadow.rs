@@ -482,7 +482,7 @@ pub(crate) fn line_effects_module(
         crate::module::emit_effects_pre_fill(page, effects, path_id, transform, palette, color_ctx);
     } else {
         crate::module::emit_effects_post_fill(
-            page, effects, path_id, transform, palette, color_ctx, None,
+            page, effects, path_id, transform, palette, color_ctx, None, 0.0,
         );
     }
 }

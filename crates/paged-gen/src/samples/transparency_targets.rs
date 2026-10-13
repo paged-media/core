@@ -139,10 +139,7 @@ pub enum Kind {
     /// A 12 pt cyan `<GraphicLine>`.
     Line,
     /// A `<Group>` of two overlapping `Multiply` squares.
-    Group {
-        isolate: bool,
-        knockout: bool,
-    },
+    Group { isolate: bool, knockout: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -171,25 +168,31 @@ pub const SMALL: (f32, f32) = (110.0, 80.0);
 const STROKE_W: f32 = 10.0;
 const IMG_PX: f32 = 64.0;
 const BLENDS: [&str; 3] = ["Normal", "Multiply", "Screen"];
-const TARGETS: [Target; 4] = [Target::Object, Target::Fill, Target::Stroke, Target::Content];
+const TARGETS: [Target; 4] = [
+    Target::Object,
+    Target::Fill,
+    Target::Stroke,
+    Target::Content,
+];
 
 /// Every case, in number order.
 pub fn cases() -> Vec<Case> {
     let mut out = Vec::new();
     let mut n = 0;
-    let mut push = |page: usize, x: f32, y: f32, kind: Kind, label: String, s: Vec<TargetSetting>| {
-        n += 1;
-        out.push(Case {
-            n,
-            page,
-            x,
-            y,
-            kind,
-            label,
-            settings: s,
-            content_on_frame: false,
-        });
-    };
+    let mut push =
+        |page: usize, x: f32, y: f32, kind: Kind, label: String, s: Vec<TargetSetting>| {
+            n += 1;
+            out.push(Case {
+                n,
+                page,
+                x,
+                y,
+                kind,
+                label,
+                settings: s,
+                content_on_frame: false,
+            });
+        };
     // Pages 1 and 2: one target at a time, 50 % × three blend modes.
     for (page, kind) in [(0, Kind::Text), (1, Kind::Image)] {
         for (row, target) in TARGETS.iter().enumerate() {
@@ -601,14 +604,7 @@ fn add_case(pb: &mut PageBuild, ids: &mut Ids, c: &Case) {
                     image_self_id: image_id.clone(),
                     image_w_pt: IMG_PX,
                     image_h_pt: IMG_PX,
-                    image_item_transform: Some([
-                        s,
-                        0.0,
-                        0.0,
-                        s,
-                        (w - img) / 2.0,
-                        (h - img) / 2.0,
-                    ]),
+                    image_item_transform: Some([s, 0.0, 0.0, s, (w - img) / 2.0, (h - img) / 2.0]),
                     effective_ppi: Some((72.0 / s, 72.0 / s)),
                     actual_ppi: Some((72.0, 72.0)),
                     color_space: Some("$ID/RGB"),
@@ -821,7 +817,8 @@ mod tests {
             .filter(|f| f.fill_color.as_deref() == Some("Color/Magenta"))
             .collect();
         assert_eq!(frames.len(), 12);
-        let n = |f: &dyn Fn(&&idml_import::TextFrame) -> bool| frames.iter().filter(|x| f(x)).count();
+        let n =
+            |f: &dyn Fn(&&idml_import::TextFrame) -> bool| frames.iter().filter(|x| f(x)).count();
         assert_eq!(n(&|f| f.opacity == Some(50.0)), 3);
         assert_eq!(n(&|f| f.fill_transparency.is_some()), 3);
         assert_eq!(n(&|f| f.stroke_transparency.is_some()), 3);
@@ -843,7 +840,13 @@ mod tests {
         let lines = &page(2).graphic_lines;
         assert_eq!(lines.len(), 4);
         assert_eq!(lines.iter().filter(|l| l.blend_mode.is_some()).count(), 3);
-        assert_eq!(lines.iter().filter(|l| l.stroke_transparency.is_some()).count(), 1);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.stroke_transparency.is_some())
+                .count(),
+            1
+        );
         // Case 38 spells its content target as the frame's own
         // `<ContentTransparencySetting>`, which InDesign ignores — and so
         // does the reader.
@@ -864,11 +867,18 @@ mod tests {
         let flags = |iso: bool, ko: bool| {
             groups
                 .iter()
-                .filter(|g| g.transparency.isolate_blending == iso && g.transparency.knockout_group == ko)
+                .filter(|g| {
+                    g.transparency.isolate_blending == iso && g.transparency.knockout_group == ko
+                })
                 .count()
         };
         assert_eq!(
-            (flags(false, false), flags(true, false), flags(false, true), flags(true, true)),
+            (
+                flags(false, false),
+                flags(true, false),
+                flags(false, true),
+                flags(true, true)
+            ),
             (2, 2, 2, 2)
         );
     }

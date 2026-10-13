@@ -378,6 +378,24 @@ pub fn emit_gradient_feather(
     let (sx, sy) = map(params.start_x, params.start_y);
     let (ex, ey) = map(params.end_x, params.end_y);
 
+    // An elliptical radial (`radial_aspect` ≠ 1): the matrix taking the
+    // unit circle onto it — the radius along the path's own x axis, the
+    // radius times the aspect along its y axis, centred on the start.
+    let elliptical = (matches!(params.kind, paged_compose::GradientFeatherKind::Radial)
+        && params.radial_aspect > 0.0
+        && (params.radial_aspect - 1.0).abs() > 1e-4)
+        .then(|| {
+            let r = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt().max(1e-3);
+            let unit = |x: f32, y: f32| {
+                let l = x.hypot(y).max(1e-9);
+                (x / l, y / l)
+            };
+            let (ax, ay) = unit(t[0], t[1]);
+            let (bx, by) = unit(t[2], t[3]);
+            let ry = r * params.radial_aspect;
+            [r * ax, r * ay, ry * bx, ry * by, sx, sy]
+        });
+
     // Sorted (location, mask gray = 1 − alpha) stops.
     let mut stops: Vec<(f32, f32)> = params
         .stops
@@ -443,6 +461,12 @@ pub fn emit_gradient_feather(
                 sh.shading_type(pdf_writer::types::FunctionShadingType::Axial);
                 sh.coords([sx, sy, ex, ey]);
             }
+            paged_compose::GradientFeatherKind::Radial if elliptical.is_some() => {
+                // A unit circle the content stream maps onto the ellipse,
+                // as InDesign writes its own default radial feathers.
+                sh.shading_type(pdf_writer::types::FunctionShadingType::Radial);
+                sh.coords([0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+            }
             paged_compose::GradientFeatherKind::Radial => {
                 let r = ((ex - sx).powi(2) + (ey - sy).powi(2)).sqrt().max(1e-3);
                 sh.shading_type(pdf_writer::types::FunctionShadingType::Radial);
@@ -463,7 +487,14 @@ pub fn emit_gradient_feather(
     crate::path::emit_path(&mut mask, &page_path);
     mask.clip_nonzero();
     mask.end_path();
-    mask.shading(Name(sh_name.as_bytes()));
+    if let Some(m) = elliptical {
+        mask.save_state();
+        mask.transform(m);
+        mask.shading(Name(sh_name.as_bytes()));
+        mask.restore_state();
+    } else {
+        mask.shading(Name(sh_name.as_bytes()));
+    }
     let mask_ref = state.refs.alloc();
     let pad = 1.0;
     pending_forms.push(crate::writer::PendingForm {

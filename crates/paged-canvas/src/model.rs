@@ -1285,7 +1285,11 @@ fn target_property_entries(
         ),
         entry(
             P::FrameDropShadowUseGlobalLight,
-            V::Bool(drop_shadow.and_then(|d| d.use_global_light).unwrap_or(false)),
+            V::Bool(
+                drop_shadow
+                    .and_then(|d| d.use_global_light)
+                    .unwrap_or(false),
+            ),
         ),
     ]);
     out

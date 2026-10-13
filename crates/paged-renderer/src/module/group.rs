@@ -268,7 +268,10 @@ pub(crate) fn group_pass(
                 }
                 let mut text = HashSet::new();
                 collect_member_text_frames(m, spread, &mut text);
-                member_windows.push((by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect(), text));
+                member_windows.push((
+                    by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect(),
+                    text,
+                ));
             }
         }
         entries.push((gi, per_page, member_text, member_windows));

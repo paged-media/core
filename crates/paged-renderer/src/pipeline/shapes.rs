@@ -111,6 +111,7 @@ pub(super) fn emit_oval_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            frame.stroke_outset_pt(),
         );
     }
     // W1.5 — Inside/Outside StrokeAlignment on the ellipse: offset the
@@ -1042,6 +1043,7 @@ pub(super) fn emit_rectangle_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            resolved.stroke_outset_pt(),
         );
     }
 

@@ -153,13 +153,20 @@ fn a_text_frame_and_its_text_fade_as_one_object() {
         .into_iter()
         .filter(|g| (g.3 - 0.5).abs() < 1e-3)
         .collect();
-    assert_eq!(halves.len(), 1, "one object group, not one for the body and one for the text");
+    assert_eq!(
+        halves.len(),
+        1,
+        "one object group, not one for the body and one for the text"
+    );
     let (begin, end, ..) = halves[0];
     let runs = list.glyph_runs.as_ref().expect("glyph runs");
     assert!(!runs.entries.is_empty());
     for e in &runs.entries {
         let i = e.command_index as usize;
-        assert!(begin < i && i < end, "glyph {i} outside the group {begin}..{end}");
+        assert!(
+            begin < i && i < end,
+            "glyph {i} outside the group {begin}..{end}"
+        );
     }
 }
 
@@ -200,7 +207,10 @@ fn every_target_has_its_own_group() {
     let runs = list.glyph_runs.as_ref().expect("glyph runs");
     for e in &runs.entries {
         let i = e.command_index as usize;
-        assert!(text.0 < i && i < text.1, "glyph {i} outside the text's group");
+        assert!(
+            text.0 < i && i < text.1,
+            "glyph {i} outside the text's group"
+        );
     }
 }
 
@@ -248,12 +258,17 @@ fn a_shadow_under_the_global_light_turns_to_it() {
         list.commands
             .iter()
             .find_map(|c| match c {
-                DisplayCommand::DropShadow { shadow, .. } => Some((shadow.offset_x, shadow.offset_y)),
+                DisplayCommand::DropShadow { shadow, .. } => {
+                    Some((shadow.offset_x, shadow.offset_y))
+                }
                 _ => None,
             })
             .expect("a shadow")
     };
     assert_eq!(shadow(false), (7.0, 7.0));
     let (x, y) = shadow(true);
-    assert!((x + 7.0).abs() < 1e-3 && (y - 7.0).abs() < 1e-3, "({x}, {y})");
+    assert!(
+        (x + 7.0).abs() < 1e-3 && (y - 7.0).abs() < 1e-3,
+        "({x}, {y})"
+    );
 }

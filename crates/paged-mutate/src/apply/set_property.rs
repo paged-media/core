@@ -2242,12 +2242,13 @@ pub(super) fn apply_set_property(
                 }
             })?;
             let t = slot.get_or_insert_with(Default::default);
-            let prev = std::mem::replace(
-                &mut t.blend_mode,
-                (!new_val.is_empty()).then_some(new_val),
-            );
+            let prev =
+                std::mem::replace(&mut t.blend_mode, (!new_val.is_empty()).then_some(new_val));
             drop_empty_target(slot);
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         // ---- R-10 — how a group's members composite ----------------
         (NodeId::Group(id), PropertyPath::GroupIsolateBlending | PropertyPath::GroupKnockout) => {
@@ -2274,11 +2275,12 @@ pub(super) fn apply_set_property(
             let new_val = expect_text(path, value)?;
             let ds = find_drop_shadow_mut(doc, node)
                 .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
-            let prev = std::mem::replace(
-                &mut ds.blend_mode,
-                (!new_val.is_empty()).then_some(new_val),
-            );
-            (Value::Text(prev.unwrap_or_default()), frame_style_hint(node))
+            let prev =
+                std::mem::replace(&mut ds.blend_mode, (!new_val.is_empty()).then_some(new_val));
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
         }
         (
             NodeId::TextFrame(_)

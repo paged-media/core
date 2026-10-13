@@ -1838,8 +1838,9 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                         // group, that group's initial backdrop, since a
                         // knockout element composites with the group's
                         // backdrop and not with the elements before it.
-                        let parent_knockout =
-                            group_stack.last().is_some_and(|p| p.knockout_base.is_some());
+                        let parent_knockout = group_stack
+                            .last()
+                            .is_some_and(|p| p.knockout_base.is_some());
                         let backdrop = group_stack.last().map(|p| {
                             (
                                 p.knockout_base.as_ref().unwrap_or(&p.pixmap).as_ref(),
@@ -1878,13 +1879,7 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                         let mut backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver) {
                             None
                         } else if let Some((src, src_off)) = backdrop {
-                            snapshot_parent_region(
-                                src,
-                                src_off,
-                                (off_x_px, off_y_px),
-                                w_px,
-                                h_px,
-                            )
+                            snapshot_parent_region(src, src_off, (off_x_px, off_y_px), w_px, h_px)
                         } else {
                             snapshot_parent_region(
                                 pixmap.as_ref(),
@@ -2870,7 +2865,8 @@ fn shape_shadow_alpha(stamp: &mut Pixmap, spread: f32, noise: f32, scale: f32) {
         let scale_c = |c: u8| (c as f32 * factor).round().clamp(0.0, 255.0) as u8;
         let na = scale_c(a);
         let c = |v: u8| scale_c(v).min(na);
-        if let Some(p) = PremultipliedColorU8::from_rgba(c(px.red()), c(px.green()), c(px.blue()), na)
+        if let Some(p) =
+            PremultipliedColorU8::from_rgba(c(px.red()), c(px.green()), c(px.blue()), na)
         {
             *px = p;
         }
@@ -4541,7 +4537,10 @@ mod tests {
         // magenta's blue.)
         let img = two_multiply_squares(false, false, 0.5);
         let p = at(&img, 12, 15);
-        assert!(p[0] > 240 && (100..160).contains(&p[1]) && p[2] < 20, "{p:?}");
+        assert!(
+            p[0] > 240 && (100..160).contains(&p[1]) && p[2] < 20,
+            "{p:?}"
+        );
         // Isolated: the magenta member alone shows as magenta over yellow.
         let img = two_multiply_squares(true, false, 1.0);
         let p = at(&img, 12, 15);
@@ -4577,8 +4576,12 @@ mod tests {
         assert!(spread.pixels().iter().all(|p| p.alpha() == 255), "clamped");
         let mut grain = stamp.clone();
         shape_shadow_alpha(&mut grain, 0.0, 0.2, 1.0);
-        let alphas: std::collections::HashSet<u8> = grain.pixels().iter().map(|p| p.alpha()).collect();
-        assert!(alphas.len() > 1 && alphas.iter().all(|a| (80..=100).contains(a)), "{alphas:?}");
+        let alphas: std::collections::HashSet<u8> =
+            grain.pixels().iter().map(|p| p.alpha()).collect();
+        assert!(
+            alphas.len() > 1 && alphas.iter().all(|a| (80..=100).contains(a)),
+            "{alphas:?}"
+        );
     }
 
     #[test]
@@ -5567,6 +5570,7 @@ mod tests {
                     alpha: 0.0,
                 },
             ],
+            radial_aspect: 1.0,
         };
         list.commands.push(Cmd::GradientFeather {
             path_id,
@@ -5653,6 +5657,8 @@ mod tests {
             direction,
             technique: BevelTechnique::Smooth,
             soften: 0.0,
+            highlight_blend: paged_compose::BlendMode::Screen,
+            shadow_blend: paged_compose::BlendMode::Multiply,
         };
         list.commands.push(Cmd::BevelEmboss {
             path_id,
@@ -5742,6 +5748,8 @@ mod tests {
                 direction: BevelDirection::Up,
                 technique,
                 soften: 0.0,
+                highlight_blend: paged_compose::BlendMode::Screen,
+                shadow_blend: paged_compose::BlendMode::Multiply,
             };
             list.commands.push(Cmd::BevelEmboss {
                 path_id,

@@ -56,7 +56,10 @@ fn exported() -> lopdf::Document {
 /// `(isolated, knockout)` of every transparency-group form XObject.
 fn group_flags(doc: &lopdf::Document) -> Vec<(bool, bool)> {
     let flag = |g: &lopdf::Dictionary, k: &[u8]| {
-        g.get(k).ok().and_then(|v| v.as_bool().ok()).unwrap_or(false)
+        g.get(k)
+            .ok()
+            .and_then(|v| v.as_bool().ok())
+            .unwrap_or(false)
     };
     doc.objects
         .values()

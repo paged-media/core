@@ -28,7 +28,8 @@ use PropertyPath as P;
 fn fixture() -> Document {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../corpus/generated/transparency-targets.idml");
-    let bytes = std::fs::read(path).expect("read transparency-targets fixture (paged-gen emit-all)");
+    let bytes =
+        std::fs::read(path).expect("read transparency-targets fixture (paged-gen emit-all)");
     idml_import::import_idml_doc(&bytes).expect("open")
 }
 
@@ -49,15 +50,21 @@ fn state(doc: &Document, node: &NodeId) -> String {
     match node {
         NodeId::TextFrame(_) => format!(
             "{:?}",
-            spreads().flat_map(|s| &s.text_frames).find(|f| hit(&f.self_id))
+            spreads()
+                .flat_map(|s| &s.text_frames)
+                .find(|f| hit(&f.self_id))
         ),
         NodeId::Rectangle(_) => format!(
             "{:?}",
-            spreads().flat_map(|s| &s.rectangles).find(|f| hit(&f.self_id))
+            spreads()
+                .flat_map(|s| &s.rectangles)
+                .find(|f| hit(&f.self_id))
         ),
         NodeId::GraphicLine(_) => format!(
             "{:?}",
-            spreads().flat_map(|s| &s.graphic_lines).find(|f| hit(&f.self_id))
+            spreads()
+                .flat_map(|s| &s.graphic_lines)
+                .find(|f| hit(&f.self_id))
         ),
         NodeId::Group(_) => format!(
             "{:?}",
@@ -99,20 +106,36 @@ fn every_new_path_writes_and_undoes() {
         (&text, P::FrameStrokeOpacity, Value::Length(Some(35.0))),
         (&text, P::FrameStrokeBlendMode, Value::Text("Screen".into())),
         (&text, P::FrameContentOpacity, Value::Length(Some(10.0))),
-        (&text, P::FrameContentBlendMode, Value::Text("Darken".into())),
+        (
+            &text,
+            P::FrameContentBlendMode,
+            Value::Text("Darken".into()),
+        ),
         (&picture, P::FrameContentOpacity, Value::Length(Some(80.0))),
         (&line, P::FrameOpacity, Value::Length(Some(30.0))),
         (&line, P::FrameBlendMode, Value::Text("Screen".into())),
         (&line, P::FrameStrokeOpacity, Value::Length(Some(20.0))),
         (&group, P::GroupIsolateBlending, Value::Bool(true)),
         (&group, P::GroupKnockout, Value::Bool(true)),
-        (&text, P::FrameDropShadowBlendMode, Value::Text("Screen".into())),
+        (
+            &text,
+            P::FrameDropShadowBlendMode,
+            Value::Text("Screen".into()),
+        ),
         (&text, P::FrameDropShadowSpread, Value::Length(Some(30.0))),
         (&text, P::FrameDropShadowNoise, Value::Length(Some(20.0))),
         (&text, P::FrameDropShadowKnockedOut, Value::Bool(false)),
         (&text, P::FrameDropShadowUseGlobalLight, Value::Bool(true)),
-        (&document, P::DocumentGlobalLightAngle, Value::Length(Some(45.0))),
-        (&document, P::DocumentGlobalLightAltitude, Value::Length(Some(20.0))),
+        (
+            &document,
+            P::DocumentGlobalLightAngle,
+            Value::Length(Some(45.0)),
+        ),
+        (
+            &document,
+            P::DocumentGlobalLightAltitude,
+            Value::Length(Some(20.0)),
+        ),
     ];
     for (node, path, value) in cases {
         let before = state(&doc, node);
@@ -152,8 +175,16 @@ fn a_cleared_target_is_dropped() {
         .and_then(|f| f.self_id.clone())
         .map(NodeId::TextFrame)
         .expect("a frame with no fill target");
-    apply(&mut doc, &set(&rect, P::FrameFillOpacity, Value::Length(Some(40.0)))).unwrap();
-    apply(&mut doc, &set(&rect, P::FrameFillOpacity, Value::Length(None))).unwrap();
+    apply(
+        &mut doc,
+        &set(&rect, P::FrameFillOpacity, Value::Length(Some(40.0))),
+    )
+    .unwrap();
+    apply(
+        &mut doc,
+        &set(&rect, P::FrameFillOpacity, Value::Length(None)),
+    )
+    .unwrap();
     let f = doc.spreads[0]
         .spread
         .text_frames

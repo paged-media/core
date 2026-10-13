@@ -408,7 +408,8 @@ impl DropShadowSetting {
         if self.use_global_light != Some(true) {
             return (self.x_offset, self.y_offset);
         }
-        let angle = global_light_angle.unwrap_or(TransparencyPreference::DEFAULT_GLOBAL_LIGHT_ANGLE);
+        let angle =
+            global_light_angle.unwrap_or(TransparencyPreference::DEFAULT_GLOBAL_LIGHT_ANGLE);
         let distance = self.x_offset.hypot(self.y_offset);
         let (sin, cos) = angle.to_radians().sin_cos();
         (-distance * cos, distance * sin)
