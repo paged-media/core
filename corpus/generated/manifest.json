@@ -6,8 +6,8 @@
       "pdf": "anchored.pdf",
       "pages": 12,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/anchored",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/anchored/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/anchored",
+      "report": "/tmp/idml-generated-diff/anchored/report.json"
     },
     {
       "name": "annual-base",
@@ -15,8 +15,8 @@
       "pdf": "annual-base.pdf",
       "pages": 134,
       "passing": 129,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/annual-base",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/annual-base/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/annual-base",
+      "report": "/tmp/idml-generated-diff/annual-base/report.json"
     },
     {
       "name": "blank-paragraphs",
@@ -24,8 +24,8 @@
       "pdf": "blank-paragraphs.pdf",
       "pages": 1,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/blank-paragraphs",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/blank-paragraphs/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/blank-paragraphs",
+      "report": "/tmp/idml-generated-diff/blank-paragraphs/report.json"
     },
     {
       "name": "composer",
@@ -33,8 +33,8 @@
       "pdf": "composer.pdf",
       "pages": 8,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/composer",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/composer/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/composer",
+      "report": "/tmp/idml-generated-diff/composer/report.json"
     },
     {
       "name": "conditions",
@@ -42,8 +42,8 @@
       "pdf": "conditions.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/conditions",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/conditions/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/conditions",
+      "report": "/tmp/idml-generated-diff/conditions/report.json"
     },
     {
       "name": "corners",
@@ -51,8 +51,8 @@
       "pdf": "corners.pdf",
       "pages": 5,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/corners",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/corners/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/corners",
+      "report": "/tmp/idml-generated-diff/corners/report.json"
     },
     {
       "name": "effects",
@@ -60,8 +60,8 @@
       "pdf": "effects.pdf",
       "pages": 12,
       "passing": 12,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/effects",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/effects/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/effects",
+      "report": "/tmp/idml-generated-diff/effects/report.json"
     },
     {
       "name": "footnotes",
@@ -69,8 +69,8 @@
       "pdf": "footnotes.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/footnotes",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/footnotes/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/footnotes",
+      "report": "/tmp/idml-generated-diff/footnotes/report.json"
     },
     {
       "name": "forced-line-break",
@@ -78,8 +78,8 @@
       "pdf": "forced-line-break.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/forced-line-break",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/forced-line-break/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/forced-line-break",
+      "report": "/tmp/idml-generated-diff/forced-line-break/report.json"
     },
     {
       "name": "geometry",
@@ -87,8 +87,8 @@
       "pdf": "geometry.pdf",
       "pages": 20,
       "passing": 20,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/geometry",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/geometry/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/geometry",
+      "report": "/tmp/idml-generated-diff/geometry/report.json"
     },
     {
       "name": "geometry-groups",
@@ -96,8 +96,8 @@
       "pdf": "geometry-groups.pdf",
       "pages": 6,
       "passing": 4,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/geometry-groups",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/geometry-groups/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/geometry-groups",
+      "report": "/tmp/idml-generated-diff/geometry-groups/report.json"
     },
     {
       "name": "gradient-geometry",
@@ -105,8 +105,8 @@
       "pdf": "gradient-geometry.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/gradient-geometry",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/gradient-geometry/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/gradient-geometry",
+      "report": "/tmp/idml-generated-diff/gradient-geometry/report.json"
     },
     {
       "name": "gradients",
@@ -114,8 +114,8 @@
       "pdf": "gradients.pdf",
       "pages": 5,
       "passing": 5,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/gradients",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/gradients/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/gradients",
+      "report": "/tmp/idml-generated-diff/gradients/report.json"
     },
     {
       "name": "hard-hyphen",
@@ -123,8 +123,8 @@
       "pdf": "hard-hyphen.pdf",
       "pages": 1,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/hard-hyphen",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/hard-hyphen/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/hard-hyphen",
+      "report": "/tmp/idml-generated-diff/hard-hyphen/report.json"
     },
     {
       "name": "image-clipping",
@@ -132,8 +132,8 @@
       "pdf": "image-clipping.pdf",
       "pages": 4,
       "passing": 2,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/image-clipping",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/image-clipping/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/image-clipping",
+      "report": "/tmp/idml-generated-diff/image-clipping/report.json"
     },
     {
       "name": "images",
@@ -141,8 +141,8 @@
       "pdf": "images.pdf",
       "pages": 5,
       "passing": 5,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/images",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/images/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/images",
+      "report": "/tmp/idml-generated-diff/images/report.json"
     },
     {
       "name": "inline-objects",
@@ -150,8 +150,17 @@
       "pdf": "inline-objects.pdf",
       "pages": 7,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/inline-objects",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/inline-objects/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/inline-objects",
+      "report": "/tmp/idml-generated-diff/inline-objects/report.json"
+    },
+    {
+      "name": "justification",
+      "idml": "justification.idml",
+      "pdf": "justification.pdf",
+      "pages": 3,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/justification",
+      "report": "/tmp/idml-generated-diff/justification/report.json"
     },
     {
       "name": "keeps",
@@ -159,8 +168,8 @@
       "pdf": "keeps.pdf",
       "pages": 8,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/keeps",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/keeps/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/keeps",
+      "report": "/tmp/idml-generated-diff/keeps/report.json"
     },
     {
       "name": "keeps-reflow",
@@ -168,8 +177,17 @@
       "pdf": "keeps-reflow.pdf",
       "pages": 9,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/keeps-reflow",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/keeps-reflow/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/keeps-reflow",
+      "report": "/tmp/idml-generated-diff/keeps-reflow/report.json"
+    },
+    {
+      "name": "kerning",
+      "idml": "kerning.idml",
+      "pdf": "kerning.pdf",
+      "pages": 1,
+      "passing": 0,
+      "diff_dir": "/tmp/idml-generated-diff/kerning",
+      "report": "/tmp/idml-generated-diff/kerning/report.json"
     },
     {
       "name": "layers-z",
@@ -177,8 +195,8 @@
       "pdf": "layers-z.pdf",
       "pages": 1,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/layers-z",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/layers-z/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/layers-z",
+      "report": "/tmp/idml-generated-diff/layers-z/report.json"
     },
     {
       "name": "layout",
@@ -186,8 +204,8 @@
       "pdf": "layout.pdf",
       "pages": 11,
       "passing": 4,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/layout",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/layout/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/layout",
+      "report": "/tmp/idml-generated-diff/layout/report.json"
     },
     {
       "name": "line-ends",
@@ -195,8 +213,8 @@
       "pdf": "line-ends.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/line-ends",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/line-ends/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/line-ends",
+      "report": "/tmp/idml-generated-diff/line-ends/report.json"
     },
     {
       "name": "line-shadows",
@@ -204,8 +222,8 @@
       "pdf": "line-shadows.pdf",
       "pages": 1,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/line-shadows",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/line-shadows/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/line-shadows",
+      "report": "/tmp/idml-generated-diff/line-shadows/report.json"
     },
     {
       "name": "links-broken",
@@ -213,8 +231,8 @@
       "pdf": "links-broken.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/links-broken",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/links-broken/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/links-broken",
+      "report": "/tmp/idml-generated-diff/links-broken/report.json"
     },
     {
       "name": "links-ok",
@@ -222,8 +240,8 @@
       "pdf": "links-ok.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/links-ok",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/links-ok/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/links-ok",
+      "report": "/tmp/idml-generated-diff/links-ok/report.json"
     },
     {
       "name": "list-marker-styles",
@@ -231,8 +249,8 @@
       "pdf": "list-marker-styles.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-marker-styles",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-marker-styles/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/list-marker-styles",
+      "report": "/tmp/idml-generated-diff/list-marker-styles/report.json"
     },
     {
       "name": "list-markers",
@@ -240,8 +258,8 @@
       "pdf": "list-markers.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-markers",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-markers/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/list-markers",
+      "report": "/tmp/idml-generated-diff/list-markers/report.json"
     },
     {
       "name": "list-overrides",
@@ -249,8 +267,8 @@
       "pdf": "list-overrides.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-overrides",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/list-overrides/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/list-overrides",
+      "report": "/tmp/idml-generated-diff/list-overrides/report.json"
     },
     {
       "name": "markers",
@@ -258,8 +276,8 @@
       "pdf": "markers.pdf",
       "pages": 2,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/markers",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/markers/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/markers",
+      "report": "/tmp/idml-generated-diff/markers/report.json"
     },
     {
       "name": "masters",
@@ -267,8 +285,8 @@
       "pdf": "masters.pdf",
       "pages": 3,
       "passing": 3,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/masters",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/masters/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/masters",
+      "report": "/tmp/idml-generated-diff/masters/report.json"
     },
     {
       "name": "mixed-leading",
@@ -276,8 +294,8 @@
       "pdf": "mixed-leading.pdf",
       "pages": 1,
       "passing": 1,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/mixed-leading",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/mixed-leading/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/mixed-leading",
+      "report": "/tmp/idml-generated-diff/mixed-leading/report.json"
     },
     {
       "name": "navigation",
@@ -285,8 +303,8 @@
       "pdf": "navigation.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/navigation",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/navigation/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/navigation",
+      "report": "/tmp/idml-generated-diff/navigation/report.json"
     },
     {
       "name": "nested-groups",
@@ -294,8 +312,8 @@
       "pdf": "nested-groups.pdf",
       "pages": 2,
       "passing": 2,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/nested-groups",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/nested-groups/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/nested-groups",
+      "report": "/tmp/idml-generated-diff/nested-groups/report.json"
     },
     {
       "name": "nested-styles",
@@ -303,8 +321,8 @@
       "pdf": "nested-styles.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate2/nested-styles",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate2/nested-styles/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/nested-styles",
+      "report": "/tmp/idml-generated-diff/nested-styles/report.json"
     },
     {
       "name": "numbering",
@@ -312,8 +330,8 @@
       "pdf": "numbering.pdf",
       "pages": 2,
       "passing": 2,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/numbering",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/numbering/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/numbering",
+      "report": "/tmp/idml-generated-diff/numbering/report.json"
     },
     {
       "name": "opentype",
@@ -321,8 +339,8 @@
       "pdf": "opentype.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate2/opentype",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate2/opentype/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/opentype",
+      "report": "/tmp/idml-generated-diff/opentype/report.json"
     },
     {
       "name": "paste-into",
@@ -330,8 +348,8 @@
       "pdf": "paste-into.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/paste-into",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/paste-into/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/paste-into",
+      "report": "/tmp/idml-generated-diff/paste-into/report.json"
     },
     {
       "name": "preflight",
@@ -339,8 +357,8 @@
       "pdf": "preflight.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/preflight",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/preflight/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/preflight",
+      "report": "/tmp/idml-generated-diff/preflight/report.json"
     },
     {
       "name": "rect-shadows",
@@ -348,8 +366,8 @@
       "pdf": "rect-shadows.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/rect-shadows",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/rect-shadows/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/rect-shadows",
+      "report": "/tmp/idml-generated-diff/rect-shadows/report.json"
     },
     {
       "name": "reflow",
@@ -357,8 +375,8 @@
       "pdf": "reflow.pdf",
       "pages": 3,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/reflow",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/reflow/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/reflow",
+      "report": "/tmp/idml-generated-diff/reflow/report.json"
     },
     {
       "name": "shaped-bands",
@@ -366,8 +384,8 @@
       "pdf": "shaped-bands.pdf",
       "pages": 3,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/shaped-bands",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/shaped-bands/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/shaped-bands",
+      "report": "/tmp/idml-generated-diff/shaped-bands/report.json"
     },
     {
       "name": "showcase-base",
@@ -375,8 +393,8 @@
       "pdf": "showcase-base.pdf",
       "pages": 16,
       "passing": 16,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/showcase-base",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/showcase-base/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/showcase-base",
+      "report": "/tmp/idml-generated-diff/showcase-base/report.json"
     },
     {
       "name": "soft-hyphens",
@@ -384,8 +402,8 @@
       "pdf": "soft-hyphens.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/soft-hyphens",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/soft-hyphens/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/soft-hyphens",
+      "report": "/tmp/idml-generated-diff/soft-hyphens/report.json"
     },
     {
       "name": "span-columns",
@@ -393,8 +411,8 @@
       "pdf": "span-columns.pdf",
       "pages": 17,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/span-columns",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/span-columns/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/span-columns",
+      "report": "/tmp/idml-generated-diff/span-columns/report.json"
     },
     {
       "name": "split-boundaries",
@@ -402,8 +420,8 @@
       "pdf": "split-boundaries.pdf",
       "pages": 24,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/split-boundaries",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/split-boundaries/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/split-boundaries",
+      "report": "/tmp/idml-generated-diff/split-boundaries/report.json"
     },
     {
       "name": "start-paragraph",
@@ -411,8 +429,8 @@
       "pdf": "start-paragraph.pdf",
       "pages": 40,
       "passing": 30,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/start-paragraph",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/start-paragraph/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/start-paragraph",
+      "report": "/tmp/idml-generated-diff/start-paragraph/report.json"
     },
     {
       "name": "stroke-inset",
@@ -420,17 +438,17 @@
       "pdf": "stroke-inset.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/stroke-inset",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/stroke-inset/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/stroke-inset",
+      "report": "/tmp/idml-generated-diff/stroke-inset/report.json"
     },
     {
       "name": "strokes-fills",
       "idml": "strokes-fills.idml",
       "pdf": "strokes-fills.pdf",
-      "pages": 19,
-      "passing": 16,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/strokes-fills",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/strokes-fills/report.json"
+      "pages": 25,
+      "passing": 24,
+      "diff_dir": "/tmp/idml-generated-diff/strokes-fills",
+      "report": "/tmp/idml-generated-diff/strokes-fills/report.json"
     },
     {
       "name": "styles-cascade",
@@ -438,8 +456,8 @@
       "pdf": "styles-cascade.pdf",
       "pages": 5,
       "passing": 2,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/styles-cascade",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/styles-cascade/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/styles-cascade",
+      "report": "/tmp/idml-generated-diff/styles-cascade/report.json"
     },
     {
       "name": "swatches",
@@ -447,8 +465,8 @@
       "pdf": "swatches.pdf",
       "pages": 3,
       "passing": 3,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/swatches",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/swatches/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/swatches",
+      "report": "/tmp/idml-generated-diff/swatches/report.json"
     },
     {
       "name": "tab-breaks",
@@ -456,8 +474,8 @@
       "pdf": "tab-breaks.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tab-breaks",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tab-breaks/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/tab-breaks",
+      "report": "/tmp/idml-generated-diff/tab-breaks/report.json"
     },
     {
       "name": "table-cell-baseline",
@@ -465,8 +483,8 @@
       "pdf": "table-cell-baseline.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/table-cell-baseline",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/table-cell-baseline/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/table-cell-baseline",
+      "report": "/tmp/idml-generated-diff/table-cell-baseline/report.json"
     },
     {
       "name": "tables",
@@ -474,8 +492,8 @@
       "pdf": "tables.pdf",
       "pages": 13,
       "passing": 12,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/tables",
+      "report": "/tmp/idml-generated-diff/tables/report.json"
     },
     {
       "name": "tables-overset",
@@ -483,8 +501,8 @@
       "pdf": "tables-overset.pdf",
       "pages": 6,
       "passing": 6,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables-overset",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables-overset/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/tables-overset",
+      "report": "/tmp/idml-generated-diff/tables-overset/report.json"
     },
     {
       "name": "tables-rows",
@@ -492,8 +510,8 @@
       "pdf": "tables-rows.pdf",
       "pages": 12,
       "passing": 11,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables-rows",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tables-rows/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/tables-rows",
+      "report": "/tmp/idml-generated-diff/tables-rows/report.json"
     },
     {
       "name": "text",
@@ -501,8 +519,8 @@
       "pdf": "text.pdf",
       "pages": 19,
       "passing": 18,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text",
+      "report": "/tmp/idml-generated-diff/text/report.json"
     },
     {
       "name": "text-advanced",
@@ -510,8 +528,8 @@
       "pdf": "text-advanced.pdf",
       "pages": 17,
       "passing": 11,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-advanced",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-advanced/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-advanced",
+      "report": "/tmp/idml-generated-diff/text-advanced/report.json"
     },
     {
       "name": "text-autosize",
@@ -519,8 +537,8 @@
       "pdf": "text-autosize.pdf",
       "pages": 1,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-autosize",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-autosize/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-autosize",
+      "report": "/tmp/idml-generated-diff/text-autosize/report.json"
     },
     {
       "name": "text-in-shape",
@@ -528,8 +546,8 @@
       "pdf": "text-in-shape.pdf",
       "pages": 3,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-in-shape",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-in-shape/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-in-shape",
+      "report": "/tmp/idml-generated-diff/text-in-shape/report.json"
     },
     {
       "name": "text-letterspacing",
@@ -537,8 +555,8 @@
       "pdf": "text-letterspacing.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-letterspacing",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-letterspacing/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-letterspacing",
+      "report": "/tmp/idml-generated-diff/text-letterspacing/report.json"
     },
     {
       "name": "text-on-path",
@@ -546,8 +564,8 @@
       "pdf": "text-on-path.pdf",
       "pages": 6,
       "passing": 5,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-on-path",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-on-path/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-on-path",
+      "report": "/tmp/idml-generated-diff/text-on-path/report.json"
     },
     {
       "name": "text-overset",
@@ -555,8 +573,8 @@
       "pdf": "text-overset.pdf",
       "pages": 2,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-overset",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-overset/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-overset",
+      "report": "/tmp/idml-generated-diff/text-overset/report.json"
     },
     {
       "name": "text-wrap",
@@ -564,8 +582,8 @@
       "pdf": "text-wrap.pdf",
       "pages": 6,
       "passing": 0,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-wrap",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/text-wrap/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/text-wrap",
+      "report": "/tmp/idml-generated-diff/text-wrap/report.json"
     },
     {
       "name": "tints",
@@ -573,8 +591,8 @@
       "pdf": "tints.pdf",
       "pages": 2,
       "passing": 2,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tints",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/tints/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/tints",
+      "report": "/tmp/idml-generated-diff/tints/report.json"
     },
     {
       "name": "transparency",
@@ -582,8 +600,8 @@
       "pdf": "transparency.pdf",
       "pages": 12,
       "passing": 12,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/transparency",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/transparency/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/transparency",
+      "report": "/tmp/idml-generated-diff/transparency/report.json"
     },
     {
       "name": "variables",
@@ -591,8 +609,8 @@
       "pdf": "variables.pdf",
       "pages": 5,
       "passing": 4,
-      "diff_dir": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/variables",
-      "report": "/private/tmp/claude-501/-Users-drietsch-paged/abc2027c-5df8-48ae-af91-753955193f13/scratchpad/w2s/gate/variables/report.json"
+      "diff_dir": "/tmp/idml-generated-diff/variables",
+      "report": "/tmp/idml-generated-diff/variables/report.json"
     }
   ]
 }

@@ -6060,7 +6060,14 @@ fn emit_paragraph_lines(
     let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification);
+    let binding = em
+        .chain_pages
+        .get(em.frame_idx)
+        .and_then(|&p| pages.get(p))
+        .map(BuiltPage::binding_edge)
+        .unwrap_or_default();
+    (lopts.alignment, lopts.last_line_alignment) =
+        map_justification(resolved_paragraph.justification, binding);
     lopts.justify_last_line = !em.segment.closes_paragraph;
     if let Some((prefix, _)) = marker_run {
         lopts.auto_leading_from_byte = prefix.len() as u32;

@@ -33,8 +33,10 @@ pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
+pub mod justification;
 pub mod keeps;
 pub mod keeps_reflow;
+pub mod kerning;
 pub mod layers_z;
 pub mod layout;
 pub mod line_ends;
@@ -160,6 +162,8 @@ pub const SAMPLES: &[&str] = &[
     "gradient-geometry",
     "tints",
     "table-cell-baseline",
+    "justification",
+    "kerning",
     "nested-styles",
     "opentype",
 ];
@@ -232,6 +236,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "gradient-geometry" => gradient_geometry::build(),
         "tints" => tints::build(),
         "table-cell-baseline" => table_cell_baseline::build(),
+        "justification" => justification::build(),
+        "kerning" => kerning::build(),
         "nested-styles" => nested_styles::build(),
         "opentype" => opentype::build(),
         _ => return None,
@@ -262,7 +268,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            67,
+            69,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
