@@ -21,7 +21,7 @@
 //!      Rainbow effect; the text centres along the arc and each glyph
 //!      rotates to the local tangent.
 //!   2. `circle` — a closed circle (four Bézier quarter-arcs). Uses
-//!      `CenterPathType` to seat each glyph's em-box centre on the
+//!      `CenterTextAlignment` to seat each glyph's em-box centre on the
 //!      ring rather than its baseline.
 //!   3. `overset` — a short straight path with far more text than fits.
 //!      The trailing glyphs drop and the renderer fires an
@@ -29,7 +29,7 @@
 //!      overset contract).
 //!   4. `segment · baseline`, 5. `segment · ascender`, 6. `segment ·
 //!      descender` — three identical straight horizontal segments
-//!      carrying the same text under the remaining `PathTypeAlignment`
+//!      carrying the same text under the remaining `TextAlignment`
 //!      seats. On a flat path the seat shift is purely vertical, so the
 //!      conformance corpus can diff Ascender / Descender against
 //!      Baseline directly.
@@ -112,7 +112,7 @@ struct Variant {
     subpath: PolygonSubPath,
     /// Story text — one paragraph.
     text: &'static str,
-    path_type_alignment: Option<&'static str>,
+    text_alignment: Option<&'static str>,
     path_effect: Option<&'static str>,
     start_bracket: Option<f32>,
     end_bracket: Option<f32>,
@@ -168,7 +168,7 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · arch · baseline · rainbow",
             subpath: arch_subpath(),
             text: "Type along the arch",
-            path_type_alignment: Some("BaselinePathType"),
+            text_alignment: Some("BaselineTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: None,
             end_bracket: None,
@@ -177,7 +177,7 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · circle · center",
             subpath: circle_subpath(140.0),
             text: "Around and around the ring we go",
-            path_type_alignment: Some("CenterPathType"),
+            text_alignment: Some("CenterTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: None,
             end_bracket: None,
@@ -187,14 +187,14 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · overset · short-segment",
             subpath: short_segment(80.0),
             text: "This sentence is far too long to fit on a tiny path",
-            path_type_alignment: Some("BaselinePathType"),
+            text_alignment: Some("BaselineTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: Some(0.0),
             end_bracket: Some(80.0),
         },
-        // The remaining two PathTypeAlignment seats the renderer honours
-        // (`AscenderPathType` lifts each glyph so its top rides the path;
-        // `DescenderPathType` drops it so its bottom does). Both ride a
+        // The remaining two TextAlignment seats the renderer honours
+        // (`AscenderTextAlignment` lifts each glyph so its top rides the path;
+        // `DescenderTextAlignment` drops it so its bottom does). Both ride a
         // STRAIGHT horizontal segment carrying the SAME text as the
         // baseline-segment page below, so the seat shift is purely
         // vertical and the conformance corpus / emission test can diff
@@ -204,7 +204,7 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · segment · baseline",
             subpath: short_segment(360.0),
             text: SEAT_TEXT,
-            path_type_alignment: Some("BaselinePathType"),
+            text_alignment: Some("BaselineTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: None,
             end_bracket: None,
@@ -213,7 +213,7 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · segment · ascender",
             subpath: short_segment(360.0),
             text: SEAT_TEXT,
-            path_type_alignment: Some("AscenderPathType"),
+            text_alignment: Some("AscenderTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: None,
             end_bracket: None,
@@ -222,7 +222,7 @@ fn variants() -> Vec<Variant> {
             name: "text-on-path · segment · descender",
             subpath: short_segment(360.0),
             text: SEAT_TEXT,
-            path_type_alignment: Some("DescenderPathType"),
+            text_alignment: Some("DescenderTextAlignment"),
             path_effect: Some("RainbowPathEffect"),
             start_bracket: None,
             end_bracket: None,
@@ -295,7 +295,7 @@ pub fn build() -> Sample {
             text_path: Some(TextPathChild {
                 self_id: tp_id,
                 parent_story: story_id.clone(),
-                path_type_alignment: variant.path_type_alignment,
+                text_alignment: variant.text_alignment,
                 path_effect: variant.path_effect,
                 start_bracket: variant.start_bracket,
                 end_bracket: variant.end_bracket,

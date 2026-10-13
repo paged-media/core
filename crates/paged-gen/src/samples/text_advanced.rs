@@ -647,9 +647,11 @@ fn variants() -> Vec<Variant> {
                     Run::with_char_attrs(
                         "\u{6F22}\u{5B57}",
                         vec![
-                            ("Ruby", "true"),
+                            // As InDesign 20.0.1 writes ruby: a numeric
+                            // flag, and the type with its `Ruby` suffix.
+                            ("RubyFlag", "1"),
                             ("RubyString", "\u{304B}\u{3093}\u{3058}"),
-                            ("RubyType", "PerCharacter"),
+                            ("RubyType", "PerCharacterRuby"),
                         ],
                     ),
                 ],
