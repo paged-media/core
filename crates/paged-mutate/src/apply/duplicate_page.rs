@@ -176,6 +176,12 @@ pub(super) fn apply_duplicate_page(
     let mut clone = doc.spreads[src_idx].clone();
     let mut next = crate::ids::highest_u_hex_id(doc) + 1;
     let renamed = fresh_ids(&mut clone.spread, &mut next);
+    // A page's `Name` is its folio, which InDesign recomputes for a copy;
+    // kept, every page a merge duplicated printed the template's "1".
+    // Without one the section rules number the copy where it lands.
+    for pg in &mut clone.spread.pages {
+        pg.name = None;
+    }
 
     // The stories: one copy per distinct story, threads kept inside the
     // page and cut where they leave it.

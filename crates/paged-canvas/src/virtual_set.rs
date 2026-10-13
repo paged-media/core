@@ -1036,6 +1036,49 @@ impl CanvasModel {
                 return read;
             }
         }
+        // A story's text, read-only: a story answers its paragraphs joined
+        // by `\n` (the separator `insertText` splits on), a text frame its
+        // story's (the whole thread), a range its characters.
+        if path == "text" {
+            let read = |story_id: &str, range: Option<(u32, u32)>| {
+                scene
+                    .stories
+                    .iter()
+                    .find(|s| s.self_id == story_id)
+                    .map(|s| Value::Text(story_text(&s.story, range)))
+                    .ok_or_else(missing)
+            };
+            match address {
+                VirtualTarget::Story { story_id } => return read(story_id, None),
+                VirtualTarget::Element {
+                    element_id: ElementId::TextFrame(id),
+                } => {
+                    let story = scene
+                        .spreads
+                        .iter()
+                        .map(|s| &s.spread)
+                        .chain(scene.master_spreads.values().map(|m| &m.spread))
+                        .flat_map(|s| s.text_frames.iter())
+                        .find(|f| f.self_id.as_deref() == Some(id.as_str()))
+                        .ok_or_else(missing)?
+                        .parent_story
+                        .clone();
+                    return match story {
+                        Some(s) => read(&s, None),
+                        None => Ok(Value::Text(String::new())),
+                    };
+                }
+                VirtualTarget::Element {
+                    element_id:
+                        ElementId::StoryRange {
+                            story_id,
+                            start,
+                            end,
+                        },
+                } => return read(story_id, Some((*start, *end))),
+                _ => {}
+            }
+        }
         match address {
             VirtualTarget::Element { element_id } if path == "imageUri" => {
                 let id = element_id.raw_id();
@@ -1609,6 +1652,41 @@ impl CanvasModel {
             }
         }
     }
+}
+
+/// A story's plain text: each paragraph's run text, paragraphs joined by
+/// `\n`. With `range`, the characters `[start, end)` in the story's
+/// offset space — the sum of run characters, paragraph breaks counting
+/// none (the space `storyRange` and `insertText` address) — with a `\n`
+/// wherever the range crosses into the next paragraph.
+pub(crate) fn story_text(story: &paged_model::Story, range: Option<(u32, u32)>) -> String {
+    let (start, end) = range.unwrap_or((0, u32::MAX));
+    let mut pieces: Vec<String> = Vec::new();
+    let mut offset: u32 = 0;
+    for para in &story.paragraphs {
+        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        let len = text.chars().count() as u32;
+        let (p0, p1) = (offset, offset + len);
+        offset = p1;
+        let (lo, hi) = (start.max(p0), end.min(p1));
+        let inside = if range.is_none() {
+            true
+        } else if len == 0 {
+            // An empty paragraph inside the range is a line of its own.
+            start < p0 && p0 < end
+        } else {
+            lo < hi
+        };
+        if inside {
+            pieces.push(
+                text.chars()
+                    .skip((lo - p0) as usize)
+                    .take(hi.saturating_sub(lo) as usize)
+                    .collect(),
+            );
+        }
+    }
+    pieces.join("\n")
 }
 
 fn table_cell(t: &paged_model::Table, row: u32, col: u32) -> Option<&paged_model::TableCell> {

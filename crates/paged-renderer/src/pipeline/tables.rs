@@ -2964,6 +2964,8 @@ pub(super) fn emit_cell_paragraph(
                 baseline_y_pt: line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION,
                 width_pt: line.width as f32 / paged_text::shape::ADVANCE_PRECISION,
                 source_text,
+                generated: Vec::new(),
+                text_path: None,
             });
         }
     }

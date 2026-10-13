@@ -1726,7 +1726,9 @@ pub struct HitResult {
     #[serde(default)]
     pub bounds: Option<[f32; 4]>,
     /// Phase A — composed affine `[a, b, c, d, tx, ty]` on the hit
-    /// element. `None` for items with no `ItemTransform`.
+    /// element, into the hit page's space like `frame_bounds` (the
+    /// page's origin inside its spread folded in). `None` for an item
+    /// with no `ItemTransform` on a page at its spread's origin.
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
     /// Phase A — containing group ancestry, outer-most first. Empty
@@ -2432,8 +2434,9 @@ impl From<crate::gesture::GestureError> for GestureFailure {
 
 /// Oriented geometry for one selected element. `bounds` is the raw
 /// `GeometricBounds` (content-box space); `item_transform` is the
-/// composed affine. The overlay layer multiplies bounds corners by
-/// the transform to draw the oriented selection chrome.
+/// composed affine into the PAGE the element sits on (see
+/// [`Self::item_transform`]). The overlay layer multiplies bounds
+/// corners by the transform to draw the oriented selection chrome.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -2449,7 +2452,8 @@ pub struct ElementGeometryItem {
     /// grouped something it then could not read back.
     ///
     /// **The convention `None` carries:** `bounds` + `item_transform`
-    /// compose against the SPREAD origin rather than a page origin.
+    /// compose against the SPREAD origin rather than a page origin (a
+    /// page-owned item composes against its page's).
     /// `spread_id` names which spread, because without it the answer is
     /// unusable the moment a document has two.
     ///
@@ -2464,9 +2468,23 @@ pub struct ElementGeometryItem {
     pub spread_id: Option<String>,
     /// `[top, left, bottom, right]`.
     pub bounds: [f32; 4],
-    /// `[a, b, c, d, tx, ty]`.
+    /// `[a, b, c, d, tx, ty]`: `bounds` through it lands in the
+    /// coordinates of `page_id`'s page, `(0, 0)` at its top-left — the
+    /// space of the hit test's `frameBounds`, carets, selection rects and
+    /// the inserts. It is the stored `ItemTransform` with the page's
+    /// origin inside its spread folded in ([`Self::page_origin`]); the two
+    /// differ wherever a page does not start at its spread's origin (a
+    /// verso, every page of an InDesign document). `moveFrame` takes it
+    /// back in the same space. A pageless item answers in spread space.
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
+    /// The page's origin inside its spread, `[x, y]` in spread
+    /// coordinates; `None` for a pageless item and a table cell. The
+    /// stored `ItemTransform` (what the `frameTransform` property reads
+    /// and writes) is `translate(page_origin) ∘ item_transform`. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub page_origin: Option<[f32; 2]>,
     /// Phase F — `true` when this element hosts a placed image
     /// (`Rectangle` with `<Image>` / `<EPSImage>` / `<PDF>` /
     /// `<ImportedPage>` nested). The TS overlay uses this to decide
@@ -3055,8 +3073,10 @@ pub struct CharacterStyleSummary {
 
 /// SDK Phase 5 (v1 sweep) — one spread summary. Backs
 /// `documentCollection:spreads`. `pageCount` is the number of
-/// `<Page>` children in the spread; `label` is the spread's
-/// `Self` id (or filename when missing).
+/// `<Page>` children in the spread; `label` is what InDesign's Pages
+/// panel shows for it, its pages' folios (`"3"`, `"2–3"`, see
+/// [`PageSummary::name`]) — the spread's `Self` id (or filename) only
+/// when it has no built page.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
@@ -3108,6 +3128,12 @@ pub struct PageSummary {
     pub self_id: String,
     /// 1-based index — what the user types in "Go to page #".
     pub index: u32,
+    /// The page's name as InDesign gives it: its folio, the label a
+    /// page-number marker on it prints (`"3"`, `"iv"`, `"A-2"`) — the
+    /// baked `Name` of a page InDesign wrote, else the number the section
+    /// rules give it where it stands. Never the page's id. Additive.
+    #[serde(default)]
+    pub name: String,
     /// `[width, height]` in points.
     pub size_pt: [f32; 2],
     /// panels.md gap 10 — page margins in pt (from the page's
@@ -3744,9 +3770,15 @@ pub struct PathAnchorsResult {
     /// hit-zones for closed subpaths only.
     #[serde(default)]
     pub subpath_open: Vec<bool>,
-    /// `[a, b, c, d, tx, ty]`. None ⇒ identity.
+    /// `[a, b, c, d, tx, ty]`. None ⇒ identity. Into the PAGE the path
+    /// sits on, the page's origin folded in, exactly as
+    /// [`ElementGeometryItem::item_transform`].
     #[serde(default)]
     pub item_transform: Option<[f32; 6]>,
+    /// See [`ElementGeometryItem::page_origin`]. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[tsify(optional)]
+    pub page_origin: Option<[f32; 2]>,
 }
 
 /// B-06 — `RequestNearestPathPoint` reply payload. Coordinates are

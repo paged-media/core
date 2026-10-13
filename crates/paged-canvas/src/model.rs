@@ -377,6 +377,150 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// Whether `mutation` changes the page list or a page's size, so the host
+/// must rebuild its page grid: the page ops themselves, and a batch that
+/// holds one. A batch used to report `false` whatever it held (only its
+/// own kind was matched), so pages a Data Merge minted in one batch never
+/// reached the grid, while undoing that batch reported `true`.
+fn changes_page_list(mutation: &Mutation) -> bool {
+    match mutation {
+        Mutation::InsertPage { .. }
+        | Mutation::DeletePage { .. }
+        | Mutation::ResizePage { .. }
+        // W0.5 — DuplicatePage adds a spread; the others change page
+        // labels/masters but keep the page count, so they don't force a
+        // grid rebuild.
+        | Mutation::DuplicatePage { .. } => true,
+        Mutation::Batch { ops } => ops.iter().any(changes_page_list),
+        _ => false,
+    }
+}
+
+/// An item's spread-space `ItemTransform` as seen from the page it sits
+/// on: the page's origin inside its spread folded in, so `bounds`
+/// through it lands in page coordinates — the space the hit test's
+/// `frameBounds`, carets, selection rects, cell rects and the inserts
+/// use. Unchanged for a pasteboard item (`page` is `None`) and for a page
+/// at its spread's origin, so a document made here reads as before.
+pub(crate) fn page_space_transform(
+    page: Option<&BuiltPage>,
+    t: Option<[f32; 6]>,
+) -> Option<[f32; 6]> {
+    let Some((ox, oy)) = page.map(|p| p.spread_origin) else {
+        return t;
+    };
+    if ox == 0.0 && oy == 0.0 {
+        return t;
+    }
+    let [a, b, c, d, tx, ty] = t.unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    Some([a, b, c, d, tx - ox, ty - oy])
+}
+
+/// The append slots of a batch's spread inserts, kept true while earlier
+/// children of the same batch remove page items.
+///
+/// A batch translates every child against the scene as it stood before
+/// the batch, and a creating child appends to its kind's list on the
+/// spread: its slot is that list's length there. A `deleteFrame` earlier
+/// in the batch shortens the list before the insert applies, so the slot
+/// pointed past the end and the apply refused the whole batch. This
+/// counts what the batch removed and added per spread and kind, and pulls
+/// an insert's slot back to the list's length at the moment it applies.
+/// A batch that removes nothing keeps every slot it had.
+#[derive(Default)]
+struct AppendSlots {
+    /// `(spread id, kind)` → page items the batch removed so far.
+    removed: HashMap<(String, &'static str), usize>,
+    /// `(spread id, kind)` → page items the batch inserted so far.
+    added: HashMap<(String, &'static str), usize>,
+    /// Ids the batch inserted, with their spread: a later removal of one
+    /// of them shortens that list too.
+    minted: HashMap<String, String>,
+}
+
+impl AppendSlots {
+    fn kind(node: &paged_mutate::NodeId) -> Option<(&'static str, &str)> {
+        use paged_mutate::NodeId;
+        match node {
+            NodeId::TextFrame(id) => Some(("textFrame", id)),
+            NodeId::Rectangle(id) => Some(("rectangle", id)),
+            NodeId::Oval(id) => Some(("oval", id)),
+            NodeId::Polygon(id) => Some(("polygon", id)),
+            NodeId::GraphicLine(id) => Some(("graphicLine", id)),
+            _ => None,
+        }
+    }
+
+    fn ids<'a>(
+        spread: &'a paged_model::Spread,
+        kind: &str,
+    ) -> Box<dyn Iterator<Item = Option<&'a str>> + 'a> {
+        match kind {
+            "textFrame" => Box::new(spread.text_frames.iter().map(|f| f.self_id.as_deref())),
+            "rectangle" => Box::new(spread.rectangles.iter().map(|f| f.self_id.as_deref())),
+            "oval" => Box::new(spread.ovals.iter().map(|f| f.self_id.as_deref())),
+            "polygon" => Box::new(spread.polygons.iter().map(|f| f.self_id.as_deref())),
+            "graphicLine" => Box::new(spread.graphic_lines.iter().map(|f| f.self_id.as_deref())),
+            _ => Box::new(std::iter::empty()),
+        }
+    }
+
+    fn spread_id(parsed: &paged_scene::ParsedSpread) -> String {
+        parsed
+            .spread
+            .self_id
+            .clone()
+            .unwrap_or_else(|| parsed.src.clone())
+    }
+
+    fn rebase(&mut self, scene: &Document, op: &mut paged_mutate::Operation) {
+        use paged_mutate::{NodeId, Operation};
+        match op {
+            Operation::RemoveNode { node } => {
+                let Some((kind, id)) = Self::kind(node) else {
+                    return;
+                };
+                let spread = self.minted.get(id).cloned().or_else(|| {
+                    scene
+                        .spreads
+                        .iter()
+                        .find(|p| Self::ids(&p.spread, kind).any(|s| s == Some(id)))
+                        .map(Self::spread_id)
+                });
+                if let Some(spread) = spread {
+                    *self.removed.entry((spread, kind)).or_default() += 1;
+                }
+            }
+            Operation::InsertNode {
+                parent: NodeId::Spread(spread),
+                position,
+                node,
+                ..
+            } => {
+                let node_id = node.node_id();
+                let Some((kind, id)) = Self::kind(&node_id) else {
+                    return;
+                };
+                let key = (spread.clone(), kind);
+                let removed = self.removed.get(&key).copied().unwrap_or(0);
+                if removed > 0 {
+                    let before = scene
+                        .spreads
+                        .iter()
+                        .find(|p| Self::spread_id(p) == *spread)
+                        .map_or(0, |p| Self::ids(&p.spread, kind).count());
+                    let added = self.added.get(&key).copied().unwrap_or(0);
+                    let live = (before + added).saturating_sub(removed);
+                    *position = (*position).min(live);
+                }
+                *self.added.entry(key).or_default() += 1;
+                self.minted.insert(id.to_string(), spread.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The `(element, handle)` pairs a translated batch bound, in order.
 ///
 /// Translation drops every `bindCreated` child (it contributes no
@@ -2723,17 +2867,9 @@ impl CanvasModel {
                 Vec::new()
             };
             // Page-list mutations (M7 extends this set with ResizePage)
-            // require the editor to rebuild its page grid.
-            let page_structure_changed = matches!(
-                mutation,
-                Mutation::InsertPage { .. }
-                    | Mutation::DeletePage { .. }
-                    | Mutation::ResizePage { .. }
-                    // W0.5 — DuplicatePage adds a spread; the others
-                    // change page labels/masters but keep the page
-                    // count, so they don't force a grid rebuild.
-                    | Mutation::DuplicatePage { .. }
-            );
+            // require the editor to rebuild its page grid — a batch that
+            // holds one too.
+            let page_structure_changed = changes_page_list(mutation);
             // v38 (Wave 2, C-2 / S-05) — §8.5 resize-vs-transform ruling.
             // A reflow notification fires ONLY when a frame's CONTENT BOX
             // changes — i.e. a `ResizeFrame`, which translates to a
@@ -3325,7 +3461,9 @@ impl CanvasModel {
                 Some(Operation::SetProperty {
                     node,
                     path: PropertyPath::FrameTransform,
-                    value: Value::Transform(Some(*transform)),
+                    value: Value::Transform(Some(
+                        self.spread_space_transform(frame_id, *transform),
+                    )),
                 })
             }
             Mutation::InsertFrame { page_id, bounds } => {
@@ -3919,6 +4057,7 @@ impl CanvasModel {
                     .iter()
                     .any(|op| matches!(op, Mutation::BindCreated { .. }));
                 let mut scope = crate::batch_handles::HandleScope::default();
+                let mut slots = AppendSlots::default();
                 for child in ops {
                     // D-22 — a page's id is minted by the applier, so this
                     // lane cannot know it before apply. A handle-using batch
@@ -3988,7 +4127,9 @@ impl CanvasModel {
                     };
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
-                    let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    let mut op =
+                        self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    slots.rebase(&self.scene, &mut op);
                     if let Some(id) = created_element_id(&self.scene, &op) {
                         if uses_handles {
                             scope.set_created(Some(crate::batch_handles::BoundHandle {
@@ -8304,6 +8445,7 @@ impl CanvasModel {
     pub fn spreads(&self) -> Vec<crate::channel::SpreadSummary> {
         use crate::channel::{GuideSummary, SpreadSummary};
         use crate::model::GuideOrientationWire;
+        let folios = self.page_folios();
         self.scene
             .spreads
             .iter()
@@ -8338,8 +8480,22 @@ impl CanvasModel {
                         page_index: g.page_index,
                     })
                     .collect();
+                // InDesign names no spread; its Pages panel labels one by
+                // its pages' folios ("3", "2–3"). The id is the label only
+                // for a spread with no built page to name it by.
+                let named: Vec<&String> = parsed
+                    .spread
+                    .pages
+                    .iter()
+                    .filter_map(|p| folios.get(p.self_id.as_deref()?))
+                    .collect();
+                let label = match named.as_slice() {
+                    [] => self_id.clone(),
+                    [only] => (*only).clone(),
+                    [first, .., last] => format!("{first}–{last}"),
+                };
                 SpreadSummary {
-                    label: self_id.clone(),
+                    label,
                     self_id,
                     page_count,
                     guides,
@@ -8351,8 +8507,32 @@ impl CanvasModel {
     /// SDK Phase 5 (v1 sweep) — list every built page (the same
     /// surface the Navigator panel reads from). Index is 1-based
     /// (matches the "Go to page #" convention).
+    /// Every built page's folio, by page id: its baked `Name`, else the
+    /// label the section rules give it — the walk the renderer makes for
+    /// page-number markers, so a page reads the number it prints.
+    fn page_folios(&self) -> HashMap<String, String> {
+        let names: HashMap<&str, Option<&str>> = self
+            .scene
+            .spreads
+            .iter()
+            .flat_map(|parsed| parsed.spread.pages.iter())
+            .filter_map(|p| Some((p.self_id.as_deref()?, p.name.as_deref())))
+            .collect();
+        let mut walk = paged_model::SectionWalk::new(&self.scene.designmap.sections);
+        self.built
+            .pages
+            .iter()
+            .map(|p| {
+                let id = p.id.as_str();
+                let name = names.get(id).copied().flatten();
+                (id.to_string(), walk.next_label(Some(id), name))
+            })
+            .collect()
+    }
+
     pub fn pages(&self) -> Vec<crate::channel::PageSummary> {
         use crate::channel::PageSummary;
+        let folios = self.page_folios();
         // panels.md gap 10 — document bleed is document-level
         // (`<DocumentPreference>`); carry it on every page so the
         // overlay has it without a second request.
@@ -8388,6 +8568,7 @@ impl CanvasModel {
                 PageSummary {
                     self_id: p.id.as_str().to_string(),
                     index: (i + 1) as u32,
+                    name: folios.get(p.id.as_str()).cloned().unwrap_or_default(),
                     size_pt: [p.width_pt, p.height_pt],
                     margin_top_pt: m.map(|m| m.top).unwrap_or(0.0),
                     margin_left_pt: m.map(|m| m.left).unwrap_or(0.0),
@@ -8516,54 +8697,58 @@ impl CanvasModel {
             .collect()
     }
 
-    /// SDK Phase 5 (v1 sweep) — list every font family used in the
-    /// document. Walks character runs + paragraph-style defaults +
-    /// character-style defaults; dedupes; sums per-family
-    /// reference counts. The parse layer doesn't carry a font
-    /// registry, so this is derived from content rather than
-    /// declared — the panel surfaces "fonts in use" rather than
-    /// "fonts installed".
+    /// SDK Phase 5 (v1 sweep) — list every font family the document's
+    /// TEXT uses: each run's effective family through the style cascade
+    /// (run > character style > paragraph style), in every story, table
+    /// cell and footnote. `reference_count` is the number of runs set in
+    /// it. A family a style names but no run ends up in is not listed:
+    /// `layout` sets every run in Inter and its root style names Open
+    /// Sans, which nothing is set in, so nothing is missing for it.
+    ///
+    /// `is_missing` — panels.md gap 4 — is true when no face serves the
+    /// family: none registered for it, and the default face is not one
+    /// of it (the renderer then substitutes the default face). The
+    /// default face counts for its own family: a host that ships Inter
+    /// as the default and opens a document set in Inter is not missing
+    /// a font. The parse layer has no Fonts.xml registry, so this is
+    /// derived from content rather than declared.
     pub fn fonts(&self) -> Vec<crate::channel::FontSummary> {
         use crate::channel::FontSummary;
         use std::collections::{BTreeMap, BTreeSet};
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-        // W1.23 — distinct style strings per family. The parse layer
-        // has no Fonts.xml registry (fonts are referenced by name from
-        // runs + style defaults), so the honest source for "styles in
-        // this family" is the `FontStyle` strings the document itself
-        // carries, unioned with the styles the worker has registered
-        // face bytes for via `RegisterFont`.
+        // W1.23 — distinct style strings per family: the `FontStyle`
+        // strings the text is set in, unioned with the styles the worker
+        // registered face bytes for via `RegisterFont`.
         let mut styles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut note_style = |family: &str, style: &Option<String>| {
-            if let Some(style) = style {
-                if !style.is_empty() {
-                    styles
-                        .entry(family.to_string())
-                        .or_default()
-                        .insert(style.clone());
+        fn walk(
+            scene: &Document,
+            para: &paged_model::Paragraph,
+            counts: &mut BTreeMap<String, u32>,
+            styles: &mut BTreeMap<String, BTreeSet<String>>,
+        ) {
+            for run in &para.runs {
+                let resolved = scene.resolved_run_attrs(para, run);
+                let Some(family) = resolved.font else {
+                    continue;
+                };
+                *counts.entry(family.clone()).or_default() += 1;
+                if let Some(style) = resolved.font_style.filter(|s| !s.is_empty()) {
+                    styles.entry(family).or_default().insert(style);
                 }
             }
-        };
+            let cells = para
+                .table
+                .iter()
+                .flat_map(|t| t.cells.iter())
+                .flat_map(|c| c.paragraphs.iter());
+            let notes = para.footnotes.iter().flat_map(|f| f.paragraphs.iter());
+            for inner in cells.chain(notes) {
+                walk(scene, inner, counts, styles);
+            }
+        }
         for story in &self.scene.stories {
             for para in &story.story.paragraphs {
-                for run in &para.runs {
-                    if let Some(family) = &run.font {
-                        *counts.entry(family.clone()).or_default() += 1;
-                        note_style(family, &run.font_style);
-                    }
-                }
-            }
-        }
-        for (_, style) in self.scene.styles.paragraph_styles.iter() {
-            if let Some(family) = &style.font {
-                *counts.entry(family.clone()).or_default() += 1;
-                note_style(family, &style.font_style);
-            }
-        }
-        for (_, style) in self.scene.styles.character_styles.iter() {
-            if let Some(family) = &style.font {
-                *counts.entry(family.clone()).or_default() += 1;
-                note_style(family, &style.font_style);
+                walk(&self.scene, para, &mut counts, &mut styles);
             }
         }
         // Union in the styles the worker registered face bytes for, so
@@ -8580,23 +8765,26 @@ impl CanvasModel {
                 }
             }
         }
-        // panels.md gap 4 — a family is "missing" when the worker's
-        // font registry has no face for it (the renderer then either
-        // substitutes the document-wide default font or drops glyphs).
-        // We check the registry directly rather than the resolver,
-        // because the resolver's default-font fall-through would mask
-        // every missing family as "resolved". Family match is
-        // case-insensitive to tolerate `"Open Sans"` vs `"open sans"`
-        // registration drift.
-        let registered: std::collections::BTreeSet<String> = self
+        // The registry and the default face, not the resolver: its
+        // default-font fall-through would mask every missing family as
+        // resolved. Family match is case-insensitive to tolerate
+        // `"Open Sans"` vs `"open sans"` registration drift.
+        let mut registered: BTreeSet<String> = self
             .font_registry
             .iter()
             .map(|e| e.family.to_lowercase())
             .collect();
+        if let Some(bytes) = self.font_bytes.as_deref() {
+            registered.extend(
+                paged_renderer::asset::face_family_names(bytes)
+                    .into_iter()
+                    .map(|f| f.to_lowercase()),
+            );
+        }
         counts
             .into_iter()
             .map(|(family, reference_count)| {
-                let is_missing = !registered.contains(&family.to_lowercase());
+                let is_missing = !registered.contains(&family.trim().to_lowercase());
                 let styles = styles
                     .get(&family)
                     .map(|s| s.iter().cloned().collect())
@@ -9411,6 +9599,7 @@ impl CanvasModel {
     pub fn scene_tree(&self) -> Vec<crate::channel::SceneTreeNode> {
         use crate::channel::SceneTreeNode;
         use paged_model::FrameRef;
+        let folios = self.page_folios();
         let mut spread_nodes = Vec::with_capacity(self.scene.spreads.len());
         for (si, parsed) in self.scene.spreads.iter().enumerate() {
             let spread = &parsed.spread;
@@ -9441,7 +9630,7 @@ impl CanvasModel {
             let label = spread
                 .pages
                 .first()
-                .and_then(|p| p.name.clone())
+                .and_then(|p| folios.get(p.self_id.as_deref()?).cloned())
                 .unwrap_or_else(|| "Page".to_string());
             page_nodes.push(SceneTreeNode {
                 id: None,
@@ -9601,6 +9790,78 @@ impl CanvasModel {
         Some(text)
     }
 
+    /// The built page a spread item belongs to: the page of its PARENT
+    /// spread that holds its transformed centroid, the rule
+    /// `element_geometry`, `path_anchors` and `moveFrame` share.
+    /// Restricting the search to the parent spread is what makes
+    /// cross-spread duplicates route correctly: a clone in spread B's
+    /// vecs carries bounds in spread-B coords, which would alias
+    /// spread A's page rectangles in a flat all-pages search. `None`
+    /// is the pasteboard.
+    fn host_page(
+        &self,
+        spread: &paged_model::Spread,
+        bounds: paged_model::Bounds,
+        item_transform: Option<[f32; 6]>,
+    ) -> Option<&BuiltPage> {
+        let aabb = crate::hit::transform_bbox(bounds, item_transform);
+        let cx = (aabb.left + aabb.right) * 0.5;
+        let cy = (aabb.top + aabb.bottom) * 0.5;
+        let host = spread.pages.iter().find(|p| {
+            let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
+            cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
+        })?;
+        let sid = host.self_id.as_deref()?;
+        self.built().pages.iter().find(|bp| bp.id.as_str() == sid)
+    }
+
+    /// `moveFrame` writes the transform `element_geometry` reads, which
+    /// is in the space of the page the item sits on; the document stores
+    /// it in spread space. Map one back to the other through the origin
+    /// of the item's CURRENT page, so a read, a step and a write move the
+    /// item by exactly the step (a pasteboard item reads and writes in
+    /// spread space).
+    fn spread_space_transform(&self, frame_id: &str, transform: [f32; 6]) -> [f32; 6] {
+        let placed = self.scene.spreads.iter().find_map(|parsed| {
+            let s = &parsed.spread;
+            let hit = |id: &Option<String>| id.as_deref() == Some(frame_id);
+            s.text_frames
+                .iter()
+                .find(|f| hit(&f.self_id))
+                .map(|f| (f.bounds, f.item_transform))
+                .or_else(|| {
+                    s.rectangles
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.ovals
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.polygons
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .or_else(|| {
+                    s.graphic_lines
+                        .iter()
+                        .find(|f| hit(&f.self_id))
+                        .map(|f| (f.bounds, f.item_transform))
+                })
+                .map(|(b, t)| (s, b, t))
+        });
+        let origin = placed
+            .and_then(|(s, b, t)| self.host_page(s, b, t))
+            .map_or((0.0, 0.0), |bp| bp.spread_origin);
+        let [a, b, c, d, tx, ty] = transform;
+        [a, b, c, d, tx + origin.0, ty + origin.1]
+    }
+
     pub fn element_geometry(
         &self,
         ids: &[crate::element_selection::ElementId],
@@ -9655,6 +9916,7 @@ impl CanvasModel {
                                 .and_then(|p| p.spread.self_id.clone()),
                             bounds: [y, x, y + h, x + w],
                             item_transform: None,
+                            page_origin: None,
                             has_image: false,
                             story_id: None,
                         });
@@ -9744,26 +10006,7 @@ impl CanvasModel {
                 let Some((bounds, item_transform, has_image)) = resolved else {
                     continue;
                 };
-                // Locate the page the element sits on by checking
-                // which of its PARENT SPREAD's pages contains the
-                // transformed centroid, then resolve the BuiltPage by
-                // matching self_id. Restricting the search to the
-                // parent spread is what makes cross-spread duplicates
-                // route correctly: a clone in spread B's `text_frames`
-                // vec carries bounds in spread-B-local coords, and
-                // those coords would alias spread-A's page-bounds
-                // rectangles in a flat all-pages search (Track K
-                // open follow-up).
-                let aabb = crate::hit::transform_bbox(bounds, item_transform);
-                let cx = (aabb.left + aabb.right) * 0.5;
-                let cy = (aabb.top + aabb.bottom) * 0.5;
-                let host_page = parsed.spread.pages.iter().find(|p| {
-                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
-                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
-                });
-                let built_page = host_page
-                    .and_then(|p| p.self_id.as_deref())
-                    .and_then(|sid| self.built().pages.iter().find(|bp| bp.id.as_str() == sid));
+                let built_page = self.host_page(&parsed.spread, bounds, item_transform);
                 // C-23 — an element whose centroid lands on no page is
                 // ON THE PASTEBOARD, not absent. This used to `if let`
                 // the push away, so the door answered nothing for an
@@ -9773,7 +10016,8 @@ impl CanvasModel {
                     page_id: built_page.map(|bp| bp.id.clone()),
                     spread_id: parsed.spread.self_id.clone(),
                     bounds: [bounds.top, bounds.left, bounds.bottom, bounds.right],
-                    item_transform,
+                    item_transform: page_space_transform(built_page, item_transform),
+                    page_origin: built_page.map(|bp| [bp.spread_origin.0, bp.spread_origin.1]),
                     has_image,
                     story_id,
                 });
@@ -9986,10 +10230,11 @@ impl CanvasModel {
         type FramePathGeom<'a> = (
             paged_model::Bounds,
             Option<[f32; 6]>,
-            &'a [PathAnchor],
+            std::borrow::Cow<'a, [PathAnchor]>,
             &'a [usize],
             &'a [bool],
         );
+        use std::borrow::Cow;
 
         let raw = id.raw_id();
         for parsed in &self.scene().spreads {
@@ -10003,7 +10248,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -10016,16 +10261,27 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
                     }),
-                // Ovals don't carry a parsed PathGeometry — they're
-                // declared by GeometricBounds; render shows them as
-                // ellipses. Drop them silently rather than synthesise
-                // 4 fake anchors.
-                ElementId::Oval(_) => None,
+                // The model keeps an oval as bounds; its path is the
+                // inscribed four-arc ellipse — the outline the renderer
+                // draws and the planar arrangement reads.
+                ElementId::Oval(_) => spread
+                    .ovals
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            Cow::Owned(paged_mutate::apply::oval_anchors(f.bounds)),
+                            &[][..],
+                            &[false][..],
+                        )
+                    }),
                 ElementId::Polygon(_) => spread
                     .polygons
                     .iter()
@@ -10034,7 +10290,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -10047,7 +10303,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -10062,30 +10318,9 @@ impl CanvasModel {
             else {
                 continue;
             };
-            // Same spread-scoped page-resolution as element_geometry:
-            // search the PARENT spread's pages so a clone in another
-            // spread's vec doesn't alias the source spread's page
-            // bounds (Track K cross-spread fix).
-            let aabb = crate::hit::transform_bbox(bounds, item_transform);
-            let cx = (aabb.left + aabb.right) * 0.5;
-            let cy = (aabb.top + aabb.bottom) * 0.5;
-            // C-23 — pageless is an ANSWER, not a miss. Both lookups
-            // used to `?` out of the whole function, so a path on the
-            // pasteboard had no readable anchors at all.
-            let page = parsed
-                .spread
-                .pages
-                .iter()
-                .find(|p| {
-                    let pb = crate::hit::transform_bbox(p.bounds, p.item_transform);
-                    cx >= pb.left && cx <= pb.right && cy >= pb.top && cy <= pb.bottom
-                })
-                .and_then(|hp| {
-                    self.built()
-                        .pages
-                        .iter()
-                        .find(|bp| Some(bp.id.as_str()) == hp.self_id.as_deref())
-                });
+            // C-23 — pageless is an ANSWER, not a miss: a path on the
+            // pasteboard reads its anchors in spread space.
+            let page = self.host_page(&parsed.spread, bounds, item_transform);
             let anchors_out: Vec<PathAnchorTriple> = anchors
                 .iter()
                 .map(|a| PathAnchorTriple {
@@ -10101,7 +10336,8 @@ impl CanvasModel {
                 anchors: anchors_out,
                 subpath_starts: subpath_starts.iter().map(|&n| n as u32).collect(),
                 subpath_open: subpath_open.to_vec(),
-                item_transform,
+                item_transform: page_space_transform(page, item_transform),
+                page_origin: page.map(|bp| [bp.spread_origin.0, bp.spread_origin.1]),
             });
         }
         None
@@ -10730,8 +10966,8 @@ impl CanvasModel {
     /// layout cache, no emit caches, no grow hint) and compares it with the
     /// incremental `built`: page count, page ids, every page's
     /// [`paged_compose::DisplayList::digest`], every page's `story_layout`
-    /// (caret and hit-test geometry, which the digest does not cover) and
-    /// the diagnostics. `Err` names the first difference.
+    /// and `cell_rects` (caret and hit-test geometry, which the digest does
+    /// not cover) and the diagnostics. `Err` names the first difference.
     ///
     /// Two builds plus a digest per page: a CI / debug lane, never the hot
     /// path. Enabled per model with [`Self::set_digest_gate`] or for every
@@ -11994,6 +12230,14 @@ fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(
                 a.id.0,
                 a.story_layout.len(),
                 b.story_layout.len()
+            ));
+        }
+        if format!("{:?}", a.cell_rects) != format!("{:?}", b.cell_rects) {
+            return Err(format!(
+                "page {i} ({}) cell_rects differ ({} vs {} cells)",
+                a.id.0,
+                a.cell_rects.len(),
+                b.cell_rects.len()
             ));
         }
     }

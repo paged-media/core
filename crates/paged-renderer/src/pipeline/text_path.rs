@@ -551,6 +551,8 @@ fn path_alignment_shift_pt(alignment: Option<&str>, stroke_weight: f32) -> f32 {
 /// now, and side/flip options beyond `Flipped` are also future work.
 pub(super) fn emit_text_path_into(
     page: &mut BuiltPage,
+    page_idx: usize,
+    breaks: &mut Vec<BreakRecord>,
     text_path: &TextPath,
     anchors: &[PathAnchor],
     item_transform: Option<[f32; 6]>,
@@ -601,6 +603,8 @@ pub(super) fn emit_text_path_into(
     // line-breaking and column flow don't apply to text-on-path so
     // the simpler per-run shape suffices.
     struct PathGlyph {
+        /// The glyph's cluster: its byte in `text`.
+        byte: usize,
         glyph_id: u32,
         x_advance_64: i32,
         y_offset_64: i32,
@@ -610,6 +614,8 @@ pub(super) fn emit_text_path_into(
         paint: Paint,
     }
     let mut glyphs: Vec<PathGlyph> = Vec::new();
+    // The text the glyphs were shaped from, run after run.
+    let mut text = String::new();
     // Faces are indexed; outline + font_id parallel arrays.
     let mut face_bytes: Vec<Bytes> = Vec::new();
     let mut face_font_ids: Vec<u32> = Vec::new();
@@ -704,8 +710,11 @@ pub(super) fn emit_text_path_into(
             if let Some(t) = resolved.tracking {
                 paged_text::shape::apply_tracking(&mut shaped, t, point_size);
             }
+            let run_start = text.len();
+            text.push_str(&run.text);
             for g in &shaped.glyphs {
                 glyphs.push(PathGlyph {
+                    byte: run_start + g.cluster as usize,
                     glyph_id: g.glyph_id,
                     x_advance_64: g.x_advance,
                     y_offset_64: g.y_offset,
@@ -792,6 +801,12 @@ pub(super) fn emit_text_path_into(
     // `end_b` (the overset tail). Reported once after the loop, like
     // the body-text overset contract.
     let mut overset_dropped = 0usize;
+    // The text that fits ends where the first overset glyph's does.
+    let mut set_end = text.len();
+    // The path's line for the break records: where on the page it starts
+    // and the arc length its glyphs take.
+    let mut line_start_y: Option<f32> = None;
+    let mut set_width_pt = 0.0f32;
     for g in &glyphs {
         let advance_pt = g.x_advance_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
         let x_off_pt = g.x_offset_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
@@ -808,9 +823,13 @@ pub(super) fn emit_text_path_into(
         // end and pile glyphs up; instead we skip + count so the
         // diagnostic matches InDesign's overset behaviour.
         if s > end_b + 1e-3 {
+            if overset_dropped == 0 {
+                set_end = g.byte.min(set_end);
+            }
             overset_dropped += 1;
             continue;
         }
+        set_width_pt += advance_pt;
         let Some((px, py, angle)) = sample_path_at(&samples, s) else {
             continue;
         };
@@ -864,6 +883,7 @@ pub(super) fn emit_text_path_into(
         let rs_d = r[1] * s_diag[2] + r[3] * s_diag[3];
         let inner = Transform([rs_a, rs_b, rs_c, rs_d, rtl_tx + px, rtl_ty + py]);
         let final_xf = outer.compose(&inner);
+        line_start_y.get_or_insert(final_xf.0[5]);
         // Concept 3 — glyph-run side-channel (text-on-path glyphs
         // carry a rotated affine; the exporter reuses it verbatim).
         if let Some(runs) = page.list.glyph_runs.as_mut() {
@@ -887,6 +907,34 @@ pub(super) fn emit_text_path_into(
             transform: final_xf,
         });
         page.stats.glyphs += 1;
+    }
+
+    // The path's one line joins the break records, as the text that fits
+    // the bracket window.
+    let wanted = options.collect_breaks
+        && options
+            .break_page_range
+            .as_ref()
+            .map_or(true, |r| r.contains(&(page_idx as u32)))
+        && options
+            .break_story_filter
+            .as_deref()
+            .map_or(true, |want| want == text_path.parent_story);
+    if wanted && set_end > 0 {
+        breaks.push(BreakRecord {
+            story_id: text_path.parent_story.clone(),
+            paragraph_idx: 0,
+            line_idx: 0,
+            page_idx: page_idx as u32,
+            frame_idx: 0,
+            first_byte: 0,
+            last_byte: set_end as u32,
+            baseline_y_pt: line_start_y.unwrap_or(0.0),
+            width_pt: set_width_pt,
+            source_text: text.get(..set_end).unwrap_or("").to_string(),
+            generated: Vec::new(),
+            text_path: Some(text_path.self_id.clone().unwrap_or_default()),
+        });
     }
 
     // Overset on a path: text that didn't fit the bracket window was

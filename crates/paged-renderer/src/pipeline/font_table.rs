@@ -145,6 +145,9 @@ pub struct FontTable {
     /// `FontSubstituted` diagnostics emit in a deterministic order.
     pub(super) substituted: std::collections::BTreeSet<FontKey>,
     pub(super) fallback: Option<Bytes>,
+    /// The families the fallback face claims ([`crate::asset::face_family_names`]):
+    /// it stands in for any other family, but is the face of these.
+    pub(super) fallback_families: Vec<String>,
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
     /// the pipeline uses for glyph-cache routing).
     pub(super) metrics: HashMap<u32, FontMetrics>,
@@ -483,6 +486,10 @@ impl FontTable {
             keys,
             cache,
             substituted,
+            fallback_families: fallback
+                .as_deref()
+                .map(crate::asset::face_family_names)
+                .unwrap_or_default(),
             fallback,
             metrics,
             family_metrics,
@@ -548,8 +555,13 @@ impl FontTable {
                 return Some((b.clone(), self.substituted.contains(&bare_key)));
             }
             // The renderer-wide default font standing in for a named
-            // family that resolved nowhere is a substitution.
-            return self.fallback.clone().map(|b| (b, true));
+            // family that resolved nowhere is a substitution — unless
+            // the family asked for is the default face's own.
+            let own = self
+                .fallback_families
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(family.trim()));
+            return self.fallback.clone().map(|b| (b, !own));
         }
         // No family requested at all: the configured default IS the
         // asked-for font, not a stand-in.

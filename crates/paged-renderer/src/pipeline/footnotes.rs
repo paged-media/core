@@ -59,6 +59,9 @@ pub(super) struct ComposedFootnote {
     /// Each paragraph's shaped text (the number printed in place), which
     /// its lines' byte ranges index.
     texts: Vec<String>,
+    /// Per paragraph, where in its text the note's number prints, for
+    /// the break records.
+    numbers: Vec<Vec<super::GeneratedRange>>,
     /// Outline bytes keyed by the `font_id` carried on each positioned
     /// glyph, so the emit pass can build a [`TtfOutliner`] per font
     /// group (a footnote that mixes faces/weights needs more than one).
@@ -120,6 +123,7 @@ pub(super) fn compose_footnote_paragraphs(
     let label = document.designmap.footnote_options.label(fn_.number);
     let mut paragraphs: Vec<paged_text::LaidOutParagraph> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
+    let mut numbers = Vec::new();
     let mut font_outline_bytes: HashMap<u32, Bytes> = HashMap::new();
     let mut resolved_runs_per_para: Vec<Vec<paged_scene::ResolvedRunAttrs>> = Vec::new();
     let mut run_text_lens_per_para: Vec<Vec<usize>> = Vec::new();
@@ -187,12 +191,30 @@ pub(super) fn compose_footnote_paragraphs(
 
         // Owned shaped texts, the number in its run's formatting. Owned
         // so the `&str` views in `StyledRun` outlive the layout call.
+        let mut number_spans = Vec::new();
+        let mut at = 0usize;
         let run_texts: Vec<String> = para
             .runs
             .iter()
             .map(|run| {
-                run.text
-                    .replace(paged_model::FOOTNOTE_REFERENCE_MARKER, &label)
+                let mut text = String::with_capacity(run.text.len());
+                for ch in run.text.chars() {
+                    if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+                        let b = at + text.len();
+                        if !label.is_empty() {
+                            number_spans.push((
+                                b..b + label.len(),
+                                super::GeneratedKind::FootnoteNumber,
+                                None,
+                            ));
+                        }
+                        text.push_str(&label);
+                    } else {
+                        text.push(ch);
+                    }
+                }
+                at += text.len();
+                text
             })
             .collect();
         let run_text_lens: Vec<usize> = run_texts.iter().map(|t| t.len()).collect();
@@ -254,6 +276,7 @@ pub(super) fn compose_footnote_paragraphs(
         // `resolved_runs` can move into the returned struct.
         drop(styled_runs);
         texts.push(run_texts.concat());
+        numbers.push(number_spans);
         paragraphs.push(laid);
         resolved_runs_per_para.push(resolved_runs);
         run_text_lens_per_para.push(run_text_lens);
@@ -265,6 +288,7 @@ pub(super) fn compose_footnote_paragraphs(
     Some(ComposedFootnote {
         paragraphs,
         texts,
+        numbers,
         font_outline_bytes,
         resolved_runs_per_para,
         run_text_lens_per_para,
@@ -532,6 +556,7 @@ pub(super) struct BodyStoryPageReset {
     images: usize,
     story_layout: usize,
     footnotes: usize,
+    cell_rects: usize,
     stats: PipelineStats,
 }
 
@@ -546,6 +571,7 @@ pub(super) fn snapshot_body_story_reset(pages: &[BuiltPage]) -> Vec<BodyStoryPag
             images: p.list.images.len(),
             story_layout: p.story_layout.len(),
             footnotes: p.footnotes.len(),
+            cell_rects: p.cell_rects.len(),
             stats: p.stats,
         })
         .collect()
@@ -560,6 +586,7 @@ pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPage
         page.list.images.truncate(s.images);
         page.story_layout.truncate(s.story_layout);
         page.footnotes.truncate(s.footnotes);
+        page.cell_rects.truncate(s.cell_rects);
         // The glyph-run side channel indexes commands ABSOLUTELY, so a
         // rolled-back pass leaves entries pointing past the end of the
         // list — harmless while nothing renumbered commands, a real
@@ -800,7 +827,12 @@ pub(super) fn emit_footnote_pools(
                                 last_byte: range.end as u32,
                                 baseline_y_pt: baseline,
                                 width_pt: line.width as f32 / paged_text::shape::ADVANCE_PRECISION,
-                                source_text: text.get(range).unwrap_or("").to_string(),
+                                source_text: text.get(range.clone()).unwrap_or("").to_string(),
+                                generated: super::GeneratedSpan::clip_to_line(
+                                    &c.numbers[p_idx],
+                                    range,
+                                ),
+                                text_path: None,
                             });
                         }
                     }

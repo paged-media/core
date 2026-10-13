@@ -543,7 +543,7 @@ pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
 /// Splice on hit: push `paths` through `PathBuffer::push_anon`
 /// (rebasing each command's path-ids by the current pool size),
 /// extend `pages[i].story_layout` with `story_layout`, and extend
-/// `pages[i].footnotes` with `footnotes`.
+/// `pages[i].footnotes` / `pages[i].cell_rects` likewise.
 #[derive(Debug, Clone)]
 pub struct BodyStoryPageDelta {
     pub paths: Vec<paged_compose::PathData>,
@@ -558,6 +558,9 @@ pub struct BodyStoryPageDelta {
     pub commands: Vec<paged_compose::DisplayCommand>,
     pub story_layout: Vec<LineLayout>,
     pub footnotes: Vec<EmittedFootnote>,
+    /// The table cell rects the story pushed on the page (the cell
+    /// hit-test map), replayed like `story_layout`.
+    pub cell_rects: Vec<CellRect>,
     /// W2 — where each chain frame's piece of `commands` begins,
     /// relative to the start of the delta: `(chain_idx, rel_start)`,
     /// ascending. A replayed delta is appended at the page tail, so
@@ -1108,6 +1111,91 @@ pub struct BreakRecord {
     /// when collection wasn't enabled; populated only when
     /// `PipelineOptions::collect_breaks` is set.
     pub source_text: String,
+    /// What the line prints that its story does not hold (a list's
+    /// marker, a tab's leader, a page number), in `source_text` order.
+    /// Omitted from the JSON when the line has none, so a line without
+    /// any reads as it did before the field existed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub generated: Vec<GeneratedSpan>,
+    /// For type on a path: the `<TextPath>` the line rides (its `Self`,
+    /// empty when it has none). Such a record is the path's one line:
+    /// `first_byte..last_byte` index the story's text rather than a
+    /// paragraph's, `baseline_y_pt` is the page-local y where the text
+    /// starts on the path and `width_pt` the arc length it covers.
+    /// Omitted for every other line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_path: Option<String>,
+}
+
+/// One stretch of a [`BreakRecord`]'s line that the engine generated
+/// rather than took from the story.
+///
+/// A text gate compares what InDesign printed with what the engine laid
+/// out, and the generated characters are where the two part without
+/// either being wrong: InDesign's PDF sets a marker in a larger size as a
+/// line of its own and carries a tab's leader as text the story lacks.
+/// The record says which characters they are, so a reader drops them on
+/// both sides instead of guessing from the PDF alone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct GeneratedSpan {
+    pub kind: GeneratedKind,
+    /// Half-open byte range in the record's `source_text`.
+    pub start: u32,
+    pub end: u32,
+    /// What prints in place of `source_text[start..end]` when that is not
+    /// those characters: a tab leader's repeats fill the tab they follow.
+    /// Omitted when the span's own characters are what prints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// What a [`GeneratedSpan`] stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratedKind {
+    /// A list's bullet or number with the text after it
+    /// (`BulletsTextAfter`), opening the paragraph's first line.
+    ListMarker,
+    /// The repeats of a tab stop's `Leader` across the tab's gap.
+    TabLeader,
+    /// A current, next or previous page number.
+    PageNumber,
+    /// A section marker.
+    SectionMarker,
+    /// A footnote's number: its reference in the body, or the number
+    /// opening the note.
+    FootnoteNumber,
+    /// A text variable's value.
+    TextVariable,
+    /// The placeholder an inline anchored object takes in its line.
+    AnchoredObject,
+}
+
+/// A [`GeneratedSpan`] before it is cut to a line: a byte range of its
+/// paragraph's text, its kind and what prints in its place.
+pub(crate) type GeneratedRange = (std::ops::Range<usize>, GeneratedKind, Option<String>);
+
+impl GeneratedSpan {
+    /// The spans among `spans` that a line covering `line` of their
+    /// paragraph's text holds, clipped to it and counted from its start.
+    pub(crate) fn clip_to_line(
+        spans: &[GeneratedRange],
+        line: std::ops::Range<usize>,
+    ) -> Vec<GeneratedSpan> {
+        spans
+            .iter()
+            .filter_map(|(r, kind, text)| {
+                let start = r.start.max(line.start);
+                let end = r.end.min(line.end);
+                (start < end).then(|| GeneratedSpan {
+                    kind: *kind,
+                    start: (start - line.start) as u32,
+                    end: (end - line.start) as u32,
+                    text: text.clone(),
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

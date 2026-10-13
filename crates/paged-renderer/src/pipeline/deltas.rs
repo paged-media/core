@@ -134,8 +134,8 @@ pub(super) fn splice_master_text_delta(
 
 /// Perf-BodyStory — splice one page's captured body-story emission
 /// into a `BuiltPage`: rebase + push the path+command delta, and
-/// extend `story_layout` + `footnotes` so caret / hit-test /
-/// footnote queries match a from-scratch emit.
+/// extend `story_layout`, `footnotes` and `cell_rects` so caret /
+/// hit-test / footnote / table-cell queries match a from-scratch emit.
 pub(super) fn splice_body_story_page_delta(page: &mut BuiltPage, delta: &BodyStoryPageDelta) {
     let new_base = page.list.paths.len() as i64;
     for (path, key) in delta.paths.iter().zip(&delta.path_keys) {
@@ -148,6 +148,7 @@ pub(super) fn splice_body_story_page_delta(page: &mut BuiltPage, delta: &BodySto
     }
     page.story_layout.extend(delta.story_layout.iter().cloned());
     page.footnotes.extend(delta.footnotes.iter().cloned());
+    page.cell_rects.extend(delta.cell_rects.iter().cloned());
 }
 
 /// Perf-MasterText — adds `offset` to every PathId field on a

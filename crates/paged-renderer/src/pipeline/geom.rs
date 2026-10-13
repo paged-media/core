@@ -174,6 +174,48 @@ pub(super) fn spread_linear_transform(m: Option<[f32; 6]>) -> Transform {
     }
 }
 
+/// Which page of a master spread the body page `local` (an index into
+/// `body`) takes: the master page on the same side of the spine, counted
+/// out from it. `body` and `master` are page bounds in their own spread's
+/// coordinates, where the spine is x = 0 — InDesign lays a spread's pages
+/// out around it, left-hand pages at negative x.
+///
+/// The side, not the index: a spread holding one page right of the spine
+/// (`BindingLocation="0"`) holds a right-hand page, and InDesign gives it
+/// the master's right page; as index 0 it used to take the left one. A
+/// master with no page on that side (a one-page master under a verso)
+/// falls back to the index.
+pub(super) fn master_page_index(
+    body: &[paged_model::Bounds],
+    local: usize,
+    master: &[paged_model::Bounds],
+) -> usize {
+    let by_index = local.min(master.len().saturating_sub(1));
+    let Some(page) = body.get(local) else {
+        return by_index;
+    };
+    let centre = |b: &paged_model::Bounds| (b.left + b.right) * 0.5;
+    let right_of_spine = |b: &paged_model::Bounds| centre(b) >= 0.0;
+    let side = right_of_spine(page);
+    // How many pages on this side sit nearer the spine than this one.
+    let ordinal = body
+        .iter()
+        .filter(|b| right_of_spine(b) == side && centre(b).abs() < centre(page).abs())
+        .count();
+    let mut same_side: Vec<usize> = (0..master.len())
+        .filter(|&i| right_of_spine(&master[i]) == side)
+        .collect();
+    if same_side.is_empty() {
+        return by_index;
+    }
+    same_side.sort_by(|&a, &b| {
+        centre(&master[a])
+            .abs()
+            .total_cmp(&centre(&master[b]).abs())
+    });
+    same_side[ordinal.min(same_side.len() - 1)]
+}
+
 pub(crate) fn transform_bounds(b: paged_model::Bounds, m: Option<[f32; 6]>) -> paged_model::Bounds {
     let Some(m) = m else { return b };
     let corners = [
