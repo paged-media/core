@@ -8536,7 +8536,7 @@ impl CanvasModel {
         // panels.md gap 10 — document bleed is document-level
         // (`<DocumentPreference>`); carry it on every page so the
         // overlay has it without a second request.
-        let bleed = self.scene.designmap.document_preference;
+        let bleed = &self.scene.designmap.document_preference;
         // Build page-self-id → MarginPreference once across all
         // spreads (each spread carries its own pages' margins).
         // ADR 026 — generated pages are derived, so the model holds no
@@ -10707,7 +10707,7 @@ impl CanvasModel {
     }
 
     pub fn document_preference(&self) -> paged_model::DocumentPreference {
-        self.scene.designmap.document_preference
+        self.scene.designmap.document_preference.clone()
     }
 
     pub fn palette(&self) -> &paged_model::Graphic {
