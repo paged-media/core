@@ -2556,6 +2556,8 @@ fn measure_cell_paragraph(
         .zip(wghts.iter())
         .map(|(b, w)| font_id(b) ^ w.to_bits())
         .collect();
+    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+    let glyph_scale = desired_glyph_scale(&resolved_paragraph);
     let styled_runs: Vec<paged_text::StyledRun> = paragraph
         .runs
         .iter()
@@ -2585,7 +2587,7 @@ fn measure_cell_paragraph(
                 resolved_runs[i].baseline_shift.unwrap_or(0.0)
                     + base * position_metrics(resolved_runs[i].position.as_deref()).1
             },
-            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0) * glyph_scale,
             vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
             skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
             fallback_faces: &[],
@@ -2599,7 +2601,6 @@ fn measure_cell_paragraph(
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     // Indents work in a cell as in body text: LeftIndent / RightIndent
     // narrow the measure and LeftIndent shifts the lines; FirstLineIndent
     // narrows and shifts line 0 (a negative one hangs it). They used to be
@@ -2808,6 +2809,8 @@ pub(super) fn emit_cell_paragraph(
         .map(|(b, w)| font_id(b) ^ w.to_bits())
         .collect();
 
+    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
+    let glyph_scale = desired_glyph_scale(&resolved_paragraph);
     let styled_runs: Vec<paged_text::StyledRun> = paragraph
         .runs
         .iter()
@@ -2837,7 +2840,7 @@ pub(super) fn emit_cell_paragraph(
                 resolved_runs[i].baseline_shift.unwrap_or(0.0)
                     + base * position_metrics(resolved_runs[i].position.as_deref()).1
             },
-            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+            horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0) * glyph_scale,
             vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
             skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
             fallback_faces: &[],
@@ -2851,7 +2854,6 @@ pub(super) fn emit_cell_paragraph(
         })
         .collect();
     let paragraph_size = styled_runs.first().map(|r| r.point_size).unwrap_or(12.0);
-    let resolved_paragraph = em.document.resolved_paragraph_attrs(paragraph);
     // The same indents as `measure_cell_paragraph`, plus the shift after
     // layout.
     let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);

@@ -6193,6 +6193,8 @@ fn emit_paragraph_lines(
             fallback_faces_pool.push(face);
         }
     }
+    // Glyph scaling scales every glyph, the list marker's too.
+    let glyph_scale = desired_glyph_scale(&resolved_paragraph);
     let mut styled_runs: Vec<paged_text::StyledRun> = paragraph
         .runs
         .iter()
@@ -6240,7 +6242,8 @@ fn emit_paragraph_lines(
                 strikethru: resolved_runs[i].strikethru.unwrap_or(false),
                 substituted: substituted_flags[i],
                 baseline_shift_pt,
-                horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
+                horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0)
+                    * glyph_scale,
                 vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
                 skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
                 fallback_faces: &fallback_faces_pool,
@@ -6270,7 +6273,7 @@ fn emit_paragraph_lines(
                 strikethru: m.strikethru.unwrap_or(false),
                 substituted: substituted_flags[marker_slot],
                 baseline_shift_pt,
-                horizontal_scale_pct: m.horizontal_scale.unwrap_or(100.0),
+                horizontal_scale_pct: m.horizontal_scale.unwrap_or(100.0) * glyph_scale,
                 vertical_scale_pct: m.vertical_scale.unwrap_or(100.0),
                 skew_deg: m.skew.unwrap_or(0.0),
                 fallback_faces: &fallback_faces_pool,
