@@ -88,9 +88,24 @@ fn scenarios() -> Vec<Scenario> {
                     let rect = spread.rectangles[0].self_id.clone().expect("a rectangle");
                     let text = spread.text_frames[0].self_id.clone().expect("a text frame");
                     let at = |kind: &str, id: &str| format!("{kind}:{id}");
-                    set(m, &at("rectangle", &rect), "itemName", Value::Text("lane-box".into()));
-                    set(m, &at("rectangle", &rect), "elementVisible", Value::Bool(false));
-                    set(m, &at("frame", &text), "itemName", Value::Text("lane-text".into()));
+                    set(
+                        m,
+                        &at("rectangle", &rect),
+                        "itemName",
+                        Value::Text("lane-box".into()),
+                    );
+                    set(
+                        m,
+                        &at("rectangle", &rect),
+                        "elementVisible",
+                        Value::Bool(false),
+                    );
+                    set(
+                        m,
+                        &at("frame", &text),
+                        "itemName",
+                        Value::Text("lane-text".into()),
+                    );
                     set(m, &at("frame", &text), "elementLocked", Value::Bool(true));
                 })
             },
@@ -217,7 +232,12 @@ fn engine_view(bytes: &[u8]) -> J {
         .values()
         .filter_map(|c| c.name.clone())
         .chain(doc.palette.swatches.values().filter_map(|s| s.name.clone()))
-        .chain(doc.palette.gradients.values().filter_map(|g| g.name.clone()))
+        .chain(
+            doc.palette
+                .gradients
+                .values()
+                .filter_map(|g| g.name.clone()),
+        )
         .collect();
     swatches.sort();
     swatches.dedup();
@@ -301,23 +321,58 @@ fn item_view(spread: &paged_model::Spread, frame: &paged_model::FrameRef) -> Opt
     let (kind, id, bounds, xf, visible, locked) = match *frame {
         F::TextFrame(i) => {
             let f = spread.text_frames.get(i)?;
-            ("TextFrame", &f.self_id, f.bounds, f.item_transform, f.visible, f.locked)
+            (
+                "TextFrame",
+                &f.self_id,
+                f.bounds,
+                f.item_transform,
+                f.visible,
+                f.locked,
+            )
         }
         F::Rectangle(i) => {
             let f = spread.rectangles.get(i)?;
-            ("Rectangle", &f.self_id, f.bounds, f.item_transform, f.visible, f.locked)
+            (
+                "Rectangle",
+                &f.self_id,
+                f.bounds,
+                f.item_transform,
+                f.visible,
+                f.locked,
+            )
         }
         F::Oval(i) => {
             let f = spread.ovals.get(i)?;
-            ("Oval", &f.self_id, f.bounds, f.item_transform, f.visible, f.locked)
+            (
+                "Oval",
+                &f.self_id,
+                f.bounds,
+                f.item_transform,
+                f.visible,
+                f.locked,
+            )
         }
         F::Polygon(i) => {
             let f = spread.polygons.get(i)?;
-            ("Polygon", &f.self_id, f.bounds, f.item_transform, f.visible, f.locked)
+            (
+                "Polygon",
+                &f.self_id,
+                f.bounds,
+                f.item_transform,
+                f.visible,
+                f.locked,
+            )
         }
         F::GraphicLine(i) => {
             let f = spread.graphic_lines.get(i)?;
-            ("GraphicLine", &f.self_id, f.bounds, f.item_transform, f.visible, f.locked)
+            (
+                "GraphicLine",
+                &f.self_id,
+                f.bounds,
+                f.item_transform,
+                f.visible,
+                f.locked,
+            )
         }
         F::Group(i) => {
             let g = spread.groups.get(i)?;
@@ -386,7 +441,10 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
         "document" => {
             let (o, t) = (&ours["document"], &theirs["document"]);
             if o["pages"] != t["pages"] {
-                out.push(format!("pages: ours {} InDesign {}", o["pages"], t["pages"]));
+                out.push(format!(
+                    "pages: ours {} InDesign {}",
+                    o["pages"], t["pages"]
+                ));
             }
             for k in ["pageWidth", "pageHeight"] {
                 if !close(&o[k], &t[k], 0.01) {
@@ -395,7 +453,10 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
             }
             for i in 0..4 {
                 if !close(&o["bleed"][i], &t["bleed"][i], 0.01) {
-                    out.push(format!("bleed: ours {} InDesign {}", o["bleed"], t["bleed"]));
+                    out.push(format!(
+                        "bleed: ours {} InDesign {}",
+                        o["bleed"], t["bleed"]
+                    ));
                     break;
                 }
             }
@@ -427,20 +488,34 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
                 let mut items: Vec<J> = v["items"].as_array().cloned().unwrap_or_default();
                 items.sort_by(|a, b| {
                     let key = |i: &J| (num(&i["bounds"][0]).round(), num(&i["bounds"][1]).round());
-                    key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+                    key(a)
+                        .partial_cmp(&key(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
                 items
             };
             let (op, tp) = (ours["pages"].as_array(), theirs["pages"].as_array());
-            for (p, (o, t)) in op.into_iter().flatten().zip(tp.into_iter().flatten()).enumerate() {
+            for (p, (o, t)) in op
+                .into_iter()
+                .flatten()
+                .zip(tp.into_iter().flatten())
+                .enumerate()
+            {
                 let (oi, ti) = (sorted(o), sorted(t));
                 if oi.len() != ti.len() {
-                    out.push(format!("page {p}: {} items (ours) / {} (InDesign)", oi.len(), ti.len()));
+                    out.push(format!(
+                        "page {p}: {} items (ours) / {} (InDesign)",
+                        oi.len(),
+                        ti.len()
+                    ));
                     continue;
                 }
                 for (a, b) in oi.iter().zip(&ti) {
                     if a["kind"] != b["kind"] {
-                        out.push(format!("page {p}: {} (ours) / {} (InDesign)", a["kind"], b["kind"]));
+                        out.push(format!(
+                            "page {p}: {} (ours) / {} (InDesign)",
+                            a["kind"], b["kind"]
+                        ));
                         continue;
                     }
                     if a["kind"] == "Group" {
@@ -448,7 +523,10 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
                     }
                     for k in ["name", "visible", "locked"] {
                         if a[k] != b[k] {
-                            out.push(format!("page {p} {} {k}: ours {} InDesign {}", a["kind"], a[k], b[k]));
+                            out.push(format!(
+                                "page {p} {} {k}: ours {} InDesign {}",
+                                a["kind"], a[k], b[k]
+                            ));
                         }
                     }
                     if (0..4).any(|i| !close(&a["bounds"][i], &b["bounds"][i], 0.05)) {
@@ -474,11 +552,18 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
             };
             let (os, ts) = (texts(ours), texts(theirs));
             if os.len() != ts.len() {
-                out.push(format!("{} stories with text (ours) / {} (InDesign)", os.len(), ts.len()));
+                out.push(format!(
+                    "{} stories with text (ours) / {} (InDesign)",
+                    os.len(),
+                    ts.len()
+                ));
             }
             for (o, t) in os.iter().zip(&ts) {
                 if o["text"] != t["text"] {
-                    out.push(format!("story text: ours {} InDesign {}", o["text"], t["text"]));
+                    out.push(format!(
+                        "story text: ours {} InDesign {}",
+                        o["text"], t["text"]
+                    ));
                     continue;
                 }
                 let styles = |s: &J| -> Vec<J> {
@@ -493,13 +578,21 @@ fn differences(field: &str, ours: &J, theirs: &J) -> Vec<String> {
                 if styles(o) != styles(t) {
                     out.push(format!(
                         "paragraph styles of {}: ours {:?} InDesign {:?}",
-                        o["text"].as_str().unwrap_or("").chars().take(40).collect::<String>(),
+                        o["text"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(40)
+                            .collect::<String>(),
                         styles(o),
                         styles(t)
                     ));
                 }
                 if o["footnotes"] != t["footnotes"] {
-                    out.push(format!("footnotes: ours {} InDesign {}", o["footnotes"], t["footnotes"]));
+                    out.push(format!(
+                        "footnotes: ours {} InDesign {}",
+                        o["footnotes"], t["footnotes"]
+                    ));
                 }
             }
         }
@@ -571,7 +664,10 @@ fn recordings_agree_with_indesign() {
         let ours = engine_view(&resaved);
         for f in s.compare {
             for d in differences(f, &ours, &view["reopened"]) {
-                failures.push(format!("{} (our import of InDesign's re-save): {d}", s.name));
+                failures.push(format!(
+                    "{} (our import of InDesign's re-save): {d}",
+                    s.name
+                ));
             }
         }
     }
@@ -581,6 +677,9 @@ fn recordings_agree_with_indesign() {
 #[test]
 fn the_view_keeps_text_without_markers() {
     assert_eq!(plain("a\u{e018}b\tc\u{2029}\u{fffc} d "), "ab c d");
-    assert_eq!(style_name("ParagraphStyle/$ID/NormalParagraphStyle"), "[Basic Paragraph]");
+    assert_eq!(
+        style_name("ParagraphStyle/$ID/NormalParagraphStyle"),
+        "[Basic Paragraph]"
+    );
     assert_eq!(style_name("ParagraphStyle/Body Copy"), "Body Copy");
 }
