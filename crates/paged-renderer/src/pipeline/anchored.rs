@@ -283,9 +283,15 @@ pub(super) fn with_object_placeholders(
         .map(|&(_, i)| inline_object(&paragraph.anchored_frames[i], i))
         .collect();
     let placed = vec![None; objects.len()];
+    // The table's character moves on past the placeholders before it (an
+    // object anchored at the table's own offset goes first).
+    let table_anchor = paragraph
+        .table_anchor
+        .map(|t| t + anchors.iter().filter(|&&(offset, _)| offset <= t).count() as u32);
     Some((
         paged_model::Paragraph {
             runs,
+            table_anchor,
             ..paragraph.clone()
         },
         InlineObjects {

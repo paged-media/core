@@ -522,6 +522,7 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
     let before: usize = para.runs[..run_idx].iter().map(|r| r.text.len()).sum();
     let split_char = para.char_offset_of_byte(before + byte_in_run);
     let (moved_frames, moved_offsets) = take_anchors_from(para, split_char);
+    let (moved_notes, moved_table) = take_notes_and_table_from(para, split_char);
     // Tail runs that come AFTER the split point move to the new
     // paragraph. The split-point run itself is split into two halves;
     // the right half becomes the first run of the new paragraph.
@@ -538,14 +539,48 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
         para.runs.pop();
     }
     let style = para.paragraph_style.clone();
+    let (table, table_anchor) = moved_table.unzip();
     let new_para = paged_model::Paragraph {
         paragraph_style: style,
         runs: tail_runs,
         anchored_frames: moved_frames,
         anchored_frame_offsets: moved_offsets,
+        footnotes: moved_notes,
+        table,
+        table_anchor,
         ..Default::default()
     };
     paragraphs.insert(paragraph_idx + 1, new_para);
+}
+
+/// Remove from `para` the footnotes whose reference stands at character
+/// `from` or later, and its table when that is anchored there or later,
+/// returning them with their anchors rebased to `from`: they go with
+/// their characters to the paragraph a split starts. A table with no
+/// anchor stays (it stands after the text the paragraph keeps).
+fn take_notes_and_table_from(
+    para: &mut paged_model::Paragraph,
+    from: u32,
+) -> (Vec<paged_model::Footnote>, Option<(paged_model::Table, u32)>) {
+    let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut para.footnotes)
+        .into_iter()
+        .partition(|f| f.anchor.is_some_and(|a| a >= from));
+    para.footnotes = kept;
+    let moved = moved
+        .into_iter()
+        .map(|mut f| {
+            f.anchor = f.anchor.map(|a| a - from);
+            f
+        })
+        .collect();
+    let table = match para.table_anchor {
+        Some(a) if a >= from => {
+            para.table_anchor = None;
+            para.table.take().map(|t| (t, a - from))
+        }
+        _ => None,
+    };
+    (moved, table)
 }
 
 /// Remove from `para` the frames anchored at character `from` or later,

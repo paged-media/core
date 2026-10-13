@@ -23,6 +23,7 @@ pub mod conditions;
 pub mod corners;
 pub mod docx_pagination;
 pub mod effects;
+pub mod footnote_references;
 pub mod footnotes;
 pub mod forced_line_break;
 pub mod geometry;
@@ -66,6 +67,7 @@ pub mod styles_cascade;
 pub mod swatches;
 pub mod tab_breaks;
 pub mod table_cell_baseline;
+pub mod table_inline_text;
 pub mod tables;
 pub mod tables_overset;
 pub mod tables_rows;
@@ -158,6 +160,8 @@ pub const SAMPLES: &[&str] = &[
     "gradient-geometry",
     "tints",
     "table-cell-baseline",
+    "table-inline-text",
+    "footnote-references",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -228,6 +232,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "gradient-geometry" => gradient_geometry::build(),
         "tints" => tints::build(),
         "table-cell-baseline" => table_cell_baseline::build(),
+        "table-inline-text" => table_inline_text::build(),
+        "footnote-references" => footnote_references::build(),
         _ => return None,
     })
 }

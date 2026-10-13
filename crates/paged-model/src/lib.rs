@@ -3329,6 +3329,15 @@ pub struct FootnoteOptions {
     /// `SpaceBetween` — vertical space between consecutive footnotes,
     /// in points.
     pub space_between: Option<f32>,
+    /// `StartAt` — the number the document's first footnote gets.
+    /// `None`: 1.
+    #[serde(default)]
+    pub start_at: Option<u32>,
+    /// `FootnoteNumberingStyle` — `Arabic`, `UpperRoman`, `LowerRoman`,
+    /// `UpperLetters`, `LowerLetters`, `Asterisks`, … (InDesign writes it
+    /// as a typed `<Properties>` child). `None`: Arabic.
+    #[serde(default)]
+    pub numbering_style: Option<String>,
 }
 
 impl FootnoteOptions {
@@ -3344,6 +3353,25 @@ impl FootnoteOptions {
     /// the document didn't say.
     pub fn rule_on_effective(&self) -> bool {
         self.rule_on.unwrap_or(true)
+    }
+
+    /// The label of the story's `ordinal`-th footnote (1-based): its
+    /// number counted from [`Self::start_at`], in
+    /// [`Self::numbering_style`]. The reference in the text and the
+    /// number opening the note both print it (asked of InDesign 20.0.1:
+    /// `StartAt` 5 prints `5`, lower roman prints `i`). A style the engine
+    /// does not spell prints Arabic.
+    pub fn label(&self, ordinal: u32) -> String {
+        let n = self.start_at.unwrap_or(1).max(1) + ordinal.saturating_sub(1);
+        let style = match self.numbering_style.as_deref() {
+            Some("UpperRoman") => NumberingStyle::UpperRoman,
+            Some("LowerRoman") => NumberingStyle::LowerRoman,
+            Some("UpperLetters") => NumberingStyle::UpperAlpha,
+            Some("LowerLetters") => NumberingStyle::LowerAlpha,
+            Some("Asterisks") => return "*".repeat(n as usize),
+            _ => NumberingStyle::Arabic,
+        };
+        style.format(n)
     }
 }
 
@@ -5266,6 +5294,18 @@ pub struct Paragraph {
     /// Tables can't currently nest inside tables — only one per
     /// paragraph.
     pub table: Option<Table>,
+    /// Where [`Self::table`] stands in the paragraph's text: the character
+    /// offset (Unicode scalars, counted contiguously over `runs`) of the
+    /// table's character. InDesign sets a table as a character of its
+    /// paragraph on a line of its own (asked of InDesign 20.0.1,
+    /// `table-inline-text`): the text before it ends a line, the text
+    /// after it starts the next, and both stay lines of the ONE paragraph
+    /// (no new list number, no space before, no first-line indent; the
+    /// line before the table is justified like any line that does not end
+    /// the paragraph). `None`: after the paragraph's text, which is where
+    /// a table paragraph the engine builds, and an older import, put it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table_anchor: Option<u32>,
     /// `OverprintFill="true"` on the `<ParagraphStyleRange>`. None ⇒
     /// inherit from the applied paragraph style cascade. Stage 3
     /// honours this when a run inside the paragraph leaves its own
@@ -5288,14 +5328,21 @@ pub struct Paragraph {
     pub index_markers: Vec<IndexMarker>,
 }
 impl Paragraph {
-    /// Keep the anchors of [`Self::anchored_frame_offsets`] on their
-    /// characters across a text edit at character `at`: `delta`
+    /// Keep the anchors of [`Self::anchored_frame_offsets`], the
+    /// footnotes and the table on their characters across a text edit at
+    /// character `at`: `delta`
     /// characters inserted (positive; text typed at an anchor goes before
     /// it) or removed (negative; an anchor inside the removed range moves
     /// to its start).
     pub fn shift_anchors(&mut self, at: u32, delta: i64) {
         let footnotes = self.footnotes.iter_mut().filter_map(|f| f.anchor.as_mut());
-        for offset in self.anchored_frame_offsets.iter_mut().chain(footnotes) {
+        let table = self.table_anchor.as_mut();
+        for offset in self
+            .anchored_frame_offsets
+            .iter_mut()
+            .chain(footnotes)
+            .chain(table)
+        {
             if delta >= 0 {
                 if *offset >= at {
                     *offset = offset.saturating_add(delta as u32);
@@ -5397,9 +5444,9 @@ pub struct Footnote {
     pub self_id: Option<String>,
     /// Where the footnote's reference stands in its host paragraph: the
     /// character offset in the paragraph's text (Unicode scalars, counted
-    /// contiguously over its runs). The note is set at the foot of the
-    /// frame holding THAT line, as InDesign sets it. `None` (the IDML
-    /// importer does not record it yet): the paragraph's start.
+    /// contiguously over its runs) of its [`FOOTNOTE_REFERENCE_MARKER`].
+    /// The note is set at the foot of the frame holding THAT line, as
+    /// InDesign sets it. `None`: the paragraph's start.
     #[serde(default)]
     pub anchor: Option<u32>,
     /// The footnote body, parsed identically to top-level story
@@ -6517,6 +6564,16 @@ pub const PREVIOUS_PAGE_NUMBER_MARKER: char = '\u{E01A}';
 /// InDesign writes it for the section marker.)
 pub const SECTION_MARKER: char = '\u{E01B}';
 
+/// A footnote's REFERENCE: the character InDesign keeps in the story where
+/// a `<Footnote>` stands (its own U+0004). It is a character of its line
+/// (asked of InDesign 20.0.1, `footnote-references`): the renderer draws
+/// the note's formatted number in its place, in the formatting of the run
+/// that holds it (InDesign writes the reference's superscript and marker
+/// style on a range of its own), so it takes width and can move a line
+/// break. The importer leaves one per footnote, in text order, at
+/// [`Footnote::anchor`]; the writer writes the `<Footnote>` there.
+pub const FOOTNOTE_REFERENCE_MARKER: char = '\u{E01C}';
+
 /// True for the private-use characters the story parser leaves for the
 /// page-dependent markers, which renderers substitute and text extractors
 /// drop.
@@ -6528,6 +6585,13 @@ pub fn is_page_marker(ch: char) -> bool {
             | PREVIOUS_PAGE_NUMBER_MARKER
             | SECTION_MARKER
     )
+}
+
+/// True for every private-use character the story parser leaves in run
+/// text in place of something the renderer generates (the page markers
+/// and the footnote reference): what plain-text extractors drop.
+pub fn is_generated_marker(ch: char) -> bool {
+    is_page_marker(ch) || ch == FOOTNOTE_REFERENCE_MARKER
 }
 
 #[cfg(test)]

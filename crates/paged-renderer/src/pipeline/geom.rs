@@ -587,6 +587,78 @@ pub(super) struct BreakSegment {
     pub closes_paragraph: bool,
 }
 
+/// The template of a segment that continues a split paragraph: the
+/// paragraph's whole-paragraph attributes, without what only its first
+/// line carries (space before, the drop cap, the anchored objects, the
+/// footnotes and index markers, which ride the first segment).
+fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
+    paged_model::Paragraph {
+        paragraph_style: paragraph.paragraph_style.clone(),
+        justification: paragraph.justification,
+        first_line_indent: paragraph.first_line_indent,
+        // W0.2 — whole-paragraph attributes carry to every
+        // split sub-paragraph (kinsoku convention).
+        left_indent: paragraph.left_indent,
+        right_indent: paragraph.right_indent,
+        hyphenation: paragraph.hyphenation,
+        hyphenation_zone: paragraph.hyphenation_zone,
+        hyphenate_after_first: paragraph.hyphenate_after_first,
+        hyphenate_before_last: paragraph.hyphenate_before_last,
+        hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
+        hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
+        hyphenate_last_word: paragraph.hyphenate_last_word,
+        hyphenate_across_columns: paragraph.hyphenate_across_columns,
+        hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
+        hyphen_weight: paragraph.hyphen_weight,
+        composer: paragraph.composer.clone(),
+        keep_lines_together: paragraph.keep_lines_together,
+        keep_with_next: paragraph.keep_with_next,
+        start_paragraph: paragraph.start_paragraph,
+        span_columns: paragraph.span_columns,
+        keep_all_lines_together: paragraph.keep_all_lines_together,
+        keep_first_lines: paragraph.keep_first_lines,
+        keep_last_lines: paragraph.keep_last_lines,
+        rule_above: paragraph.rule_above.clone(),
+        rule_below: paragraph.rule_below.clone(),
+        space_before: None,
+        space_after: None,
+        tab_list: paragraph.tab_list.clone(),
+        bullets_list_type: paragraph.bullets_list_type.clone(),
+        bullet_character: paragraph.bullet_character,
+        numbering_format: paragraph.numbering_format.clone(),
+        bullets_text_after: paragraph.bullets_text_after.clone(),
+        numbering_expression: paragraph.numbering_expression.clone(),
+        numbering_start_at: paragraph.numbering_start_at,
+        numbering_continue: paragraph.numbering_continue,
+        bullets_character_style: paragraph.bullets_character_style.clone(),
+        bullets_and_numbering_digits_character_style: paragraph
+            .bullets_and_numbering_digits_character_style
+            .clone(),
+        applied_numbering_list: paragraph.applied_numbering_list.clone(),
+        // Drop cap + anchored frames are first-paragraph-only;
+        // sub-paragraphs after a `\n` reset to defaults.
+        drop_cap_characters: 0,
+        drop_cap_lines: 0,
+        drop_cap_detail: 0,
+        overprint_fill: paragraph.overprint_fill,
+        overprint_stroke: paragraph.overprint_stroke,
+        // Kinsoku / Mojikumi apply to the whole paragraph.
+        kinsoku_set: paragraph.kinsoku_set.clone(),
+        kinsoku_type: paragraph.kinsoku_type.clone(),
+        mojikumi_table: paragraph.mojikumi_table.clone(),
+        mojikumi_set: paragraph.mojikumi_set.clone(),
+        anchored_frames: Vec::new(),
+        anchored_frame_offsets: Vec::new(),
+        runs: Vec::new(),
+        table: None,
+        table_anchor: None,
+        // Sub-paragraphs after a `\n` reset markers too
+        // (matches anchored-frame convention above).
+        footnotes: Vec::new(),
+        index_markers: Vec::new(),
+    }
+}
+
 /// [`split_paragraph_at_breaks`], keeping where each piece came from and
 /// whether a `\n` (a paragraph boundary) or a [`FORCED_LINE_BREAK`] (a
 /// line boundary inside one paragraph) delimits it.
@@ -659,6 +731,7 @@ pub(super) fn split_paragraph_into_segments(
         anchored_frame_offsets: paragraph.anchored_frame_offsets.clone(),
         runs: Vec::new(),
         table: None,
+        table_anchor: None,
         // Phase 5 — footnotes / index markers ride the FIRST
         // sub-paragraph only (matches the anchored-frame +
         // drop-cap convention above); subsequent splits start with
@@ -667,25 +740,86 @@ pub(super) fn split_paragraph_into_segments(
         index_markers: paragraph.index_markers.clone(),
     };
     let is_break = |c: char| c == '\n' || c == FORCED_LINE_BREAK;
+    // The table stands at a character of the paragraph, on a line of its
+    // own (asked of InDesign 20.0.1, `table-inline-text`): its place is a
+    // cut that ends the line before it — not the paragraph — and the
+    // table is a segment of its own between the two lines.
+    let mut table_byte: Option<usize> = paragraph.table.as_ref().map(|_| {
+        let total: u32 = paragraph
+            .runs
+            .iter()
+            .map(|r| r.text.chars().count() as u32)
+            .sum();
+        paragraph.byte_of_char_offset(paragraph.table_anchor.unwrap_or(total).min(total))
+    });
+    // Set from the table's segment until something follows it: a break
+    // right after the table ends the TABLE's line (a paragraph mark also
+    // ends its paragraph), so it opens no empty line of its own.
+    let mut after_table = false;
     // Byte offset of the current run within the paragraph's text, and
     // where/how the in-progress segment began.
     let mut pos: usize = 0;
     let mut current_opens = true;
     let mut current_base: u32 = 0;
     for run in &paragraph.runs {
-        if !run.text.contains(is_break) {
+        let table_here = table_byte
+            .filter(|&t| t >= pos && t < pos + run.text.len())
+            .map(|t| t - pos);
+        if table_here.is_none() && !run.text.contains(is_break) {
+            if !run.text.is_empty() {
+                after_table = false;
+            }
             current.runs.push(run.clone());
             pos += run.text.len();
             continue;
         }
+        // The cuts in this run, in text order; the table goes before a
+        // break at the same byte (it stands before that character).
+        let mut cuts: Vec<(usize, Option<char>)> = run
+            .text
+            .char_indices()
+            .filter(|(_, c)| is_break(*c))
+            .map(|(i, c)| (i, Some(c)))
+            .collect();
+        if let Some(k) = table_here {
+            let at = cuts.partition_point(|&(i, _)| i < k);
+            cuts.insert(at, (k, None));
+            table_byte = None;
+        }
         let mut seg_start = 0;
-        for (i, ch) in run.text.char_indices().filter(|(_, c)| is_break(*c)) {
+        for (i, cut) in cuts {
             let seg = &run.text[seg_start..i];
             if !seg.is_empty() {
                 let mut copy = run.clone();
                 copy.text = seg.to_string();
                 current.runs.push(copy);
+                after_table = false;
             }
+            let Some(ch) = cut else {
+                push_table_segment(
+                    paragraph,
+                    &mut subs,
+                    &mut current,
+                    &mut current_opens,
+                    (current_base, (pos + i) as u32),
+                );
+                after_table = true;
+                seg_start = i;
+                current_base = (pos + i) as u32;
+                continue;
+            };
+            if after_table && current.runs.is_empty() {
+                // The break right after the table ends the table's line.
+                if let Some(table_seg) = subs.last_mut() {
+                    table_seg.closes_paragraph = ch == '\n';
+                }
+                after_table = false;
+                current_opens = ch == '\n';
+                seg_start = i + ch.len_utf8();
+                current_base = (pos + seg_start) as u32;
+                continue;
+            }
+            after_table = false;
             // If the about-to-be-closed sub-paragraph has no runs
             // (the previous segment ended with a break and produced
             // a terminator straight away), surface the run's
@@ -701,70 +835,7 @@ pub(super) fn split_paragraph_into_segments(
                 current.runs.push(hint);
             }
             // Close the current sub-paragraph and start a new one.
-            let mut next = paged_model::Paragraph {
-                paragraph_style: paragraph.paragraph_style.clone(),
-                justification: paragraph.justification,
-                first_line_indent: paragraph.first_line_indent,
-                // W0.2 — whole-paragraph attributes carry to every
-                // split sub-paragraph (kinsoku convention).
-                left_indent: paragraph.left_indent,
-                right_indent: paragraph.right_indent,
-                hyphenation: paragraph.hyphenation,
-                hyphenation_zone: paragraph.hyphenation_zone,
-                hyphenate_after_first: paragraph.hyphenate_after_first,
-                hyphenate_before_last: paragraph.hyphenate_before_last,
-                hyphenate_words_longer_than: paragraph.hyphenate_words_longer_than,
-                hyphenate_capitalized_words: paragraph.hyphenate_capitalized_words,
-                hyphenate_last_word: paragraph.hyphenate_last_word,
-                hyphenate_across_columns: paragraph.hyphenate_across_columns,
-                hyphenate_ladder_limit: paragraph.hyphenate_ladder_limit,
-                hyphen_weight: paragraph.hyphen_weight,
-                composer: paragraph.composer.clone(),
-                keep_lines_together: paragraph.keep_lines_together,
-                keep_with_next: paragraph.keep_with_next,
-                start_paragraph: paragraph.start_paragraph,
-                span_columns: paragraph.span_columns,
-                keep_all_lines_together: paragraph.keep_all_lines_together,
-                keep_first_lines: paragraph.keep_first_lines,
-                keep_last_lines: paragraph.keep_last_lines,
-                rule_above: paragraph.rule_above.clone(),
-                rule_below: paragraph.rule_below.clone(),
-                space_before: None,
-                space_after: None,
-                tab_list: paragraph.tab_list.clone(),
-                bullets_list_type: paragraph.bullets_list_type.clone(),
-                bullet_character: paragraph.bullet_character,
-                numbering_format: paragraph.numbering_format.clone(),
-                bullets_text_after: paragraph.bullets_text_after.clone(),
-                numbering_expression: paragraph.numbering_expression.clone(),
-                numbering_start_at: paragraph.numbering_start_at,
-                numbering_continue: paragraph.numbering_continue,
-                bullets_character_style: paragraph.bullets_character_style.clone(),
-                bullets_and_numbering_digits_character_style: paragraph
-                    .bullets_and_numbering_digits_character_style
-                    .clone(),
-                applied_numbering_list: paragraph.applied_numbering_list.clone(),
-                // Drop cap + anchored frames are first-paragraph-only;
-                // sub-paragraphs after a `\n` reset to defaults.
-                drop_cap_characters: 0,
-                drop_cap_lines: 0,
-                drop_cap_detail: 0,
-                overprint_fill: paragraph.overprint_fill,
-                overprint_stroke: paragraph.overprint_stroke,
-                // Kinsoku / Mojikumi apply to the whole paragraph.
-                kinsoku_set: paragraph.kinsoku_set.clone(),
-                kinsoku_type: paragraph.kinsoku_type.clone(),
-                mojikumi_table: paragraph.mojikumi_table.clone(),
-                mojikumi_set: paragraph.mojikumi_set.clone(),
-                anchored_frames: Vec::new(),
-                anchored_frame_offsets: Vec::new(),
-                runs: Vec::new(),
-                table: None,
-                // Sub-paragraphs after a `\n` reset markers too
-                // (matches anchored-frame convention above).
-                footnotes: Vec::new(),
-                index_markers: Vec::new(),
-            };
+            let mut next = continuation(paragraph);
             std::mem::swap(&mut current, &mut next);
             // Keep empty sub-paragraphs — `<Br/><Br/>` and similar
             // patterns mean "advance one line of vertical space".
@@ -785,13 +856,33 @@ pub(super) fn split_paragraph_into_segments(
             let mut copy = run.clone();
             copy.text = tail.to_string();
             current.runs.push(copy);
+            after_table = false;
         }
         pos += run.text.len();
+    }
+    // A table after all of the text (or with no anchor) ends the
+    // paragraph: the model's "runs, then table" paragraph.
+    if table_byte.is_some() {
+        push_table_segment(
+            paragraph,
+            &mut subs,
+            &mut current,
+            &mut current_opens,
+            (current_base, pos as u32),
+        );
+        after_table = true;
+        current_base = pos as u32;
+    }
+    if after_table && current.runs.iter().all(|r| r.text.is_empty()) {
+        current.runs.clear();
+        if let Some(table_seg) = subs.last_mut() {
+            table_seg.closes_paragraph = true;
+        }
     }
     // A forced line break that ends the paragraph still leaves the empty
     // line after it (the paragraph mark stands on it), so that segment
     // stays even with no runs.
-    if current.runs.is_empty() && !current_opens {
+    if current.runs.is_empty() && !current_opens && !after_table {
         if let Some(run) = paragraph.runs.last() {
             let mut hint = run.clone();
             hint.text = String::new();
@@ -828,6 +919,7 @@ pub(super) fn split_paragraph_into_segments(
             .last()
             .map(|s| {
                 s.opens_paragraph
+                    && s.paragraph.table.is_none()
                     && s.paragraph
                         .runs
                         .iter()
@@ -909,6 +1001,7 @@ pub(super) fn split_paragraph_into_segments(
                 anchored_frame_offsets: Vec::new(),
                 runs: Vec::new(),
                 table: None,
+                table_anchor: None,
                 footnotes: Vec::new(),
                 index_markers: Vec::new(),
             },
@@ -916,3 +1009,53 @@ pub(super) fn split_paragraph_into_segments(
     }
     subs
 }
+
+/// Close the line before a table (when it holds text: it ends the line,
+/// not the paragraph) and push the table's own segment at `byte_base`.
+/// The text after the table continues the paragraph on a new line; when
+/// the table opens the paragraph, the text after it no longer does.
+///
+/// A table with no anchor keeps the reading the engine had before the
+/// anchor existed: its text is a paragraph of its own and the table
+/// follows it.
+fn push_table_segment(
+    paragraph: &paged_model::Paragraph,
+    subs: &mut Vec<BreakSegment>,
+    current: &mut paged_model::Paragraph,
+    current_opens: &mut bool,
+    (current_base, byte_base): (u32, u32),
+) {
+    let anchored = paragraph.table_anchor.is_some();
+    if current.runs.iter().any(|r| !r.text.is_empty()) {
+        let mut text = std::mem::replace(current, continuation(paragraph));
+        if !anchored {
+            text.space_after = paragraph.space_after;
+        }
+        subs.push(BreakSegment {
+            byte_base: current_base,
+            paragraph: text,
+            opens_paragraph: *current_opens,
+            closes_paragraph: !anchored,
+        });
+        *current_opens = !anchored;
+    } else {
+        // Nothing before the table on its line: the table's line is the
+        // paragraph's first when the paragraph opens here.
+        current.runs.clear();
+        current.space_before = None;
+        current.drop_cap_characters = 0;
+        current.drop_cap_lines = 0;
+        current.drop_cap_detail = 0;
+    }
+    subs.push(BreakSegment {
+        paragraph: paged_model::Paragraph {
+            table: paragraph.table.clone(),
+            ..continuation(paragraph)
+        },
+        byte_base,
+        opens_paragraph: *current_opens,
+        closes_paragraph: false,
+    });
+    *current_opens = false;
+}
+
