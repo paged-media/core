@@ -1132,10 +1132,9 @@ pub(super) fn emit_table_into_chain(
                     .compose(&Transform::rotate_deg(deg))
                     .compose(&Transform::translate(-cx, -cy));
                 for (s, e) in &emitted_extents {
-                    for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                        let t = cmd.transform_mut();
-                        *t = rot.compose(t);
-                    }
+                    pages[target_page]
+                        .list
+                        .map_transforms(*s..*e, |t| *t = rot.compose(t));
                 }
             }
             // `DiagonalLineInFront` → paint the diagonal(s) over the
@@ -2427,6 +2426,8 @@ fn measure_cell_paragraph(
     by_leading: bool,
     first_baseline: CellFirstBaseline,
 ) -> Vec<f32> {
+    // A cell paragraph takes its nested styles as a body one does.
+    let paragraph = &*with_nested_styles(em.document, paragraph);
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return Vec::new();
     }
@@ -2545,6 +2546,7 @@ fn measure_cell_paragraph(
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
                 resolved_runs[i].capitalization.as_deref(),
+                resolved_runs[i].position.as_deref(),
             ),
         })
         .collect();
@@ -2560,7 +2562,9 @@ fn measure_cell_paragraph(
     let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
     let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification);
+    // Measuring only: the binding side moves a line, never its breaks.
+    (lopts.alignment, lopts.last_line_alignment) =
+        map_justification(resolved_paragraph.justification, BindingEdge::default());
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
@@ -2635,6 +2639,8 @@ pub(super) fn emit_cell_paragraph(
     // The cell's first-baseline settings.
     first_baseline: CellFirstBaseline,
 ) {
+    // A cell paragraph takes its nested styles as a body one does.
+    let paragraph = &*with_nested_styles(em.document, paragraph);
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return;
     }
@@ -2792,6 +2798,7 @@ pub(super) fn emit_cell_paragraph(
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
                 resolved_runs[i].capitalization.as_deref(),
+                resolved_runs[i].position.as_deref(),
             ),
         })
         .collect();
@@ -2804,7 +2811,12 @@ pub(super) fn emit_cell_paragraph(
     let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
     let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification);
+    let binding = pages
+        .get(target_page)
+        .map(BuiltPage::binding_edge)
+        .unwrap_or_default();
+    (lopts.alignment, lopts.last_line_alignment) =
+        map_justification(resolved_paragraph.justification, binding);
     apply_paragraph_compose_options(
         &mut lopts,
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),

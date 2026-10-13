@@ -1172,13 +1172,13 @@ pub fn bevel_emboss_stamps(
         EffectStamp {
             mask: hi,
             color: bevel.highlight_color,
-            blend_mode: crate::BlendMode::Screen,
+            blend_mode: bevel.highlight_blend,
             clip_to_path: clip,
         },
         EffectStamp {
             mask: sh,
             color: bevel.shadow_color,
-            blend_mode: crate::BlendMode::Multiply,
+            blend_mode: bevel.shadow_blend,
             clip_to_path: clip,
         },
     ]
@@ -1257,6 +1257,17 @@ pub fn gradient_feather_mask(
     let degenerate = len_sq < 1e-9;
     let inv_len_sq = if degenerate { 0.0 } else { 1.0 / len_sq };
     let radius = len_sq.sqrt().max(1e-6);
+    // An elliptical radial: page-space unit vectors along the path's own
+    // x and y axes, and the radius across the latter.
+    let t = transform.0;
+    let unit = |x: f32, y: f32| {
+        let l = x.hypot(y).max(1e-9);
+        (x / l, y / l)
+    };
+    let (ax, ay) = unit(t[0], t[1]);
+    let (bx, by) = unit(t[2], t[3]);
+    let aspect = params.radial_aspect;
+    let elliptical = (aspect - 1.0).abs() > 1e-4 && aspect > 0.0;
     let inv_scale = 1.0 / grid.scale.max(1e-6);
     let (w, h) = (grid.width_px, grid.height_px);
     let mut data = vec![255u8; (w as usize) * (h as usize)];
@@ -1275,6 +1286,12 @@ pub fn gradient_feather_mask(
                 let t = match params.kind {
                     crate::GradientFeatherKind::Linear => {
                         (((px_pt - sx) * dx + (py_pt - sy) * dy) * inv_len_sq).clamp(0.0, 1.0)
+                    }
+                    crate::GradientFeatherKind::Radial if elliptical => {
+                        let (dx, dy) = (px_pt - sx, py_pt - sy);
+                        let u = dx * ax + dy * ay;
+                        let v = dx * bx + dy * by;
+                        (u.hypot(v / aspect) / radius).clamp(0.0, 1.0)
                     }
                     crate::GradientFeatherKind::Radial => {
                         ((px_pt - sx).hypot(py_pt - sy) / radius).clamp(0.0, 1.0)
@@ -1335,6 +1352,8 @@ mod tests {
             direction: BevelDirection::Up,
             technique: BevelTechnique::Smooth,
             soften: 0.0,
+            highlight_blend: crate::BlendMode::Screen,
+            shadow_blend: crate::BlendMode::Multiply,
         }
     }
 
@@ -1566,5 +1585,42 @@ mod tests {
         );
         assert!(at(&stamps[0].mask, 32.0, 65.0) > 230, "solid 12 pt in");
         assert_eq!(at(&stamps[0].mask, 40.0, 65.0), 0, "nothing 20 pt in");
+    }
+
+    /// An elliptical radial feather (InDesign's default on a frame taller
+    /// than it is wide): points at the same fraction of the horizontal and
+    /// of the vertical radius keep the same alpha.
+    #[test]
+    fn an_elliptical_radial_feather_scales_its_vertical_radius() {
+        let (path, transform) = rect(0.0, 0.0, 80.0, 110.0);
+        let params = crate::GradientFeather {
+            kind: crate::GradientFeatherKind::Radial,
+            start_x: 0.5,
+            start_y: 0.5,
+            end_x: 0.5 + 40.0 / 80.0,
+            end_y: 0.5,
+            stops: vec![
+                crate::GradientFeatherStop {
+                    location: 0.0,
+                    alpha: 1.0,
+                },
+                crate::GradientFeatherStop {
+                    location: 1.0,
+                    alpha: 0.0,
+                },
+            ],
+            radial_aspect: 1.375,
+        };
+        let m = gradient_feather_mask(&path, &transform, &params, 144.0).expect("mask");
+        let across = at(&m, 40.0 + 20.0, 55.0);
+        let down = at(&m, 40.0, 55.0 + 20.0 * 1.375);
+        assert!(
+            across.abs_diff(down) <= 3,
+            "half the radius across ({across}) and down ({down})"
+        );
+        assert!(
+            at(&m, 40.0, 55.0 + 20.0).abs_diff(across) > 20,
+            "a circle would match here"
+        );
     }
 }

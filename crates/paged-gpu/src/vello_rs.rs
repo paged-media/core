@@ -3052,6 +3052,8 @@ mod tests {
             },
             blend_mode: ComposeBlend::Multiply,
             opacity: 0.8,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
         list.commands.push(DisplayCommand::Image {
@@ -3115,6 +3117,9 @@ mod tests {
                 blur_radius: 3.0,
                 color: DLColor::rgba(0.0, 0.0, 0.0, 1.0),
                 opacity: 0.5,
+                blend_mode: paged_compose::BlendMode::Normal,
+                spread: 0.0,
+                noise: 0.0,
             },
         });
         list.commands.push(DisplayCommand::InnerShadow {
@@ -3588,6 +3593,8 @@ mod tests {
             },
             blend_mode: ComposeBlend::Normal,
             opacity: 1.0,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
         list.commands.push(DisplayCommand::FillPath {
@@ -4131,6 +4138,8 @@ mod tests {
             },
             blend_mode: ComposeBlend::Normal,
             opacity: 0.5,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
         list.commands.push(DisplayCommand::PushClip {
@@ -4310,6 +4319,8 @@ mod tests {
             },
             blend_mode: ComposeBlend::Multiply,
             opacity: 1.0,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
         list.commands.push(DisplayCommand::FillPath {
@@ -4393,6 +4404,8 @@ mod tests {
             bounds,
             blend_mode: ComposeBlend::Multiply,
             opacity: 0.5,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         };
         let folded = Some(HoistedGroup {
@@ -4592,6 +4605,8 @@ mod tests {
                 bounds,
                 blend_mode: ComposeBlend::Multiply,
                 opacity: 1.0,
+                isolated: false,
+                knockout: false,
                 transform: Transform::IDENTITY,
             });
         }

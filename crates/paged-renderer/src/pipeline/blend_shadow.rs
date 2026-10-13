@@ -80,9 +80,92 @@ pub(crate) fn push_blend_group(
             bounds: padded,
             blend_mode,
             opacity,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
     padded
+}
+
+/// R-10 — open a transparency TARGET's group (the fill's, the
+/// stroke's, the content's) when it composites differently from an
+/// opaque `Normal` paint. Everything the target paints — its own shadow
+/// included, which its opacity fades with it (asked of InDesign,
+/// `transparency-targets` case 40) — goes inside; the object's group,
+/// when there is one, encloses it. Returns whether a group was pushed,
+/// for the matching [`pop_blend_group`].
+pub(crate) fn push_target_group(
+    page: &mut BuiltPage,
+    target: Option<&paged_model::TargetTransparency>,
+    bounds_in_inner: paged_compose::Rect,
+    outer: Transform,
+) -> bool {
+    let Some(t) = target.filter(|t| t.is_active()) else {
+        return false;
+    };
+    push_blend_group(
+        page,
+        bounds_in_inner,
+        outer,
+        blend_mode_from_idml(t.blend_mode.as_deref()),
+        target_opacity(Some(t)),
+    );
+    true
+}
+
+/// A target's opacity, 0..=1; 1 for a missing target.
+pub(crate) fn target_opacity(target: Option<&paged_model::TargetTransparency>) -> f32 {
+    target
+        .and_then(|t| t.opacity)
+        .map(|p| (p / 100.0).clamp(0.0, 1.0))
+        .unwrap_or(1.0)
+}
+
+/// R-11 — the blend mode a shadow's stamp needs a group for: its own,
+/// unless that changes nothing (`Normal`, or a black `Multiply` shadow,
+/// which multiplies exactly as it paints).
+pub(crate) fn shadow_group_blend(shadow: &DropShadow) -> Option<paged_compose::BlendMode> {
+    use paged_compose::BlendMode as B;
+    let black = shadow.color.r <= 0.0 && shadow.color.g <= 0.0 && shadow.color.b <= 0.0;
+    match shadow.blend_mode {
+        B::Normal => None,
+        B::Multiply | B::Darken if black => None,
+        mode => Some(mode),
+    }
+}
+
+/// R-11 — emit a shadow stamp, bracketed in a group of the shadow's
+/// blend mode when that mode changes the result. The group's
+/// paper-backdrop rule is what keeps a `Screen` shadow visible on paper
+/// (asked of InDesign, `effects-attrs` case 3). The group's bounds are
+/// the page; the fit pass at the end of the build sizes it.
+pub(crate) fn emit_blended_shadow(
+    page: &mut BuiltPage,
+    shadow: &DropShadow,
+    emit: impl FnOnce(&mut BuiltPage),
+) {
+    let Some(mode) = shadow_group_blend(shadow) else {
+        emit(page);
+        return;
+    };
+    let bounds = paged_compose::Rect {
+        x: 0.0,
+        y: 0.0,
+        w: page.width_pt,
+        h: page.height_pt,
+    };
+    page.list
+        .commands
+        .push(paged_compose::DisplayCommand::BeginBlendGroup {
+            bounds,
+            blend_mode: mode,
+            opacity: 1.0,
+            isolated: false,
+            knockout: false,
+            transform: Transform::IDENTITY,
+        });
+    emit(page);
+    pop_blend_group(page);
 }
 
 /// Push the matching `EndBlendGroup` for [`push_blend_group`].
@@ -127,11 +210,25 @@ pub(super) fn convert_setting_to_shadow(
         .and_then(|id| color_id_to_paint(id, palette, color_ctx))
         .and_then(|p| paint_as_solid_with_icc(p, color_ctx))
         .unwrap_or(Color::BLACK);
+    // R-11: under the document's light the shadow keeps its distance
+    // and turns to the light's angle (asked of InDesign, `effects-attrs`
+    // cases 13–15).
+    let (offset_x, offset_y) = setting.effective_offset(color_ctx.global_light_angle);
     Some(DropShadow {
-        offset_x: setting.x_offset,
-        offset_y: setting.y_offset,
+        offset_x,
+        offset_y,
         blur_radius: setting.size,
         color,
         opacity,
+        // InDesign's default is `Multiply` (cases 2 and 4 paint alike).
+        blend_mode: blend_mode_from_idml(Some(setting.blend_mode.as_deref().unwrap_or("Multiply"))),
+        spread: setting
+            .spread_pct
+            .map(|s| (s / 100.0).clamp(0.0, 0.99))
+            .unwrap_or(0.0),
+        noise: setting
+            .noise_pct
+            .map(|n| (n / 100.0).clamp(0.0, 1.0))
+            .unwrap_or(0.0),
     })
 }

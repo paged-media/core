@@ -1423,6 +1423,19 @@
     "frameDirectionalFeatherNoise",
     "frameDirectionalFeatherChoke",
     "frameBlendMode",
+    "frameFillOpacity",
+    "frameFillBlendMode",
+    "frameStrokeOpacity",
+    "frameStrokeBlendMode",
+    "frameContentOpacity",
+    "frameContentBlendMode",
+    "groupIsolateBlending",
+    "groupKnockout",
+    "frameDropShadowBlendMode",
+    "frameDropShadowSpread",
+    "frameDropShadowNoise",
+    "frameDropShadowKnockedOut",
+    "frameDropShadowUseGlobalLight",
     "frameGradientFeather",
     "cellFillColor",
     "cellFillTint",
@@ -5742,6 +5755,354 @@
     },
     {
       "addressKind": "frame",
+      "path": "frameFillOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFillBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameContentOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameContentBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "groupIsolateBlending",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "IsolateBlending",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "groupKnockout",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "KnockoutGroup",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Multiply",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowSpread",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "Spread",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "Noise",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowKnockedOut",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "KnockedOut",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowUseGlobalLight",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "UseGlobalLight",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
       "path": "frameGradientFeather",
       "type": {
         "kind": "struct",
@@ -7944,6 +8305,62 @@
         {
           "element": "DocumentPreference",
           "attribute": "SlugRightOrOutsideOffset",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentGlobalLightAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "default": 120.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "TransparencyPreference",
+          "attribute": "GlobalLightAngle",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentGlobalLightAltitude",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "default": 30.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "TransparencyPreference",
+          "attribute": "GlobalLightAltitude",
           "kind": "attr"
         }
       ]

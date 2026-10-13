@@ -40,6 +40,15 @@ pub struct ColorCtx<'a> {
     /// InDesign falls back to. With this on, such a swatch is DISPLAYED
     /// from its Lab primary. See [`spot_lab_display_rgb`].
     pub standard_lab_for_spots: bool,
+    /// R-11 — the document's global light angle
+    /// (`<TransparencyPreference GlobalLightAngle>`, `None` for InDesign's
+    /// 120°). A shadow with `UseGlobalLight` takes its angle from it when
+    /// it resolves to a paint, here with the rest of the document-wide
+    /// paint policy.
+    pub global_light_angle: Option<f32>,
+    /// R-11 — `<TransparencyPreference GlobalLightAltitude>` (`None` for
+    /// 30°), a bevel's altitude under the document's light.
+    pub global_light_altitude: Option<f32>,
 }
 
 impl<'a> ColorCtx<'a> {
@@ -50,6 +59,8 @@ impl<'a> ColorCtx<'a> {
         Self {
             icc,
             standard_lab_for_spots: false,
+            global_light_angle: None,
+            global_light_altitude: None,
         }
     }
 }
@@ -732,6 +743,18 @@ pub struct RunPaintPicker {
 }
 
 impl RunPaintPicker {
+    /// The picker for a paragraph laid out without its first `bytes`
+    /// (a drop cap's characters, shaped and drawn apart): the body's
+    /// clusters start at 0 after them, so every band moves back by as
+    /// much — a run that starts right after the cap paints from the
+    /// body's first glyph.
+    pub fn without_leading(mut self, bytes: u32) -> Self {
+        for (start, _) in &mut self.bands {
+            *start = start.saturating_sub(bytes);
+        }
+        self
+    }
+
     pub fn pick(&self, cluster: u32) -> Paint {
         let mut chosen = self.default;
         for (start, paint) in &self.bands {
@@ -759,6 +782,14 @@ pub struct RunStrokePicker {
 }
 
 impl RunStrokePicker {
+    /// See [`RunPaintPicker::without_leading`].
+    pub fn without_leading(mut self, bytes: u32) -> Self {
+        for (start, _) in &mut self.bands {
+            *start = start.saturating_sub(bytes);
+        }
+        self
+    }
+
     pub fn pick(&self, cluster: u32) -> Option<(Paint, Stroke)> {
         let mut chosen: Option<(Paint, Stroke)> = None;
         for (start, entry) in &self.bands {

@@ -743,6 +743,14 @@ pub(super) fn build_document_inner(
     let color_ctx = ColorCtx {
         icc: cmyk_xform.as_deref(),
         standard_lab_for_spots: options.use_standard_lab_for_spots,
+        global_light_angle: document
+            .designmap
+            .transparency_preference
+            .global_light_angle,
+        global_light_altitude: document
+            .designmap
+            .transparency_preference
+            .global_light_altitude,
     };
     let mut pages: Vec<BuiltPage> = Vec::new();
     let mut total_stats = PipelineStats::default();
@@ -1265,7 +1273,9 @@ pub(super) fn build_document_inner(
                     let mut copy = frame.clone();
                     copy.item_transform =
                         Some(compose_outer_matrix(mpt_outer, copy.item_transform));
-                    emit_text_frame_into(
+                    // A master frame's text is not moved into a slot, so
+                    // its own bracket stays in the glyph post-pass.
+                    let _ = emit_text_frame_into(
                         &mut pages[i],
                         &copy,
                         document,
@@ -1304,6 +1314,10 @@ pub(super) fn build_document_inner(
                     let mut copy = rect.clone();
                     copy.item_transform =
                         Some(compose_outer_matrix(mpt_outer, copy.item_transform));
+                    // A master's placed picture (a slide-master background
+                    // photo, a logo) paints on every page that applies it,
+                    // between the frame's fill and its stroke.
+                    let image_cache = &mut page_image_caches[i];
                     emit_rectangle_into(
                         &mut pages[i],
                         &copy,
@@ -1312,15 +1326,21 @@ pub(super) fn build_document_inner(
                         options.fallback_frame_fill,
                         color_ctx,
                         None,
-                    );
-                    // A master's placed picture (a slide-master background
-                    // photo, a logo) paints on every page that applies it.
-                    emit_rectangle_image(
-                        &mut pages[i],
-                        &copy,
-                        options,
-                        &mut page_image_caches[i],
-                        decoded_image_cache,
+                        &mut |page: &mut BuiltPage| {
+                            emit_rectangle_image(
+                                page,
+                                &copy,
+                                options,
+                                image_cache,
+                                decoded_image_cache,
+                                resolve_frame_shadow(
+                                    copy.content_drop_shadow.as_ref(),
+                                    None,
+                                    palette,
+                                    color_ctx,
+                                ),
+                            )
+                        },
                     );
                 }
                 paged_model::FrameRef::Polygon(idx) => {
@@ -1349,6 +1369,7 @@ pub(super) fn build_document_inner(
                         palette,
                         options.fallback_frame_fill,
                         color_ctx,
+                        &mut |_: &mut BuiltPage| {},
                     );
                 }
                 paged_model::FrameRef::Oval(idx) => {
@@ -1377,6 +1398,7 @@ pub(super) fn build_document_inner(
                         palette,
                         options.fallback_frame_fill,
                         color_ctx,
+                        &mut |_: &mut BuiltPage| {},
                     );
                 }
                 paged_model::FrameRef::GraphicLine(idx) => {
@@ -1594,7 +1616,7 @@ pub(super) fn build_document_inner(
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
-                        emit_text_frame_into(
+                        let slot_in_group = emit_text_frame_into(
                             &mut pages[page_idx],
                             frame,
                             document,
@@ -1654,8 +1676,11 @@ pub(super) fn build_document_inner(
                         let z_seq = frame_spans.z_seq;
                         frame_spans.text_slots[idx].push(crate::module::TextSlot {
                             page_idx,
-                            slot: pages[page_idx].list.commands.len(),
+                            // R-10: inside the body's object group when it
+                            // has one, so the frame composites as one.
+                            slot: slot_in_group.unwrap_or(pages[page_idx].list.commands.len()),
                             z_seq,
+                            in_object_group: slot_in_group.is_some(),
                         });
                     }
                 }
@@ -1692,6 +1717,9 @@ pub(super) fn build_document_inner(
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
+                        // The placed image paints between the frame's fill
+                        // and its stroke, inside the frame's groups.
+                        let image_cache = &mut page_image_caches[page_idx];
                         emit_rectangle_into(
                             &mut pages[page_idx],
                             rect,
@@ -1700,16 +1728,21 @@ pub(super) fn build_document_inner(
                             options.fallback_frame_fill,
                             color_ctx,
                             options.frame_drop_shadow,
-                        );
-                        // emit_rectangle_image runs paired with the
-                        // rectangle fill so the placed image sits on
-                        // top of the solid fill in the same span.
-                        emit_rectangle_image(
-                            &mut pages[page_idx],
-                            rect,
-                            options,
-                            &mut page_image_caches[page_idx],
-                            decoded_image_cache,
+                            &mut |page: &mut BuiltPage| {
+                                emit_rectangle_image(
+                                    page,
+                                    rect,
+                                    options,
+                                    image_cache,
+                                    decoded_image_cache,
+                                    resolve_frame_shadow(
+                                        rect.content_drop_shadow.as_ref(),
+                                        None,
+                                        palette,
+                                        color_ctx,
+                                    ),
+                                )
+                            },
                         );
                         let after = pages[page_idx].list.commands.len();
                         if after > before && frame_spans.rectangles[idx].is_none() {
@@ -1789,6 +1822,7 @@ pub(super) fn build_document_inner(
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
+                        let image_cache = &mut page_image_caches[page_idx];
                         emit_oval_into(
                             &mut pages[page_idx],
                             oval,
@@ -1796,13 +1830,15 @@ pub(super) fn build_document_inner(
                             palette,
                             options.fallback_frame_fill,
                             color_ctx,
-                        );
-                        emit_oval_image(
-                            &mut pages[page_idx],
-                            oval,
-                            options,
-                            &mut page_image_caches[page_idx],
-                            decoded_image_cache,
+                            &mut |page: &mut BuiltPage| {
+                                emit_oval_image(
+                                    page,
+                                    oval,
+                                    options,
+                                    image_cache,
+                                    decoded_image_cache,
+                                )
+                            },
                         );
                         let after = pages[page_idx].list.commands.len();
                         if after > before && frame_spans.ovals[idx].is_none() {
@@ -1948,6 +1984,7 @@ pub(super) fn build_document_inner(
                     for &local_idx in &local_indices {
                         let page_idx = range.start + local_idx;
                         let before = pages[page_idx].list.commands.len();
+                        let image_cache = &mut page_image_caches[page_idx];
                         emit_polygon_into(
                             &mut pages[page_idx],
                             poly,
@@ -1955,13 +1992,15 @@ pub(super) fn build_document_inner(
                             palette,
                             options.fallback_frame_fill,
                             color_ctx,
-                        );
-                        emit_polygon_image(
-                            &mut pages[page_idx],
-                            poly,
-                            options,
-                            &mut page_image_caches[page_idx],
-                            decoded_image_cache,
+                            &mut |page: &mut BuiltPage| {
+                                emit_polygon_image(
+                                    page,
+                                    poly,
+                                    options,
+                                    image_cache,
+                                    decoded_image_cache,
+                                )
+                            },
                         );
                         let after = pages[page_idx].list.commands.len();
                         if after > before && frame_spans.polygons[idx].is_none() {
@@ -3201,7 +3240,8 @@ pub(super) fn build_document_inner(
             .with_footnote_reservation(&reserved_64)
             .with_forced_breaks(&forced_breaks)
             .with_span_plan(&span_starts, &span_widths)
-            .with_all_text_overset(all_text_overset);
+            .with_all_text_overset(all_text_overset)
+            .with_text_slots(&text_slots);
             // W1.18c — running-header pickup index on the post-layout pass.
             if let Some(index) = running_header_index {
                 emitter = emitter.with_running_headers(index);
@@ -3887,6 +3927,11 @@ impl<'a> StoryEmitter<'a> {
 pub(super) struct StoryEmitter<'a> {
     pub(super) document: &'a Document,
     pub(super) options: &'a PipelineOptions<'a>,
+    /// W2 / R-10 — the body frames' text slots, so the glyph post-pass
+    /// knows which frames' text will move INSIDE their body's object
+    /// group (and so needs no object bracket of its own). `None` for the
+    /// passes whose text is not relocated.
+    pub(super) text_slots: Option<&'a HashMap<(usize, String), crate::module::TextSlot>>,
     pub(super) palette: &'a Graphic,
     /// Reserved for the upcoming CMYK text-fill path. The current
     /// per-glyph paint picker resolves through `palette` directly.
@@ -4277,6 +4322,7 @@ impl<'a> StoryEmitter<'a> {
         Self {
             document,
             options,
+            text_slots: None,
             palette,
             color_ctx,
             font_table,
@@ -4356,6 +4402,16 @@ impl<'a> StoryEmitter<'a> {
     /// page-number variables read.
     pub(super) fn with_page_numbering(mut self, numbering: &'a links::PageNumbering) -> Self {
         self.page_numbering = numbering;
+        self
+    }
+
+    /// W2 / R-10 — the body frames' text slots; see
+    /// [`StoryEmitter::text_slots`].
+    pub(super) fn with_text_slots(
+        mut self,
+        slots: &'a HashMap<(usize, String), crate::module::TextSlot>,
+    ) -> Self {
+        self.text_slots = Some(slots);
         self
     }
 
@@ -4637,16 +4693,14 @@ impl<'a> StoryEmitter<'a> {
                 if gap_64 == 0 {
                     continue;
                 }
-                let cmds = &mut pages[self.chain_pages[i]].list.commands;
+                let list = &mut pages[self.chain_pages[i]].list;
                 for (idx, &(seg_start, seg_end)) in segments.iter().enumerate() {
                     let dy_64 = gap_64 * idx as i32;
                     if dy_64 == 0 {
                         continue;
                     }
                     let dy_pt = dy_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
-                    for cmd in &mut cmds[seg_start..seg_end] {
-                        cmd.transform_mut().0[5] += dy_pt;
-                    }
+                    list.map_transforms(seg_start..seg_end, |t| t.0[5] += dy_pt);
                 }
                 continue;
             }
@@ -4659,9 +4713,9 @@ impl<'a> StoryEmitter<'a> {
                 continue;
             }
             let dy_pt = dy_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
-            for cmd in &mut pages[self.chain_pages[i]].list.commands[start..end] {
-                cmd.transform_mut().0[5] += dy_pt;
-            }
+            pages[self.chain_pages[i]]
+                .list
+                .map_transforms(start..end, |t| t.0[5] += dy_pt);
         }
     }
 
@@ -4861,47 +4915,41 @@ impl<'a> StoryEmitter<'a> {
         }
     }
 
-    /// The frame body (fill / stroke / drop-shadow) is bracketed
-    /// separately at body emit time inside `emit_text_frame_into`. We
-    /// emit two groups per blended text frame — one for the body, one
-    /// for the glyphs — both using the same blend mode against the
-    /// page underneath. Visually equivalent to a single group when the
-    /// body and glyphs occupy disjoint pixel sets (text frames with
-    /// transparent fills, the manual-sample case); slightly different
-    /// only when the body's painted pixels overlap the glyph pixels
-    /// AND the blend is non-associative.
+    /// The frame body (fill / stroke / drop-shadow) is bracketed at body
+    /// emit time inside `emit_text_frame_into`, and the frame's text slot
+    /// sits INSIDE that object group: when the glyphs move to the slot
+    /// (`text_at_frame_z`), the whole frame composites as one group, as
+    /// InDesign does (R-10, `transparency-targets` case 1 — two groups
+    /// faded the text twice). Glyphs that stay where they were emitted
+    /// (a master frame's, or with `text_at_frame_z` off) get the object's
+    /// bracket of their own here. The text's own target
+    /// (`<ContentTransparencySetting>`) is always bracketed here.
     pub(super) fn apply_blend_groups(&mut self, pages: &mut [BuiltPage]) {
         // Per-frame post-emit work: optionally splice glyph-shaped
         // drop shadows in front of the frame's glyph fills, then
-        // optionally bracket the (still-original) glyph range with
-        // a transparency group. Both run from the same per-page
-        // reverse-start-order pass so command-index bookkeeping
-        // stays straightforward.
-        //
-        // Entry shape: `(start, end, glyph_shadow, glyph_shadow_bounds,
-        // blend_group)`.
-        // - `glyph_shadow`: Some((DropShadow, kind)) if the frame has
-        //   no fill and either an object drop shadow (which InDesign
-        //   casts from the text as well as from the stroke) or a
-        //   stroke-transparency drop shadow with no visible stroke
-        //   (per InDesign semantics for "shadow off the visible text
-        //   outlines").
-        // - `glyph_shadow_bounds`: page-space rect to seed the
-        //   shadow wrapper's BlendGroup buffer; the helper pads
-        //   further by `|offset| + 3σ` to guarantee soft edges fit.
-        // - `blend_group`: Some(...) when the frame's blend mode is
-        //   non-Normal or opacity < 100%.
-        type Entry = (
-            usize,
-            usize,
-            Option<(DropShadow, crate::module::GlyphShadowKind)>,
-            paged_compose::Rect,
-            Option<(paged_compose::Rect, paged_compose::BlendMode, f32)>,
-            // W2 — the chain frame this entry belongs to, so the
-            // commands this pass splices can be accounted for against
-            // every OTHER frame's range on the same page.
-            usize,
-        );
+        // optionally bracket the (still-original) glyph range with the
+        // text's own transparency group and the object's. All run from
+        // the same per-page reverse-start-order pass so command-index
+        // bookkeeping stays straightforward.
+        // R-10: one entry per chain frame with glyphs to shadow or
+        // bracket.
+        struct Entry {
+            start: usize,
+            end: usize,
+            glyph_shadow: Option<(DropShadow, crate::module::GlyphShadowKind)>,
+            frame_bounds_in_page: paged_compose::Rect,
+            /// The object's bracket — `None` when the frame needs none, or
+            /// when the glyphs will move into a text slot INSIDE the body's
+            /// own object group (one group for the whole frame, as
+            /// InDesign composites it: `transparency-targets` case 1).
+            blend_group: Option<(paged_compose::Rect, paged_compose::BlendMode, f32)>,
+            /// The content target — the text's own opacity / blend mode
+            /// (`<ContentTransparencySetting>`) and its own shadow, cast
+            /// glyph by glyph (cases 10–12, 28).
+            content_group: Option<(paged_compose::Rect, paged_compose::BlendMode, f32)>,
+            content_shadow: Option<DropShadow>,
+            frame_idx: usize,
+        }
         let mut per_page: HashMap<usize, Vec<Entry>> = HashMap::new();
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
@@ -4915,8 +4963,15 @@ impl<'a> StoryEmitter<'a> {
             let page_idx = self.chain_pages[i];
             let blend_mode = blend_mode_from_idml(frame.blend_mode.as_deref());
             let opacity = frame.opacity;
-            let needs_group = !matches!(blend_mode, paged_compose::BlendMode::Normal)
-                || matches!(opacity, Some(o) if o < 100.0 - f32::EPSILON);
+            let in_body_group = self.options.text_at_frame_z
+                && frame.self_id.as_ref().is_some_and(|id| {
+                    self.text_slots
+                        .and_then(|slots| slots.get(&(page_idx, id.clone())))
+                        .is_some_and(|slot| slot.in_object_group && slot.slot <= start)
+                });
+            let needs_group = !in_body_group
+                && (!matches!(blend_mode, paged_compose::BlendMode::Normal)
+                    || matches!(opacity, Some(o) if o < 100.0 - f32::EPSILON));
             let opacity_f = opacity.map(|p| (p / 100.0).clamp(0.0, 1.0)).unwrap_or(1.0);
             let outer = frame_outer_transform(&pages[page_idx], frame.item_transform);
             let inner_rect = paged_compose::Rect {
@@ -4926,25 +4981,37 @@ impl<'a> StoryEmitter<'a> {
                 h: frame.bounds.height(),
             };
             let frame_bounds_in_page = rect_bounds_in_page(inner_rect, outer);
-            let blend_group = if needs_group {
-                // The frame's rect + 0.5 pt of AA headroom, matching
-                // `push_blend_group`. It is a starting point: glyph ink
-                // can overshoot the frame box (descenders past the
-                // bottom inset, an italic's overhang), and `bounds` is
-                // a CLIP in both back ends.
-                // `fit_transparency_group_bounds`, run at the end of
-                // `build_document_inner`, grows it to the glyphs'
-                // actual extent.
-                let padded = paged_compose::Rect {
-                    x: frame_bounds_in_page.x - 0.5,
-                    y: frame_bounds_in_page.y - 0.5,
-                    w: frame_bounds_in_page.w + 1.0,
-                    h: frame_bounds_in_page.h + 1.0,
-                };
-                Some((padded, blend_mode, opacity_f))
-            } else {
-                None
+            // The frame's rect + 0.5 pt of AA headroom, matching
+            // `push_blend_group`. It is a starting point: glyph ink can
+            // overshoot the frame box (descenders past the bottom inset,
+            // an italic's overhang), and `bounds` is a CLIP in both back
+            // ends. `fit_transparency_group_bounds`, run at the end of
+            // `build_document_inner`, grows it to the glyphs' actual
+            // extent.
+            let padded = paged_compose::Rect {
+                x: frame_bounds_in_page.x - 0.5,
+                y: frame_bounds_in_page.y - 0.5,
+                w: frame_bounds_in_page.w + 1.0,
+                h: frame_bounds_in_page.h + 1.0,
             };
+            let blend_group = needs_group.then_some((padded, blend_mode, opacity_f));
+            let content_group = frame
+                .content_transparency
+                .as_ref()
+                .filter(|t| t.is_active())
+                .map(|t| {
+                    (
+                        padded,
+                        blend_mode_from_idml(t.blend_mode.as_deref()),
+                        target_opacity(Some(t)),
+                    )
+                });
+            let content_shadow = resolve_frame_shadow(
+                frame.content_drop_shadow.as_ref(),
+                None,
+                self.palette,
+                self.color_ctx,
+            );
             // Glyph-shaped shadow: emit when the frame carries a
             // stroke-transparency drop shadow AND both fill and
             // stroke are transparent (so the rect-shaped stamp from
@@ -4990,92 +5057,126 @@ impl<'a> StoryEmitter<'a> {
                     None
                 }
             });
-            if glyph_shadow.is_none() && blend_group.is_none() {
+            if glyph_shadow.is_none()
+                && blend_group.is_none()
+                && content_group.is_none()
+                && content_shadow.is_none()
+            {
                 continue;
             }
-            per_page.entry(page_idx).or_default().push((
+            per_page.entry(page_idx).or_default().push(Entry {
                 start,
                 end,
                 glyph_shadow,
                 frame_bounds_in_page,
                 blend_group,
-                i,
-            ));
+                content_group,
+                content_shadow,
+                frame_idx: i,
+            });
         }
+        let shadow_bounds = |frame_bounds_in_page: paged_compose::Rect, shadow: &DropShadow| {
+            // Group-buffer bounds for the shadow wrapper: the frame's
+            // bbox in page coords, padded by `(|offset| + 3*blur)` on
+            // each side so soft edges don't get clipped to the buffer.
+            // The helper inserts the BeginBlendGroup itself.
+            let pad = shadow.offset_x.abs().max(shadow.offset_y.abs())
+                + 3.0 * shadow.blur_radius.abs()
+                + 1.0;
+            paged_compose::Rect {
+                x: frame_bounds_in_page.x - pad,
+                y: frame_bounds_in_page.y - pad,
+                w: frame_bounds_in_page.w + 2.0 * pad,
+                h: frame_bounds_in_page.h + 2.0 * pad,
+            }
+        };
+        let bracket = |page: &mut BuiltPage,
+                       from: usize,
+                       to: usize,
+                       (bounds, blend_mode, opacity): (
+            paged_compose::Rect,
+            paged_compose::BlendMode,
+            f32,
+        )| {
+            // End first so the start-insert doesn't shift `to`.
+            page.list.insert_command(
+                to,
+                paged_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
+            );
+            page.list.insert_command(
+                from,
+                paged_compose::DisplayCommand::BeginBlendGroup {
+                    bounds,
+                    blend_mode,
+                    opacity,
+                    isolated: false,
+                    knockout: false,
+                    transform: Transform::IDENTITY,
+                },
+            );
+        };
         // Splice in reverse start-order per page so earlier ranges
         // stay valid.
         for (page_idx, mut entries) in per_page {
-            entries.sort_by(|a, b| b.0.cmp(&a.0));
-            for (start, end, glyph_shadow, frame_bounds_in_page, blend_group, frame_idx) in entries
-            {
+            entries.sort_by(|a, b| b.start.cmp(&a.start));
+            for e in entries {
+                let (start, end) = (e.start, e.end);
                 let page = &mut pages[page_idx];
-                // Step 1: splice glyph-shaped shadows in front of
-                // the original glyph range. The shadow stamps land
-                // *before* any BeginBlendGroup we add in Step 2,
-                // so a Lighten-blend frame's glyphs still cast a
-                // dark shadow against the page below (Lighten of
-                // dark gray on white = white = invisible — the
-                // shadow has to be outside the group). Returns
-                // `inserted`, the number of commands added (one
-                // PathShadow per glyph fill plus the wrapper
-                // BeginBlendGroup / EndBlendGroup); every later
-                // index (incl. `end`) shifts forward by that count
-                // for Step 2.
-                let inserted = if let Some((shadow, kind)) = glyph_shadow {
-                    // Group-buffer bounds for the shadow wrapper:
-                    // the frame's bbox in page coords, padded by
-                    // `(|offset| + 3*blur)` on each side so soft
-                    // edges don't get clipped to the buffer. The
-                    // helper inserts the BeginBlendGroup itself.
-                    let pad = shadow.offset_x.abs().max(shadow.offset_y.abs())
-                        + 3.0 * shadow.blur_radius.abs()
-                        + 1.0;
-                    let bounds_in_page = paged_compose::Rect {
-                        x: frame_bounds_in_page.x - pad,
-                        y: frame_bounds_in_page.y - pad,
-                        w: frame_bounds_in_page.w + 2.0 * pad,
-                        h: frame_bounds_in_page.h + 2.0 * pad,
-                    };
-                    crate::module::emit_glyph_shadow_pass(
+                // Step 1: splice the object's (or the stroke target's)
+                // glyph-shaped shadows in front of the original glyph
+                // range. The stamps land *before* any BeginBlendGroup we
+                // add below, so a Lighten-blend frame's glyphs still cast
+                // a dark shadow against the page below (Lighten of dark
+                // gray on white = white = invisible — the shadow has to
+                // be outside the group). Returns the number of commands
+                // added (one PathShadow per glyph fill plus the wrapper
+                // BeginBlendGroup / EndBlendGroup); every later index
+                // (incl. `end`) shifts forward by that count.
+                let inserted = match e.glyph_shadow {
+                    Some((shadow, kind)) => crate::module::emit_glyph_shadow_pass(
                         page,
                         start..end,
                         shadow,
                         kind,
-                        bounds_in_page,
-                    )
-                } else {
-                    0
+                        shadow_bounds(e.frame_bounds_in_page, &shadow),
+                    ),
+                    None => 0,
                 };
-                let glyphs_start = start + inserted;
-                let glyphs_end = end + inserted;
-                // Step 2: bracket glyph fills with BeginBlendGroup /
-                // EndBlendGroup (when needed). Insert end-then-start
-                // so the start-insert doesn't shift `glyphs_end`.
-                let bracketed = if let Some((bounds, blend_mode, opacity)) = blend_group {
-                    page.list.insert_command(
-                        glyphs_end,
-                        paged_compose::DisplayCommand::EndBlendGroup(Transform::IDENTITY),
+                let content_start = start + inserted;
+                let mut glyphs_end = end + inserted;
+                let mut total = inserted;
+                // Step 2: the text's own shadow, inside the content
+                // target, so the text's opacity fades it with the glyphs.
+                if let Some(shadow) = e.content_shadow {
+                    let n = crate::module::emit_glyph_shadow_pass(
+                        page,
+                        content_start..glyphs_end,
+                        shadow,
+                        crate::module::GlyphShadowKind::Object,
+                        shadow_bounds(e.frame_bounds_in_page, &shadow),
                     );
-                    page.list.insert_command(
-                        glyphs_start,
-                        paged_compose::DisplayCommand::BeginBlendGroup {
-                            bounds,
-                            blend_mode,
-                            opacity,
-                            transform: Transform::IDENTITY,
-                        },
-                    );
-                    2
-                } else {
-                    0
-                };
+                    glyphs_end += n;
+                    total += n;
+                }
+                // Step 3: the content target's bracket around the text
+                // (and its shadow).
+                if let Some(g) = e.content_group {
+                    bracket(page, content_start, glyphs_end, g);
+                    glyphs_end += 2;
+                    total += 2;
+                }
+                // Step 4: the object's bracket, when the glyphs are not
+                // moving into the body's own object group.
+                if let Some(g) = e.blend_group {
+                    bracket(page, content_start, glyphs_end, g);
+                    total += 2;
+                }
                 // W2 — this frame's block grew by the shadow stamps and
-                // the bracket; record its final extent and push every
+                // the brackets; record its final extent and push every
                 // other frame on the page along.
-                let total = inserted + bracketed;
                 if total > 0 {
-                    self.frame_cmd_ranges[frame_idx] = Some((start, end + total));
-                    self.shift_ranges_for_insert(page_idx, start, total, frame_idx);
+                    self.frame_cmd_ranges[e.frame_idx] = Some((start, end + total));
+                    self.shift_ranges_for_insert(page_idx, start, total, e.frame_idx);
                 }
             }
         }
@@ -5313,33 +5414,16 @@ fn emit_paragraph_lines(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
-    // Phase 4 typography — nested character styles. If the paragraph
-    // style declares `<NestedStyle>` children, splice the runs at
-    // overlay boundaries and override the `character_style` field on
-    // each sliced fragment. The rest of the function then sees a run
-    // list whose applied character styles already reflect the nested
-    // overrides; no other code path needs to know about nested styles.
-    let paragraph_owned;
-    let paragraph: &paged_model::Paragraph = {
-        let nested = &em
-            .document
-            .resolved_paragraph_attrs(paragraph)
-            .nested_styles;
-        if nested.is_empty() {
-            paragraph
-        } else {
-            let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
-            let overlay = compute_nested_style_overlay(&paragraph_text, nested);
-            if overlay.is_empty() {
-                paragraph
-            } else {
-                paragraph_owned = paged_model::Paragraph {
-                    runs: split_runs_for_nested_styles(&paragraph.runs, &overlay),
-                    ..paragraph.clone()
-                };
-                &paragraph_owned
-            }
-        }
+    // Nested styles (and the style's drop cap they may name): layered
+    // into the runs once, on the whole paragraph, before it is split at
+    // its forced breaks — a segment carries what it was given, and a
+    // nested style never restarts at a forced line break.
+    let paragraph_nested;
+    let paragraph: &paged_model::Paragraph = if em.in_segments {
+        paragraph
+    } else {
+        paragraph_nested = with_nested_styles(em.document, paragraph);
+        &paragraph_nested
     };
     // IDML's paragraph mark `<Br/>` reads as `\n` inside run text, so
     // one style range can hold several paragraphs. The composer treats
@@ -5993,6 +6077,7 @@ fn emit_paragraph_lines(
                     resolved_runs[i].kerning_method.as_deref(),
                     &resolved_runs[i].otf,
                     resolved_runs[i].capitalization.as_deref(),
+                    resolved_runs[i].position.as_deref(),
                 ),
             }
         })
@@ -6022,6 +6107,7 @@ fn emit_paragraph_lines(
                     m.kerning_method.as_deref(),
                     &m.otf,
                     m.capitalization.as_deref(),
+                    m.position.as_deref(),
                 ),
             },
         );
@@ -6082,7 +6168,14 @@ fn emit_paragraph_lines(
     let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
-    lopts.alignment = map_justification(resolved_paragraph.justification);
+    let binding = em
+        .chain_pages
+        .get(em.frame_idx)
+        .and_then(|&p| pages.get(p))
+        .map(BuiltPage::binding_edge)
+        .unwrap_or_default();
+    (lopts.alignment, lopts.last_line_alignment) =
+        map_justification(resolved_paragraph.justification, binding);
     lopts.justify_last_line = !em.segment.closes_paragraph;
     if let Some((prefix, _)) = marker_run {
         lopts.auto_leading_from_byte = prefix.len() as u32;
@@ -6944,6 +7037,14 @@ fn emit_paragraph_lines(
         em.color_ctx,
         bullet_paint_override.map(|(len, _)| len).unwrap_or(0),
     );
+    // A drop cap's characters are shaped and drawn apart, and the body
+    // is laid out without them: its clusters start after the cap. The
+    // pickers count from the paragraph's first byte, so they move back
+    // by the cap's bytes — or a run starting right after the cap (a
+    // nested style's) paints one character late.
+    let cap_bytes = drop_cap_spec_emit.as_ref().map_or(0, |cap| cap.0 as u32);
+    let picker = picker.without_leading(cap_bytes);
+    let stroke_picker = stroke_picker.without_leading(cap_bytes);
     let any_text_stroke = stroke_picker.any_visible();
 
     let space_after_64 =
@@ -7757,10 +7858,11 @@ fn emit_paragraph_lines(
         if !frame_is_upright {
             let pivot_x = sx - ox;
             let pivot_y = sy - oy;
-            for cmd in &mut pages[target_page].list.commands[before_cmds..after_glyph_cmds] {
-                let xf = cmd.transform_mut();
-                rotate_transform_around(xf, frame_linear, pivot_x, pivot_y);
-            }
+            pages[target_page]
+                .list
+                .map_transforms(before_cmds..after_glyph_cmds, |xf| {
+                    rotate_transform_around(xf, frame_linear, pivot_x, pivot_y)
+                });
         }
 
         let after_cmds = pages[target_page].list.commands.len();

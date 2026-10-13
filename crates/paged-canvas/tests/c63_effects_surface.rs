@@ -183,7 +183,8 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
 
     // ADR 132 — a line's effects are drawn from its stroke band now, so
     // it reads the inventory too — every row but the gradient feather
-    // (it fades a fill) and the blend mode (a line has no blend slot).
+    // (it fades a fill). Its blend mode is stored and drawn since R-10, so
+    // it reads that row once, as the shapes do.
     let line = graphic_line(&mut m);
     let line_rows: Vec<PropertyPath> = m
         .element_properties(&line)
@@ -203,9 +204,16 @@ fn a_polygon_and_an_oval_read_the_effect_inventory_a_rectangle_reads() {
         );
     }
     assert!(
-        !line_rows.contains(&PropertyPath::FrameGradientFeather)
-            && !line_rows.contains(&PropertyPath::FrameBlendMode),
+        !line_rows.contains(&PropertyPath::FrameGradientFeather),
         "a GraphicLine must not advertise what it cannot draw"
+    );
+    assert_eq!(
+        line_rows
+            .iter()
+            .filter(|p| **p == PropertyPath::FrameBlendMode)
+            .count(),
+        1,
+        "a GraphicLine reads its blend mode once (R-10)"
     );
 }
 

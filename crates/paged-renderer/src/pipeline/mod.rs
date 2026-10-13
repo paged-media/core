@@ -101,8 +101,8 @@ use shapes::{PLACEHOLDER_FILL_RGB, PLACEHOLDER_X_RGB, PLACEHOLDER_X_STROKE_PT};
 use shapes::{SUBSTITUTED_HIGHLIGHT_B, SUBSTITUTED_HIGHLIGHT_G, SUBSTITUTED_HIGHLIGHT_R};
 
 pub(crate) use blend_shadow::{
-    frame_group_opacity, frame_needs_blend_group, pop_blend_group, push_blend_group,
-    resolve_frame_shadow,
+    emit_blended_shadow, frame_group_opacity, frame_needs_blend_group, pop_blend_group,
+    push_blend_group, push_target_group, resolve_frame_shadow, shadow_group_blend, target_opacity,
 };
 pub use build_engine::build_index_paragraphs;
 use build_engine::*;
@@ -767,6 +767,14 @@ pub struct BuiltPage {
     /// re-encode only the pages a scene-layer submit changed instead of
     /// dropping every cached page.
     pub scene_layer_frames: Vec<String>,
+}
+
+impl BuiltPage {
+    /// The page edge its binding runs along, from where it sits in its
+    /// spread (see [`BindingEdge::of_page`]).
+    pub fn binding_edge(&self) -> BindingEdge {
+        BindingEdge::of_page(self.spread_origin.0, self.width_pt)
+    }
 }
 
 /// W3.A1 — one table cell's page-local rect plus its addressing keys.
@@ -1672,7 +1680,8 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             };
             let measurer = paged_text::HarfrustMeasurer::new(face, paragraph_size);
             let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
-            lopts.alignment = map_justification(paragraph.justification);
+            (lopts.alignment, lopts.last_line_alignment) =
+                map_justification(paragraph.justification, BindingEdge::default());
             let laid_out = paged_text::layout_paragraph(&paragraph_text, &measurer, &lopts);
             stats.lines += laid_out.lines.len();
 

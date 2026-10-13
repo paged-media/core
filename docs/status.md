@@ -106,7 +106,14 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `crates/paged-introspect/catalog.json`: 161 host functions, 221 settable paths, 403
   property schemas, 130 operations, and the 30 address forms of `idGrammar`. 355 of the
   schema rows name the IDML element and attribute their value is read from (`idml`).
-- **Fidelity tooling.** The fixture generator (62 samples), the image-diff tool, 61
+- **Nested styles and OpenType as InDesign sets them** ([ADR 134](adr/134-nested-styles-and-opentype-as-indesign-sets-them.md)).
+  Nested styles read from InDesign's `<AllNestedStyles>` lists on a style or a range, cascade
+  through `EmptyNestedStyles`, layer under a hand-applied character style, and range by the rules
+  InDesign 20.0.1 answered (through and up to, words, sentences, repeat, a drop cap's style). A
+  paragraph style carries `Ligatures`, `KerningMethod` and the `OTF*` toggles; the OpenType
+  positions are the font's `sups` / `subs` / `numr` / `dnom` glyphs; All Caps asks for `case`
+  and `cpsp`; historical forms and stylistic alternates shape.
+- **Fidelity tooling.** The fixture generator (67 samples), the image-diff tool, 66
   reference PDFs with thresholds (`docx-pagination` has none and is not gated), and the
   scripts that drive InDesign to export them.
 
@@ -137,6 +144,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `DocumentPreference`, so a bleed or slug set with `set` survives in the model part of a
   `.paged` file only. (A hidden item's `Visible="false"` and text variables authored in paged
   do reach the IDML: `crates/paged-canvas/tests/idml_export_object_model_state.rs`.)
+- **Line and GREP styles are read and kept, not applied.** `<AllLineStyles>` and
+  `<AllGREPStyles>` reach the model and the IDML export; the renderer sets no line or GREP style.
+  End Nested Style Here (`<?ACE 3?>`) is not kept by the story reader, so a nested style that
+  ends there runs on to its other limits.
 - **A cell's fill tint is not modelled.** `cellFillTint` reads `null` on every cell and its
   write is accepted but not stored, rendered or saved; the cell keeps its fill at 100 %.
   It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).
