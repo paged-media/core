@@ -5713,6 +5713,24 @@ pub struct Paragraph {
     /// for drop caps. `0` is the default. Stored signed because the
     /// IDML serialisation allows negative values.
     pub drop_cap_detail: i32,
+    /// `Minimum` / `Desired` / `MaximumWordSpacing` set on the range
+    /// itself (percent of the space), over the paragraph style's. `None`
+    /// ⇒ the style's value.
+    pub minimum_word_spacing: Option<f32>,
+    pub desired_word_spacing: Option<f32>,
+    pub maximum_word_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumLetterSpacing` on the range: a
+    /// percentage of the space width (see
+    /// [`ParagraphStyleDef::desired_letter_spacing`]). `None` ⇒ the
+    /// style's value.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumGlyphScaling` on the range
+    /// (percent; 100 is the font's width). `None` ⇒ the style's value.
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
     /// `Hyphenation` boolean override on the `<ParagraphStyleRange>`.
     /// `None` ⇒ inherit (IDML default at the bottom of the cascade is
     /// `true`). The composer keys hyphenation off the resolved style

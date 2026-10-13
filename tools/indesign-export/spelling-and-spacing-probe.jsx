@@ -38,6 +38,8 @@
 //   super, sub      "HH" then "HH" raised / lowered
 //   ruleabove/below a 4 pt rule above / below "Hxg", offset 10 pt
 //   spellings       a drop cap with detail 2, ruby on 漢字, small caps
+//   localspacing    word and letter spacing and glyph scaling set on the
+//                   paragraph itself, not through a style
 //   path0..path5    type on a straight 400 pt line with a 6 pt Paper
 //                   stroke: Baseline, Ascender, Descender, Center text
 //                   alignment on the path's centre, then Baseline on its
@@ -153,6 +155,13 @@
         f.parentStory.paragraphs[0].ruleBelowLineWeight = 4;
         f.parentStory.paragraphs[0].ruleBelowOffset = 10;
         f.parentStory.paragraphs[0].ruleBelowColor = black;
+        // Spacing set on the paragraph itself, not through a style: InDesign
+        // writes it on the <ParagraphStyleRange>.
+        f = frame("localspacing", 700, 30, "Local spacing");
+        var lp = f.parentStory.paragraphs[0];
+        lp.maximumWordSpacing = 150; lp.desiredWordSpacing = 110; lp.minimumWordSpacing = 70;
+        lp.maximumLetterSpacing = 30; lp.desiredLetterSpacing = 10; lp.minimumLetterSpacing = -10;
+        lp.maximumGlyphScaling = 110; lp.desiredGlyphScaling = 105; lp.minimumGlyphScaling = 95;
         f = frame("spellings", 640, 50, "Drop cap 漢字 and SMALL caps");
         f.parentStory.paragraphs[0].dropCapCharacters = 1;
         f.parentStory.paragraphs[0].dropCapLines = 2;

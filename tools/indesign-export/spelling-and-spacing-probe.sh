@@ -62,6 +62,10 @@ unzip -p "$IDML" 'Stories/*.xml' 'Spreads/*.xml' \
     | grep -oE '(DropcapDetail|DropCapDetail|RubyFlag|RubyType|Capitalization|PathAlignment|TextAlignment|PathTypeAlignment)="[^"]*"' \
     | sort | uniq -c
 
+echo "==> spacing set on a paragraph itself (InDesign writes it on the range)"
+unzip -p "$IDML" 'Stories/*.xml' | grep -oE '<ParagraphStyleRange [^>]*(WordSpacing|LetterSpacing|GlyphScaling)[^>]*>' \
+    | grep -oE '(Minimum|Desired|Maximum)(Word|Letter)Spacing="[^"]*"|(Minimum|Desired|Maximum)GlyphScaling="[^"]*"' | sort -u
+
 echo "==> rules and type on a path in InDesign's PDF"
 pdftoppm -r 1152 -gray "$PDF" "$OUT/page" >/dev/null
 python3 -I - "$OUT" <<'PY'
