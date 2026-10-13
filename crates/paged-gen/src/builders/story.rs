@@ -565,10 +565,19 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
             let point_size_str: String;
             let tracking_str: String;
             let baseline_str: String;
-            let mut r_attrs: Vec<(&str, &str)> = vec![(
-                "AppliedCharacterStyle",
-                "CharacterStyle/$ID/[No character style]",
-            )];
+            // An `AppliedCharacterStyle` in the escape hatch REPLACES the
+            // default, as `AppliedParagraphStyle` does for the paragraph.
+            let mut r_attrs: Vec<(&str, &str)> = Vec::new();
+            if !run
+                .extra_char_attrs
+                .iter()
+                .any(|(k, _)| *k == "AppliedCharacterStyle")
+            {
+                r_attrs.push((
+                    "AppliedCharacterStyle",
+                    "CharacterStyle/$ID/[No character style]",
+                ));
+            }
             if let Some(size) = run.point_size {
                 point_size_str = crate::xml::format_f32(size);
                 r_attrs.push(("PointSize", point_size_str.as_str()));
