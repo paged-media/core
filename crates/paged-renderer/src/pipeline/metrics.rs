@@ -192,6 +192,25 @@ pub fn map_justification(
     }
 }
 
+/// How far (1/64 pt) InDesign lets a line run past its measure before the
+/// Paragraph Composer breaks it, at `size` pt. Asked of InDesign 20.0.1
+/// (`tools/indesign-export/fit-tolerance-probe.json`, bisected at 6 to 48
+/// pt): ragged lines keep a word up to `size / 32 + 0.254 / size` pt over,
+/// justified lines up to `0.0466 × size + 0.178 / size` pt — every
+/// measured point within 0.003 pt, at any word spacing and however many
+/// spaces the line holds.
+pub(super) fn fit_tolerance_64(size: f32, justified: bool) -> i32 {
+    if size <= 0.0 {
+        return 0;
+    }
+    let pt = if justified {
+        0.0466 * size + 0.178 / size
+    } else {
+        size / 32.0 + 0.254 / size
+    };
+    (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32
+}
+
 pub(super) fn map_tab_alignment(a: Option<&str>) -> paged_text::layout::TabAlignment {
     match a {
         Some("RightAlign") => paged_text::layout::TabAlignment::Right,
@@ -204,6 +223,29 @@ pub(super) fn map_tab_alignment(a: Option<&str>) -> paged_text::layout::TabAlign
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fit-tolerance-probe.json`: InDesign 20.0.1's bisected allowances.
+    #[test]
+    fn fit_tolerance_matches_indesigns_measured_allowance() {
+        let pt = |s: f32, j: bool| fit_tolerance_64(s, j) as f32 / 64.0;
+        for (size, ragged, justified) in [
+            (6.0, 0.2299, 0.3093),
+            (12.0, 0.3973, 0.5741),
+            (24.0, 0.7600, 1.1247),
+            (48.0, 1.5023, 2.2377),
+        ] {
+            assert!(
+                (pt(size, false) - ragged).abs() < 0.02,
+                "{size} ragged {}",
+                pt(size, false)
+            );
+            assert!(
+                (pt(size, true) - justified).abs() < 0.02,
+                "{size} justified {}",
+                pt(size, true)
+            );
+        }
+    }
     use paged_model::Justification as J;
     use paged_text::Alignment as A;
 

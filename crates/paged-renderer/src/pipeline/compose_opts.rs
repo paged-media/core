@@ -64,6 +64,8 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     // driven purely by geometric fit, as InDesign's justified composer
     // does. W1.3 landed the ragged-only zone gate; this closes the
     // justified case as a documented no-op rather than a behaviour.
+    // A paragraph that states no zone has none: InDesign hyphenates the
+    // `tints` labels' "Ma-genta" as it does at zone 0, not as at 36.
     let zone_64 = resolved
         .hyphenation_zone
         .map(|z| (z.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
