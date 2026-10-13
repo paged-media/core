@@ -51,12 +51,15 @@ pub(super) fn run_prints(applied: &[String], declared: &BTreeMap<String, Conditi
 /// to. The model keeps only a character offset, which on a boundary names
 /// two ranges; InDesign writes an anchored object BEFORE the text of the
 /// range it sits in and a footnote reference AFTER it, so the boundary
-/// goes to the range starting there or ending there respectively.
+/// goes to the range starting there or ending there respectively. A
+/// reference whose marker character stands at the offset is that
+/// character, and goes with the range holding it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Side {
     /// Anchored objects: the range that starts at the offset.
     Starts,
-    /// Footnote references: the range that ends at the offset.
+    /// Footnote references recorded without their character: the range
+    /// that ends at the offset.
     Ends,
 }
 
@@ -142,14 +145,24 @@ pub(super) fn without_hidden_runs(
             out.anchored_frame_offsets.push(at - hidden_before(at));
         }
     }
+    // A note whose reference character stands at its anchor goes with
+    // the run holding that character; an anchor with no character (an
+    // older import) with the run ending there.
+    let chars: Vec<char> = paragraph.runs.iter().flat_map(|r| r.text.chars()).collect();
     for note in &paragraph.footnotes {
         let at = note.anchor.unwrap_or(0);
-        if kept(at, Side::Ends) {
+        let side = if chars.get(at as usize) == Some(&paged_model::FOOTNOTE_REFERENCE_MARKER) {
+            Side::Starts
+        } else {
+            Side::Ends
+        };
+        if kept(at, side) {
             let mut note = note.clone();
             note.anchor = note.anchor.map(|a| a - hidden_before(a));
             out.footnotes.push(note);
         }
     }
+    out.table_anchor = paragraph.table_anchor.map(|a| a - hidden_before(a));
     Some(out)
 }
 
