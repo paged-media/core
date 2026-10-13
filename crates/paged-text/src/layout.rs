@@ -1432,7 +1432,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             options.last_line_setting(i == last_break),
             bytes,
             opts.minimum_raggedness,
-            single_line.is_some(),
+            single_line.is_some() || !opts.minimum_raggedness,
         );
         // A line sits ITS OWN leading below the line before it (the
         // first one at `first_baseline`): the largest leading among its
@@ -1513,6 +1513,16 @@ fn knuth_plass_breaks(
                 overrun_size: opts.overrun_size,
             },
         );
+        if !breaks.is_empty() {
+            return breaks;
+        }
+    }
+    // Justified text breaks the way InDesign's Paragraph Composer was
+    // measured to break it: over-shrunk lines priced, not infeasible, and
+    // against the true measure (ADR 144). Shaped and wrapped frames keep
+    // Knuth–Plass, whose joined rows and overset lines it does not model.
+    if alignment == Alignment::Justify && !opts.minimum_raggedness {
+        let breaks = crate::justified::justified_breaks(items, lengths);
         if !breaks.is_empty() {
             return breaks;
         }

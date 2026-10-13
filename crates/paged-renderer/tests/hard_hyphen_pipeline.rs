@@ -68,15 +68,12 @@ const INDESIGN: [[&str; 5]; 6] = [
     ],
 ];
 
-/// Frames where the engine still differs from InDesign, none of them about
-/// the hyphen rule: `(row, column, the engine's lines)`.
-/// - (3, 1): justified. The Paragraph Composer refuses the loose line
-///   `The two-` (one space to stretch) that InDesign sets.
-///
-/// (5, 3) matches since a line may overrun its measure by InDesign's
-/// allowance (ADR 141), and (4, 0) since ragged text breaks by minimum
+/// Frames where the engine still differs from InDesign: `(row, column, the
+/// engine's lines)`. None since justified text prices an over-shrunk line
+/// (ADR 144): the justified row's 60 pt `The two- / way street` was the
+/// last. (5, 3) matched with ADR 141's allowance and (4, 0) with minimum
 /// raggedness (ADR 142).
-const KNOWN: [(usize, usize, &str); 1] = [(3, 1, "The / two-way / street")];
+const KNOWN: [(usize, usize, &str); 0] = [];
 
 fn inter_font() -> Vec<u8> {
     let p =

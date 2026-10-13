@@ -37,6 +37,8 @@ pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
 pub mod justification;
+pub mod justified_breaks;
+pub mod justified_probe;
 pub mod keeps;
 pub mod keeps_reflow;
 pub mod kerning;
@@ -141,6 +143,7 @@ pub const SAMPLES: &[&str] = &[
     "layout",
     "blank-paragraphs",
     "hard-hyphen",
+    "justified-breaks",
     "mixed-leading",
     "keeps",
     "start-paragraph",
@@ -223,6 +226,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "layout" => layout::build(),
         "blank-paragraphs" => blank_paragraphs::build(),
         "hard-hyphen" => hard_hyphen::build(),
+        "justified-breaks" => justified_breaks::build(),
+        "justified-probe" => justified_probe::build(),
         "mixed-leading" => mixed_leading::build(),
         "keeps" => keeps::build(),
         "start-paragraph" => start_paragraph::build(),
@@ -291,7 +296,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            77,
+            78,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
