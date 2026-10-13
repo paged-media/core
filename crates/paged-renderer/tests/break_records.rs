@@ -14,9 +14,10 @@
 
 //! The break records (`paged-inspect --emit-breaks`) say what a line prints
 //! that its story does not hold — a list's marker, a tab's leader, a page
-//! or footnote number. The text gate (`corpus/generated/text-diff.sh`)
-//! reads them: it drops a marker on both sides and prints a leader on both,
-//! instead of guessing either from InDesign's PDF alone.
+//! or footnote number — and type on a path writes its line. The text gate
+//! (`corpus/generated/text-diff.sh`) reads both: it drops a marker on both
+//! sides and prints a leader on both, instead of guessing either from
+//! InDesign's PDF alone.
 
 use std::path::PathBuf;
 
@@ -153,6 +154,49 @@ fn page_numbers_variables_and_footnote_numbers_are_marked() {
     assert_eq!(spans(note), [(FootnoteNumber, "5")]);
 }
 
+/// Type on a path is one line per `<TextPath>`, holding the text that fits
+/// between its brackets (`text-on-path`: six paths, one per page).
+#[test]
+fn type_on_a_path_writes_its_line() {
+    let b = breaks(paged_gen::samples::text_on_path::build());
+    let paths: Vec<_> = b.iter().filter(|r| r.text_path.is_some()).collect();
+    let texts: Vec<_> = paths
+        .iter()
+        .map(|r| (r.page_idx, r.source_text.as_str()))
+        .collect();
+    assert_eq!(texts.len(), 6, "{texts:?}");
+    assert_eq!(texts[0], (0, "Type along the arch"));
+    assert_eq!(texts[1], (1, "Around and around the ring we go"));
+    // The overset path holds a head of its sentence, not all of it.
+    const OVERSET: &str = "This sentence is far too long to fit on a tiny path";
+    assert_eq!(texts[2].0, 2);
+    assert!(
+        OVERSET.starts_with(texts[2].1) && texts[2].1.len() < OVERSET.len() / 2,
+        "{:?}",
+        texts[2].1
+    );
+    for (i, t) in texts[3..].iter().enumerate() {
+        assert_eq!(*t, (3 + i as u32, "Seat the glyphs"));
+    }
+    for r in &paths {
+        assert!(!r.text_path.as_deref().unwrap().is_empty());
+        assert_eq!((r.paragraph_idx, r.line_idx, r.first_byte), (0, 0, 0));
+        assert_eq!(r.last_byte as usize, r.source_text.len());
+        assert!(r.generated.is_empty());
+        // Page-local: on the A4 page, and the glyphs cover some arc.
+        assert!(
+            r.baseline_y_pt > 0.0 && r.baseline_y_pt < 841.9,
+            "{}",
+            r.baseline_y_pt
+        );
+        assert!(r.width_pt > 0.0);
+    }
+    // The three seats ride the same segment: Baseline on it, Ascender
+    // below it, Descender above it.
+    let y: Vec<f32> = paths[3..].iter().map(|r| r.baseline_y_pt).collect();
+    assert!(y[1] > y[0] && y[2] < y[0], "{y:?}");
+}
+
 /// The JSON a line without generated text writes is the one it wrote
 /// before the fields existed; one with spans names their kind in snake
 /// case.
@@ -170,6 +214,7 @@ fn the_json_adds_fields_only_where_they_apply() {
         width_pt: 40.0,
         source_text: "1.\tone two".into(),
         generated: Vec::new(),
+        text_path: None,
     };
     let plain = serde_json::to_value(&r).unwrap();
     let mut keys: Vec<_> = plain.as_object().unwrap().keys().cloned().collect();
@@ -203,6 +248,7 @@ fn the_json_adds_fields_only_where_they_apply() {
             text: Some("...".into()),
         },
     ];
+    r.text_path = Some("u2".into());
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(
         v["generated"],
@@ -211,4 +257,5 @@ fn the_json_adds_fields_only_where_they_apply() {
             {"kind": "tab_leader", "start": 6, "end": 7, "text": "..."}
         ])
     );
+    assert_eq!(v["text_path"], "u2");
 }

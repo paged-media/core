@@ -1114,6 +1114,14 @@ pub struct BreakRecord {
     /// any reads as it did before the field existed.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub generated: Vec<GeneratedSpan>,
+    /// For type on a path: the `<TextPath>` the line rides (its `Self`,
+    /// empty when it has none). Such a record is the path's one line:
+    /// `first_byte..last_byte` index the story's text rather than a
+    /// paragraph's, `baseline_y_pt` is the page-local y where the text
+    /// starts on the path and `width_pt` the arc length it covers.
+    /// Omitted for every other line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_path: Option<String>,
 }
 
 /// One stretch of a [`BreakRecord`]'s line that the engine generated

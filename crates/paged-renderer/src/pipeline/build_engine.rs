@@ -2603,6 +2603,8 @@ pub(super) fn build_document_inner(
             for tp in &poly.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     &poly.anchors,
                     poly.item_transform,
@@ -2661,6 +2663,8 @@ pub(super) fn build_document_inner(
             for tp in &rect.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     anchors,
                     rect.item_transform,
@@ -2709,6 +2713,8 @@ pub(super) fn build_document_inner(
             for tp in &line.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     anchors,
                     line.item_transform,
@@ -7709,6 +7715,7 @@ fn emit_paragraph_lines(
                 width_pt: line.width as f32 / paged_text::shape::ADVANCE_PRECISION,
                 source_text,
                 generated,
+                text_path: None,
             });
         }
 

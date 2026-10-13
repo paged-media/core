@@ -829,6 +829,7 @@ pub(super) fn emit_footnote_pools(
                                     &c.numbers[p_idx],
                                     range,
                                 ),
+                                text_path: None,
                             });
                         }
                     }
