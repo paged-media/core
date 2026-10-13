@@ -2675,6 +2675,7 @@ fn cycle4_q07_negative_tracking_tightens_emitted_glyph_advances() {
 // carry letter spacing on paragraph styles, so the tests do too.
 
 fn build_spacing_idml(
+    face: &str,
     style_attrs: &str,
     para_attrs: &str,
     char_attrs: &str,
@@ -2700,7 +2701,7 @@ fn build_spacing_idml(
 <idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
   <Story Self="u10">
     <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Spaced" {para_attrs}>
-      <CharacterStyleRange AppliedFont="Inter" PointSize="36" {char_attrs}>
+      <CharacterStyleRange {face} {char_attrs}>
         <Content>{text}</Content>
       </CharacterStyleRange>
     </ParagraphStyleRange>
@@ -2729,6 +2730,7 @@ fn spacing_glyphs(
         ..PipelineOptions::default()
     };
     let doc = idml_import::import_idml_doc(&build_spacing_idml(
+        r#"AppliedFont="Inter" PointSize="36""#,
         style_attrs,
         para_attrs,
         char_attrs,
@@ -2798,4 +2800,107 @@ fn a_right_aligned_lines_last_character_carries_no_spacing() {
         lettered[0].0,
         plain[0].0
     );
+}
+
+// ─────────────── Glyph scaling ───────────────
+//
+// InDesign 20.0.1, measured (tools/indesign-export/spelling-and-spacing-
+// probe, frames `localspacing` and `glyphscale80`): `DesiredGlyphScaling`
+// scales every glyph horizontally — advance and outline — in ragged text
+// too, multiplied with a run's own `HorizontalScale`; letter and word
+// spacing then take their percentages of the scaled space. "Local
+// spacing" in 20 pt Open Sans, InDesign's insertion points less the
+// first:
+
+/// At glyph scaling 105, letter spacing 10 and word spacing 110.
+const LOCAL_SPACING_IP: [f32; 14] = [
+    0.0, 11.507, 24.685, 35.29, 47.504, 53.351, 59.897, 70.45, 83.844, 96.059, 106.663, 112.51,
+    125.934, 137.337,
+];
+/// At glyph scaling 105 over a run at 80 % horizontal scale.
+const GLYPH_SCALE_80_IP: [f32; 14] = [
+    0.0, 8.769, 18.875, 26.923, 36.258, 40.499, 44.863, 52.869, 63.148, 72.483, 80.53, 84.771,
+    95.074, 104.196,
+];
+
+/// Each glyph's x and horizontal scale (its outline's x scale over its
+/// y scale) on a line of 20 pt Open Sans.
+fn open_sans_line(
+    style_attrs: &str,
+    para_attrs: &str,
+    char_attrs: &str,
+    text: &str,
+) -> Vec<(f32, f32)> {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let face = r#"AppliedFont="Open Sans" PointSize="20""#;
+    let idml = build_spacing_idml(face, style_attrs, para_attrs, char_attrs, text);
+    let doc = idml_import::import_idml_doc(&idml).unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            DisplayCommand::FillPath { transform, .. } => {
+                let [a, b, c2, d, tx, _] = transform.0;
+                (b.abs() < 1e-5 && c2.abs() < 1e-5 && a > 0.0 && d < 0.0).then(|| (tx, a / -d))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every glyph of "Local spacing" (all but the space, which draws nothing)
+/// against InDesign's insertion points, and drawn at `scale`. Within
+/// 0.1 pt: the engine's advances are 1/64 pt, and the letter spacing's
+/// rounding accumulates to 0.075 pt by the last glyph, 137 pt along.
+fn assert_matches_indesign(glyphs: &[(f32, f32)], ip: &[f32; 14], scale: f32) {
+    let starts: Vec<f32> = (0..13).filter(|&k| k != 5).map(|k| ip[k]).collect();
+    assert_eq!(glyphs.len(), starts.len(), "{glyphs:?}");
+    for ((x, s), want) in glyphs.iter().zip(&starts) {
+        let got = x - glyphs[0].0;
+        assert!(
+            (got - want).abs() < 0.1,
+            "glyph at {got} pt, InDesign {want} pt: {glyphs:?}"
+        );
+        assert!((s - scale).abs() < 1e-3, "drawn at {s}, InDesign {scale}");
+    }
+}
+
+/// The probe's `localspacing` values, as InDesign writes them.
+const LOCAL_SPACING: &str = concat!(
+    r#"MinimumWordSpacing="70" DesiredWordSpacing="110" MaximumWordSpacing="150" "#,
+    r#"MinimumLetterSpacing="-10" DesiredLetterSpacing="10" MaximumLetterSpacing="30" "#,
+    r#"MinimumGlyphScaling="95" DesiredGlyphScaling="105" MaximumGlyphScaling="110""#,
+);
+
+#[test]
+fn spacing_set_on_the_paragraph_itself_beats_its_style() {
+    // InDesign wrote the probe's spacing on the <ParagraphStyleRange>, the
+    // paragraph setting it itself; the style below asks for other values.
+    let style = concat!(
+        r#"MinimumLetterSpacing="0" DesiredLetterSpacing="50" MaximumLetterSpacing="50" "#,
+        r#"MinimumGlyphScaling="80" DesiredGlyphScaling="80" MaximumGlyphScaling="80""#,
+    );
+    let glyphs = open_sans_line(style, LOCAL_SPACING, "", "Local spacing");
+    assert_matches_indesign(&glyphs, &LOCAL_SPACING_IP, 1.05);
+}
+
+#[test]
+fn desired_glyph_scaling_scales_every_glyph_as_indesign_does() {
+    // The same values on a paragraph style, as most documents carry them.
+    let glyphs = open_sans_line(LOCAL_SPACING, "", "", "Local spacing");
+    assert_matches_indesign(&glyphs, &LOCAL_SPACING_IP, 1.05);
+}
+
+#[test]
+fn glyph_scaling_multiplies_a_runs_horizontal_scale() {
+    let scaling = r#"MinimumGlyphScaling="95" DesiredGlyphScaling="105" MaximumGlyphScaling="110""#;
+    let glyphs = open_sans_line(scaling, "", r#"HorizontalScale="80""#, "Local spacing");
+    assert_matches_indesign(&glyphs, &GLYPH_SCALE_80_IP, 0.84);
 }

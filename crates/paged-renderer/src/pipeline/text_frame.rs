@@ -345,7 +345,7 @@ pub(super) fn build_perline_wrap_widths(
         .iter()
         .zip(em.chain_wrap_rects.iter())
         .any(|(b, ws)| {
-            ws.iter().any(|s| {
+            ws.iter().filter(|s| s.kind == WrapKind::Around).any(|s| {
                 let w = s.bounds;
                 w.bottom > b.top && w.top < b.bottom && w.right > b.left && w.left < b.right
             })
@@ -362,6 +362,13 @@ pub(super) fn build_perline_wrap_widths(
         _ => ((head_size_pt * 1.2 * paged_text::shape::ADVANCE_PRECISION).round() as i32).max(1),
     };
     let leading_pt = leading_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
+    // The bands sit where the composer will put the lines: the exact
+    // leading summed from the exact first baseline.
+    let leading_exact = if leading_64 == lopts.leading_override.unwrap_or(lopts.line_height) {
+        lopts.paragraph_leading_exact()
+    } else {
+        leading_64 as f64
+    };
     let scalar_width_64 =
         (em.column_width_pt.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
 
@@ -426,6 +433,11 @@ pub(super) fn build_perline_wrap_widths(
         } else {
             (head_size_pt * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32
         };
+        let frame_first_baseline_exact = if frame_idx == start_frame && em.y_cursor >= 0 {
+            em.y_exact() + push_64 as f64
+        } else {
+            frame_first_baseline_64 as f64
+        };
         let remaining_height_pt = (frame_height_pt
             - frame_first_baseline_64 as f32 / paged_text::shape::ADVANCE_PRECISION)
             .max(0.0);
@@ -443,21 +455,24 @@ pub(super) fn build_perline_wrap_widths(
         // this guard, the AABB-based width for a slightly rotated
         // sibling differs enough from `column_width_pt` to derail
         // Knuth-Plass for the entire story.
-        let frame_has_wraps = wraps.iter().any(|s| {
-            let w = s.bounds;
-            w.bottom > frame_bounds.top
-                && w.top < frame_bounds.bottom
-                && w.right > frame_bounds.left
-                && w.left < frame_bounds.right
-        });
+        let frame_has_wraps = wraps
+            .iter()
+            .filter(|s| s.kind == WrapKind::Around)
+            .any(|s| {
+                let w = s.bounds;
+                w.bottom > frame_bounds.top
+                    && w.top < frame_bounds.bottom
+                    && w.right > frame_bounds.left
+                    && w.left < frame_bounds.right
+            });
         let frame_legacy = shape.is_none() && !frame_has_wraps;
         let frame_first_line = widths_64.len();
         for i in 0..n_lines {
             if last_row_fits {
                 visible_lines = widths_64.len();
             }
-            let baseline_pt = (frame_first_baseline_64 + (i as i32) * leading_64) as f32
-                / paged_text::shape::ADVANCE_PRECISION;
+            let baseline_pt = ((frame_first_baseline_exact + i as f64 * leading_exact)
+                / paged_text::shape::ADVANCE_PRECISION as f64) as f32;
             last_row_fits = baseline_pt <= frame_height_pt - insets[2] + 0.01;
             if frame_legacy {
                 widths_64.push(scalar_width_64);
@@ -533,7 +548,7 @@ pub(super) fn build_perline_wrap_widths(
             // parallelograms the extent is the actual polygon span at
             // this y, which is much narrower than the AABB at the
             // rotated rect's vertical extremes.
-            for shape in wraps {
+            for shape in wraps.iter().filter(|s| s.kind == WrapKind::Around) {
                 let aabb = shape.bounds;
                 if aabb.bottom <= line_top || aabb.top >= line_bottom {
                     continue;
@@ -681,11 +696,15 @@ pub(super) fn build_perline_wrap_widths(
             first_baseline_push_pt: 0.0,
         };
     }
+    let widths_vary = widths_64.iter().any(|w| *w != scalar_width_64);
     lopts.compose.column_widths = Some(widths_64);
-    // A shaped frame's ragged lines break the way InDesign breaks them
-    // there: by minimum raggedness (`paged_text` `ragged.rs`).
-    if chain_shapes.iter().any(Option::is_some) {
+    // Ragged lines of different measures — a shaped frame's, or a frame's
+    // that text wraps inside — break the way InDesign breaks them there:
+    // by minimum raggedness, squeezing word spaces to keep a word only
+    // where it must (`paged_text` `ragged.rs`).
+    if chain_shapes.iter().any(Option::is_some) || (any_chain_overlap && widths_vary) {
         lopts.compose.minimum_raggedness = true;
+        lopts.compose.overrun_size = None;
         lopts.compose.visible_lines = Some(visible_lines);
         lopts.compose.joined_lines = Some(twin_after.clone());
     }
@@ -1805,4 +1824,161 @@ pub(super) fn paint_as_solid_with_icc(p: Paint, color_ctx: ColorCtx<'_>) -> Opti
         }
         _ => None,
     }
+}
+
+/// Move lines past the current frame's jump-object wraps
+/// (`JumpObjectTextWrap`): no line sits beside such an object. A line
+/// whose slug — from the row above's baseline down to its own — meets
+/// the object's wrap zone moves down one leading, row by row, until its
+/// slug clears, and every line after it moves with it. Measured on
+/// InDesign 20.0.1 (`text-wrap` page 3): after a line at 265.88 pt, a
+/// 276–384 pt zone sends the next line ten leadings down, to 409.88 pt,
+/// the first row whose slug (395.48–409.88) is clear of it.
+///
+/// `twin_after` marks the parts of a row a wrap splits; they move with
+/// the row. Lines that end up past the frame are left to the emitter's
+/// overflow, which places them in the next frame.
+pub(super) fn jump_object_wraps(
+    em: &StoryEmitter,
+    lines: &mut [paged_text::layout::LaidOutLine],
+    twin_after: &[bool],
+    leading_exact: f64,
+) {
+    let f = em.frame_idx;
+    let (Some(bounds), Some(wraps), Some(frame)) = (
+        em.chain_spread_bounds.get(f),
+        em.chain_wrap_rects.get(f),
+        em.chain.get(f),
+    ) else {
+        return;
+    };
+    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let (inner_left, inner_right) = (bounds.left + insets[1], bounds.right - insets[3]);
+    let zones: Vec<(f32, f32)> = wraps
+        .iter()
+        .filter(|w| w.kind == WrapKind::JumpObject)
+        .filter(|w| w.bounds.right > inner_left && w.bounds.left < inner_right)
+        .map(|w| (w.bounds.top, w.bounds.bottom))
+        .collect();
+    if zones.is_empty() || lines.is_empty() || leading_exact <= 0.0 {
+        return;
+    }
+    let to_spread = |v: f64| bounds.top + (v / paged_text::shape::ADVANCE_PRECISION as f64) as f32;
+    let meets = |top: f64, bottom: f64| {
+        let (t, b) = (to_spread(top), to_spread(bottom));
+        zones.iter().any(|(zt, zb)| t < *zb && b > *zt)
+    };
+    let exact = |l: &paged_text::layout::LaidOutLine| {
+        if l.baseline_exact.round() as i32 == l.baseline_y {
+            l.baseline_exact
+        } else {
+            l.baseline_y as f64
+        }
+    };
+    // The row above the paragraph's first line: the frame's deepest
+    // baseline so far, or the top of its text area.
+    let mut above = match em.frame_max_baseline_64.get(f).copied().filter(|b| *b > 0) {
+        Some(b) => b as f64,
+        None => insets[0] as f64 * paged_text::shape::ADVANCE_PRECISION as f64,
+    };
+    let mut shift = 0.0_f64;
+    let mut i = 0;
+    while i < lines.len() {
+        let mut j = i + 1;
+        while j < lines.len() && twin_after.get(j).copied().unwrap_or(false) {
+            j += 1;
+        }
+        let mut base = exact(&lines[i]) + shift;
+        let mut top = above;
+        let mut steps = 0;
+        while meets(top, base) && steps < 10_000 {
+            top = base;
+            base += leading_exact;
+            shift += leading_exact;
+            steps += 1;
+        }
+        if shift != 0.0 {
+            for line in &mut lines[i..j] {
+                let moved = exact(line) + shift;
+                let dy = moved.round() as i32 - line.baseline_y;
+                line.baseline_y += dy;
+                line.baseline_exact = moved;
+                for g in &mut line.glyphs {
+                    g.y += dy;
+                }
+            }
+        }
+        above = base;
+        i = j;
+    }
+}
+
+/// Does the slug from `above_64` down to `baseline_64` (1/64 pt, relative
+/// to the current frame's top) meet a next-column wrap
+/// (`NextColumnTextWrap`) that overlaps the frame's text area?
+pub(super) fn meets_next_column_wrap(em: &StoryEmitter, above_64: i32, baseline_64: i32) -> bool {
+    let f = em.frame_idx;
+    let (Some(bounds), Some(wraps), Some(frame)) = (
+        em.chain_spread_bounds.get(f),
+        em.chain_wrap_rects.get(f),
+        em.chain.get(f),
+    ) else {
+        return false;
+    };
+    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
+    let (inner_left, inner_right) = (bounds.left + insets[1], bounds.right - insets[3]);
+    let to_spread = |v: i32| bounds.top + v as f32 / paged_text::shape::ADVANCE_PRECISION;
+    let (top, bottom) = (to_spread(above_64), to_spread(baseline_64));
+    wraps
+        .iter()
+        .filter(|w| w.kind == WrapKind::NextColumn)
+        .filter(|w| w.bounds.right > inner_left && w.bounds.left < inner_right)
+        .any(|w| top < w.bounds.bottom && bottom > w.bounds.top)
+}
+
+/// How many lines the rest of the chain holds for a paragraph whose first
+/// baseline is `first_baseline_64` in the current frame: the rows of
+/// `leading_64` that fit above each frame's text bottom (less its footnote
+/// reserve), from the current frame on. `None` when the chain can grow, so
+/// no line is overset.
+pub(super) fn visible_rows(
+    em: &StoryEmitter,
+    first_baseline_64: i32,
+    leading_64: i32,
+    point_size: f32,
+    metrics: Option<&FontMetrics>,
+) -> Option<usize> {
+    if leading_64 <= 0 {
+        return None;
+    }
+    if em
+        .chain
+        .last()
+        .and_then(|f| f.auto_sizing)
+        .is_some_and(|a| a.grows_height())
+    {
+        return None;
+    }
+    let mut rows = 0usize;
+    for (k, frame) in em.chain.iter().enumerate().skip(em.frame_idx) {
+        let bottom_64 = ((frame.bounds.height() - super::build_engine::inset_bottom(frame))
+            * paged_text::shape::ADVANCE_PRECISION)
+            .round() as i32
+            - em.reserved_footnote_64.get(k).copied().unwrap_or(0);
+        let first_64 = if k == em.frame_idx {
+            first_baseline_64.max(0)
+        } else {
+            first_baseline_for_frame(
+                frame,
+                point_size,
+                (point_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+                metrics,
+                Some(leading_64),
+            )
+        };
+        if first_64 <= bottom_64 {
+            rows += ((bottom_64 - first_64) / leading_64) as usize + 1;
+        }
+    }
+    Some(rows)
 }

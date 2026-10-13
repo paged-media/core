@@ -184,7 +184,11 @@ pub(super) fn spread_linear_transform(m: Option<[f32; 6]>) -> Transform {
 /// (`BindingLocation="0"`) holds a right-hand page, and InDesign gives it
 /// the master's right page; as index 0 it used to take the left one. A
 /// master with no page on that side (a one-page master under a verso)
-/// falls back to the index.
+/// falls back to the index, and so does a page ON the spine — a
+/// single-sided document's, centred on x = 0 — which belongs to neither
+/// side: InDesign 20.0.1 prints a two-page master's LEFT page on it
+/// (tools/indesign-export/master-items-probe, whose single-sided page
+/// keeps the default facing master).
 pub(super) fn master_page_index(
     body: &[paged_model::Bounds],
     local: usize,
@@ -194,6 +198,9 @@ pub(super) fn master_page_index(
     let Some(page) = body.get(local) else {
         return by_index;
     };
+    if page.left < 0.0 && page.right > 0.0 {
+        return by_index;
+    }
     let centre = |b: &paged_model::Bounds| (b.left + b.right) * 0.5;
     let right_of_spine = |b: &paged_model::Bounds| centre(b) >= 0.0;
     let side = right_of_spine(page);
@@ -262,6 +269,20 @@ pub(crate) fn transform_bounds(b: paged_model::Bounds, m: Option<[f32; 6]>) -> p
 pub(super) struct WrapShape {
     pub(super) bounds: paged_model::Bounds,
     pub(super) corners: [(f32, f32); 4],
+    pub(super) kind: WrapKind,
+}
+
+/// How text treats a wrap obstacle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum WrapKind {
+    /// Bounding box and contour: lines are narrowed around it.
+    Around,
+    /// `JumpObjectTextWrap`: no line sits beside it; a line whose slug
+    /// meets it moves down a leading at a time until it clears.
+    JumpObject,
+    /// `NextColumnTextWrap`: the line that meets it, and the rest of
+    /// the story, continue in the next column.
+    NextColumn,
 }
 
 impl WrapShape {
@@ -321,7 +342,11 @@ impl WrapShape {
             bottom: max_y,
             right: max_x,
         };
-        Self { bounds, corners }
+        Self {
+            bounds,
+            corners,
+            kind: WrapKind::Around,
+        }
     }
 
     /// Return the polygon's projected x-extent within the horizontal
@@ -432,23 +457,21 @@ pub(super) fn collect_wrap_rects_per_page(
             if !wrap.mode.is_active() {
                 return;
             }
-            // Treat BoundingBoxTextWrap and ContourTextWrap as
-            // bounding-box exclusions. ContourTextWrap with
-            // `ContourType=BoundingBox` (the default that InDesign
-            // emits for plain rectangle hosts) is identical; richer
-            // contour types degrade to their AABB which is still a
-            // useful first-cut. JumpObject / NextColumn keep being
-            // skipped — they need column-level layout we don't yet
-            // model, and approximating them as side-shrink makes
-            // matters worse.
-            if !matches!(
-                wrap.mode,
+            // Bounding box and contour narrow the lines (a contour
+            // degrades to its AABB — the same for a plain rectangle
+            // host, a first cut for richer contour types). Jump object
+            // and next column move lines instead (`WrapKind`).
+            let kind = match wrap.mode {
                 paged_model::TextWrapMode::BoundingBoxTextWrap
-                    | paged_model::TextWrapMode::ContourTextWrap
-            ) {
-                return;
-            }
-            let shape = WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets);
+                | paged_model::TextWrapMode::ContourTextWrap => WrapKind::Around,
+                paged_model::TextWrapMode::JumpObjectTextWrap => WrapKind::JumpObject,
+                paged_model::TextWrapMode::NextColumnTextWrap => WrapKind::NextColumn,
+                _ => return,
+            };
+            let shape = WrapShape {
+                kind,
+                ..WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets)
+            };
             if let Some(local_idx) = route(shape.bounds) {
                 let page_idx = range.start + local_idx;
                 if page_idx < out.len() {
@@ -689,6 +712,16 @@ fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
         drop_cap_characters: 0,
         drop_cap_lines: 0,
         drop_cap_detail: 0,
+        // Spacing set on the range carries to every segment.
+        minimum_word_spacing: paragraph.minimum_word_spacing,
+        desired_word_spacing: paragraph.desired_word_spacing,
+        maximum_word_spacing: paragraph.maximum_word_spacing,
+        minimum_letter_spacing: paragraph.minimum_letter_spacing,
+        desired_letter_spacing: paragraph.desired_letter_spacing,
+        maximum_letter_spacing: paragraph.maximum_letter_spacing,
+        minimum_glyph_scaling: paragraph.minimum_glyph_scaling,
+        desired_glyph_scaling: paragraph.desired_glyph_scaling,
+        maximum_glyph_scaling: paragraph.maximum_glyph_scaling,
         overprint_fill: paragraph.overprint_fill,
         overprint_stroke: paragraph.overprint_stroke,
         // Kinsoku / Mojikumi apply to the whole paragraph.
@@ -775,6 +808,16 @@ pub(super) fn split_paragraph_into_segments(
         drop_cap_characters: paragraph.drop_cap_characters,
         drop_cap_lines: paragraph.drop_cap_lines,
         drop_cap_detail: paragraph.drop_cap_detail,
+        // Spacing set on the range carries to every segment.
+        minimum_word_spacing: paragraph.minimum_word_spacing,
+        desired_word_spacing: paragraph.desired_word_spacing,
+        maximum_word_spacing: paragraph.maximum_word_spacing,
+        minimum_letter_spacing: paragraph.minimum_letter_spacing,
+        desired_letter_spacing: paragraph.desired_letter_spacing,
+        maximum_letter_spacing: paragraph.maximum_letter_spacing,
+        minimum_glyph_scaling: paragraph.minimum_glyph_scaling,
+        desired_glyph_scaling: paragraph.desired_glyph_scaling,
+        maximum_glyph_scaling: paragraph.maximum_glyph_scaling,
         overprint_fill: paragraph.overprint_fill,
         overprint_stroke: paragraph.overprint_stroke,
         // Kinsoku / Mojikumi apply to the whole paragraph; every
@@ -1054,6 +1097,16 @@ pub(super) fn split_paragraph_into_segments(
                 drop_cap_characters: 0,
                 drop_cap_lines: 0,
                 drop_cap_detail: 0,
+                // Spacing set on the range carries to every segment.
+                minimum_word_spacing: paragraph.minimum_word_spacing,
+                desired_word_spacing: paragraph.desired_word_spacing,
+                maximum_word_spacing: paragraph.maximum_word_spacing,
+                minimum_letter_spacing: paragraph.minimum_letter_spacing,
+                desired_letter_spacing: paragraph.desired_letter_spacing,
+                maximum_letter_spacing: paragraph.maximum_letter_spacing,
+                minimum_glyph_scaling: paragraph.minimum_glyph_scaling,
+                desired_glyph_scaling: paragraph.desired_glyph_scaling,
+                maximum_glyph_scaling: paragraph.maximum_glyph_scaling,
                 overprint_fill: paragraph.overprint_fill,
                 overprint_stroke: paragraph.overprint_stroke,
                 kinsoku_set: paragraph.kinsoku_set.clone(),

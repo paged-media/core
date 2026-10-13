@@ -25,7 +25,9 @@
 //!
 //! The master below paints red on its left page and blue on its right
 //! page, at the same page position; each body page must show its side's
-//! colour there.
+//! colour there. A single-sided document's page sits ON the spine and has
+//! no side: it takes the master page by index, the left one (InDesign
+//! 20.0.1, tools/indesign-export/master-items-probe).
 
 use std::io::Write;
 
@@ -73,7 +75,8 @@ fn spread(id: &str, binding: u32, pages: &[(&str, f32)]) -> String {
 /// Spreads, in document order:
 /// 1. one page right of the spine (`BindingLocation="0"`) — a recto alone;
 /// 2. a facing pair, verso then recto (`BindingLocation="1"`);
-/// 3. one page left of the spine (`BindingLocation="1"`) — a verso alone.
+/// 3. one page left of the spine (`BindingLocation="1"`) — a verso alone;
+/// 4. one page centred on the spine — a single-sided document's.
 fn build() -> Vec<u8> {
     let buf = std::io::Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buf);
@@ -91,6 +94,7 @@ fn build() -> Vec<u8> {
   <idPkg:Spread src="Spreads/Spread_sa.xml"/>
   <idPkg:Spread src="Spreads/Spread_sb.xml"/>
   <idPkg:Spread src="Spreads/Spread_sc.xml"/>
+  <idPkg:Spread src="Spreads/Spread_sd.xml"/>
 </Document>"#,
     )
     .unwrap();
@@ -127,6 +131,10 @@ fn build() -> Vec<u8> {
             spread("sb", 1, &[("verso2", -W), ("recto2", 0.0)]),
         ),
         ("Spreads/Spread_sc.xml", spread("sc", 1, &[("verso", -W)])),
+        (
+            "Spreads/Spread_sd.xml",
+            spread("sd", 0, &[("alone", -W / 2.0)]),
+        ),
     ] {
         zip.start_file(name, deflated).unwrap();
         zip.write_all(body.as_bytes()).unwrap();
@@ -149,7 +157,7 @@ fn every_body_page_takes_the_master_page_on_its_own_side_of_the_spine() {
     let (_, images) =
         pipeline::render_document(&document, &PipelineOptions::default(), 72.0, Color::WHITE)
             .unwrap();
-    assert_eq!(images.len(), 4);
+    assert_eq!(images.len(), 5);
     let got: Vec<&str> = images.iter().map(colour_at_centre).collect();
     assert_eq!(
         got,
@@ -158,6 +166,7 @@ fn every_body_page_takes_the_master_page_on_its_own_side_of_the_spine() {
             "red (master left page)",   // the facing pair's verso…
             "blue (master right page)", // …and recto
             "red (master left page)",   // a verso standing alone
+            "red (master left page)",   // a single-sided page, on the spine
         ]
     );
 }

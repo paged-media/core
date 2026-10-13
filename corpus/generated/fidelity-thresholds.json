@@ -7,7 +7,13 @@
     "",
     "Semantics: a fixture passes iff *every* page that has a matching",
     "reference PDF page (cand-NNN.png + ref-NNN.png) satisfies",
-    "  mean_de <= max_mean_de AND p99_de <= max_p99_de AND ssim >= min_ssim.",
+    "  mean_de <= max_mean_de AND p99_de <= max_p99_de AND ssim >= min_ssim",
+    "  AND ink_mean_de <= max_ink_mean_de (when the fixture sets it).",
+    "ink_mean_de is the mean ΔE over only the pixels that either image inks",
+    "(CIELAB L* < 60). Text covers under 1% of most pages, so a misplaced line",
+    "moves the page mean by a hundredth while its ink mean moves by tens: the",
+    "page mean measures the paper, the ink mean measures the type. Fixtures",
+    "with (almost) no ink are floored at 1.0.",
     "Pages without a matching reference are skipped (max_pages_with_pdf bounds",
     "this — IDMLs that grew past their last InDesign-export are still allowed",
     "to run; only the first N pages are gated).",
@@ -33,19 +39,21 @@
       "name": "anchored",
       "text_gate": true,
       "max_pages_with_pdf": 12,
-      "max_mean_de": 0.309,
-      "max_p99_de": 5.18,
-      "min_ssim": 0.9844,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.841 / p99 32.919 / ssim 0.9493 (was 0.934 / 38.784 / 0.9457); re-sized by the rule above. TIGHTENED 2026-10-02 (inline-objects: an inline anchored object is a character of its line — it takes its width and raises the line, where it used to hang over the text at the paragraph origin): worst page now mean 0.371 / p99 7.396 / ssim 0.9823 (was 0.841 / 32.919 / 0.9493, measured on the same tree without the change); mean and p99 at worst x 1.20, SSIM at worst - 0.005. TIGHTENED 2026-10-02 (the IDML reader records each anchored object's character offset, so its mid-line inline objects stand at their characters instead of their paragraph's start): worst page now mean 0.257 / p99 4.316 / ssim 0.9894 (was 0.371 / 7.396 / 0.9823, same tree with the reader at the previous pin); re-sized by the same rule."
+      "max_mean_de": 0.247,
+      "max_p99_de": 2.72,
+      "min_ssim": 0.9856,
+      "max_ink_mean_de": 19.189,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.934 / p99 38.784 / SSIM 0.9457 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.841 / p99 32.919 / ssim 0.9493 (was 0.934 / 38.784 / 0.9457); re-sized by the rule above. TIGHTENED 2026-10-02 (inline-objects: an inline anchored object is a character of its line — it takes its width and raises the line, where it used to hang over the text at the paragraph origin): worst page now mean 0.371 / p99 7.396 / ssim 0.9823 (was 0.841 / 32.919 / 0.9493, measured on the same tree without the change); mean and p99 at worst x 1.20, SSIM at worst - 0.005. TIGHTENED 2026-10-02 (the IDML reader records each anchored object's character offset, so its mid-line inline objects stand at their characters instead of their paragraph's start): worst page now mean 0.257 / p99 4.316 / ssim 0.9894 (was 0.371 / 7.396 / 0.9823, same tree with the reader at the previous pin); re-sized by the same rule. INK GATED 2026-10-13: worst page ink mean 15.990 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.205 / p99 2.265 / ssim 0.9906 (thresholds were 0.309 / 5.18 / 0.9844); re-sized by the rule above."
     },
     {
       "name": "inline-objects",
       "text_gate": true,
       "max_pages_with_pdf": 7,
-      "max_mean_de": 0.297,
-      "max_p99_de": 9.81,
-      "min_ssim": 0.9879,
-      "rationale": "Gated 2026-10-02 from its first InDesign measurement (InDesign 20.0.1, Inter 10 pt). Worst page mean 2.026 / p99 84.14 / SSIM 0.8796 (page 1; page 2 1.707 / 73.93 / 0.9182; pages 3-7 at most 0.401 / 10.39 / 0.9844), loose on pages 1-2 because the IDML reader did not record where in its paragraph an anchored object sits, so their mid-line and paragraph-end objects rendered at the paragraph start. TIGHTENED 2026-10-02: the reader (plugin-publish idml-import) records Paragraph::anchored_frame_offsets, and pages 1-2 now match like the rest: worst mean 0.248 (page 1), worst p99 8.17 and SSIM 0.9929 (page 6, unchanged); pages 1-2 were 2.026 / 84.14 / 0.8796 and 1.707 / 73.93 / 0.9182, now 0.248 / 8.1 / 0.9948 and 0.242 / 7.8 / 0.9962, on the same tree with the reader at the previous pin; mean and p99 at worst x 1.20, SSIM at worst - 0.005. The exact geometry — every baseline and object box within 0.25 pt of InDesign's, with the reader's own anchors — is pinned by crates/paged-renderer/tests/inline_objects_pipeline.rs."
+      "max_mean_de": 0.237,
+      "max_p99_de": 6.16,
+      "min_ssim": 0.9889,
+      "max_ink_mean_de": 6.712,
+      "rationale": "Gated 2026-10-02 from its first InDesign measurement (InDesign 20.0.1, Inter 10 pt). Worst page mean 2.026 / p99 84.14 / SSIM 0.8796 (page 1; page 2 1.707 / 73.93 / 0.9182; pages 3-7 at most 0.401 / 10.39 / 0.9844), loose on pages 1-2 because the IDML reader did not record where in its paragraph an anchored object sits, so their mid-line and paragraph-end objects rendered at the paragraph start. TIGHTENED 2026-10-02: the reader (plugin-publish idml-import) records Paragraph::anchored_frame_offsets, and pages 1-2 now match like the rest: worst mean 0.248 (page 1), worst p99 8.17 and SSIM 0.9929 (page 6, unchanged); pages 1-2 were 2.026 / 84.14 / 0.8796 and 1.707 / 73.93 / 0.9182, now 0.248 / 8.1 / 0.9948 and 0.242 / 7.8 / 0.9962, on the same tree with the reader at the previous pin; mean and p99 at worst x 1.20, SSIM at worst - 0.005. The exact geometry — every baseline and object box within 0.25 pt of InDesign's, with the reader's own anchors — is pinned by crates/paged-renderer/tests/inline_objects_pipeline.rs. INK GATED 2026-10-13: worst page ink mean 5.593 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.197 / p99 5.135 / ssim 0.9939 (thresholds were 0.297 / 9.81 / 0.9879); re-sized by the rule above."
     },
     {
       "name": "annual-base",
@@ -53,7 +61,8 @@
       "max_mean_de": 0.989,
       "max_p99_de": 40.02,
       "min_ssim": 0.95,
-      "rationale": "Gated 2026-09-08. 134 pages of the annual's base template; the worst page is 0.969. Cheap insurance on the document the whole campaign is measured against. RE-REFERENCED 2026-10-12 (A-08): the footnote options moved to Resources/Preferences.xml (InDesign had drawn its default 1 pt black 72 pt separator on p35, the fixture's is 0.5 pt vermilion, 62 pt, 4 pt offset); the colour group and the TOC style are now read by InDesign too but print nothing. Only p35 changed: worst page now mean 0.956 / p99 42.435 / ssim 0.9447 (was 0.968 / 43.618 / 0.9448); TIGHTENED (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`annual-base.fonts.sh`); was 1.036 / 47.42 / 0.9406 with JetBrains Mono, Space Grotesk, Noto Sans JP, EB Garamond and Fraunces drawn in the fallback serif; worst page now 0.824 / 33.35 / 0.955. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
+      "max_ink_mean_de": 84.771,
+      "rationale": "Gated 2026-09-08. 134 pages of the annual's base template; the worst page is 0.969. Cheap insurance on the document the whole campaign is measured against. RE-REFERENCED 2026-10-12 (A-08): the footnote options moved to Resources/Preferences.xml (InDesign had drawn its default 1 pt black 72 pt separator on p35, the fixture's is 0.5 pt vermilion, 62 pt, 4 pt offset); the colour group and the TOC style are now read by InDesign too but print nothing. Only p35 changed: worst page now mean 0.956 / p99 42.435 / ssim 0.9447 (was 0.968 / 43.618 / 0.9448); TIGHTENED (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`annual-base.fonts.sh`); was 1.036 / 47.42 / 0.9406 with JetBrains Mono, Space Grotesk, Noto Sans JP, EB Garamond and Fraunces drawn in the fallback serif; worst page now 0.824 / 33.35 / 0.955. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 70.642 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "conditions",
@@ -62,15 +71,17 @@
       "max_mean_de": 0.493,
       "max_p99_de": 3.7,
       "min_ssim": 0.9817,
-      "rationale": "Re-sized 2026-10-12 with a NEW page and reference, asked of InDesign 20.0.1 (Wave 1 R-05). The old numbers (mean 0.105 / p99 0.3 / SSIM 0.9869) held a four-word page whose reference was a broken oracle: InDesign printed the run gated by the hidden condition, because it does not hide inline text on open, and the pixel gate could not see the twelve glyphs. The page is now a 14-case matrix (several conditions, an undeclared one, an anchor marker, table cells, a footnote reference) with the hidden cases in InDesign's own <HiddenText> spelling, so its plain export prints what the toggled document prints. origin/main's engine (a run hidden when ANY condition is hidden): mean 0.515 / p99 4.921 / SSIM 0.9802, and the text gate fails on DELTA ECHO JULIETT LIMA. With the measured rule (printed while ANY condition is visible): 0.428 / 3.220 / 0.9847, text ok; sized at worst x 1.15 and SSIM - 0.003 so each metric still fails the old rule. The residue: the hidden anchored square in case 09 is drawn (plugin-publish idml-import attaches an anchored object inside <HiddenText>), and the table sits about 1 pt short of InDesign's, moving the line below it."
+      "max_ink_mean_de": 32.971,
+      "rationale": "Re-sized 2026-10-12 with a NEW page and reference, asked of InDesign 20.0.1 (Wave 1 R-05). The old numbers (mean 0.105 / p99 0.3 / SSIM 0.9869) held a four-word page whose reference was a broken oracle: InDesign printed the run gated by the hidden condition, because it does not hide inline text on open, and the pixel gate could not see the twelve glyphs. The page is now a 14-case matrix (several conditions, an undeclared one, an anchor marker, table cells, a footnote reference) with the hidden cases in InDesign's own <HiddenText> spelling, so its plain export prints what the toggled document prints. origin/main's engine (a run hidden when ANY condition is hidden): mean 0.515 / p99 4.921 / SSIM 0.9802, and the text gate fails on DELTA ECHO JULIETT LIMA. With the measured rule (printed while ANY condition is visible): 0.428 / 3.220 / 0.9847, text ok; sized at worst x 1.15 and SSIM - 0.003 so each metric still fails the old rule. The residue: the hidden anchored square in case 09 is drawn (plugin-publish idml-import attaches an anchored object inside <HiddenText>), and the table sits about 1 pt short of InDesign's, moving the line below it. INK GATED 2026-10-13: worst page ink mean 27.476 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "composer",
       "max_pages_with_pdf": 8,
-      "max_mean_de": 1.5,
-      "max_p99_de": 62.29,
-      "min_ssim": 0.938,
-      "rationale": "Added 2026-10-02 with the Adobe Single-line Composer (Composer=\"HL Single\"). Fourteen cases, each set twice with the same text and measure: the Paragraph Composer on the left (or above), the Single-line Composer on the right (or below) - ragged and justified, 130 / 80 / 451 pt measures, hyphenation on and off, hyphenation zone 0, word spacing 100/100/200, 60/100/150, 70/100/133 and 80/80/100, letter spacing -5/0/10, centred. The reference is InDesign 2025's own export; every line of every Single-line frame matches InDesign's (pinned structurally by crates/paged-renderer/tests/composer_pipeline.rs). Worst page measured: mean 1.246 / p99 51.905 / ssim 0.9434 (page 6); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the Single-line Composer: 8 of the 14 Paragraph Composer frames break differently from InDesign (the engine's Knuth-Plass calibration - e.g. it keeps 'to stop.' off a line InDesign fills, and hyphenates 'weigh-ing' in a centred paragraph InDesign leaves whole); those frames carry pages 3, 5 and 6. Body copy is Inter, registered by composer.fonts.sh."
+      "max_mean_de": 1.039,
+      "max_p99_de": 34.25,
+      "min_ssim": 0.9561,
+      "max_ink_mean_de": 21.852,
+      "rationale": "Added 2026-10-02 with the Adobe Single-line Composer (Composer=\"HL Single\"). Fourteen cases, each set twice with the same text and measure: the Paragraph Composer on the left (or above), the Single-line Composer on the right (or below) - ragged and justified, 130 / 80 / 451 pt measures, hyphenation on and off, hyphenation zone 0, word spacing 100/100/200, 60/100/150, 70/100/133 and 80/80/100, letter spacing -5/0/10, centred. The reference is InDesign 2025's own export; every line of every Single-line frame matches InDesign's (pinned structurally by crates/paged-renderer/tests/composer_pipeline.rs). Worst page measured: mean 1.246 / p99 51.905 / ssim 0.9434 (page 6); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the Single-line Composer: 8 of the 14 Paragraph Composer frames break differently from InDesign (the engine's Knuth-Plass calibration - e.g. it keeps 'to stop.' off a line InDesign fills, and hyphenates 'weigh-ing' in a centred paragraph InDesign leaves whole); those frames carry pages 3, 5 and 6. Body copy is Inter, registered by composer.fonts.sh. INK GATED 2026-10-13: worst page ink mean 28.627 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.865 / p99 28.53 / SSIM 0.9611 / ink 18.210; sized at worst x 1.20 and SSIM - 0.005."
     },
     {
       "name": "corners",
@@ -79,24 +90,28 @@
       "max_mean_de": 0.993,
       "max_p99_de": 22.83,
       "min_ssim": 0.9751,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 19.999,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 16.665 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "effects",
+      "text_gate": true,
       "max_pages_with_pdf": 12,
       "max_mean_de": 0.15,
       "max_p99_de": 1.0,
       "min_ssim": 0.992,
-      "rationale": "worst page meanΔE 0.113 / p99 0.737 / SSIM 0.994 (p12). Tightened 2026-09-06 from 0.42 / 6.5 / 0.99 after the soft effects were calibrated against InDesign 20.0.1: `Size` is the WIDTH of an effect's band, not a Gaussian σ (σ = Size/2 outside the outline, 0.4×Size inside), and Choke/Spread are fractions of it. p10–p12 went mean 0.170/0.195/0.345 → 0.100/0.112/0.113 and p99 3.9/4.7/5.3 → 0.63/0.71/0.74. ~1.3× headroom over the new worst page."
+      "max_ink_mean_de": 71.432,
+      "rationale": "worst page meanΔE 0.113 / p99 0.737 / SSIM 0.994 (p12). Tightened 2026-09-06 from 0.42 / 6.5 / 0.99 after the soft effects were calibrated against InDesign 20.0.1: `Size` is the WIDTH of an effect's band, not a Gaussian σ (σ = Size/2 outside the outline, 0.4×Size inside), and Choke/Spread are fractions of it. p10–p12 went mean 0.170/0.195/0.345 → 0.100/0.112/0.113 and p99 3.9/4.7/5.3 → 0.63/0.71/0.74. ~1.3× headroom over the new worst page. INK GATED 2026-10-13: worst page ink mean 59.526 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "footnotes",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.082,
-      "max_p99_de": 1.0,
-      "min_ssim": 0.9939,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.529 / p99 7.679 / ssim 0.9667 (was 0.583 / 16.451 / 0.9648); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): the generator wrote the document's <FootnoteOption> into designmap.xml inside a <RootFootnoteStory>, where InDesign does not read it, so the reference drew InDesign's default separator (a 72 pt rule, no spacing) while the engine drew the fixture's; it is now in Resources/Preferences.xml, where InDesign keeps it (asked of InDesign 20.0.1: its DOM reads the 140 pt rule, 2 pt offset, '. ' separator and the 2/4 pt spacing back). Against the new reference the page measures mean 0.434 / p99 2.674 / ssim 0.9725 (was 0.529 / 7.679 / 0.9667); TIGHTENED by the rule above (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (L-01b, A-05): references print as characters of their line, the notes carry their own numbers, and the footnote area sits on the frame's foot as InDesign sets it (footnote-pool-probe: last baseline on the content bottom, overset lines dropped until the area clears the reference line plus Spacer, the rule taking no room); worst page now mean 0.068 / p99 0.2 / SSIM 0.9989 (main: 0.434 / 2.67 / 0.9725, with no references or note numbers drawn and the area overlapping the body). Mean at worst x 1.2, p99 at the 1.0 floor, SSIM at worst - 0.005."
+      "max_mean_de": 0.067,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9942,
+      "max_ink_mean_de": 6.721,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.529 / p99 7.679 / ssim 0.9667 (was 0.583 / 16.451 / 0.9648); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): the generator wrote the document's <FootnoteOption> into designmap.xml inside a <RootFootnoteStory>, where InDesign does not read it, so the reference drew InDesign's default separator (a 72 pt rule, no spacing) while the engine drew the fixture's; it is now in Resources/Preferences.xml, where InDesign keeps it (asked of InDesign 20.0.1: its DOM reads the 140 pt rule, 2 pt offset, '. ' separator and the 2/4 pt spacing back). Against the new reference the page measures mean 0.434 / p99 2.674 / ssim 0.9725 (was 0.529 / 7.679 / 0.9667); TIGHTENED by the rule above (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (L-01b, A-05): references print as characters of their line, the notes carry their own numbers, and the footnote area sits on the frame's foot as InDesign sets it (footnote-pool-probe: last baseline on the content bottom, overset lines dropped until the area clears the reference line plus Spacer, the rule taking no room); worst page now mean 0.068 / p99 0.2 / SSIM 0.9989 (main: 0.434 / 2.67 / 0.9725, with no references or note numbers drawn and the area overlapping the body). Mean at worst x 1.2, p99 at the 1.0 floor, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 5.600 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.056 / p99 0.000 / ssim 0.9992 (thresholds were 0.082 / 1.0 / 0.9939); re-sized by the rule above."
     },
     {
       "name": "geometry",
@@ -105,7 +120,8 @@
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "worst page meanΔE 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15→0.13 (1.20× headroom over current). p99 stays at the 0.5 noise floor (measured 0 — pages are mostly white). SSIM stays at the long-term 0.99 target."
+      "max_ink_mean_de": 6.136,
+      "rationale": "worst page meanΔE 0.108 / p99 0.000 / SSIM 0.994. Mean tightened 0.15→0.13 (1.20× headroom over current). p99 stays at the 0.5 noise floor (measured 0 — pages are mostly white). SSIM stays at the long-term 0.99 target. INK GATED 2026-10-13: worst page ink mean 5.113 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "geometry-groups",
@@ -114,7 +130,8 @@
       "max_mean_de": 0.2,
       "max_p99_de": 1.0,
       "min_ssim": 0.984,
-      "rationale": "worst page meanΔE 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) — the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes."
+      "max_ink_mean_de": 14.285,
+      "rationale": "worst page meanΔE 0.160 / p99 0.000 / SSIM 0.989 (p5). Substantially tightened from the original (1.2 / 50.0 / 0.97) — the nested-group p6 outlier the old budget was sized for is gone. Re-loosen p99 if overprint simulation (Tier 3 #14) reintroduces nested-group spikes. INK GATED 2026-10-13: worst page ink mean 11.903 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "gradients",
@@ -123,7 +140,8 @@
       "max_mean_de": 0.2,
       "max_p99_de": 1.3,
       "min_ssim": 0.99,
-      "rationale": "worst meanΔE 0.158 / p99 1.027 / SSIM 0.994. All three are ≥79% of budget — kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf)."
+      "max_ink_mean_de": 2.486,
+      "rationale": "worst meanΔE 0.158 / p99 1.027 / SSIM 0.994. All three are ≥79% of budget — kept. Tightest of the corpus; locks in CMYK gradient tessellation fidelity (commit 86b5bdf). INK GATED 2026-10-13: worst page ink mean 2.071 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "image-clipping",
@@ -132,15 +150,18 @@
       "max_mean_de": 0.683,
       "max_p99_de": 42.72,
       "min_ssim": 0.9843,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.569 / p99 34.178 / SSIM 0.9923 across 4 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 15.161,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.569 / p99 34.178 / SSIM 0.9923 across 4 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 12.634 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "images",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
       "min_ssim": 0.99,
-      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have meanΔE ≤ 0.105 / p99 0 / SSIM ≥ 0.995. Mean tightened 0.15→0.13 (1.20× over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99."
+      "max_ink_mean_de": 53.85,
+      "rationale": "IDML ships 14 pages but reference PDF only covers the first 5. The 5 gated pages have meanΔE ≤ 0.105 / p99 0 / SSIM ≥ 0.995. Mean tightened 0.15→0.13 (1.20× over current worst); p99 keeps the noise floor; SSIM stays at long-term 0.99. INK GATED 2026-10-13: worst page ink mean 44.874 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "layers-z",
@@ -149,7 +170,8 @@
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
       "min_ssim": 0.992,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 1 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 1.0,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 1 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 0.000 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%, floored at 1.0."
     },
     {
       "name": "layout",
@@ -158,7 +180,8 @@
       "max_mean_de": 0.764,
       "max_p99_de": 54.38,
       "min_ssim": 0.9554,
-      "rationale": "Re-gated 2026-09-10 for the column wave. Two changes pull in opposite directions and both are recorded here. TIGHTER: p99 59.11 -> 54.38, because layout.fonts.sh now registers Inter — the fixture sets its body copy in Inter (samples/layout.rs BODY_FONT) and the harness default registered only Open Sans + Minion Pro, so every body run fell back to SourceSerif4 while InDesign exported it in Inter. Pages 1-4 improved on that alone (0.417/0.524/0.457/0.902 -> 0.154/0.218/0.251/0.582). LOOSER: mean 1.083 -> 1.302 and ssim 0.9502 -> 0.939, NOT to mask a regression but because the fixture gained four pages (7-10, the column cases) carrying 44 lines of body copy each — denser than anything it held before, so the worst page moved from page 4 (0.902) to page 10 (1.132). Worst across all 10 pages: mean 1.132 / p99 47.289 / ssim 0.944; sized at worst * 1.15 and worst_ssim - 0.005. Page 11 (2col-autosize-height) joined the gate 2026-09-11 and moved NO threshold: it measures mean 0.363 / p99 15.627 / ssim 0.987, well inside the values above, so only max_pages_with_pdf changed. It is gated because the rule it pins is a MEASURED one — InDesign grows a two-column auto-height frame to ten lines and splits 10/10, where we grew it to twenty in one full-width column. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.636 / p99 47.289 / ssim 0.9605 (was 1.132 / 47.289 / 0.9441); re-sized by the rule above."
+      "max_ink_mean_de": 31.47,
+      "rationale": "Re-gated 2026-09-10 for the column wave. Two changes pull in opposite directions and both are recorded here. TIGHTER: p99 59.11 -> 54.38, because layout.fonts.sh now registers Inter — the fixture sets its body copy in Inter (samples/layout.rs BODY_FONT) and the harness default registered only Open Sans + Minion Pro, so every body run fell back to SourceSerif4 while InDesign exported it in Inter. Pages 1-4 improved on that alone (0.417/0.524/0.457/0.902 -> 0.154/0.218/0.251/0.582). LOOSER: mean 1.083 -> 1.302 and ssim 0.9502 -> 0.939, NOT to mask a regression but because the fixture gained four pages (7-10, the column cases) carrying 44 lines of body copy each — denser than anything it held before, so the worst page moved from page 4 (0.902) to page 10 (1.132). Worst across all 10 pages: mean 1.132 / p99 47.289 / ssim 0.944; sized at worst * 1.15 and worst_ssim - 0.005. Page 11 (2col-autosize-height) joined the gate 2026-09-11 and moved NO threshold: it measures mean 0.363 / p99 15.627 / ssim 0.987, well inside the values above, so only max_pages_with_pdf changed. It is gated because the rule it pins is a MEASURED one — InDesign grows a two-column auto-height frame to ten lines and splits 10/10, where we grew it to twenty in one full-width column. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.636 / p99 47.289 / ssim 0.9605 (was 1.132 / 47.289 / 0.9441); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 26.224 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "keeps",
@@ -167,16 +190,18 @@
       "max_mean_de": 0.176,
       "max_p99_de": 0.3,
       "min_ssim": 0.976,
-      "rationale": "Added 2026-10-01 with ADR 028 (paragraph keep options). Eight two-column pages on an exact ten-lines-per-column grid, each keep rule beside a no-keep control; the reference is InDesign 2025's own export, and the column split of every page matches it (also pinned structurally by crates/paged-renderer/tests/keeps_pipeline.rs). Worst page measured: mean 0.453 / p99 9.392 / ssim 0.9698; sized at worst * 1.20 and worst_ssim - 0.005 per the rule above. Body copy is Inter, registered by keeps.fonts.sh. TIGHTENED same day (ADR 026 work): the LeadingOffset first-baseline fix put every line 4 pt lower, where InDesign has it; worst page now mean 0.195 / p99 0.0 / ssim 0.9814 (was 0.453 / 9.392 / 0.9698). Sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.152 / p99 0.000 / ssim 0.9831 (was 0.195 / 0.000 / 0.9814); re-sized by the rule above."
+      "max_ink_mean_de": 32.218,
+      "rationale": "Added 2026-10-01 with ADR 028 (paragraph keep options). Eight two-column pages on an exact ten-lines-per-column grid, each keep rule beside a no-keep control; the reference is InDesign 2025's own export, and the column split of every page matches it (also pinned structurally by crates/paged-renderer/tests/keeps_pipeline.rs). Worst page measured: mean 0.453 / p99 9.392 / ssim 0.9698; sized at worst * 1.20 and worst_ssim - 0.005 per the rule above. Body copy is Inter, registered by keeps.fonts.sh. TIGHTENED same day (ADR 026 work): the LeadingOffset first-baseline fix put every line 4 pt lower, where InDesign has it; worst page now mean 0.195 / p99 0.0 / ssim 0.9814 (was 0.453 / 9.392 / 0.9698). Sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.152 / p99 0.000 / ssim 0.9831 (was 0.195 / 0.000 / 0.9814); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 26.848 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "reflow",
       "text_gate": true,
       "max_pages_with_pdf": 3,
-      "max_mean_de": 0.636,
-      "max_p99_de": 17.45,
-      "min_ssim": 0.9513,
-      "rationale": "Added 2026-10-01 with ADR 026 (page growth). The reference is InDesign 2025's export AFTER Smart Text Reflow grew the two-page fixture to three (tools/indesign-export/reflow-probe.sh); reflow.fonts.sh passes --grow-story so the engine grows the same story. Page 3 is GENERATED on both sides (margin-box frame, default frame options). Worst page measured: mean 0.885 / p99 24.736 / ssim 0.948 (page 3: 0.835 / 24.736 / 0.948); sized at worst * 1.20 and worst_ssim - 0.005. Pages 1-2 scored mean 7.9 before the LeadingOffset first-baseline fix in the same change. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.552 / p99 15.169 / ssim 0.9563 (was 0.885 / 24.736 / 0.9476); re-sized by the rule above."
+      "max_mean_de": 0.782,
+      "max_p99_de": 23.02,
+      "min_ssim": 0.9507,
+      "max_ink_mean_de": 12.106,
+      "rationale": "Added 2026-10-01 with ADR 026 (page growth). The reference is InDesign 2025's export AFTER Smart Text Reflow grew the two-page fixture to three (tools/indesign-export/reflow-probe.sh); reflow.fonts.sh passes --grow-story so the engine grows the same story. Page 3 is GENERATED on both sides (margin-box frame, default frame options). Worst page measured: mean 0.885 / p99 24.736 / ssim 0.948 (page 3: 0.835 / 24.736 / 0.948); sized at worst * 1.20 and worst_ssim - 0.005. Pages 1-2 scored mean 7.9 before the LeadingOffset first-baseline fix in the same change. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.552 / p99 15.169 / ssim 0.9563 (was 0.885 / 24.736 / 0.9476); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 10.088 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. RE-SIZED 2026-10-13 with exact glyph positions (ADR 138), worst page mean 0.652 / p99 19.187 / ssim 0.9557 (was 0.552 / 15.169 / 0.9563 with every advance rounded to 1/64 pt). Read off InDesign's TJ stream, its Inter 10 pt lines step by the PDF's integer widths (1/1000 em) plus kerning, not the font's exact advances: 'Paragraph NN of the reflowing story.' ends 3.2/1000 em (0.032 pt) short of the exact sum, which per-glyph 1/64 pt rounding happened to land closer to on this one repeated line. Across the corpus exact positions are better in 20 fixtures and worse in 2 (this and layout, +0.014), summed mean dE 20.11 -> 19.48."
     },
     {
       "name": "keeps-reflow",
@@ -185,7 +210,8 @@
       "max_mean_de": 1.374,
       "max_p99_de": 47.6,
       "min_ssim": 0.961,
-      "rationale": "Added 2026-10-02 with the ADR 028 keeps-on-a-growing-chain fix. Word's widow control (KeepLinesTogether 2/2 on every paragraph, KeepWithNext 1 on the headings) over a two-page threaded chain that grows to nine pages; the reference is InDesign 2025's export after the story was reflowed over generated pages (reflow-probe.sh, PAGED_REFLOW_EDIT=thread: Smart Text Reflow's idle task did not run on the host, and the scripted reflow reproduced the reflow fixture's pages and line positions exactly); keeps-reflow.fonts.sh passes --grow-story. The page map (every page's first and last line) is pinned structurally by crates/paged-renderer/tests/keeps_reflow_pipeline.rs; before the fix the engine laid ten pages, page 5 a lone heading and page 9 two lines. Worst page measured: mean 1.145 / p99 39.661 / ssim 0.9661 (page 1; the two AUTHORED pages measure ~1.1, the generated ones 0.21-0.26: the authored pages' ink sits 0.3 px lower in the render although every word's position matches InDesign's to 0.04 pt, a rasterisation phase on the whole-point LeadingOffset baselines, not layout). Sized at worst * 1.20 and worst_ssim - 0.005."
+      "max_ink_mean_de": 17.013,
+      "rationale": "Added 2026-10-02 with the ADR 028 keeps-on-a-growing-chain fix. Word's widow control (KeepLinesTogether 2/2 on every paragraph, KeepWithNext 1 on the headings) over a two-page threaded chain that grows to nine pages; the reference is InDesign 2025's export after the story was reflowed over generated pages (reflow-probe.sh, PAGED_REFLOW_EDIT=thread: Smart Text Reflow's idle task did not run on the host, and the scripted reflow reproduced the reflow fixture's pages and line positions exactly); keeps-reflow.fonts.sh passes --grow-story. The page map (every page's first and last line) is pinned structurally by crates/paged-renderer/tests/keeps_reflow_pipeline.rs; before the fix the engine laid ten pages, page 5 a lone heading and page 9 two lines. Worst page measured: mean 1.145 / p99 39.661 / ssim 0.9661 (page 1; the two AUTHORED pages measure ~1.1, the generated ones 0.21-0.26: the authored pages' ink sits 0.3 px lower in the render although every word's position matches InDesign's to 0.04 pt, a rasterisation phase on the whole-point LeadingOffset baselines, not layout). Sized at worst * 1.20 and worst_ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 14.177 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "links-broken",
@@ -194,7 +220,8 @@
       "max_mean_de": 0.287,
       "max_p99_de": 0.3,
       "min_ssim": 0.9679,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-broken.fonts.sh`); was 0.437 / 18.26 / 0.9622 in the fallback serif; now 0.239 / 0 / 0.9729. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
+      "max_ink_mean_de": 32.203,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-broken.fonts.sh`); was 0.437 / 18.26 / 0.9622 in the fallback serif; now 0.239 / 0 / 0.9729. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 26.835 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "links-ok",
@@ -203,7 +230,8 @@
       "max_mean_de": 0.12,
       "max_p99_de": 0.3,
       "min_ssim": 0.9845,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-ok.fonts.sh`); was 0.22 / 0 / 0.9832 in the fallback serif; now 0.1 / 0 / 0.9895. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
+      "max_ink_mean_de": 29.349,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-ok.fonts.sh`); was 0.22 / 0 / 0.9832 in the fallback serif; now 0.1 / 0 / 0.9895. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 24.457 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "markers",
@@ -211,7 +239,8 @@
       "max_mean_de": 0.448,
       "max_p99_de": 0.3,
       "min_ssim": 0.9761,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.373 / p99 0.000 / SSIM 0.9841 across 2 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 68.329,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.373 / p99 0.000 / SSIM 0.9841 across 2 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 56.941 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "masters",
@@ -220,7 +249,8 @@
       "max_mean_de": 0.05,
       "max_p99_de": 0.3,
       "min_ssim": 0.992,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 3 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 1.0,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.000 / p99 0.000 / SSIM 1.0000 across 3 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 0.000 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%, floored at 1.0."
     },
     {
       "name": "navigation",
@@ -229,7 +259,8 @@
       "max_mean_de": 0.66,
       "max_p99_de": 1.681,
       "min_ssim": 0.9649,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.550 / p99 3.779 / SSIM 0.9729 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.535 / p99 1.400 / ssim 0.9736 (was 0.550 / 3.779 / 0.9729); re-sized by the rule above."
+      "max_ink_mean_de": 71.519,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.550 / p99 3.779 / SSIM 0.9729 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.535 / p99 1.400 / ssim 0.9736 (was 0.550 / 3.779 / 0.9729); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 59.598 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "nested-groups",
@@ -238,33 +269,38 @@
       "max_mean_de": 0.075,
       "max_p99_de": 0.3,
       "min_ssim": 0.9894,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.088 / p99 0.000 / SSIM 0.9974 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.064 / p99 0.000 / ssim 0.9984 (was 0.088 / 0.000 / 0.9974); re-sized by the rule above."
+      "max_ink_mean_de": 3.025,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.088 / p99 0.000 / SSIM 0.9974 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.064 / p99 0.000 / ssim 0.9984 (was 0.088 / 0.000 / 0.9974); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 2.521 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "numbering",
       "text_gate": true,
       "max_pages_with_pdf": 2,
-      "max_mean_de": 0.023,
+      "max_mean_de": 0.012,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9947,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 by the list-marker fix (a hanging first line's left indent is a tab stop, so the text after each number now starts at the 18 pt indent where InDesign puts it instead of the 36 pt default stop): worst page now mean 0.091 / p99 0.000 / SSIM 0.9970, both pages inside the §13.2 budget; re-sized at worst * 1.20, p99 at the 0.3 floor, ssim worst - 0.005. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.040 / p99 0.000 / ssim 0.9989 (was 0.091 / 0.000 / 0.9970); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): InDesign read neither the <NumberingList> (the generator wrote it into Styles.xml inside a <RootNumberingListGroup>; InDesign keeps lists in designmap.xml) nor the paragraphs' AppliedNumberingList attribute (InDesign spells it as a typed <Properties> child), so its reference numbered story B '1.' and page 2 '1. 2. 1.' while the fixture continues the shared list across stories. Both are spelled as InDesign writes them now, and InDesign numbers 1-2-3 / 4-5-6, as the engine does. Measured mean 0.019 / p99 0.000 / ssim 0.9997 (was 0.040 / 0.000 / 0.9989); TIGHTENED (mean worst * 1.20, p99 at the 0.3 floor, ssim worst - 0.005)."
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 3.83,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.471 / p99 0.000 / SSIM 0.9811 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 by the list-marker fix (a hanging first line's left indent is a tab stop, so the text after each number now starts at the 18 pt indent where InDesign puts it instead of the 36 pt default stop): worst page now mean 0.091 / p99 0.000 / SSIM 0.9970, both pages inside the §13.2 budget; re-sized at worst * 1.20, p99 at the 0.3 floor, ssim worst - 0.005. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.040 / p99 0.000 / ssim 0.9989 (was 0.091 / 0.000 / 0.9970); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): InDesign read neither the <NumberingList> (the generator wrote it into Styles.xml inside a <RootNumberingListGroup>; InDesign keeps lists in designmap.xml) nor the paragraphs' AppliedNumberingList attribute (InDesign spells it as a typed <Properties> child), so its reference numbered story B '1.' and page 2 '1. 2. 1.' while the fixture continues the shared list across stories. Both are spelled as InDesign writes them now, and InDesign numbers 1-2-3 / 4-5-6, as the engine does. Measured mean 0.019 / p99 0.000 / ssim 0.9997 (was 0.040 / 0.000 / 0.9989); TIGHTENED (mean worst * 1.20, p99 at the 0.3 floor, ssim worst - 0.005). INK GATED 2026-10-13: worst page ink mean 3.192 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.010 / p99 0.000 / ssim 0.9999 (thresholds were 0.023 / 0.3 / 0.9947); re-sized by the rule above."
     },
     {
       "name": "paste-into",
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.611,
-      "max_p99_de": 7.002,
-      "min_ssim": 0.9761,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.531 / p99 5.834 / ssim 0.9811 (was 0.630 / 17.532 / 0.9765); re-sized by the rule above."
+      "max_mean_de": 0.407,
+      "max_p99_de": 1.85,
+      "min_ssim": 0.9851,
+      "max_ink_mean_de": 3.712,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.531 / p99 5.834 / ssim 0.9811 (was 0.630 / 17.532 / 0.9765); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 4.726 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.339 / p99 1.53 / SSIM 0.9901 / ink 3.093; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142).",
+      "text_gate": "lines"
     },
     {
       "name": "preflight",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.942,
-      "max_p99_de": 41.26,
-      "min_ssim": 0.9536,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%."
+      "max_mean_de": 0.093,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9894,
+      "max_ink_mean_de": 9.566,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 56.816 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.551 / p99 12.273 / ssim 0.9722 (thresholds were 0.942 / 41.26 / 0.9536); re-sized by the rule above. INK TIGHTENED 2026-10-13: the ink budget was sized on a worktree without corpus/fonts/local/MyriadPro-Regular.otf (preflight.fonts.sh's substitute for the missing family), where the page reads mean 0.780 / ink 56.8; with it, as the tightened page budgets above assume, the page reads 0.551 / 12.27 / 0.9722 and ink 45.23, so the ink budget is re-sized at worst + 20%. TIGHTENED 2026-10-14: Inter registered (preflight.fonts.sh) since ragged text breaks by minimum raggedness (ADR 142) and keeps \"story\" whole as InDesign does. With Myriad Pro in corpus/fonts/local, as these budgets assume: mean 0.077 / p99 0.00 / SSIM 0.9944 / ink 7.971, sized at worst x 1.20 (p99 at its 0.3 floor) and SSIM - 0.005. Without it (the missing family in the default face) the page reads 0.305 / 0.77 / 0.9841 / ink 28.430."
     },
     {
       "name": "showcase-base",
@@ -272,7 +308,8 @@
       "max_mean_de": 0.146,
       "max_p99_de": 0.3,
       "min_ssim": 0.9836,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.121 / p99 0.000 / SSIM 0.9916 across 16 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 64.773,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.121 / p99 0.000 / SSIM 0.9916 across 16 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 53.977 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "gradient-geometry",
@@ -281,7 +318,8 @@
       "max_mean_de": 1.955,
       "max_p99_de": 59.1,
       "min_ssim": 0.9697,
-      "rationale": "Added 2026-10-12 (ADR 120, R-02a): where a linear gradient runs, asked of InDesign 20.0.1. Page 1: GradientFillAngle 0/45/90/135/180/-90 with no start or length on a square, a 2:1 rectangle and a square rotated 30 degrees; page 2: explicit GradientFillStart + Length, three-stop midpoints (default, 20 on stop 1, 80 on stop 2), a text frame fill, a gradient stroke, an inline anchored rectangle and two gradient feathers. InDesign turns the angle counter-clockwise on the page (axis (cos t, -sin t) in inner y-down coordinates, 90 degrees runs bottom to top), starts the default axis at the inner box's bottom-left corner with the box's WIDTH as its length (its own re-export writes GradientFillStart=\"0 h\" GradientFillLength=\"w\"), runs an explicit start in inner coordinates, and bends the segment BEFORE the stop that carries a Midpoint with N = ln 0.5 / ln m (3.10628 for 20 and 80). The engine drew 90 degrees top-down, ignored GradientFillStart on linear gradients and bent the segment after the stop: mean 7.789 / p99 82.338 / ssim 0.8768 (p1), 3.926 / 84.138 / 0.9390 (p2). After: 1.629 / 49.243 / 0.9748 (p1), 0.175 / 4.191 / 0.9970 (p2); sized at worst * 1.20 and ssim - 0.005. The residue on p1 is the rotated column alone (every unrotated case is within 1 RGB level on average): for a rotated frame with no start InDesign synthesises its default in page space (its re-export writes GradientFillStart=\"-7.32 12.68\" GradientFillLength=\"109.28\", the page bounding box's width, for an 80 pt square at 30 degrees) where the engine keeps the inner bottom-left / inner width. Real InDesign documents always carry an explicit start (91 of 91 gradient-filled items in the corpus packs). Case 28 (a gradient feather with no start) also differs: InDesign's undeclared feather default spans 69 pt over a 60 pt frame."
+      "max_ink_mean_de": 9.717,
+      "rationale": "Added 2026-10-12 (ADR 120, R-02a): where a linear gradient runs, asked of InDesign 20.0.1. Page 1: GradientFillAngle 0/45/90/135/180/-90 with no start or length on a square, a 2:1 rectangle and a square rotated 30 degrees; page 2: explicit GradientFillStart + Length, three-stop midpoints (default, 20 on stop 1, 80 on stop 2), a text frame fill, a gradient stroke, an inline anchored rectangle and two gradient feathers. InDesign turns the angle counter-clockwise on the page (axis (cos t, -sin t) in inner y-down coordinates, 90 degrees runs bottom to top), starts the default axis at the inner box's bottom-left corner with the box's WIDTH as its length (its own re-export writes GradientFillStart=\"0 h\" GradientFillLength=\"w\"), runs an explicit start in inner coordinates, and bends the segment BEFORE the stop that carries a Midpoint with N = ln 0.5 / ln m (3.10628 for 20 and 80). The engine drew 90 degrees top-down, ignored GradientFillStart on linear gradients and bent the segment after the stop: mean 7.789 / p99 82.338 / ssim 0.8768 (p1), 3.926 / 84.138 / 0.9390 (p2). After: 1.629 / 49.243 / 0.9748 (p1), 0.175 / 4.191 / 0.9970 (p2); sized at worst * 1.20 and ssim - 0.005. The residue on p1 is the rotated column alone (every unrotated case is within 1 RGB level on average): for a rotated frame with no start InDesign synthesises its default in page space (its re-export writes GradientFillStart=\"-7.32 12.68\" GradientFillLength=\"109.28\", the page bounding box's width, for an 80 pt square at 30 degrees) where the engine keeps the inner bottom-left / inner width. Real InDesign documents always carry an explicit start (91 of 91 gradient-filled items in the corpus packs). Case 28 (a gradient feather with no start) also differs: InDesign's undeclared feather default spans 69 pt over a 60 pt frame. INK GATED 2026-10-13: worst page ink mean 8.097 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "tints",
@@ -290,15 +328,18 @@
       "max_mean_de": 0.211,
       "max_p99_de": 2.48,
       "min_ssim": 0.9925,
-      "rationale": "Added 2026-10-12 (ADR 120, R-03): how a tint of a CMYK colour prints, asked of InDesign 20.0.1. Page 1: process C, M, Y, [Black], a rich black and four brand colours x tint 100/80/60/40/20/5, each square at FillTint beside the <Tint> swatch of the same value; page 2: a StrokeTint, 48 pt text at FillTint, a gradient stop on a <Tint>, a CMYK-defined spot at FillTint and as <Tint> swatches, and a <Tint> at a FillTint. InDesign exports FillTint and the <Tint> swatch identically, as the base's inks scaled by the tint (`0.34 0.04 0.16 0 k` for teal 85/10/40/0 at 40, in fills, text, strokes and gradient stops; the spot as its Separation at the tint), so the page colour is the scaled ink through the CMYK profile. An object's tint over a <Tint> swatch is relative to the swatch's BASE (the teal 50 % <Tint> at FillTint 50 prints teal at 50 %). The engine blended FillTint's display colour toward white in linear RGB: mean 0.567 / p99 11.939 / ssim 0.9976 (p1), 0.296 / 10.784 / 0.9970 (p2). After: 0.033 / 0.510 / 0.9996 (p1), 0.176 / 2.063 / 0.9975 (p2); sized at worst * 1.20 and ssim - 0.005. The residue on p2 is case 55's StrokeTint, which the adapter does not read on a frame (the stroke paints at full strength). InDesign also caps a <Tint TintValue=\"100\"> at 99 % (it renames it 'Process Cyan 99%'), which the engine does not: p1's tint-swatch squares at 100 differ by 1 %."
+      "max_ink_mean_de": 14.498,
+      "rationale": "Added 2026-10-12 (ADR 120, R-03): how a tint of a CMYK colour prints, asked of InDesign 20.0.1. Page 1: process C, M, Y, [Black], a rich black and four brand colours x tint 100/80/60/40/20/5, each square at FillTint beside the <Tint> swatch of the same value; page 2: a StrokeTint, 48 pt text at FillTint, a gradient stop on a <Tint>, a CMYK-defined spot at FillTint and as <Tint> swatches, and a <Tint> at a FillTint. InDesign exports FillTint and the <Tint> swatch identically, as the base's inks scaled by the tint (`0.34 0.04 0.16 0 k` for teal 85/10/40/0 at 40, in fills, text, strokes and gradient stops; the spot as its Separation at the tint), so the page colour is the scaled ink through the CMYK profile. An object's tint over a <Tint> swatch is relative to the swatch's BASE (the teal 50 % <Tint> at FillTint 50 prints teal at 50 %). The engine blended FillTint's display colour toward white in linear RGB: mean 0.567 / p99 11.939 / ssim 0.9976 (p1), 0.296 / 10.784 / 0.9970 (p2). After: 0.033 / 0.510 / 0.9996 (p1), 0.176 / 2.063 / 0.9975 (p2); sized at worst * 1.20 and ssim - 0.005. The residue on p2 is case 55's StrokeTint, which the adapter does not read on a frame (the stroke paints at full strength). InDesign also caps a <Tint TintValue=\"100\"> at 99 % (it renames it 'Process Cyan 99%'), which the engine does not: p1's tint-swatch squares at 100 differ by 1 %. INK GATED 2026-10-13: worst page ink mean 12.081 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "strokes-fills",
+      "text_gate": true,
       "max_pages_with_pdf": 25,
       "max_mean_de": 0.713,
       "max_p99_de": 2.5,
       "min_ssim": 0.9755,
-      "rationale": "worst page meanΔE 0.449 (p13), p99 0.000 (every page), SSIM 0.9863 (p13). p99 tightened 2026-10-12 from 11.0 to the long-term 2.5 budget: the worst p99 was the two FillTint pages (p18 black 50 %, p19 black 20 %: 9.381 and 2.896), and with a tint scaling the inks before the CMYK profile (asked of InDesign, the tints fixture) they read mean 0.050 / p99 0.000. Mean and SSIM stay — both ≥75% of budget. RE-REFERENCED and RE-SIZED 2026-10-12 (A-08). The old reference ignored every stroke style in the fixture: the built-in ones (Dashed p11, Canned Dotted p13, Japanese Dots p14) because Graphic.xml did not declare them and InDesign resolves a built-in StrokeType only against its declaration (asked of InDesign 20.0.1: all read back Solid), and it predated the W1.2 pages 20-25 (custom striped, wavy, gap-coloured dash; the generator wrote the custom styles into Styles.xml with a Pattern attribute and <Stripe> children, and InDesign took only their names, drawing its default dash and stripes). It was also made before the page labels were set in Open Sans. The thresholds above were sized against that reference. Now the package declares InDesign's built-ins, the custom styles are spelled as InDesign writes them (Graphic.xml, DashArray, StripeArray, the gap colour on the page item, the built-in Wavy), and the gate covers all 25 pages. Pages 1-19 measure worst mean 0.374 (p12) / ssim 0.9909; the gate is sized by p21, mean 0.594 / ssim 0.9805, at worst * 1.20 and ssim worst - 0.005. The residue is named: InDesign's built-in wave (p21) is flatter and longer than the engine's and is fitted to each side; InDesign spreads dashes evenly along each side with a dash on every corner (p11, p13, p14, p22, 'DashesAndGaps'), the engine runs one phase around the path; and `StrokeStyle/$ID/Dotted` (p12) is not one of InDesign's built-ins (its dotted is `Canned Dotted`), so InDesign draws it solid where the engine draws dots. The striped page (p20) measured 0.354 until the engine offset a closed contour's stripes with mitred corners (now 0.027)."
+      "max_ink_mean_de": 82.201,
+      "rationale": "worst page meanΔE 0.449 (p13), p99 0.000 (every page), SSIM 0.9863 (p13). p99 tightened 2026-10-12 from 11.0 to the long-term 2.5 budget: the worst p99 was the two FillTint pages (p18 black 50 %, p19 black 20 %: 9.381 and 2.896), and with a tint scaling the inks before the CMYK profile (asked of InDesign, the tints fixture) they read mean 0.050 / p99 0.000. Mean and SSIM stay — both ≥75% of budget. RE-REFERENCED and RE-SIZED 2026-10-12 (A-08). The old reference ignored every stroke style in the fixture: the built-in ones (Dashed p11, Canned Dotted p13, Japanese Dots p14) because Graphic.xml did not declare them and InDesign resolves a built-in StrokeType only against its declaration (asked of InDesign 20.0.1: all read back Solid), and it predated the W1.2 pages 20-25 (custom striped, wavy, gap-coloured dash; the generator wrote the custom styles into Styles.xml with a Pattern attribute and <Stripe> children, and InDesign took only their names, drawing its default dash and stripes). It was also made before the page labels were set in Open Sans. The thresholds above were sized against that reference. Now the package declares InDesign's built-ins, the custom styles are spelled as InDesign writes them (Graphic.xml, DashArray, StripeArray, the gap colour on the page item, the built-in Wavy), and the gate covers all 25 pages. Pages 1-19 measure worst mean 0.374 (p12) / ssim 0.9909; the gate is sized by p21, mean 0.594 / ssim 0.9805, at worst * 1.20 and ssim worst - 0.005. The residue is named: InDesign's built-in wave (p21) is flatter and longer than the engine's and is fitted to each side; InDesign spreads dashes evenly along each side with a dash on every corner (p11, p13, p14, p22, 'DashesAndGaps'), the engine runs one phase around the path; and `StrokeStyle/$ID/Dotted` (p12) is not one of InDesign's built-ins (its dotted is `Canned Dotted`), so InDesign draws it solid where the engine draws dots. The striped page (p20) measured 0.354 until the engine offset a closed contour's stripes with mitred corners (now 0.027). INK GATED 2026-10-13: worst page ink mean 68.501 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "styles-cascade",
@@ -307,7 +348,8 @@
       "max_mean_de": 0.89,
       "max_p99_de": 22.83,
       "min_ssim": 0.967,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.742 / p99 18.262 / SSIM 0.9750 across 5 page(s); sized at worst + ~20%."
+      "max_ink_mean_de": 85.109,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.742 / p99 18.262 / SSIM 0.9750 across 5 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 70.924 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "swatches",
@@ -316,7 +358,8 @@
       "max_mean_de": 0.18,
       "max_p99_de": 0.3,
       "min_ssim": 0.995,
-      "rationale": "New 2026-09-08. Spot ink at full strength, the same ink at 50% through the object's FillTint, and a frame whose paint comes from its applied ObjectStyle with no inline FillColor. Was measuring worst mean 31.8 / SSIM 0.70 because the generator wrote four things InDesign does not: a spot whose CMYK alternate differs from its Lab primary (all 15 corpus spots are LAB/LAB and identical), TintValue on a <Color> (0 of 7,545), a <Swatch Color=...> alias (<Swatch> is Swatch/None 271 of 271 times), and BasedOn on an ObjectStyle (0 of 1,101 — InDesign flattens the inheritance at export). Now worst page mean 0.142 / p99 0.212 / SSIM 0.9997."
+      "max_ink_mean_de": 1.0,
+      "rationale": "New 2026-09-08. Spot ink at full strength, the same ink at 50% through the object's FillTint, and a frame whose paint comes from its applied ObjectStyle with no inline FillColor. Was measuring worst mean 31.8 / SSIM 0.70 because the generator wrote four things InDesign does not: a spot whose CMYK alternate differs from its Lab primary (all 15 corpus spots are LAB/LAB and identical), TintValue on a <Color> (0 of 7,545), a <Swatch Color=...> alias (<Swatch> is Swatch/None 271 of 271 times), and BasedOn on an ObjectStyle (0 of 1,101 — InDesign flattens the inheritance at export). Now worst page mean 0.142 / p99 0.212 / SSIM 0.9997. INK GATED 2026-10-13: worst page ink mean 0.229 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%, floored at 1.0."
     },
     {
       "name": "tables",
@@ -325,16 +368,18 @@
       "max_mean_de": 0.215,
       "max_p99_de": 3.0,
       "min_ssim": 0.982,
-      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay."
+      "max_ink_mean_de": 47.995,
+      "rationale": "Re-baselined 2026-09-07 after four table fixes: paged-gen writes MinimumHeight/AutoGrow so InDesign lays out the declared row heights; a cell edge with no declared stroke draws InDesign's default 1pt black; and a table's content is inset half its outer border, as InDesign keeps that border inside the frame. Reference re-exported from the changed IDML; all 13 pages gated (was 7). Worst page mean 0.219 / p99 2.457 / SSIM 0.9878 - tightened from 1.1/13.0/0.96, which had made this the loosest fixture in the corpus. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.186 / p99 2.457 / ssim 0.9905 (was 0.219 / 2.457 / 0.9878); re-sized by the rule above. RE-EXPORTED 2026-10-02 (tables-rows): paged-gen now writes a cell's paragraph marks (<Br/>), so InDesign reads p7's and p12's multi-paragraph cells as several paragraphs instead of one run-on line; with the cell row fix p7 went mean 0.076 -> 0.021 and p12 0.126 -> 0.055. The worst page (p2, nested table, mean 0.186 / p99 2.457 / SSIM 0.9905) is unchanged, so the thresholds stay. INK GATED 2026-10-13: worst page ink mean 39.995 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "tables-overset",
       "text_gate": true,
       "max_pages_with_pdf": 6,
-      "max_mean_de": 0.05,
+      "max_mean_de": 0.032,
       "max_p99_de": 0.3,
-      "min_ssim": 0.991,
-      "rationale": "New 2026-09-07. Six pages isolating what InDesign draws when a table does not fit its frame - all rows fit, two of four fit, none fit, the header alone is taller than the frame, the header fits but no body row does - plus a 4pt-border page so the outer-border inset is measured at two weights rather than one. InDesign's export has ZERO ink on the three overset pages where the renderer drew one row. Worst page mean 0.100 / p99 0.000 / SSIM 0.9966 (p6). TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.027 / p99 0.000 / ssim 0.9996 (was 0.100 / 0.000 / 0.9966); re-sized by the rule above."
+      "min_ssim": 0.9946,
+      "max_ink_mean_de": 5.074,
+      "rationale": "New 2026-09-07. Six pages isolating what InDesign draws when a table does not fit its frame - all rows fit, two of four fit, none fit, the header alone is taller than the frame, the header fits but no body row does - plus a 4pt-border page so the outer-border inset is measured at two weights rather than one. InDesign's export has ZERO ink on the three overset pages where the renderer drew one row. Worst page mean 0.100 / p99 0.000 / SSIM 0.9966 (p6). TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.027 / p99 0.000 / ssim 0.9996 (was 0.100 / 0.000 / 0.9966); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 4.228 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.026 / p99 0.000 / ssim 0.9996 (thresholds were 0.05 / 0.3 / 0.991); re-sized by the rule above."
     },
     {
       "name": "tables-rows",
@@ -343,7 +388,8 @@
       "max_mean_de": 0.19,
       "max_p99_de": 3.8,
       "min_ssim": 0.994,
-      "rationale": "New 2026-10-02. Eleven pages asking InDesign how a row's height comes from its cells: 1-3 paragraphs per cell, space before/after, fixed / tight leading and mixed sizes, insets (incl. 0 under 1 pt and 4 pt edges), MinimumHeight / MaximumHeight, vertical justification, a table breaking across two threaded frames with its header repeating, and a row taller than every frame. Pages 10-11 (AutoGrow=\"false\" fixed rows, KeepWithNextRow) are NOT gated: the IDML reader does not carry either attribute yet. Before the fix the gated pages measured worst mean 1.597 / p99 84.1 / SSIM 0.919 (p8: every multi-paragraph row short, its later lines overlapping the next row); after, worst page mean 0.158 / p99 3.147 / SSIM 0.9956 (p8, glyph sub-pixel phase); sized by the rule above. GATED 2026-10-02 to all 11 pages: the reader carries AutoGrow / KeepWithNextRow (plugin-publish 96cfb6c), a fixed row is held at its height with its cells overset, and a run of kept rows moves to the next frame together. p10 (fixed rows) mean 0.718 -> 0.024, p99 20.556 -> 0.000, SSIM 0.9620 -> 0.9996; p11 (KeepWithNextRow) 0.571 -> 0.121, 12.611 -> 1.504, 0.9729 -> 0.9973. The worst page over all 11 is still p8 (mean 0.158 / p99 3.147) and p4 (SSIM 0.9956): 83% / 83% of the mean / p99 budget and 0.0016 of SSIM headroom, so by the rule the thresholds stay. PAGE 12 ADDED 2026-10-02 (blank paragraphs in a cell: a paragraph with no word is a line, as InDesign sets it; they took no room before). Reference re-exported from the changed IDML; page 12 measures mean 0.042 / p99 0.000 / ssim 0.9991 and the worst page is unchanged, so the thresholds stay and now cover 12 pages."
+      "max_ink_mean_de": 9.056,
+      "rationale": "New 2026-10-02. Eleven pages asking InDesign how a row's height comes from its cells: 1-3 paragraphs per cell, space before/after, fixed / tight leading and mixed sizes, insets (incl. 0 under 1 pt and 4 pt edges), MinimumHeight / MaximumHeight, vertical justification, a table breaking across two threaded frames with its header repeating, and a row taller than every frame. Pages 10-11 (AutoGrow=\"false\" fixed rows, KeepWithNextRow) are NOT gated: the IDML reader does not carry either attribute yet. Before the fix the gated pages measured worst mean 1.597 / p99 84.1 / SSIM 0.919 (p8: every multi-paragraph row short, its later lines overlapping the next row); after, worst page mean 0.158 / p99 3.147 / SSIM 0.9956 (p8, glyph sub-pixel phase); sized by the rule above. GATED 2026-10-02 to all 11 pages: the reader carries AutoGrow / KeepWithNextRow (plugin-publish 96cfb6c), a fixed row is held at its height with its cells overset, and a run of kept rows moves to the next frame together. p10 (fixed rows) mean 0.718 -> 0.024, p99 20.556 -> 0.000, SSIM 0.9620 -> 0.9996; p11 (KeepWithNextRow) 0.571 -> 0.121, 12.611 -> 1.504, 0.9729 -> 0.9973. The worst page over all 11 is still p8 (mean 0.158 / p99 3.147) and p4 (SSIM 0.9956): 83% / 83% of the mean / p99 budget and 0.0016 of SSIM headroom, so by the rule the thresholds stay. PAGE 12 ADDED 2026-10-02 (blank paragraphs in a cell: a paragraph with no word is a line, as InDesign sets it; they took no room before). Reference re-exported from the changed IDML; page 12 measures mean 0.042 / p99 0.000 / ssim 0.9991 and the worst page is unchanged, so the thresholds stay and now cover 12 pages. INK GATED 2026-10-13: worst page ink mean 7.547 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "text",
@@ -351,26 +397,29 @@
       "max_pages_with_pdf": 19,
       "max_mean_de": 0.401,
       "max_p99_de": 0.3,
-      "min_ssim": 0.975,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 on a host that has Open Sans, the face the IDML declares. The file it replaces embedded MinionPro-Regular — InDesign had substituted on the export host — so this fixture spent its life comparing our sans against InDesign's serif, and the old budget (mean 0.65 / p99 8.6) was sized entirely to that mismatch. Against the honest reference the worst page measures mean 0.390 / p99 0.198 / SSIM 0.982 (p6, the densest text page); the PDF also grew 13→19 pages, so every page is gated now. Budget = measured × ~1.25 with p99 left a 1.0 noise floor. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.348 / p99 0.000 / ssim 0.9836 (was 0.390 / 0.198 / 0.9821); re-sized by the rule above."
+      "min_ssim": 0.9785,
+      "max_ink_mean_de": 50.649,
+      "rationale": "Reference RE-EXPORTED 2026-09-06 on a host that has Open Sans, the face the IDML declares. The file it replaces embedded MinionPro-Regular — InDesign had substituted on the export host — so this fixture spent its life comparing our sans against InDesign's serif, and the old budget (mean 0.65 / p99 8.6) was sized entirely to that mismatch. Against the honest reference the worst page measures mean 0.390 / p99 0.198 / SSIM 0.982 (p6, the densest text page); the PDF also grew 13→19 pages, so every page is gated now. Budget = measured × ~1.25 with p99 left a 1.0 noise floor. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.348 / p99 0.000 / ssim 0.9836 (was 0.390 / 0.198 / 0.9821); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 42.207 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.349 / p99 0.00 / SSIM 0.9836 / ink 42.241; sized at worst x 1.20 and SSIM - 0.005; p99 kept at its 0.3 floor."
     },
     {
       "name": "text-advanced",
       "text_gate": true,
       "max_pages_with_pdf": 17,
-      "max_mean_de": 0.76,
-      "max_p99_de": 19.04,
-      "min_ssim": 0.965,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed — size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.587 / p99 16.554 / ssim 0.9730 (was 0.634 / 21.479 / 0.9700); re-sized by the rule above. RE-EXPORTED 2026-10-13 from the IDML in InDesign's ruby spelling (`RubyFlag=\"1\"`, `PerCharacterRuby`; the generator wrote `Ruby=\"true\"`, which InDesign ignores): InDesign's reference still sets no ruby text (pdftotext finds no かんじ) and every page measures as before."
+      "max_mean_de": 0.646,
+      "max_p99_de": 12.91,
+      "min_ssim": 0.9691,
+      "max_ink_mean_de": 81.03,
+      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed — size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.587 / p99 16.554 / ssim 0.9730 (was 0.634 / 21.479 / 0.9700); re-sized by the rule above. RE-EXPORTED 2026-10-13 from the IDML in InDesign's ruby spelling (`RubyFlag=\"1\"`, `PerCharacterRuby`; the generator wrote `Ruby=\"true\"`, which InDesign ignores): InDesign's reference still sets no ruby text (pdftotext finds no かんじ) and every page measures as before. EXPLAINED 2026-10-13: InDesign sets ruby and kenten only under its Japanese composers (HL Composer J / HL Single J; tools/indesign-export/cjk-composer-probe), and this paragraph uses the default one; the engine now gates them the same way. INK GATED 2026-10-13: worst page ink mean 67.525 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.539 / p99 10.756 / ssim 0.9741 (thresholds were 0.76 / 19.04 / 0.965); re-sized by the rule above."
     },
     {
       "name": "text-autosize",
-      "text_gate": true,
+      "text_gate": "lines",
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.22,
+      "max_mean_de": 0.188,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9887,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-autosize.fonts.sh`); was 0.44 / 0 / 0.979 in the fallback serif; now 0.183 / 0 / 0.9937. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
+      "min_ssim": 0.9901,
+      "max_ink_mean_de": 2.109,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-autosize.fonts.sh`); was 0.44 / 0 / 0.979 in the fallback serif; now 0.183 / 0 / 0.9937. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 2.068 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.156 / p99 0.00 / SSIM 0.9952 / ink 1.757; sized at worst x 1.20 and SSIM - 0.005; p99 kept at its 0.3 floor. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142)."
     },
     {
       "name": "text-in-shape",
@@ -378,16 +427,18 @@
       "max_mean_de": 1.271,
       "max_p99_de": 57.12,
       "min_ssim": 0.9439,
-      "rationale": "Set 2026-09-08 from the wrap-inside rule measured against InDesign (outline eroded by the inset, band over the line's slug, edges on the whole-point grid) plus the insets crossing the wire in both directions: worst page mean 2.898 -> 2.000. The body text then lost the two words only Adobe's proprietary patterns break (\"lazy\" -> \"sleepy\", \"windowsill\" -> \"window ledge\") — this fixture gates wrap-INSIDE geometry, and those words measured whose hyphenation dictionary is richer instead; the donut page went 2.239 -> 1.156 on that alone. Current worst page: mean 2.004 / p99 79.5 / SSIM 0.9007 across 3 page(s). Held at the earlier numbers rather than re-baselined: worst + 20% would be LOOSER than these. TIGHTENED 2026-10-01 (shaped frames take InDesign's band rules: stroke erodes the outline, slug from the previous baseline, whole-point grid from the text area, minimum-raggedness breaking, split rows centred onto the hole): worst page now mean 1.059 / p99 49.668 / ssim 0.9489 (was 2.053 / 80.300 / 0.8983); mean x1.20 (<=50%), p99 x1.15 (50-75%), ssim worst - 0.005."
+      "max_ink_mean_de": 54.647,
+      "rationale": "Set 2026-09-08 from the wrap-inside rule measured against InDesign (outline eroded by the inset, band over the line's slug, edges on the whole-point grid) plus the insets crossing the wire in both directions: worst page mean 2.898 -> 2.000. The body text then lost the two words only Adobe's proprietary patterns break (\"lazy\" -> \"sleepy\", \"windowsill\" -> \"window ledge\") — this fixture gates wrap-INSIDE geometry, and those words measured whose hyphenation dictionary is richer instead; the donut page went 2.239 -> 1.156 on that alone. Current worst page: mean 2.004 / p99 79.5 / SSIM 0.9007 across 3 page(s). Held at the earlier numbers rather than re-baselined: worst + 20% would be LOOSER than these. TIGHTENED 2026-10-01 (shaped frames take InDesign's band rules: stroke erodes the outline, slug from the previous baseline, whole-point grid from the text area, minimum-raggedness breaking, split rows centred onto the hole): worst page now mean 1.059 / p99 49.668 / ssim 0.9489 (was 2.053 / 80.300 / 0.8983); mean x1.20 (<=50%), p99 x1.15 (50-75%), ssim worst - 0.005. INK GATED 2026-10-13: worst page ink mean 45.539 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "text-letterspacing",
-      "text_gate": true,
+      "text_gate": "lines",
       "max_pages_with_pdf": 2,
-      "max_mean_de": 0.851,
-      "max_p99_de": 27.77,
-      "min_ssim": 0.9614,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.709 / p99 28.534 / SSIM 0.9636 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.669 / p99 24.142 / ssim 0.9664 (was 0.709 / 28.534 / 0.9636); re-sized by the rule above."
+      "max_mean_de": 0.045,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9945,
+      "max_ink_mean_de": 3.726,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.709 / p99 28.534 / SSIM 0.9636 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.669 / p99 24.142 / ssim 0.9664 (was 0.709 / 28.534 / 0.9636); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 47.092 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.037 / p99 0.00 / SSIM 0.9996 / ink 3.104; sized at worst x 1.20 and SSIM - 0.005; p99 kept at its 0.3 floor. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142)."
     },
     {
       "name": "text-on-path",
@@ -395,7 +446,8 @@
       "max_mean_de": 0.084,
       "max_p99_de": 0.3,
       "min_ssim": 0.997,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13: the reference was re-exported from the IDML in InDesign's own spelling (`TextAlignment`; the old `PathTypeAlignment` was ignored by InDesign, so every seat printed as Baseline), and the renderer now places the text by the paragraph's justification (left, InDesign's default, where it centred) and seats Ascender / Descender on the font's bounding box (tools/indesign-export/spelling-and-spacing-probe). Worst page now p2 mean 0.070 / SSIM 0.9978 (was 0.256 / 0.9889); pages 4-6 at 0.003. Sized at worst + ~20%."
+      "max_ink_mean_de": 33.43,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13: the reference was re-exported from the IDML in InDesign's own spelling (`TextAlignment`; the old `PathTypeAlignment` was ignored by InDesign, so every seat printed as Baseline), and the renderer now places the text by the paragraph's justification (left, InDesign's default, where it centred) and seats Ascender / Descender on the font's bounding box (tools/indesign-export/spelling-and-spacing-probe). Worst page now p2 mean 0.070 / SSIM 0.9978 (was 0.256 / 0.9889); pages 4-6 at 0.003. Sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 27.858 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "text-overset",
@@ -404,34 +456,38 @@
       "max_mean_de": 0.167,
       "max_p99_de": 0.3,
       "min_ssim": 0.98,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-overset.fonts.sh`); was 0.79 / 33.62 / 0.9564 in the fallback serif, which fit a third line InDesign carries over; now 0.139 / 0 / 0.985. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
+      "max_ink_mean_de": 17.831,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-overset.fonts.sh`); was 0.79 / 33.62 / 0.9564 in the fallback serif, which fit a third line InDesign carries over; now 0.139 / 0 / 0.985. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 14.859 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "text-wrap",
       "text_gate": true,
       "max_pages_with_pdf": 6,
-      "max_mean_de": 0.257,
-      "max_p99_de": 8.92,
-      "min_ssim": 0.9891,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.639 / p99 24.438 / SSIM 0.9735 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.214 / p99 7.433 / ssim 0.9941 (was 0.639 / 24.570 / 0.9734); re-sized by the rule above."
+      "max_mean_de": 0.649,
+      "max_p99_de": 15.13,
+      "min_ssim": 0.9845,
+      "max_ink_mean_de": 8.071,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.639 / p99 24.438 / SSIM 0.9735 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.214 / p99 7.433 / ssim 0.9941 (was 0.639 / 24.570 / 0.9734); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 6.725 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. RE-GATED 2026-10-13: the sample's story was lengthened to run past its obstacles (it set 11 lines that ended above all of them, so no wrap mode reached a line) and its reference was exported again; jump-object / next-column wraps and the ragged breaker for wrapped frames (ADR 139) and exact positions (ADR 138) landed with it. Worst page measured mean 0.541 / p99 12.611 / ssim 0.9895; sized at worst * 1.20 and worst_ssim - 0.005."
     },
     {
       "name": "transparency",
       "text_gate": true,
       "max_pages_with_pdf": 12,
-      "max_mean_de": 0.05,
-      "max_p99_de": 1.08,
-      "min_ssim": 0.9905,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.044 / p99 0.861 / SSIM 0.9985 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.023 / p99 0.861 / ssim 0.9992 (was 0.044 / 0.861 / 0.9985); re-sized by the rule above."
+      "max_mean_de": 0.028,
+      "max_p99_de": 1.03,
+      "min_ssim": 0.9943,
+      "max_ink_mean_de": 4.05,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.044 / p99 0.861 / SSIM 0.9985 across 12 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.023 / p99 0.861 / ssim 0.9992 (was 0.044 / 0.861 / 0.9985); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 3.374 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.023 / p99 0.861 / ssim 0.9993 (thresholds were 0.05 / 1.08 / 0.9905); re-sized by the rule above."
     },
     {
       "name": "variables",
       "text_gate": true,
       "max_pages_with_pdf": 5,
-      "max_mean_de": 0.156,
-      "max_p99_de": 3.98,
-      "min_ssim": 0.9924,
-      "rationale": "RE-SIZED 2026-10-01 on a NEW reference (thoughts ADR 033, RFI C-37). The old sample wrote variable types and a <TextVariablePreference> InDesign never writes, an undefined Heading style and paragraphs without <Br/> marks; InDesign's reference printed NOTHING for its running header and dates, so the old numbers (mean 0.45 / p99 0.3 / ssim 0.9739 over 2 pages, sized on worst mean 0.375 / p99 0.000) measured a blank slot against a blank slot. The sample is now five pages in InDesign's own vocabulary (MatchParagraph/CharacterStyleType, LastPageNumberType, ACE 18 + PageNumberType, ACE 19 section marker, a restart to 1 on page 3), re-exported by InDesign 20.0.1; every page's resolved text equals InDesign's (crates/paged-renderer/tests/variables.rs) and the gate renders the dates for the export day (render-diff.sh --document-date). Worst page measured: mean 0.130 / p99 3.320 / ssim 0.9974 (p1, dense text: antialiasing at glyph edges, the same text); sized at worst * 1.20 and ssim worst - 0.005. Mean and SSIM are TIGHTER than before; p99 is looser because the old reference had almost no text to differ on."
+      "max_mean_de": 0.12,
+      "max_p99_de": 3.18,
+      "min_ssim": 0.993,
+      "max_ink_mean_de": 6.632,
+      "rationale": "RE-SIZED 2026-10-01 on a NEW reference (thoughts ADR 033, RFI C-37). The old sample wrote variable types and a <TextVariablePreference> InDesign never writes, an undefined Heading style and paragraphs without <Br/> marks; InDesign's reference printed NOTHING for its running header and dates, so the old numbers (mean 0.45 / p99 0.3 / ssim 0.9739 over 2 pages, sized on worst mean 0.375 / p99 0.000) measured a blank slot against a blank slot. The sample is now five pages in InDesign's own vocabulary (MatchParagraph/CharacterStyleType, LastPageNumberType, ACE 18 + PageNumberType, ACE 19 section marker, a restart to 1 on page 3), re-exported by InDesign 20.0.1; every page's resolved text equals InDesign's (crates/paged-renderer/tests/variables.rs) and the gate renders the dates for the export day (render-diff.sh --document-date). Worst page measured: mean 0.130 / p99 3.320 / ssim 0.9974 (p1, dense text: antialiasing at glyph edges, the same text); sized at worst * 1.20 and ssim worst - 0.005. Mean and SSIM are TIGHTER than before; p99 is looser because the old reference had almost no text to differ on. INK GATED 2026-10-13: worst page ink mean 5.526 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.100 / p99 2.648 / ssim 0.9980 (thresholds were 0.156 / 3.98 / 0.9924); re-sized by the rule above."
     },
     {
       "name": "start-paragraph",
@@ -440,7 +496,8 @@
       "max_mean_de": 0.119,
       "max_p99_de": 0.3,
       "min_ssim": 0.983,
-      "rationale": "Added 2026-10-01 with ADR 028 (the break-before rule, StartParagraph). Ten cases, each one story threaded through a four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page; the reference is InDesign 2025's own export, and where each case's rule paragraph lands matches it (also pinned structurally by crates/paged-renderer/tests/start_paragraph_pipeline.rs). Worst page measured: mean 0.130 / p99 0.0 / ssim 0.9884; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by start-paragraph.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.103 / p99 0.000 / ssim 0.9893 (was 0.130 / 0.000 / 0.9882); re-sized by the rule above."
+      "max_ink_mean_de": 78.937,
+      "rationale": "Added 2026-10-01 with ADR 028 (the break-before rule, StartParagraph). Ten cases, each one story threaded through a four-page chain (a two-column frame and a one-column frame on page 1, one frame on each of pages 2-4), every case starting on an odd page; the reference is InDesign 2025's own export, and where each case's rule paragraph lands matches it (also pinned structurally by crates/paged-renderer/tests/start_paragraph_pipeline.rs). Worst page measured: mean 0.130 / p99 0.0 / ssim 0.9884; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by start-paragraph.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.103 / p99 0.000 / ssim 0.9893 (was 0.130 / 0.000 / 0.9882); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 65.781 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "forced-line-break",
@@ -449,16 +506,18 @@
       "max_mean_de": 0.484,
       "max_p99_de": 15.13,
       "min_ssim": 0.946,
-      "rationale": "Added 2026-10-01 with the forced line break (U+2028, core ab383b1). Seven cases on one page (indent + spacing, bullets, numbers, two breaks in a row, a break that ends the paragraph, justified, a break that starts it); the reference is InDesign 2025's own export, and every line of every case lands where InDesign put it (also pinned structurally by crates/paged-renderer/tests/forced_line_break_pipeline.rs). It could join only once the importer kept U+2028 in the run (plugin-publish 18d0622): while it folded the break into \\n the gate rendered every break as a paragraph mark and measured mean 0.757 / p99 26.6. Worst page measured: mean 0.591 / p99 12.611 / ssim 0.9470; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE at the time, not the forced break: in the bullets and numbers cases the text after the list marker started at the wrong x (the engine puts a space after an undeclared BulletsTextAfter where InDesign's default is a tab, and the number's tab lands at 108 pt, the next 36 pt default stop, instead of the hanging indent's left indent at 90 pt); with those two frames masked the page measures mean 0.387. Body copy is Inter, registered by forced-line-break.fonts.sh. TIGHTENED 2026-10-01 once that residue was fixed (core: an undeclared BulletsTextAfter is a tab, and a hanging first line's left indent is a tab stop; measured by the list-markers fixture): the page now measures mean 0.506 / p99 12.611 / ssim 0.9519, re-sized at worst * 1.20 (p99 unchanged at 15.13) and worst_ssim - 0.005. What remains is not the list markers: the 0.25 pt frame strokes and glyph-edge antialiasing (the 0.387 above was with whole frames masked, strokes included). TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.421 / p99 12.611 / ssim 0.9546 (was 0.506 / 12.611 / 0.9519); re-sized by the rule above."
+      "max_ink_mean_de": 31.043,
+      "rationale": "Added 2026-10-01 with the forced line break (U+2028, core ab383b1). Seven cases on one page (indent + spacing, bullets, numbers, two breaks in a row, a break that ends the paragraph, justified, a break that starts it); the reference is InDesign 2025's own export, and every line of every case lands where InDesign put it (also pinned structurally by crates/paged-renderer/tests/forced_line_break_pipeline.rs). It could join only once the importer kept U+2028 in the run (plugin-publish 18d0622): while it folded the break into \\n the gate rendered every break as a paragraph mark and measured mean 0.757 / p99 26.6. Worst page measured: mean 0.591 / p99 12.611 / ssim 0.9470; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE at the time, not the forced break: in the bullets and numbers cases the text after the list marker started at the wrong x (the engine puts a space after an undeclared BulletsTextAfter where InDesign's default is a tab, and the number's tab lands at 108 pt, the next 36 pt default stop, instead of the hanging indent's left indent at 90 pt); with those two frames masked the page measures mean 0.387. Body copy is Inter, registered by forced-line-break.fonts.sh. TIGHTENED 2026-10-01 once that residue was fixed (core: an undeclared BulletsTextAfter is a tab, and a hanging first line's left indent is a tab stop; measured by the list-markers fixture): the page now measures mean 0.506 / p99 12.611 / ssim 0.9519, re-sized at worst * 1.20 (p99 unchanged at 15.13) and worst_ssim - 0.005. What remains is not the list markers: the 0.25 pt frame strokes and glyph-edge antialiasing (the 0.387 above was with whole frames masked, strokes included). TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.421 / p99 12.611 / ssim 0.9546 (was 0.506 / 12.611 / 0.9519); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 25.869 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "soft-hyphens",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.529,
-      "max_p99_de": 7.67,
-      "min_ssim": 0.9761,
-      "rationale": "Added 2026-10-02 to ask InDesign where a discretionary hyphen (U+00AD, which InDesign writes bare inside <Content>) breaks. Fifteen 92-96 pt frames on one page: hyphenation on and off with the Paragraph and the Single-line Composer, HyphenateAfterFirst/BeforeLast 6, HyphenateWordsLongerThan 25, HyphenateLastWord false, HyphenateCapitalizedWords false, a ladder limit of 1 with and without a way out, a 36 pt zone, and leading soft hyphens guarding justified words. The reference is InDesign 20.0.1's own export. InDesign's rule: a soft hyphen breaks (and prints its hyphen) whether the paragraph hyphenates or not, under the paragraph's letter, word-length, last-word, ladder and zone limits but not its capitalised-words switch; a ladder limit yields where nothing else fits. Every Single-line case's lines match InDesign's exactly (pinned structurally by crates/paged-renderer/tests/soft_hyphens_pipeline.rs). KNOWN RESIDUE, not the soft-hyphen rule: the three Paragraph Composer frames (frames 1 and 2 ragged, frame 4 justified) break differently, because our Knuth-Plass weighs a line against a hyphen differently from InDesign's (ragged it sets 'The' alone to save the second hyphen; justified it keeps 'concentration and' together and leaves one-word lines flush left where InDesign letterspaces them). Worst page measured: mean 0.441 / p99 6.392 / ssim 0.9811; sized at worst * 1.20 and worst_ssim - 0.005. Body copy is Inter, registered by soft-hyphens.fonts.sh."
+      "max_mean_de": 0.262,
+      "max_p99_de": 4.56,
+      "min_ssim": 0.987,
+      "max_ink_mean_de": 7.873,
+      "rationale": "Added 2026-10-02 to ask InDesign where a discretionary hyphen (U+00AD, which InDesign writes bare inside <Content>) breaks. Fifteen 92-96 pt frames on one page: hyphenation on and off with the Paragraph and the Single-line Composer, HyphenateAfterFirst/BeforeLast 6, HyphenateWordsLongerThan 25, HyphenateLastWord false, HyphenateCapitalizedWords false, a ladder limit of 1 with and without a way out, a 36 pt zone, and leading soft hyphens guarding justified words. The reference is InDesign 20.0.1's own export. InDesign's rule: a soft hyphen breaks (and prints its hyphen) whether the paragraph hyphenates or not, under the paragraph's letter, word-length, last-word, ladder and zone limits but not its capitalised-words switch; a ladder limit yields where nothing else fits. Every Single-line case's lines match InDesign's exactly (pinned structurally by crates/paged-renderer/tests/soft_hyphens_pipeline.rs). KNOWN RESIDUE, not the soft-hyphen rule: the three Paragraph Composer frames (frames 1 and 2 ragged, frame 4 justified) break differently, because our Knuth-Plass weighs a line against a hyphen differently from InDesign's (ragged it sets 'The' alone to save the second hyphen; justified it keeps 'concentration and' together and leaves one-word lines flush left where InDesign letterspaces them). Worst page measured: mean 0.441 / p99 6.392 / ssim 0.9811; sized at worst * 1.20 and worst_ssim - 0.005. Body copy is Inter, registered by soft-hyphens.fonts.sh. INK GATED 2026-10-13: worst page ink mean 13.429 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.218 / p99 3.80 / SSIM 0.9920 / ink 6.560; sized at worst x 1.20 and SSIM - 0.005."
     },
     {
       "name": "list-markers",
@@ -467,7 +526,8 @@
       "max_mean_de": 0.739,
       "max_p99_de": 15.14,
       "min_ssim": 0.9155,
-      "rationale": "Added 2026-10-01 to ask InDesign where the text after a list marker starts. Fourteen cases on one page, two paragraphs each: BulletsTextAfter undeclared / ^t / a space; NumberingExpression ^#.^t / ^#.; no indent, left indent only, hanging indents (one narrower than the number), explicit tab stops before, beyond and under the marker, and a plain tab in a hanging paragraph with no list. The reference is InDesign 20.0.1's own export, and the x of the text after every marker matches it within 0.5 pt (pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs). Worst page measured: mean 0.873 / p99 33.344 / ssim 0.9096; sized at worst * 1.20 and worst_ssim - 0.005. The residue is not the markers: fourteen 0.25 pt frame strokes the CPU rasteriser paints lighter than InDesign, plus glyph-edge antialiasing (before the fix the page measured mean 1.114 / p99 53.7 / ssim 0.8958). Body copy is Inter, registered by list-markers.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.642 / p99 12.611 / ssim 0.9206 (was 0.873 / 33.344 / 0.9096); re-sized by the rule above."
+      "max_ink_mean_de": 28.369,
+      "rationale": "Added 2026-10-01 to ask InDesign where the text after a list marker starts. Fourteen cases on one page, two paragraphs each: BulletsTextAfter undeclared / ^t / a space; NumberingExpression ^#.^t / ^#.; no indent, left indent only, hanging indents (one narrower than the number), explicit tab stops before, beyond and under the marker, and a plain tab in a hanging paragraph with no list. The reference is InDesign 20.0.1's own export, and the x of the text after every marker matches it within 0.5 pt (pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs). Worst page measured: mean 0.873 / p99 33.344 / ssim 0.9096; sized at worst * 1.20 and worst_ssim - 0.005. The residue is not the markers: fourteen 0.25 pt frame strokes the CPU rasteriser paints lighter than InDesign, plus glyph-edge antialiasing (before the fix the page measured mean 1.114 / p99 53.7 / ssim 0.8958). Body copy is Inter, registered by list-markers.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.642 / p99 12.611 / ssim 0.9206 (was 0.873 / 33.344 / 0.9096); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 23.640 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "list-overrides",
@@ -476,15 +536,18 @@
       "max_mean_de": 0.931,
       "max_p99_de": 20.88,
       "min_ssim": 0.9027,
-      "rationale": "Added 2026-10-01 to ask InDesign how the list attributes behave when set on the paragraph range itself rather than in its style. Twenty-two cases, two paragraphs each: BulletsTextAfter / NumberingExpression as local attributes, as typed <Properties> children, and over a style that says otherwise; NumberingStartAt / NumberingContinue on the first, the second and through a style (including InDesign's own [No paragraph style] pair start 1 + continue true); NumberingFormat as child and as attribute; the marker character styles as children and as attributes. The reference is InDesign 20.0.1's own export; the text after every marker and the marker's width (which tells the counter values apart) match it within 0.5 / 0.1 pt in all 22 cases, pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs. Worst page measured: mean 1.132 / p99 51.432 / ssim 0.8958 (tightened 2026-10-01 from 1.218 / 62.710 / 0.8919 when the marker character style's size and face were honoured); sized at worst * 1.20 and worst_ssim - 0.005. Residue: the same 0.25 pt frame strokes and glyph-edge antialiasing as list-markers, over 22 frames instead of 14. Body copy is Inter, registered by list-overrides.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.809 / p99 17.397 / ssim 0.9077 (was 1.132 / 51.432 / 0.8958); re-sized by the rule above."
+      "max_ink_mean_de": 26.468,
+      "rationale": "Added 2026-10-01 to ask InDesign how the list attributes behave when set on the paragraph range itself rather than in its style. Twenty-two cases, two paragraphs each: BulletsTextAfter / NumberingExpression as local attributes, as typed <Properties> children, and over a style that says otherwise; NumberingStartAt / NumberingContinue on the first, the second and through a style (including InDesign's own [No paragraph style] pair start 1 + continue true); NumberingFormat as child and as attribute; the marker character styles as children and as attributes. The reference is InDesign 20.0.1's own export; the text after every marker and the marker's width (which tells the counter values apart) match it within 0.5 / 0.1 pt in all 22 cases, pinned structurally by crates/paged-renderer/tests/list_markers_pipeline.rs. Worst page measured: mean 1.132 / p99 51.432 / ssim 0.8958 (tightened 2026-10-01 from 1.218 / 62.710 / 0.8919 when the marker character style's size and face were honoured); sized at worst * 1.20 and worst_ssim - 0.005. Residue: the same 0.25 pt frame strokes and glyph-edge antialiasing as list-markers, over 22 frames instead of 14. Body copy is Inter, registered by list-overrides.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.809 / p99 17.397 / ssim 0.9077 (was 1.132 / 51.432 / 0.8958); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 22.056 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "list-marker-styles",
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.926,
-      "max_p99_de": 19.74,
-      "min_ssim": 0.9027,
-      "rationale": "Added 2026-10-01 to ask InDesign what a list marker's character style does to the marker. Twenty-two cases, two paragraphs each: a BulletsCharacterStyle / NumberingCharacterStyle that sets size, family (JetBrains Mono), bold, colour, baseline shift, tracking, or nothing, each for a bullet and a number; a 20 pt marker under auto leading, before a tab, from the paragraph style, and over a run with its own bold / colour. InDesign's rule: the whole marker (number, literal and separator) takes the character style laid over the first character's formatting, the style winning over the run's local values, and the marker never raises the line's auto leading. The reference is InDesign 20.0.1's own export; every line's baseline, the text after the marker, and each marker glyph's position, size and colour match it within 0.5 / 0.1 pt, pinned by crates/paged-renderer/tests/list_markers_pipeline.rs. Worst page measured: mean 1.079 / p99 50.589 / ssim 0.8976; sized at worst * 1.20 and worst_ssim - 0.005. Residue: the same 0.25 pt frame strokes and glyph-edge antialiasing as list-overrides. Body copy is Inter and one marker style JetBrains Mono, registered by list-marker-styles.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.804 / p99 16.445 / ssim 0.9078 (was 1.079 / 50.589 / 0.8976); re-sized by the rule above."
+      "max_p99_de": 15.14,
+      "min_ssim": 0.9034,
+      "max_ink_mean_de": 25.537,
+      "rationale": "Added 2026-10-01 to ask InDesign what a list marker's character style does to the marker. Twenty-two cases, two paragraphs each: a BulletsCharacterStyle / NumberingCharacterStyle that sets size, family (JetBrains Mono), bold, colour, baseline shift, tracking, or nothing, each for a bullet and a number; a 20 pt marker under auto leading, before a tab, from the paragraph style, and over a run with its own bold / colour. InDesign's rule: the whole marker (number, literal and separator) takes the character style laid over the first character's formatting, the style winning over the run's local values, and the marker never raises the line's auto leading. The reference is InDesign 20.0.1's own export; every line's baseline, the text after the marker, and each marker glyph's position, size and colour match it within 0.5 / 0.1 pt, pinned by crates/paged-renderer/tests/list_markers_pipeline.rs. Worst page measured: mean 1.079 / p99 50.589 / ssim 0.8976; sized at worst * 1.20 and worst_ssim - 0.005. Residue: the same 0.25 pt frame strokes and glyph-edge antialiasing as list-overrides. Body copy is Inter and one marker style JetBrains Mono, registered by list-marker-styles.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.804 / p99 16.445 / ssim 0.9078 (was 1.079 / 50.589 / 0.8976); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 21.710 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.788 / p99 12.61 / SSIM 0.9085 / ink 21.281; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142).",
+      "text_gate": "lines"
     },
     {
       "name": "span-columns",
@@ -493,7 +556,8 @@
       "max_mean_de": 0.195,
       "max_p99_de": 0.3,
       "min_ssim": 0.978,
-      "rationale": "Added 2026-10-01 with span and split columns (SpanColumnType, SpanSplitColumnCount, SpanColumnMinSpaceBefore/After, SplitColumnInsideGutter/OutsideGutter). Seventeen cases, one per page, each one story threaded through two frames (spans in 2- and 3-column frames: at the story's start, mid-story, over 2 of 3 columns with overflow into the third column and frame B, with min space and SpaceBefore/After in both orders, with no room left, centred; splits into 2 and 3 in a 1-column frame and inside one column of a 2-column frame, with default and explicit gutters, min space, a paragraph straddling the split, and a block crossing into frame B). The reference is InDesign 2025's own export, and all 256 lines land where InDesign put them, within 0.13 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.203 / p99 0.210 / ssim 0.9830; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by span-columns.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.169 / p99 0.000 / ssim 0.9837 (was 0.203 / 0.210 / 0.9826); re-sized by the rule above."
+      "max_ink_mean_de": 39.594,
+      "rationale": "Added 2026-10-01 with span and split columns (SpanColumnType, SpanSplitColumnCount, SpanColumnMinSpaceBefore/After, SplitColumnInsideGutter/OutsideGutter). Seventeen cases, one per page, each one story threaded through two frames (spans in 2- and 3-column frames: at the story's start, mid-story, over 2 of 3 columns with overflow into the third column and frame B, with min space and SpaceBefore/After in both orders, with no room left, centred; splits into 2 and 3 in a 1-column frame and inside one column of a 2-column frame, with default and explicit gutters, min space, a paragraph straddling the split, and a block crossing into frame B). The reference is InDesign 2025's own export, and all 256 lines land where InDesign put them, within 0.13 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.203 / p99 0.210 / ssim 0.9830; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by span-columns.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.169 / p99 0.000 / ssim 0.9837 (was 0.203 / 0.210 / 0.9826); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 32.994 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "split-boundaries",
@@ -502,7 +566,8 @@
       "max_mean_de": 0.149,
       "max_p99_de": 0.3,
       "min_ssim": 0.98,
-      "rationale": "Added 2026-10-01 with split-block boundaries: where one block of SplitColumns paragraphs ends and the next begins. Twenty-four cases in span-columns' page layout (one story through frames A and B, Inter 10/12, numbered one-line paragraphs): consecutive splits with a different count (2 then 3, 3 then 2), inside gutter, outside gutter, min space only, and spelled-out defaults; a split directly before and after a span; block boundaries across a column, across a frame, and at a full frame; and the spacing at a boundary (min space after vs before, SpaceAfter + SpaceBefore, with and without min space, single text either side). The reference is InDesign 2025's own export, and all 306 lines land where InDesign put them, within 0.12 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.162 / p99 0.000 / ssim 0.9858; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by split-boundaries.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.129 / p99 0.000 / ssim 0.9874 (was 0.162 / 0.000 / 0.9858); re-sized by the rule above."
+      "max_ink_mean_de": 38.868,
+      "rationale": "Added 2026-10-01 with split-block boundaries: where one block of SplitColumns paragraphs ends and the next begins. Twenty-four cases in span-columns' page layout (one story through frames A and B, Inter 10/12, numbered one-line paragraphs): consecutive splits with a different count (2 then 3, 3 then 2), inside gutter, outside gutter, min space only, and spelled-out defaults; a split directly before and after a span; block boundaries across a column, across a frame, and at a full frame; and the spacing at a boundary (min space after vs before, SpaceAfter + SpaceBefore, with and without min space, single text either side). The reference is InDesign 2025's own export, and all 306 lines land where InDesign put them, within 0.12 pt (pinned structurally by crates/paged-renderer/tests/span_columns_pipeline.rs). Worst page measured: mean 0.162 / p99 0.000 / ssim 0.9858; sized at worst * 1.20, the p99 at the 0.3 floor other fixtures use, ssim worst - 0.005. Body copy is Inter, registered by split-boundaries.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.129 / p99 0.000 / ssim 0.9874 (was 0.162 / 0.000 / 0.9858); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 32.389 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "tab-breaks",
@@ -511,7 +576,8 @@
       "max_mean_de": 0.211,
       "max_p99_de": 3.842,
       "min_ssim": 0.9891,
-      "rationale": "Added 2026-10-01 to ask InDesign where a line breaks when a tab decides it (core: the composer measures each tab at the width it takes on its line, paged_text::layout::tab_aware_breaks). Page 1: fourteen cases with a tab near the right edge of a 200 pt frame (a left stop the next word no longer fits after, a stop the word after the tab cannot fit at, default and explicit stops exceeding the measure, right/decimal/center stops near the edge, a tab past the last explicit stop, a stop beyond the frame, justified text with a tab). Page 2: Left/Right/Center/Decimal minimum-width sweeps and edge probes. The reference is InDesign 20.0.1's own export; every asserted word sits on InDesign's line within 0.5 pt (pinned structurally by crates/paged-renderer/tests/tab_breaks_pipeline.rs). Before the change the pages measured mean 0.801 / p99 28.53 / ssim 0.9625 (page 1) and 0.476 / 14.53 / 0.9820 (page 2); after, worst page mean 0.403 / p99 13.177 / ssim 0.9842; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the tab rule: c09's tab-free last line (InDesign sets its spaces at 70 %, below the 80 % minimum, to keep one word the engine wraps) and two edge probes InDesign keeps on the line by squeezing a 0.1 pt overflow. Frames carry no stroke: InDesign insets a frame's text by half a centre-aligned stroke. Body copy is Inter, registered by tab-breaks.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.176 / p99 3.202 / ssim 0.9942 (was 0.403 / 13.177 / 0.9842); re-sized by the rule above."
+      "max_ink_mean_de": 9.129,
+      "rationale": "Added 2026-10-01 to ask InDesign where a line breaks when a tab decides it (core: the composer measures each tab at the width it takes on its line, paged_text::layout::tab_aware_breaks). Page 1: fourteen cases with a tab near the right edge of a 200 pt frame (a left stop the next word no longer fits after, a stop the word after the tab cannot fit at, default and explicit stops exceeding the measure, right/decimal/center stops near the edge, a tab past the last explicit stop, a stop beyond the frame, justified text with a tab). Page 2: Left/Right/Center/Decimal minimum-width sweeps and edge probes. The reference is InDesign 20.0.1's own export; every asserted word sits on InDesign's line within 0.5 pt (pinned structurally by crates/paged-renderer/tests/tab_breaks_pipeline.rs). Before the change the pages measured mean 0.801 / p99 28.53 / ssim 0.9625 (page 1) and 0.476 / 14.53 / 0.9820 (page 2); after, worst page mean 0.403 / p99 13.177 / ssim 0.9842; sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE, not the tab rule: c09's tab-free last line (InDesign sets its spaces at 70 %, below the 80 % minimum, to keep one word the engine wraps) and two edge probes InDesign keeps on the line by squeezing a 0.1 pt overflow. Frames carry no stroke: InDesign insets a frame's text by half a centre-aligned stroke. Body copy is Inter, registered by tab-breaks.fonts.sh. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.176 / p99 3.202 / ssim 0.9942 (was 0.403 / 13.177 / 0.9842); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 7.607 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "stroke-inset",
@@ -520,7 +586,8 @@
       "max_mean_de": 0.273,
       "max_p99_de": 5.37,
       "min_ssim": 0.9822,
-      "rationale": "Added 2026-10-01 to ask InDesign how a text frame's stroke moves its text. Thirty-one one-frame cases on two pages (Inter 10/12, LeadingOffset, hyphenation off; one-line paragraphs alternating left/right): stroke weights 0.25 / 1 / 6 / 12 pt at centre / inside / outside, a stroke with no colour, InsetSpacing plus a stroke, frames whose height lets the stroke decide whether the fifth line fits, two-column frames, rounded corners and a chamfered polygon. The reference is InDesign 20.0.1's own export; its rule (a painted stroke insets the text area on all four sides by half its weight centred, all of it inside, none outside, on top of InsetSpacing; the gutter is unchanged) is pinned line by line within 0.05 pt by crates/paged-renderer/tests/stroke_inset_pipeline.rs. Worst page measured: mean 4.025 / p99 84.138 / ssim 0.8960; sized at worst * 1.20 and worst_ssim - 0.005. TIGHTENED 2026-10-01 (a text frame's StrokeAlignment reaches the model, plugin-publish 2ab572b, and the renderer strokes the outline it names): the twelve inside / outside frames, which were painted and inset as centred, now paint and set where InDesign does (pinned within 0.05 pt); worst page mean 4.025 -> 0.534, p99 84.138 -> 8.891, ssim 0.8960 -> 0.9724 (page 2), all <= 50% of the old budget, so sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the rounded-corner frames (the engine does not lay text out around corner effects); and shaped frames, which the engine does not inset by their stroke yet (see text_area_frame). Body copy is Inter, registered by stroke-inset.fonts.sh. TIGHTENED 2026-10-01 (shaped frames are inset by their stroke too, and the chamfered cases 27-30 land on InDesign's lines): worst page now mean 0.228 / p99 4.474 / ssim 0.9872 (was 0.534 / 8.893 / 0.9724); mean and p99 x1.20 (<=50%), ssim worst - 0.005."
+      "max_ink_mean_de": 3.298,
+      "rationale": "Added 2026-10-01 to ask InDesign how a text frame's stroke moves its text. Thirty-one one-frame cases on two pages (Inter 10/12, LeadingOffset, hyphenation off; one-line paragraphs alternating left/right): stroke weights 0.25 / 1 / 6 / 12 pt at centre / inside / outside, a stroke with no colour, InsetSpacing plus a stroke, frames whose height lets the stroke decide whether the fifth line fits, two-column frames, rounded corners and a chamfered polygon. The reference is InDesign 20.0.1's own export; its rule (a painted stroke insets the text area on all four sides by half its weight centred, all of it inside, none outside, on top of InsetSpacing; the gutter is unchanged) is pinned line by line within 0.05 pt by crates/paged-renderer/tests/stroke_inset_pipeline.rs. Worst page measured: mean 4.025 / p99 84.138 / ssim 0.8960; sized at worst * 1.20 and worst_ssim - 0.005. TIGHTENED 2026-10-01 (a text frame's StrokeAlignment reaches the model, plugin-publish 2ab572b, and the renderer strokes the outline it names): the twelve inside / outside frames, which were painted and inset as centred, now paint and set where InDesign does (pinned within 0.05 pt); worst page mean 4.025 -> 0.534, p99 84.138 -> 8.891, ssim 0.8960 -> 0.9724 (page 2), all <= 50% of the old budget, so sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the rounded-corner frames (the engine does not lay text out around corner effects); and shaped frames, which the engine does not inset by their stroke yet (see text_area_frame). Body copy is Inter, registered by stroke-inset.fonts.sh. TIGHTENED 2026-10-01 (shaped frames are inset by their stroke too, and the chamfered cases 27-30 land on InDesign's lines): worst page now mean 0.228 / p99 4.474 / ssim 0.9872 (was 0.534 / 8.893 / 0.9724); mean and p99 x1.20 (<=50%), ssim worst - 0.005. INK GATED 2026-10-13: worst page ink mean 2.748 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "shaped-bands",
@@ -529,7 +596,8 @@
       "max_mean_de": 0.546,
       "max_p99_de": 14.87,
       "min_ssim": 0.9861,
-      "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh."
+      "max_ink_mean_de": 4.838,
+      "rationale": "Added 2026-10-01 to ask InDesign how lines fit SHAPED text frames. Eighteen frames on three pages (Inter 10/12, hyphenation off): a circle, an apex-up triangle, a square donut whose hole splits the middle rows, a chamfered rectangle, a rectangle with a notch (every edge on a whole point) and a narrow ellipse, set left / right / centred / justified, AscentOffset and LeadingOffset, with insets and painted strokes. The reference is InDesign 20.0.1's own export; every line (text, ink start / end, baseline) is pinned within 0.05 pt by crates/paged-renderer/tests/shaped_bands_pipeline.rs. Worst page measured: mean 0.455 / p99 12.393 / ssim 0.9911 (the engine before the band rules: 5.848 / 84.138 / 0.7260); sized at worst * 1.20 and worst_ssim - 0.005. KNOWN RESIDUE: the justified donut (InDesign letterspaces a lone word across its part of a split row) and one line of the stroked circle (1 pt). Body copy is Inter, registered by shaped-bands.fonts.sh. INK GATED 2026-10-13: worst page ink mean 4.031 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "blank-paragraphs",
@@ -538,7 +606,8 @@
       "max_mean_de": 0.006,
       "max_p99_de": 0.01,
       "min_ssim": 0.9948,
-      "rationale": "Added 2026-10-02 (RFI C-56): a paragraph with no word still takes a line. Six frames of A / something / B in Inter 10/12; the reference is InDesign 20.0.1's export. A paragraph of spaces is a line at its own leading (it laid out no line and took no room before); crates/paged-renderer/tests/blank_paragraphs_pipeline.rs pins all six distances, the truly empty paragraph as a named known difference (the IDML importer drops its range's leading, RFI C-57: 2.4 pt). Measured mean 0.0047 / p99 0.000 / ssim 0.99984; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+      "max_ink_mean_de": 10.686,
+      "rationale": "Added 2026-10-02 (RFI C-56): a paragraph with no word still takes a line. Six frames of A / something / B in Inter 10/12; the reference is InDesign 20.0.1's export. A paragraph of spaces is a line at its own leading (it laid out no line and took no room before); crates/paged-renderer/tests/blank_paragraphs_pipeline.rs pins all six distances, the truly empty paragraph as a named known difference (the IDML importer drops its range's leading, RFI C-57: 2.4 pt). Measured mean 0.0047 / p99 0.000 / ssim 0.99984; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 8.904 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "mixed-leading",
@@ -547,16 +616,18 @@
       "max_mean_de": 0.043,
       "max_p99_de": 0.01,
       "min_ssim": 0.9933,
-      "rationale": "Added 2026-10-02 (RFI C-59): a line takes the largest leading among its characters, and sits its OWN leading below the line before it. Six frames, Inter 10 pt, lines fixed by forced line breaks; the reference is InDesign 20.0.1's export. The engine gave every line the paragraph's first run's leading and stepped by the previous line's. crates/paged-renderer/tests/mixed_leading_pipeline.rs pins every step; one frame is a named known difference (the forced break ending a line counts for that line in InDesign). Measured mean 0.0351 / p99 0.000 / ssim 0.9983; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005."
+      "max_ink_mean_de": 14.017,
+      "rationale": "Added 2026-10-02 (RFI C-59): a line takes the largest leading among its characters, and sits its OWN leading below the line before it. Six frames, Inter 10 pt, lines fixed by forced line breaks; the reference is InDesign 20.0.1's export. The engine gave every line the paragraph's first run's leading and stepped by the previous line's. crates/paged-renderer/tests/mixed_leading_pipeline.rs pins every step; one frame is a named known difference (the forced break ending a line counts for that line in InDesign). Measured mean 0.0351 / p99 0.000 / ssim 0.9983; sized at worst * 1.20 (p99 at the 0.01 floor) and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 11.680 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "hard-hyphen",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.156,
-      "max_p99_de": 1.78,
-      "min_ssim": 0.9896,
-      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005."
+      "max_mean_de": 0.089,
+      "max_p99_de": 1.52,
+      "min_ssim": 0.9928,
+      "max_ink_mean_de": 5.356,
+      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 8.432 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.074 / p99 1.27 / SSIM 0.9979 / ink 4.463; sized at worst x 1.20 and SSIM - 0.005."
     },
     {
       "name": "line-ends",
@@ -565,7 +636,8 @@
       "max_mean_de": 0.596,
       "max_p99_de": 2.34,
       "min_ssim": 0.9804,
-      "rationale": "Added 2026-10-03 (RFI C-62): a pen path's stroke end cap and line ends. One page, no text: open polygons in the three caps, with line ends (circle/triangle, barbed/simple-wide, square at 150 % + triangle at 50 %), a compound path of two open contours, a closed triangle with line ends set, graphic lines in round/projecting caps, and dashed ellipses in the three caps; the reference is InDesign 20.0.1's export. InDesign agrees on every cap, on line ends for EACH open contour of a compound path, and on none for a closed one. Measured mean 0.497 / p99 1.952 / ssim 0.9854 (the same IDML with the attributes the pre-C-62 reader ignored stripped: 0.710 / 8.739 / 0.981); sized at worst * 1.20 and ssim - 0.005. The residue is named, not C-62's: arrowhead geometry (InDesign trims the stroke under the head and draws Simple/SimpleWide/Barbed/hollow-Square differently) and the dash distribution on a closed path (InDesign spreads dashes evenly)."
+      "max_ink_mean_de": 14.135,
+      "rationale": "Added 2026-10-03 (RFI C-62): a pen path's stroke end cap and line ends. One page, no text: open polygons in the three caps, with line ends (circle/triangle, barbed/simple-wide, square at 150 % + triangle at 50 %), a compound path of two open contours, a closed triangle with line ends set, graphic lines in round/projecting caps, and dashed ellipses in the three caps; the reference is InDesign 20.0.1's export. InDesign agrees on every cap, on line ends for EACH open contour of a compound path, and on none for a closed one. Measured mean 0.497 / p99 1.952 / ssim 0.9854 (the same IDML with the attributes the pre-C-62 reader ignored stripped: 0.710 / 8.739 / 0.981); sized at worst * 1.20 and ssim - 0.005. The residue is named, not C-62's: arrowhead geometry (InDesign trims the stroke under the head and draws Simple/SimpleWide/Barbed/hollow-Square differently) and the dash distribution on a closed path (InDesign spreads dashes evenly). INK GATED 2026-10-13: worst page ink mean 11.779 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "line-shadows",
@@ -574,7 +646,8 @@
       "max_mean_de": 0.061,
       "max_p99_de": 2.25,
       "min_ssim": 0.9941,
-      "rationale": "Added 2026-10-06 (ADR 130): what casts an object's drop shadow when the object has no fill. One page, no text, every item with the same shadow (offset 6/6 pt, Size 4, black 75 %): graphic lines at 6 pt round caps, 1 pt butt caps and a 6 pt projecting-cap diagonal; a 6 pt round-capped open polygon (a pen path); a closed stroke-only triangle; a filled triangle with no stroke; a filled, stroked oval. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the object paints: a line's and an unfilled polygon's from the stroke band including caps, a filled and stroked oval's from the ellipse plus the stroke's outer half. The engine matched the lines already (shadow profiles within 0.05 coverage); unfilled polygons cast nothing and the oval stamped its bounding rectangle: mean 0.382 / p99 13.140 / ssim 0.9864. With ovals and polygons stamping their painted outline: 0.051 / 1.879 / 0.9991; sized at worst * 1.20 and ssim - 0.005."
+      "max_ink_mean_de": 1.368,
+      "rationale": "Added 2026-10-06 (ADR 130): what casts an object's drop shadow when the object has no fill. One page, no text, every item with the same shadow (offset 6/6 pt, Size 4, black 75 %): graphic lines at 6 pt round caps, 1 pt butt caps and a 6 pt projecting-cap diagonal; a 6 pt round-capped open polygon (a pen path); a closed stroke-only triangle; a filled triangle with no stroke; a filled, stroked oval. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the object paints: a line's and an unfilled polygon's from the stroke band including caps, a filled and stroked oval's from the ellipse plus the stroke's outer half. The engine matched the lines already (shadow profiles within 0.05 coverage); unfilled polygons cast nothing and the oval stamped its bounding rectangle: mean 0.382 / p99 13.140 / ssim 0.9864. With ovals and polygons stamping their painted outline: 0.051 / 1.879 / 0.9991; sized at worst * 1.20 and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 1.139 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "rect-shadows",
@@ -583,7 +656,8 @@
       "max_mean_de": 0.175,
       "max_p99_de": 4.62,
       "min_ssim": 0.9922,
-      "rationale": "Added 2026-10-07 (ADR 130): what casts a rectangle's and a text frame's drop shadow. One page, every frame 120 x 80 pt with the same shadow (offset 6/6 pt, Size 4, black 75 %): stroke-only rectangles at 6 and 1 pt centred and 6 pt outside; filled (grey 40 %) rectangles with a 6 pt stroke centred, inside and outside; a filled, stroked and a stroke-only rounded rectangle (radius 16); a filled rectangle with no stroke; text frames holding Inter 48 pt 'Hi', stroke-only, filled and stroked, and neither. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the frame paints, as for ovals and polygons: the stroke band with no fill, the outline pushed out by the stroke's outer part with a fill, the rounded outline for rounded corners, and with no fill the text as well. The engine cast nothing for stroke-only frames, the fill rectangle for stroked ones, the bounding rectangle for rounded ones and no text shadow: mean 1.182 / p99 36.149 / ssim 0.9558. With frames stamping their painted outline and unfilled text frames shadowing their glyphs: 0.145 / 3.847 / 0.9972; sized at worst * 1.20 and ssim - 0.005. The residue: the engine's shadow falloff sits about 0.4 pt inside InDesign's on every shadow (the filled rectangle with no stroke included), and the rounded-corner and glyph outlines differ by a fraction of a point."
+      "max_ink_mean_de": 1.183,
+      "rationale": "Added 2026-10-07 (ADR 130): what casts a rectangle's and a text frame's drop shadow. One page, every frame 120 x 80 pt with the same shadow (offset 6/6 pt, Size 4, black 75 %): stroke-only rectangles at 6 and 1 pt centred and 6 pt outside; filled (grey 40 %) rectangles with a 6 pt stroke centred, inside and outside; a filled, stroked and a stroke-only rounded rectangle (radius 16); a filled rectangle with no stroke; text frames holding Inter 48 pt 'Hi', stroke-only, filled and stroked, and neither. The reference is InDesign 20.0.1's export. InDesign casts the shadow from what the frame paints, as for ovals and polygons: the stroke band with no fill, the outline pushed out by the stroke's outer part with a fill, the rounded outline for rounded corners, and with no fill the text as well. The engine cast nothing for stroke-only frames, the fill rectangle for stroked ones, the bounding rectangle for rounded ones and no text shadow: mean 1.182 / p99 36.149 / ssim 0.9558. With frames stamping their painted outline and unfilled text frames shadowing their glyphs: 0.145 / 3.847 / 0.9972; sized at worst * 1.20 and ssim - 0.005. The residue: the engine's shadow falloff sits about 0.4 pt inside InDesign's on every shadow (the filled rectangle with no stroke included), and the rounded-corner and glyph outlines differ by a fraction of a point. INK GATED 2026-10-13: worst page ink mean 0.985 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "table-cell-baseline",
@@ -592,16 +666,18 @@
       "max_mean_de": 0.176,
       "max_p99_de": 3.55,
       "min_ssim": 0.991,
-      "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing."
+      "max_ink_mean_de": 4.224,
+      "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 3.520 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "footnote-references",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.073,
-      "max_p99_de": 1.22,
-      "min_ssim": 0.9942,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (L-01b, A-05: a reference is a character of its line, formatted by its run; StartAt 3; the note's number where its text holds InDesign's ACE 4, a tab after it). Worst page mean 0.061 / p99 1.02 / SSIM 0.9992; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+      "max_mean_de": 0.063,
+      "max_p99_de": 1.14,
+      "min_ssim": 0.9944,
+      "max_ink_mean_de": 5.173,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (L-01b, A-05: a reference is a character of its line, formatted by its run; StartAt 3; the note's number where its text holds InDesign's ACE 4, a tab after it). Worst page mean 0.061 / p99 1.02 / SSIM 0.9992; mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 4.311 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.053 / p99 0.951 / ssim 0.9994 (thresholds were 0.073 / 1.22 / 0.9942); re-sized by the rule above."
     },
     {
       "name": "table-inline-text",
@@ -610,7 +686,8 @@
       "max_mean_de": 1.183,
       "max_p99_de": 60.2,
       "min_ssim": 0.9474,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-06: a table is a character of its paragraph on a line of its own; text before and after it stays one paragraph, its alignment places the table; a paragraph mark before the table makes two). Worst page mean 0.986 / p99 50.17 / SSIM 0.9524: every case composes as InDesign's, and the residue is one-to-two-point offsets of the lines around each table. Mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+      "max_ink_mean_de": 48.027,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-06: a table is a character of its paragraph on a line of its own; text before and after it stays one paragraph, its alignment places the table; a paragraph mark before the table makes two). Worst page mean 0.986 / p99 50.17 / SSIM 0.9524: every case composes as InDesign's, and the residue is one-to-two-point offsets of the lines around each table. Mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 40.022 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "transparency-targets",
@@ -619,7 +696,8 @@
       "max_mean_de": 0.371,
       "max_p99_de": 5.34,
       "min_ssim": 0.9844,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-10: fill, stroke and content targets at 50 % in Normal, Multiply and Screen; a drop shadow per target; graphic lines; isolate x knockout groups). Worst page mean 0.309 / p99 4.45 / SSIM 0.9894; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+      "max_ink_mean_de": 1.925,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-10: fill, stroke and content targets at 50 % in Normal, Multiply and Screen; a drop shadow per target; graphic lines; isolate x knockout groups). Worst page mean 0.309 / p99 4.45 / SSIM 0.9894; mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 1.604 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "effects-attrs",
@@ -628,51 +706,57 @@
       "max_mean_de": 1.061,
       "max_p99_de": 25.15,
       "min_ssim": 0.9778,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-11: shadow blend, spread, noise, knockout, global light; glow technique; bevel blend modes; radial feather highlight; directional feather follow-shape). Worst page mean 0.884 / p99 20.96 / SSIM 0.9828. The residue is page 2: the bevels' Smooth shading (ours mitres the corners), the Precise glow edge, and cases 26-27, whose highlight moves the radial shading's focal point, which is not drawn yet. Sized at worst x 1.20 / worst - 0.005; tighten as those land."
+      "max_ink_mean_de": 3.035,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-11: shadow blend, spread, noise, knockout, global light; glow technique; bevel blend modes; radial feather highlight; directional feather follow-shape). Worst page mean 0.884 / p99 20.96 / SSIM 0.9828. The residue is page 2: the bevels' Smooth shading (ours mitres the corners), the Precise glow edge, and cases 26-27, whose highlight moves the radial shading's focal point, which is not drawn yet. Sized at worst x 1.20 / worst - 0.005; tighten as those land. INK GATED 2026-10-13: worst page ink mean 2.529 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
     },
     {
       "name": "justification",
       "max_pages_with_pdf": 3,
-      "max_mean_de": 0.52,
-      "max_p99_de": 13.3,
-      "min_ssim": 0.9796,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-01, every Justification value x last-line shape x recto/verso). Worst page mean 0.433 / p99 11.06 / SSIM 0.9846 across 3 pages after the last-line and binding-side fix; mean and p99 at worst x 1.20, SSIM at worst - 0.005. Not text-gated: case 1.34's label sits at its frame edge, InDesign oversets 'last line' where the engine fits 'last' (a label, not a justification case)."
+      "max_mean_de": 0.434,
+      "max_p99_de": 8.08,
+      "min_ssim": 0.9814,
+      "max_ink_mean_de": 8.892,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-01, every Justification value x last-line shape x recto/verso). Worst page mean 0.433 / p99 11.06 / SSIM 0.9846 across 3 pages after the last-line and binding-side fix; mean and p99 at worst x 1.20, SSIM at worst - 0.005. Not text-gated: case 1.34's label sits at its frame edge, InDesign oversets 'last line' where the engine fits 'last' (a label, not a justification case). INK GATED 2026-10-13: worst page ink mean 7.410 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.362 / p99 6.735 / ssim 0.9864 (thresholds were 0.52 / 13.3 / 0.9796); re-sized by the rule above."
     },
     {
       "name": "kerning",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 1.9,
-      "max_p99_de": 85.6,
-      "min_ssim": 0.9442,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-04, KerningMethod with and without $ID/, from run, paragraph style and character style, tracking 0/+50/-25). Worst page mean 1.586 / p99 71.3 / SSIM 0.9492; the residue is the Optical rows, which fall back to metrics kerning until optical kerning lands (R-40, calibration set kerning.optical-advances.json). Sized at worst x 1.20 / worst - 0.005; tighten when R-40 lands."
+      "max_mean_de": 1.509,
+      "max_p99_de": 61.83,
+      "min_ssim": 0.9563,
+      "max_ink_mean_de": 23.778,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-04, KerningMethod with and without $ID/, from run, paragraph style and character style, tracking 0/+50/-25). Worst page mean 1.586 / p99 71.3 / SSIM 0.9492; the residue is the Optical rows, which fall back to metrics kerning until optical kerning lands (R-40, calibration set kerning.optical-advances.json). Sized at worst x 1.20 / worst - 0.005; tighten when R-40 lands. INK GATED 2026-10-13: worst page ink mean 19.815 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 1.257 / p99 51.523 / ssim 0.9613 (thresholds were 1.9 / 85.6 / 0.9442); re-sized by the rule above."
     },
     {
       "name": "nested-styles",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.237,
-      "max_p99_de": 5.92,
-      "min_ssim": 0.9901,
-      "rationale": "Added 2026-10-12 (ADR 134, A-11): nested styles in InDesign's spelling (<Properties><AllNestedStyles>), asked of InDesign 20.0.1. Twenty frames: a tab, word, character, literal-character and sentence delimiter, each through and up to; a chain of three; a Repeat loop; a drop cap whose character style is the first nested style (Dropcap) and a style drop cap with none; a 15 pt red nested range with an underline style applied by hand inside it; a style that inherits its parent's list and one that cleared it (EmptyNestedStyles); a range's own list. origin/main's engine read no <AllNestedStyles> list and drew every paragraph in its body style: mean 0.566 / p99 24.615 / SSIM 0.9854. With the lists read, the ranges set by InDesign's rules, the nested style layered under the hand-applied one and the drop cap's paint following the cap: 0.197 / 4.933 / 0.9951; sized at worst x 1.20 and SSIM - 0.005. The frames carry no stroke on purpose (a hairline rasterises differently in the reference). The residue is glyph anti-aliasing."
+      "max_mean_de": 0.146,
+      "max_p99_de": 3.99,
+      "min_ssim": 0.9927,
+      "max_ink_mean_de": 4.539,
+      "rationale": "Added 2026-10-12 (ADR 134, A-11): nested styles in InDesign's spelling (<Properties><AllNestedStyles>), asked of InDesign 20.0.1. Twenty frames: a tab, word, character, literal-character and sentence delimiter, each through and up to; a chain of three; a Repeat loop; a drop cap whose character style is the first nested style (Dropcap) and a style drop cap with none; a 15 pt red nested range with an underline style applied by hand inside it; a style that inherits its parent's list and one that cleared it (EmptyNestedStyles); a range's own list. origin/main's engine read no <AllNestedStyles> list and drew every paragraph in its body style: mean 0.566 / p99 24.615 / SSIM 0.9854. With the lists read, the ranges set by InDesign's rules, the nested style layered under the hand-applied one and the drop cap's paint following the cap: 0.197 / 4.933 / 0.9951; sized at worst x 1.20 and SSIM - 0.005. The frames carry no stroke on purpose (a hairline rasterises differently in the reference). The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 6.582 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.121 / p99 3.32 / SSIM 0.9977 / ink 3.782; sized at worst x 1.20 and SSIM - 0.005."
     },
     {
       "name": "opentype",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.16,
-      "max_p99_de": 5.0,
-      "min_ssim": 0.9932,
-      "rationale": "Added 2026-10-12 (ADR 134, R-21 + A-10): OpenType positions and features on runs and on paragraph styles, asked of InDesign 20.0.1 in Inter, EB Garamond and Roboto (pdffonts: all embedded, none substituted). The reference's glyph ids say what InDesign applied: OTSuperscript/OTSubscript/OTNumerator/OTDenominator are sups/subs/numr/dnom at full size on the baseline (subs, not EB Garamond's distinct sinf), Roboto (no sups) prints a plain 2; OTFStylisticAlternate is salt, OTFHistorical hist, OTFSwash swsh; All Caps sets case and cpsp (2.18 pt wider in Inter), typed capitals neither; a paragraph style's Ligatures=false, OTFFigureStyle, OTFStylisticAlternate, OTFHistorical, Position and OTFFraction reach its runs. origin/main's engine scaled and raised the OT positions and read none of the paragraph-style attributes: mean 0.744 / p99 21.105 / SSIM 0.9689. After: 0.133 / 4.168 / 0.9982; sized at worst x 1.20 and SSIM - 0.005. Frames unstroked, as in nested-styles."
+      "max_mean_de": 0.125,
+      "max_p99_de": 3.93,
+      "min_ssim": 0.9938,
+      "max_ink_mean_de": 4.918,
+      "rationale": "Added 2026-10-12 (ADR 134, R-21 + A-10): OpenType positions and features on runs and on paragraph styles, asked of InDesign 20.0.1 in Inter, EB Garamond and Roboto (pdffonts: all embedded, none substituted). The reference's glyph ids say what InDesign applied: OTSuperscript/OTSubscript/OTNumerator/OTDenominator are sups/subs/numr/dnom at full size on the baseline (subs, not EB Garamond's distinct sinf), Roboto (no sups) prints a plain 2; OTFStylisticAlternate is salt, OTFHistorical hist, OTFSwash swsh; All Caps sets case and cpsp (2.18 pt wider in Inter), typed capitals neither; a paragraph style's Ligatures=false, OTFFigureStyle, OTFStylisticAlternate, OTFHistorical, Position and OTFFraction reach its runs. origin/main's engine scaled and raised the OT positions and read none of the paragraph-style attributes: mean 0.744 / p99 21.105 / SSIM 0.9689. After: 0.133 / 4.168 / 0.9982; sized at worst x 1.20 and SSIM - 0.005. Frames unstroked, as in nested-styles. INK GATED 2026-10-13: worst page ink mean 4.098 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.105 / p99 3.278 / ssim 0.9988 (thresholds were 0.16 / 5.0 / 0.9932); re-sized by the rule above."
     },
     {
       "name": "object-style-frames",
-      "text_gate": true,
+      "text_gate": "lines",
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.192,
-      "max_p99_de": 4.1,
-      "min_ssim": 0.9892,
-      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+      "max_mean_de": 0.08,
+      "max_p99_de": 2.91,
+      "min_ssim": 0.9943,
+      "max_ink_mean_de": 3.449,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 8.824 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.143 / p99 2.864 / ssim 0.9946 (thresholds were 0.192 / 4.1 / 0.9892); re-sized by the rule above. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.066 / p99 2.42 / SSIM 0.9993 / ink 2.874; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142)."
     },
     {
       "name": "baseline-grid",
@@ -692,5 +776,5 @@
       "min_ssim": 0.9931,
       "rationale": "Gated 2026-10-13 from its first InDesign measurement (ADR 140): the document grid from the top MARGIN (TopOfMarginOfBaselineGridRelativeOption, BaselineStart 0, every 14), the margin 45 pt on page 1 and 60.5 on page 2; not aligned, aligned, a heading, first line only, SpaceBefore 5 on a range, and a frame above the margin. All 50 body baselines agree with InDesign's probe to 0.001 pt. origin/main's engine: worst page mean 1.793 / p99 76.680 / SSIM 0.8885. After: 0.140 / 3.936 / 0.9981; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
     }
-]
+  ]
 }

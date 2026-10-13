@@ -821,14 +821,15 @@ pub struct ConditionSpec {
     pub indicator_color: Option<&'static str>,
 }
 
-/// W4.8 — a `<ConditionSet>` definition: a named grouping of
-/// `Condition` self_ids the document organises into one toggleable
-/// set. Emitted as `<Properties><SetConditions><VisibilityPair
-/// Condition="…" Visibility="true"/>…` (see [`ConditionSpec`]).
+/// W4.8 — a `<ConditionSet>` definition. Emitted as InDesign records a
+/// set: `<Properties><SetConditions>` with a `<VisibilityPair
+/// Condition="…" Visibility="…"/>` for EVERY condition the document
+/// declares, shown when listed here and hidden otherwise (see
+/// [`ConditionSpec`]).
 pub struct ConditionSetSpec {
     pub self_id: &'static str,
     pub name: &'static str,
-    /// Member `Condition/<id>` refs.
+    /// The `Condition/<id>` refs the set shows.
     pub conditions: &'static [&'static str],
 }
 

@@ -627,7 +627,7 @@ pub struct BaselineFrameGrid {
 #[derive(Clone)]
 pub struct TextWrap {
     /// `TextWrapMode` enum string: `"None"`, `"BoundingBoxTextWrap"`,
-    /// `"ContourTextWrap"`, `"JumpObjectTextWrap"`,
+    /// `"Contour"`, `"JumpObjectTextWrap"`,
     /// `"NextColumnTextWrap"`.
     pub mode: &'static str,
     /// `[top, left, bottom, right]` offsets in pt — the wrap

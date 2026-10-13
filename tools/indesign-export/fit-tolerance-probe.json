@@ -1,0 +1,19 @@
+{
+  "indesign": "20.0.1.32",
+  "rows": [
+    {"alignment": "LeftAlign", "size": 6, "natural": 80.6807, "tolerance_pt": 0.2299, "tolerance_em": 0.03832},
+    {"alignment": "LeftAlign", "size": 9, "natural": 121.0210, "tolerance_pt": 0.3108, "tolerance_em": 0.03453},
+    {"alignment": "LeftAlign", "size": 12, "natural": 161.3613, "tolerance_pt": 0.3973, "tolerance_em": 0.03311},
+    {"alignment": "LeftAlign", "size": 18, "natural": 242.0420, "tolerance_pt": 0.5768, "tolerance_em": 0.03204},
+    {"alignment": "LeftAlign", "size": 24, "natural": 322.7227, "tolerance_pt": 0.7600, "tolerance_em": 0.03167},
+    {"alignment": "LeftAlign", "size": 36, "natural": 484.0840, "tolerance_pt": 1.1303, "tolerance_em": 0.03140},
+    {"alignment": "LeftAlign", "size": 48, "natural": 645.4453, "tolerance_pt": 1.5023, "tolerance_em": 0.03130},
+    {"alignment": "LeftJustified", "size": 6, "natural": 80.6807, "tolerance_pt": 0.3093, "tolerance_em": 0.05155},
+    {"alignment": "LeftJustified", "size": 9, "natural": 121.0210, "tolerance_pt": 0.4395, "tolerance_em": 0.04883},
+    {"alignment": "LeftJustified", "size": 12, "natural": 161.3613, "tolerance_pt": 0.5741, "tolerance_em": 0.04784},
+    {"alignment": "LeftJustified", "size": 18, "natural": 242.0420, "tolerance_pt": 0.8481, "tolerance_em": 0.04712},
+    {"alignment": "LeftJustified", "size": 24, "natural": 322.7227, "tolerance_pt": 1.1247, "tolerance_em": 0.04686},
+    {"alignment": "LeftJustified", "size": 36, "natural": 484.0840, "tolerance_pt": 1.6805, "tolerance_em": 0.04668},
+    {"alignment": "LeftJustified", "size": 48, "natural": 645.4453, "tolerance_pt": 2.2377, "tolerance_em": 0.04662}
+  ]
+}

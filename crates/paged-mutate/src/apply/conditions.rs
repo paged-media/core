@@ -57,26 +57,30 @@ pub(super) fn apply_activate_condition_set(
     doc: &mut Document,
     set: &str,
 ) -> Result<AppliedOperation, OperationError> {
-    let members: Vec<String> = doc
-        .styles
-        .condition_sets
-        .get(set)
-        .ok_or_else(|| OperationError::CollectionEntryNotFound {
+    let def = doc.styles.condition_sets.get(set).ok_or_else(|| {
+        OperationError::CollectionEntryNotFound {
             collection: "conditionSets".to_string(),
             id: set.to_string(),
-        })?
+        }
+    })?;
+    let recorded: std::collections::HashMap<String, bool> = def
         .conditions
-        .clone();
+        .iter()
+        .map(|c| (c.clone(), !def.hidden.contains(c)))
+        .collect();
     // Capture every condition's prior visibility so the inverse is a
     // single RestoreConditionVisibility.
     let mut states: Vec<(String, bool)> = Vec::with_capacity(doc.styles.conditions.len());
     for (id, def) in doc.styles.conditions.iter() {
         states.push((id.clone(), def.visible.unwrap_or(true)));
     }
-    // Activate: members visible, everyone else hidden.
-    let member_set: std::collections::HashSet<&str> = members.iter().map(String::as_str).collect();
+    // Applying a set gives each condition it lists the visibility it
+    // recorded; a condition it does not list keeps its own (InDesign
+    // 20.0.1, `tools/indesign-export/condition-sets-probe.json`).
     for (id, def) in doc.styles.conditions.iter_mut() {
-        def.visible = Some(member_set.contains(id.as_str()));
+        if let Some(visible) = recorded.get(id) {
+            def.visible = Some(*visible);
+        }
     }
     Ok(AppliedOperation {
         op: Operation::ActivateConditionSet {

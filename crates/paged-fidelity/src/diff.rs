@@ -52,6 +52,8 @@ pub fn compare_images(
 
     let mut sum = 0.0f64;
     let mut max = 0.0f64;
+    let mut ink_sum = 0.0f64;
+    let mut ink_pixels = 0u64;
     for (pr, pc) in reference.pixels().zip(candidate.pixels()) {
         let lab_r = color::srgb_u8_to_lab(pr.0[0], pr.0[1], pr.0[2]);
         let lab_c = color::srgb_u8_to_lab(pc.0[0], pc.0[1], pc.0[2]);
@@ -60,9 +62,18 @@ pub fn compare_images(
         if d > max {
             max = d;
         }
+        if lab_r[0] < crate::INK_LIGHTNESS || lab_c[0] < crate::INK_LIGHTNESS {
+            ink_sum += d;
+            ink_pixels += 1;
+        }
         deltas.push(d);
     }
     let mean = sum / n as f64;
+    let ink_mean = if ink_pixels > 0 {
+        ink_sum / ink_pixels as f64
+    } else {
+        0.0
+    };
     let p99 = percentile(&mut deltas.clone(), 0.99);
     let ssim = crate::ssim::ssim(reference, candidate);
 
@@ -72,6 +83,8 @@ pub fn compare_images(
             p99_delta_e: p99,
             max_delta_e: max,
             ssim,
+            ink_mean_delta_e: ink_mean,
+            ink_pixels,
             width: w,
             height: h,
         },
@@ -131,6 +144,36 @@ mod tests {
         let (report, _) = compare_images(&a, &b).unwrap();
         assert!(report.max_delta_e > 10.0, "got {}", report.max_delta_e);
         assert!(report.mean_delta_e > 0.0);
+    }
+
+    #[test]
+    fn misplaced_text_reads_on_its_ink_not_on_the_page() {
+        // A white page with one small black mark, set 6 px off in the
+        // candidate: the page-wide mean barely moves, the ink mean does.
+        let mark = |x0: u32| {
+            ImageBuffer::from_fn(200, 200, move |x, y| {
+                if (x0..x0 + 6).contains(&x) && (90..100).contains(&y) {
+                    Rgb([0, 0, 0])
+                } else {
+                    Rgb([255, 255, 255])
+                }
+            })
+        };
+        let (same, _) = compare_images(&mark(50), &mark(50)).unwrap();
+        assert_eq!(same.ink_mean_delta_e, 0.0);
+        assert_eq!(same.ink_pixels, 60);
+        let (moved, _) = compare_images(&mark(50), &mark(56)).unwrap();
+        assert!(moved.mean_delta_e < 1.5, "page mean {}", moved.mean_delta_e);
+        assert!(
+            moved.ink_mean_delta_e > 50.0,
+            "ink mean {}",
+            moved.ink_mean_delta_e
+        );
+        assert_eq!(moved.ink_pixels, 120);
+        // A blank page has no ink to measure.
+        let blank: RgbImage = ImageBuffer::from_fn(8, 8, |_, _| Rgb([255, 255, 255]));
+        let (none, _) = compare_images(&blank, &blank).unwrap();
+        assert_eq!((none.ink_pixels, none.ink_mean_delta_e), (0, 0.0));
     }
 
     #[test]

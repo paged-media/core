@@ -1,0 +1,10 @@
+{
+  "indesign": "20.0.1.32",
+  "pairs": [{"condition": "A", "visible": true}, {"condition": "B", "visible": false}],
+  "steps": [
+    {"step": "set S made", "visible": {"A": true, "B": false}},
+    {"step": "C added after S", "visible": {"A": true, "B": false, "C": true}},
+    {"step": "flipped", "visible": {"A": false, "B": true, "C": true}},
+    {"step": "S applied", "visible": {"A": true, "B": false, "C": true}}
+  ]
+}

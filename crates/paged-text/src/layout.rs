@@ -29,7 +29,7 @@ use paragraph_breaker::{Breakpoint, Item};
 
 use crate::compose::{compose_paragraph, ComposeOptions, TextShaper};
 use crate::shape::{
-    apply_tracking, shape_run, shape_run_with_features, Face, ShapedRun, ADVANCE_PRECISION,
+    apply_tracking, shape_run, shape_run_with_features_at, Face, ShapedRun, ADVANCE_PRECISION,
 };
 
 /// Stretch of the finishing glue that ends every paragraph. Knuth–Plass
@@ -103,6 +103,9 @@ pub struct LaidOutLine {
     pub byte_range: Range<usize>,
     /// Baseline y, 1/64 pt, frame-origin-relative.
     pub baseline_y: i32,
+    /// `baseline_y` before rounding: the exact sum of the leadings above
+    /// the line (see [`LayoutOptions::leading_override_exact`]).
+    pub baseline_exact: f64,
     /// Natural (unjustified) width of the line, 1/64 pt.
     pub width: i32,
     /// Paragraph-breaker ratio. 0 = natural, >0 = stretched (would be
@@ -161,6 +164,20 @@ pub struct LayoutOptions<'a> {
     /// (auto leading). Mirrors IDML's explicit `Leading` attribute on
     /// the leading run of a paragraph.
     pub leading_override: Option<i32>,
+    /// `leading_override` before it was rounded to 1/64 pt. A line's
+    /// baseline is the exact sum of the leadings above it, rounded once:
+    /// InDesign steps 12 pt auto-leaded lines 14.4 pt apart, and summing
+    /// `round(14.4 x 64)` = 14.40625 drifted them 0.3 pt down a page.
+    /// `None`: `leading_override` is exact as it stands. Auto leading
+    /// (1.2 x a size) is always taken exactly.
+    pub leading_override_exact: Option<f64>,
+    /// `line_height` before it was rounded, 1/64 pt (1.2 x the size from
+    /// [`LayoutOptions::new`]). Ignored unless it rounds to `line_height`.
+    pub line_height_exact: Option<f64>,
+    /// `first_baseline` before it was rounded, 1/64 pt, so a paragraph
+    /// continues the exact baseline sum of the ones above it. Ignored
+    /// unless it rounds to `first_baseline`.
+    pub first_baseline_exact: Option<f64>,
     /// The leading each run asks for, when the paragraph's runs do NOT
     /// agree: `(the run's first byte in the paragraph text, its explicit
     /// leading in 1/64 pt)`, in text order; `None` is auto leading
@@ -242,6 +259,9 @@ impl LayoutOptions<'_> {
             line_height,
             first_baseline,
             leading_override: None,
+            leading_override_exact: None,
+            line_height_exact: Some(point_size as f64 * 1.2 * ADVANCE_PRECISION as f64),
+            first_baseline_exact: None,
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             alignment: Alignment::Left,
@@ -264,6 +284,7 @@ pub fn layout_paragraph<S: TextShaper>(
     let last_index = composed.len().saturating_sub(1);
     let mut lines = Vec::with_capacity(composed.len());
     let mut baseline = options.first_baseline;
+    let mut exact = options.first_baseline_exact();
 
     for (i, line) in composed.iter().enumerate() {
         let slice = &text[line.byte_range.clone()];
@@ -303,17 +324,42 @@ pub fn layout_paragraph<S: TextShaper>(
         lines.push(LaidOutLine {
             byte_range: line.byte_range.clone(),
             baseline_y: baseline,
+            baseline_exact: exact,
             width: shaped.total_advance,
             ratio: line.ratio,
             glyphs,
         });
-        baseline += options.line_height;
+        exact += options.line_height as f64;
+        baseline = exact.round() as i32;
     }
 
     LaidOutParagraph { lines }
 }
 
 impl LayoutOptions<'_> {
+    /// The first baseline, exactly when the caller gave it exactly
+    /// ([`Self::first_baseline_exact`]), in 1/64 pt.
+    pub fn first_baseline_exact(&self) -> f64 {
+        self.first_baseline_exact
+            .filter(|e| e.round() as i32 == self.first_baseline)
+            .unwrap_or(self.first_baseline as f64)
+    }
+
+    /// The paragraph's leading, exactly: the override when there is one,
+    /// else `line_height`, in 1/64 pt.
+    pub fn paragraph_leading_exact(&self) -> f64 {
+        match self.leading_override {
+            Some(l) => self
+                .leading_override_exact
+                .filter(|e| e.round() as i32 == l)
+                .unwrap_or(l as f64),
+            None => self
+                .line_height_exact
+                .filter(|e| e.round() as i32 == self.line_height)
+                .unwrap_or(self.line_height as f64),
+        }
+    }
+
     /// Column width in 1/64 pt (convenience for layout passes).
     pub fn column_width(&self) -> i32 {
         self.compose.column_width
@@ -580,8 +626,15 @@ fn shape_with_per_cluster_fallback(
     fallbacks: &[&Face],
     text: &str,
     point_size: f32,
+    mut pen: f64,
 ) -> ShapedRun {
-    let primary_shape = shape_run(primary, text, point_size);
+    let primary_shape = shape_run_with_features_at(
+        primary,
+        text,
+        point_size,
+        crate::shape::ShapingFeatures::default(),
+        &mut pen,
+    );
     if primary_shape.glyphs.iter().all(|g| g.glyph_id != 0) {
         return primary_shape;
     }
@@ -716,10 +769,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // after a line's last character, so the breaker and the line
     // assembly below take it back there.
     let mut run_spacing: Vec<Vec<i32>> = Vec::with_capacity(runs.len());
+    // The paragraph's exact pen across its runs: each run's advances are
+    // rounded against it (`shape_run_with_features_at`), so two adjacent
+    // runs that differ in nothing the shaper sees set as one run would.
+    let mut pen = 0.0_f64;
     for r in runs {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
-        let mut s = shape_run_with_features(r.face, r.text, r.point_size, r.shaping_features);
+        let run_pen = pen;
+        let mut s =
+            shape_run_with_features_at(r.face, r.text, r.point_size, r.shaping_features, &mut pen);
         // P-20: per-cluster glyph fallback. When the primary face
         // shapes a cluster to `.notdef` (glyph id 0), retry that
         // cluster's source bytes against each fallback face in turn
@@ -727,7 +786,13 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // run-level fallback only covers "primary face missing"; this
         // covers "primary face present but glyph missing".
         if !r.fallback_faces.is_empty() && s.glyphs.iter().any(|g| g.glyph_id == 0) {
-            s = shape_with_per_cluster_fallback(r.face, r.fallback_faces, r.text, r.point_size);
+            s = shape_with_per_cluster_fallback(
+                r.face,
+                r.fallback_faces,
+                r.text,
+                r.point_size,
+                run_pen,
+            );
         }
         let natural: Vec<i32> = s.glyphs.iter().map(|g| g.x_advance).collect();
         if let Some(t) = r.tracking {
@@ -968,21 +1033,28 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // its discretionary hyphens, under the same limits and zone —
         // InDesign's rule, see `soft_hyphen_opportunities`.
         let breaks: Vec<usize> = match single_run {
-            Some(_) if zone_allows_hyphenation => {
+            Some(_) => {
                 let word_text = &paragraph_text[w.start..w.end];
                 let is_last_word = i + 1 == words.len();
-                let points = match opts.hyphenator {
-                    Some(h) => {
-                        h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
+                // The zone keeps hyphenation (and discretionary hyphens)
+                // out of a word that starts inside it.
+                let points = if !zone_allows_hyphenation {
+                    Vec::new()
+                } else {
+                    match opts.hyphenator {
+                        Some(h) => {
+                            h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
+                        }
+                        None => crate::hyphenate::soft_hyphen_opportunities(
+                            word_text,
+                            &opts.hyphenation_limits,
+                            is_last_word,
+                        ),
                     }
-                    None => crate::hyphenate::soft_hyphen_opportunities(
-                        word_text,
-                        &opts.hyphenation_limits,
-                        is_last_word,
-                    ),
                 };
                 // A hyphen the word already has is a break too (InDesign
-                // and Word: `two-` / `way`), hyphenation on or off.
+                // and Word: `two-` / `way`), hyphenation on or off and
+                // whatever the zone: breaking there hyphenates nothing.
                 crate::hyphenate::merge_opportunities(
                     points,
                     crate::hyphenate::hard_hyphen_opportunities(word_text),
@@ -992,7 +1064,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .map(|b| w.start + b)
                 .collect()
             }
-            _ => Vec::new(),
+            None => Vec::new(),
         };
         let hyphen_width = if !breaks.is_empty() {
             let r = &runs[single_run.unwrap()];
@@ -1053,18 +1125,13 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         byte_ends.push(w.end);
         is_hyphen.push(false);
         if glue_follows {
-            // When a ragged zone is active we widen every inter-word
-            // glue's stretch to at least `zone` so the breaker can end a
-            // line short — by up to the zone — without that line becoming
-            // infeasible (the breaker's internal ratio cap would
-            // otherwise reject a short ragged line, degrading to the
-            // P-17 one-box-per-line fallback). For ragged text the
-            // breaker ratio is discarded at glyph-emit (left-flush), so
-            // the extra stretch only changes WHERE breaks land, not the
-            // rendered spacing. Mirrors `compose_paragraph`'s zone glue
-            // widening. Justified paragraphs have `zone == 0` here, so
-            // their calibrated stretch is untouched.
-            let glue_stretch = if zone > 0 { stretch.max(zone) } else { stretch };
+            // The hyphenation zone decides only which words may be
+            // hyphenated (above). It once also widened every gap's stretch
+            // to the zone, which let the breaker prefer short, balanced
+            // ragged lines: 14 + 12 words where InDesign fills 18 + 8
+            // (`inline-objects`), in every document that states its zone —
+            // all of InDesign's do (ADR 141).
+            let glue_stretch = stretch;
             // The gap's glue is as wide as the whitespace actually in it:
             // a double space (or a tab-less run of spaces) is two glyphs
             // wide in the line the reader sees, and a breaker that
@@ -1190,6 +1257,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let mut lines = Vec::with_capacity(breaks.len());
     let mut byte_cursor = 0usize;
     let mut baseline = options.first_baseline;
+    let mut exact_baseline = options.first_baseline_exact();
     let last_break = breaks.len().saturating_sub(1);
     let bytes = paragraph_text.as_bytes();
     // Per-line widths drive both Knuth-Plass and post-layout
@@ -1297,6 +1365,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             let mut snapped = LaidOutLine {
                 byte_range: start..end,
                 baseline_y: baseline,
+                baseline_exact: baseline as f64,
                 width: natural_width,
                 ratio: bp.ratio,
                 glyphs,
@@ -1316,10 +1385,21 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             natural_width = snapped.width;
             glyphs = snapped.glyphs;
         }
-        // The Single-line Composer measured each word space at its
-        // DESIRED width (`DesiredWordSpacing`); set it there too, or a
-        // ragged line at 80 % runs its spaces' 20 % past the measure.
-        if single_line.is_some() && space_width != natural_space {
+        // The breaker measured each word space at its DESIRED width
+        // (`DesiredWordSpacing`); set it there too, or a ragged line at
+        // 80 % runs its spaces' 20 % past the measure. InDesign sets a
+        // ragged line's spaces at the desired width under either composer
+        // (20.0.1, spelling-and-spacing-probe `localspacing`: 110 % opens a
+        // left-aligned space by a tenth). A justified line takes its
+        // spaces from its measure instead, so only lines set ragged move.
+        let ragged_line = !matches!(
+            (
+                options.alignment,
+                options.last_line_setting(i == last_break)
+            ),
+            (Alignment::Justify, None | Some(Alignment::Justify))
+        );
+        if (single_line.is_some() || ragged_line) && space_width != natural_space {
             let first = glyphs
                 .iter()
                 .rposition(|g| bytes.get(g.cluster as usize) == Some(&b'\t'))
@@ -1360,15 +1440,19 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // line with a 20 pt-leaded word after 12 pt-leaded lines steps
         // 20, and the next line steps 12 again.
         if !lines.is_empty() {
-            let step = line_leading(&glyphs, options).unwrap_or(options.line_height);
-            baseline += step;
+            let step = line_leading_exact(&glyphs, options).unwrap_or(options.line_height as f64);
+            exact_baseline += step;
+            let next = exact_baseline.round() as i32;
+            let dy = next - baseline;
+            baseline = next;
             for g in &mut glyphs {
-                g.y += step;
+                g.y += dy;
             }
         }
         lines.push(LaidOutLine {
             byte_range: start..end,
             baseline_y: baseline,
+            baseline_exact: exact_baseline,
             width: natural_width,
             ratio: bp.ratio,
             glyphs,
@@ -1426,12 +1510,22 @@ fn knuth_plass_breaks(
                 joined: opts.joined_lines.as_deref().unwrap_or(&[]),
                 hyphen_penalty: opts.hyphen_penalty,
                 space_shrink: opts.shrink_ratio,
+                overrun_size: opts.overrun_size,
             },
         );
         if !breaks.is_empty() {
             return breaks;
         }
     }
+    // InDesign lets a line run a sliver past its measure before it
+    // breaks it (`ComposeOptions::fit_tolerance`).
+    let widened: Vec<i32>;
+    let lengths: &[i32] = if opts.fit_tolerance > 0 {
+        widened = lengths.iter().map(|l| l + opts.fit_tolerance).collect();
+        &widened
+    } else {
+        lengths
+    };
     // paragraph_breaker returns an empty break list when no feasible
     // fit exists at the configured tolerance. Real-world body copy
     // that interleaves many run-color-switch boxes or runs past the
@@ -1540,6 +1634,7 @@ impl TabBreakInput<'_> {
         let mut line_glyphs = LaidOutLine {
             byte_range: start..end,
             baseline_y: 0,
+            baseline_exact: 0.0,
             width: pen - x0,
             ratio: 0.0,
             glyphs,
@@ -1767,6 +1862,34 @@ pub fn line_leading(glyphs: &[PositionedGlyph], options: &LayoutOptions) -> Opti
         .reduce(i32::max)
         .or(options.leading_override)
         .or_else(|| auto_line_height(glyphs, 0))
+}
+
+/// [`line_leading`] before it is rounded to 1/64 pt: auto leading is
+/// 1.2 x the size exactly, an override its
+/// [`LayoutOptions::leading_override_exact`]. Runs that disagree keep
+/// their rounded leadings.
+pub fn line_leading_exact(glyphs: &[PositionedGlyph], options: &LayoutOptions) -> Option<f64> {
+    if !options.run_leadings.is_empty() {
+        return line_leading(glyphs, options).map(f64::from);
+    }
+    if let Some(l) = options.leading_override {
+        return Some(
+            options
+                .leading_override_exact
+                .filter(|e| e.round() as i32 == l)
+                .unwrap_or(l as f64),
+        );
+    }
+    let size = |from: u32| {
+        glyphs
+            .iter()
+            .filter(|g| g.cluster >= from)
+            .map(|g| g.point_size)
+            .reduce(f32::max)
+    };
+    size(options.auto_leading_from_byte)
+        .or_else(|| size(0))
+        .map(|pt| pt as f64 * 1.2 * ADVANCE_PRECISION as f64)
 }
 
 /// In-cell alignment for a tab stop. IDML's `Alignment` attribute on
@@ -2407,12 +2530,17 @@ mod tests {
                 minimum_raggedness: false,
                 visible_lines: None,
                 joined_lines: None,
+                fit_tolerance: 0,
+                overrun_size: None,
                 single_line: None,
             },
             line_height: 20,
             first_baseline: 15,
             alignment,
             leading_override: None,
+            leading_override_exact: None,
+            line_height_exact: None,
+            first_baseline_exact: None,
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
             justify_last_line: false,
@@ -2747,6 +2875,7 @@ mod tests {
         LaidOutLine {
             byte_range: 0..bytes.len(),
             baseline_y: 0,
+            baseline_exact: 0.0,
             width: pen,
             ratio: 0.0,
             glyphs,
@@ -2962,6 +3091,7 @@ mod tests {
         LaidOutLine {
             byte_range: start..end,
             baseline_y: 0,
+            baseline_exact: 0.0,
             width: x,
             ratio: 0.0,
             glyphs,

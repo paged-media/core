@@ -61,6 +61,17 @@ impl Grid {
         let target_64 = ((origin + k * step) * precision).round() as i32;
         target_64 - baseline_64
     }
+
+    /// [`Self::snap_64`] for an exact baseline (1/64 pt, unrounded): how
+    /// far it moves, exactly, to the grid line at or below it.
+    pub(super) fn snap_exact(&self, baseline: f64) -> f64 {
+        let precision = f64::from(paged_text::shape::ADVANCE_PRECISION);
+        let y = baseline / precision;
+        let origin = f64::from(self.origin_pt);
+        let step = f64::from(self.step_pt);
+        let k = ((y - origin - ON_GRID_PT) / step).ceil().max(0.0);
+        (origin + k * step) * precision - baseline
+    }
 }
 
 /// Whether a line of a paragraph aligns to the grid: every line of an

@@ -2501,7 +2501,8 @@ impl TextWrapMode {
         match self {
             Self::None => "None",
             Self::BoundingBoxTextWrap => "BoundingBoxTextWrap",
-            Self::ContourTextWrap => "ContourTextWrap",
+            // InDesign's value; it opens `ContourTextWrap` as no wrap.
+            Self::ContourTextWrap => "Contour",
             Self::JumpObjectTextWrap => "JumpObjectTextWrap",
             Self::NextColumnTextWrap => "NextColumnTextWrap",
             Self::Other => "None",
@@ -2837,6 +2838,46 @@ pub struct ColorGroupEntry {
     /// Stored as-parsed; the editor resolves them against the
     /// `colors` table for display.
     pub members: Vec<String>,
+}
+
+/// `<Ink>` in `Resources/Graphic.xml` — one printing ink of the document's
+/// separations: the four process inks every InDesign document carries,
+/// and one per spot ink. Kept for round-trip and for separation output;
+/// the renderer does not read it. Every attribute is `None` when the
+/// element does not carry it.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InkDef {
+    /// `Self` — `Ink/$ID/Process Cyan`, or `Ink/<spot name>`.
+    pub self_id: String,
+    /// `Name` — `$ID/Process Cyan`, or the spot ink's name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `Angle` — the screen angle in degrees.
+    #[serde(default)]
+    pub angle: Option<f32>,
+    /// `Frequency` — the screen frequency in lines per inch.
+    #[serde(default)]
+    pub frequency: Option<f32>,
+    /// `NeutralDensity` — the ink's neutral density (trapping uses it).
+    #[serde(default)]
+    pub neutral_density: Option<f32>,
+    /// `ConvertToProcess` — a spot ink separated as process.
+    #[serde(default)]
+    pub convert_to_process: Option<bool>,
+    /// `PrintInk` — whether the ink prints a plate.
+    #[serde(default)]
+    pub print_ink: Option<bool>,
+    /// `TrapOrder` — the ink's position in the trapping sequence.
+    #[serde(default)]
+    pub trap_order: Option<i32>,
+    /// `InkType` — the ink's trapping type, as InDesign spells it
+    /// (`Normal` in every census document).
+    #[serde(default)]
+    pub ink_type: Option<String>,
+    /// `AliasInkName` — the ink this one separates onto (Ink Manager's
+    /// ink alias).
+    #[serde(default)]
+    pub alias_ink_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3641,7 +3682,7 @@ pub struct ColorSettings {
 /// bleed spells "…InsideOrLeft/…OutsideOrRight" while slug flips the
 /// word order to "SlugRightOrOutsideOffset" — that's faithful to the
 /// spec, not a typo.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentPreference {
     pub bleed_top: f32,
     pub bleed_bottom: f32,
@@ -3651,6 +3692,22 @@ pub struct DocumentPreference {
     pub slug_bottom: f32,
     pub slug_inside_or_left: f32,
     pub slug_right_or_outside: f32,
+    /// `PageWidth` — the document's page width in points (File ▸
+    /// Document Setup). Each page carries its own bounds; this is the
+    /// size new pages take. `None` when the attribute is absent.
+    #[serde(default)]
+    pub page_width: Option<f32>,
+    /// `PageHeight` — the document's page height in points.
+    #[serde(default)]
+    pub page_height: Option<f32>,
+    /// `FacingPages` — whether pages are laid out in left/right pairs.
+    /// InDesign assumes `true` when the element is absent.
+    #[serde(default)]
+    pub facing_pages: Option<bool>,
+    /// `PageBinding` — `LeftToRight` or `RightToLeft`, as InDesign spells
+    /// it: which side of a spread the first page binds on.
+    #[serde(default)]
+    pub page_binding: Option<String>,
 }
 
 /// `<GridPreference>` — the document's baseline-grid + document-grid
@@ -3938,6 +3995,10 @@ pub enum Composer {
     WorldReadyParagraph,
     /// `"HL Single Optyca"` — the Adobe World-Ready Single-line Composer.
     WorldReadySingleLine,
+    /// `"HL Composer J"` — the Adobe Japanese Paragraph Composer.
+    JapaneseParagraph,
+    /// `"HL Single J"` — the Adobe Japanese Single-line Composer.
+    JapaneseSingleLine,
     /// Any other value, verbatim.
     Other(String),
 }
@@ -3951,6 +4012,8 @@ impl Composer {
             "HL Single" => Self::SingleLine,
             "HL Composer Optyca" => Self::WorldReadyParagraph,
             "HL Single Optyca" => Self::WorldReadySingleLine,
+            "HL Composer J" => Self::JapaneseParagraph,
+            "HL Single J" => Self::JapaneseSingleLine,
             other => Self::Other(other.to_string()),
         }
     }
@@ -3962,6 +4025,8 @@ impl Composer {
             Self::SingleLine => "HL Single",
             Self::WorldReadyParagraph => "HL Composer Optyca",
             Self::WorldReadySingleLine => "HL Single Optyca",
+            Self::JapaneseParagraph => "HL Composer J",
+            Self::JapaneseSingleLine => "HL Single J",
             Self::Other(s) => s,
         }
     }
@@ -3969,7 +4034,18 @@ impl Composer {
     /// Whether this composer sets one line at a time. A composer we do
     /// not know composes as the Paragraph Composer.
     pub fn is_single_line(&self) -> bool {
-        matches!(self, Self::SingleLine | Self::WorldReadySingleLine)
+        matches!(
+            self,
+            Self::SingleLine | Self::WorldReadySingleLine | Self::JapaneseSingleLine
+        )
+    }
+
+    /// Whether this is one of InDesign's Japanese composers. Only they set
+    /// ruby and emphasis marks (kenten): InDesign 20.0.1 prints neither
+    /// under the Paragraph or World-Ready Composer, the same font and
+    /// text otherwise (tools/indesign-export/cjk-composer-probe).
+    pub fn is_japanese(&self) -> bool {
+        matches!(self, Self::JapaneseParagraph | Self::JapaneseSingleLine)
     }
 }
 
@@ -4097,21 +4173,28 @@ pub struct ConditionDef {
     /// renderer ignores indicators today; captured for round-trip.
     pub indicator_method: Option<String>,
 }
-/// SDK Phase 5 (v1 sweep) — IDML `<ConditionSet>`. Each entry is a
-/// named grouping of `Condition` self_ids that the editor's
-/// Conditions panel can toggle as a unit. The renderer doesn't
-/// branch on this today (visibility resolution walks individual
-/// conditions); kept for round-trip + a future "show only this
-/// set" affordance.
+/// IDML `<ConditionSet>`: a recorded visibility for each condition
+/// the document had when the set was made. InDesign writes one
+/// `<VisibilityPair Condition=… Visibility=…>` per condition; applying
+/// the set gives each listed condition its recorded visibility and
+/// leaves a condition the set does not list as it was (asked of
+/// InDesign 20.0.1, `tools/indesign-export/condition-sets-probe.json`).
+/// The renderer doesn't branch on a set: visibility resolution walks the
+/// individual conditions.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionSetDef {
     pub self_id: String,
     pub name: Option<String>,
-    /// IDML `Conditions` attribute — space-separated list of
-    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for
-    /// IDs in the special namespace). Stored as-parsed; the
-    /// editor de-dupes for display.
+    /// The listed conditions, in document order, as
+    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for IDs in
+    /// the special namespace). Stored as-parsed; the editor de-dupes
+    /// for display.
     pub conditions: Vec<String>,
+    /// The listed conditions whose recorded visibility is hidden
+    /// (`Visibility="false"`); every other entry of `conditions` is
+    /// recorded visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
 }
 /// W1.22 (engine gap 22) — IDML `<NumberingList>` resource. A named
 /// list definition. Paragraphs reference one via
@@ -5886,6 +5969,24 @@ pub struct Paragraph {
     /// for drop caps. `0` is the default. Stored signed because the
     /// IDML serialisation allows negative values.
     pub drop_cap_detail: i32,
+    /// `Minimum` / `Desired` / `MaximumWordSpacing` set on the range
+    /// itself (percent of the space), over the paragraph style's. `None`
+    /// ⇒ the style's value.
+    pub minimum_word_spacing: Option<f32>,
+    pub desired_word_spacing: Option<f32>,
+    pub maximum_word_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumLetterSpacing` on the range: a
+    /// percentage of the space width (see
+    /// [`ParagraphStyleDef::desired_letter_spacing`]). `None` ⇒ the
+    /// style's value.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumGlyphScaling` on the range
+    /// (percent; 100 is the font's width). `None` ⇒ the style's value.
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
     /// `Hyphenation` boolean override on the `<ParagraphStyleRange>`.
     /// `None` ⇒ inherit (IDML default at the bottom of the cascade is
     /// `true`). The composer keys hyphenation off the resolved style
@@ -6746,6 +6847,10 @@ pub struct Graphic {
     /// ("Brand colours", "UI accents"). Empty when the document
     /// declares no groups (the renderer doesn't branch on them).
     pub color_groups: BTreeMap<String, ColorGroupEntry>,
+    /// The `<Ink>` entries, in document order (InDesign's order is the
+    /// Ink Manager's: the process inks, then the spot inks).
+    #[serde(default)]
+    pub inks: Vec<InkDef>,
 }
 
 impl Graphic {
@@ -7160,6 +7265,13 @@ pub struct Story {
     /// does not yet honour this — see docs/plan.md Tier 4 — CJK
     /// Stage 3.
     pub story_direction: Option<StoryDirection>,
+    /// `<Story AppliedTOCStyle="TOCStyle/…">` — the table-of-contents
+    /// style the story was generated with. InDesign writes the attribute
+    /// on every `<Story>`, `"n"` (none) on an ordinary one, which reads as
+    /// `None`. [`TextFrame::applied_toc_style`] is the engine's older
+    /// spelling of the same binding.
+    #[serde(default)]
+    pub applied_toc_style: Option<String>,
     /// thoughts ADR 026 — the story's frame chain GROWS: when the story
     /// oversets its last frame, the renderer appends generated pages (and
     /// removes generated pages that end up empty). `None` = a fixed chain,

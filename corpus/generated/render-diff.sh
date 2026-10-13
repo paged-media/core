@@ -255,9 +255,10 @@ if [ "$HAVE_PDF" -eq 1 ]; then
         mean=$(echo "$line" | grep -oE '"mean_de":[0-9.]+' | sed 's/.*://')
         p99=$(echo "$line" | grep -oE '"p99_de":[0-9.]+' | sed 's/.*://')
         ssim=$(echo "$line" | grep -oE '"ssim":[0-9.]+' | sed 's/.*://')
+        ink=$(echo "$line" | grep -oE '"ink_mean_de":[0-9.]+' | sed 's/.*://')
         [ "$pass" = "true" ] && pass_pages=$((pass_pages + 1))
-        printf "  page %s  meanΔE=%6.3f  p99ΔE=%6.3f  ssim=%5.3f  %s\n" \
-            "$page" "$mean" "$p99" "$ssim" "$pass"
+        printf "  page %s  meanΔE=%6.3f  p99ΔE=%6.3f  ssim=%5.3f  inkΔE=%6.3f  %s\n" \
+            "$page" "$mean" "$p99" "$ssim" "${ink:-0}" "$pass"
         if [ $first -eq 0 ]; then echo "," >> "$REPORT"; fi
         first=0
         printf '  {"page":%s,%s}' "$((10#$page))" "${line:1:${#line}-2}" >> "$REPORT"

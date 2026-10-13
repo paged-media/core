@@ -113,6 +113,23 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   paragraph style carries `Ligatures`, `KerningMethod` and the `OTF*` toggles; the OpenType
   positions are the font's `sups` / `subs` / `numr` / `dnom` glyphs; All Caps asks for `case`
   and `cpsp`; historical forms and stylistic alternates shape.
+- **Text wrap as InDesign sets it** ([ADR 139](adr/139-jump-object-and-next-column-wraps.md)).
+  Bounding-box and contour wraps narrow the lines beside them, and those lines break by minimum
+  raggedness, squeezing word spaces to keep a word. A jump-object wrap leaves its rows empty and
+  text resumes below it on the leading grid; at a next-column wrap the rest of the story moves to
+  the next frame. A contour wrap is written `Contour`, the value InDesign reads.
+- **Line breaks as InDesign's Paragraph Composer sets them** ([ADR 141](adr/141-a-line-may-overrun-its-measure-by-a-sliver.md),
+  [ADR 142](adr/142-ragged-text-breaks-by-minimum-raggedness.md)). Ragged text breaks by minimum
+  raggedness in every frame; a line keeps its last word while it overruns its measure by about a
+  99th of that word, and the overrun comes out of the word spaces. Justified text keeps one
+  allowance per paragraph. A drop cap spans the paragraph's leading at the face's cap height.
+  46 of the 73 generator fixtures set every line as InDesign does.
+- **Positions are exact sums** ([ADR 138](adr/138-positions-are-exact-sums.md)). Baselines and
+  glyph advances are summed exactly and rounded once, so a 14.4 pt leading or a 12 pt Open Sans
+  line does not drift off InDesign's positions down a page or along a line.
+- **Condition sets as InDesign records them.** A set keeps each condition's recorded visibility;
+  applying it restores the listed conditions and leaves the others as they are. Bleed and slug
+  set in paged reach an IDML save, with a `DocumentPreference` added to a package that had none.
 - **Fidelity tooling.** The fixture generator (67 samples), the image-diff tool, 66
   reference PDFs with thresholds (`docx-pagination` has none and is not gated), and the
   scripts that drive InDesign to export them.
@@ -140,10 +157,6 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which
   is one JSON document (`crates/paged-canvas/src/model.rs:5122-5125`). A model part with
   another format version is ignored on load, and the IDML parts are parsed instead.
-- **Document bleed edited in paged does not reach an IDML save.** The IDML adapter writes no
-  `DocumentPreference`, so a bleed or slug set with `set` survives in the model part of a
-  `.paged` file only. (A hidden item's `Visible="false"` and text variables authored in paged
-  do reach the IDML: `crates/paged-canvas/tests/idml_export_object_model_state.rs`.)
 - **Line and GREP styles are read and kept, not applied.** `<AllLineStyles>` and
   `<AllGREPStyles>` reach the model and the IDML export; the renderer sets no line or GREP style.
   End Nested Style Here (`<?ACE 3?>`) is not kept by the story reader, so a nested style that

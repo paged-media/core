@@ -66,6 +66,10 @@ is not written yet.
 | [135](135-transparency-targets-and-effect-attributes.md) | Transparency per target, group isolation and knockout, and the effect attributes InDesign writes | Accepted 2026-10-13 |
 | [136](136-tables-and-footnote-references-are-characters.md) | Tables and footnote references are characters of their line, and the footnote area sits as InDesign sets it | Accepted 2026-10-13 |
 | [137](137-object-style-text-frame-options.md) | A text frame takes the options it does not state from its object style | Accepted 2026-10-13 |
+| [138](138-positions-are-exact-sums.md) | A position is the exact sum of the advances before it, rounded once | Accepted 2026-10-13 |
+| [139](139-jump-object-and-next-column-wraps.md) | Jump-object and next-column wraps, and how wrapped lines break | Accepted 2026-10-13 |
+| [141](141-a-line-may-overrun-its-measure-by-a-sliver.md) | A line may overrun its measure by a sliver; the hyphenation zone does not widen the gaps | Accepted 2026-10-13 |
+| [142](142-ragged-text-breaks-by-minimum-raggedness.md) | Ragged text breaks by minimum raggedness, and a line keeps its last word by a share of it | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

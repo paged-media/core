@@ -1503,8 +1503,8 @@ impl CanvasModel {
         None
     }
 
-    /// The set whose conditions are exactly the visible ones, if any —
-    /// what `activateConditionSet` leaves behind.
+    /// The set whose recorded visibilities every listed condition has
+    /// now, if any — what `activateConditionSet` leaves behind.
     fn active_condition_set(&self) -> Option<String> {
         let styles = &self.scene.styles;
         let visible = |id: &str| {
@@ -1519,10 +1519,11 @@ impl CanvasModel {
             .condition_sets
             .values()
             .find(|set| {
-                styles.conditions.keys().all(|c| {
-                    let member = set.conditions.iter().any(|m| m == c);
-                    member == visible(c)
-                })
+                !set.conditions.is_empty()
+                    && set
+                        .conditions
+                        .iter()
+                        .all(|m| visible(m) != set.hidden.contains(m))
             })
             .map(|s| s.self_id.clone())
     }

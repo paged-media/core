@@ -26,7 +26,7 @@
 //!     `TextWrapMode="BoundingBoxTextWrap"` on an axis-aligned rect.
 //!     The body text wraps around the obstacle's AABB.
 //!   * `text-wrap · contour · circle` — an axis-aligned square
-//!     obstacle with `TextWrapMode="ContourTextWrap"`. The renderer
+//!     obstacle with `TextWrapMode="Contour"`. The renderer
 //!     today reduces contour to its AABB; a future contour-aware
 //!     renderer can use the same IDML.
 //!   * `text-wrap · jump-object` — `JumpObjectTextWrap`. Text breaks
@@ -79,13 +79,13 @@ fn variants() -> Vec<Variant> {
             offsets: [6.0, 6.0, 6.0, 6.0],
             side: Some("BothSides"),
         },
-        // Same square obstacle with ContourTextWrap. The renderer's
+        // Same square obstacle with `Contour` wrap. The renderer's
         // wrap collector reduces contour to AABB today; the IDML
         // captures the intent so a contour-aware future-renderer can
         // see the same input.
         Variant {
             name: "text-wrap · contour · circle",
-            mode: "ContourTextWrap",
+            mode: "Contour",
             offsets: [4.0, 4.0, 4.0, 4.0],
             side: Some("BothSides"),
         },
@@ -122,9 +122,13 @@ fn variants() -> Vec<Variant> {
     ]
 }
 
-/// English body text long enough to fill ~720 pt of body frame at
-/// 12 pt size with default leading. Two paragraphs so paragraph
-/// breaks are visible in the diff harness.
+/// English body text long enough to run past the obstacle: the two
+/// paragraphs four times over, about 44 lines at 12 pt, so every
+/// variant's wrap shapes the lines beside and below it. (The fixture
+/// once set the two paragraphs once, 11 lines that ended above the
+/// obstacle, so no variant's wrap touched a line and the gate could not
+/// tell one mode from another.) Paragraph breaks stay visible in the
+/// diff harness.
 fn body_paragraphs() -> Vec<Paragraph> {
     let p1 = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod \
               tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim \
@@ -148,10 +152,14 @@ fn body_paragraphs() -> Vec<Paragraph> {
     // than whose wrap is right. `text-in-shape` keeps hyphenation on
     // over text where the two dictionaries are verified to agree.
     let no_hyphens = || vec![("Hyphenation", "false")];
-    vec![
-        Paragraph::plain(p1).with_para_attrs(no_hyphens()),
-        Paragraph::plain(p2).with_para_attrs(no_hyphens()),
-    ]
+    (0..4)
+        .flat_map(|_| {
+            [
+                Paragraph::plain(p1).with_para_attrs(no_hyphens()),
+                Paragraph::plain(p2).with_para_attrs(no_hyphens()),
+            ]
+        })
+        .collect()
 }
 
 pub fn build() -> Sample {
