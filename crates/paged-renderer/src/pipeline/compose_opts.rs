@@ -14,6 +14,19 @@
 
 //! apply_paragraph_compose_options — per-paragraph compose-option resolution. Extracted from pipeline/mod.rs (1.6b).
 
+/// `DesiredGlyphScaling` as a factor on every glyph of the paragraph.
+/// InDesign sets it as a horizontal scale — advances and outlines, ragged
+/// text too — multiplied with a run's own `HorizontalScale`, and letter
+/// and word spacing then take their percentages of the scaled space
+/// (InDesign 20.0.1, tools/indesign-export/spelling-and-spacing-probe:
+/// at 105 % every glyph of a 20 pt Open Sans line advances 1.050 times its
+/// width, 0.840 times on a run already at 80 %). Callers fold it into each
+/// run's `horizontal_scale_pct`; the Min..Max band stays a breaker budget
+/// (below).
+pub(super) fn desired_glyph_scale(resolved: &paged_scene::ResolvedParagraphAttrs) -> f32 {
+    resolved.desired_glyph_scaling.unwrap_or(100.0).max(0.0) / 100.0
+}
+
 /// Apply IDML paragraph-style attributes that drive the line breaker
 /// onto a fresh `LayoutOptions`. Hyphenation defaults to *on* (IDML's
 /// own default) when the cascade leaves the field unset; explicit
@@ -183,13 +196,12 @@ pub(super) fn apply_paragraph_compose_options<'a>(
         lopts.compose.stretch_ratio = (lopts.compose.stretch_ratio + stretch_add).min(2.0);
         lopts.compose.shrink_ratio = (lopts.compose.shrink_ratio + shrink_add).min(0.5);
     }
-    // Q-20: glyph scaling. When `Min/Max GlyphScaling` differ from
-    // 100 the IDML allows the composer to scale per-glyph x-advance
-    // by that percentage. Per-glyph distribution after Knuth-Plass
-    // is the proper implementation; for now we widen the stretch
-    // ratio so the breaker has the budget the IDML implies. None of
-    // the cycle-2 evidence packs vary this from 100, so this is
-    // foundation work that lights up on packs that do customise it.
+    // Q-20: glyph scaling. The desired value scales every glyph
+    // (`desired_glyph_scale`, folded into the runs). When `Min/Max
+    // GlyphScaling` differ from it, the IDML allows the composer to scale
+    // per-glyph x-advance within that band. Per-glyph distribution after
+    // Knuth-Plass is the proper implementation; for now we widen the
+    // stretch ratio so the breaker has the budget the IDML implies.
     let gs_desired = resolved.desired_glyph_scaling.unwrap_or(100.0);
     let gs_max = resolved.maximum_glyph_scaling.unwrap_or(gs_desired);
     let gs_min = resolved.minimum_glyph_scaling.unwrap_or(gs_desired);
