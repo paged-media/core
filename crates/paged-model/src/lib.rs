@@ -3857,8 +3857,19 @@ pub struct OtfFeatures {
     /// stylistic sets into one integer where bit `i` (0-based) enables
     /// `ss{i+1}` (`ss01`..`ss20`). `0`/`None` ⇒ no stylistic set.
     pub stylistic_sets: Option<i32>,
+    /// `OTFStylisticAlternate="true"` — `salt` (stylistic alternates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stylistic_alternate: Option<bool>,
+    /// `OTFHistorical="true"` — `hist` (historical forms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub historical: Option<bool>,
 }
 impl OtfFeatures {
+    /// True when no toggle is set at this level.
+    pub fn is_unset(&self) -> bool {
+        *self == OtfFeatures::default()
+    }
+
     /// Fill any unset field from `below` (a lower cascade level: this
     /// run's character style, then paragraph style). Nothing is
     /// overwritten once set.
@@ -3876,6 +3887,8 @@ impl OtfFeatures {
             self.figure_style = below.figure_style.clone();
         }
         self.stylistic_sets = self.stylistic_sets.or(below.stylistic_sets);
+        self.stylistic_alternate = self.stylistic_alternate.or(below.stylistic_alternate);
+        self.historical = self.historical.or(below.historical);
     }
 }
 
@@ -4434,6 +4447,12 @@ pub struct ParagraphStyleDef {
     /// without kerning unless a document asks for it.
     #[serde(default)]
     pub kerning_method: Option<String>,
+    /// The discrete OpenType toggles (`OTF*` attributes) on the
+    /// paragraph style. InDesign writes them there as it writes them on
+    /// character styles (`OTFHistorical="true"`, `OTFFigureStyle=…`), and
+    /// they reach every run whose character style leaves them unset.
+    #[serde(default, skip_serializing_if = "OtfFeatures::is_unset")]
+    pub otf: OtfFeatures,
     /// `<TabList>` parsed from the style. Empty means "no
     /// declaration" — the cascade may inherit from `BasedOn`.
     pub tab_list: Vec<TabStop>,
@@ -4644,18 +4663,65 @@ pub struct ParagraphStyleDef {
     pub rule_below: ParagraphRule,
     /// Q-09: rectangular border around the paragraph's content box.
     pub border: ParagraphBorder,
-    /// Phase 4 typography — nested character styles applied to the
-    /// paragraph's leading characters. Each entry restyles a prefix
-    /// range; successive entries chain (the previous entry's end is
-    /// the next entry's start). Empty when the IDML declares no
-    /// `<NestedStyle>` children. Always replaces (no cascade merge)
-    /// because the IDML serialiser writes the full list per style.
+    /// Nested character styles applied to the paragraph's leading
+    /// characters (`<Properties><AllNestedStyles type="list">`, InDesign's
+    /// spelling; the engine's older `<NestedStyle>` children still read).
+    /// Each entry restyles a prefix range; successive entries chain (the
+    /// previous entry's end is the next entry's start). Empty means "not
+    /// declared here" unless [`Self::empty_nested_styles`] says the style
+    /// cleared its parent's list. Always replaces (no cascade merge):
+    /// InDesign writes the full list whenever a style's list differs from
+    /// its parent's.
     pub nested_styles: Vec<NestedStyle>,
+    /// `EmptyNestedStyles="true"` — the style's nested-style list is
+    /// explicitly EMPTY, so a parent's list does not reach it (InDesign
+    /// 20.0.1 writes `true` on a style that cleared an inherited list and
+    /// on every style with none; `false` with no list on a style that
+    /// inherits its parent's). `None` when the attribute is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_nested_styles: Option<bool>,
+    /// Line styles (`<AllLineStyles type="list">`): a character style
+    /// applied to the paragraph's first lines. Read and kept; the
+    /// renderer does not apply them yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_styles: Vec<LineStyle>,
+    /// `EmptyLineStyles` — see [`Self::empty_nested_styles`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_line_styles: Option<bool>,
+    /// GREP styles (`<AllGREPStyles type="list">`): a character style
+    /// applied to every match of an expression. Read and kept; the
+    /// renderer does not apply them yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grep_styles: Vec<GrepStyle>,
+    /// `EmptyGrepStyles` — see [`Self::empty_nested_styles`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_grep_styles: Option<bool>,
 }
-/// IDML `<NestedStyle>` — a CharacterStyle applied to a leading
-/// portion of a paragraph, bounded by a delimiter (count of
-/// words / sentences / characters, a literal char, or a special
-/// "any digit / letter / quote" matcher).
+/// One line style (`<AllLineStyles>` list item): `AppliedCharacterStyle`
+/// over the next `LineCount` lines of the paragraph.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LineStyle {
+    /// `<AppliedCharacterStyle type="object">CharacterStyle/…`.
+    pub applied_character_style: String,
+    /// `<LineCount type="long">` — how many lines the entry covers.
+    pub line_count: i32,
+    /// `<RepeatLast type="long">` — InDesign writes `-1` (no repeat).
+    pub repeat_last: Option<i32>,
+}
+/// One GREP style (`<AllGREPStyles>` list item): `AppliedCharacterStyle`
+/// over every match of `GrepExpression` in the paragraph.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GrepStyle {
+    /// `<AppliedCharacterStyle type="object">CharacterStyle/…`.
+    pub applied_character_style: String,
+    /// `<GrepExpression type="string">` — InDesign's GREP dialect, kept
+    /// verbatim.
+    pub grep_expression: String,
+}
+/// One nested style — a CharacterStyle applied to a leading portion of
+/// a paragraph, bounded by a delimiter (a count of words, sentences,
+/// characters, letters, digits, tabs, a set of literal characters, …).
+/// InDesign spells it as an `<AllNestedStyles>` list item.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NestedStyle {
     /// `AppliedCharacterStyle="CharacterStyle/<id>"`. The named style
@@ -4672,7 +4738,7 @@ pub struct NestedStyle {
     /// before it. InDesign default: true.
     pub inclusive: bool,
 }
-/// What delimits the end of a `<NestedStyle>` range.
+/// What delimits the end of a nested style's range.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NestedDelimiter {
     /// `Words` — N whitespace-delimited words.
@@ -4697,14 +4763,39 @@ pub enum NestedDelimiter {
     /// `EndNestedStyle` — InDesign's "End Nested Style Here" marker
     /// (U+0003). Often inserted manually in the source text.
     EndNestedStyle,
-    /// Literal character delimiter, e.g. `:` or `;` from an
-    /// `Delimiter="ANY_CHARACTER"` + explicit char on the style.
+    /// Literal character delimiter, e.g. `:` or `;` — InDesign's
+    /// `<Delimiter type="string">:</Delimiter>`.
     Char(char),
     /// Fallback for unsupported / unparseable delimiter values —
     /// the nested style entry is effectively a no-op (matches
     /// nothing).
     #[default]
     Unknown,
+    /// `Dropcap` — the paragraph's drop-cap characters
+    /// (`DropCapCharacters` of them). InDesign writes the drop cap's
+    /// character style as the FIRST nested style with this delimiter.
+    Dropcap,
+    /// `EmSpace` — N em spaces (U+2003).
+    EmSpace,
+    /// `EnSpace` — N en spaces (U+2002).
+    EnSpace,
+    /// `NonbreakingSpace` — N no-break spaces (U+00A0, U+202F).
+    NonbreakingSpace,
+    /// `IndentHereTab` — N "indent to here" characters.
+    IndentHereTab,
+    /// `AutoPageNumber` — N page-number markers.
+    AutoPageNumber,
+    /// `SectionMarker` — N section markers.
+    SectionMarker,
+    /// `InlineGraphic` — N anchored-object characters.
+    InlineGraphic,
+    /// `Repeat` — not a range: loops the `repetition` entries before it
+    /// until the paragraph ends.
+    Repeat,
+    /// A `type="string"` delimiter of more than one character: any ONE
+    /// of them ends a repetition (InDesign 20.0.1: `.,` through 2 on
+    /// "One, two. three" styles "One, two.").
+    AnyOf(String),
 }
 /// Effective character-level attributes after walking BasedOn.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -4791,6 +4882,9 @@ pub struct ResolvedParagraph {
     pub strikethru: Option<bool>,
     pub ligatures_on: Option<bool>,
     pub kerning_method: Option<String>,
+    /// Cascaded `OTF*` toggles of the paragraph style chain. See
+    /// [`ParagraphStyleDef::otf`].
+    pub otf: OtfFeatures,
     /// `<TabList>` from the cascade. Empty means inherited / none.
     pub tab_list: Vec<TabStop>,
     pub bullets_list_type: Option<String>,
@@ -4914,10 +5008,18 @@ pub struct ResolvedParagraph {
     pub rule_above: ParagraphRule,
     pub rule_below: ParagraphRule,
     pub border: ParagraphBorder,
-    /// Phase 4 typography — cascaded `<NestedStyle>` entries.
-    /// Replaces rather than merges (the IDML serialiser writes the
-    /// full list per ParagraphStyle).
+    /// Cascaded nested styles: the list of the nearest style that
+    /// declares one (or says, with `EmptyNestedStyles="true"`, that it
+    /// has none). Replaces rather than merges.
     pub nested_styles: Vec<NestedStyle>,
+    /// Cascaded line styles, resolved like [`Self::nested_styles`].
+    pub line_styles: Vec<LineStyle>,
+    /// Cascaded GREP styles, resolved like [`Self::nested_styles`].
+    pub grep_styles: Vec<GrepStyle>,
+    /// Whether a level of the cascade already settled each list (gave
+    /// one, or declared it empty), so a parent's list no longer reaches
+    /// it: `[nested, line, grep]`.
+    pub style_lists_settled: [bool; 3],
 }
 impl ResolvedObject {
     pub fn merge_below(&mut self, def: &ObjectStyleDef) {
@@ -5140,6 +5242,7 @@ impl ResolvedParagraph {
         if self.kerning_method.is_none() {
             self.kerning_method = def.kerning_method.clone();
         }
+        self.otf.merge_below(&def.otf);
         if self.tab_list.is_empty() && !def.tab_list.is_empty() {
             self.tab_list = def.tab_list.clone();
         }
@@ -5258,12 +5361,48 @@ impl ResolvedParagraph {
         merge_rule(&mut self.rule_below, &def.rule_below);
         // Q-09: per-field border inheritance.
         merge_border(&mut self.border, &def.border);
-        // Phase 4 — nested styles replace as a whole list. The IDML
-        // serialiser writes the full list per style; cascade through
-        // BasedOn only when the lower style has none of its own.
-        if self.nested_styles.is_empty() && !def.nested_styles.is_empty() {
-            self.nested_styles = def.nested_styles.clone();
-        }
+        // The three style lists replace as whole lists: the nearest
+        // level that gives one, or says it has none, settles it.
+        settle_style_list(
+            &mut self.nested_styles,
+            &mut self.style_lists_settled[0],
+            &def.nested_styles,
+            def.empty_nested_styles,
+        );
+        settle_style_list(
+            &mut self.line_styles,
+            &mut self.style_lists_settled[1],
+            &def.line_styles,
+            def.empty_line_styles,
+        );
+        settle_style_list(
+            &mut self.grep_styles,
+            &mut self.style_lists_settled[2],
+            &def.grep_styles,
+            def.empty_grep_styles,
+        );
+    }
+}
+/// Cascade one of a paragraph's style lists (nested, line, GREP) from a
+/// lower level. A level settles the list when it declares entries, or
+/// when it says the list is empty (`Empty*Styles="true"`): InDesign 20.0.1
+/// writes no list and `EmptyNestedStyles="false"` on a style that
+/// inherits its parent's, and `EmptyNestedStyles="true"` on one that
+/// cleared it — which then sets no nested style at all.
+pub fn settle_style_list<T: Clone>(
+    list: &mut Vec<T>,
+    settled: &mut bool,
+    below: &[T],
+    below_empty: Option<bool>,
+) {
+    if *settled {
+        return;
+    }
+    if !below.is_empty() {
+        *list = below.to_vec();
+        *settled = true;
+    } else if below_empty == Some(true) {
+        *settled = true;
     }
 }
 fn merge_rule(child: &mut ParagraphRule, parent: &ParagraphRule) {
@@ -5488,6 +5627,20 @@ pub struct Paragraph {
     /// `RuleBelow*` — the horizontal rule stroked below the last
     /// line. W0.2: see [`Paragraph::rule_above`].
     pub rule_below: ParagraphRule,
+    /// A LOCAL nested-style list: `<Properties><AllNestedStyles>` on the
+    /// `<ParagraphStyleRange>` itself (InDesign writes one when a
+    /// paragraph's list differs from its style's). Non-empty replaces
+    /// the style's list; empty lets the style's apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nested_styles: Vec<NestedStyle>,
+    /// A local line-style list (`<AllLineStyles>`); see
+    /// [`Self::nested_styles`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_styles: Vec<LineStyle>,
+    /// A local GREP-style list (`<AllGREPStyles>`); see
+    /// [`Self::nested_styles`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grep_styles: Vec<GrepStyle>,
     pub runs: Vec<CharacterRun>,
     /// `KinsokuSet="KinsokuTable/$ID/PhotoshopKinsokuHard"` (or
     /// similar) reference. Identifies the set of CJK line-break
@@ -6029,6 +6182,14 @@ impl TableCell {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
+    /// The nested style that reaches this run — set by the renderer when
+    /// it splits a paragraph at its nested-style ranges, never read from
+    /// or written to IDML. It sits UNDER [`Self::character_style`] in the
+    /// cascade: a character style applied by hand replaces only the
+    /// attributes it defines (InDesign 20.0.1: a hand-applied underline-
+    /// only style inside a nested 20 pt red range stays 20 pt red).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested_character_style: Option<String>,
     pub font: Option<String>,
     pub font_style: Option<String>,
     pub point_size: Option<f32>,

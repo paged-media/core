@@ -27,6 +27,8 @@ fn shaped_run_attrs(
     document: &Document,
     paragraph: &paged_model::Paragraph,
 ) -> Vec<paged_scene::ResolvedRunAttrs> {
+    // The faces a nested style names are shaped too.
+    let paragraph = &*super::with_nested_styles(document, paragraph);
     let mut out: Vec<paged_scene::ResolvedRunAttrs> = paragraph
         .runs
         .iter()

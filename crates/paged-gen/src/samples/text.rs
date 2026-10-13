@@ -71,9 +71,10 @@ fn emphasis_style() -> ParagraphStyleSpec {
     }
 }
 
-/// A paragraph style carrying two `<NestedStyle>` runs (the first word, then
-/// up to the first colon) — the per-delimiter nested-style construct the
-/// parser reads onto the style def (stories-text.nested-styles).
+/// A paragraph style carrying two nested styles (through the first word,
+/// then up to the first colon), spelled as InDesign's `<AllNestedStyles>`
+/// list — the construct the parser reads onto the style def
+/// (stories-text.nested-styles). No paragraph applies it.
 fn nested_style_demo() -> ParagraphStyleSpec {
     ParagraphStyleSpec {
         self_id: "ParagraphStyle/NestedDemo",
@@ -84,7 +85,7 @@ fn nested_style_demo() -> ParagraphStyleSpec {
         nested_styles: vec![
             NestedStyleSpec {
                 applied_character_style: "CharacterStyle/$ID/[No character style]",
-                delimiter: "1",
+                delimiter: "AnyWord",
                 repetition: 1,
                 inclusive: true,
             },

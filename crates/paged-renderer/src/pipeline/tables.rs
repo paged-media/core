@@ -2427,6 +2427,8 @@ fn measure_cell_paragraph(
     by_leading: bool,
     first_baseline: CellFirstBaseline,
 ) -> Vec<f32> {
+    // A cell paragraph takes its nested styles as a body one does.
+    let paragraph = &*with_nested_styles(em.document, paragraph);
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return Vec::new();
     }
@@ -2545,6 +2547,7 @@ fn measure_cell_paragraph(
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
                 resolved_runs[i].capitalization.as_deref(),
+                resolved_runs[i].position.as_deref(),
             ),
         })
         .collect();
@@ -2635,6 +2638,8 @@ pub(super) fn emit_cell_paragraph(
     // The cell's first-baseline settings.
     first_baseline: CellFirstBaseline,
 ) {
+    // A cell paragraph takes its nested styles as a body one does.
+    let paragraph = &*with_nested_styles(em.document, paragraph);
     if column_width_pt <= 0.0 || paragraph.runs.is_empty() {
         return;
     }
@@ -2792,6 +2797,7 @@ pub(super) fn emit_cell_paragraph(
                 resolved_runs[i].kerning_method.as_deref(),
                 &resolved_runs[i].otf,
                 resolved_runs[i].capitalization.as_deref(),
+                resolved_runs[i].position.as_deref(),
             ),
         })
         .collect();

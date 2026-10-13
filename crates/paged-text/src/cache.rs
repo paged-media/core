@@ -391,6 +391,15 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_bool(f.contextual_alternates);
         h.add_u32(figure_style_tag(f.figure_style));
         h.add_u32(f.stylistic_sets);
+        h.add_u32(match f.small_caps {
+            crate::shape::SmallCaps::None => 0,
+            crate::shape::SmallCaps::Lowercase => 1,
+            crate::shape::SmallCaps::All => 2,
+        });
+        h.add_bool(f.stylistic_alternates);
+        h.add_bool(f.historical);
+        h.add_u32(f.position as u32);
+        h.add_bool(f.all_caps);
         h.sep();
     }
     fold_layout_options(&mut h, options);
