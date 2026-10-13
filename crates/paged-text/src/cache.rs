@@ -306,16 +306,23 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
         } else {
             let at_zero = LayoutOptions {
                 first_baseline: 0,
+                first_baseline_exact: None,
                 ..options.clone()
             };
             layout_runs(runs, &at_zero)
         }
     });
-    if origin != 0 {
+    // The exact origin, so every baseline is the exact sum rounded once
+    // (`LaidOutLine::baseline_exact`), as an uncached layout sets it.
+    let origin_exact = options.first_baseline_exact();
+    if origin != 0 || origin_exact != 0.0 {
         for line in &mut laid.lines {
-            line.baseline_y += origin;
+            let exact = line.baseline_exact + origin_exact;
+            let dy = exact.round() as i32 - line.baseline_y;
+            line.baseline_y += dy;
+            line.baseline_exact = exact;
             for g in &mut line.glyphs {
-                g.y += origin;
+                g.y += dy;
             }
         }
     }
@@ -413,6 +420,11 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     // `first_baseline` is not an input: `layout_runs_cached` lays out at 0
     // and translates.
     h.add_optional_i32(options.leading_override);
+    h.add_u64(
+        options
+            .leading_override_exact
+            .map_or(u64::MAX, |e| e.to_bits()),
+    );
     h.add_u32(options.run_leadings.len() as u32);
     for (start, leading) in &options.run_leadings {
         h.add_u32(*start);

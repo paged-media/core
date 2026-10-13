@@ -4028,6 +4028,35 @@ pub(super) fn capture_footnotes(
 ///    emission so the post-story vertical-justification shift can
 ///    target this story's commands without touching frame outlines.
 impl<'a> StoryEmitter<'a> {
+    /// The cursor exactly, in 1/64 pt (see [`Self::y_cursor_exact`]).
+    pub(super) fn y_exact(&self) -> f64 {
+        self.y_cursor_exact
+            .filter(|e| e.round() as i32 == self.y_cursor)
+            .unwrap_or(self.y_cursor as f64)
+    }
+
+    /// Move the cursor to `y` (1/64 pt, exact).
+    pub(super) fn set_y_exact(&mut self, y: f64) {
+        self.y_cursor = y.round() as i32;
+        self.y_cursor_exact = Some(y);
+    }
+
+    /// The previous line's leading exactly, when one was placed.
+    pub(super) fn prev_line_height_exact(&self) -> Option<f64> {
+        let rounded = self.prev_line_height_64?;
+        Some(
+            self.prev_line_height_exact
+                .filter(|e| e.round() as i32 == rounded)
+                .unwrap_or(rounded as f64),
+        )
+    }
+
+    /// Record the leading of the line (or empty paragraph) just placed.
+    pub(super) fn set_prev_line_height(&mut self, exact: f64) {
+        self.prev_line_height_64 = Some(exact.round() as i32);
+        self.prev_line_height_exact = Some(exact);
+    }
+
     /// Wire the per-language hyphenator set, so each paragraph gets the
     /// dictionary its own `AppliedLanguage` names.
     pub(super) fn with_languages(mut self, set: &'a paged_text::Hyphenators) -> Self {
@@ -4148,6 +4177,15 @@ pub(super) struct StoryEmitter<'a> {
     /// start (no baseline yet — `first_baseline_for_frame` will be
     /// used instead).
     pub(super) prev_line_height_64: Option<i32>,
+    /// `y_cursor` before it was rounded to 1/64 pt: the exact sum of the
+    /// leadings and paragraph spaces placed so far, so a 14.4 pt leading
+    /// does not drift 0.00625 pt a line (InDesign steps it exactly).
+    /// Trusted only while it rounds to `y_cursor` ([`Self::y_exact`]):
+    /// a path that moves the cursor without it falls back to the
+    /// rounded value.
+    pub(super) y_cursor_exact: Option<f64>,
+    /// `prev_line_height_64` before it was rounded, on the same terms.
+    pub(super) prev_line_height_exact: Option<f64>,
     pub(super) frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     pub(super) frame_max_baseline_64: Vec<i32>,
     /// W1.7 footnote space reservation — per chain-frame height (in
@@ -4411,6 +4449,9 @@ impl<'a> StoryEmitter<'a> {
         // compose_paragraph and is queued.
         let frame_height = head_frame_spread.height();
         for shape in head_wrap_rects {
+            if shape.kind != WrapKind::Around {
+                continue;
+            }
             let w = shape.bounds;
             // Vertical overlap check.
             let v_overlap =
@@ -4486,6 +4527,8 @@ impl<'a> StoryEmitter<'a> {
             frame_idx: 0,
             y_cursor: -1,
             prev_line_height_64: None,
+            y_cursor_exact: None,
+            prev_line_height_exact: None,
             forced_breaks: super::keeps::ForcedBreaks::new(),
             applied_breaks: std::collections::HashSet::new(),
             frame_first_line: None,
@@ -5672,16 +5715,15 @@ fn emit_paragraph_lines(
         // run (a blank line a plugin poured and styled) the paragraph
         // style's own leading is the only one there is: Word's blank
         // lines carry their spacing that way (plugin-doc, ADR 029).
-        let line_height_64 = paragraph
+        let line_height_exact = paragraph
             .runs
             .first()
             .and_then(|r| em.document.resolved_run_attrs(paragraph, r).leading)
             .or(style.leading)
             .filter(|l| *l > 0.0)
-            .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
-            .unwrap_or_else(|| {
-                (para_pt * 1.2 * paged_text::shape::ADVANCE_PRECISION).round() as i32
-            });
+            .map(|l| l as f64 * paged_text::shape::ADVANCE_PRECISION as f64)
+            .unwrap_or_else(|| para_pt as f64 * 1.2 * paged_text::shape::ADVANCE_PRECISION as f64);
+        let line_height_64 = line_height_exact.round() as i32;
         // Establish the first baseline if we haven't placed any
         // content yet — same convention as the populated branch
         // below — then advance by a full line height.
@@ -5712,7 +5754,6 @@ fn emit_paragraph_lines(
                 Some(line_height_64),
             );
         }
-        em.y_cursor += space_before_64.round() as i32;
         // Adobe places the empty paragraph's virtual baseline at
         // `prev_baseline + leading(empty)`, then the next line at
         // `empty_baseline + leading(next)`. Our y_cursor encodes
@@ -5722,9 +5763,11 @@ fn emit_paragraph_lines(
         // contributes only ~14.4pt (matching InDesign), while a
         // 12pt empty after a 12pt run unchanged (no-op when prev
         // and current leadings agree).
-        let prev_lh = em.prev_line_height_64.unwrap_or(line_height_64);
-        em.y_cursor = em.y_cursor - prev_lh + line_height_64 + line_height_64;
-        em.prev_line_height_64 = Some(line_height_64);
+        let prev_lh = em.prev_line_height_exact().unwrap_or(line_height_exact);
+        em.set_y_exact(
+            em.y_exact() + space_before_64 as f64 - prev_lh + line_height_exact + line_height_exact,
+        );
+        em.set_prev_line_height(line_height_exact);
         // The blank line is a line: the caret can stand on it, a click
         // on it lands in it, and a selection across it shows it. Its one
         // cluster is a zero-width stop at the line's left edge.
@@ -5765,7 +5808,7 @@ fn emit_paragraph_lines(
         }
         let space_after_64 =
             resolved_paragraph.space_after.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
-        em.y_cursor += space_after_64.round() as i32;
+        em.set_y_exact(em.y_exact() + space_after_64 as f64);
         return;
     }
     // A forced line break's pieces are lines of ONE paragraph, as
@@ -6284,6 +6327,8 @@ fn emit_paragraph_lines(
         if leading_pt > 0.0 {
             lopts.leading_override =
                 Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+            lopts.leading_override_exact =
+                Some(leading_pt as f64 * paged_text::shape::ADVANCE_PRECISION as f64);
         }
     }
     // Runs that ask for DIFFERENT leadings: each line takes the largest
@@ -6352,7 +6397,7 @@ fn emit_paragraph_lines(
     } else {
         let space_before_64 =
             resolved_paragraph.space_before.unwrap_or(0.0) * paged_text::shape::ADVANCE_PRECISION;
-        em.y_cursor += space_before_64.round() as i32;
+        let mut y = em.y_exact() + space_before_64 as f64;
         // Adobe places each baseline at `prev_baseline + leading(THIS
         // line)`, not `+ leading(prev line)`. The most recent
         // y_cursor bump used the previous line/empty-paragraph's
@@ -6360,12 +6405,13 @@ fn emit_paragraph_lines(
         // first-line leading so mixed-size flows (12pt body → 24pt
         // heading) gain the extra leading Adobe expects. No-op when
         // previous and current leadings agree (the common case).
-        if let Some(prev_lh) = em.prev_line_height_64 {
-            let this_lh = lopts.leading_override.unwrap_or(lopts.line_height);
-            em.y_cursor += this_lh - prev_lh;
+        if let Some(prev_lh) = em.prev_line_height_exact() {
+            y += lopts.paragraph_leading_exact() - prev_lh;
         }
+        em.set_y_exact(y);
     }
     lopts.first_baseline = em.y_cursor;
+    lopts.first_baseline_exact = Some(em.y_exact());
 
     // Drop cap: when the paragraph carries
     // `<ParagraphStyleRange DropCapCharacters="N" DropCapLines="M">`,
@@ -6975,13 +7021,17 @@ fn emit_paragraph_lines(
     // as separate rows). Without this pass twins would render as
     // sequential rows, which Knuth-Plass produced naively.
     if !twin_after.is_empty() {
-        let line_height_64 = lopts.line_height.max(1);
+        // Rows step by the paragraph's leading, summed exactly like the
+        // composer's own baselines (`LaidOutLine::baseline_exact`).
+        let line_height_exact = lopts.paragraph_leading_exact().max(1.0);
         let mut prev_unique_baseline: Option<i32> = None;
+        let mut prev_unique_exact = 0.0_f64;
         for (i, line) in laid_out.lines.iter_mut().enumerate() {
             let is_twin = twin_after.get(i).copied().unwrap_or(false) && i > 0;
             if is_twin {
                 if let Some(target) = prev_unique_baseline {
                     let diff = line.baseline_y - target;
+                    line.baseline_exact = prev_unique_exact;
                     if diff != 0 {
                         line.baseline_y = target;
                         for g in &mut line.glyphs {
@@ -6992,11 +7042,16 @@ fn emit_paragraph_lines(
                 // Twin partner — stays on previous unique row, doesn't
                 // advance prev_unique_baseline.
             } else {
-                let new_baseline = match prev_unique_baseline {
-                    Some(prev) => prev + line_height_64,
-                    None => line.baseline_y,
+                let new_exact = match prev_unique_baseline {
+                    Some(_) => prev_unique_exact + line_height_exact,
+                    None if line.baseline_exact.round() as i32 == line.baseline_y => {
+                        line.baseline_exact
+                    }
+                    None => line.baseline_y as f64,
                 };
+                let new_baseline = new_exact.round() as i32;
                 let diff = line.baseline_y - new_baseline;
+                line.baseline_exact = new_exact;
                 if diff != 0 {
                     line.baseline_y = new_baseline;
                     for g in &mut line.glyphs {
@@ -7004,6 +7059,7 @@ fn emit_paragraph_lines(
                     }
                 }
                 prev_unique_baseline = Some(new_baseline);
+                prev_unique_exact = new_exact;
             }
         }
     }
@@ -7364,6 +7420,18 @@ fn emit_paragraph_lines(
             }
         }
     }
+    // No line sits beside a jump-object wrap: lines meeting one move
+    // below it (`text_frame::jump_object_wraps`).
+    super::text_frame::jump_object_wraps(
+        em,
+        &mut laid_out.lines,
+        &twin_after,
+        lopts.paragraph_leading_exact(),
+    );
+    // A next-column wrap ends the column for the line that meets it and
+    // everything after (`next_column_here` below): the row above the
+    // line being placed, for its slug.
+    let mut slug_above_64: Option<(usize, i32)> = None;
     let mut chain_shift_64: i32 = 0;
     for mut line in laid_out.lines.into_iter() {
         if chain_shift_64 != 0 {
@@ -7410,6 +7478,28 @@ fn emit_paragraph_lines(
         // A line whose band lies outside the frame's outline has no
         // room even when its baseline is inside the bounding box.
         let no_room_here = plan_no_room.get(current_line_idx).copied().unwrap_or(false);
+        // A next-column wrap the line's slug meets sends it, and the rest
+        // of the story, to the next column (InDesign 20.0.1, `text-wrap`
+        // page 4: the frame ends above the obstacle; its only frame
+        // oversets the rest).
+        let above_64 = match slug_above_64 {
+            Some((f, b)) if f == em.frame_idx => b,
+            _ => em
+                .frame_max_baseline_64
+                .get(em.frame_idx)
+                .copied()
+                .filter(|b| *b > 0)
+                .unwrap_or_else(|| {
+                    em.chain[em.frame_idx].inset_spacing.map_or(0, |i| {
+                        (i[0] * paged_text::shape::ADVANCE_PRECISION).round() as i32
+                    })
+                }),
+        };
+        let next_column_here =
+            super::text_frame::meets_next_column_wrap(em, above_64, line.baseline_y);
+        if next_column_here && em.frame_idx + 1 >= em.chain.len() {
+            em.force_overset = true;
+        }
         // ADR 028 — a keep option decided (from the previous pass) that
         // this line opens the next frame.
         let keep_break_here = em.take_forced_break();
@@ -7437,6 +7527,7 @@ fn emit_paragraph_lines(
         }
         if (paged_flow::region_overflows(line.baseline_y, text_bottom_64)
             || no_room_here
+            || next_column_here
             || keep_break_here
             || start_to.is_some())
             && em.frame_idx + 1 < em.chain.len()
@@ -8028,8 +8119,19 @@ fn emit_paragraph_lines(
             em.frame_max_baseline_64[frame_idx] = line.baseline_y;
         }
 
-        em.y_cursor = line.baseline_y + line_h;
-        em.prev_line_height_64 = Some(line_h);
+        // The next line sits this line's leading below it, exactly
+        // (`StoryEmitter::y_cursor_exact`).
+        let baseline_exact = if line.baseline_exact.round() as i32 == line.baseline_y {
+            line.baseline_exact
+        } else {
+            line.baseline_y as f64
+        };
+        let line_h_exact = paged_text::layout::line_leading_exact(&line.glyphs, &lopts)
+            .filter(|e| e.round() as i32 == line_h)
+            .unwrap_or(line_h as f64);
+        em.set_y_exact(baseline_exact + line_h_exact);
+        em.set_prev_line_height(line_h_exact);
+        slug_above_64 = Some((em.frame_idx, line.baseline_y));
 
         // Q-09: emit RuleBelow AFTER the last line's glyphs so the
         // rule sits in front of the body text. Mirror of the
@@ -8256,7 +8358,7 @@ fn emit_paragraph_lines(
     if dropped_overflow_lines > 0 {
         total_stats.dropped_overflow_lines += dropped_overflow_lines;
     }
-    em.y_cursor += space_after_64.round() as i32;
+    em.set_y_exact(em.y_exact() + space_after_64 as f64);
 
     // Anchored object pass: walk the paragraph's `anchored_frames`
     // list and emit each one. We support InlinePosition (the most

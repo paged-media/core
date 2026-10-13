@@ -481,6 +481,20 @@ pub fn shape_run_with_features(
     point_size: f32,
     features: ShapingFeatures,
 ) -> ShapedRun {
+    shape_run_with_features_at(face, text, point_size, features, &mut 0.0)
+}
+
+/// [`shape_run_with_features`] for a run that starts at the exact pen
+/// `pen` (1/64 pt, unrounded) of its paragraph, which it advances past the
+/// run. Advances are rounded against the paragraph's pen, not the run's,
+/// so a paragraph lays out the same however its text is split into runs.
+pub fn shape_run_with_features_at(
+    face: &Face,
+    text: &str,
+    point_size: f32,
+    features: ShapingFeatures,
+    pen: &mut f64,
+) -> ShapedRun {
     let mut buf = UnicodeBuffer::new();
     // A TAB is blank ink that advances to a stop. The stop-snapping
     // pass keys on the `\t` byte in the paragraph text and needs the
@@ -552,11 +566,22 @@ pub fn shape_run_with_features(
 
     let mut glyphs = Vec::with_capacity(infos.len());
     let mut total = 0i32;
+    // A glyph's advance is the step between the run's exact advance
+    // before and after it, each rounded once to 1/64 pt. Rounding every
+    // advance on its own drifts: Open Sans' 12 pt advances round up more
+    // often than down, and a 78-glyph line came out 447.28 pt wide where
+    // the font (and InDesign) set it 447.14.
+    let exact_scale = point_size as f64 * ADVANCE_PRECISION as f64 / units_per_em as f64;
+    let mut exact_pen = *pen;
+    let mut rounded_pen = exact_pen.round() as i32;
     for (info, pos) in infos.iter().zip(positions.iter()) {
         if is_control_at(info.cluster) {
             continue;
         }
-        let adv = to_fp64(pos.x_advance);
+        exact_pen += pos.x_advance as f64 * exact_scale;
+        let next = exact_pen.round() as i32;
+        let adv = next - rounded_pen;
+        rounded_pen = next;
         total += adv;
         glyphs.push(ShapedGlyph {
             glyph_id: info.glyph_id,
@@ -567,6 +592,7 @@ pub fn shape_run_with_features(
         });
     }
 
+    *pen = exact_pen;
     ShapedRun {
         glyphs,
         total_advance: total,

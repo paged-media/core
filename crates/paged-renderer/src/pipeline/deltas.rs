@@ -93,6 +93,7 @@ pub(super) fn body_story_signature(
             1u8.hash(&mut h);
             rects.len().hash(&mut h);
             for r in rects {
+                r.kind.hash(&mut h);
                 r.bounds.top.to_bits().hash(&mut h);
                 r.bounds.left.to_bits().hash(&mut h);
                 r.bounds.bottom.to_bits().hash(&mut h);
