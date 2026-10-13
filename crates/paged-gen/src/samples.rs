@@ -57,6 +57,7 @@ pub mod nested_groups;
 pub mod nested_styles;
 pub mod numbering;
 pub mod object_style_frames;
+pub mod object_style_options;
 pub mod opentype;
 pub mod paste_into;
 pub mod preflight;
@@ -179,6 +180,7 @@ pub const SAMPLES: &[&str] = &[
     "object-style-frames",
     "baseline-grid",
     "baseline-grid-margin",
+    "object-style-options",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -260,6 +262,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "object-style-frames" => object_style_frames::build(),
         "baseline-grid" => baseline_grid::build(),
         "baseline-grid-margin" => baseline_grid::build_margin(),
+        "object-style-options" => object_style_options::build(),
         _ => return None,
     })
 }
@@ -288,7 +291,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            76,
+            77,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

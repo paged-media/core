@@ -71,6 +71,7 @@ is not written yet.
 | [140](140-align-to-baseline-grid.md) | A paragraph aligned to the baseline grid stands each line on the next grid line | Accepted 2026-10-14 |
 | [141](141-a-line-may-overrun-its-measure-by-a-sliver.md) | A line may overrun its measure by a sliver; the hyphenation zone does not widen the gaps | Accepted 2026-10-13 |
 | [142](142-ragged-text-breaks-by-minimum-raggedness.md) | Ragged text breaks by minimum raggedness, and a line keeps its last word by a share of it | Accepted 2026-10-14 |
+| [143](143-object-style-wrap-and-anchoring.md) | An item takes the text wrap and anchoring it leaves out from its object style | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
