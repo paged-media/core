@@ -56,11 +56,13 @@ fn main() -> Result<()> {
 
     if args.json {
         println!(
-            "{{\"mean_de\":{:.6},\"p99_de\":{:.6},\"max_de\":{:.6},\"ssim\":{:.6},\"passes\":{}}}",
+            "{{\"mean_de\":{:.6},\"p99_de\":{:.6},\"max_de\":{:.6},\"ssim\":{:.6},\"ink_mean_de\":{:.6},\"ink_pixels\":{},\"passes\":{}}}",
             report.mean_delta_e,
             report.p99_delta_e,
             report.max_delta_e,
             report.ssim,
+            report.ink_mean_delta_e,
+            report.ink_pixels,
             report.passes(),
         );
     } else {

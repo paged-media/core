@@ -168,12 +168,20 @@ for p in gated:
         page_failures.append(
             f"ssim {p['ssim']:.4f} < {spec['min_ssim']:.4f}"
         )
+    # The mean over the pixels either side inks: text set a few points
+    # off barely moves the page-wide mean, but it fails here (see
+    # paged_fidelity::FidelityReport::ink_mean_delta_e).
+    if "max_ink_mean_de" in spec and p.get("ink_mean_de", 0.0) > spec["max_ink_mean_de"]:
+        page_failures.append(
+            f"inkΔE {p['ink_mean_de']:.3f} > {spec['max_ink_mean_de']:.3f}"
+        )
     if page_failures:
         failures.append({
             "page": p["page"],
             "mean_de": p["mean_de"],
             "p99_de": p["p99_de"],
             "ssim": p["ssim"],
+            "ink_mean_de": p.get("ink_mean_de"),
             "violations": page_failures,
         })
 
@@ -186,6 +194,7 @@ result = {
         "max_mean_de": spec["max_mean_de"],
         "max_p99_de": spec["max_p99_de"],
         "min_ssim": spec["min_ssim"],
+        "max_ink_mean_de": spec.get("max_ink_mean_de"),
     },
     "failures": failures,
 }
