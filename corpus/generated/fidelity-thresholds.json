@@ -359,7 +359,7 @@
       "max_mean_de": 0.76,
       "max_p99_de": 19.04,
       "min_ssim": 0.965,
-      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed — size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.587 / p99 16.554 / ssim 0.9730 (was 0.634 / 21.479 / 0.9700); re-sized by the rule above."
+      "rationale": "Reference RE-EXPORTED 2026-09-06 with Open Sans installed; `text-advanced.fonts.sh` no longer routes the renderer through CormorantGaramond to chase InDesign's Minion substitute. The DROP CAP that dominated p1 is measured and fixed — size, ink flush and body indent all match InDesign to under a point. Worst page is still p1 at mean 0.634 / p99 21.5 / SSIM 0.970, and what remains there is a LINE BREAK: the third line keeps a word InDesign moves on. Our advances are right (the same text sets within 0.8 pt over a 414 pt line, measured against InDesign's own `story.lines`), so the difference is the composer's objective, not its measure. Budget = measured x ~1.2. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.587 / p99 16.554 / ssim 0.9730 (was 0.634 / 21.479 / 0.9700); re-sized by the rule above. RE-EXPORTED 2026-10-13 from the IDML in InDesign's ruby spelling (`RubyFlag=\"1\"`, `PerCharacterRuby`; the generator wrote `Ruby=\"true\"`, which InDesign ignores): InDesign's reference still sets no ruby text (pdftotext finds no かんじ) and every page measures as before."
     },
     {
       "name": "text-autosize",
@@ -389,10 +389,10 @@
     {
       "name": "text-on-path",
       "max_pages_with_pdf": 6,
-      "max_mean_de": 0.306,
+      "max_mean_de": 0.084,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9809,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%."
+      "min_ssim": 0.997,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.255 / p99 0.000 / SSIM 0.9889 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13: the reference was re-exported from the IDML in InDesign's own spelling (`TextAlignment`; the old `PathTypeAlignment` was ignored by InDesign, so every seat printed as Baseline), and the renderer now places the text by the paragraph's justification (left, InDesign's default, where it centred) and seats Ascender / Descender on the font's bounding box (tools/indesign-export/spelling-and-spacing-probe). Worst page now p2 mean 0.070 / SSIM 0.9978 (was 0.256 / 0.9889); pages 4-6 at 0.003. Sized at worst + ~20%."
     },
     {
       "name": "text-overset",

@@ -470,31 +470,46 @@ fn sample_path_at(samples: &[PathSample], s: f32) -> Option<(f32, f32, f32)> {
     Some((x, y, angle))
 }
 
-/// Map a `PathTypeAlignment` value to the glyph baseline offset, in
-/// *font units*, that seats the glyph on the path correctly. The
-/// renderer flips font space (y-up) to page space (y-down) via the
-/// `-scale` term, so a *positive* return here lifts the glyph above
-/// the path in page space.
+/// The glyph baseline offset, in *font units*, that seats a glyph on the
+/// path for a `TextAlignment` value (InDesign's attribute) or the
+/// `PathTypeAlignment` spelling older Paged builds wrote. The renderer
+/// flips font space (y-up) to page space (y-down) via the `-scale` term,
+/// so a *positive* return here moves the glyph below the path.
 ///
-///   - `BaselinePathType` (IDML default) — baseline on the path ⇒ 0.
-///   - `CenterPathType` — em-box centre on the path. `descender` is
-///     negative, so `(ascender + descender) / 2` is the signed centre
-///     of the box above the baseline; we lift the baseline by that.
-///   - `AscenderPathType` — glyph top on the path ⇒ lift by `ascender`.
-///   - `DescenderPathType` — glyph bottom on the path ⇒ lift by the
-///     (negative) `descender`.
+/// InDesign 20.0.1 measures from the font's bounding box (`head` yMax /
+/// yMin), not its ascent and descent: type on a straight line, Open Sans
+/// 24 pt, put the baseline 25.125 pt below the line for Ascender (yMax
+/// 25.148) and 6.562 pt above it for Descender (yMin −6.527), where the
+/// ascent and descent would give 25.652 and 7.031.
 ///
-/// Ascender / Descender land but are exercised less than Baseline /
-/// Center (the two the v1 acceptance asserts).
-fn path_type_baseline_offset_units(alignment: Option<&str>, ascender: i16, descender: i16) -> f32 {
-    let asc = ascender as f32;
-    let desc = descender as f32;
+///   - `BaselineTextAlignment` (the default) — baseline on the path ⇒ 0.
+///   - `AscenderTextAlignment` — the box's top on the path ⇒ `y_max`.
+///   - `DescenderTextAlignment` — the box's bottom on the path ⇒ `y_min`
+///     (negative, so the baseline rises above the path).
+///   - `CenterTextAlignment` — the box's centre on the path.
+fn text_alignment_baseline_offset_units(alignment: Option<&str>, y_max: i16, y_min: i16) -> f32 {
+    let top = y_max as f32;
+    let bottom = y_min as f32;
     match alignment {
-        Some("CenterPathType") => (asc + desc) * 0.5,
-        Some("AscenderPathType") => asc,
-        Some("DescenderPathType") => desc,
-        // BaselinePathType (default) and any unknown value seat the
-        // baseline on the path.
+        Some("CenterTextAlignment" | "CenterPathType") => (top + bottom) * 0.5,
+        Some("AscenderTextAlignment" | "AscenderPathType") => top,
+        Some("DescenderTextAlignment" | "DescenderPathType") => bottom,
+        // Baseline (the default) and any unknown value seat the baseline
+        // on the path.
+        _ => 0.0,
+    }
+}
+
+/// How far `PathAlignment` moves the text off the path's centre line, in
+/// pt, positive downward: InDesign 20.0.1 sets text on the top edge of the
+/// stroke for `TopPathAlignment` and on its bottom edge for
+/// `BottomPathAlignment`, half the stroke weight either way (a 6 pt stroke
+/// put the baseline 3 pt above and 3 pt below the line).
+fn path_alignment_shift_pt(alignment: Option<&str>, stroke_weight: f32) -> f32 {
+    let half = stroke_weight.max(0.0) / 2.0;
+    match alignment {
+        Some("TopPathAlignment") => -half,
+        Some("BottomPathAlignment") => half,
         _ => 0.0,
     }
 }
@@ -512,9 +527,14 @@ fn path_type_baseline_offset_units(alignment: Option<&str>, ascender: i16, desce
 ///     we look up `(x, y, angle)` at the cursor's midpoint. The
 ///     glyph is then emitted with a per-glyph rotated transform
 ///     (Rainbow path effect — the IDML default).
-///   - Honours `PathTypeAlignment` (the glyph's vertical seat on the
-///     path): Baseline / Center / Ascender / Descender via
-///     `path_type_baseline_offset_units`.
+///   - Honours `TextAlignment` (the glyph's vertical seat on the path):
+///     Baseline / Center / Ascender / Descender via
+///     `text_alignment_baseline_offset_units`, and `PathAlignment` (which
+///     edge of the host's stroke the text rides) via
+///     `path_alignment_shift_pt`.
+///   - Places the text along the path as its first paragraph's
+///     justification says: left from `StartBracket` (InDesign's default),
+///     centred, or right against `EndBracket`.
 ///   - Honours the `flip_path_effect` attribute: `Flipped` reverses
 ///     the path direction so text reads from end-to-start.
 ///   - Honours `StartBracket` / `EndBracket`: text flows only within
@@ -527,13 +547,14 @@ fn path_type_baseline_offset_units(alignment: Option<&str>, ascender: i16, desce
 /// `StairStepPathEffect` / `GravityPathEffect` all render as Rainbow
 /// today. Skew/3D-Ribbon look the same as Rainbow on a gentle arch;
 /// Stair-Step and Gravity need a per-glyph projection that lands
-/// later. Horizontal distribution (`Flush`/`Spacing`) beyond centred,
-/// and side/flip options beyond `Flipped`, are also future work.
+/// later. Justified text on a path (spread along it) sets as left for
+/// now, and side/flip options beyond `Flipped` are also future work.
 pub(super) fn emit_text_path_into(
     page: &mut BuiltPage,
     text_path: &TextPath,
     anchors: &[PathAnchor],
     item_transform: Option<[f32; 6]>,
+    stroke_weight: f32,
     document: &Document,
     options: &PipelineOptions,
     palette: &Graphic,
@@ -725,12 +746,31 @@ pub(super) fn emit_text_path_into(
         .clamp(start_b, total_len);
     let usable_len = (end_b - start_b).max(0.0);
 
-    // Center the text within the bracket window when it fits — this
-    // is the centred-flush default. Overflowing text (advance >
+    // Along the path the text sits as its first paragraph's justification
+    // says, like a one-line paragraph: InDesign 20.0.1 starts left-aligned
+    // text (its default) at `StartBracket`. Overflowing text (advance >
     // usable_len) starts at `start_b` and runs off `end_b`; those
     // trailing glyphs are dropped and reported as overset below.
-    let start_offset_pt = if total_advance_pt < usable_len {
-        start_b + ((usable_len - total_advance_pt) * 0.5)
+    let alignment = parsed_story
+        .story
+        .paragraphs
+        .first()
+        .map(|p| {
+            map_justification(
+                document.resolved_paragraph_attrs(p).justification,
+                page.binding_edge(),
+            )
+            .1
+        })
+        .unwrap_or(paged_text::Alignment::Left);
+    let slack = usable_len - total_advance_pt;
+    let start_offset_pt = if slack > 0.0 {
+        match alignment {
+            paged_text::Alignment::Center => start_b + slack * 0.5,
+            paged_text::Alignment::Right => start_b + slack,
+            // Left, and justified text (not spread along a path yet).
+            _ => start_b,
+        }
     } else {
         start_b
     };
@@ -740,10 +780,12 @@ pub(super) fn emit_text_path_into(
     // shape's coordinate system without re-implementing the math.
     let outer = frame_outer_transform(page, item_transform);
 
-    // `PathTypeAlignment` seats the glyph vertically on the path; it's
-    // a single value for the whole TextPath. `Flipped` already mirrors
-    // the path direction; we keep the seat as authored.
-    let path_type = text_path.path_type_alignment.as_deref();
+    // `TextAlignment` seats the glyph vertically on the path, and
+    // `PathAlignment` picks the stroke edge it rides; each is a single
+    // value for the whole TextPath. `Flipped` already mirrors the path
+    // direction; we keep the seat as authored.
+    let text_alignment = text_path.path_type_alignment.as_deref();
+    let path_shift_pt = path_alignment_shift_pt(text_path.path_alignment.as_deref(), stroke_weight);
 
     let mut cursor_pt = start_offset_pt;
     // Count glyphs whose advance carries their baseline-origin past
@@ -779,9 +821,10 @@ pub(super) fn emit_text_path_into(
         let upem = outliner.units_per_em();
         let scale = g.point_size / upem;
         // Vertical seat offset (font units → pt). 0 for Baseline.
+        let bbox = outline.global_bounding_box();
         let seat_units =
-            path_type_baseline_offset_units(path_type, outline.ascender(), outline.descender());
-        let seat_pt = seat_units * scale;
+            text_alignment_baseline_offset_units(text_alignment, bbox.y_max, bbox.y_min);
+        let seat_pt = seat_units * scale + path_shift_pt;
         let Some(path_id) = list_get_or_intern_glyph_outline(
             face_font_ids[g.face_idx],
             g.glyph_id,
@@ -868,36 +911,60 @@ pub(super) fn emit_text_path_into(
 mod tests {
     use super::*;
 
-    // Open Sans-ish metrics: ascender ≈ 2189, descender ≈ -600 in a
-    // 2048-upem face. Exact values don't matter — the relations do.
-    const ASC: i16 = 2189;
-    const DESC: i16 = -600;
+    // Open Sans's bounding box in its 2048-upem face (`head` yMax / yMin),
+    // the metric InDesign seats type on a path by.
+    const TOP: i16 = 2146;
+    const BOTTOM: i16 = -557;
 
     #[test]
-    fn path_type_alignment_offsets() {
-        // Baseline (default) seats the baseline on the path ⇒ 0.
-        assert_eq!(path_type_baseline_offset_units(None, ASC, DESC), 0.0);
+    fn text_alignment_offsets() {
+        // Baseline (the default) seats the baseline on the path ⇒ 0.
+        assert_eq!(text_alignment_baseline_offset_units(None, TOP, BOTTOM), 0.0);
         assert_eq!(
-            path_type_baseline_offset_units(Some("BaselinePathType"), ASC, DESC),
+            text_alignment_baseline_offset_units(Some("BaselineTextAlignment"), TOP, BOTTOM),
             0.0
         );
         // Unknown values fall back to Baseline (no panic, no offset).
         assert_eq!(
-            path_type_baseline_offset_units(Some("WatPathType"), ASC, DESC),
+            text_alignment_baseline_offset_units(Some("WatTextAlignment"), TOP, BOTTOM),
             0.0
         );
-        // Center = signed midpoint of the em box above the baseline.
-        let center = path_type_baseline_offset_units(Some("CenterPathType"), ASC, DESC);
-        assert!((center - (ASC as f32 + DESC as f32) * 0.5).abs() < 1e-3);
-        // Center lifts the glyph (positive ⇒ shifts down in page space
-        // so the box centre, not the baseline, rides the path) and is
-        // strictly between Descender (bottom on path) and Ascender
-        // (top on path).
-        let asc_off = path_type_baseline_offset_units(Some("AscenderPathType"), ASC, DESC);
-        let desc_off = path_type_baseline_offset_units(Some("DescenderPathType"), ASC, DESC);
-        assert_eq!(asc_off, ASC as f32);
-        assert_eq!(desc_off, DESC as f32);
-        assert!(desc_off < center && center < asc_off);
+        // InDesign's spelling and the one older Paged builds wrote agree.
+        for (indesign, legacy) in [
+            ("CenterTextAlignment", "CenterPathType"),
+            ("AscenderTextAlignment", "AscenderPathType"),
+            ("DescenderTextAlignment", "DescenderPathType"),
+        ] {
+            assert_eq!(
+                text_alignment_baseline_offset_units(Some(indesign), TOP, BOTTOM),
+                text_alignment_baseline_offset_units(Some(legacy), TOP, BOTTOM)
+            );
+        }
+        // InDesign 20.0.1, Open Sans 24 pt on a straight line: the baseline
+        // 25.125 pt below the line for Ascender, 6.562 pt above it for
+        // Descender (measured at 1/16 pt).
+        let pt =
+            |a: &str| text_alignment_baseline_offset_units(Some(a), TOP, BOTTOM) * 24.0 / 2048.0;
+        assert!((pt("AscenderTextAlignment") - 25.125).abs() < 0.07);
+        assert!((pt("DescenderTextAlignment") + 6.562).abs() < 0.07);
+        let center = pt("CenterTextAlignment");
+        assert!(pt("DescenderTextAlignment") < center && center < pt("AscenderTextAlignment"));
+    }
+
+    #[test]
+    fn path_alignment_rides_the_stroke_edge() {
+        // InDesign 20.0.1: a 6 pt stroke put the baseline 3 pt above the
+        // line for Top and 3 pt below it for Bottom.
+        assert_eq!(path_alignment_shift_pt(Some("TopPathAlignment"), 6.0), -3.0);
+        assert_eq!(
+            path_alignment_shift_pt(Some("BottomPathAlignment"), 6.0),
+            3.0
+        );
+        assert_eq!(
+            path_alignment_shift_pt(Some("CenterPathAlignment"), 6.0),
+            0.0
+        );
+        assert_eq!(path_alignment_shift_pt(None, 6.0), 0.0);
     }
 
     #[test]

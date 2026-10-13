@@ -711,6 +711,11 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let mut paragraph_text = String::new();
     let mut run_starts = Vec::with_capacity(runs.len());
     let mut run_shapes: Vec<ShapedRun> = Vec::with_capacity(runs.len());
+    // Per run, per glyph: the space tracking and letter spacing add after
+    // the glyph (1/64 pt, already in its advance). InDesign adds neither
+    // after a line's last character, so the breaker and the line
+    // assembly below take it back there.
+    let mut run_spacing: Vec<Vec<i32>> = Vec::with_capacity(runs.len());
     for r in runs {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
@@ -724,8 +729,22 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         if !r.fallback_faces.is_empty() && s.glyphs.iter().any(|g| g.glyph_id == 0) {
             s = shape_with_per_cluster_fallback(r.face, r.fallback_faces, r.text, r.point_size);
         }
+        let natural: Vec<i32> = s.glyphs.iter().map(|g| g.x_advance).collect();
         if let Some(t) = r.tracking {
             apply_tracking(&mut s, t, r.point_size);
+        }
+        // `DesiredLetterSpacing` is a percentage of the run's own space
+        // width (InDesign 20.0.1: 50 at 20 pt Open Sans adds 2.598 pt, half
+        // its 5.195 pt space), added like tracking.
+        if options.compose.letter_spacing_pct != 0.0 {
+            let space = shape_run(r.face, " ", r.point_size).total_advance;
+            let extra = (space as f32 * options.compose.letter_spacing_pct / 100.0).round() as i32;
+            if extra != 0 {
+                for g in s.glyphs.iter_mut() {
+                    g.x_advance += extra;
+                }
+                s.total_advance = s.glyphs.iter().map(|g| g.x_advance).sum();
+            }
         }
         // HorizontalScale folds into the per-glyph x_advance so the
         // breaker sees the requested width directly (P-08). The
@@ -744,6 +763,18 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             }
             s.total_advance = total;
         }
+        let factor = if (hs_pct - 100.0).abs() > 0.05 {
+            hs_pct / 100.0
+        } else {
+            1.0
+        };
+        run_spacing.push(
+            s.glyphs
+                .iter()
+                .zip(&natural)
+                .map(|(g, &n)| g.x_advance - (n as f32 * factor).round() as i32)
+                .collect(),
+        );
         run_shapes.push(s);
     }
 
@@ -767,7 +798,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let mut object_cluster: Option<u32> = None;
     for (run_i, shape) in run_shapes.iter().enumerate() {
         let base = run_starts[run_i] as u32;
-        for g in &shape.glyphs {
+        for (gi, g) in shape.glyphs.iter().enumerate() {
             let cluster = base + g.cluster;
             let object = !options.object_advances.is_empty()
                 && paragraph_text
@@ -798,6 +829,12 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                     g.y_offset
                 },
                 glyph_id: g.glyph_id,
+                // An inline object's advance is its own width, nothing added.
+                spacing: if object_advance.is_some() {
+                    0
+                } else {
+                    run_spacing[run_i].get(gi).copied().unwrap_or(0)
+                },
             });
         }
     }
@@ -985,12 +1022,6 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             seg_start = *offset;
         }
         let final_width = sum_advances_in(&flat, seg_start as u32..w.end as u32);
-        items.push(Item::Box {
-            width: final_width,
-            data: (),
-        });
-        byte_ends.push(w.end);
-        is_hyphen.push(false);
         // A zero-width object (an above-line anchor) stays on the line of
         // the word before it: InDesign hangs it, and the space before
         // it, at the end of a full line rather than breaking ahead of it
@@ -1003,7 +1034,25 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .all(|c| c == OBJECT_REPLACEMENT)
                 && sum_advances_in(&flat, n.start as u32..n.end as u32) == 0
         });
-        if i + 1 < words.len() && !next_is_zero_object {
+        let glue_follows = i + 1 < words.len() && !next_is_zero_object;
+        // The space tracking and letter spacing put after the word's last
+        // character belongs to the gap that follows it: a line that ends
+        // on the word drops it with the gap, and the paragraph's last word
+        // never has it. InDesign 20.0.1 sets a line's last character at its
+        // bare advance (right-aligned lines at +50 letter spacing and at
+        // +100 tracking both end exactly on the measure).
+        let trail = if glue_follows || i + 1 == words.len() {
+            trailing_spacing_in(&flat, w.start as u32..w.end as u32)
+        } else {
+            0
+        };
+        items.push(Item::Box {
+            width: final_width - trail,
+            data: (),
+        });
+        byte_ends.push(w.end);
+        is_hyphen.push(false);
+        if glue_follows {
             // When a ragged zone is active we widen every inter-word
             // glue's stretch to at least `zone` so the breaker can end a
             // line short — by up to the zone — without that line becoming
@@ -1036,7 +1085,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 (space_width, glue_stretch, shrink)
             };
             items.push(Item::Glue {
-                width: gap_width,
+                width: gap_width + trail,
                 stretch: gap_stretch,
                 shrink: gap_shrink,
             });
@@ -1193,6 +1242,19 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             });
             pen_x += fg.x_advance;
             last_run_idx = Some(fg.run_idx);
+        }
+        // The line's last character carries no tracking or letter spacing
+        // (the breaker's `trail` above): its advance gives it back, so a
+        // right-aligned, centred or justified line measures its ink. A
+        // hyphenated line ends on the synthetic hyphen, which has none.
+        if !hyphenated {
+            let trail = trailing_spacing_in(&flat, start as u32..end as u32);
+            if trail != 0 {
+                if let Some(g) = glyphs.last_mut() {
+                    g.x_advance -= trail;
+                }
+                pen_x -= trail;
+            }
         }
         // Append a synthetic hyphen glyph for hyphenated breaks,
         // shaped with the run that owns the line's last glyph. The
@@ -2104,6 +2166,9 @@ struct FlatGlyph {
     x_offset: i32,
     y_offset: i32,
     glyph_id: u32,
+    /// Tracking and letter spacing inside `x_advance` (1/64 pt): the
+    /// space after the glyph, which a line's last character does not get.
+    spacing: i32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2129,6 +2194,25 @@ fn segment_paragraph(text: &str) -> Vec<WordSpan> {
         }
     }
     out
+}
+
+/// The space tracking and letter spacing add after the last character of
+/// `range` (its glyphs, when a mark shares its cluster): what InDesign
+/// leaves off when that character ends a line.
+fn trailing_spacing_in(flat: &[FlatGlyph], range: Range<u32>) -> i32 {
+    let last = flat
+        .iter()
+        .filter(|g| g.cluster >= range.start && g.cluster < range.end)
+        .map(|g| g.cluster)
+        .max();
+    match last {
+        Some(c) => flat
+            .iter()
+            .filter(|g| g.cluster == c)
+            .map(|g| g.spacing)
+            .sum(),
+        None => 0,
+    }
 }
 
 fn sum_advances_in(flat: &[FlatGlyph], range: Range<u32>) -> i32 {
@@ -2293,6 +2377,7 @@ mod tests {
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,
                 desired_space_ratio: 1.0,
+                letter_spacing_pct: 0.0,
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,

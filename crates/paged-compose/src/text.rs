@@ -383,6 +383,7 @@ mod tests {
                 stretch_ratio: 1.0,
                 shrink_ratio: 0.5,
                 desired_space_ratio: 1.0,
+                letter_spacing_pct: 0.0,
                 looseness: 0,
                 hyphenator: None,
                 hyphen_penalty: 50,
