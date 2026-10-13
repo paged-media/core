@@ -64,6 +64,10 @@ pub(super) struct ParaMark {
     frame_idx: usize,
     y_cursor: i32,
     prev_line_height_64: Option<i32>,
+    /// The emitter's exact cursor and leading (`StoryEmitter::y_exact`),
+    /// so a resumed flow continues the same exact sums.
+    y_exact: f64,
+    prev_line_height_exact: Option<f64>,
     numbered_counter: u32,
     prev_was_numbered: bool,
     last_placed_frame: Option<usize>,
@@ -94,6 +98,9 @@ impl ParaMark {
         self.frame_idx == other.frame_idx
             && self.y_cursor == other.y_cursor
             && self.prev_line_height_64 == other.prev_line_height_64
+            && self.y_exact.to_bits() == other.y_exact.to_bits()
+            && self.prev_line_height_exact.map(f64::to_bits)
+                == other.prev_line_height_exact.map(f64::to_bits)
             && self.numbered_counter == other.numbered_counter
             && self.prev_was_numbered == other.prev_was_numbered
             && self.last_placed_frame == other.last_placed_frame
@@ -181,6 +188,8 @@ pub(super) fn mark(
         frame_idx: em.frame_idx,
         y_cursor: em.y_cursor,
         prev_line_height_64: em.prev_line_height_64,
+        y_exact: em.y_exact(),
+        prev_line_height_exact: em.prev_line_height_exact(),
         numbered_counter: em.numbered_counter,
         prev_was_numbered: em.prev_was_numbered,
         last_placed_frame: em.last_placed_frame,
@@ -423,6 +432,8 @@ pub(super) fn splice_prefix(
     em.frame_idx = m.frame_idx;
     em.y_cursor = m.y_cursor;
     em.prev_line_height_64 = m.prev_line_height_64;
+    em.y_cursor_exact = Some(m.y_exact);
+    em.prev_line_height_exact = m.prev_line_height_exact;
     em.numbered_counter = m.numbered_counter;
     em.prev_was_numbered = m.prev_was_numbered;
     em.last_placed_frame = m.last_placed_frame;
@@ -540,6 +551,8 @@ pub(super) fn try_stop(
     em.frame_idx = end.frame_idx;
     em.y_cursor = end.y_cursor;
     em.prev_line_height_64 = end.prev_line_height_64;
+    em.y_cursor_exact = Some(end.y_exact);
+    em.prev_line_height_exact = end.prev_line_height_exact;
     em.numbered_counter = end.numbered_counter;
     em.prev_was_numbered = end.prev_was_numbered;
     em.last_placed_frame = end.last_placed_frame;

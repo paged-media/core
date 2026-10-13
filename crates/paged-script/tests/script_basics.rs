@@ -138,7 +138,7 @@ fn w25_element_and_contour_paths_route_through_paged_set() {
         r#"
             paged.set("textFrame:ua365e1", "elementVisible", false);
             paged.set("textFrame:ua365e1", "elementLocked", true);
-            paged.set("textFrame:ua365e1", "frameTextWrapMode", "ContourTextWrap");
+            paged.set("textFrame:ua365e1", "frameTextWrapMode", "Contour");
             paged.set("textFrame:ua365e1", "frameTextWrapContourType", "DetectEdges");
             paged.set("textFrame:ua365e1", "frameTextWrapContourIncludeInside", true);
         "#,

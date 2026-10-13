@@ -269,6 +269,20 @@ pub(crate) fn transform_bounds(b: paged_model::Bounds, m: Option<[f32; 6]>) -> p
 pub(super) struct WrapShape {
     pub(super) bounds: paged_model::Bounds,
     pub(super) corners: [(f32, f32); 4],
+    pub(super) kind: WrapKind,
+}
+
+/// How text treats a wrap obstacle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum WrapKind {
+    /// Bounding box and contour: lines are narrowed around it.
+    Around,
+    /// `JumpObjectTextWrap`: no line sits beside it; a line whose slug
+    /// meets it moves down a leading at a time until it clears.
+    JumpObject,
+    /// `NextColumnTextWrap`: the line that meets it, and the rest of
+    /// the story, continue in the next column.
+    NextColumn,
 }
 
 impl WrapShape {
@@ -328,7 +342,11 @@ impl WrapShape {
             bottom: max_y,
             right: max_x,
         };
-        Self { bounds, corners }
+        Self {
+            bounds,
+            corners,
+            kind: WrapKind::Around,
+        }
     }
 
     /// Return the polygon's projected x-extent within the horizontal
@@ -439,23 +457,21 @@ pub(super) fn collect_wrap_rects_per_page(
             if !wrap.mode.is_active() {
                 return;
             }
-            // Treat BoundingBoxTextWrap and ContourTextWrap as
-            // bounding-box exclusions. ContourTextWrap with
-            // `ContourType=BoundingBox` (the default that InDesign
-            // emits for plain rectangle hosts) is identical; richer
-            // contour types degrade to their AABB which is still a
-            // useful first-cut. JumpObject / NextColumn keep being
-            // skipped — they need column-level layout we don't yet
-            // model, and approximating them as side-shrink makes
-            // matters worse.
-            if !matches!(
-                wrap.mode,
+            // Bounding box and contour narrow the lines (a contour
+            // degrades to its AABB — the same for a plain rectangle
+            // host, a first cut for richer contour types). Jump object
+            // and next column move lines instead (`WrapKind`).
+            let kind = match wrap.mode {
                 paged_model::TextWrapMode::BoundingBoxTextWrap
-                    | paged_model::TextWrapMode::ContourTextWrap
-            ) {
-                return;
-            }
-            let shape = WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets);
+                | paged_model::TextWrapMode::ContourTextWrap => WrapKind::Around,
+                paged_model::TextWrapMode::JumpObjectTextWrap => WrapKind::JumpObject,
+                paged_model::TextWrapMode::NextColumnTextWrap => WrapKind::NextColumn,
+                _ => return,
+            };
+            let shape = WrapShape {
+                kind,
+                ..WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets)
+            };
             if let Some(local_idx) = route(shape.bounds) {
                 let page_idx = range.start + local_idx;
                 if page_idx < out.len() {

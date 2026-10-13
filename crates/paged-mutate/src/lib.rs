@@ -3968,7 +3968,7 @@ mod tests {
             .apply(Operation::SetProperty {
                 node: NodeId::TextFrame("TextFrame/u1".to_string()),
                 path: PropertyPath::FrameTextWrapMode,
-                value: Value::Text("ContourTextWrap".to_string()),
+                value: Value::Text("Contour".to_string()),
             })
             .expect("apply mode");
 
@@ -7674,22 +7674,27 @@ mod tests {
                     indicator_method: None,
                 },
             );
-            conditions.insert(
-                "Condition/B".to_string(),
-                ConditionDef {
-                    self_id: "Condition/B".to_string(),
-                    name: Some("B".to_string()),
-                    visible: Some(true),
-                    indicator_method: None,
-                },
-            );
+            for id in ["B", "C"] {
+                conditions.insert(
+                    format!("Condition/{id}"),
+                    ConditionDef {
+                        self_id: format!("Condition/{id}"),
+                        name: Some(id.to_string()),
+                        visible: Some(true),
+                        indicator_method: None,
+                    },
+                );
+            }
+            // As InDesign records a set made while A was shown and B
+            // hidden, before C existed: A visible, B hidden, C unlisted.
             let mut sets: BTreeMap<String, ConditionSetDef> = BTreeMap::new();
             sets.insert(
                 "ConditionSet/Print".to_string(),
                 ConditionSetDef {
                     self_id: "ConditionSet/Print".to_string(),
                     name: Some("Print".to_string()),
-                    conditions: vec!["Condition/A".to_string()],
+                    conditions: vec!["Condition/A".to_string(), "Condition/B".to_string()],
+                    hidden: vec!["Condition/B".to_string()],
                 },
             );
             doc.styles.conditions = conditions;
@@ -7724,32 +7729,30 @@ mod tests {
             );
         }
 
+        /// InDesign 20.0.1 (`tools/indesign-export/condition-sets-probe.json`):
+        /// applying a set gives each listed condition its recorded
+        /// visibility (A shown, B hidden although it is listed) and leaves
+        /// an unlisted condition (C) as it was.
         #[test]
-        fn activate_condition_set_round_trips() {
+        fn activate_condition_set_applies_recorded_visibility_and_round_trips() {
             let mut p = Project::new(doc_with_conditions());
+            p.apply(Operation::SetConditionVisible {
+                condition: "Condition/A".to_string(),
+                visible: false,
+            })
+            .expect("hide A");
             p.apply(Operation::ActivateConditionSet {
                 set: "ConditionSet/Print".to_string(),
             })
             .expect("activate set");
-            // Member A visible, non-member B hidden.
-            assert_eq!(
-                p.document().styles.conditions["Condition/A"].visible,
-                Some(true)
-            );
-            assert_eq!(
-                p.document().styles.conditions["Condition/B"].visible,
-                Some(false)
-            );
+            let vis = |p: &Project, id: &str| p.document().styles.conditions[id].visible;
+            assert_eq!(vis(&p, "Condition/A"), Some(true));
+            assert_eq!(vis(&p, "Condition/B"), Some(false));
+            assert_eq!(vis(&p, "Condition/C"), Some(true));
             p.undo().expect("undo");
-            // Restored to the prior (both visible).
-            assert_eq!(
-                p.document().styles.conditions["Condition/A"].visible,
-                Some(true)
-            );
-            assert_eq!(
-                p.document().styles.conditions["Condition/B"].visible,
-                Some(true)
-            );
+            assert_eq!(vis(&p, "Condition/A"), Some(false));
+            assert_eq!(vis(&p, "Condition/B"), Some(true));
+            assert_eq!(vis(&p, "Condition/C"), Some(true));
         }
 
         // ---- MovePage -----------------------------------------------------
