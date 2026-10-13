@@ -1,0 +1,4 @@
+# Faces available on this machine but not redistributable (Adobe
+# fonts InDesign ships with). Copied in for local gate runs only.
+*
+!.gitignore
