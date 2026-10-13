@@ -8083,13 +8083,24 @@ fn emit_paragraph_lines(
         // White / Custom) all stamp the same simple filled circle
         // today; richer glyphs (the actual ・ / ﹅ shapes) are a
         // follow-up.
-        emit_kenten_for_line(
-            &line,
-            paragraph,
-            &resolved_runs,
-            (sx - ox, sy - oy),
-            &mut pages[target_page].list,
-        );
+        //
+        // Kenten and ruby print only under InDesign's Japanese composers
+        // (`HL Composer J` / `HL Single J`): InDesign 20.0.1 set neither
+        // under the Paragraph or World-Ready Composer, same font and text
+        // (tools/indesign-export/cjk-composer-probe).
+        let japanese = resolved_paragraph
+            .composer
+            .as_ref()
+            .is_some_and(paged_model::Composer::is_japanese);
+        if japanese {
+            emit_kenten_for_line(
+                &line,
+                paragraph,
+                &resolved_runs,
+                (sx - ox, sy - oy),
+                &mut pages[target_page].list,
+            );
+        }
 
         // Phase 7 — Ruby annotations. For each run with
         // `ruby_flag = true` and a non-empty `ruby_string`, shape
@@ -8099,7 +8110,7 @@ fn emit_paragraph_lines(
         // collapsed to "group centered" in the MVP — distributing
         // ruby chars per base char (`PerCharacter` mode) requires
         // a more involved layout pass and is queued.
-        if let Some(font) = em.options.font {
+        if let (true, Some(font)) = (japanese, em.options.font) {
             emit_ruby_for_line(
                 &line,
                 paragraph,

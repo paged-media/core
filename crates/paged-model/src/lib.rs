@@ -3781,6 +3781,10 @@ pub enum Composer {
     WorldReadyParagraph,
     /// `"HL Single Optyca"` — the Adobe World-Ready Single-line Composer.
     WorldReadySingleLine,
+    /// `"HL Composer J"` — the Adobe Japanese Paragraph Composer.
+    JapaneseParagraph,
+    /// `"HL Single J"` — the Adobe Japanese Single-line Composer.
+    JapaneseSingleLine,
     /// Any other value, verbatim.
     Other(String),
 }
@@ -3794,6 +3798,8 @@ impl Composer {
             "HL Single" => Self::SingleLine,
             "HL Composer Optyca" => Self::WorldReadyParagraph,
             "HL Single Optyca" => Self::WorldReadySingleLine,
+            "HL Composer J" => Self::JapaneseParagraph,
+            "HL Single J" => Self::JapaneseSingleLine,
             other => Self::Other(other.to_string()),
         }
     }
@@ -3805,6 +3811,8 @@ impl Composer {
             Self::SingleLine => "HL Single",
             Self::WorldReadyParagraph => "HL Composer Optyca",
             Self::WorldReadySingleLine => "HL Single Optyca",
+            Self::JapaneseParagraph => "HL Composer J",
+            Self::JapaneseSingleLine => "HL Single J",
             Self::Other(s) => s,
         }
     }
@@ -3812,7 +3820,18 @@ impl Composer {
     /// Whether this composer sets one line at a time. A composer we do
     /// not know composes as the Paragraph Composer.
     pub fn is_single_line(&self) -> bool {
-        matches!(self, Self::SingleLine | Self::WorldReadySingleLine)
+        matches!(
+            self,
+            Self::SingleLine | Self::WorldReadySingleLine | Self::JapaneseSingleLine
+        )
+    }
+
+    /// Whether this is one of InDesign's Japanese composers. Only they set
+    /// ruby and emphasis marks (kenten): InDesign 20.0.1 prints neither
+    /// under the Paragraph or World-Ready Composer, the same font and
+    /// text otherwise (tools/indesign-export/cjk-composer-probe).
+    pub fn is_japanese(&self) -> bool {
+        matches!(self, Self::JapaneseParagraph | Self::JapaneseSingleLine)
     }
 }
 

@@ -123,3 +123,6 @@ take the InDesign GUI for a few seconds and share the lock
   letter spacing left off a line's last character, superscript and
   subscript shifts, paragraph-rule offsets, and where type on a path sits
   for each text and path alignment (measured from InDesign's PDF).
+- `cjk-composer-probe`: ruby and emphasis marks (kenten) print only under
+  InDesign's Japanese composers (`HL Composer J`, `HL Single J`), never
+  under the Paragraph or World-Ready Composer.
