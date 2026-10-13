@@ -6898,7 +6898,7 @@
           "Normal",
           "AllCaps",
           "SmallCaps",
-          "OTSmallCaps"
+          "CapToSmallCap"
         ],
         "open": true
       },
@@ -9718,7 +9718,7 @@
           "Normal",
           "AllCaps",
           "SmallCaps",
-          "OTSmallCaps"
+          "CapToSmallCap"
         ],
         "open": true
       },
@@ -10087,7 +10087,7 @@
           "Normal",
           "AllCaps",
           "SmallCaps",
-          "OTSmallCaps"
+          "CapToSmallCap"
         ],
         "open": true
       },
