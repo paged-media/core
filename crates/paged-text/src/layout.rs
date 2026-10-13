@@ -1383,10 +1383,21 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             natural_width = snapped.width;
             glyphs = snapped.glyphs;
         }
-        // The Single-line Composer measured each word space at its
-        // DESIRED width (`DesiredWordSpacing`); set it there too, or a
-        // ragged line at 80 % runs its spaces' 20 % past the measure.
-        if single_line.is_some() && space_width != natural_space {
+        // The breaker measured each word space at its DESIRED width
+        // (`DesiredWordSpacing`); set it there too, or a ragged line at
+        // 80 % runs its spaces' 20 % past the measure. InDesign sets a
+        // ragged line's spaces at the desired width under either composer
+        // (20.0.1, spelling-and-spacing-probe `localspacing`: 110 % opens a
+        // left-aligned space by a tenth). A justified line takes its
+        // spaces from its measure instead, so only lines set ragged move.
+        let ragged_line = !matches!(
+            (
+                options.alignment,
+                options.last_line_setting(i == last_break)
+            ),
+            (Alignment::Justify, None | Some(Alignment::Justify))
+        );
+        if (single_line.is_some() || ragged_line) && space_width != natural_space {
             let first = glyphs
                 .iter()
                 .rposition(|g| bytes.get(g.cluster as usize) == Some(&b'\t'))

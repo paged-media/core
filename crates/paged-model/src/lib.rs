@@ -3782,6 +3782,10 @@ pub enum Composer {
     WorldReadyParagraph,
     /// `"HL Single Optyca"` — the Adobe World-Ready Single-line Composer.
     WorldReadySingleLine,
+    /// `"HL Composer J"` — the Adobe Japanese Paragraph Composer.
+    JapaneseParagraph,
+    /// `"HL Single J"` — the Adobe Japanese Single-line Composer.
+    JapaneseSingleLine,
     /// Any other value, verbatim.
     Other(String),
 }
@@ -3795,6 +3799,8 @@ impl Composer {
             "HL Single" => Self::SingleLine,
             "HL Composer Optyca" => Self::WorldReadyParagraph,
             "HL Single Optyca" => Self::WorldReadySingleLine,
+            "HL Composer J" => Self::JapaneseParagraph,
+            "HL Single J" => Self::JapaneseSingleLine,
             other => Self::Other(other.to_string()),
         }
     }
@@ -3806,6 +3812,8 @@ impl Composer {
             Self::SingleLine => "HL Single",
             Self::WorldReadyParagraph => "HL Composer Optyca",
             Self::WorldReadySingleLine => "HL Single Optyca",
+            Self::JapaneseParagraph => "HL Composer J",
+            Self::JapaneseSingleLine => "HL Single J",
             Self::Other(s) => s,
         }
     }
@@ -3813,7 +3821,18 @@ impl Composer {
     /// Whether this composer sets one line at a time. A composer we do
     /// not know composes as the Paragraph Composer.
     pub fn is_single_line(&self) -> bool {
-        matches!(self, Self::SingleLine | Self::WorldReadySingleLine)
+        matches!(
+            self,
+            Self::SingleLine | Self::WorldReadySingleLine | Self::JapaneseSingleLine
+        )
+    }
+
+    /// Whether this is one of InDesign's Japanese composers. Only they set
+    /// ruby and emphasis marks (kenten): InDesign 20.0.1 prints neither
+    /// under the Paragraph or World-Ready Composer, the same font and
+    /// text otherwise (tools/indesign-export/cjk-composer-probe).
+    pub fn is_japanese(&self) -> bool {
+        matches!(self, Self::JapaneseParagraph | Self::JapaneseSingleLine)
     }
 }
 
@@ -5721,6 +5740,24 @@ pub struct Paragraph {
     /// for drop caps. `0` is the default. Stored signed because the
     /// IDML serialisation allows negative values.
     pub drop_cap_detail: i32,
+    /// `Minimum` / `Desired` / `MaximumWordSpacing` set on the range
+    /// itself (percent of the space), over the paragraph style's. `None`
+    /// ⇒ the style's value.
+    pub minimum_word_spacing: Option<f32>,
+    pub desired_word_spacing: Option<f32>,
+    pub maximum_word_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumLetterSpacing` on the range: a
+    /// percentage of the space width (see
+    /// [`ParagraphStyleDef::desired_letter_spacing`]). `None` ⇒ the
+    /// style's value.
+    pub minimum_letter_spacing: Option<f32>,
+    pub desired_letter_spacing: Option<f32>,
+    pub maximum_letter_spacing: Option<f32>,
+    /// `Minimum` / `Desired` / `MaximumGlyphScaling` on the range
+    /// (percent; 100 is the font's width). `None` ⇒ the style's value.
+    pub minimum_glyph_scaling: Option<f32>,
+    pub desired_glyph_scaling: Option<f32>,
+    pub maximum_glyph_scaling: Option<f32>,
     /// `Hyphenation` boolean override on the `<ParagraphStyleRange>`.
     /// `None` ⇒ inherit (IDML default at the bottom of the cascade is
     /// `true`). The composer keys hyphenation off the resolved style
