@@ -32,10 +32,6 @@ pub(super) fn desired_glyph_scale(resolved: &paged_scene::ResolvedParagraphAttrs
 /// own default) when the cascade leaves the field unset; explicit
 /// `Hyphenation="false"` disables it. Word-spacing percentages convert
 /// to the composer's stretch / shrink ratios.
-/// InDesign's factory `HyphenationZone`: what its `[No paragraph style]`
-/// writes in all 60 census templates sampled.
-const DEFAULT_HYPHENATION_ZONE_PT: f32 = 36.0;
-
 pub(super) fn apply_paragraph_compose_options<'a>(
     lopts: &mut paged_text::LayoutOptions<'a>,
     hyphenator: Option<&'a paged_text::Hyphenator>,
@@ -68,14 +64,12 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     // driven purely by geometric fit, as InDesign's justified composer
     // does. W1.3 landed the ragged-only zone gate; this closes the
     // justified case as a documented no-op rather than a behaviour.
-    // A paragraph that states no zone takes InDesign's factory 36 pt, the
-    // value its own root style carries in every census document: without
-    // it a ragged line that ended 1.6 pt short of the margin was
-    // hyphenated, where InDesign keeps the word whole (`preflight`'s
-    // "story", in a frame of any height).
-    let zone_64 = (resolved.hyphenation_zone.unwrap_or(DEFAULT_HYPHENATION_ZONE_PT).max(0.0)
-        * paged_text::shape::ADVANCE_PRECISION)
-        .round() as i32;
+    // A paragraph that states no zone has none: InDesign hyphenates the
+    // `tints` labels' "Ma-genta" as it does at zone 0, not as at 36.
+    let zone_64 = resolved
+        .hyphenation_zone
+        .map(|z| (z.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+        .unwrap_or(0);
     lopts.compose.hyphenation_zone = if lopts.alignment == paged_text::Alignment::Justify {
         0
     } else {

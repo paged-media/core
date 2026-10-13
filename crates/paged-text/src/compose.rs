@@ -848,25 +848,12 @@ pub fn compose_paragraph(
         }
 
         if i + 1 < words.len() {
-            // A zone is a ragged-paragraph feature: it explicitly
-            // permits up to `zone` of whitespace at the end of a line
-            // (rather than hyphenating into it). When a zone is active
-            // we widen every inter-word glue's stretch to at least
-            // `zone` so the breaker can end a line short — by up to the
-            // zone — without that line becoming infeasible (the
-            // internal `threshold ≈ 8.6` ratio cap would otherwise
-            // reject a short ragged line). For ragged text the breaker
-            // ratio is discarded at glyph-emit time (left-flush), so
-            // the extra stretch only changes *where* breaks land, not
-            // the rendered spacing. Paragraphs without a zone (the
-            // default, incl. all justified text) keep the calibrated
-            // stretch untouched.
-            let glue_stretch = if zone > 0 {
+            // The zone gates hyphenation only; it does not widen the
+            // gaps (see `layout_runs`, ADR 141).
+            if zone > 0 {
                 natural_x += natural_space as i64;
-                stretch.max(zone)
-            } else {
-                stretch
-            };
+            }
+            let glue_stretch = stretch;
             push(
                 &mut items,
                 &mut meta,

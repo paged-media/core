@@ -68,7 +68,7 @@ is not written yet.
 | [137](137-object-style-text-frame-options.md) | A text frame takes the options it does not state from its object style | Accepted 2026-10-13 |
 | [138](138-positions-are-exact-sums.md) | A position is the exact sum of the advances before it, rounded once | Accepted 2026-10-13 |
 | [139](139-jump-object-and-next-column-wraps.md) | Jump-object and next-column wraps, and how wrapped lines break | Accepted 2026-10-13 |
-| [141](141-a-line-may-overrun-its-measure-by-a-sliver.md) | A line may overrun its measure by a sliver; an unstated hyphenation zone is 36 pt | Accepted 2026-10-13 |
+| [141](141-a-line-may-overrun-its-measure-by-a-sliver.md) | A line may overrun its measure by a sliver; the hyphenation zone does not widen the gaps | Accepted 2026-10-13 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

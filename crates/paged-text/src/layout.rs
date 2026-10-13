@@ -1033,21 +1033,28 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // its discretionary hyphens, under the same limits and zone —
         // InDesign's rule, see `soft_hyphen_opportunities`.
         let breaks: Vec<usize> = match single_run {
-            Some(_) if zone_allows_hyphenation => {
+            Some(_) => {
                 let word_text = &paragraph_text[w.start..w.end];
                 let is_last_word = i + 1 == words.len();
-                let points = match opts.hyphenator {
-                    Some(h) => {
-                        h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
+                // The zone keeps hyphenation (and discretionary hyphens)
+                // out of a word that starts inside it.
+                let points = if !zone_allows_hyphenation {
+                    Vec::new()
+                } else {
+                    match opts.hyphenator {
+                        Some(h) => {
+                            h.opportunities_for(word_text, &opts.hyphenation_limits, is_last_word)
+                        }
+                        None => crate::hyphenate::soft_hyphen_opportunities(
+                            word_text,
+                            &opts.hyphenation_limits,
+                            is_last_word,
+                        ),
                     }
-                    None => crate::hyphenate::soft_hyphen_opportunities(
-                        word_text,
-                        &opts.hyphenation_limits,
-                        is_last_word,
-                    ),
                 };
                 // A hyphen the word already has is a break too (InDesign
-                // and Word: `two-` / `way`), hyphenation on or off.
+                // and Word: `two-` / `way`), hyphenation on or off and
+                // whatever the zone: breaking there hyphenates nothing.
                 crate::hyphenate::merge_opportunities(
                     points,
                     crate::hyphenate::hard_hyphen_opportunities(word_text),
@@ -1057,7 +1064,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .map(|b| w.start + b)
                 .collect()
             }
-            _ => Vec::new(),
+            None => Vec::new(),
         };
         let hyphen_width = if !breaks.is_empty() {
             let r = &runs[single_run.unwrap()];
@@ -1118,18 +1125,13 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         byte_ends.push(w.end);
         is_hyphen.push(false);
         if glue_follows {
-            // When a ragged zone is active we widen every inter-word
-            // glue's stretch to at least `zone` so the breaker can end a
-            // line short — by up to the zone — without that line becoming
-            // infeasible (the breaker's internal ratio cap would
-            // otherwise reject a short ragged line, degrading to the
-            // P-17 one-box-per-line fallback). For ragged text the
-            // breaker ratio is discarded at glyph-emit (left-flush), so
-            // the extra stretch only changes WHERE breaks land, not the
-            // rendered spacing. Mirrors `compose_paragraph`'s zone glue
-            // widening. Justified paragraphs have `zone == 0` here, so
-            // their calibrated stretch is untouched.
-            let glue_stretch = if zone > 0 { stretch.max(zone) } else { stretch };
+            // The hyphenation zone decides only which words may be
+            // hyphenated (above). It once also widened every gap's stretch
+            // to the zone, which let the breaker prefer short, balanced
+            // ragged lines: 14 + 12 words where InDesign fills 18 + 8
+            // (`inline-objects`), in every document that states its zone —
+            // all of InDesign's do (ADR 141).
+            let glue_stretch = stretch;
             // The gap's glue is as wide as the whitespace actually in it:
             // a double space (or a tab-less run of spaces) is two glyphs
             // wide in the line the reader sees, and a breaker that
