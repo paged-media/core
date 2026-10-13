@@ -640,6 +640,15 @@
       "max_p99_de": 5.0,
       "min_ssim": 0.9932,
       "rationale": "Added 2026-10-12 (ADR 134, R-21 + A-10): OpenType positions and features on runs and on paragraph styles, asked of InDesign 20.0.1 in Inter, EB Garamond and Roboto (pdffonts: all embedded, none substituted). The reference's glyph ids say what InDesign applied: OTSuperscript/OTSubscript/OTNumerator/OTDenominator are sups/subs/numr/dnom at full size on the baseline (subs, not EB Garamond's distinct sinf), Roboto (no sups) prints a plain 2; OTFStylisticAlternate is salt, OTFHistorical hist, OTFSwash swsh; All Caps sets case and cpsp (2.18 pt wider in Inter), typed capitals neither; a paragraph style's Ligatures=false, OTFFigureStyle, OTFStylisticAlternate, OTFHistorical, Position and OTFFraction reach its runs. origin/main's engine scaled and raised the OT positions and read none of the paragraph-style attributes: mean 0.744 / p99 21.105 / SSIM 0.9689. After: 0.133 / 4.168 / 0.9982; sized at worst x 1.20 and SSIM - 0.005. Frames unstroked, as in nested-styles."
+    },
+    {
+      "name": "object-style-frames",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.192,
+      "max_p99_de": 4.1,
+      "min_ssim": 0.9892,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
     }
 ]
 }
