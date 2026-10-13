@@ -51,18 +51,14 @@ pub(super) const MAX_FOOTNOTE_RESERVE_PASSES: usize = 3;
 /// W1.8 — the styled, laid-out form of one footnote's body, shared by
 /// the space-reservation measure and the pool emit so they agree to the
 /// pixel. Each entry is one body paragraph (its reference character
-/// printing the note's number) laid out into the column width through the SAME multi-font `layout_runs` path as body
-/// text. `height_pt` is the stacked line height of all its lines.
+/// printing the note's number) laid out into the column width through
+/// the SAME multi-font `layout_runs` path as body text.
 pub(super) struct ComposedFootnote {
     /// One laid-out paragraph per source footnote paragraph.
     paragraphs: Vec<paged_text::LaidOutParagraph>,
     /// Each paragraph's shaped text (the number printed in place), which
     /// its lines' byte ranges index.
     texts: Vec<String>,
-    /// Per-paragraph height in pt (sum of its line heights).
-    para_heights_pt: Vec<f32>,
-    /// Total height of this footnote in pt (Σ `para_heights_pt`).
-    height_pt: f32,
     /// Outline bytes keyed by the `font_id` carried on each positioned
     /// glyph, so the emit pass can build a [`TtfOutliner`] per font
     /// group (a footnote that mixes faces/weights needs more than one).
@@ -124,8 +120,6 @@ pub(super) fn compose_footnote_paragraphs(
     let label = document.designmap.footnote_options.label(fn_.number);
     let mut paragraphs: Vec<paged_text::LaidOutParagraph> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
-    let mut para_heights_pt: Vec<f32> = Vec::new();
-    let mut total_h_pt = 0.0f32;
     let mut font_outline_bytes: HashMap<u32, Bytes> = HashMap::new();
     let mut resolved_runs_per_para: Vec<Vec<paged_scene::ResolvedRunAttrs>> = Vec::new();
     let mut run_text_lens_per_para: Vec<Vec<usize>> = Vec::new();
@@ -257,14 +251,6 @@ pub(super) fn compose_footnote_paragraphs(
         // `resolved_runs` can move into the returned struct.
         drop(styled_runs);
         texts.push(run_texts.concat());
-        let h: f32 = laid.lines.iter().map(footnote_line_height_pt).sum();
-        let h = if laid.lines.is_empty() {
-            default_size * 1.2
-        } else {
-            h
-        };
-        para_heights_pt.push(h);
-        total_h_pt += h;
         paragraphs.push(laid);
         resolved_runs_per_para.push(resolved_runs);
         run_text_lens_per_para.push(run_text_lens);
@@ -276,20 +262,49 @@ pub(super) fn compose_footnote_paragraphs(
     Some(ComposedFootnote {
         paragraphs,
         texts,
-        para_heights_pt,
-        height_pt: total_h_pt,
         font_outline_bytes,
         resolved_runs_per_para,
         run_text_lens_per_para,
     })
 }
 
-/// W1.8 — total pool height (pt) for one frame's footnote group, laid
-/// out exactly as [`emit_footnote_pools`] draws it: each footnote
-/// composed through [`compose_footnote_paragraphs`], plus the
-/// `space_between` gap between consecutive footnotes and the separator
-/// rule's vertical footprint (offset + weight) when the rule is on.
-/// Summed across the group, this is the band the body text must vacate.
+/// The baselines of a frame's footnote area, top to bottom, measured
+/// from the area's top: `(note, paragraph, line, baseline)`. Asked of
+/// InDesign 20.0.1 (`tools/indesign-export/footnote-pool-probe.jsx` over
+/// the `footnotes` fixture):
+///
+/// * a note's first line sits its first-baseline offset below the
+///   previous note's last baseline plus `SpaceBetween` (the area's top for
+///   the first note). The offset is InDesign's default, the line's
+///   leading; `CAP_HEIGHT` and the other choices are not read yet;
+/// * every further line sits one leading below the one before;
+/// * the separator rule takes no room: neither its offset nor its weight
+///   moves a line.
+fn footnote_area_baselines(
+    composed: &[ComposedFootnote],
+    metrics: &FootnoteMetrics,
+) -> Vec<(usize, usize, usize, f32)> {
+    let mut out = Vec::new();
+    let mut y = 0.0f32;
+    for (fi, c) in composed.iter().enumerate() {
+        if fi > 0 {
+            y += metrics.space_between_pt;
+        }
+        for (p_idx, laid) in c.paragraphs.iter().enumerate() {
+            for (l_idx, line) in laid.lines.iter().enumerate() {
+                y += footnote_line_height_pt(line);
+                out.push((fi, p_idx, l_idx, y));
+            }
+        }
+    }
+    out
+}
+
+/// W1.8 — the height (pt) of one frame's footnote area, laid out exactly
+/// as [`emit_footnote_pools`] draws it: from the area's top to its last
+/// baseline, which InDesign sets on the frame's foot
+/// ([`footnote_area_baselines`]). This, plus `Spacer`, is the band the
+/// body text must vacate.
 pub(super) fn footnote_pool_height_pt(
     group: &[&EmittedFootnote],
     document: &Document,
@@ -300,22 +315,21 @@ pub(super) fn footnote_pool_height_pt(
     if column_width_pt <= 0.0 {
         return 0.0;
     }
-    let mut total_h_pt = metrics.rule_band_pt();
-    for (i, fn_) in group.iter().enumerate() {
-        if let Some(c) = compose_footnote_paragraphs(
-            fn_,
-            document,
-            font_table,
-            column_width_pt,
-            metrics.default_size,
-        ) {
-            total_h_pt += c.height_pt;
-            if i + 1 < group.len() {
-                total_h_pt += metrics.space_between_pt;
-            }
-        }
-    }
-    total_h_pt
+    let composed: Vec<ComposedFootnote> = group
+        .iter()
+        .filter_map(|fn_| {
+            compose_footnote_paragraphs(
+                fn_,
+                document,
+                font_table,
+                column_width_pt,
+                metrics.default_size,
+            )
+        })
+        .collect();
+    footnote_area_baselines(&composed, metrics)
+        .last()
+        .map_or(0.0, |&(.., y)| y)
 }
 
 /// W1.8 — document-level footnote layout metrics, resolved once from the
@@ -342,17 +356,6 @@ pub(super) struct FootnoteRuleSpec {
     width_pt: f32,
     offset_pt: f32,
     paint: Paint,
-}
-
-impl FootnoteMetrics {
-    /// Vertical space the separator rule occupies above the pool: its
-    /// offset plus its stroke weight. Zero when the rule is off.
-    fn rule_band_pt(&self) -> f32 {
-        self.rule
-            .as_ref()
-            .map(|r| r.offset_pt.max(0.0) + r.weight_pt.max(0.0))
-            .unwrap_or(0.0)
-    }
 }
 
 /// W1.8 — resolve the document's `<FootnoteOption>` into the metrics the
@@ -680,55 +683,47 @@ pub(super) fn emit_footnote_pools(
             if composed.is_empty() {
                 continue;
             }
-            // Pool height = Σ footnote heights + (n-1) inter-footnote
-            // gaps + the separator-rule band. Bodies stack so the LAST
-            // footnote's bottom sits at the frame's content bottom.
-            let n = composed.len();
-            let bodies_h: f32 = composed.iter().map(|c| c.height_pt).sum();
-            let gaps_h = metrics.space_between_pt * (n.saturating_sub(1)) as f32;
-            let rule_band = metrics.rule_band_pt();
-            let total_h_pt = bodies_h + gaps_h + rule_band;
+            // The area sits on the frame's foot: its last baseline on the
+            // content bottom. When it is taller than the room under its
+            // references, InDesign keeps as many of its lines as fit and
+            // oversets the rest: the area's top may come no higher than
+            // the lowest reference line's baseline plus `Spacer` (asked of
+            // InDesign 20.0.1, `footnote-pool-probe`: `Spacer` 0, 4 and 12
+            // keep three, two and two lines of the `footnotes` fixture's
+            // too-tall third note, its last line on the frame's foot).
+            let baselines = footnote_area_baselines(&composed, &metrics);
             let frame_bottom_pt = rect.y + rect.h;
-            // Top of the whole pool (rule + bodies): at the frame's foot,
-            // but never above the lowest line holding one of its
-            // references — the room the reservation pass may take too
-            // (`StoryEmitter::footnote_reserve_caps`). A pool taller than
-            // that room starts under the reference line and its lines past
-            // the frame's foot are overset, as InDesign sets the
-            // `footnotes` fixture's too-tall third note (its last lines
-            // are cut at the frame's foot; the body keeps its place).
-            let ref_floor_pt = group
+            let floor_pt = group
                 .iter()
                 .map(|f| f.ref_baseline_pt)
-                .fold(f32::MIN, f32::max);
-            let pool_top_pt = (frame_bottom_pt - total_h_pt).max(ref_floor_pt);
-            // First body row sits below the rule band.
-            let mut cursor_y_pt = pool_top_pt + rule_band;
+                .fold(f32::MIN, f32::max)
+                + metrics.spacer_pt;
+            let kept = (1..=baselines.len())
+                .rev()
+                .find(|&m| frame_bottom_pt - baselines[m - 1].3 >= floor_pt - 0.01)
+                .unwrap_or(1);
+            let area_top_pt = frame_bottom_pt - baselines[kept - 1].3;
 
-            // A pool cut at the frame's foot loses lines: report it so
-            // callers know the render is lossy. Cross-frame continuation
-            // is the documented deferral (see the note on
-            // `EmittedFootnote`). The diagnostic is what the editor / CLI
-            // surfaces for a too-tall footnote.
-            if pool_top_pt + total_h_pt > frame_bottom_pt + 0.5 {
+            // A cut area loses lines: report it so callers know the render
+            // is lossy. Continuing them in the next frame is the
+            // documented deferral (see the note on `EmittedFootnote`).
+            if kept < baselines.len() {
                 page.diagnostics.push(
                     Diagnostic::new(
                         DiagnosticCode::FootnoteOverflow,
-                        "footnote pool is taller than the room below its references; the lines \
-                         past the frame's foot are overset (cross-frame footnote splitting is \
-                         not yet implemented)",
+                        "footnote area is taller than the room below its references; its last \
+                         lines are overset (cross-frame footnote splitting is not yet implemented)",
                     )
                     .with_page(page_idx)
                     .with_story(group[0].host_story_id.clone()),
                 );
             }
 
-            // Draw the separator rule once, above the first footnote.
+            // The separator rule, centred its offset above the area's top
+            // (InDesign 20.0.1: offset 2, weight 1 strokes 236.4–237.4 pt
+            // over an area starting at 238.9 pt).
             if let Some(spec) = metrics.rule.as_ref() {
-                // The rule baseline sits at the bottom of the rule band
-                // (i.e. just above the first body row), inset from the
-                // pool top by the rule offset.
-                let rule_y_pt = pool_top_pt + spec.offset_pt.max(0.0);
+                let rule_y_pt = area_top_pt - spec.offset_pt;
                 let x0 = rect.x + spec.left_indent_pt;
                 let x1 = x0 + spec.width_pt;
                 if spec.width_pt > 0.0 && spec.weight_pt > 0.0 {
@@ -744,7 +739,8 @@ pub(super) fn emit_footnote_pools(
                 }
             }
 
-            // Emit each footnote's glyphs, stacking downward.
+            // Each kept line at its baseline; the rest are overset.
+            let kept = &baselines[..kept];
             for (fi, c) in composed.iter().enumerate() {
                 // Build the per-font outliners for this footnote once.
                 let ttf_faces: HashMap<u32, ttf_parser::Face> = c
@@ -757,6 +753,14 @@ pub(super) fn emit_footnote_pools(
                     })
                     .collect();
                 for (p_idx, laid) in c.paragraphs.iter().enumerate() {
+                    let line_baselines: Vec<f32> = kept
+                        .iter()
+                        .filter(|&&(f, p, ..)| f == fi && p == p_idx)
+                        .map(|&(.., y)| area_top_pt + y)
+                        .collect();
+                    if line_baselines.is_empty() {
+                        continue;
+                    }
                     let picker = build_footnote_paint_picker(
                         &c.resolved_runs_per_para[p_idx],
                         &c.run_text_lens_per_para[p_idx],
@@ -764,7 +768,6 @@ pub(super) fn emit_footnote_pools(
                         color_ctx,
                         default_paint,
                     );
-                    let para_top = cursor_y_pt;
                     // A note's lines are lines of the page too: they
                     // join the break records when those are collected.
                     let host = group[fi].host_story_id.as_str();
@@ -779,12 +782,9 @@ pub(super) fn emit_footnote_pools(
                             .map_or(true, |want| want == host)
                     {
                         let text = &c.texts[p_idx];
-                        for (line_idx, line) in laid.lines.iter().enumerate() {
-                            let baseline = para_top
-                                + line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION;
-                            if baseline > frame_bottom_pt + 0.01 {
-                                break;
-                            }
+                        for (line_idx, (line, &baseline)) in
+                            laid.lines.iter().zip(&line_baselines).enumerate()
+                        {
                             let range = line.byte_range.start.min(text.len())
                                 ..line.byte_range.end.min(text.len());
                             breaks.push(super::BreakRecord {
@@ -806,14 +806,10 @@ pub(super) fn emit_footnote_pools(
                         &ttf_faces,
                         font_table,
                         &picker,
-                        (rect.x, para_top),
-                        frame_bottom_pt,
+                        rect.x,
+                        &line_baselines,
                         &mut page.list,
                     );
-                    cursor_y_pt += c.para_heights_pt[p_idx];
-                }
-                if fi + 1 < composed.len() {
-                    cursor_y_pt += metrics.space_between_pt;
                 }
             }
         }
@@ -823,12 +819,10 @@ pub(super) fn emit_footnote_pools(
 /// W1.8 — emit one laid-out footnote paragraph's glyphs, grouping by
 /// `font_id` so each face/weight uses its own outliner (a footnote that
 /// mixes bold + regular needs more than one). `paint_for` returns the
-/// per-cluster fill. `frame_origin_pt` is the (x, top-y) the line's
-/// glyph positions offset from — `layout_runs` places the first
-/// baseline below the top by the line ascent, matching body text. A line
-/// whose baseline falls below `max_baseline_pt` (the frame's foot) is
+/// per-cluster fill. Each line is drawn on its baseline in
+/// `baselines_pt` (page space, from [`footnote_area_baselines`]), its
+/// glyphs starting at `left_pt`; a line with no baseline there is
 /// overset and not drawn.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_footnote_paragraph(
     laid: &paged_text::LaidOutParagraph,
     ttf_faces: &HashMap<u32, ttf_parser::Face>,
@@ -837,16 +831,17 @@ pub(super) fn emit_footnote_paragraph(
     // text on the page the PDF exporter cannot embed.
     font_table: &FontTable,
     picker: &RunPaintPicker,
-    frame_origin_pt: (f32, f32),
-    max_baseline_pt: f32,
+    left_pt: f32,
+    baselines_pt: &[f32],
     list: &mut DisplayList,
 ) {
-    for line in &laid.lines {
-        if frame_origin_pt.1 + line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION
-            > max_baseline_pt + 0.01
-        {
-            break;
-        }
+    for (line, &baseline_pt) in laid.lines.iter().zip(baselines_pt) {
+        // The glyphs are positioned from the paragraph's top; move that
+        // top so this line's baseline lands where the area puts it.
+        let frame_origin_pt = (
+            left_pt,
+            baseline_pt - line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION,
+        );
         let mut start = 0;
         while start < line.glyphs.len() {
             // Group by (font_id, point_size): `emit_glyph_slice` applies

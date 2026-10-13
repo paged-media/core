@@ -1058,4 +1058,3 @@ fn push_table_segment(
     });
     *current_opens = false;
 }
-

@@ -6629,4 +6629,44 @@ mod anchor_offset_tests {
         p.shift_anchors(1, -5); // [1, 6) removed
         assert_eq!(p.anchored_frame_offsets, vec![0, 1, 3]);
     }
+
+    /// A table's anchor and a footnote's are characters too: an edit
+    /// before them moves them, an edit after them leaves them.
+    #[test]
+    fn table_and_footnote_anchors_follow_their_characters() {
+        let mut p = para(&["before after"], &[]);
+        p.table_anchor = Some(6);
+        p.footnotes.push(Footnote {
+            anchor: Some(12),
+            ..Default::default()
+        });
+        p.shift_anchors(0, 4);
+        assert_eq!(p.table_anchor, Some(10));
+        assert_eq!(p.footnotes[0].anchor, Some(16));
+        p.shift_anchors(12, 2);
+        assert_eq!(p.table_anchor, Some(10));
+        assert_eq!(p.footnotes[0].anchor, Some(18));
+    }
+
+    /// A note's label counts from `StartAt` in its numbering style
+    /// (asked of InDesign 20.0.1, `footnote-references`: `StartAt` 3
+    /// prints 3, 4, 5).
+    #[test]
+    fn footnote_labels_count_from_start_at_in_their_style() {
+        let mut o = FootnoteOptions::default();
+        assert_eq!(o.label(1), "1");
+        o.start_at = Some(3);
+        assert_eq!((o.label(1), o.label(3)), ("3".to_string(), "5".to_string()));
+        o.numbering_style = Some("LowerRoman".into());
+        assert_eq!(o.label(2), "iv");
+        o.numbering_style = Some("Asterisks".into());
+        o.start_at = None;
+        assert_eq!(o.label(3), "***");
+        o.numbering_style = Some("KanjiSomething".into());
+        assert_eq!(
+            o.label(2),
+            "2",
+            "a style the engine does not spell prints Arabic"
+        );
+    }
 }

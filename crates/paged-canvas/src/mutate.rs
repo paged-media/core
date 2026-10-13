@@ -561,7 +561,10 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
 fn take_notes_and_table_from(
     para: &mut paged_model::Paragraph,
     from: u32,
-) -> (Vec<paged_model::Footnote>, Option<(paged_model::Table, u32)>) {
+) -> (
+    Vec<paged_model::Footnote>,
+    Option<(paged_model::Table, u32)>,
+) {
     let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut para.footnotes)
         .into_iter()
         .partition(|f| f.anchor.is_some_and(|a| a >= from));

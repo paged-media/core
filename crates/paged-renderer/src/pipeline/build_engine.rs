@@ -3891,7 +3891,9 @@ pub(super) fn substitute_generated_markers(
 /// k-th marker wherever an edit left its recorded anchor (an undone
 /// deletion re-inserts the marker, not the offset). Otherwise each note
 /// waits at its anchor.
-pub(super) fn queued_footnotes(paragraph: &paged_model::Paragraph) -> Vec<(u32, paged_model::Footnote)> {
+pub(super) fn queued_footnotes(
+    paragraph: &paged_model::Paragraph,
+) -> Vec<(u32, paged_model::Footnote)> {
     let mut notes: Vec<(u32, paged_model::Footnote)> = paragraph
         .footnotes
         .iter()
@@ -5458,7 +5460,11 @@ fn emit_paragraph_lines(
         // The table's line takes its paragraph's alignment (InDesign
         // 20.0.1, `table-inline-text`: centred and right-aligned
         // paragraphs centre and right-align the table).
-        let line_align = match em.document.resolved_paragraph_attrs(paragraph).justification {
+        let line_align = match em
+            .document
+            .resolved_paragraph_attrs(paragraph)
+            .justification
+        {
             Some(paged_model::Justification::CenterAlign) => 0.5,
             Some(paged_model::Justification::RightAlign) => 1.0,
             _ => 0.0,
@@ -6685,7 +6691,9 @@ fn emit_paragraph_lines(
         let dropped = drop_cap_spec_emit.as_ref().map_or(0, |t| t.0 as u32);
         let mut start = 0u32;
         for (i, spans) in generated.spans.iter().enumerate() {
-            let shaped = styled_runs.get(head_run + i).map_or(0, |r| r.text.len() as u32);
+            let shaped = styled_runs
+                .get(head_run + i)
+                .map_or(0, |r| r.text.len() as u32);
             let merged_marker = if i == 0 && marker_run.is_none() {
                 marker_bytes
             } else {

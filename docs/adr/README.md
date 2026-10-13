@@ -62,6 +62,7 @@ is not written yet.
 | [131](131-one-address-grammar-and-selectors.md) | One address grammar for every object, with selectors | Accepted 2026-10-06 |
 | [132](132-typed-property-schemas-and-virtual-paths.md) | Typed property schemas, virtual paths and one `Set { address, path, value }` | Accepted 2026-10-06 |
 | [133](133-locks-and-deletes-follow-indesign.md) | Locks, container deletes and emptied groups follow InDesign | Accepted 2026-10-12 |
+| [136](136-tables-and-footnote-references-are-characters.md) | Tables and footnote references are characters of their line, and the footnote area sits as InDesign sets it | Accepted 2026-10-13 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

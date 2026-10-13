@@ -166,3 +166,57 @@ fn too_tall_footnote_fires_overflow_diagnostic() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Where InDesign 20.0.1 puts the `footnotes` fixture's footnote area
+/// (`tools/indesign-export/footnote-pool-probe.jsx`, case `as-authored`;
+/// page-space baselines from its DOM). The area sits on the frame's foot,
+/// its last kept line on the content bottom (300.472). The too-tall third
+/// note keeps as many lines as fit with the area's top no higher than the
+/// reference line's baseline (222.099) plus `Spacer` 4: the notes' lines
+/// fall at 253.273, 269.673 (`SpaceBetween` 2 plus a 14.4 leading),
+/// 286.073 and 300.472, and the rest are overset. The rule (offset 2,
+/// weight 1) is centred at the area's top minus its offset, and takes no
+/// room.
+#[test]
+fn the_footnote_area_sits_on_the_frame_foot_as_indesign_sets_it() {
+    let sample = paged_gen::samples::footnotes::build();
+    let bytes = paged_gen::write_idml(&sample).unwrap();
+    let document = idml_import::import_idml_doc(&bytes).unwrap();
+    // The faces the gate's `diff.sh` registers, so the body sets as
+    // InDesign set it (its reference line's baseline is the area's floor).
+    let font = read_font("SourceSerif4.ttf");
+    let mut fonts = paged_renderer::BytesResolver::new();
+    fonts.add_font("Open Sans", None, read_font("OpenSans.ttf"));
+    fonts.add_font(
+        "Open Sans",
+        Some("Italic"),
+        read_font("OpenSans-Italic.ttf"),
+    );
+    let opts = PipelineOptions {
+        font: Some(&font),
+        assets: Some(&fonts),
+        collect_breaks: true,
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&document, &opts).unwrap();
+    let notes: Vec<f32> = built
+        .breaks
+        .iter()
+        .filter(|b| b.story_id.contains("#footnote"))
+        .map(|b| b.baseline_y_pt)
+        .collect();
+    let indesign = [253.273, 269.673, 286.073, 300.472];
+    assert_eq!(notes.len(), indesign.len(), "kept note lines: {notes:?}");
+    for (ours, theirs) in notes.iter().zip(indesign) {
+        assert!(
+            (ours - theirs).abs() < 0.15,
+            "note baselines {notes:?}, InDesign {indesign:?}"
+        );
+    }
+    let rule_y = horizontal_strokes(&built.pages[0])
+        .iter()
+        .find(|(x0, x1, _, w)| ((x1 - x0) - 140.0).abs() < 1.0 && (*w - 1.0).abs() < 0.1)
+        .map(|&(_, _, y, _)| y)
+        .expect("separator rule");
+    assert!((rule_y - 236.873).abs() < 0.15, "rule at {rule_y}");
+}
