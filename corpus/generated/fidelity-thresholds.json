@@ -50,10 +50,10 @@
     {
       "name": "annual-base",
       "max_pages_with_pdf": 134,
-      "max_mean_de": 1.147,
-      "max_p99_de": 50.92,
-      "min_ssim": 0.9397,
-      "rationale": "Gated 2026-09-08. 134 pages of the annual's base template; the worst page is 0.969. Cheap insurance on the document the whole campaign is measured against. RE-REFERENCED 2026-10-12 (A-08): the footnote options moved to Resources/Preferences.xml (InDesign had drawn its default 1 pt black 72 pt separator on p35, the fixture's is 0.5 pt vermilion, 62 pt, 4 pt offset); the colour group and the TOC style are now read by InDesign too but print nothing. Only p35 changed: worst page now mean 0.956 / p99 42.435 / ssim 0.9447 (was 0.968 / 43.618 / 0.9448); TIGHTENED (worst * 1.20, ssim worst - 0.005)."
+      "max_mean_de": 0.989,
+      "max_p99_de": 40.02,
+      "min_ssim": 0.95,
+      "rationale": "Gated 2026-09-08. 134 pages of the annual's base template; the worst page is 0.969. Cheap insurance on the document the whole campaign is measured against. RE-REFERENCED 2026-10-12 (A-08): the footnote options moved to Resources/Preferences.xml (InDesign had drawn its default 1 pt black 72 pt separator on p35, the fixture's is 0.5 pt vermilion, 62 pt, 4 pt offset); the colour group and the TOC style are now read by InDesign too but print nothing. Only p35 changed: worst page now mean 0.956 / p99 42.435 / ssim 0.9447 (was 0.968 / 43.618 / 0.9448); TIGHTENED (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`annual-base.fonts.sh`); was 1.036 / 47.42 / 0.9406 with JetBrains Mono, Space Grotesk, Noto Sans JP, EB Garamond and Fraunces drawn in the fallback serif; worst page now 0.824 / 33.35 / 0.955. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
     },
     {
       "name": "conditions",
@@ -191,19 +191,19 @@
       "name": "links-broken",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.52,
-      "max_p99_de": 22.83,
-      "min_ssim": 0.9541,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%."
+      "max_mean_de": 0.287,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9679,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.433 / p99 18.262 / SSIM 0.9621 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-broken.fonts.sh`); was 0.437 / 18.26 / 0.9622 in the fallback serif; now 0.239 / 0 / 0.9729. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
     },
     {
       "name": "links-ok",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.262,
+      "max_mean_de": 0.12,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9752,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%."
+      "min_ssim": 0.9845,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.218 / p99 0.000 / SSIM 0.9832 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`links-ok.fonts.sh`); was 0.22 / 0 / 0.9832 in the fallback serif; now 0.1 / 0 / 0.9895. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
     },
     {
       "name": "markers",
@@ -365,10 +365,10 @@
       "name": "text-autosize",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.568,
+      "max_mean_de": 0.22,
       "max_p99_de": 0.3,
-      "min_ssim": 0.9713,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%."
+      "min_ssim": 0.9887,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.473 / p99 0.000 / SSIM 0.9793 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-autosize.fonts.sh`); was 0.44 / 0 / 0.979 in the fallback serif; now 0.183 / 0 / 0.9937. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
     },
     {
       "name": "text-in-shape",
@@ -396,11 +396,12 @@
     },
     {
       "name": "text-overset",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
-      "max_mean_de": 0.941,
-      "max_p99_de": 42.03,
-      "min_ssim": 0.9485,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%."
+      "max_mean_de": 0.167,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.98,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.784 / p99 33.622 / SSIM 0.9565 across 2 page(s); sized at worst + ~20%. TIGHTENED 2026-10-13 (fonts): the gate now registers the faces InDesign set it in (`text-overset.fonts.sh`); was 0.79 / 33.62 / 0.9564 in the fallback serif, which fit a third line InDesign carries over; now 0.139 / 0 / 0.985. Mean and p99 at worst x 1.20 (p99 floor 0.3), SSIM at worst - 0.005."
     },
     {
       "name": "text-wrap",
@@ -659,6 +660,15 @@
       "max_p99_de": 5.0,
       "min_ssim": 0.9932,
       "rationale": "Added 2026-10-12 (ADR 134, R-21 + A-10): OpenType positions and features on runs and on paragraph styles, asked of InDesign 20.0.1 in Inter, EB Garamond and Roboto (pdffonts: all embedded, none substituted). The reference's glyph ids say what InDesign applied: OTSuperscript/OTSubscript/OTNumerator/OTDenominator are sups/subs/numr/dnom at full size on the baseline (subs, not EB Garamond's distinct sinf), Roboto (no sups) prints a plain 2; OTFStylisticAlternate is salt, OTFHistorical hist, OTFSwash swsh; All Caps sets case and cpsp (2.18 pt wider in Inter), typed capitals neither; a paragraph style's Ligatures=false, OTFFigureStyle, OTFStylisticAlternate, OTFHistorical, Position and OTFFraction reach its runs. origin/main's engine scaled and raised the OT positions and read none of the paragraph-style attributes: mean 0.744 / p99 21.105 / SSIM 0.9689. After: 0.133 / 4.168 / 0.9982; sized at worst x 1.20 and SSIM - 0.005. Frames unstroked, as in nested-styles."
+    },
+    {
+      "name": "object-style-frames",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.192,
+      "max_p99_de": 4.1,
+      "min_ssim": 0.9892,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
     }
 ]
 }

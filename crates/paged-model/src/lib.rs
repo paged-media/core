@@ -4114,7 +4114,106 @@ pub struct ObjectStyleDef {
     /// rect path; the decorative variants currently fall back to
     /// `Rounded` until per-shape parsers land.
     pub corner_option: Option<String>,
+    /// The option categories the style governs (`Enable*`). A category
+    /// switched off is not part of the style: its values, though written,
+    /// reach no item. See [`ObjectStyleCategories`] for an absent flag.
+    #[serde(default, skip_serializing_if = "ObjectStyleCategories::is_unset")]
+    pub enable: ObjectStyleCategories,
+    /// The style's own `<TextFramePreference>`: what a text frame takes
+    /// when it does not state an option itself. InDesign leaves an option
+    /// the style supplies off the frame (asked of InDesign 20.0.1: a frame
+    /// of an object style with vertical justification `CenterAlign` is
+    /// written without `VerticalJustification`), so without it such a frame
+    /// sets top-aligned. These options do not pass down `BasedOn` (ADR 137).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame: Option<TextFrameOptions>,
 }
+
+/// `Enable*` on an `<ObjectStyle>`: whether each option category is part
+/// of the style. InDesign writes every flag. An absent text-frame flag is
+/// off (asked of InDesign 20.0.1: a style without
+/// `EnableTextFrameGeneralOptions` reports the category disabled); the
+/// fill and stroke categories are read as on when absent, the behaviour
+/// the `swatches` fixture's `BasedOn` cascade was measured against.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectStyleCategories {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_and_corner_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_style: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_general_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_baseline_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_frame_auto_sizing_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap_and_others: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchored_object_options: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_fitting_options: Option<bool>,
+}
+
+impl ObjectStyleDef {
+    /// The style's `<TextFramePreference>` values in the categories it
+    /// switches on; nothing for a category off or absent.
+    pub fn own_text_frame_options(&self) -> TextFrameOptions {
+        let Some(tf) = self.text_frame.as_ref() else {
+            return TextFrameOptions::default();
+        };
+        let on = |flag: Option<bool>| flag == Some(true);
+        let mut out = TextFrameOptions::default();
+        if on(self.enable.text_frame_general_options) {
+            out.vertical_justification = tf.vertical_justification;
+            out.inset_spacing = tf.inset_spacing;
+            out.column_count = tf.column_count;
+            out.column_gutter = tf.column_gutter;
+        }
+        if on(self.enable.text_frame_baseline_options) {
+            out.first_baseline_offset = tf.first_baseline_offset;
+            out.minimum_first_baseline_offset = tf.minimum_first_baseline_offset;
+        }
+        if on(self.enable.text_frame_auto_sizing_options) {
+            out.auto_sizing = tf.auto_sizing;
+        }
+        out
+    }
+}
+
+impl ObjectStyleCategories {
+    pub fn is_unset(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The text-frame options an object style sets — the same fields a
+/// [`TextFrame`] carries, each `None` when the style leaves it unset.
+/// Grouped as InDesign's categories group them: general options
+/// (vertical justification, insets, columns), baseline options (first
+/// baseline) and auto-sizing.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextFrameOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_justification: Option<VerticalJustification>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset_spacing: Option<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_gutter: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_baseline_offset: Option<FirstBaselineOffset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_first_baseline_offset: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_sizing: Option<AutoSizingType>,
+}
+
 /// Effective object-level attributes after walking BasedOn.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ResolvedObject {
@@ -4125,6 +4224,9 @@ pub struct ResolvedObject {
     pub stroke_weight: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<String>,
+    /// The text-frame options the applied style supplies: its own
+    /// `<TextFramePreference>`, for the categories it switches on.
+    pub text_frame: TextFrameOptions,
 }
 /// `<CellStyle>` — per-cell defaults for fill, edge strokes, and
 /// vertical justification. Cells can override individual fields
@@ -5052,19 +5154,43 @@ pub struct ResolvedParagraph {
     pub style_lists_settled: [bool; 3],
 }
 impl ResolvedObject {
-    pub fn merge_below(&mut self, def: &ObjectStyleDef) {
-        if self.fill_color.is_none() {
-            self.fill_color = def.fill_color.clone();
+    /// Fill in what `def` sets and the closer styles did not — fill,
+    /// stroke, stroke and corner options — category by category, skipping
+    /// the categories already `closed` (switched off by a closer style) and
+    /// closing the ones `def` switches off.
+    pub fn merge_below(&mut self, def: &ObjectStyleDef, closed: &mut ObjectStyleCategories) {
+        let open = |flag: Option<bool>, slot: &mut Option<bool>| -> bool {
+            if *slot == Some(false) {
+                return false;
+            }
+            if flag == Some(false) {
+                *slot = Some(false);
+                return false;
+            }
+            true
+        };
+        let e = def.enable;
+        if open(e.fill, &mut closed.fill) {
+            if self.fill_color.is_none() {
+                self.fill_color = def.fill_color.clone();
+            }
+            self.fill_tint = self.fill_tint.or(def.fill_tint);
         }
-        self.fill_tint = self.fill_tint.or(def.fill_tint);
-        if self.stroke_color.is_none() {
-            self.stroke_color = def.stroke_color.clone();
+        if open(e.stroke, &mut closed.stroke) {
+            if self.stroke_color.is_none() {
+                self.stroke_color = def.stroke_color.clone();
+            }
+            self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
+            self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
         }
-        self.stroke_tint = self.stroke_tint.or(def.stroke_tint);
-        self.stroke_weight = self.stroke_weight.or(def.stroke_weight);
-        self.corner_radius = self.corner_radius.or(def.corner_radius);
-        if self.corner_option.is_none() {
-            self.corner_option = def.corner_option.clone();
+        if open(
+            e.stroke_and_corner_options,
+            &mut closed.stroke_and_corner_options,
+        ) {
+            self.corner_radius = self.corner_radius.or(def.corner_radius);
+            if self.corner_option.is_none() {
+                self.corner_option = def.corner_option.clone();
+            }
         }
     }
 }
@@ -6573,14 +6699,23 @@ impl StyleSheet {
     /// pattern as `resolve_paragraph` / `resolve_character`.
     pub fn resolve_object(&self, id: &str) -> ResolvedObject {
         let mut acc = ResolvedObject::default();
+        let mut closed = ObjectStyleCategories::default();
         let mut cursor = Some(id.to_string());
         for _ in 0..MAX_BASED_ON_DEPTH {
             let Some(cur_id) = cursor else { break };
             let Some(s) = self.object_styles.get(&cur_id) else {
                 break;
             };
-            acc.merge_below(s);
+            acc.merge_below(s, &mut closed);
             cursor = s.based_on.clone();
+        }
+        // The text-frame options come from the applied style alone: InDesign
+        // does not pass them down `BasedOn` — a style based on one that
+        // centres its text, switching the category on and setting nothing
+        // itself, sets its frames top-aligned (asked of InDesign 20.0.1,
+        // `object-style-frames` case 8).
+        if let Some(s) = self.object_styles.get(id) {
+            acc.text_frame = s.own_text_frame_options();
         }
         acc
     }
@@ -7043,6 +7178,109 @@ pub fn is_page_marker(ch: char) -> bool {
 /// and the footnote reference): what plain-text extractors drop.
 pub fn is_generated_marker(ch: char) -> bool {
     is_page_marker(ch) || ch == FOOTNOTE_REFERENCE_MARKER
+}
+
+#[cfg(test)]
+mod object_style_tests {
+    use super::*;
+
+    fn style(
+        id: &str,
+        based_on: Option<&str>,
+        enable: ObjectStyleCategories,
+        tf: Option<TextFrameOptions>,
+    ) -> ObjectStyleDef {
+        ObjectStyleDef {
+            self_id: id.to_string(),
+            based_on: based_on.map(String::from),
+            enable,
+            text_frame: tf,
+            ..Default::default()
+        }
+    }
+
+    fn centred() -> Option<TextFrameOptions> {
+        Some(TextFrameOptions {
+            vertical_justification: Some(VerticalJustification::Center),
+            first_baseline_offset: Some(FirstBaselineOffset::CapHeight),
+            ..Default::default()
+        })
+    }
+
+    /// The text-frame options come from the applied style alone, in the
+    /// categories it switches on (asked of InDesign 20.0.1,
+    /// `object-style-frames`): a style based on a centring one, with the
+    /// category on and nothing of its own, sets top-aligned; an absent flag
+    /// is off.
+    #[test]
+    fn text_frame_options_come_from_the_applied_style_alone() {
+        let on = ObjectStyleCategories {
+            text_frame_general_options: Some(true),
+            ..Default::default()
+        };
+        let mut sheet = StyleSheet::default();
+        for s in [
+            style("ObjectStyle/Center", None, on, centred()),
+            style("ObjectStyle/Child", Some("ObjectStyle/Center"), on, None),
+            style(
+                "ObjectStyle/Absent",
+                None,
+                ObjectStyleCategories::default(),
+                centred(),
+            ),
+        ] {
+            sheet.object_styles.insert(s.self_id.clone(), s);
+        }
+        let tf = |id: &str| sheet.resolve_object(id).text_frame;
+        assert_eq!(
+            tf("ObjectStyle/Center").vertical_justification,
+            Some(VerticalJustification::Center)
+        );
+        // Baseline options are a category of their own, and it is not on.
+        assert_eq!(tf("ObjectStyle/Center").first_baseline_offset, None);
+        assert_eq!(tf("ObjectStyle/Child").vertical_justification, None);
+        assert_eq!(tf("ObjectStyle/Absent").vertical_justification, None);
+    }
+
+    /// Fill keeps passing down `BasedOn`, but stops at a style that
+    /// switches the category off.
+    #[test]
+    fn a_switched_off_fill_stops_the_cascade() {
+        let mut sheet = StyleSheet::default();
+        let mut base = style(
+            "ObjectStyle/Base",
+            None,
+            ObjectStyleCategories::default(),
+            None,
+        );
+        base.fill_color = Some("Color/Red".into());
+        let derived = style(
+            "ObjectStyle/Derived",
+            Some("ObjectStyle/Base"),
+            ObjectStyleCategories::default(),
+            None,
+        );
+        let off = style(
+            "ObjectStyle/Off",
+            Some("ObjectStyle/Base"),
+            ObjectStyleCategories {
+                fill: Some(false),
+                ..Default::default()
+            },
+            None,
+        );
+        for s in [base, derived, off] {
+            sheet.object_styles.insert(s.self_id.clone(), s);
+        }
+        assert_eq!(
+            sheet
+                .resolve_object("ObjectStyle/Derived")
+                .fill_color
+                .as_deref(),
+            Some("Color/Red")
+        );
+        assert_eq!(sheet.resolve_object("ObjectStyle/Off").fill_color, None);
+    }
 }
 
 #[cfg(test)]

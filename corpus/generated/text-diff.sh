@@ -166,7 +166,12 @@ def unhyphen(t):
     return t[:-1] if t.endswith("-") else t
 
 problems = []
-for page in sorted(set(R) | set(C)):
+# Only the pages the reference has: a sample that grew after its reference
+# was exported has pages InDesign never set, which the pixel gate skips
+# too (`max_pages_with_pdf`). They are counted, not compared.
+compared = sorted(p for p in set(R) | set(C) if p < len(pages))
+beyond = sorted(p for p in set(C) if p >= len(pages))
+for page in compared:
     rr, cc = R.get(page, []), C.get(page, [])
     rc, ccnt = chars(rr), chars(cc)
     problem = {}
@@ -183,7 +188,7 @@ for page in sorted(set(R) | set(C)):
         problem["page"] = page + 1
         problems.append(problem)
 result = {"fixture": name, "mode": mode, "passed": not problems,
-          "pages_compared": len(set(R) | set(C)),
+          "pages_compared": len(compared), "pages_beyond_reference": len(beyond),
           "lines_indesign": len(ref), "lines_paged": len(cand), "problems": problems}
 json.dump(result, open(out_path, "w"), indent=2)
 if problems:
@@ -191,7 +196,8 @@ if problems:
     for p in problems[:6]:
         print(f"  page {p['page']}: " + json.dumps({k: v for k, v in p.items() if k != 'page'}, ensure_ascii=False)[:300])
     sys.exit(1)
-print(f"[{name}] text ok ({len(ref)} lines, {result['pages_compared']} pages)")
+extra = f"; {len(beyond)} page(s) past the reference not compared" if beyond else ""
+print(f"[{name}] text ok ({len(ref)} lines, {result['pages_compared']} pages{extra})")
 PY
     rc=$?
     set -e

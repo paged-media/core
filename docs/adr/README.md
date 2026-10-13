@@ -65,6 +65,7 @@ is not written yet.
 | [134](134-nested-styles-and-opentype-as-indesign-sets-them.md) | Nested styles and OpenType features as InDesign sets them | Accepted 2026-10-12 |
 | [135](135-transparency-targets-and-effect-attributes.md) | Transparency per target, group isolation and knockout, and the effect attributes InDesign writes | Accepted 2026-10-13 |
 | [136](136-tables-and-footnote-references-are-characters.md) | Tables and footnote references are characters of their line, and the footnote area sits as InDesign sets it | Accepted 2026-10-13 |
+| [137](137-object-style-text-frame-options.md) | A text frame takes the options it does not state from its object style | Accepted 2026-10-13 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
