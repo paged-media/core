@@ -298,8 +298,8 @@
       "max_mean_de": 0.661,
       "max_p99_de": 14.73,
       "min_ssim": 0.9672,
-      "max_ink_mean_de": 68.18,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 56.816 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.551 / p99 12.273 / ssim 0.9722 (thresholds were 0.942 / 41.26 / 0.9536); re-sized by the rule above."
+      "max_ink_mean_de": 54.28,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.785 / p99 33.011 / SSIM 0.9616 across 1 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 56.816 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.551 / p99 12.273 / ssim 0.9722 (thresholds were 0.942 / 41.26 / 0.9536); re-sized by the rule above. INK TIGHTENED 2026-10-13: the ink budget was sized on a worktree without corpus/fonts/local/MyriadPro-Regular.otf (preflight.fonts.sh's substitute for the missing family), where the page reads mean 0.780 / ink 56.8; with it, as the tightened page budgets above assume, the page reads 0.551 / 12.27 / 0.9722 and ink 45.23, so the ink budget is re-sized at worst + 20%."
     },
     {
       "name": "showcase-base",
