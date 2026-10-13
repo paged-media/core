@@ -217,10 +217,10 @@ mod tests {
     fn kerning_method_id_none_is_off() {
         let otf = paged_model::OtfFeatures::default();
         for spelling in ["None", "$ID/None"] {
-            let f = shaping_features_from(None, Some(spelling), &otf, None);
+            let f = shaping_features_from(None, Some(spelling), &otf, None, None);
             assert_eq!(f.kerning, paged_text::KerningMethod::Off, "{spelling}");
         }
-        let f = shaping_features_from(None, Some("$ID/Optical"), &otf, None);
+        let f = shaping_features_from(None, Some("$ID/Optical"), &otf, None, None);
         assert_eq!(f.kerning, paged_text::KerningMethod::Optical);
     }
 
