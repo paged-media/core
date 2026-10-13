@@ -2825,7 +2825,12 @@ const GLYPH_SCALE_80_IP: [f32; 14] = [
 
 /// Each glyph's x and horizontal scale (its outline's x scale over its
 /// y scale) on a line of 20 pt Open Sans.
-fn open_sans_line(style_attrs: &str, char_attrs: &str, text: &str) -> Vec<(f32, f32)> {
+fn open_sans_line(
+    style_attrs: &str,
+    para_attrs: &str,
+    char_attrs: &str,
+    text: &str,
+) -> Vec<(f32, f32)> {
     let mut resolver = BytesResolver::new();
     resolver.add_font("Open Sans", None, read_font("OpenSans.ttf"));
     let opts = PipelineOptions {
@@ -2833,7 +2838,7 @@ fn open_sans_line(style_attrs: &str, char_attrs: &str, text: &str) -> Vec<(f32, 
         ..PipelineOptions::default()
     };
     let face = r#"AppliedFont="Open Sans" PointSize="20""#;
-    let idml = build_spacing_idml(face, style_attrs, "", char_attrs, text);
+    let idml = build_spacing_idml(face, style_attrs, para_attrs, char_attrs, text);
     let doc = idml_import::import_idml_doc(&idml).unwrap();
     let built = pipeline::build_document(&doc, &opts).unwrap();
     built.pages[0]
@@ -2867,20 +2872,35 @@ fn assert_matches_indesign(glyphs: &[(f32, f32)], ip: &[f32; 14], scale: f32) {
     }
 }
 
+/// The probe's `localspacing` values, as InDesign writes them.
+const LOCAL_SPACING: &str = concat!(
+    r#"MinimumWordSpacing="70" DesiredWordSpacing="110" MaximumWordSpacing="150" "#,
+    r#"MinimumLetterSpacing="-10" DesiredLetterSpacing="10" MaximumLetterSpacing="30" "#,
+    r#"MinimumGlyphScaling="95" DesiredGlyphScaling="105" MaximumGlyphScaling="110""#,
+);
+
+#[test]
+fn spacing_set_on_the_paragraph_itself_beats_its_style() {
+    // InDesign wrote the probe's spacing on the <ParagraphStyleRange>, the
+    // paragraph setting it itself; the style below asks for other values.
+    let style = concat!(
+        r#"MinimumLetterSpacing="0" DesiredLetterSpacing="50" MaximumLetterSpacing="50" "#,
+        r#"MinimumGlyphScaling="80" DesiredGlyphScaling="80" MaximumGlyphScaling="80""#,
+    );
+    let glyphs = open_sans_line(style, LOCAL_SPACING, "", "Local spacing");
+    assert_matches_indesign(&glyphs, &LOCAL_SPACING_IP, 1.05);
+}
+
 #[test]
 fn desired_glyph_scaling_scales_every_glyph_as_indesign_does() {
-    let spacing = concat!(
-        r#"MinimumWordSpacing="70" DesiredWordSpacing="110" MaximumWordSpacing="150" "#,
-        r#"MinimumLetterSpacing="-10" DesiredLetterSpacing="10" MaximumLetterSpacing="30" "#,
-        r#"MinimumGlyphScaling="95" DesiredGlyphScaling="105" MaximumGlyphScaling="110""#,
-    );
-    let glyphs = open_sans_line(spacing, "", "Local spacing");
+    // The same values on a paragraph style, as most documents carry them.
+    let glyphs = open_sans_line(LOCAL_SPACING, "", "", "Local spacing");
     assert_matches_indesign(&glyphs, &LOCAL_SPACING_IP, 1.05);
 }
 
 #[test]
 fn glyph_scaling_multiplies_a_runs_horizontal_scale() {
     let scaling = r#"MinimumGlyphScaling="95" DesiredGlyphScaling="105" MaximumGlyphScaling="110""#;
-    let glyphs = open_sans_line(scaling, r#"HorizontalScale="80""#, "Local spacing");
+    let glyphs = open_sans_line(scaling, "", r#"HorizontalScale="80""#, "Local spacing");
     assert_matches_indesign(&glyphs, &GLYPH_SCALE_80_IP, 0.84);
 }
