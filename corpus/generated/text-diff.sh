@@ -134,6 +134,10 @@ def squeeze(s):
 # footnote numbers, variables) print on both sides and stay.
 cand = []
 markers = {}
+# Per page, the characters of one copy of each leader the engine drew: a
+# leader's copy count turns on a sub-point gap, so the two sides may set
+# one copy more or fewer per leader (macOS and Linux builds have).
+leader_slack = {}
 for l in open(cand_path, encoding="utf-8"):
     r = json.loads(l)
     raw = r.get("source_text", "").encode("utf-8")
@@ -148,7 +152,11 @@ for l in open(cand_path, encoding="utf-8"):
                 markers.setdefault(r["page_idx"], Counter())[m] += 1
             out.append(" ")
         else:
-            out.append(" " + g.get("text", "") + " ")
+            drawn = g.get("text", "")
+            out.append(" " + drawn + " ")
+            unit = Counter(ch for ch in set(drawn) if not ch.isspace())
+            if unit:
+                leader_slack.setdefault(r["page_idx"], Counter()).update(unit)
         at = g["end"]
     out.append(raw[at:].decode("utf-8", "replace"))
     text = norm("".join(out))
@@ -223,6 +231,7 @@ def unhyphen(t):
     return t[:-1] if t.endswith("-") else t
 
 problems = []
+leader_notes = []
 # Only the pages the reference has: a sample that grew after its reference
 # was exported has pages InDesign never set, which the pixel gate skips
 # too (`max_pages_with_pdf`). They are counted, not compared.
@@ -232,6 +241,12 @@ for page in compared:
     rr, cc = R.get(page, []), C.get(page, [])
     rc, ccnt = chars(rr), chars(cc)
     problem = {}
+    slack = leader_slack.get(page, Counter())
+    if rc != ccnt and slack:
+        off = (rc - ccnt) + (ccnt - rc)
+        if all(slack[ch] >= n for ch, n in off.items()):
+            leader_notes.append({"page": page + 1, "leader_copies": dict(off)})
+            rc = ccnt
     if rc != ccnt:
         problem["indesign_only"] = "".join(sorted((rc - ccnt).elements()))[:120]
         problem["paged_only"] = "".join(sorted((ccnt - rc).elements()))[:120]
@@ -252,7 +267,7 @@ notes = [{"page": p + 1, "markers_paged_only": sorted(unmatched[p].elements())[:
 result = {"fixture": name, "mode": mode, "passed": not problems,
           "pages_compared": len(compared), "pages_beyond_reference": len(beyond),
           "lines_indesign": len(ref), "lines_paged": len(cand), "problems": problems,
-          "notes": notes}
+          "notes": notes, "leader_notes": leader_notes}
 json.dump(result, open(out_path, "w"), indent=2)
 if problems:
     print(f"[{name}] TEXT MISMATCH ({mode}) on {len(problems)} page(s)")
@@ -264,6 +279,9 @@ print(f"[{name}] text ok ({len(ref)} lines, {result['pages_compared']} pages{ext
 for n in notes:
     print(f"  note, page {n['page']}: list marker(s) InDesign does not print: "
           + " ".join(n["markers_paged_only"]))
+for n in leader_notes:
+    print(f"  note, page {n['page']}: leader copies differ (one per leader at most): "
+          + json.dumps(n["leader_copies"], ensure_ascii=False))
 PY
     rc=$?
     set -e
