@@ -2718,6 +2718,46 @@ pub struct ColorGroupEntry {
     pub members: Vec<String>,
 }
 
+/// `<Ink>` in `Resources/Graphic.xml` — one printing ink of the document's
+/// separations: the four process inks every InDesign document carries,
+/// and one per spot ink. Kept for round-trip and for separation output;
+/// the renderer does not read it. Every attribute is `None` when the
+/// element does not carry it.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InkDef {
+    /// `Self` — `Ink/$ID/Process Cyan`, or `Ink/<spot name>`.
+    pub self_id: String,
+    /// `Name` — `$ID/Process Cyan`, or the spot ink's name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `Angle` — the screen angle in degrees.
+    #[serde(default)]
+    pub angle: Option<f32>,
+    /// `Frequency` — the screen frequency in lines per inch.
+    #[serde(default)]
+    pub frequency: Option<f32>,
+    /// `NeutralDensity` — the ink's neutral density (trapping uses it).
+    #[serde(default)]
+    pub neutral_density: Option<f32>,
+    /// `ConvertToProcess` — a spot ink separated as process.
+    #[serde(default)]
+    pub convert_to_process: Option<bool>,
+    /// `PrintInk` — whether the ink prints a plate.
+    #[serde(default)]
+    pub print_ink: Option<bool>,
+    /// `TrapOrder` — the ink's position in the trapping sequence.
+    #[serde(default)]
+    pub trap_order: Option<i32>,
+    /// `InkType` — the ink's trapping type, as InDesign spells it
+    /// (`Normal` in every census document).
+    #[serde(default)]
+    pub ink_type: Option<String>,
+    /// `AliasInkName` — the ink this one separates onto (Ink Manager's
+    /// ink alias).
+    #[serde(default)]
+    pub alias_ink_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorEntry {
     pub self_id: String,
@@ -3520,7 +3560,7 @@ pub struct ColorSettings {
 /// bleed spells "…InsideOrLeft/…OutsideOrRight" while slug flips the
 /// word order to "SlugRightOrOutsideOffset" — that's faithful to the
 /// spec, not a typo.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentPreference {
     pub bleed_top: f32,
     pub bleed_bottom: f32,
@@ -3530,6 +3570,22 @@ pub struct DocumentPreference {
     pub slug_bottom: f32,
     pub slug_inside_or_left: f32,
     pub slug_right_or_outside: f32,
+    /// `PageWidth` — the document's page width in points (File ▸
+    /// Document Setup). Each page carries its own bounds; this is the
+    /// size new pages take. `None` when the attribute is absent.
+    #[serde(default)]
+    pub page_width: Option<f32>,
+    /// `PageHeight` — the document's page height in points.
+    #[serde(default)]
+    pub page_height: Option<f32>,
+    /// `FacingPages` — whether pages are laid out in left/right pairs.
+    /// InDesign assumes `true` when the element is absent.
+    #[serde(default)]
+    pub facing_pages: Option<bool>,
+    /// `PageBinding` — `LeftToRight` or `RightToLeft`, as InDesign spells
+    /// it: which side of a spread the first page binds on.
+    #[serde(default)]
+    pub page_binding: Option<String>,
 }
 
 /// `<GridPreference>` — the document's baseline-grid + document-grid
@@ -6610,6 +6666,10 @@ pub struct Graphic {
     /// ("Brand colours", "UI accents"). Empty when the document
     /// declares no groups (the renderer doesn't branch on them).
     pub color_groups: BTreeMap<String, ColorGroupEntry>,
+    /// The `<Ink>` entries, in document order (InDesign's order is the
+    /// Ink Manager's: the process inks, then the spot inks).
+    #[serde(default)]
+    pub inks: Vec<InkDef>,
 }
 
 impl Graphic {
@@ -7024,6 +7084,13 @@ pub struct Story {
     /// does not yet honour this — see docs/plan.md Tier 4 — CJK
     /// Stage 3.
     pub story_direction: Option<StoryDirection>,
+    /// `<Story AppliedTOCStyle="TOCStyle/…">` — the table-of-contents
+    /// style the story was generated with. InDesign writes the attribute
+    /// on every `<Story>`, `"n"` (none) on an ordinary one, which reads as
+    /// `None`. [`TextFrame::applied_toc_style`] is the engine's older
+    /// spelling of the same binding.
+    #[serde(default)]
+    pub applied_toc_style: Option<String>,
     /// thoughts ADR 026 — the story's frame chain GROWS: when the story
     /// oversets its last frame, the renderer appends generated pages (and
     /// removes generated pages that end up empty). `None` = a fixed chain,
