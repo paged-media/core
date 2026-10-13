@@ -3940,21 +3940,28 @@ pub struct ConditionDef {
     /// renderer ignores indicators today; captured for round-trip.
     pub indicator_method: Option<String>,
 }
-/// SDK Phase 5 (v1 sweep) — IDML `<ConditionSet>`. Each entry is a
-/// named grouping of `Condition` self_ids that the editor's
-/// Conditions panel can toggle as a unit. The renderer doesn't
-/// branch on this today (visibility resolution walks individual
-/// conditions); kept for round-trip + a future "show only this
-/// set" affordance.
+/// IDML `<ConditionSet>`: a recorded visibility for each condition
+/// the document had when the set was made. InDesign writes one
+/// `<VisibilityPair Condition=… Visibility=…>` per condition; applying
+/// the set gives each listed condition its recorded visibility and
+/// leaves a condition the set does not list as it was (asked of
+/// InDesign 20.0.1, `tools/indesign-export/condition-sets-probe.json`).
+/// The renderer doesn't branch on a set: visibility resolution walks the
+/// individual conditions.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionSetDef {
     pub self_id: String,
     pub name: Option<String>,
-    /// IDML `Conditions` attribute — space-separated list of
-    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for
-    /// IDs in the special namespace). Stored as-parsed; the
-    /// editor de-dupes for display.
+    /// The listed conditions, in document order, as
+    /// `Condition/<self_id>` refs (or `Condition/$ID/...` for IDs in
+    /// the special namespace). Stored as-parsed; the editor de-dupes
+    /// for display.
     pub conditions: Vec<String>,
+    /// The listed conditions whose recorded visibility is hidden
+    /// (`Visibility="false"`); every other entry of `conditions` is
+    /// recorded visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
 }
 /// W1.22 (engine gap 22) — IDML `<NumberingList>` resource. A named
 /// list definition. Paragraphs reference one via
