@@ -2379,7 +2379,8 @@ impl TextWrapMode {
         match self {
             Self::None => "None",
             Self::BoundingBoxTextWrap => "BoundingBoxTextWrap",
-            Self::ContourTextWrap => "ContourTextWrap",
+            // InDesign's value; it opens `ContourTextWrap` as no wrap.
+            Self::ContourTextWrap => "Contour",
             Self::JumpObjectTextWrap => "JumpObjectTextWrap",
             Self::NextColumnTextWrap => "NextColumnTextWrap",
             Self::Other => "None",

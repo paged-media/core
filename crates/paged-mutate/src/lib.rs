@@ -3968,7 +3968,7 @@ mod tests {
             .apply(Operation::SetProperty {
                 node: NodeId::TextFrame("TextFrame/u1".to_string()),
                 path: PropertyPath::FrameTextWrapMode,
-                value: Value::Text("ContourTextWrap".to_string()),
+                value: Value::Text("Contour".to_string()),
             })
             .expect("apply mode");
 
