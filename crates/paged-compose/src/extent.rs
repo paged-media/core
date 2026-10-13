@@ -770,6 +770,8 @@ mod tests {
             bounds,
             blend_mode: BlendMode::Multiply,
             opacity: 0.5,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         }
     }
@@ -811,6 +813,9 @@ mod tests {
                 blur_radius: 6.0,
                 color: Color::BLACK,
                 opacity: 0.75,
+                blend_mode: crate::BlendMode::Normal,
+                spread: 0.0,
+                noise: 0.0,
             },
         });
         list.commands

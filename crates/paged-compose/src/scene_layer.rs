@@ -814,6 +814,9 @@ pub fn emit_scene_layer<T>(
                         blur_radius: (*blur_radius).max(0.0),
                         color,
                         opacity: a.clamp(0.0, 1.0),
+                        blend_mode: crate::BlendMode::Normal,
+                        spread: 0.0,
+                        noise: 0.0,
                     },
                 });
             }

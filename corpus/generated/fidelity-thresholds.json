@@ -608,6 +608,24 @@
       "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-06: a table is a character of its paragraph on a line of its own; text before and after it stays one paragraph, its alignment places the table; a paragraph mark before the table makes two). Worst page mean 0.986 / p99 50.17 / SSIM 0.9524: every case composes as InDesign's, and the residue is one-to-two-point offsets of the lines around each table. Mean and p99 at worst x 1.20, SSIM at worst - 0.005."
     },
     {
+      "name": "transparency-targets",
+      "text_gate": true,
+      "max_pages_with_pdf": 4,
+      "max_mean_de": 0.371,
+      "max_p99_de": 5.34,
+      "min_ssim": 0.9844,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-10: fill, stroke and content targets at 50 % in Normal, Multiply and Screen; a drop shadow per target; graphic lines; isolate x knockout groups). Worst page mean 0.309 / p99 4.45 / SSIM 0.9894; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+    },
+    {
+      "name": "effects-attrs",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 1.061,
+      "max_p99_de": 25.15,
+      "min_ssim": 0.9778,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-11: shadow blend, spread, noise, knockout, global light; glow technique; bevel blend modes; radial feather highlight; directional feather follow-shape). Worst page mean 0.884 / p99 20.96 / SSIM 0.9828. The residue is page 2: the bevels' Smooth shading (ours mitres the corners), the Precise glow edge, and cases 26-27, whose highlight moves the radial shading's focal point, which is not drawn yet. Sized at worst x 1.20 / worst - 0.005; tighten as those land."
+    },
+    {
       "name": "justification",
       "max_pages_with_pdf": 3,
       "max_mean_de": 0.52,

@@ -991,6 +991,28 @@ mod tests {
             "ItemTransform",
             &["frameTransform", "group:groupTransform"],
         ),
+        // R-10: one `<BlendingSetting>` per transparency target — the
+        // object's, and under `<Fill|Stroke|ContentTransparencySetting>`.
+        (
+            "BlendingSetting",
+            "Opacity",
+            &[
+                "frameOpacity",
+                "frameFillOpacity",
+                "frameStrokeOpacity",
+                "frameContentOpacity",
+            ],
+        ),
+        (
+            "BlendingSetting",
+            "BlendMode",
+            &[
+                "frameBlendMode",
+                "frameFillBlendMode",
+                "frameStrokeBlendMode",
+                "frameContentBlendMode",
+            ],
+        ),
     ];
 
     fn well_formed(name: &str) -> bool {

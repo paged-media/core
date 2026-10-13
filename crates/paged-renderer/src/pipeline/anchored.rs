@@ -883,6 +883,11 @@ fn emit_anchored_rect_via_pipeline(
         stroke_weight: af.stroke_weight,
         drop_shadow: None,
         stroke_drop_shadow: None,
+        fill_transparency: None,
+        stroke_transparency: None,
+        content_transparency: None,
+        fill_drop_shadow: None,
+        content_drop_shadow: None,
         // Image emission for anchored Rectangles is deferred — the
         // per-page image cache lives in the pre-pass scope, outside
         // StoryEmitter. The parser still surfaces image_link /
@@ -937,6 +942,8 @@ fn emit_anchored_rect_via_pipeline(
         subpath_open: Vec::new(),
     };
     // `emit_rectangle_into` increments `page.stats.frames` internally.
+    // An anchored frame's picture paints in its own pass (see
+    // `emit_anchored_rect_image`).
     emit_rectangle_into(
         &mut pages[target_page],
         &synthetic,
@@ -945,6 +952,7 @@ fn emit_anchored_rect_via_pipeline(
         em.options.fallback_frame_fill,
         em.color_ctx,
         None,
+        &mut |_: &mut BuiltPage| {},
     );
 }
 
@@ -987,6 +995,11 @@ pub(super) fn emit_anchored_rect_image(
         stroke_weight: af.stroke_weight,
         drop_shadow: None,
         stroke_drop_shadow: None,
+        fill_transparency: None,
+        stroke_transparency: None,
+        content_transparency: None,
+        fill_drop_shadow: None,
+        content_drop_shadow: None,
         image_link: af.image_link.clone(),
         has_image_element: af.image_link.is_some(),
         has_inline_pdf: false,
@@ -1030,7 +1043,14 @@ pub(super) fn emit_anchored_rect_image(
         subpath_starts: Vec::new(),
         subpath_open: Vec::new(),
     };
-    emit_rectangle_image(page, &synthetic, options, page_image_cache, decoded_cache);
+    emit_rectangle_image(
+        page,
+        &synthetic,
+        options,
+        page_image_cache,
+        decoded_cache,
+        None,
+    );
 }
 
 /// Flow the story referenced by an anchored TextFrame into the
@@ -1105,6 +1125,11 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         stroke_alignment: None,
         drop_shadow: None,
         stroke_drop_shadow: None,
+        fill_transparency: None,
+        stroke_transparency: None,
+        content_transparency: None,
+        fill_drop_shadow: None,
+        content_drop_shadow: None,
         next_text_frame: None,
         vertical_justification: None,
         first_baseline_offset: None,

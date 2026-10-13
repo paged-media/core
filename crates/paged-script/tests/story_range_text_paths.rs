@@ -203,7 +203,9 @@ fn the_promoted_paths_are_in_the_published_catalog() {
     assert_eq!(
         catalog.settable_paths.len(),
         // 221: ADR 131/132 added `itemName`.
-        221,
+        // 234: ADR 135 added the transparency targets, group isolate and
+        // knockout, and the drop shadow's attributes.
+        234,
         "the advertised roster changed; move the count with the decision"
     );
 }

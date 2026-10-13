@@ -24,6 +24,7 @@ pub mod corners;
 pub mod docx_pagination;
 pub mod effects;
 pub mod footnote_references;
+pub mod effects_attrs;
 pub mod footnotes;
 pub mod forced_line_break;
 pub mod geometry;
@@ -85,6 +86,7 @@ pub mod text_overset;
 pub mod text_wrap;
 pub mod tints;
 pub mod transparency;
+pub mod transparency_targets;
 pub mod variables;
 
 /// Every built-in sample, by CLI name.
@@ -166,6 +168,8 @@ pub const SAMPLES: &[&str] = &[
     "table-cell-baseline",
     "table-inline-text",
     "footnote-references",
+    "transparency-targets",
+    "effects-attrs",
     "justification",
     "kerning",
     "nested-styles",
@@ -242,6 +246,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "table-cell-baseline" => table_cell_baseline::build(),
         "table-inline-text" => table_inline_text::build(),
         "footnote-references" => footnote_references::build(),
+        "transparency-targets" => transparency_targets::build(),
+        "effects-attrs" => effects_attrs::build(),
         "justification" => justification::build(),
         "kerning" => kerning::build(),
         "nested-styles" => nested_styles::build(),
@@ -274,7 +280,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            71,
+            73,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
