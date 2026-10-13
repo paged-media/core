@@ -949,14 +949,13 @@ fn footnotes_round_trips_through_parser() {
     // bodies on the host paragraph.
     let sample = paged_gen::samples::footnotes::build();
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let container = idml_import::open_source_archive(&bytes).expect("open_source_archive");
-    let fo = &dm(&container).footnote_options;
+    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
+    let fo = &doc.designmap.footnote_options;
     assert!(fo.present, "FootnoteOption must round-trip");
     assert_eq!(fo.rule_on, Some(true));
     assert_eq!(fo.rule_width, Some(140.0));
     assert_eq!(fo.rule_color.as_deref(), Some("Color/Black"));
 
-    let doc = idml_import::import_idml_doc(&bytes).expect("Document::open");
     let footnote_count: usize = doc
         .stories
         .iter()
@@ -2414,5 +2413,162 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
             .pixels()
             .any(|px| px.0[0] < 250 || px.0[1] < 250 || px.0[2] < 250);
         assert!(non_white, "page idx {idx} rasterises non-blank");
+    }
+}
+
+// ── A-08: the generator spells these elements as InDesign writes them ──
+//
+// Each was asked of InDesign 20.0.1 (2026-10-12): the element was made
+// through its DOM and exported as IDML, and the generated fixtures were
+// opened and read back through the DOM. In the generator's older
+// spellings InDesign read none of them, so the references the gate
+// compares against had been made without them.
+
+/// One entry of an emitted package, as text.
+fn part(bytes: &[u8], name: &str) -> String {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let mut entry = zip
+        .by_name(name)
+        .unwrap_or_else(|_| panic!("{name} missing"));
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut out).expect("utf-8 part");
+    out
+}
+
+#[test]
+fn footnote_options_are_a_preference() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::footnotes::build()).unwrap();
+    let prefs = part(&bytes, "Resources/Preferences.xml");
+    assert!(prefs.contains("<FootnoteOption "), "{prefs}");
+    // The rule colour is a typed Properties child in InDesign's spelling.
+    assert!(
+        prefs.contains(
+            r#"<Properties><RuleColor type="object">Color/Black</RuleColor></Properties>"#
+        ),
+        "{prefs}"
+    );
+    let designmap = part(&bytes, "designmap.xml");
+    assert!(!designmap.contains("FootnoteOption"), "{designmap}");
+    assert!(!designmap.contains("RootFootnoteStory"), "{designmap}");
+}
+
+#[test]
+fn colour_groups_are_designmap_children_with_member_elements() {
+    use paged_gen::samples::swatches;
+    let bytes = paged_gen::write_idml(&swatches::build()).unwrap();
+    let designmap = part(&bytes, "designmap.xml");
+    assert!(
+        designmap.contains(
+            r#"<ColorGroup Self="ColorGroup/Brand" Name="Brand" IsRootColorGroup="false"><ColorGroupSwatch Self="ColorGroup/BrandColorGroupSwatch0" SwatchItemRef="Color/InkFull"/>"#
+        ),
+        "{designmap}"
+    );
+    let graphic = part(&bytes, "Resources/Graphic.xml");
+    assert!(!graphic.contains("ColorGroup"), "{graphic}");
+    // The importer reads the designmap spelling.
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let group = doc
+        .palette
+        .color_groups
+        .get(swatches::COLOR_GROUP)
+        .expect("group");
+    assert_eq!(
+        group.members,
+        vec![swatches::INK_FULL, swatches::INK_HALF, swatches::INK_MIXED]
+    );
+}
+
+#[test]
+fn numbering_lists_are_designmap_children_applied_through_properties() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::numbering::build()).unwrap();
+    let designmap = part(&bytes, "designmap.xml");
+    assert!(
+        designmap.contains(
+            r#"<idPkg:Styles src="Resources/Styles.xml"/><NumberingList Self="NumberingList/Shared" Name="Shared" ContinueNumbersAcrossStories="true" ContinueNumbersAcrossDocuments="false"/><idPkg:Preferences"#
+        ),
+        "{designmap}"
+    );
+    let styles = part(&bytes, "Resources/Styles.xml");
+    assert!(!styles.contains("NumberingList"), "{styles}");
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let bound = doc
+        .stories
+        .iter()
+        .flat_map(|s| s.story.paragraphs.iter())
+        .filter(|p| p.applied_numbering_list.as_deref() == Some("NumberingList/Shared"))
+        .count();
+    assert_eq!(bound, 6, "every list paragraph applies the shared list");
+    // ... through the typed Properties child, never the attribute.
+    let story_names: Vec<String> = {
+        let zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        zip.file_names()
+            .filter(|n| n.starts_with("Stories/"))
+            .map(str::to_string)
+            .collect()
+    };
+    for name in story_names {
+        let story = part(&bytes, &name);
+        assert!(!story.contains("AppliedNumberingList=\""), "{story}");
+        assert!(
+            story.contains(
+                r#"<AppliedNumberingList type="object">NumberingList/Shared</AppliedNumberingList>"#
+            ),
+            "{story}"
+        );
+    }
+}
+
+#[test]
+fn stroke_styles_are_graphic_resources_in_indesign_spelling() {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::strokes_fills::build()).unwrap();
+    let graphic = part(&bytes, "Resources/Graphic.xml");
+    assert!(
+        graphic.contains(
+            r#"<DashedStrokeStyle Self="DashedStrokeStyle/Gap Dash" DashArray="8 6" StrokeCornerAdjustment="DashesAndGaps" EndCap="ButtEndCap" Name="Gap Dash"/>"#
+        ),
+        "{graphic}"
+    );
+    assert!(
+        graphic.contains(
+            r#"<StripedStrokeStyle Self="StripedStrokeStyle/Thick Thin" StripeArray="0 60 80 100" Name="Thick Thin">"#
+        ),
+        "{graphic}"
+    );
+    assert!(
+        graphic.contains(r#"<StrokeStyle Self="StrokeStyle/$ID/Wavy" Name="$ID/Wavy"/>"#),
+        "{graphic}"
+    );
+    let styles = part(&bytes, "Resources/Styles.xml");
+    assert!(!styles.contains("StrokeStyle Self"), "{styles}");
+    assert!(!graphic.contains("WavyStrokeStyle"), "{graphic}");
+    // The importer reads them from Graphic.xml: the dashes from DashArray,
+    // the stripes (for now) from the older `<Stripe>` children.
+    let doc = idml_import::import_idml_doc(&bytes).expect("import");
+    let dash = doc
+        .styles
+        .stroke_styles
+        .get("DashedStrokeStyle/Gap Dash")
+        .expect("dashed style");
+    assert_eq!(dash.pattern, vec![8.0, 6.0]);
+    let stripes = doc
+        .styles
+        .stroke_styles
+        .get("StripedStrokeStyle/Thick Thin")
+        .expect("striped style");
+    assert_eq!(stripes.stripes.len(), 2);
+}
+
+#[test]
+fn toc_styles_are_direct_children_of_the_styles_part() {
+    for bytes in [
+        paged_gen::write_idml(&paged_gen::samples::navigation::build()).unwrap(),
+        paged_gen::write_idml(&paged_gen::samples::annual_base::build()).unwrap(),
+        paged_gen::write_idml(&paged_gen::samples::showcase_base::build()).unwrap(),
+    ] {
+        let styles = part(&bytes, "Resources/Styles.xml");
+        assert!(styles.contains("<TOCStyle "), "{styles}");
+        assert!(!styles.contains("RootTOCStyleGroup"), "{styles}");
+        let doc = idml_import::import_idml_doc(&bytes).expect("import");
+        assert_eq!(doc.styles.toc_styles.len(), 1);
     }
 }

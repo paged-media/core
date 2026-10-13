@@ -31,9 +31,10 @@
 //!     recognises `MixedInk` but resolves it as `Unknown`, falling back
 //!     to the alternate — so the fixture proves the *fallback* is present
 //!     and renders rather than dropping.
-//!   * **colour groups** — a `<ColorGroup ColorGroupSwatches="…">`
-//!     grouping the brand inks (round-trip for the editor's Color Groups
-//!     panel).
+//!   * **colour groups** — a `<ColorGroup>` grouping the brand inks
+//!     through `<ColorGroupSwatch SwatchItemRef>` children, in
+//!     `designmap.xml` where InDesign keeps it (round-trip for the
+//!     editor's Color Groups panel).
 //!   * **swatch overrides / based-on** — a `<Swatch>` that aliases a
 //!     `<Color>` by reference (the named-swatch-over-colour layer), and
 //!     an `ObjectStyle` BasedOn cascade whose derived style supplies the
@@ -47,12 +48,14 @@
 //! the render test asserts the half-tint pixel is lighter than the
 //! full-ink pixel and the swatch-alias frame paints the wrapped colour.
 
-use crate::builders::designmap::{write_designmap, DesignMap};
+use crate::builders::designmap::{
+    write_designmap_with_markers, ColorGroupSpec, DesignMap, MarkerResources,
+};
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
 use crate::builders::resources::{
-    container_xml, fonts_xml, graphic_xml_rich, preferences_xml, styles_xml_with_raw,
-    ColorGroupSpec, RichColor, SwatchSpec,
+    container_xml, fonts_xml, graphic_xml_rich, preferences_xml, styles_xml_with_raw, RichColor,
+    SwatchSpec,
 };
 use crate::builders::spread::{write_spread, Spread};
 use crate::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
@@ -89,8 +92,7 @@ pub const STYLE_DERIVED: &str = "ObjectStyle/Derived";
 const INK_LAB: &str = "30 40 -55";
 
 /// Build the rich `Resources/Graphic.xml`: the spot full/half-tint inks,
-/// the mixed-ink swatch (with its own alternate), the colour group, and
-/// the swatch alias.
+/// the mixed-ink swatch (with its own alternate), and the swatch alias.
 fn graphic() -> Vec<u8> {
     let colors = [
         RichColor {
@@ -136,7 +138,17 @@ fn graphic() -> Vec<u8> {
             base_color: None,
         },
     ];
-    let groups = [ColorGroupSpec {
+    let swatches = [SwatchSpec {
+        self_id: SWATCH_ALIAS.to_string(),
+        name: "Brand Alias".to_string(),
+        color_ref: INK_FULL.to_string(),
+    }];
+    graphic_xml_rich(&colors, &swatches)
+}
+
+/// The brand colour group — a `designmap.xml` child.
+fn color_groups() -> Vec<ColorGroupSpec> {
+    vec![ColorGroupSpec {
         self_id: COLOR_GROUP.to_string(),
         name: "Brand".to_string(),
         members: vec![
@@ -144,13 +156,7 @@ fn graphic() -> Vec<u8> {
             INK_HALF.to_string(),
             INK_MIXED.to_string(),
         ],
-    }];
-    let swatches = [SwatchSpec {
-        self_id: SWATCH_ALIAS.to_string(),
-        name: "Brand Alias".to_string(),
-        color_ref: INK_FULL.to_string(),
-    }];
-    graphic_xml_rich(&colors, &groups, &swatches)
+    }]
 }
 
 /// `Resources/Styles.xml` carrying a two-step ObjectStyle BasedOn
@@ -307,12 +313,18 @@ pub fn build() -> Sample {
         spread_refs.push(spread_id);
     }
 
-    let designmap = write_designmap(&DesignMap {
-        self_id: "d".to_string(),
-        master_spreads: master_refs,
-        spreads: spread_refs,
-        stories: Vec::new(),
-    });
+    let designmap = write_designmap_with_markers(
+        &DesignMap {
+            self_id: "d".to_string(),
+            master_spreads: master_refs,
+            spreads: spread_refs,
+            stories: Vec::new(),
+        },
+        &MarkerResources {
+            color_groups: color_groups(),
+            ..MarkerResources::default()
+        },
+    );
 
     Sample {
         container_xml: container_xml(),

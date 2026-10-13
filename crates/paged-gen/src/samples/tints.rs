@@ -444,7 +444,7 @@ pub fn build() -> Sample {
             spreads: spread_refs,
             stories: story_refs,
         }),
-        graphic_xml: graphic_xml_rich_full(&colors(), &gradients(), &[], &[]),
+        graphic_xml: graphic_xml_rich_full(&colors(), &gradients(), &[]),
         fonts_xml: fonts_xml(),
         styles_xml: styles_xml(),
         preferences_xml: preferences_xml(),

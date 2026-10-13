@@ -692,11 +692,12 @@ fn build_with(move_destination: bool) -> Sample {
                 ..Default::default()
             },
         ],
-        footnote_option: None,
         bookmarks: Vec::new(),
         index_topics: Vec::new(),
         conditions: Vec::new(),
         condition_sets: Vec::new(),
+        numbering_lists: Vec::new(),
+        color_groups: Vec::new(),
     };
 
     let mut stories: Vec<(String, Vec<u8>)> = body_story_ids

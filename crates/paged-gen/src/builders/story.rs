@@ -71,8 +71,12 @@ pub struct Paragraph {
     /// W1.22 (engine gap 22) — `AppliedNumberingList` reference on the
     /// `<ParagraphStyleRange>` (e.g. `"NumberingList/Shared"`). Binds
     /// the paragraph to a named `<NumberingList>` resource so the
-    /// renderer can resolve its cross-story continuity flag. `None` ⇒
-    /// omit the attribute.
+    /// renderer can resolve its cross-story continuity flag. Written as
+    /// InDesign writes it, a typed `<Properties>` child
+    /// (`<AppliedNumberingList type="object">`, all 148 occurrences in
+    /// the corpus packs); InDesign ignores the attribute spelling this
+    /// used to be (asked of InDesign 20.0.1, 2026-10-12: every paragraph
+    /// stayed in its default list). `None` ⇒ omit it.
     pub applied_numbering_list: Option<&'static str>,
     /// Inline bullet glyph override emitted as
     /// `<Properties><BulletChar BulletCharacterType="UnicodeWithFont"
@@ -457,9 +461,6 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
         if let Some(blt) = paragraph.bullets_list_type {
             p_attrs.push(("BulletsAndNumberingListType", blt));
         }
-        if let Some(anl) = paragraph.applied_numbering_list {
-            p_attrs.push(("AppliedNumberingList", anl));
-        }
         // Escape-hatch attributes (rules/shading/border, …) emitted verbatim.
         for (k, v) in &paragraph.extra_paragraph_attrs {
             p_attrs.push((*k, *v));
@@ -486,12 +487,18 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
         if has_bullet_char
             || !paragraph.tab_list.is_empty()
             || !paragraph.extra_paragraph_props.is_empty()
+            || paragraph.applied_numbering_list.is_some()
         {
             b.start("Properties", &[]);
             for (name, ty, value) in &paragraph.extra_paragraph_props {
                 b.start(name, &[("type", ty)]);
                 b.text(value);
                 b.end(name);
+            }
+            if let Some(anl) = paragraph.applied_numbering_list {
+                b.start("AppliedNumberingList", &[("type", "object")]);
+                b.text(anl);
+                b.end("AppliedNumberingList");
             }
             if let Some(cp) = paragraph.bullet_character {
                 let cp_str = cp.to_string();

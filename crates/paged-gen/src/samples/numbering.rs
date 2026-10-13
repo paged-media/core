@@ -29,12 +29,10 @@
 //! B here), so the cross-story counter is fed deterministically.
 
 use crate::builders::{
-    designmap::{write_designmap, DesignMap},
+    designmap::{write_designmap_with_markers, DesignMap, MarkerResources, NumberingListSpec},
     master::{write_master, Master},
     page_item::Rect,
-    resources::{
-        container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml_with_numbering_list,
-    },
+    resources::{container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml},
     spread::{write_spread, Spread},
     story::{write_story, Paragraph, Run, Story},
     xml_folder::{backing_story_xml, mapping_xml, tags_xml},
@@ -116,14 +114,11 @@ pub fn build() -> Sample {
     let mut story_refs = Vec::with_capacity(variants.len() * 2);
 
     // All variants share the same NumberingList resource id, so the
-    // package's single Styles.xml can only carry one continuity flag.
-    // Emit ONE document per flag instead: the first variant's flag
-    // wins for the package's Styles.xml, and the second variant is the
-    // complement — but a single package has one Styles.xml. To keep the
-    // fixture honest, the package's Styles.xml declares the list as
-    // `continue=true` (variant 0); the `restart` variant is exercised
-    // by the renderer unit test. We still emit both pages so the
-    // visual fixture shows the continue case end-to-end.
+    // package can only carry one continuity flag. To keep the fixture
+    // honest, the package declares the list as `continue=true`
+    // (variant 0); the `restart` variant is exercised by the renderer
+    // unit test. We still emit both pages so the visual fixture shows
+    // the continue case end-to-end.
     let styles_continue = variants[0].continue_across_stories;
 
     for (i, variant) in variants.iter().enumerate() {
@@ -202,19 +197,34 @@ pub fn build() -> Sample {
         spread_refs.push(spread_id);
     }
 
-    let designmap = write_designmap(&DesignMap {
-        self_id: "d".to_string(),
-        master_spreads: master_refs,
-        spreads: spread_refs,
-        stories: story_refs,
-    });
+    // The list is a `designmap.xml` child, where InDesign keeps numbering
+    // lists (see `NumberingListSpec`); in Styles.xml, inside the
+    // `<RootNumberingListGroup>` this used to write, InDesign never read
+    // it and restarted story B at 1.
+    let designmap = write_designmap_with_markers(
+        &DesignMap {
+            self_id: "d".to_string(),
+            master_spreads: master_refs,
+            spreads: spread_refs,
+            stories: story_refs,
+        },
+        &MarkerResources {
+            numbering_lists: vec![NumberingListSpec {
+                self_id: "NumberingList/Shared".to_string(),
+                name: "Shared".to_string(),
+                continue_across_stories: styles_continue,
+                continue_across_documents: false,
+            }],
+            ..MarkerResources::default()
+        },
+    );
 
     Sample {
         container_xml: container_xml(),
         designmap_xml: designmap,
         graphic_xml: graphic_xml(),
         fonts_xml: fonts_xml(),
-        styles_xml: styles_xml_with_numbering_list(styles_continue),
+        styles_xml: styles_xml(),
         preferences_xml: preferences_xml(),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
