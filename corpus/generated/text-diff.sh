@@ -11,7 +11,12 @@
 #   candidate: paged-inspect --emit-breaks, one record per laid-out line
 #
 # and compares, page by page, the sequence of lines (whitespace
-# normalised, generated list markers stripped). Two modes, per fixture:
+# normalised). The candidate's records mark what the engine generated
+# (`generated` spans): a list's marker is dropped on both sides — from the
+# candidate exactly, from the reference where one of the page's lines
+# opens with a marker the engine printed there (InDesign's PDF sets a
+# marker in a larger size as a line of its own) — and a tab leader is
+# printed on both, the candidate's from the record. Two modes, per fixture:
 #   "text_gate": true     the page's CHARACTERS as a multiset: a missing or
 #                         extra word fails, a different line break or
 #                         hyphenation point does not
@@ -113,37 +118,89 @@ from collections import Counter
 from xml.etree import ElementTree as ET
 
 ref_path, cand_path, name, out_path = sys.argv[1:5]
-MARKER = re.compile(r"^(?:[•◦▪‣–—\-*]|\(?[0-9ivxlcdmIVXLCDMa-zA-Z]{1,6}[.)])\s+")
 
 def norm(s):
-    s = s.replace(" ", " ").replace("­", "").replace("\t", " ")
-    s = re.sub(r"\s+", " ", s).strip()
-    s = MARKER.sub("", s)
-    return "" if re.fullmatch(r"[•◦▪‣–—*]|\(?[0-9ivxlcdmIVXLCDMa-zA-Z]{1,6}[.)]", s) else s
+    s = s.replace("\u00a0", " ").replace("\u00ad", "").replace("\t", " ")
+    return re.sub(r"\s+", " ", s).strip()
+
+def squeeze(s):
+    return re.sub(r"\s+", "", s)
+
+# Candidate: one record per laid-out line. Its `generated` spans (byte
+# ranges of `source_text`) say what the engine printed that the story
+# does not hold. A list marker is set aside, per page, to be dropped from
+# the reference too; a tab leader prints its repeats in place of the tab
+# (`text`), as InDesign's PDF carries them; the rest (page numbers,
+# footnote numbers, variables) print on both sides and stay.
+cand = []
+markers = {}
+for l in open(cand_path, encoding="utf-8"):
+    r = json.loads(l)
+    raw = r.get("source_text", "").encode("utf-8")
+    out, at = [], 0
+    for g in sorted(r.get("generated", []), key=lambda g: g["start"]):
+        if g["kind"] not in ("list_marker", "tab_leader") or g["start"] < at:
+            continue
+        out.append(raw[at:g["start"]].decode("utf-8", "replace"))
+        if g["kind"] == "list_marker":
+            m = squeeze(raw[g["start"]:g["end"]].decode("utf-8", "replace"))
+            if m:
+                markers.setdefault(r["page_idx"], Counter())[m] += 1
+            out.append(" ")
+        else:
+            out.append(" " + g.get("text", "") + " ")
+        at = g["end"]
+    out.append(raw[at:].decode("utf-8", "replace"))
+    text = norm("".join(out))
+    if text:
+        cand.append({"page": r["page_idx"], "text": text, "y": r["baseline_y_pt"]})
+
+def strip_marker(text, page_markers):
+    """`text` without the engine's marker it opens with (whitespace inside
+    the marker aside: tracking splits `1.` into `1 .`), and the marker;
+    the longest of the page's markers still unmatched wins."""
+    for m in sorted((m for m, n in page_markers.items() if n > 0), key=len, reverse=True):
+        i = k = 0
+        while k < len(m) and i < len(text):
+            if text[i].isspace():
+                i += 1
+            elif text[i] == m[k]:
+                i += 1
+                k += 1
+            else:
+                break
+        if k == len(m):
+            return text[i:].strip(), m
+    return text, None
 
 # Reference: <page><flow><block><line><word xMin yMin xMax yMax>w</word>…
 raw = open(ref_path, encoding="utf-8").read()
 raw = raw[raw.index("<body"):raw.rindex("</body>") + 7]
 body = ET.fromstring(re.sub(r"&(?!amp;|lt;|gt;|quot;|apos;)", "&amp;", raw))
 ref = []
+unmatched = {}
 pages = [p for p in body.iter() if p.tag.endswith("page")]
 for pi, page in enumerate(pages):
+    rows = []
     for line in [l for l in page.iter() if l.tag.endswith("line")]:
         words = [w for w in line if w.tag.endswith("word")]
         if not words:
             continue
         text = norm(" ".join(html.unescape(w.text or "") for w in words))
-        if not text:
-            continue
-        ymax = max(float(w.get("yMax")) for w in words)
-        ref.append({"page": pi, "text": text, "y": ymax})
-
-cand = []
-for l in open(cand_path, encoding="utf-8"):
-    r = json.loads(l)
-    text = norm(r.get("source_text", ""))
-    if text:
-        cand.append({"page": r["page_idx"], "text": text, "y": r["baseline_y_pt"]})
+        if text:
+            rows.append({"page": pi, "text": text,
+                         "y": max(float(w.get("yMax")) for w in words)})
+    # A marker the engine printed on this page is dropped where a line
+    # opens with it, a line that is only the marker first.
+    left = Counter(markers.get(pi, {}))
+    rows.sort(key=lambda r: (squeeze(r["text"]) not in left, r["y"]))
+    for row in rows:
+        row["text"], m = strip_marker(row["text"], left)
+        if m:
+            left[m] -= 1
+    if +left:
+        unmatched[pi] = +left
+    ref.extend(r for r in rows if r["text"])
 
 def by_page(rows):
     out = {}
@@ -187,9 +244,15 @@ for page in compared:
     if problem:
         problem["page"] = page + 1
         problems.append(problem)
+# A marker the engine printed that no line of InDesign's opens with is
+# reported, not failed: the marker is dropped on both sides, so this is the
+# one place the gate sees a list number InDesign does not print.
+notes = [{"page": p + 1, "markers_paged_only": sorted(unmatched[p].elements())[:8]}
+         for p in compared if p in unmatched]
 result = {"fixture": name, "mode": mode, "passed": not problems,
           "pages_compared": len(compared), "pages_beyond_reference": len(beyond),
-          "lines_indesign": len(ref), "lines_paged": len(cand), "problems": problems}
+          "lines_indesign": len(ref), "lines_paged": len(cand), "problems": problems,
+          "notes": notes}
 json.dump(result, open(out_path, "w"), indent=2)
 if problems:
     print(f"[{name}] TEXT MISMATCH ({mode}) on {len(problems)} page(s)")
@@ -198,6 +261,9 @@ if problems:
     sys.exit(1)
 extra = f"; {len(beyond)} page(s) past the reference not compared" if beyond else ""
 print(f"[{name}] text ok ({len(ref)} lines, {result['pages_compared']} pages{extra})")
+for n in notes:
+    print(f"  note, page {n['page']}: list marker(s) InDesign does not print: "
+          + " ".join(n["markers_paged_only"]))
 PY
     rc=$?
     set -e
