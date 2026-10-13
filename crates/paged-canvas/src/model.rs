@@ -8565,54 +8565,58 @@ impl CanvasModel {
             .collect()
     }
 
-    /// SDK Phase 5 (v1 sweep) — list every font family used in the
-    /// document. Walks character runs + paragraph-style defaults +
-    /// character-style defaults; dedupes; sums per-family
-    /// reference counts. The parse layer doesn't carry a font
-    /// registry, so this is derived from content rather than
-    /// declared — the panel surfaces "fonts in use" rather than
-    /// "fonts installed".
+    /// SDK Phase 5 (v1 sweep) — list every font family the document's
+    /// TEXT uses: each run's effective family through the style cascade
+    /// (run > character style > paragraph style), in every story, table
+    /// cell and footnote. `reference_count` is the number of runs set in
+    /// it. A family a style names but no run ends up in is not listed:
+    /// `layout` sets every run in Inter and its root style names Open
+    /// Sans, which nothing is set in, so nothing is missing for it.
+    ///
+    /// `is_missing` — panels.md gap 4 — is true when no face serves the
+    /// family: none registered for it, and the default face is not one
+    /// of it (the renderer then substitutes the default face). The
+    /// default face counts for its own family: a host that ships Inter
+    /// as the default and opens a document set in Inter is not missing
+    /// a font. The parse layer has no Fonts.xml registry, so this is
+    /// derived from content rather than declared.
     pub fn fonts(&self) -> Vec<crate::channel::FontSummary> {
         use crate::channel::FontSummary;
         use std::collections::{BTreeMap, BTreeSet};
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-        // W1.23 — distinct style strings per family. The parse layer
-        // has no Fonts.xml registry (fonts are referenced by name from
-        // runs + style defaults), so the honest source for "styles in
-        // this family" is the `FontStyle` strings the document itself
-        // carries, unioned with the styles the worker has registered
-        // face bytes for via `RegisterFont`.
+        // W1.23 — distinct style strings per family: the `FontStyle`
+        // strings the text is set in, unioned with the styles the worker
+        // registered face bytes for via `RegisterFont`.
         let mut styles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let mut note_style = |family: &str, style: &Option<String>| {
-            if let Some(style) = style {
-                if !style.is_empty() {
-                    styles
-                        .entry(family.to_string())
-                        .or_default()
-                        .insert(style.clone());
+        fn walk(
+            scene: &Document,
+            para: &paged_model::Paragraph,
+            counts: &mut BTreeMap<String, u32>,
+            styles: &mut BTreeMap<String, BTreeSet<String>>,
+        ) {
+            for run in &para.runs {
+                let resolved = scene.resolved_run_attrs(para, run);
+                let Some(family) = resolved.font else {
+                    continue;
+                };
+                *counts.entry(family.clone()).or_default() += 1;
+                if let Some(style) = resolved.font_style.filter(|s| !s.is_empty()) {
+                    styles.entry(family).or_default().insert(style);
                 }
             }
-        };
+            let cells = para
+                .table
+                .iter()
+                .flat_map(|t| t.cells.iter())
+                .flat_map(|c| c.paragraphs.iter());
+            let notes = para.footnotes.iter().flat_map(|f| f.paragraphs.iter());
+            for inner in cells.chain(notes) {
+                walk(scene, inner, counts, styles);
+            }
+        }
         for story in &self.scene.stories {
             for para in &story.story.paragraphs {
-                for run in &para.runs {
-                    if let Some(family) = &run.font {
-                        *counts.entry(family.clone()).or_default() += 1;
-                        note_style(family, &run.font_style);
-                    }
-                }
-            }
-        }
-        for (_, style) in self.scene.styles.paragraph_styles.iter() {
-            if let Some(family) = &style.font {
-                *counts.entry(family.clone()).or_default() += 1;
-                note_style(family, &style.font_style);
-            }
-        }
-        for (_, style) in self.scene.styles.character_styles.iter() {
-            if let Some(family) = &style.font {
-                *counts.entry(family.clone()).or_default() += 1;
-                note_style(family, &style.font_style);
+                walk(&self.scene, para, &mut counts, &mut styles);
             }
         }
         // Union in the styles the worker registered face bytes for, so
@@ -8629,23 +8633,26 @@ impl CanvasModel {
                 }
             }
         }
-        // panels.md gap 4 — a family is "missing" when the worker's
-        // font registry has no face for it (the renderer then either
-        // substitutes the document-wide default font or drops glyphs).
-        // We check the registry directly rather than the resolver,
-        // because the resolver's default-font fall-through would mask
-        // every missing family as "resolved". Family match is
-        // case-insensitive to tolerate `"Open Sans"` vs `"open sans"`
-        // registration drift.
-        let registered: std::collections::BTreeSet<String> = self
+        // The registry and the default face, not the resolver: its
+        // default-font fall-through would mask every missing family as
+        // resolved. Family match is case-insensitive to tolerate
+        // `"Open Sans"` vs `"open sans"` registration drift.
+        let mut registered: BTreeSet<String> = self
             .font_registry
             .iter()
             .map(|e| e.family.to_lowercase())
             .collect();
+        if let Some(bytes) = self.font_bytes.as_deref() {
+            registered.extend(
+                paged_renderer::asset::face_family_names(bytes)
+                    .into_iter()
+                    .map(|f| f.to_lowercase()),
+            );
+        }
         counts
             .into_iter()
             .map(|(family, reference_count)| {
-                let is_missing = !registered.contains(&family.to_lowercase());
+                let is_missing = !registered.contains(&family.trim().to_lowercase());
                 let styles = styles
                     .get(&family)
                     .map(|s| s.iter().cloned().collect())

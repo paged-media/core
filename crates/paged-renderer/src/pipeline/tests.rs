@@ -1083,6 +1083,7 @@ fn font_table_with(cache: &[(&str, Option<&str>, &[u8])], fallback: Option<&[u8]
         cache: hm,
         substituted: Default::default(),
         fallback: fallback.map(Bytes::copy_from_slice),
+        fallback_families: Vec::new(),
         metrics: HashMap::new(),
         family_metrics: HashMap::new(),
     }

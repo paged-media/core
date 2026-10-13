@@ -144,7 +144,8 @@ impl AssetResolver for BytesResolver {
 
     fn resolve_font_traced(&self, family: &str, style: Option<&str>) -> Option<ResolvedFont> {
         // Styled or bare-family registration is the asked-for face;
-        // only the `default_font` catch-all counts as a substitution.
+        // the `default_font` catch-all is a substitution unless it is
+        // a face of the asked-for family itself.
         if let Some(b) = self
             .fonts
             .get(&font_key(family, style))
@@ -156,8 +157,8 @@ impl AssetResolver for BytesResolver {
             });
         }
         self.default_font.clone().map(|bytes| ResolvedFont {
+            substituted: !face_is_family(&bytes, family),
             bytes,
-            substituted: true,
         })
     }
 
@@ -217,6 +218,45 @@ impl AssetResolver for BytesResolver {
     fn resolve_icc(&self, name: &str) -> Option<Bytes> {
         self.icc.get(name).cloned()
     }
+}
+
+/// The family names a face claims for itself: its typographic family
+/// (`name` ID 16) and its family (ID 1), each once. Empty when the bytes
+/// do not parse as a font.
+pub fn face_family_names(bytes: &[u8]) -> Vec<String> {
+    let Ok(face) = ttf_parser::Face::parse(bytes, 0) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for id in [
+        ttf_parser::name_id::TYPOGRAPHIC_FAMILY,
+        ttf_parser::name_id::FAMILY,
+    ] {
+        let found = face
+            .names()
+            .into_iter()
+            .filter(|n| n.name_id == id)
+            .find_map(|n| n.to_string());
+        if let Some(name) = found.map(|n| n.trim().to_string()) {
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `bytes` is a face of `family` (case-insensitive): the default
+/// face standing in for its OWN family is that family, not a substitute.
+/// The host hands the default face over as bytes with no family name, so
+/// without this a document set in the very face the host ships was
+/// flagged as substituted throughout, and laid out with the substitute's
+/// first-baseline heuristic instead of the face's own ascender.
+pub fn face_is_family(bytes: &[u8], family: &str) -> bool {
+    let family = family.trim();
+    face_family_names(bytes)
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(family))
 }
 
 fn font_key(family: &str, style: Option<&str>) -> String {
