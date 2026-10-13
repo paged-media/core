@@ -476,6 +476,20 @@ pub struct DropShadow {
     pub blur_radius: f32,
     pub color: Color,
     pub opacity: f32,
+    /// R-11 — how the shadow composites onto what lies under it (IDML
+    /// `BlendMode`, InDesign's default `Multiply`). The rasterisers draw
+    /// the stamp itself `Normal`; the EMITTER brackets a shadow whose
+    /// mode changes the result in a transparency group of that mode, so
+    /// the group's paper-backdrop rule applies (a `Screen` shadow shows on
+    /// paper, `effects-attrs` case 3).
+    pub blend_mode: BlendMode,
+    /// R-11 — IDML `Spread` as 0..1: how much of the blur band is solid
+    /// before it fades, applied as a choke on the blurred alpha
+    /// (`α' = min(1, α / (1 − spread))`).
+    pub spread: f32,
+    /// R-11 — IDML `Noise` as 0..1: hashed grain mixed into the shadow's
+    /// alpha.
+    pub noise: f32,
 }
 
 impl DropShadow {
@@ -488,6 +502,9 @@ impl DropShadow {
             blur_radius: 4.0,
             color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 0.3,
+            blend_mode: BlendMode::Normal,
+            spread: 0.0,
+            noise: 0.0,
         }
     }
 }
@@ -1005,6 +1022,18 @@ pub enum DisplayCommand {
         bounds: Rect,
         blend_mode: BlendMode,
         opacity: f32,
+        /// IDML `IsolateBlending`: the group's contents blend with each
+        /// other only, never with what lies under the group. `false` is
+        /// InDesign's default — a non-isolated group, whose contents see
+        /// the backdrop (a `Multiply` fill inside a frame at 50 %
+        /// multiplies with the page, `transparency-targets` case 37).
+        isolated: bool,
+        /// IDML `KnockoutGroup`: each element of the group composites
+        /// with the group's initial backdrop instead of with the elements
+        /// before it, so a later element replaces an earlier one where it
+        /// covers it (cases 43, 44). An "element" is a nested group; the
+        /// emitter brackets every member of a knockout group.
+        knockout: bool,
         transform: Transform,
     },
     /// End the most-recently-pushed transparency group. Mismatched

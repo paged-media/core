@@ -171,6 +171,7 @@ pub(super) fn emit_polygon_into(
     palette: &Graphic,
     fallback: Paint,
     color_ctx: ColorCtx<'_>,
+    content: super::shapes::ContentPainter<'_>,
 ) {
     let mut resolved = ResolvedFrame::from_polygon(poly);
     let style = crate::module::resolve_applied_style(&resolved, document);
@@ -180,17 +181,17 @@ pub(super) fn emit_polygon_into(
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
     let needs_group = frame_needs_blend_group(&resolved);
+    let bbox = match &resolved.geometry {
+        Geometry::Polygon { bbox, .. } => *bbox,
+        Geometry::Rect { rect } => *rect,
+        _ => paged_compose::Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        },
+    };
     if needs_group {
-        let bbox = match &resolved.geometry {
-            Geometry::Polygon { bbox, .. } => *bbox,
-            Geometry::Rect { rect } => *rect,
-            _ => paged_compose::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: 0.0,
-                h: 0.0,
-            },
-        };
         push_blend_group(
             page,
             bbox,
@@ -231,7 +232,7 @@ pub(super) fn emit_polygon_into(
     };
     // The shadow stamps under the polygon's real outline (the module
     // interns it under the same key as `path_id`), behind the fill.
-    crate::module::drop_shadow_module(&resolved, page, palette, color_ctx, None, outer, None);
+    crate::module::drop_shadow_module(&resolved, page, palette, color_ctx, None, outer);
     // Q-04: Polygon frame effects (GradientFeather, OuterGlow, etc.)
     // ride the interned polygon path. The path is already in inner-
     // coord space and `outer` carries the frame's ItemTransform plus
@@ -240,9 +241,14 @@ pub(super) fn emit_polygon_into(
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
         crate::module::emit_effects_pre_fill(page, effects, pid, outer, palette, color_ctx);
     }
+    let fill_group = push_target_group(page, resolved.fill_target, bbox, outer);
+    crate::module::fill_shadow_module(&resolved, page, palette, color_ctx, outer);
     crate::module::fill_paint_module(
         &resolved, page, palette, color_ctx, fallback, outer, path_id,
     );
+    if fill_group {
+        pop_blend_group(page);
+    }
     if let (Some(pid), Some(effects)) = (path_id, poly.effects.as_ref()) {
         crate::module::emit_effects_post_fill(page, effects, pid, outer, palette, color_ctx, None);
     }
@@ -272,6 +278,13 @@ pub(super) fn emit_polygon_into(
     } else {
         None
     };
+    // The picture, between the fill and the stroke, in its own target.
+    let content_group = push_target_group(page, resolved.content_target, bbox, outer);
+    content(page);
+    if content_group {
+        pop_blend_group(page);
+    }
+    let stroke_group = push_target_group(page, resolved.stroke_target, bbox, outer);
     crate::module::stroke_paint_module(
         &resolved,
         page,
@@ -335,6 +348,9 @@ pub(super) fn emit_polygon_into(
                 );
             }
         }
+    }
+    if stroke_group {
+        pop_blend_group(page);
     }
     if needs_group {
         pop_blend_group(page);

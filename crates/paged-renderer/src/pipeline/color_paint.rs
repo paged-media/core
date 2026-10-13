@@ -40,6 +40,15 @@ pub struct ColorCtx<'a> {
     /// InDesign falls back to. With this on, such a swatch is DISPLAYED
     /// from its Lab primary. See [`spot_lab_display_rgb`].
     pub standard_lab_for_spots: bool,
+    /// R-11 — the document's global light angle
+    /// (`<TransparencyPreference GlobalLightAngle>`, `None` for InDesign's
+    /// 120°). A shadow with `UseGlobalLight` takes its angle from it when
+    /// it resolves to a paint, here with the rest of the document-wide
+    /// paint policy.
+    pub global_light_angle: Option<f32>,
+    /// R-11 — `<TransparencyPreference GlobalLightAltitude>` (`None` for
+    /// 30°), a bevel's altitude under the document's light.
+    pub global_light_altitude: Option<f32>,
 }
 
 impl<'a> ColorCtx<'a> {
@@ -50,6 +59,8 @@ impl<'a> ColorCtx<'a> {
         Self {
             icc,
             standard_lab_for_spots: false,
+            global_light_angle: None,
+            global_light_altitude: None,
         }
     }
 }

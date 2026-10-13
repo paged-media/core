@@ -75,6 +75,10 @@ pub(crate) struct TextSlot {
     pub page_idx: usize,
     pub slot: usize,
     pub z_seq: u32,
+    /// R-10 — the slot sits inside the frame body's own object group (just
+    /// before its `EndBlendGroup`), so the moved text composites with the
+    /// fill and stroke as one group.
+    pub in_object_group: bool,
 }
 
 /// Per-spread per-frame-kind command ranges. Indexing mirrors the
@@ -147,7 +151,39 @@ fn group_needs_bracket(g: &Group) -> bool {
     let blend_non_normal = matches!(blend, Some(s) if !s.eq_ignore_ascii_case("Normal"));
     let opacity_below = matches!(g.transparency.opacity, Some(o) if o < 100.0 - f32::EPSILON);
     let has_shadow = g.transparency.drop_shadow.is_some();
-    blend_non_normal || opacity_below || has_shadow
+    // R-10: an isolated or knockout group changes how its members
+    // composite even at Normal / 100 % (`transparency-targets` 42–44).
+    let flags = g.transparency.isolate_blending || g.transparency.knockout_group;
+    blend_non_normal || opacity_below || has_shadow || flags
+}
+
+/// True when `commands[start..end]` is exactly one bracket — a
+/// `BeginBlendGroup` / `PushLayer` at `start` whose matching end is the
+/// last command — so the range already composites as one element.
+fn is_single_bracket(cmds: &[DisplayCommand], start: usize, end: usize) -> bool {
+    if end <= start + 1 || end > cmds.len() {
+        return false;
+    }
+    if !matches!(
+        cmds[start],
+        DisplayCommand::BeginBlendGroup { .. } | DisplayCommand::PushLayer { .. }
+    ) {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (i, c) in cmds[start..end].iter().enumerate() {
+        match c {
+            DisplayCommand::BeginBlendGroup { .. } | DisplayCommand::PushLayer { .. } => depth += 1,
+            DisplayCommand::EndBlendGroup(_) | DisplayCommand::PopLayer(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return start + i + 1 == end;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Run the group bracket pass for one spread.
@@ -185,7 +221,11 @@ pub(crate) fn group_pass(
     // `PageWindow` = (page_idx, start, end); `GroupEntry` pairs a group
     // index with its per-page windows.
     type PageWindow = (usize, usize, usize);
-    let mut entries: Vec<(usize, Vec<PageWindow>, HashSet<usize>)> = Vec::new();
+    // Per group: its per-page windows, the text frames it holds, and —
+    // for a knockout group — each member's own per-page window with the
+    // text frames that member holds.
+    type MemberWindows = Vec<(Vec<PageWindow>, HashSet<usize>)>;
+    let mut entries: Vec<(usize, Vec<PageWindow>, HashSet<usize>, MemberWindows)> = Vec::new();
     for (gi, group) in spread.groups.iter().enumerate() {
         if !group_needs_bracket(group) {
             continue;
@@ -212,13 +252,32 @@ pub(crate) fn group_pass(
             }
         }
         let per_page: Vec<PageWindow> = by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect();
-        entries.push((gi, per_page, member_text));
+        // R-10: a knockout group's members are its ELEMENTS — each one
+        // composites with the group's backdrop and replaces those before
+        // it — so every member must reach the rasteriser as one bracket.
+        let mut member_windows: MemberWindows = Vec::new();
+        if group.transparency.knockout_group {
+            for &m in &group.members {
+                let mut spans: Vec<FrameCmdSpan> = Vec::new();
+                collect_member_spans(m, spread, spread_frame_spans, &mut spans);
+                let mut by_page: HashMap<usize, (usize, usize)> = HashMap::new();
+                for s in &spans {
+                    let e = by_page.entry(s.page_idx).or_insert((s.start, s.end));
+                    e.0 = e.0.min(s.start);
+                    e.1 = e.1.max(s.end);
+                }
+                let mut text = HashSet::new();
+                collect_member_text_frames(m, spread, &mut text);
+                member_windows.push((by_page.into_iter().map(|(p, (a, b))| (p, a, b)).collect(), text));
+            }
+        }
+        entries.push((gi, per_page, member_text, member_windows));
     }
 
     // Reverse splice order so earlier groups' ranges stay valid.
     entries.sort_by(|a, b| b.0.cmp(&a.0));
 
-    for (gi, per_page, member_text) in entries {
+    for (gi, per_page, member_text, member_windows) in entries {
         let group = &spread.groups[gi];
         let blend_mode = blend_mode_from_idml(group.transparency.blend_mode.as_deref());
         let opacity = group
@@ -231,9 +290,43 @@ pub(crate) fn group_pass(
         // practice a single group lives on one page; defensive).
         let mut per_page = per_page;
         per_page.sort_by(|a, b| b.1.cmp(&a.1));
-        for (page_idx, start, end) in per_page {
+        for (page_idx, start, mut end) in per_page {
             if page_idx >= pages.len() || start >= end {
                 continue;
+            }
+            // Knockout: bracket every member that is not one bracket
+            // already, last first so the earlier windows stay valid.
+            let mut windows: Vec<(usize, usize, &HashSet<usize>)> = member_windows
+                .iter()
+                .flat_map(|(w, text)| {
+                    w.iter()
+                        .filter(|(p, a, b)| *p == page_idx && a < b)
+                        .map(move |(_, a, b)| (*a, *b, text))
+                })
+                .collect();
+            windows.sort_by(|a, b| b.0.cmp(&a.0));
+            for (a, b, text) in windows {
+                let page = &mut pages[page_idx];
+                if is_single_bracket(&page.list.commands, a, b) {
+                    continue;
+                }
+                let bounds = group_bounds_in_page(page, a, b);
+                page.list
+                    .commands
+                    .insert(b, DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+                page.list.insert_command(
+                    a,
+                    DisplayCommand::BeginBlendGroup {
+                        bounds,
+                        blend_mode: paged_compose::BlendMode::Normal,
+                        opacity: 1.0,
+                        isolated: false,
+                        knockout: false,
+                        transform: Transform::IDENTITY,
+                    },
+                );
+                shift_text_slots(spread_frame_spans, page_idx, a, b, text);
+                end += 2;
             }
             let page = &mut pages[page_idx];
             let bounds = group_bounds_in_page(page, start, end);
@@ -248,6 +341,8 @@ pub(crate) fn group_pass(
                     bounds,
                     blend_mode,
                     opacity,
+                    isolated: group.transparency.isolate_blending,
+                    knockout: group.transparency.knockout_group,
                     transform: Transform::IDENTITY,
                 },
             );

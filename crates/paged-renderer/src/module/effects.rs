@@ -263,6 +263,16 @@ fn inner_shadow_from_parser(
         (_, _, Some(angle), Some(dist)) => polar_to_offset(angle, dist),
         _ => (0.0, 0.0),
     };
+    // R-11: under the document's light the shadow keeps its distance and
+    // turns to the light's angle, as a drop shadow does.
+    let (offset_x, offset_y) = if p.use_global_light == Some(true) {
+        let angle = color_ctx
+            .global_light_angle
+            .unwrap_or(paged_model::TransparencyPreference::DEFAULT_GLOBAL_LIGHT_ANGLE);
+        polar_to_offset(angle, offset_x.hypot(offset_y))
+    } else {
+        (offset_x, offset_y)
+    };
     ComposeInnerShadow {
         offset_x,
         offset_y,
@@ -362,8 +372,18 @@ fn bevel_emboss_from_parser(
         // rasterizer's contrast multiplier is 1.0 at "100% depth".
         depth: pct_to_scale(p.depth_pct, 1.0),
         size: p.size.unwrap_or(DEFAULT_BLUR_RADIUS),
-        angle_deg: p.angle_deg.unwrap_or(120.0),
-        altitude_deg: p.altitude_deg.unwrap_or(30.0),
+        // R-11: `UseGlobalLight` takes the document's light (asked of
+        // InDesign, `effects-attrs` case 16).
+        angle_deg: if p.use_global_light == Some(true) {
+            color_ctx.global_light_angle.unwrap_or(120.0)
+        } else {
+            p.angle_deg.unwrap_or(120.0)
+        },
+        altitude_deg: if p.use_global_light == Some(true) {
+            color_ctx.global_light_altitude.unwrap_or(30.0)
+        } else {
+            p.altitude_deg.unwrap_or(30.0)
+        },
         highlight_color,
         shadow_color,
         highlight_opacity: pct_to_unit(p.highlight_opacity_pct, DEFAULT_OPACITY),
@@ -608,6 +628,7 @@ mod tests {
             start_point: None,
             end_point: None,
             stops: Vec::new(),
+            ..Default::default()
         };
         let g = gradient_feather_from_parser(&p, None);
         assert_eq!(g.stops.len(), 2, "the default gradient has two stops");
@@ -636,6 +657,7 @@ mod tests {
                     stop_color: None,
                 },
             ],
+            ..Default::default()
         };
         let g = gradient_feather_from_parser(&p, None);
         assert_eq!(g.stops.len(), 2);

@@ -67,27 +67,13 @@ use crate::pipeline::{
     stroke_alignment_offset, stroke_for, BuiltPage, ColorCtx,
 };
 
-/// Emit the drop-shadow stamp(s) for a frame. The object shadow stamps
-/// what the frame paints (its fill outline grown by the stroke's outer
-/// part, or its stroke band when unfilled); the stroke-transparency
-/// shadow stamps the frame's outline when the stroke is visible
-/// (`StrokeColor != Swatch/None` AND `StrokeWeight > 0`).
-pub(crate) fn drop_shadow_module(
-    frame: &ResolvedFrame<'_>,
-    page: &mut BuiltPage,
-    palette: &Graphic,
-    color_ctx: ColorCtx<'_>,
-    fallback: Option<DropShadow>,
-    outer: Transform,
-    stroke_drop_shadow: Option<&DropShadowSetting>,
-) {
-    // Resolve the shape the shadow stamps under: an axis-aligned rect
-    // for a plain Rect / TextFrameRect, or the frame's real outline
-    // (interned once, reused by both fill and stroke shadows) for a
-    // rounded one, an Oval or a pathed Polygon. Lines cast theirs in
-    // `line_drop_shadow_module`.
+/// The shape a closed frame's shadows stamp under: an axis-aligned rect
+/// for a plain Rect / TextFrameRect, or the frame's real outline
+/// (interned) for a rounded one, an Oval or a pathed Polygon. `None` for
+/// a line, which casts its shadow in [`line_drop_shadow_module`].
+fn outline_target(frame: &ResolvedFrame<'_>, page: &mut BuiltPage) -> Option<ShadowTarget> {
     let cache_key = frame.self_id.map(|id| fnv_1a_u64(id.as_bytes()));
-    let target: ShadowTarget = match &frame.geometry {
+    Some(match &frame.geometry {
         Geometry::Rect { rect } | Geometry::TextFrameRect { rect } => {
             match rect_outline(frame, *rect, 0.0) {
                 RectOutline::Plain(rect) => ShadowTarget::Rect(rect),
@@ -122,7 +108,43 @@ pub(crate) fn drop_shadow_module(
                 ShadowTarget::Path(path_id)
             }
         }
-        Geometry::Line { .. } => return,
+        Geometry::Line { .. } => return None,
+    })
+}
+
+/// R-10 — how strong the object's shadow is: InDesign casts it from the
+/// object's composited alpha, so a fill target at 40 % casts a shadow
+/// 40 % as strong, which shows through the fill (asked of InDesign,
+/// `effects-attrs` cases 9–10: the shadow's darkness falls from 165 to 66
+/// levels, `KnockedOut` true or false alike). Approximated per painted
+/// part: the fill's opacity for a filled frame, the stroke's for a
+/// stroke-only one, the stronger of the two for both.
+fn object_shadow_strength(frame: &ResolvedFrame<'_>, fill: bool, stroke: bool) -> f32 {
+    let f = crate::pipeline::target_opacity(frame.fill_target);
+    let s = crate::pipeline::target_opacity(frame.stroke_target);
+    match (fill, stroke) {
+        (true, true) => f.max(s),
+        (true, false) => f,
+        (false, true) => s,
+        (false, false) => 1.0,
+    }
+}
+
+/// Emit the OBJECT's drop-shadow stamp for a frame: what the frame
+/// paints — its fill outline grown by the stroke's outer part, or its
+/// stroke band when unfilled. The fill's and the stroke's own shadows
+/// are [`fill_shadow_module`] and [`stroke_shadow_module`].
+pub(crate) fn drop_shadow_module(
+    frame: &ResolvedFrame<'_>,
+    page: &mut BuiltPage,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+    fallback: Option<DropShadow>,
+    outer: Transform,
+) {
+    let cache_key = frame.self_id.map(|id| fnv_1a_u64(id.as_bytes()));
+    let Some(target) = outline_target(frame, page) else {
+        return;
     };
 
     // Object shadow, cast from what the object paints. With a visible
@@ -131,9 +153,13 @@ pub(crate) fn drop_shadow_module(
     // the stroke band, as InDesign does for every closed shape.
     let stroke_visible =
         frame_stroke_is_visible(frame.stroke_color, frame.effective_stroke_weight());
-    if !frame_fill_is_transparent(frame.fill_color) {
-        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, fallback, palette, color_ctx)
+    let filled = !frame_fill_is_transparent(frame.fill_color);
+    let strength = object_shadow_strength(frame, filled, stroke_visible);
+    if filled {
+        if let Some(mut shadow) =
+            resolve_frame_shadow(frame.drop_shadow, fallback, palette, color_ctx)
         {
+            shadow.opacity *= strength;
             // Filled AND stroked: the fill plus the stroke's outer part.
             let painted = stroke_visible
                 .then(|| filled_and_stroked_outline_of(frame))
@@ -149,7 +175,9 @@ pub(crate) fn drop_shadow_module(
             emit_shadow(painted.unwrap_or(target), outer, shadow, page);
         }
     } else if stroke_visible {
-        if let Some(shadow) = resolve_frame_shadow(frame.drop_shadow, None, palette, color_ctx) {
+        if let Some(mut shadow) = resolve_frame_shadow(frame.drop_shadow, None, palette, color_ctx)
+        {
+            shadow.opacity *= strength;
             if let Some(band) = stroke_band_of(frame) {
                 let key =
                     cache_key.unwrap_or_else(|| path_signature_of(frame)) ^ 0x5AD0_B4ED_0000_0000;
@@ -158,14 +186,58 @@ pub(crate) fn drop_shadow_module(
             }
         }
     }
+}
 
-    // Stroke shadow — only when the stroke is actually visible.
-    // Resolving via `resolve_frame_shadow(..., None, ...)` so the
-    // synthetic fallback only ever supplies the *fill* shadow.
-    if stroke_visible {
-        if let Some(shadow) = resolve_frame_shadow(stroke_drop_shadow, None, palette, color_ctx) {
-            emit_shadow(target, outer, shadow, page);
-        }
+/// R-10 — the fill target's own shadow
+/// (`<FillTransparencySetting><DropShadowSetting>`): cast by the fill's
+/// outline alone, not grown by the stroke (asked of InDesign,
+/// `transparency-targets` case 26). Nothing for an unfilled frame.
+pub(crate) fn fill_shadow_module(
+    frame: &ResolvedFrame<'_>,
+    page: &mut BuiltPage,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+    outer: Transform,
+) {
+    if frame.fill_drop_shadow.is_none() || frame_fill_is_transparent(frame.fill_color) {
+        return;
+    }
+    let Some(shadow) = resolve_frame_shadow(frame.fill_drop_shadow, None, palette, color_ctx)
+    else {
+        return;
+    };
+    if let Some(target) = outline_target(frame, page) {
+        emit_shadow(target, outer, shadow, page);
+    }
+}
+
+/// The stroke target's own shadow
+/// (`<StrokeTransparencySetting><DropShadowSetting>`), cast by the stroke
+/// band — so where it falls inward it lies OVER the fill (asked of
+/// InDesign, `transparency-targets` case 27; it used to stamp the whole
+/// frame outline, under the fill). Emitted only when the stroke is
+/// visible (`StrokeColor != Swatch/None` AND `StrokeWeight > 0`).
+pub(crate) fn stroke_shadow_module(
+    frame: &ResolvedFrame<'_>,
+    page: &mut BuiltPage,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+    outer: Transform,
+) {
+    if frame.stroke_drop_shadow.is_none()
+        || !frame_stroke_is_visible(frame.stroke_color, frame.effective_stroke_weight())
+    {
+        return;
+    }
+    let Some(shadow) = resolve_frame_shadow(frame.stroke_drop_shadow, None, palette, color_ctx)
+    else {
+        return;
+    };
+    let cache_key = frame.self_id.map(|id| fnv_1a_u64(id.as_bytes()));
+    if let Some(band) = stroke_band_of(frame) {
+        let key = cache_key.unwrap_or_else(|| path_signature_of(frame)) ^ 0x5AD0_57E0_0000_0000;
+        let (path_id, _) = page.list.paths.intern(key, band);
+        emit_shadow(ShadowTarget::Path(path_id), outer, shadow, page);
     }
 }
 
@@ -305,6 +377,17 @@ enum ShadowTarget {
 }
 
 fn emit_shadow(target: ShadowTarget, outer: Transform, shadow: DropShadow, page: &mut BuiltPage) {
+    crate::pipeline::emit_blended_shadow(page, &shadow, |page| {
+        emit_shadow_stamp(target, outer, shadow, page)
+    });
+}
+
+fn emit_shadow_stamp(
+    target: ShadowTarget,
+    outer: Transform,
+    shadow: DropShadow,
+    page: &mut BuiltPage,
+) {
     match target {
         ShadowTarget::Rect(rect) => {
             emit_drop_shadow_rect_transformed(rect, outer, shadow, &mut page.list);
@@ -355,10 +438,12 @@ pub(crate) fn line_drop_shadow_module(
         .list
         .paths
         .intern(cache_key ^ 0x5AD0_57A0_0000_0000, band);
-    page.list.push(DisplayCommand::DropShadow {
-        path_id,
-        transform,
-        shadow,
+    crate::pipeline::emit_blended_shadow(page, &shadow, |page| {
+        page.list.push(DisplayCommand::DropShadow {
+            path_id,
+            transform,
+            shadow,
+        })
     });
 }
 

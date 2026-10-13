@@ -102,7 +102,8 @@ use shapes::{SUBSTITUTED_HIGHLIGHT_B, SUBSTITUTED_HIGHLIGHT_G, SUBSTITUTED_HIGHL
 
 pub(crate) use blend_shadow::{
     frame_group_opacity, frame_needs_blend_group, pop_blend_group, push_blend_group,
-    resolve_frame_shadow,
+    emit_blended_shadow, push_target_group, resolve_frame_shadow, shadow_group_blend,
+    target_opacity,
 };
 pub use build_engine::build_index_paragraphs;
 use build_engine::*;

@@ -772,6 +772,23 @@ property_paths! {
         FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise" : pct().idml(idml![attr(DirectionalFeatherSetting, Noise)]),
         FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke" : pct().idml(idml![attr(DirectionalFeatherSetting, ChokeAmount)]),
         FrameBlendMode => "frameBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        // R-10 — the fill, stroke and content targets (the `<BlendingSetting>`
+        // under `<Fill|Stroke|ContentTransparencySetting>`, a picture's under
+        // its `<Image>`), and how a group's members composite.
+        FrameFillOpacity => "frameFillOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameFillBlendMode => "frameFillBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        FrameStrokeOpacity => "frameStrokeOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameStrokeBlendMode => "frameStrokeBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        FrameContentOpacity => "frameContentOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameContentBlendMode => "frameContentBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        GroupIsolateBlending => "groupIsolateBlending" : bool_().default_bool(false).idml(idml![attr(BlendingSetting, IsolateBlending)]),
+        GroupKnockout => "groupKnockout" : bool_().default_bool(false).idml(idml![attr(BlendingSetting, KnockoutGroup)]),
+        // R-11 — the drop shadow's remaining attributes.
+        FrameDropShadowBlendMode => "frameDropShadowBlendMode" : enum_open(BLEND_MODES).default_text("Multiply").idml(idml![attr(DropShadowSetting, BlendMode)]),
+        FrameDropShadowSpread => "frameDropShadowSpread" : pct().default_num(0.0).idml(idml![attr(DropShadowSetting, Spread)]),
+        FrameDropShadowNoise => "frameDropShadowNoise" : pct().default_num(0.0).idml(idml![attr(DropShadowSetting, Noise)]),
+        FrameDropShadowKnockedOut => "frameDropShadowKnockedOut" : bool_().default_bool(true).idml(idml![attr(DropShadowSetting, KnockedOut)]),
+        FrameDropShadowUseGlobalLight => "frameDropShadowUseGlobalLight" : bool_().default_bool(false).idml(idml![attr(DropShadowSetting, UseGlobalLight)]),
         // W0.4 — the seventh frame effect. Its six siblings were
         // advertised and it was not, under "no recorded reason"; the
         // apply arm takes the same node kinds as the others and the
@@ -900,6 +917,9 @@ property_paths! {
         DocumentSlugBottom => "documentSlugBottom" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugBottomOffset)]), "doc",
         DocumentSlugInsideOrLeft => "documentSlugInsideOrLeft" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugInsideOrLeftOffset)]), "doc",
         DocumentSlugRightOrOutside => "documentSlugRightOrOutside" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugRightOrOutsideOffset)]), "doc",
+        // R-11 — the document's global light.
+        DocumentGlobalLightAngle => "documentGlobalLightAngle" : deg().default_num(120.0).idml(idml![attr(TransparencyPreference, GlobalLightAngle)]), "doc",
+        DocumentGlobalLightAltitude => "documentGlobalLightAltitude" : deg().default_num(30.0).idml(idml![attr(TransparencyPreference, GlobalLightAltitude)]), "doc",
         TextVariableName => "textVariableName" : text().idml(idml![attr(TextVariable, Name)]), "textVariable",
         TextVariableType => "textVariableType" : enum_open(TEXT_VARIABLE_TYPES).idml(idml![attr(TextVariable, VariableType)]), "textVariable",
         TextVariableContents => "textVariableContents" : text().idml(idml![child(CustomTextVariablePreference, Contents)]), "textVariable",

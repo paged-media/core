@@ -99,6 +99,10 @@ pub enum PendingFormGroup {
     /// Non-isolated transparency group, blending colour space
     /// inherited from the parent (the blend/opacity groups).
     TransparencyInherit,
+    /// R-10 — a transparency group with IDML's `IsolateBlending` /
+    /// `KnockoutGroup`: `/I true` and / or `/K true` on the group
+    /// dictionary, blending colour space inherited.
+    TransparencyFlags { isolated: bool, knockout: bool },
     /// Isolated DeviceGray group (luminosity soft masks).
     LuminosityGray,
     /// C-28 — isolated transparency group whose ALPHA channel drives

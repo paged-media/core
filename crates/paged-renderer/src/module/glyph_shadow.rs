@@ -175,8 +175,11 @@ pub(crate) fn emit_glyph_shadow_pass(
         abs_start,
         DisplayCommand::BeginBlendGroup {
             bounds: group_bounds,
-            blend_mode: BlendMode::Normal,
+            // R-11: the shadow's own blend mode, where it matters.
+            blend_mode: crate::pipeline::shadow_group_blend(&shadow).unwrap_or(BlendMode::Normal),
             opacity: group_opacity,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         },
     );
@@ -306,6 +309,8 @@ mod tests {
             },
             blend_mode: paged_compose::BlendMode::Normal,
             opacity: 1.0,
+            isolated: false,
+            knockout: false,
             transform: Transform::IDENTITY,
         });
         list.commands

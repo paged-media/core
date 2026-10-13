@@ -352,7 +352,13 @@ impl AutoSizingReferencePoint {
 
 /// Drop shadow as carried in the IDML XML. Distances are in pt;
 /// `opacity_pct` is 0..=100; `effect_color` is a Color id reference.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// R-11: InDesign writes each of the remaining attributes only when it
+/// differs from its default (asked of InDesign 20.0.1, the
+/// `effects-attrs` fixture), so every one of them is an `Option` whose
+/// `None` is that default. Build one with `..Default::default()` so an
+/// adapter survives the next attribute.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DropShadowSetting {
     pub mode: String,
     pub x_offset: f32,
@@ -360,6 +366,117 @@ pub struct DropShadowSetting {
     pub size: f32,
     pub opacity_pct: f32,
     pub effect_color: Option<String>,
+    /// `BlendMode` — how the shadow composites onto what lies under it.
+    /// `None` is InDesign's default, `Multiply` (cases 1–4: a cyan shadow
+    /// with no `BlendMode` paints exactly as one spelled `Multiply`).
+    #[serde(default)]
+    pub blend_mode: Option<String>,
+    /// `Spread` (0..=100) — how much of the blur band is solid before it
+    /// starts to fade: a choke on the blurred alpha. `None` is 0.
+    #[serde(default)]
+    pub spread_pct: Option<f32>,
+    /// `Noise` (0..=100) — grain mixed into the shadow's alpha. `None`
+    /// is 0.
+    #[serde(default)]
+    pub noise_pct: Option<f32>,
+    /// `KnockedOut` — "object knocks out shadow". `None` is `true`.
+    /// Read and written back: over a fill at 40 % InDesign shows the
+    /// (40 %-strength) shadow through the fill whether it is `true` or
+    /// `false` (cases 9–10 render identically), so the renderer has
+    /// nothing to branch on.
+    #[serde(default)]
+    pub knocked_out: Option<bool>,
+    /// `HonorOtherEffects` — the shadow follows the item's other effects
+    /// (a feathered item casts a feathered shadow). `None` is `false`.
+    #[serde(default)]
+    pub honor_other_effects: Option<bool>,
+    /// `UseGlobalLight` — the shadow falls away from the DOCUMENT's light
+    /// ([`TransparencyPreference::global_light_angle`]) at the distance
+    /// of its own offsets, `hypot(x_offset, y_offset)`, instead of along
+    /// its own offsets (cases 13–15). `None` is `false`.
+    #[serde(default)]
+    pub use_global_light: Option<bool>,
+}
+
+impl DropShadowSetting {
+    /// The offset the shadow paints at: its own `(x_offset, y_offset)`,
+    /// or — under the document's light — the same distance away from a
+    /// light at `global_light_angle` degrees (counter-clockwise from the
+    /// +x axis, so the shadow falls the opposite way: InDesign's 135°
+    /// default light puts a 7 / 7 shadow down and to the right).
+    pub fn effective_offset(&self, global_light_angle: Option<f32>) -> (f32, f32) {
+        if self.use_global_light != Some(true) {
+            return (self.x_offset, self.y_offset);
+        }
+        let angle = global_light_angle.unwrap_or(TransparencyPreference::DEFAULT_GLOBAL_LIGHT_ANGLE);
+        let distance = self.x_offset.hypot(self.y_offset);
+        let (sin, cos) = angle.to_radians().sin_cos();
+        (-distance * cos, distance * sin)
+    }
+}
+
+/// `<TransparencyPreference>` in `Resources/Preferences.xml` — the
+/// document's global light, which every effect with `UseGlobalLight`
+/// takes its angle (and a bevel its altitude) from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TransparencyPreference {
+    /// `GlobalLightAngle` in degrees; `None` is InDesign's 120.
+    #[serde(default)]
+    pub global_light_angle: Option<f32>,
+    /// `GlobalLightAltitude` in degrees; `None` is InDesign's 30.
+    #[serde(default)]
+    pub global_light_altitude: Option<f32>,
+}
+
+impl TransparencyPreference {
+    pub const DEFAULT_GLOBAL_LIGHT_ANGLE: f32 = 120.0;
+    pub const DEFAULT_GLOBAL_LIGHT_ALTITUDE: f32 = 30.0;
+}
+
+/// One transparency TARGET of a page item other than the object as a
+/// whole: its fill, its stroke, or its content. A page item composites
+/// as a group of its targets — fill, then content, then stroke — each
+/// with its own opacity, blend mode and effects; the object's own
+/// setting then applies to the group (asked of InDesign 20.0.1, the
+/// `transparency-targets` fixture).
+///
+/// Spelled `<FillTransparencySetting>`, `<StrokeTransparencySetting>`
+/// and — for a text frame's text — `<ContentTransparencySetting>`. A
+/// graphic frame's content is its placed picture, whose transparency
+/// is the `<Image>`'s own `<TransparencySetting>`: InDesign writes no
+/// `<ContentTransparencySetting>` on a graphic frame and ignores one.
+///
+/// A target's drop shadow lives next to it on the item
+/// (`fill_drop_shadow`, `stroke_drop_shadow`, `content_drop_shadow`),
+/// as the object's own `drop_shadow` lives next to `effects`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TargetTransparency {
+    /// `<BlendingSetting Opacity>`, 0..=100. `None` is 100. It fades the
+    /// target's own shadow with it (case 40).
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// `<BlendingSetting BlendMode>`. `None` is `Normal`. The target
+    /// blends with whatever lies under the ITEM, not only with the
+    /// item's other targets: the object is a non-isolated group
+    /// (case 37).
+    #[serde(default)]
+    pub blend_mode: Option<String>,
+    /// The target's other effects (glows, feathers, …), read and written
+    /// back; the renderer paints the object's effects only.
+    #[serde(default)]
+    pub effects: Option<FrameEffects>,
+}
+
+impl TargetTransparency {
+    /// True when the target composites differently from an opaque
+    /// `Normal` paint.
+    pub fn is_active(&self) -> bool {
+        self.opacity.is_some_and(|o| o < 100.0 - f32::EPSILON)
+            || self
+                .blend_mode
+                .as_deref()
+                .is_some_and(|b| !b.eq_ignore_ascii_case("Normal"))
+    }
 }
 
 /// Authoritative placed-image metadata InDesign bakes onto the
@@ -683,6 +800,18 @@ pub struct GroupTransparency {
     /// emits the shadow against the group's flattened raster (so
     /// child fills don't double-stamp under it).
     pub drop_shadow: Option<DropShadowSetting>,
+    /// `<BlendingSetting IsolateBlending>` — the members' blend modes see
+    /// only each other, not what lies under the group (cases 42, 44, 46,
+    /// 48 of `transparency-targets`). `false` (InDesign's default) lets a
+    /// `Multiply` member multiply with the page below.
+    #[serde(default)]
+    pub isolate_blending: bool,
+    /// `<BlendingSetting KnockoutGroup>` — each member composites with
+    /// what lies under the GROUP rather than with the members before it,
+    /// so a later member replaces an earlier one where they overlap
+    /// (cases 43, 44, 47, 48).
+    #[serde(default)]
+    pub knockout_group: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -928,6 +1057,27 @@ pub struct TextFrame {
     pub subpath_open: Vec<bool>,
     /// See [`Rectangle::effects`] (Q-04).
     pub effects: Option<FrameEffects>,
+    /// R-10 — `<FillTransparencySetting>`: the fill's own opacity, blend
+    /// mode and effects; see [`TargetTransparency`]. `None` when absent.
+    #[serde(default)]
+    pub fill_transparency: Option<TargetTransparency>,
+    /// R-10 — `<StrokeTransparencySetting>`; see [`TargetTransparency`].
+    #[serde(default)]
+    pub stroke_transparency: Option<TargetTransparency>,
+    /// R-10 — the content target: a text frame's text
+    /// (`<ContentTransparencySetting>`) or a graphic frame's placed
+    /// picture (the `<Image>`'s own `<TransparencySetting>`); see
+    /// [`TargetTransparency`].
+    #[serde(default)]
+    pub content_transparency: Option<TargetTransparency>,
+    /// R-10 — the fill target's `<DropShadowSetting>`: a shadow cast by
+    /// the fill's shape alone (case 26), faded with the fill (case 40).
+    #[serde(default)]
+    pub fill_drop_shadow: Option<DropShadowSetting>,
+    /// R-10 — the content target's `<DropShadowSetting>`: a text frame's
+    /// text casts it glyph by glyph (case 28), a picture by its own box.
+    #[serde(default)]
+    pub content_drop_shadow: Option<DropShadowSetting>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -1060,6 +1210,11 @@ impl TextFrame {
             subpath_starts: Vec::new(),
             subpath_open: Vec::new(),
             effects: None,
+            fill_transparency: None,
+            stroke_transparency: None,
+            content_transparency: None,
+            fill_drop_shadow: None,
+            content_drop_shadow: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
             gradient_fill_start: None,
@@ -1318,6 +1473,27 @@ pub struct Rectangle {
     /// renderer treats the field as "no effect"; when set it's
     /// surfaced for downstream tooling but visibly emits nothing.
     pub effects: Option<FrameEffects>,
+    /// R-10 — `<FillTransparencySetting>`: the fill's own opacity, blend
+    /// mode and effects; see [`TargetTransparency`]. `None` when absent.
+    #[serde(default)]
+    pub fill_transparency: Option<TargetTransparency>,
+    /// R-10 — `<StrokeTransparencySetting>`; see [`TargetTransparency`].
+    #[serde(default)]
+    pub stroke_transparency: Option<TargetTransparency>,
+    /// R-10 — the content target: a text frame's text
+    /// (`<ContentTransparencySetting>`) or a graphic frame's placed
+    /// picture (the `<Image>`'s own `<TransparencySetting>`); see
+    /// [`TargetTransparency`].
+    #[serde(default)]
+    pub content_transparency: Option<TargetTransparency>,
+    /// R-10 — the fill target's `<DropShadowSetting>`: a shadow cast by
+    /// the fill's shape alone (case 26), faded with the fill (case 40).
+    #[serde(default)]
+    pub fill_drop_shadow: Option<DropShadowSetting>,
+    /// R-10 — the content target's `<DropShadowSetting>`: a text frame's
+    /// text casts it glyph by glyph (case 28), a picture by its own box.
+    #[serde(default)]
+    pub content_drop_shadow: Option<DropShadowSetting>,
     /// `GradientFillAngle` in degrees, counter-clockwise as seen on the
     /// page: the axis runs from the start in the direction
     /// `(cos θ, −sin θ)` of the item's (y-down) inner coordinates, so
@@ -1437,6 +1613,11 @@ impl Rectangle {
             opacity: None,
             blend_mode: None,
             effects: None,
+            fill_transparency: None,
+            stroke_transparency: None,
+            content_transparency: None,
+            fill_drop_shadow: None,
+            content_drop_shadow: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
             gradient_fill_start: None,
@@ -1496,6 +1677,10 @@ pub struct InnerShadowParams {
     pub choke_pct: Option<f32>,
     pub blend_mode: Option<String>,
     pub noise_pct: Option<f32>,
+    /// R-11 — `UseGlobalLight`: the shadow's angle is the document's
+    /// light. `None` is `false`.
+    #[serde(default)]
+    pub use_global_light: Option<bool>,
 }
 
 /// `<OuterGlowSetting>` parameters.
@@ -1507,6 +1692,10 @@ pub struct OuterGlowParams {
     pub spread_pct: Option<f32>,
     pub blend_mode: Option<String>,
     pub noise_pct: Option<f32>,
+    /// R-11 — `Technique`: `Softer` (InDesign's default, a blurred
+    /// halo) or `Precise` (follows the outline's corners).
+    #[serde(default)]
+    pub technique: Option<String>,
 }
 
 /// `<InnerGlowSetting>` parameters. `source` selects center-out vs
@@ -1521,6 +1710,9 @@ pub struct InnerGlowParams {
     pub blend_mode: Option<String>,
     pub source: Option<String>,
     pub noise_pct: Option<f32>,
+    /// R-11 — `Technique`; see [`OuterGlowParams::technique`].
+    #[serde(default)]
+    pub technique: Option<String>,
 }
 
 /// `<BevelAndEmbossSetting>` parameters. `style` (Inner/Outer/Emboss/
@@ -1543,6 +1735,16 @@ pub struct BevelEmbossParams {
     pub direction: Option<String>,
     pub technique: Option<String>,
     pub soften: Option<f32>,
+    /// R-11 — `HighlightBlendMode`; `None` is InDesign's `Screen`.
+    #[serde(default)]
+    pub highlight_blend_mode: Option<String>,
+    /// R-11 — `ShadowBlendMode`; `None` is InDesign's `Multiply`.
+    #[serde(default)]
+    pub shadow_blend_mode: Option<String>,
+    /// R-11 — `UseGlobalLight`: angle and altitude are the document's
+    /// light. `None` is `false`.
+    #[serde(default)]
+    pub use_global_light: Option<bool>,
 }
 
 /// `<SatinSetting>` parameters. `Distance` + `Angle` set the wave
@@ -1585,6 +1787,10 @@ pub struct DirectionalFeatherParams {
     pub noise_pct: Option<f32>,
     pub choke_pct: Option<f32>,
     pub corner_type: Option<String>,
+    /// R-11 — `FollowShapeMode`: `LeadingEdge` (InDesign's default),
+    /// `AllEdges` or `None`.
+    #[serde(default)]
+    pub follow_shape_mode: Option<String>,
 }
 
 /// `<GradientFeatherSetting>` parameters. The gradient direction is
@@ -1602,6 +1808,14 @@ pub struct GradientFeatherParams {
     pub end_point: Option<(f32, f32)>,
     pub angle_deg: Option<f32>,
     pub stops: Vec<GradientFeatherStop>,
+    /// R-11 — `HiliteAngle` in degrees: the direction a radial feather's
+    /// centre moves off the item's centre (measured, `effects-attrs`
+    /// cases 25–28).
+    #[serde(default)]
+    pub hilite_angle: Option<f32>,
+    /// R-11 — `HiliteLength` in pt: how far it moves.
+    #[serde(default)]
+    pub hilite_length: Option<f32>,
 }
 
 /// One `<GradientStop>` child of a `<GradientFeatherSetting>`. Each
@@ -1692,6 +1906,27 @@ pub struct Oval {
     pub item_layer: Option<String>,
     /// See [`Rectangle::effects`] (Q-04).
     pub effects: Option<FrameEffects>,
+    /// R-10 — `<FillTransparencySetting>`: the fill's own opacity, blend
+    /// mode and effects; see [`TargetTransparency`]. `None` when absent.
+    #[serde(default)]
+    pub fill_transparency: Option<TargetTransparency>,
+    /// R-10 — `<StrokeTransparencySetting>`; see [`TargetTransparency`].
+    #[serde(default)]
+    pub stroke_transparency: Option<TargetTransparency>,
+    /// R-10 — the content target: a text frame's text
+    /// (`<ContentTransparencySetting>`) or a graphic frame's placed
+    /// picture (the `<Image>`'s own `<TransparencySetting>`); see
+    /// [`TargetTransparency`].
+    #[serde(default)]
+    pub content_transparency: Option<TargetTransparency>,
+    /// R-10 — the fill target's `<DropShadowSetting>`: a shadow cast by
+    /// the fill's shape alone (case 26), faded with the fill (case 40).
+    #[serde(default)]
+    pub fill_drop_shadow: Option<DropShadowSetting>,
+    /// R-10 — the content target's `<DropShadowSetting>`: a text frame's
+    /// text casts it glyph by glyph (case 28), a picture by its own box.
+    #[serde(default)]
+    pub content_drop_shadow: Option<DropShadowSetting>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -1799,6 +2034,11 @@ impl Oval {
             text_wrap: None,
             item_layer: None,
             effects: None,
+            fill_transparency: None,
+            stroke_transparency: None,
+            content_transparency: None,
+            fill_drop_shadow: None,
+            content_drop_shadow: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
             gradient_fill_start: None,
@@ -1879,6 +2119,20 @@ pub struct GraphicLine {
     /// fill-only effects (GradientFeather, InnerShadow, etc.) just
     /// log; stroke-side effects map naturally.
     pub effects: Option<FrameEffects>,
+    /// R-10 — `<BlendingSetting Opacity>` under the line's
+    /// `<TransparencySetting>`, 0..=100; `None` is opaque. Lines had no
+    /// object opacity until R-10, so a faded line printed solid.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// R-10 — `<BlendingSetting BlendMode>` under the line's
+    /// `<TransparencySetting>`; `None` is `Normal`.
+    #[serde(default)]
+    pub blend_mode: Option<String>,
+    /// R-10 — `<StrokeTransparencySetting>`: the line's stroke target
+    /// (case 36). A line paints nothing but its stroke, so this composites
+    /// exactly like the object's setting.
+    #[serde(default)]
+    pub stroke_transparency: Option<TargetTransparency>,
     /// `OverprintStroke="true"`. See [`TextFrame::overprint_stroke`].
     /// Lines carry no fill, so only the stroke flag is meaningful.
     pub overprint_stroke: bool,
@@ -1968,6 +2222,9 @@ impl GraphicLine {
             subpath_open: Vec::new(),
             text_paths: Vec::new(),
             effects: None,
+            opacity: None,
+            blend_mode: None,
+            stroke_transparency: None,
             overprint_stroke: false,
             nonprinting: false,
             visible: true,
@@ -2238,6 +2495,27 @@ pub struct Polygon {
     pub drop_shadow: Option<DropShadowSetting>,
     /// See [`Rectangle::effects`] (Q-04).
     pub effects: Option<FrameEffects>,
+    /// R-10 — `<FillTransparencySetting>`: the fill's own opacity, blend
+    /// mode and effects; see [`TargetTransparency`]. `None` when absent.
+    #[serde(default)]
+    pub fill_transparency: Option<TargetTransparency>,
+    /// R-10 — `<StrokeTransparencySetting>`; see [`TargetTransparency`].
+    #[serde(default)]
+    pub stroke_transparency: Option<TargetTransparency>,
+    /// R-10 — the content target: a text frame's text
+    /// (`<ContentTransparencySetting>`) or a graphic frame's placed
+    /// picture (the `<Image>`'s own `<TransparencySetting>`); see
+    /// [`TargetTransparency`].
+    #[serde(default)]
+    pub content_transparency: Option<TargetTransparency>,
+    /// R-10 — the fill target's `<DropShadowSetting>`: a shadow cast by
+    /// the fill's shape alone (case 26), faded with the fill (case 40).
+    #[serde(default)]
+    pub fill_drop_shadow: Option<DropShadowSetting>,
+    /// R-10 — the content target's `<DropShadowSetting>`: a text frame's
+    /// text casts it glyph by glyph (case 28), a picture by its own box.
+    #[serde(default)]
+    pub content_drop_shadow: Option<DropShadowSetting>,
     /// See [`Rectangle::gradient_fill_angle`].
     pub gradient_fill_angle: Option<f32>,
     /// See [`Rectangle::gradient_fill_length`].
@@ -2376,6 +2654,11 @@ impl Polygon {
             text_wrap: None,
             item_layer: None,
             effects: None,
+            fill_transparency: None,
+            stroke_transparency: None,
+            content_transparency: None,
+            fill_drop_shadow: None,
+            content_drop_shadow: None,
             gradient_fill_angle: None,
             gradient_fill_length: None,
             gradient_fill_start: None,
@@ -6437,6 +6720,10 @@ pub struct DesignMap {
     /// the document's real numbers. Snapping text to this grid is a
     /// layout-engine task deferred separately. See [`GridPreference`].
     pub grid_preference: GridPreference,
+    /// R-11 — `<TransparencyPreference>`: the document's global light.
+    /// Default (both `None`, InDesign's 120° / 30°) when absent.
+    #[serde(default)]
+    pub transparency_preference: TransparencyPreference,
     /// W1.8 — document-level `<FootnoteOption>` settings (separator
     /// rule + footnote spacing). Default (all-`None`, `present=false`)
     /// when the element is absent; the renderer then applies InDesign's

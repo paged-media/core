@@ -105,6 +105,18 @@ struct GroupFrame {
     /// of compositing it; it never reaches the `EndBlendGroup` /
     /// `PopLayer` composite path.
     soft_mask: Option<(paged_compose::SoftMaskType, bool)>,
+    /// R-10 — the buffer started as a COPY of its backdrop: a
+    /// non-isolated `Normal` group, whose contents blend with what lies
+    /// under the group as they are drawn. Its pop fades the parent toward
+    /// the buffer by the group's opacity instead of compositing a
+    /// transparent buffer over it (for an opaque backdrop the PDF
+    /// non-isolated formula reduces to exactly that lerp).
+    backdrop_copied: bool,
+    /// R-10 — a knockout group's initial backdrop (a copy of the parent
+    /// region, or transparent when the group is isolated). Each child
+    /// group composites onto THIS rather than onto the group's buffer,
+    /// and the result replaces the buffer where the child covers it.
+    knockout_base: Option<Pixmap>,
 }
 
 /// Parallel CMYK accumulator state for the CPU rasterizer (Stage B of
@@ -1547,6 +1559,7 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                         // edges into a halo).
                         let kernel = gaussian_kernel(sigma_px);
                         gaussian_blur_premul(scratch.data_mut(), w_px, h_px, &kernel);
+                        shape_shadow_alpha(&mut scratch, shadow.spread, shadow.noise, scale);
                         target.draw_pixmap(
                             off_x_px,
                             off_y_px,
@@ -1734,6 +1747,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                         effect: None,
                         effect_sigma_px: 0.0,
                         soft_mask: Some((*mask_type, *invert)),
+                        backdrop_copied: false,
+                        knockout_base: None,
                     });
                 }
             }
@@ -1787,6 +1802,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 bounds,
                 blend_mode,
                 opacity,
+                isolated,
+                knockout,
                 ..
             } => {
                 // Allocate an offscreen pixmap sized to the bounds (in
@@ -1814,8 +1831,44 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let w_px = (max_x_px - off_x_px).max(1) as u32;
                 let h_px = (max_y_px - off_y_px).max(1) as u32;
                 match Pixmap::new(w_px, h_px) {
-                    Some(buf) => {
+                    Some(mut buf) => {
                         let ts_blend = blend_mode_to_ts(*blend_mode);
+                        // R-10: what this group's contents see as "below":
+                        // the parent's buffer — or, inside a knockout
+                        // group, that group's initial backdrop, since a
+                        // knockout element composites with the group's
+                        // backdrop and not with the elements before it.
+                        let parent_knockout =
+                            group_stack.last().is_some_and(|p| p.knockout_base.is_some());
+                        let backdrop = group_stack.last().map(|p| {
+                            (
+                                p.knockout_base.as_ref().unwrap_or(&p.pixmap).as_ref(),
+                                p.offset,
+                            )
+                        });
+                        // A non-isolated `Normal` group outside a knockout
+                        // group starts as a copy of its backdrop, so a
+                        // `Multiply` inside it multiplies with the page
+                        // (asked of InDesign, `transparency-targets` 37,
+                        // 45). A child of a knockout group keeps a
+                        // transparent buffer: its COVERAGE is what knocks
+                        // the earlier elements out.
+                        let backdrop_copied = !*isolated
+                            && !parent_knockout
+                            && matches!(ts_blend, TsBlendMode::SourceOver);
+                        if backdrop_copied {
+                            let (src, src_off) = backdrop.unwrap_or((pixmap.as_ref(), (0, 0)));
+                            if let Some(copy) = snapshot_parent_region(
+                                src,
+                                src_off,
+                                (off_x_px, off_y_px),
+                                w_px,
+                                h_px,
+                            ) {
+                                buf = copy;
+                            }
+                        }
+                        let knockout_base = knockout.then(|| buf.clone());
                         // Snapshot the parent target's pixels at the
                         // buffer's bbox so EndBlendGroup can apply
                         // the paper-α=0 backdrop bypass. Only needed
@@ -1824,10 +1877,10 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                         // right answer (no correction needed).
                         let mut backdrop_snapshot = if matches!(ts_blend, TsBlendMode::SourceOver) {
                             None
-                        } else if let Some(parent) = group_stack.last() {
+                        } else if let Some((src, src_off)) = backdrop {
                             snapshot_parent_region(
-                                parent.pixmap.as_ref(),
-                                parent.offset,
+                                src,
+                                src_off,
                                 (off_x_px, off_y_px),
                                 w_px,
                                 h_px,
@@ -1867,6 +1920,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                             effect: None,
                             effect_sigma_px: 0.0,
                             soft_mask: None,
+                            backdrop_copied,
+                            knockout_base,
                         });
                         if let Some(mask) = group_bounds_mask(
                             *bounds,
@@ -1895,6 +1950,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                                 effect: None,
                                 effect_sigma_px: 0.0,
                                 soft_mask: None,
+                                backdrop_copied: false,
+                                knockout_base: None,
                             });
                         }
                     }
@@ -1945,6 +2002,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                             effect: Some(*effect),
                             effect_sigma_px,
                             soft_mask: None,
+                            backdrop_copied: false,
+                            knockout_base: None,
                         });
                         // Clip to `bounds` for the same reason
                         // `BeginBlendGroup` does — but only on the
@@ -1982,6 +2041,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                                 effect: None,
                                 effect_sigma_px: 0.0,
                                 soft_mask: None,
+                                backdrop_copied: false,
+                                knockout_base: None,
                             });
                         }
                     }
@@ -2190,6 +2251,8 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                     // reach here through a malformed list — composite
                     // it as an ordinary group rather than panicking.
                     soft_mask: _,
+                    backdrop_copied,
+                    knockout_base: _,
                 } = top;
                 // Apply the layer effect (Gaussian blur) before
                 // compositing. The buffer was padded by `3σ + 1px` at
@@ -2230,6 +2293,79 @@ fn rasterize_inner(list: &DisplayList, options: &RasterOptions) -> (RgbaImage, O
                 let paper_premul = linear_color_to_ts(options.background)
                     .premultiply()
                     .to_color_u8();
+                // R-10: a child of a knockout group composites onto the
+                // group's INITIAL backdrop, and the result replaces the
+                // group's buffer where the child covers it.
+                if effect.is_none() {
+                    if let Some(parent) = group_stack.last_mut() {
+                        if let Some(base) = parent.knockout_base.as_ref() {
+                            let parent_off = parent.offset;
+                            let dst = (off_x_px - parent_off.0, off_y_px - parent_off.1);
+                            if let Some(mut element) = snapshot_parent_region(
+                                base.as_ref(),
+                                (0, 0),
+                                dst,
+                                group_pix.width(),
+                                group_pix.height(),
+                            ) {
+                                element.draw_pixmap(
+                                    0,
+                                    0,
+                                    group_pix.as_ref(),
+                                    &composite,
+                                    TsTransform::identity(),
+                                    None,
+                                );
+                                if let Some(snapshot) = backdrop_snapshot.as_ref() {
+                                    apply_paper_backdrop_bypass(
+                                        &mut element,
+                                        (0, 0),
+                                        group_pix.as_ref(),
+                                        snapshot.as_ref(),
+                                        opacity,
+                                        paper_premul,
+                                        None,
+                                    );
+                                }
+                                lerp_region(
+                                    &mut parent.pixmap,
+                                    dst,
+                                    element.as_ref(),
+                                    1.0,
+                                    Some(group_pix.as_ref()),
+                                    parent_mask,
+                                );
+                            }
+                            continue;
+                        }
+                    }
+                }
+                if backdrop_copied {
+                    // The buffer holds the backdrop with the contents
+                    // drawn on it: fade the parent toward it.
+                    match group_stack.last_mut() {
+                        Some(parent) => {
+                            let dst = (off_x_px - parent.offset.0, off_y_px - parent.offset.1);
+                            lerp_region(
+                                &mut parent.pixmap,
+                                dst,
+                                group_pix.as_ref(),
+                                opacity,
+                                None,
+                                parent_mask,
+                            );
+                        }
+                        None => lerp_region(
+                            &mut pixmap,
+                            (off_x_px, off_y_px),
+                            group_pix.as_ref(),
+                            opacity,
+                            None,
+                            parent_mask,
+                        ),
+                    }
+                    continue;
+                }
                 if let Some(parent) = group_stack.last_mut() {
                     let parent_off = parent.offset;
                     let dst_x = off_x_px - parent_off.0;
@@ -2700,6 +2836,113 @@ fn snapshot_parent_region(
         }
     }
     Some(snap)
+}
+
+/// R-11 — a drop shadow's `Spread` and `Noise` on its blurred stamp
+/// (premultiplied, one colour). Spread chokes the blur: the alpha is
+/// scaled by `1 / (1 − spread)` and clamped, so that share of the band
+/// is solid before it fades (Photoshop's and InDesign's definition).
+/// Noise multiplies the alpha by grain hashed per page-space cell (so
+/// the pattern does not change with the dpi), `1 − noise · h` for `h` in
+/// 0..1.
+fn shape_shadow_alpha(stamp: &mut Pixmap, spread: f32, noise: f32, scale: f32) {
+    let spread = spread.clamp(0.0, 0.99);
+    let noise = noise.clamp(0.0, 1.0);
+    if spread <= 0.0 && noise <= 0.0 {
+        return;
+    }
+    let w = stamp.width() as usize;
+    let gain = 1.0 / (1.0 - spread);
+    // One grain per ~0.5 pt.
+    let cell = (scale * 0.5).max(1.0);
+    for (i, px) in stamp.pixels_mut().iter_mut().enumerate() {
+        let a = px.alpha();
+        if a == 0 {
+            continue;
+        }
+        let mut factor = gain.min(255.0 / a as f32);
+        if noise > 0.0 {
+            let (x, y) = ((i % w) as f32 / cell, (i / w) as f32 / cell);
+            let k = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663);
+            let h = (k.wrapping_mul(2_654_435_761) >> 16) as f32 / 65_535.0;
+            factor *= 1.0 - noise * h;
+        }
+        let scale_c = |c: u8| (c as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        let na = scale_c(a);
+        let c = |v: u8| scale_c(v).min(na);
+        if let Some(p) = PremultipliedColorU8::from_rgba(c(px.red()), c(px.green()), c(px.blue()), na)
+        {
+            *px = p;
+        }
+    }
+}
+
+/// R-10 — fade `parent` toward `src` (both premultiplied) over `src`'s
+/// extent at `target_off`: `dst += (src − dst) · t`, with
+/// `t = opacity × coverage α × clip`. `coverage`, when given, is a
+/// buffer of `src`'s size whose alpha weighs each pixel (a knockout
+/// child's own coverage); `parent_mask` is the parent target's clip.
+fn lerp_region(
+    parent: &mut Pixmap,
+    target_off: (i32, i32),
+    src: PixmapRef<'_>,
+    opacity: f32,
+    coverage: Option<PixmapRef<'_>>,
+    parent_mask: Option<&TsMask>,
+) {
+    let parent_w = parent.width() as i32;
+    let parent_h = parent.height() as i32;
+    let src_w = src.width() as i32;
+    let src_h = src.height() as i32;
+    let src_pixels = src.pixels();
+    let cov_pixels = coverage.map(|c| c.pixels());
+    let mask_data = parent_mask.map(|m| (m.data(), m.width() as i32, m.height() as i32));
+    let opacity = opacity.clamp(0.0, 1.0);
+    let parent_pixels = parent.pixels_mut();
+    for j in 0..src_h {
+        let py = j + target_off.1;
+        if py < 0 || py >= parent_h {
+            continue;
+        }
+        for i in 0..src_w {
+            let px = i + target_off.0;
+            if px < 0 || px >= parent_w {
+                continue;
+            }
+            let s_idx = (j * src_w + i) as usize;
+            let mut t = opacity;
+            if let Some(cov) = cov_pixels {
+                t *= cov[s_idx].alpha() as f32 / 255.0;
+            }
+            if let Some((md, mw, mh)) = mask_data {
+                if px < mw && py < mh {
+                    t *= md[(py * mw + px) as usize] as f32 / 255.0;
+                }
+            }
+            if t <= 0.0 {
+                continue;
+            }
+            let p_idx = (py * parent_w + px) as usize;
+            let d = parent_pixels[p_idx];
+            let sp = src_pixels[s_idx];
+            let mix = |dc: u8, sc: u8| -> u8 {
+                (dc as f32 + (sc as f32 - dc as f32) * t)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            let a = mix(d.alpha(), sp.alpha());
+            // Premultiplied channels never exceed alpha.
+            let c = |dc: u8, sc: u8| mix(dc, sc).min(a);
+            if let Some(px) = PremultipliedColorU8::from_rgba(
+                c(d.red(), sp.red()),
+                c(d.green(), sp.green()),
+                c(d.blue(), sp.blue()),
+                a,
+            ) {
+                parent_pixels[p_idx] = px;
+            }
+        }
+    }
 }
 
 /// Q-05 helper: true iff every pixel of `snap` has α=0 (transparent
@@ -4179,6 +4422,8 @@ mod tests {
                 },
                 blend_mode: paged_compose::BlendMode::Lighten,
                 opacity: 1.0,
+                isolated: false,
+                knockout: false,
                 transform: paged_compose::Transform::IDENTITY,
             });
         emit_rect(
@@ -4207,6 +4452,133 @@ mod tests {
         // Outside the rects (2, 2): background white.
         let bg = at(&img, 2, 2);
         assert!(bg[0] > 240 && bg[1] > 240 && bg[2] > 240, "bg = {bg:?}");
+    }
+
+    /// R-10 — a group of `mode` around `rect` filled with `paint`.
+    fn grouped_rect(
+        list: &mut DisplayList,
+        rect: Rect,
+        paint: Paint,
+        mode: paged_compose::BlendMode,
+    ) {
+        list.commands
+            .push(paged_compose::DisplayCommand::BeginBlendGroup {
+                bounds: rect,
+                blend_mode: mode,
+                opacity: 1.0,
+                isolated: false,
+                knockout: false,
+                transform: paged_compose::Transform::IDENTITY,
+            });
+        emit_rect(rect, paint, list);
+        list.commands
+            .push(paged_compose::DisplayCommand::EndBlendGroup(
+                paged_compose::Transform::IDENTITY,
+            ));
+    }
+
+    /// R-10 — a yellow backdrop, then a group with `isolated` /
+    /// `knockout` / `opacity` holding a Multiply magenta square and a
+    /// Multiply cyan square that overlap at x 15..20.
+    fn two_multiply_squares(isolated: bool, knockout: bool, opacity: f32) -> RgbaImage {
+        let mut list = DisplayList::new();
+        let r = |x: f32, w: f32| Rect {
+            x,
+            y: 10.0,
+            w,
+            h: 20.0,
+        };
+        emit_rect(
+            Rect {
+                x: 5.0,
+                y: 5.0,
+                w: 30.0,
+                h: 30.0,
+            },
+            Paint::Solid(Color::rgba(1.0, 1.0, 0.0, 1.0)),
+            &mut list,
+        );
+        list.commands
+            .push(paged_compose::DisplayCommand::BeginBlendGroup {
+                bounds: r(10.0, 15.0),
+                blend_mode: paged_compose::BlendMode::Normal,
+                opacity,
+                isolated,
+                knockout,
+                transform: paged_compose::Transform::IDENTITY,
+            });
+        let multiply = paged_compose::BlendMode::Multiply;
+        grouped_rect(
+            &mut list,
+            r(10.0, 10.0),
+            Paint::Solid(Color::rgba(1.0, 0.0, 1.0, 1.0)),
+            multiply,
+        );
+        grouped_rect(
+            &mut list,
+            r(15.0, 10.0),
+            Paint::Solid(Color::rgba(0.0, 1.0, 1.0, 1.0)),
+            multiply,
+        );
+        list.commands
+            .push(paged_compose::DisplayCommand::EndBlendGroup(
+                paged_compose::Transform::IDENTITY,
+            ));
+        let mut opts = RasterOptions::new(40.0, 40.0);
+        opts.dpi = 72.0;
+        rasterize(&list, &opts)
+    }
+
+    /// Asked of InDesign (`transparency-targets` cases 41–48): members of
+    /// a NON-isolated group multiply with the page under the group; an
+    /// isolated group's see only each other; a knockout group's later
+    /// member replaces the earlier one where they overlap.
+    #[test]
+    fn groups_isolate_and_knock_out_as_indesign_composites_them() {
+        // Non-isolated, no knockout, 50 %: magenta × yellow = red, faded
+        // halfway back toward yellow — green at half, no blue. (An
+        // isolated buffer would multiply magenta with nothing and show
+        // magenta's blue.)
+        let img = two_multiply_squares(false, false, 0.5);
+        let p = at(&img, 12, 15);
+        assert!(p[0] > 240 && (100..160).contains(&p[1]) && p[2] < 20, "{p:?}");
+        // Isolated: the magenta member alone shows as magenta over yellow.
+        let img = two_multiply_squares(true, false, 1.0);
+        let p = at(&img, 12, 15);
+        assert!(p[0] > 240 && p[1] < 15 && p[2] > 240, "{p:?}");
+        // Overlap, isolated: magenta × cyan = blue.
+        let p = at(&img, 17, 15);
+        assert!(p[0] < 15 && p[1] < 15 && p[2] > 240, "{p:?}");
+        // Knockout, non-isolated: in the overlap the cyan member replaces
+        // the magenta one and multiplies with the yellow page alone:
+        // green (not black, which the three-way multiply would give).
+        let img = two_multiply_squares(false, true, 1.0);
+        let p = at(&img, 17, 15);
+        assert!(p[0] < 15 && p[1] > 240 && p[2] < 15, "{p:?}");
+        // …and outside it the magenta member still multiplies: red.
+        let p = at(&img, 12, 15);
+        assert!(p[0] > 240 && p[1] < 15 && p[2] < 15, "{p:?}");
+        // Knockout, isolated: plain cyan over magenta in the overlap.
+        let img = two_multiply_squares(true, true, 1.0);
+        let p = at(&img, 17, 15);
+        assert!(p[0] < 15 && p[1] > 240 && p[2] > 240, "{p:?}");
+    }
+
+    /// R-11 — a shadow's spread chokes its blurred alpha; noise grains it.
+    #[test]
+    fn shadow_spread_chokes_and_noise_grains_the_stamp() {
+        let mut stamp = Pixmap::new(8, 8).unwrap();
+        let px = PremultipliedColorU8::from_rgba(0, 0, 0, 100).unwrap();
+        stamp.pixels_mut().iter_mut().for_each(|p| *p = px);
+        let mut spread = stamp.clone();
+        shape_shadow_alpha(&mut spread, 0.5, 0.0, 1.0);
+        assert!(spread.pixels().iter().all(|p| p.alpha() == 200));
+        shape_shadow_alpha(&mut spread, 0.9, 0.0, 1.0);
+        assert!(spread.pixels().iter().all(|p| p.alpha() == 255), "clamped");
+        let mut grain = stamp.clone();
+        shape_shadow_alpha(&mut grain, 0.0, 0.2, 1.0);
+        let alphas: std::collections::HashSet<u8> = grain.pixels().iter().map(|p| p.alpha()).collect();
+        assert!(alphas.len() > 1 && alphas.iter().all(|a| (80..=100).contains(a)), "{alphas:?}");
     }
 
     #[test]
@@ -4250,6 +4622,8 @@ mod tests {
                 },
                 blend_mode: paged_compose::BlendMode::Lighten,
                 opacity: 1.0,
+                isolated: false,
+                knockout: false,
                 transform: paged_compose::Transform::IDENTITY,
             });
         // Push a clip covering only the left half (x in 10..20) of
@@ -4337,6 +4711,8 @@ mod tests {
                 },
                 blend_mode: paged_compose::BlendMode::Normal,
                 opacity: 0.5,
+                isolated: false,
+                knockout: false,
                 transform: paged_compose::Transform::IDENTITY,
             });
         let black = Paint::Solid(Color::rgba(0.0, 0.0, 0.0, 1.0));
@@ -4396,6 +4772,9 @@ mod tests {
             blur_radius: 2.0,
             color: paged_compose::Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 0.6,
+            blend_mode: paged_compose::BlendMode::Normal,
+            spread: 0.0,
+            noise: 0.0,
         };
         list.commands.push(Cmd::PathShadow {
             path_id,
@@ -4580,6 +4959,8 @@ mod tests {
                     },
                     blend_mode: paged_compose::BlendMode::Multiply,
                     opacity: 1.0,
+                    isolated: false,
+                    knockout: false,
                     transform: paged_compose::Transform::IDENTITY,
                 });
             emit_rect(
@@ -6201,6 +6582,8 @@ mod tests {
             bounds,
             blend_mode: BlendMode::Multiply,
             opacity: 1.0,
+            isolated: false,
+            knockout: false,
             transform: XF([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
         });
         // Inside the group: 50%-grey opaque fill over the same bounds.
