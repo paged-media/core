@@ -18,6 +18,9 @@ fixed.
 | `text-advanced` | InDesign's PDF carries tab leaders as text; the engine's line records did not. A price on a line of its own (`10.`) was also dropped as a bare marker. | The record marks each leader on its tab with the characters drawn, and the gate prints them on the engine's side too: InDesign's leaders and the engine's agree dot for dot (17, 21 and 21). Text-gated. |
 | `navigation`, `text-letterspacing` | The gate dropped a short word ending in a full stop from the start of InDesign's line as if it were a list number (`pears.`, `vow.`, `quack.`; the engine's `dog.`), so a different line break read as a missing word. | Markers are dropped only where the engine printed one. The characters agree; the breaks still differ (below for `composer`; InDesign runs `navigation`'s headings into the next paragraph, an A-08 follow-up). Text-gated. |
 | `text-on-path` (records) | The inspector wrote no line records for type on a path. | One record per `<TextPath>`, holding the text that fits between its brackets. Pages 1, 2, 4, 5 and 6 agree; page 3 is open (below). |
+| `preflight` (Inter) | Set in Inter, the engine hyphenated "sto-ry" on the overset story's second line where InDesign's Paragraph Composer keeps "story" whole on the 360 pt measure. | Ragged text breaks by minimum raggedness, and a line keeps its last word by the allowance InDesign gives it (ADR 142); Inter is registered in `preflight.fonts.sh`. |
+| `paste-into` | InDesign's PDF holds five lines of the nested text frame where the engine's line records held two. | The engine set those lines; they were broken differently (ADR 142). Every line matches: text gate `"lines"`. |
+| `list-marker-styles` | Case m15's label `number: size 20, auto leading` broke before `auto` where InDesign oversets `leading`. | ADR 142. Every line matches: text gate `"lines"`. |
 
 ### What the line records mark
 
@@ -38,17 +41,18 @@ The gate drops `list_marker` spans, prints `tab_leader` text in place of its tab
 rest, which InDesign prints too. A marker the engine printed that no line of InDesign's opens with
 is reported as a note, not failed: the marker is dropped on both sides, so the characters agree.
 
+### Line by line
+
+The gate's `"lines"` mode fails a different break as well as a different character. Run over every fixture, 46 of 73 match InDesign line for line (41 before ADR 142, none worse). The five that ADR 142 brought to agreement are gated that way: `list-marker-styles`, `object-style-frames`, `paste-into`, `text-autosize`, `text-letterspacing`.
+
 ## Open, with the package that owns them
 
 | Fixture | Cause | Package |
 |---|---|---|
 | `annual-base`, `showcase-base` | The master folio is `<?ACE 18?>`. The engine prints the page's baked `Page@Name`, which these fixtures use as a descriptor (`annual-base · p003 · front`); InDesign recomputes the number from the sections and prints `3`. The baked name is preferred on purpose (`SectionWalk::next_label`): it carries numbering InDesign computed from rules the engine does not model, a book's continued numbering through `DocumentPreference@StartPageNumber` among them. | L-08 (page numbering), after the start page number is read. |
-| `preflight` (Inter) | Set in Inter, the engine hyphenates "sto-ry" on the overset story's second line; InDesign's Paragraph Composer fits "story" on the full 360 pt measure (its DOM: the line runs 36 to 396 pt) and keeps the hyphen out of a ragged line. InDesign keeps "story" whole at hyphenation zone 0, 36 and 100 and under either composer, and without a hyphen the word fits the measure (358.4 of 360 pt): the difference is how the engine's breaker weighs a hyphen. Inter stays unregistered for this fixture until the composer agrees. | R-23 (composer). |
 | `markers` | InDesign prints the generator's text variables (`Season`, the page count) as empty: it does not resolve the generator's spelling of them. | A-08 follow-up (generator spelling), asked of InDesign. |
-| `paste-into` | InDesign's PDF holds five lines of the nested text frame, the engine's line records two. The container clips the frame, and a clip leaves text in the PDF's text layer, so whether the engine sets fewer lines or only records fewer is still to be checked. | To verify (nested text frames). |
-| `composer` | Line breaks and hyphenation points differ; the characters that differ are those the two layouts carry onto, or past, the last line. | R-20 (letter and glyph spacing), R-23. |
+| `composer` | Line breaks and hyphenation points differ; the characters that differ are those the two layouts carry onto, or past, the last line. Since ragged text breaks by minimum raggedness (ADR 142) the pixel gate measures it at mean ΔE 0.445 (was 0.688); the remaining breaks are justified paragraphs and hyphenation points from TeX patterns, where InDesign uses its own dictionaries. | R-20 (letter and glyph spacing), hyphenation dictionary. |
 | `text-in-shape` | The engine fits more words per line in a non-rectangular frame. | R-30 (wrap and shaped frames). |
 | `justification` | Case 1.34's label sits at its frame edge; InDesign oversets one word more. | Label only; the justification cases agree. |
-| `list-marker-styles` | The markers agree now. Case m15's label, `number: size 20, auto leading`, sits in a frame one line deep: InDesign sets `number: size 20, auto` and oversets `leading`; the engine breaks before `auto` (`number: size 20,` / `auto leading`), so `auto` is overset in the engine only. Both set the label at the same widths (`number: size 20, run bold` is 142.96 pt on either side), so the break choice is the composer's. | R-23 (composer). |
 | `text-on-path` (page 3) | InDesign sets type on a path as one line and oversets it at a line break, here a hyphenation point: its PDF reads `This sen-`. The engine drops the glyphs whose origin passes `EndBracket` and draws `This sente`. | Type on a path (overset at a break). |
 | `styles-cascade` (note, gated) | The engine numbers the paragraph in `ListDerived` (`2.`); InDesign prints no number, and sets the paragraph at the frame edge without the list's tab, as if the style were not based on `ListBase`. The sample writes that `BasedOn` as an attribute, where InDesign writes a `<Properties>` element, and the engine reads the attribute. The gate drops markers on both sides, so the fixture passes and the note reports it. | A-08 follow-up (generator spelling). |

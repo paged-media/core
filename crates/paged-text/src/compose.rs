@@ -274,12 +274,18 @@ pub struct ComposeOptions<'a> {
     /// How far (1/64 pt) a line may run past its measure before the
     /// Paragraph Composer breaks it. InDesign keeps a word that overruns
     /// the measure by a sliver — 1/32 em in ragged text, 3/64 em in
-    /// justified text, at any word spacing and however many spaces the
-    /// line holds (asked of InDesign 20.0.1:
-    /// `tools/indesign-export/fit-tolerance-probe.*`). `0`: lines fit
-    /// their measure exactly. The minimum-raggedness breaker keeps its
-    /// own, measured squeeze instead.
+    /// justified text, for a six-letter last word (asked of InDesign
+    /// 20.0.1: `tools/indesign-export/fit-tolerance-probe.*`). `0`: lines
+    /// fit their measure exactly. The minimum-raggedness breaker reads
+    /// `overrun_size` instead, whose allowance follows each line's last
+    /// word (ADR 142).
     pub fit_tolerance: i32,
+    /// With `minimum_raggedness`, in a plain frame: the paragraph's size
+    /// (pt). A line may then overrun its measure by the allowance InDesign
+    /// gives its last word, its word spaces squeezed onto it (ADR 142).
+    /// `None`: each space may shrink by `shrink_ratio`, priced by how far
+    /// it does (a shaped or wrapped frame's measured squeeze).
+    pub overrun_size: Option<f32>,
     /// Set the paragraph with InDesign's Single-line Composer
     /// (`Composer="HL Single"`) instead of the Paragraph Composer: one
     /// line at a time, as Word does (`single_line.rs`). `None` is the
@@ -329,6 +335,7 @@ impl ComposeOptions<'_> {
             visible_lines: None,
             joined_lines: None,
             fit_tolerance: 0,
+            overrun_size: None,
             single_line: None,
         }
     }

@@ -118,6 +118,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   raggedness, squeezing word spaces to keep a word. A jump-object wrap leaves its rows empty and
   text resumes below it on the leading grid; at a next-column wrap the rest of the story moves to
   the next frame. A contour wrap is written `Contour`, the value InDesign reads.
+- **Line breaks as InDesign's Paragraph Composer sets them** ([ADR 141](adr/141-a-line-may-overrun-its-measure-by-a-sliver.md),
+  [ADR 142](adr/142-ragged-text-breaks-by-minimum-raggedness.md)). Ragged text breaks by minimum
+  raggedness in every frame; a line keeps its last word while it overruns its measure by about a
+  99th of that word, and the overrun comes out of the word spaces. Justified text keeps one
+  allowance per paragraph. A drop cap spans the paragraph's leading at the face's cap height.
+  46 of the 73 generator fixtures set every line as InDesign does.
 - **Positions are exact sums** ([ADR 138](adr/138-positions-are-exact-sums.md)). Baselines and
   glyph advances are summed exactly and rounded once, so a 14.4 pt leading or a 12 pt Open Sans
   line does not drift off InDesign's positions down a page or along a line.

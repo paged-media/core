@@ -6,12 +6,11 @@
 # the missing family to it from corpus/fonts/local/ (git-ignored) on a
 # machine that copied it there; elsewhere the default face stands in.
 #
-# Inter is deliberately NOT registered here yet: set in Inter, the
-# engine's composer hyphenates "sto-ry" on the overset story's second line
-# where InDesign's Paragraph Composer fits "story" on the full 360 pt
-# measure (docs/design/text-gate-triage-2026-10.md, R-20 / R-23). Until
-# that lands, the default face keeps the text gate on what it has passed.
+# Inter is registered since ragged text breaks by minimum raggedness
+# (ADR 142): set in Inter, the overset story's second line keeps "story"
+# whole on the 360 pt measure, as InDesign's Paragraph Composer does.
 FONT_FLAGS=(
+    --font-family "Inter=$FONTS/Inter.ttf"
     --font-family "Open Sans=$FONTS/OpenSans.ttf"
     --font-family "Minion Pro=$FONTS/CormorantGaramond.ttf"
 )
