@@ -86,12 +86,17 @@ fn report_unrenderable_content(page: &mut BuiltPage, frame_id: Option<&str>) {
 ///      back to the legacy "stretch image to frame bounds — minus
 ///      `<FrameFittingOption>` crops" path. No clip is needed
 ///      because the image already covers exactly the frame's AABB.
+///
+/// `shadow` is the picture's own drop shadow (R-10: the `<Image>`'s
+/// `<TransparencySetting><DropShadowSetting>`, the frame's content
+/// target), stamped under the picture's placed box.
 pub(super) fn emit_rectangle_image(
     page: &mut BuiltPage,
     rect: &Rectangle,
     options: &PipelineOptions,
     page_image_cache: &mut HashMap<String, paged_compose::ImageId>,
     decoded_cache: &mut HashMap<String, paged_compose::DecodedImage>,
+    shadow: Option<paged_compose::DropShadow>,
 ) {
     // Routing: a `<Image>`-bearing frame whose link is *missing*
     // gets InDesign's 50% grey + diagonal-X placeholder. A link that
@@ -210,6 +215,16 @@ pub(super) fn emit_rectangle_image(
             rect.image_link.as_deref(),
             rect.self_id.as_deref(),
         );
+        if let Some(shadow) = shadow {
+            emit_blended_shadow(page, &shadow, |page| {
+                paged_compose::emit_drop_shadow_rect_transformed(
+                    img_rect,
+                    composed,
+                    shadow,
+                    &mut page.list,
+                )
+            });
+        }
         emit_clipped_image(
             &mut page.list,
             clip_rect,
@@ -257,6 +272,11 @@ pub(super) fn emit_rectangle_image(
             rect.image_link.as_deref(),
             rect.self_id.as_deref(),
         );
+        if let Some(shadow) = shadow {
+            emit_blended_shadow(page, &shadow, |page| {
+                paged_compose::emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list)
+            });
+        }
         paged_compose::emit_image_at(r, outer, id, &mut page.list);
     }
 }

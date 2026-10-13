@@ -224,6 +224,11 @@ mod tests {
             stroke_alignment: None,
             drop_shadow: None,
             stroke_drop_shadow: None,
+            fill_transparency: None,
+            stroke_transparency: None,
+            content_transparency: None,
+            fill_drop_shadow: None,
+            content_drop_shadow: None,
             next_text_frame: None,
             vertical_justification: None,
             first_baseline_offset: None,
@@ -7207,12 +7212,13 @@ mod tests {
 
     /// C-20 — the honest half of the tint/blend fan-out. `Polygon` and
     /// `Oval` gained arms because `paged_model::{Polygon, Oval}` carry
-    /// `fill_tint` + `blend_mode` slots; `paged_model::GraphicLine`
-    /// carries NEITHER (lines have no fill, and the parser never reads a
-    /// `<BlendingSetting>` onto them), so both paths keep rejecting
-    /// rather than writing into a field that does not exist.
+    /// `fill_tint` + `blend_mode` slots. A `paged_model::GraphicLine` has
+    /// no fill, so its tint keeps rejecting rather than writing into a
+    /// field that does not exist. Its blend mode is stored and drawn since
+    /// R-10 (InDesign 20.0.1 blends a line's stroke: `transparency-targets`
+    /// cases 33-36), so that path applies and undoes like a frame's.
     #[test]
-    fn c20_tint_and_blend_unsupported_on_graphic_line() {
+    fn c20_a_line_has_no_fill_tint_but_blends() {
         let mut p = Project::new(document_with_one_textframe("TextFrame/u1"));
         p.apply(Operation::InsertNode {
             parent: NodeId::Spread("Spread/u_main".to_string()),
@@ -7242,19 +7248,38 @@ mod tests {
         })
         .unwrap();
         let line = NodeId::GraphicLine("GraphicLine/u9".to_string());
-        for (path, value) in [
-            (PropertyPath::FrameFillTint, Value::Length(Some(50.0))),
-            (
-                PropertyPath::FrameBlendMode,
-                Value::Text("Multiply".to_string()),
-            ),
-        ] {
-            let err = p.apply(set_op(line.clone(), path, value)).unwrap_err();
-            assert!(
-                matches!(err, OperationError::UnsupportedProperty { .. }),
-                "GraphicLine has no storage for {path:?} — reject, don't pretend"
-            );
-        }
+        let err = p
+            .apply(set_op(
+                line.clone(),
+                PropertyPath::FrameFillTint,
+                Value::Length(Some(50.0)),
+            ))
+            .unwrap_err();
+        assert!(
+            matches!(err, OperationError::UnsupportedProperty { .. }),
+            "a GraphicLine has no fill tint — reject, don't pretend"
+        );
+        p.apply(set_op(
+            line,
+            PropertyPath::FrameBlendMode,
+            Value::Text("Multiply".to_string()),
+        ))
+        .expect("a line blends");
+        assert_eq!(line_blend(&p).as_deref(), Some("Multiply"));
+        p.undo().expect("undo");
+        assert_eq!(line_blend(&p), None);
+    }
+
+    fn line_blend(p: &Project) -> Option<String> {
+        p_line(p, "GraphicLine/u9").and_then(|l| l.blend_mode.clone())
+    }
+
+    fn p_line<'a>(p: &'a Project, id: &str) -> Option<&'a paged_model::GraphicLine> {
+        p.document()
+            .spreads
+            .iter()
+            .flat_map(|s| s.spread.graphic_lines.iter())
+            .find(|l| l.self_id.as_deref() == Some(id))
     }
 
     // =======================================================================

@@ -1132,10 +1132,9 @@ pub(super) fn emit_table_into_chain(
                     .compose(&Transform::rotate_deg(deg))
                     .compose(&Transform::translate(-cx, -cy));
                 for (s, e) in &emitted_extents {
-                    for cmd in &mut pages[target_page].list.commands[*s..*e] {
-                        let t = cmd.transform_mut();
-                        *t = rot.compose(t);
-                    }
+                    pages[target_page]
+                        .list
+                        .map_transforms(*s..*e, |t| *t = rot.compose(t));
                 }
             }
             // `DiagonalLineInFront` → paint the diagonal(s) over the

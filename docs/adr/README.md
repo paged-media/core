@@ -63,6 +63,7 @@ is not written yet.
 | [132](132-typed-property-schemas-and-virtual-paths.md) | Typed property schemas, virtual paths and one `Set { address, path, value }` | Accepted 2026-10-06 |
 | [133](133-locks-and-deletes-follow-indesign.md) | Locks, container deletes and emptied groups follow InDesign | Accepted 2026-10-12 |
 | [134](134-nested-styles-and-opentype-as-indesign-sets-them.md) | Nested styles and OpenType features as InDesign sets them | Accepted 2026-10-12 |
+| [135](135-transparency-targets-and-effect-attributes.md) | Transparency per target, group isolation and knockout, and the effect attributes InDesign writes | Accepted 2026-10-13 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

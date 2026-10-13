@@ -1068,12 +1068,17 @@ pub(super) fn apply_create_group(
 /// The group's `drop_shadow` is not restored: nothing can set it (no
 /// write arm) and nothing paints it, so it only ever arrives from a
 /// file — the same standing as the corner attributes, which an
-/// ungroup-then-undo has never restored either.
+/// ungroup-then-undo has never restored either. Nor are R-10's
+/// `isolate_blending` / `knockout_group`: carrying them would add fields
+/// to the wire's `GroupSpec`, a protocol change this additive release
+/// does not make — an undone ungroup comes back non-isolated and
+/// non-knockout.
 fn restored_transparency(spec: &GroupSpec) -> paged_model::GroupTransparency {
     paged_model::GroupTransparency {
         opacity: spec.opacity,
         blend_mode: spec.blend_mode.clone(),
         drop_shadow: None,
+        ..Default::default()
     }
 }
 

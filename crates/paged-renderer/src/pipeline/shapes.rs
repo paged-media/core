@@ -36,6 +36,12 @@ pub(super) const SUBSTITUTED_HIGHLIGHT_R: f32 = 1.0;
 pub(super) const SUBSTITUTED_HIGHLIGHT_G: f32 = 0.522;
 pub(super) const SUBSTITUTED_HIGHLIGHT_B: f32 = 0.604;
 
+/// The frame's CONTENT — its placed picture — painted between its fill
+/// and its stroke, inside the object's group: InDesign draws a frame's
+/// stroke over its picture, and the object's opacity fades the picture
+/// with the rest (asked of InDesign, `transparency-targets` case 13).
+pub(super) type ContentPainter<'p> = &'p mut dyn FnMut(&mut BuiltPage);
+
 pub(super) fn emit_oval_into(
     page: &mut BuiltPage,
     oval: &Oval,
@@ -43,6 +49,7 @@ pub(super) fn emit_oval_into(
     palette: &Graphic,
     fallback: Paint,
     color_ctx: ColorCtx<'_>,
+    content: ContentPainter<'_>,
 ) {
     let mut frame = ResolvedFrame::from_oval(oval);
     let style = crate::module::resolve_applied_style(&frame, document);
@@ -63,15 +70,11 @@ pub(super) fn emit_oval_into(
             );
         }
     }
-    crate::module::drop_shadow_module(
-        &frame,
-        page,
-        palette,
-        color_ctx,
-        None,
-        outer,
-        oval.stroke_drop_shadow.as_ref(),
-    );
+    crate::module::drop_shadow_module(&frame, page, palette, color_ctx, None, outer);
+    let oval_rect = match &frame.geometry {
+        Geometry::Oval { rect } => *rect,
+        _ => rect_from_model_bounds(oval.bounds),
+    };
     // Q-04: extend GradientFeather / OuterGlow / etc. to Oval. The
     // host geometry is the unit-ellipse path scaled to `rect` via the
     // outer affine, mirroring how `emit_ellipse_transformed` builds
@@ -93,7 +96,12 @@ pub(super) fn emit_oval_into(
     if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
         crate::module::emit_effects_pre_fill(page, effects, pid, effects_xform, palette, color_ctx);
     }
+    let fill_group = push_target_group(page, frame.fill_target, oval_rect, outer);
+    crate::module::fill_shadow_module(&frame, page, palette, color_ctx, outer);
     crate::module::fill_paint_module(&frame, page, palette, color_ctx, fallback, outer, None);
+    if fill_group {
+        pop_blend_group(page);
+    }
     if let (Some(pid), Some(effects)) = (effects_path, oval.effects.as_ref()) {
         crate::module::emit_effects_post_fill(
             page,
@@ -103,6 +111,7 @@ pub(super) fn emit_oval_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            frame.stroke_outset_pt(),
         );
     }
     // W1.5 — Inside/Outside StrokeAlignment on the ellipse: offset the
@@ -127,6 +136,13 @@ pub(super) fn emit_oval_into(
             ^ 0xA11A_0000;
         page.list.paths.intern(seed, p).0
     });
+    let content_group = push_target_group(page, frame.content_target, oval_rect, outer);
+    content(page);
+    if content_group {
+        pop_blend_group(page);
+    }
+    let stroke_group = push_target_group(page, frame.stroke_target, oval_rect, outer);
+    crate::module::stroke_shadow_module(&frame, page, palette, color_ctx, outer);
     crate::module::stroke_paint_module(
         &frame,
         page,
@@ -144,8 +160,20 @@ pub(super) fn emit_oval_into(
             frame.stroke_dash,
         ),
     );
+    if stroke_group {
+        pop_blend_group(page);
+    }
     if needs_group {
         pop_blend_group(page);
+    }
+}
+
+fn rect_from_model_bounds(b: paged_model::Bounds) -> Rect {
+    Rect {
+        x: b.left,
+        y: b.top,
+        w: b.width(),
+        h: b.height(),
     }
 }
 
@@ -483,7 +511,41 @@ pub(super) fn emit_path_line_ends(
     }
 }
 
+/// A `<GraphicLine>`, inside its object group and its stroke target's
+/// group (R-10: a line had no opacity or blend mode at all, so a faded
+/// line printed solid — `transparency-targets` cases 33–36). A line
+/// paints only its stroke, so the two groups wrap the same paint.
 pub(super) fn emit_line_into(
+    page: &mut BuiltPage,
+    line: &GraphicLine,
+    document: &Document,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+) {
+    let resolved = ResolvedFrame::from_graphic_line(line);
+    let outer = frame_outer_transform(page, resolved.item_transform);
+    let bounds = rect_from_model_bounds(line.bounds);
+    let object_group = frame_needs_blend_group(&resolved);
+    if object_group {
+        push_blend_group(
+            page,
+            bounds,
+            outer,
+            resolved.blend_mode,
+            frame_group_opacity(&resolved),
+        );
+    }
+    let stroke_group = push_target_group(page, resolved.stroke_target, bounds, outer);
+    emit_line_body(page, line, document, palette, color_ctx);
+    if stroke_group {
+        pop_blend_group(page);
+    }
+    if object_group {
+        pop_blend_group(page);
+    }
+}
+
+fn emit_line_body(
     page: &mut BuiltPage,
     line: &GraphicLine,
     document: &Document,
@@ -701,6 +763,7 @@ fn emit_rectangle_polygon_path(
     palette: &Graphic,
     fallback: Paint,
     color_ctx: ColorCtx<'_>,
+    content: ContentPainter<'_>,
 ) {
     page.stats.frames += 1;
     let outer = frame_outer_transform(page, resolved.item_transform);
@@ -744,7 +807,19 @@ fn emit_rectangle_polygon_path(
     } else {
         (None, None, 0)
     };
+    let fill_group = push_target_group(page, resolved.fill_target, bbox, outer);
+    crate::module::fill_shadow_module(resolved, page, palette, color_ctx, outer);
     crate::module::fill_paint_module(resolved, page, palette, color_ctx, fallback, outer, path_id);
+    if fill_group {
+        pop_blend_group(page);
+    }
+    let content_group = push_target_group(page, resolved.content_target, bbox, outer);
+    content(page);
+    if content_group {
+        pop_blend_group(page);
+    }
+    let stroke_group = push_target_group(page, resolved.stroke_target, bbox, outer);
+    crate::module::stroke_shadow_module(resolved, page, palette, color_ctx, outer);
     let stroke_width = resolved.effective_stroke_weight();
     let stroke = stroke_for(
         resolved.stroke_type,
@@ -826,6 +901,9 @@ fn emit_rectangle_polygon_path(
             stroke,
         );
     }
+    if stroke_group {
+        pop_blend_group(page);
+    }
     if needs_group {
         pop_blend_group(page);
     }
@@ -839,6 +917,7 @@ pub(super) fn emit_rectangle_into(
     fallback: Paint,
     color_ctx: ColorCtx<'_>,
     drop_shadow: Option<DropShadow>,
+    content: ContentPainter<'_>,
 ) {
     let mut resolved = ResolvedFrame::from_rectangle(rect);
     let style = crate::module::resolve_applied_style(&resolved, document);
@@ -852,7 +931,9 @@ pub(super) fn emit_rectangle_into(
     // route the polygon case through the same path emit
     // `emit_polygon_into` uses, then return.
     if matches!(resolved.geometry, Geometry::Polygon { .. }) {
-        emit_rectangle_polygon_path(page, &resolved, document, palette, fallback, color_ctx);
+        emit_rectangle_polygon_path(
+            page, &resolved, document, palette, fallback, color_ctx, content,
+        );
         return;
     }
     let Geometry::Rect { rect: r } = resolved.geometry else {
@@ -870,15 +951,7 @@ pub(super) fn emit_rectangle_into(
             frame_group_opacity(&resolved),
         );
     }
-    crate::module::drop_shadow_module(
-        &resolved,
-        page,
-        palette,
-        color_ctx,
-        drop_shadow,
-        outer,
-        rect.stroke_drop_shadow.as_ref(),
-    );
+    crate::module::drop_shadow_module(&resolved, page, palette, color_ctx, drop_shadow, outer);
 
     // Rounded-corner Rectangles route fill + stroke through interned
     // paths; non-rounded ones use the geometry's natural primitives.
@@ -944,6 +1017,8 @@ pub(super) fn emit_rectangle_into(
         );
     }
 
+    let fill_group = push_target_group(page, resolved.fill_target, r, outer);
+    crate::module::fill_shadow_module(&resolved, page, palette, color_ctx, outer);
     crate::module::fill_paint_module(
         &resolved,
         page,
@@ -953,6 +1028,9 @@ pub(super) fn emit_rectangle_into(
         outer,
         corner.fill,
     );
+    if fill_group {
+        pop_blend_group(page);
+    }
 
     if let (Some(effects), Some((effects_path, effects_xform, effects_unit_normalize))) =
         (rect.effects.as_ref(), effects_target)
@@ -965,8 +1043,18 @@ pub(super) fn emit_rectangle_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            resolved.stroke_outset_pt(),
         );
     }
+
+    // The picture, between the fill and the stroke, in its own target.
+    let content_group = push_target_group(page, resolved.content_target, r, outer);
+    content(page);
+    if content_group {
+        pop_blend_group(page);
+    }
+    let stroke_group = push_target_group(page, resolved.stroke_target, r, outer);
+    crate::module::stroke_shadow_module(&resolved, page, palette, color_ctx, outer);
 
     // Stroke needs the IDML stroke style (dash pattern, end-cap/join,
     // miter limit) folded into the `Stroke`. For non-rounded
@@ -994,6 +1082,9 @@ pub(super) fn emit_rectangle_into(
             corner.stroke,
             stroke,
         );
+        if stroke_group {
+            pop_blend_group(page);
+        }
         if needs_group {
             pop_blend_group(page);
         }
@@ -1062,6 +1153,9 @@ pub(super) fn emit_rectangle_into(
                 emit_stroke_rect_transformed(inset, outer, stroke, paint, &mut page.list);
             }
         }
+    }
+    if stroke_group {
+        pop_blend_group(page);
     }
     if needs_group {
         pop_blend_group(page);
