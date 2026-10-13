@@ -1104,6 +1104,17 @@ impl CanvasModel {
             }
             VirtualTarget::Doc => {
                 if let Some(p) = addressed_path("doc", path) {
+                    // R-11 — the document's global light.
+                    let light = &scene.designmap.transparency_preference;
+                    match p {
+                        PropertyPath::DocumentGlobalLightAngle => {
+                            return Ok(Value::Length(light.global_light_angle));
+                        }
+                        PropertyPath::DocumentGlobalLightAltitude => {
+                            return Ok(Value::Length(light.global_light_altitude));
+                        }
+                        _ => {}
+                    }
                     let d = &scene.designmap.document_preference;
                     let n = match p {
                         PropertyPath::DocumentBleedTop => d.bleed_top,

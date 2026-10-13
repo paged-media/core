@@ -302,6 +302,9 @@ fn frame_drop_shadow_paints_offset_pixels() {
             blur_radius: 0.0,
             color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 1.0,
+            blend_mode: paged_compose::BlendMode::Normal,
+            spread: 0.0,
+            noise: 0.0,
         }),
         ..PipelineOptions::default()
     };

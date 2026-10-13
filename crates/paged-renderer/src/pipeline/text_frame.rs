@@ -868,7 +868,7 @@ pub(super) fn emit_text_frame_into(
     color_ctx: ColorCtx<'_>,
     drop_shadow: Option<DropShadow>,
     auto_sized_bounds: Option<paged_model::Bounds>,
-) {
+) -> Option<usize> {
     let mut resolved = ResolvedFrame::from_text_frame(frame);
     // W1.7 Phase B: an AutoSizing frame paints its fill / stroke to the
     // GROWN extent, not the authored undersized box. Substitute the
@@ -926,15 +926,7 @@ pub(super) fn emit_text_frame_into(
     } else {
         None
     };
-    crate::module::drop_shadow_module(
-        &resolved,
-        page,
-        palette,
-        color_ctx,
-        drop_shadow,
-        outer,
-        frame.stroke_drop_shadow.as_ref(),
-    );
+    crate::module::drop_shadow_module(&resolved, page, palette, color_ctx, drop_shadow, outer);
     // W1.1: a TextFrame carrying a genuinely non-rectangular path
     // (triangle / pentagon / Bezier / compound outline) had its
     // geometry lifted to `Geometry::Polygon` by `from_text_frame`.
@@ -1055,9 +1047,26 @@ pub(super) fn emit_text_frame_into(
             color_ctx,
         );
     }
+    let target_bounds = match &resolved.geometry {
+        Geometry::TextFrameRect { rect } | Geometry::Rect { rect } | Geometry::Oval { rect } => {
+            *rect
+        }
+        Geometry::Polygon { bbox, .. } => *bbox,
+        Geometry::Line { .. } => Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        },
+    };
+    let fill_group = push_target_group(page, resolved.fill_target, target_bounds, outer);
+    crate::module::fill_shadow_module(&resolved, page, palette, color_ctx, outer);
     crate::module::fill_paint_module(
         &resolved, page, palette, color_ctx, fallback, outer, fill_path,
     );
+    if fill_group {
+        pop_blend_group(page);
+    }
     if let (Some(path_id), Some(effects)) = (effects_path, frame.effects.as_ref()) {
         crate::module::emit_effects_post_fill(
             page,
@@ -1067,8 +1076,11 @@ pub(super) fn emit_text_frame_into(
             palette,
             color_ctx,
             effects_unit_normalize,
+            resolved.stroke_outset_pt(),
         );
     }
+    let stroke_group = push_target_group(page, resolved.stroke_target, target_bounds, outer);
+    crate::module::stroke_shadow_module(&resolved, page, palette, color_ctx, outer);
     crate::module::stroke_paint_module(
         &resolved,
         page,
@@ -1090,10 +1102,17 @@ pub(super) fn emit_text_frame_into(
             resolved.stroke_dash,
         ),
     );
-    if needs_group {
+    if stroke_group {
         pop_blend_group(page);
     }
     let _ = group_bounds;
+    // The text slot: just before the object group closes, so the story's
+    // glyphs, moved there, composite with the body as one group.
+    needs_group.then(|| {
+        let slot = page.list.commands.len();
+        pop_blend_group(page);
+        slot
+    })
 }
 
 /// First-baseline y (1/64 pt) for the head frame of a story,
@@ -1292,15 +1311,14 @@ pub(super) fn apply_vertical_writing_rotation(
         let pivot_x = sx - ox;
         let pivot_y = sy - oy;
         let frame_w = frame.bounds.width();
-        for cmd in &mut pages[page_idx].list.commands[pre..total] {
-            let xf = cmd.transform_mut();
+        pages[page_idx].list.map_transforms(pre..total, |xf| {
             rotate_transform_around(xf, linear, pivot_x, pivot_y);
             // After rotation around the frame's top-left, rotated
             // content lives in x ∈ [pivot_x - h, pivot_x], y ∈
             // [pivot_y, pivot_y + w]. Shift +frame_w on x to bring
             // it into the right half of the frame.
             xf.0[4] += frame_w;
-        }
+        });
     }
 }
 
