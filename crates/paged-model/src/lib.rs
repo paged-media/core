@@ -191,6 +191,121 @@ impl SpanSplitColumnCount {
     }
 }
 
+/// IDML `GridAlignment` — what a paragraph's lines align to.
+/// `AlignBaseline` sets each line on the baseline grid (the document's,
+/// or its frame's own when the frame uses one): the line moves down to
+/// the first grid line at or below where its leading put it, and the
+/// lines after it follow (measured on InDesign 20.0.1, the
+/// `baseline-grid` fixtures). The em-box and ICF values align to the CJK
+/// layout grid; they are carried for the round trip, not laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GridAlignment {
+    None,
+    AlignBaseline,
+    AlignEmTop,
+    AlignEmCenter,
+    AlignEmBottom,
+    AlignIcfTop,
+    AlignIcfBottom,
+}
+
+impl GridAlignment {
+    /// Parse an IDML attribute value. Unknown values return `None`.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "None" => Some(Self::None),
+            "AlignBaseline" => Some(Self::AlignBaseline),
+            "AlignEmTop" => Some(Self::AlignEmTop),
+            "AlignEmCenter" => Some(Self::AlignEmCenter),
+            "AlignEmBottom" => Some(Self::AlignEmBottom),
+            "AlignICFTop" => Some(Self::AlignIcfTop),
+            "AlignICFBottom" => Some(Self::AlignIcfBottom),
+            _ => None,
+        }
+    }
+
+    /// The IDML attribute value.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::AlignBaseline => "AlignBaseline",
+            Self::AlignEmTop => "AlignEmTop",
+            Self::AlignEmCenter => "AlignEmCenter",
+            Self::AlignEmBottom => "AlignEmBottom",
+            Self::AlignIcfTop => "AlignICFTop",
+            Self::AlignIcfBottom => "AlignICFBottom",
+        }
+    }
+}
+
+/// IDML `BaselineFrameGridRelativeOption` — what a text frame's own
+/// baseline grid is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BaselineFrameGridRelativeOption {
+    TopOfPage,
+    TopOfMargin,
+    TopOfFrame,
+    TopOfInset,
+}
+
+impl BaselineFrameGridRelativeOption {
+    /// Parse an IDML attribute value. Unknown values return `None`.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        match s {
+            "TopOfPage" => Some(Self::TopOfPage),
+            "TopOfMargin" => Some(Self::TopOfMargin),
+            "TopOfFrame" => Some(Self::TopOfFrame),
+            "TopOfInset" => Some(Self::TopOfInset),
+            _ => None,
+        }
+    }
+
+    /// The IDML attribute value.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::TopOfPage => "TopOfPage",
+            Self::TopOfMargin => "TopOfMargin",
+            Self::TopOfFrame => "TopOfFrame",
+            Self::TopOfInset => "TopOfInset",
+        }
+    }
+}
+
+/// `<BaselineFrameGridOption>` — a text frame's own baseline grid.
+/// InDesign writes one on every text frame, a sibling of
+/// `<TextFramePreference>`; it takes effect only with
+/// `UseCustomBaselineFrameGrid="true"`. Each field is `None` when the
+/// element leaves it out.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct BaselineFrameGrid {
+    /// `UseCustomBaselineFrameGrid`.
+    pub use_custom: Option<bool>,
+    /// `StartingOffsetForBaselineFrameGrid` (pt), from the reference.
+    pub starting_offset: Option<f32>,
+    /// `BaselineFrameGridRelativeOption`.
+    pub relative_option: Option<BaselineFrameGridRelativeOption>,
+    /// `BaselineFrameGridIncrement` (pt).
+    pub increment: Option<f32>,
+}
+
+impl BaselineFrameGrid {
+    /// The grid the frame sets its aligned lines on, when it uses its
+    /// own: `(reference, offset, increment)`, InDesign's defaults (top of
+    /// inset, 0, 12 pt) for what the element leaves out. `None` when the
+    /// frame takes the document grid.
+    pub fn custom(&self) -> Option<(BaselineFrameGridRelativeOption, f32, f32)> {
+        if self.use_custom != Some(true) {
+            return None;
+        }
+        Some((
+            self.relative_option
+                .unwrap_or(BaselineFrameGridRelativeOption::TopOfInset),
+            self.starting_offset.unwrap_or(0.0),
+            self.increment.unwrap_or(12.0),
+        ))
+    }
+}
+
 /// A paragraph's span / split columns settings (IDML `SpanColumnType`,
 /// `SpanSplitColumnCount`, `SpanColumnMinSpaceBefore` / `After`,
 /// `SplitColumnInsideGutter` / `OutsideGutter`). Every field is `None`
@@ -1007,6 +1122,12 @@ pub struct TextFrame {
     /// — `Some(true)` balances the last line across columns. `None` ⇒
     /// inherit (false).
     pub column_balance: Option<bool>,
+    /// `<BaselineFrameGridOption>` — the frame's own baseline grid, a
+    /// sibling of `<TextFramePreference>`. `None` when absent; in use only
+    /// with `UseCustomBaselineFrameGrid="true"`
+    /// ([`BaselineFrameGrid::custom`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_frame_grid: Option<BaselineFrameGrid>,
     /// `AppliedObjectStyle` reference — `ObjectStyle/<id>`. Real-
     /// world IDMLs almost always rely on this for fill/stroke; the
     /// per-element FillColor attribute is rare. Resolved by
@@ -1203,6 +1324,7 @@ impl TextFrame {
             column_count: None,
             column_gutter: None,
             column_balance: None,
+            baseline_frame_grid: None,
             applied_object_style: None,
             text_wrap: None,
             item_layer: None,
@@ -3538,8 +3660,9 @@ pub struct DocumentPreference {
 /// gridline divisions for the layout grid) is carried too since it
 /// shares the element. All offsets / divisions are in points.
 ///
-/// The renderer ignores this entirely (the baseline grid is a
-/// non-printing authoring aid). `present` distinguishes "no
+/// The grid itself never prints; the renderer reads it to set the
+/// lines of a paragraph aligned to it (`GridAlignment`,
+/// [`GridPreference::baseline_grid`]). `present` distinguishes "no
 /// `<GridPreference>`" (InDesign defaults apply) from "explicitly
 /// configured", mirroring [`FootnoteOptions::present`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -3554,8 +3677,10 @@ pub struct GridPreference {
     /// `BaselineGridShown` — whether the grid is shown by default in the
     /// authoring view. The editor's overlay toggle seeds from this.
     pub baseline_grid_shown: Option<bool>,
-    /// `BaselineGridRelativeOption` — `"TopOfPage"` / `"TopMargin"`. The
-    /// reference the `baseline_start` offset is measured from.
+    /// `BaselineGridRelativeOption` — the reference the `baseline_start`
+    /// offset is measured from, in InDesign's spelling:
+    /// `"TopOfPageOfBaselineGridRelativeOption"` or
+    /// `"TopOfMarginOfBaselineGridRelativeOption"`.
     pub baseline_grid_relative_option: Option<String>,
     /// `BaselineColor` — the grid line colour. Usually a `"Color/…"`
     /// swatch ref or a named UI colour (e.g. `"LightBlue"`). The overlay
@@ -3567,6 +3692,38 @@ pub struct GridPreference {
     pub horizontal_gridline_division: Option<f32>,
     /// `VerticalGridlineDivision` — document-grid vertical spacing (pt).
     pub vertical_gridline_division: Option<f32>,
+}
+
+/// The document's baseline grid as the layout uses it: grid lines at
+/// `origin + start + k × division` for every `k ≥ 0`, the origin being
+/// the top of the page or of its top margin. No line lies above the
+/// first: a line aligned above it moves down to it (InDesign 20.0.1, the
+/// `baseline-grid` fixtures).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DocumentBaselineGrid {
+    /// Measured from the page's top margin rather than its top edge.
+    pub from_top_margin: bool,
+    /// `BaselineStart` (pt).
+    pub start: f32,
+    /// `BaselineDivision` (pt).
+    pub division: f32,
+}
+
+impl GridPreference {
+    /// The document baseline grid, with InDesign's defaults (from the
+    /// top of the page, starting 36 pt down, every 12 pt) for what the
+    /// document leaves out.
+    pub fn baseline_grid(&self) -> DocumentBaselineGrid {
+        let from_top_margin = self
+            .baseline_grid_relative_option
+            .as_deref()
+            .is_some_and(|s| s.starts_with("TopOfMargin") || s == "TopMargin");
+        DocumentBaselineGrid {
+            from_top_margin,
+            start: self.baseline_start.unwrap_or(36.0),
+            division: self.baseline_division.unwrap_or(12.0),
+        }
+    }
 }
 
 /// `<FootnoteOption>` — document-level footnote separator + spacing
@@ -4727,6 +4884,14 @@ pub struct ParagraphStyleDef {
     /// Span / split columns (`SpanColumnType` and its companions).
     #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
     pub span_columns: SpanColumns,
+    /// `GridAlignment` — whether the paragraph's lines align to the
+    /// baseline grid. `None` inherits; absent everywhere is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_alignment: Option<GridAlignment>,
+    /// `GridAlignFirstLineOnly` — align only the paragraph's first line;
+    /// the others keep their leading from it. `None` inherits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_align_first_line_only: Option<bool>,
     pub hyphenation_zone: Option<f32>,
     /// `AppliedLanguage` reference (e.g. `$ID/English: USA`). Used to
     /// pick the hyphenation dictionary; unrecognised values fall back
@@ -5100,6 +5265,10 @@ pub struct ResolvedParagraph {
     pub start_paragraph: Option<StartParagraph>,
     /// Span / split columns (`SpanColumnType` and its companions).
     pub span_columns: SpanColumns,
+    /// `GridAlignment`, cascaded.
+    pub grid_alignment: Option<GridAlignment>,
+    /// `GridAlignFirstLineOnly`, cascaded.
+    pub grid_align_first_line_only: Option<bool>,
     pub applied_language: Option<String>,
     pub minimum_word_spacing: Option<f32>,
     pub desired_word_spacing: Option<f32>,
@@ -5456,6 +5625,10 @@ impl ResolvedParagraph {
         self.keep_with_next = self.keep_with_next.or(def.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(def.start_paragraph);
         self.span_columns.inherit(&def.span_columns);
+        self.grid_alignment = self.grid_alignment.or(def.grid_alignment);
+        self.grid_align_first_line_only = self
+            .grid_align_first_line_only
+            .or(def.grid_align_first_line_only);
         if self.applied_language.is_none() {
             self.applied_language = def.applied_language.clone();
         }
@@ -5766,6 +5939,14 @@ pub struct Paragraph {
     /// Span / split columns (`SpanColumnType` and its companions).
     #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
     pub span_columns: SpanColumns,
+    /// `GridAlignment` — whether the paragraph's lines align to the
+    /// baseline grid. `None` inherits; absent everywhere is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_alignment: Option<GridAlignment>,
+    /// `GridAlignFirstLineOnly` — align only the paragraph's first line;
+    /// the others keep their leading from it. `None` inherits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_align_first_line_only: Option<bool>,
     /// `KeepAllLinesTogether` (ADR 028) — with `keep_lines_together`
     /// on, true keeps every line together; false applies the
     /// first/last-line counts below.

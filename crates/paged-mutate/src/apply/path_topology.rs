@@ -1466,6 +1466,7 @@ pub(crate) fn new_text_frame(
         column_count: None,
         column_gutter: None,
         column_balance: None,
+        baseline_frame_grid: None,
         applied_object_style: None,
         text_wrap: None,
         item_layer: None,

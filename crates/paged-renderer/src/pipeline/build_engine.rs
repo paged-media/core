@@ -4880,6 +4880,15 @@ impl<'a> StoryEmitter<'a> {
         self.para_line = self.para_line.saturating_add(1);
     }
 
+    /// How far (1/64 pt) a line aligned to the baseline grid moves down
+    /// from `baseline_64` in the current frame (ADR 140).
+    fn grid_snap_64(&self, pages: &[BuiltPage], baseline_64: i32) -> i32 {
+        let frame = self.chain[self.frame_idx];
+        let page = &pages[self.chain_pages[self.frame_idx]];
+        super::baseline_grid::frame_grid(self.document, frame, page)
+            .map_or(0, |grid| grid.snap_64(baseline_64))
+    }
+
     pub(super) fn apply_vertical_justification(&self, pages: &mut [BuiltPage]) {
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
@@ -5806,6 +5815,11 @@ fn emit_paragraph_lines(
         let prev_lh = em.prev_line_height_64.unwrap_or(line_height_64);
         em.y_cursor = em.y_cursor - prev_lh + line_height_64 + line_height_64;
         em.prev_line_height_64 = Some(line_height_64);
+        // An empty line aligned to the baseline grid stands on it like any
+        // other (`baseline-grid` case 10, ADR 140).
+        if super::baseline_grid::line_aligns(&resolved_paragraph, em.segment.opens_paragraph) {
+            em.y_cursor += em.grid_snap_64(pages, em.y_cursor - line_height_64);
+        }
         // The blank line is a line: the caret can stand on it, a click
         // on it lands in it, and a selection across it shows it. Its one
         // cluster is a zero-width stop at the line's left edge.
@@ -7483,6 +7497,24 @@ fn emit_paragraph_lines(
                 g.y += chain_shift_64;
             }
         }
+        // Align to baseline grid (ADR 140): the line stands on the first
+        // grid line at or below where its leading put it, and the lines
+        // after it are placed from there — so the shift carries forward
+        // like a frame advance's.
+        let grid_aligned = super::baseline_grid::line_aligns(
+            &resolved_paragraph,
+            em.segment.opens_paragraph && current_line_idx == 0,
+        );
+        if grid_aligned {
+            let d = em.grid_snap_64(pages, line.baseline_y);
+            if d != 0 {
+                chain_shift_64 += d;
+                line.baseline_y += d;
+                for g in &mut line.glyphs {
+                    g.y += d;
+                }
+            }
+        }
         // A line advances by its leading: the explicit one (a run's, or
         // its style's, cascaded) when there is one, else auto leading
         // from the largest glyph. The composer already pitched the
@@ -7578,6 +7610,10 @@ fn emit_paragraph_lines(
                     line_h,
                     Some((new_baseline, top_64)),
                 );
+            }
+            // …and on the continuation frame's grid.
+            if grid_aligned {
+                new_baseline += em.grid_snap_64(pages, new_baseline);
             }
             let dy = new_baseline - prev_baseline;
             chain_shift_64 += dy;

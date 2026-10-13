@@ -1,0 +1,909 @@
+{
+ "indesign_version": "20.0.1.32",
+ "grid": {
+  "start": 0,
+  "division": 14,
+  "relative": "TOP_OF_MARGIN_OF_BASELINE_GRID_RELATIVE_OPTION"
+ },
+ "pages": [
+  {
+   "name": "1",
+   "margin_top": 45,
+   "frames": [
+    {
+     "bounds": [
+      6,
+      404,
+      72,
+      584
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 45,
+       "text": "6.1 Bright vixens jump a",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 59,
+       "text": "quack over the lazy dog.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      32,
+      36,
+      42,
+      396
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 39.482,
+       "text": "6 \u00b7 aligned, the frame (",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      260,
+      220,
+      400,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 283,
+       "text": "5.1 Quick zephyrs blow, ",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 297,
+       "text": "Jim, while five boxing w",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 311,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 339,
+       "text": "5.2 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 353,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 367,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      246,
+      220,
+      256,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 253.482,
+       "text": "5 \u00b7 aligned by the range",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      260,
+      36,
+      400,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 283,
+       "text": "4.1 Quick zephyrs blow, ",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 295,
+       "text": "Jim, while five boxing w",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 307,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 325,
+       "text": "4.2 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 337,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 349,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      246,
+      36,
+      256,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 253.482,
+       "text": "4 \u00b7 first line only",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      100,
+      404,
+      240,
+      584
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 115,
+       "text": "3.1 Bright vixens jump a",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 129,
+       "text": "quack over the lazy dog.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 171,
+       "text": "3.2 Heading\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 24
+      },
+      {
+       "baseline": 185,
+       "text": "3.3 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 199,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 213,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      404,
+      96,
+      584
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "3 \u00b7 24/28.8 heading amon",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      100,
+      220,
+      240,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 115,
+       "text": "2.1 Quick zephyrs blow, ",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 129,
+       "text": "Jim, while five boxing w",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 143,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 157,
+       "text": "2.2 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 171,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 185,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      220,
+      96,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "2 \u00b7 aligned by the style",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      100,
+      36,
+      240,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 110.688,
+       "text": "1.1 Quick zephyrs blow, ",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 122.688,
+       "text": "Jim, while five boxing w",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 134.688,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 146.688,
+       "text": "1.2 Sphinx of black quar",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 158.688,
+       "text": "vow; pack my box with fi",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 170.688,
+       "text": "liquor jugs.",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      36,
+      96,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "1 \u00b7 not aligned (control",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      18,
+      36,
+      28,
+      396
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 25.482,
+       "text": "baseline-grid-margin \u00b7 p",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "2",
+   "margin_top": 60.5,
+   "frames": [
+    {
+     "bounds": [
+      100,
+      404,
+      240,
+      584
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 116.5,
+       "text": "9.1 Quick zephyrs blow, ",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 128.5,
+       "text": "Jim, while five boxing w",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 140.5,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 158.5,
+       "text": "9.2 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 170.5,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      },
+      {
+       "baseline": 182.5,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "true",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      404,
+      96,
+      584
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "9 \u00b7 first line only",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      100,
+      220,
+      240,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 116.5,
+       "text": "8.1 Bright vixens jump a",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 130.5,
+       "text": "quack over the lazy dog.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 172.5,
+       "text": "8.2 Heading\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 24
+      },
+      {
+       "baseline": 186.5,
+       "text": "8.3 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 200.5,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 214.5,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      220,
+      96,
+      400
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "8 \u00b7 24/28.8 heading amon",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      100,
+      36,
+      240,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 116.5,
+       "text": "7.1 Quick zephyrs blow, ",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 130.5,
+       "text": "Jim, while five boxing w",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 144.5,
+       "text": "over the lazy dog.\u00b6",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 158.5,
+       "text": "7.2 Sphinx of black quar",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 172.5,
+       "text": "vow; pack my box with fi",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      },
+      {
+       "baseline": 186.5,
+       "text": "liquor jugs.",
+       "grid": "ALIGN_BASELINE",
+       "first_only": "false",
+       "size": 10
+      }
+     ]
+    },
+    {
+     "bounds": [
+      86,
+      36,
+      96,
+      216
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 93.482,
+       "text": "7 \u00b7 aligned by the style",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    },
+    {
+     "bounds": [
+      18,
+      36,
+      28,
+      396
+     ],
+     "inset": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "columns": 1,
+     "frame_grid": {
+      "use": false,
+      "offset": 0,
+      "relative": "TOP_OF_INSET",
+      "increment": 12
+     },
+     "lines": [
+      {
+       "baseline": 25.482,
+       "text": "baseline-grid-margin \u00b7 p",
+       "grid": "NONE",
+       "first_only": "false",
+       "size": 7
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

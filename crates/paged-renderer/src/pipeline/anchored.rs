@@ -1143,6 +1143,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         column_count: None,
         column_gutter: None,
         column_balance: None,
+        baseline_frame_grid: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
         item_layer: None,

@@ -17,6 +17,7 @@
 
 pub mod anchored;
 pub mod annual_base;
+pub mod baseline_grid;
 pub mod blank_paragraphs;
 pub mod composer;
 pub mod conditions;
@@ -176,6 +177,8 @@ pub const SAMPLES: &[&str] = &[
     "nested-styles",
     "opentype",
     "object-style-frames",
+    "baseline-grid",
+    "baseline-grid-margin",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -255,6 +258,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "nested-styles" => nested_styles::build(),
         "opentype" => opentype::build(),
         "object-style-frames" => object_style_frames::build(),
+        "baseline-grid" => baseline_grid::build(),
+        "baseline-grid-margin" => baseline_grid::build_margin(),
         _ => return None,
     })
 }
@@ -283,7 +288,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            74,
+            76,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
