@@ -38,6 +38,10 @@
 //   super, sub      "HH" then "HH" raised / lowered
 //   ruleabove/below a 4 pt rule above / below "Hxg", offset 10 pt
 //   spellings       a drop cap with detail 2, ruby on 漢字, small caps
+//   localspacing    word and letter spacing and glyph scaling set on the
+//                   paragraph itself, not through a style
+//   glyphscale80    glyph scaling 105 % on a run set at 80 % horizontal
+//                   scale
 //   path0..path5    type on a straight 400 pt line with a 6 pt Paper
 //                   stroke: Baseline, Ascender, Descender, Center text
 //                   alignment on the path's centre, then Baseline on its
@@ -118,8 +122,7 @@
         wrap = wrap.join(" ");
 
         // Letter spacing through paragraph styles, as real documents carry
-        // it (Paged reads it there; a local override on the range it does
-        // not read yet).
+        // it; `localspacing` sets it on the paragraph itself.
         var face = { appliedFont: "Open Sans", fontStyle: "Regular", pointSize: 20 };
         function style(name, props) {
             var st = doc.paragraphStyles.add({ name: name });
@@ -153,6 +156,18 @@
         f.parentStory.paragraphs[0].ruleBelowLineWeight = 4;
         f.parentStory.paragraphs[0].ruleBelowOffset = 10;
         f.parentStory.paragraphs[0].ruleBelowColor = black;
+        // Spacing set on the paragraph itself, not through a style: InDesign
+        // writes it on the <ParagraphStyleRange>.
+        f = frame("localspacing", 700, 30, "Local spacing");
+        var lp = f.parentStory.paragraphs[0];
+        lp.maximumWordSpacing = 150; lp.desiredWordSpacing = 110; lp.minimumWordSpacing = 70;
+        lp.maximumLetterSpacing = 30; lp.desiredLetterSpacing = 10; lp.minimumLetterSpacing = -10;
+        lp.maximumGlyphScaling = 110; lp.desiredGlyphScaling = 105; lp.minimumGlyphScaling = 95;
+        // Glyph scaling over a run's own horizontal scale: do they multiply?
+        f = frame("glyphscale80", 740, 30, "Local spacing");
+        f.parentStory.texts[0].horizontalScale = 80;
+        lp = f.parentStory.paragraphs[0];
+        lp.maximumGlyphScaling = 110; lp.desiredGlyphScaling = 105; lp.minimumGlyphScaling = 95;
         f = frame("spellings", 640, 50, "Drop cap 漢字 and SMALL caps");
         f.parentStory.paragraphs[0].dropCapCharacters = 1;
         f.parentStory.paragraphs[0].dropCapLines = 2;

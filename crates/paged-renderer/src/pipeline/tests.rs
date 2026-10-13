@@ -3777,85 +3777,51 @@ fn vertical_writing_rotates_emitted_commands() {
 
 #[test]
 fn ruby_annotation_emits_above_base_run() {
-    // Paragraph with RubyFlag="true" + RubyString="ruby". The
-    // renderer should shape the ruby text at half point size and
-    // emit it above the base run. Base ABC at 12pt + ruby
-    // "ruby" at 6pt = ~7 extra glyph commands (ruby has up to 4
-    // glyphs depending on shaper output).
-    use std::io::Write;
-    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
-
-    let buf = std::io::Cursor::new(Vec::new());
-    let mut zip = ZipWriter::new(buf);
-    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-    let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-    zip.start_file("mimetype", stored).unwrap();
-    zip.write_all(b"application/vnd.adobe.indesign-idml-package")
-        .unwrap();
-    zip.start_file("designmap.xml", deflated).unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
-  <idPkg:Spread src="Spreads/Spread_sp1.xml"/>
-  <idPkg:Story src="Stories/Story_s1.xml"/>
-</Document>"#,
-    )
-    .unwrap();
-    zip.start_file("Spreads/Spread_sp1.xml", deflated).unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
-  <Spread Self="sp1">
-    <Page Self="p1" GeometricBounds="0 0 200 612"/>
-    <TextFrame Self="frameA" ParentStory="s1" GeometricBounds="40 40 180 572"/>
-  </Spread>
-</idPkg:Spread>"#,
-    )
-    .unwrap();
-    zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
-  <Story Self="s1">
-    <ParagraphStyleRange>
-      <CharacterStyleRange AppliedFont="Inter" PointSize="12" RubyFlag="true" RubyString="abc">
-        <Content>ABC</Content>
-      </CharacterStyleRange>
-    </ParagraphStyleRange>
-  </Story>
-</idPkg:Story>"#,
-    )
-    .unwrap();
-    let bytes = zip.finish().unwrap().into_inner();
-    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
-
-    let font_bytes = std::fs::read(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
-    )
-    .expect("Inter.ttf fixture");
-    let options = PipelineOptions {
-        font: Some(&font_bytes),
-        ..PipelineOptions::default()
-    };
-    let built = build_document(&doc, &options).expect("build");
-
-    // Body "ABC" = 3 glyphs; ruby "abc" at 6pt = 3 more.
-    // Expect ≥ 6 commands.
-    let cmd_count = built.pages[0].list.commands.len();
+    // Ruby "abc" over "ABC": under a Japanese composer the renderer shapes
+    // the ruby at half size above the base run (3 glyphs + 3 ruby glyphs);
+    // under InDesign's default composer it sets none, as InDesign does.
+    let ruby = r#"RubyFlag="1" RubyString="abc""#;
+    let japanese = cjk_decoration_commands(Some("HL Composer J"), ruby);
     assert!(
-        cmd_count >= 6,
-        "expected base + ruby glyphs (≥6 cmds), got {cmd_count}"
+        japanese >= 6,
+        "expected base + ruby glyphs (>=6 cmds), got {japanese}"
+    );
+    assert_eq!(
+        cjk_decoration_commands(None, ruby),
+        cjk_decoration_commands(None, ""),
+        "no ruby under the Paragraph Composer"
+    );
+    assert_eq!(
+        cjk_decoration_commands(Some("HL Composer Optyca"), ruby),
+        cjk_decoration_commands(Some("HL Composer Optyca"), ""),
+        "no ruby under the World-Ready Composer"
     );
 }
 
 #[test]
 fn kenten_marks_emit_above_each_glyph() {
-    // A paragraph with `KentenKind="Dot"` on its CharacterStyleRange.
-    // The renderer should stamp an emphasis mark (small filled
-    // ellipse) above every glyph of that run. Pre-fix: zero
-    // ellipse commands. Post-fix: one ellipse per character
-    // glyph plus any frame chrome.
+    // `KentenKind` on "ABC": one mark per glyph under a Japanese composer
+    // (single-line too); none under the default composer.
+    let kenten = r#"KentenKind="Dot""#;
+    for composer in ["HL Composer J", "HL Single J"] {
+        let marked = cjk_decoration_commands(Some(composer), kenten);
+        assert!(
+            marked >= 6,
+            "{composer}: expected glyphs + 3 kenten marks (>=6 cmds), got {marked}"
+        );
+    }
+    assert_eq!(
+        cjk_decoration_commands(None, kenten),
+        cjk_decoration_commands(None, ""),
+        "no kenten under the Paragraph Composer"
+    );
+}
+
+/// Display-list commands for one 12 pt "ABC" paragraph under `composer`,
+/// its run carrying `char_attrs` (ruby, kenten, …). InDesign 20.0.1 sets
+/// ruby and kenten only under its Japanese composers
+/// (tools/indesign-export/cjk-composer-probe).
+fn cjk_decoration_commands(composer: Option<&str>, char_attrs: &str) -> usize {
     use std::io::Write;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
@@ -3863,7 +3829,6 @@ fn kenten_marks_emit_above_each_glyph() {
     let mut zip = ZipWriter::new(buf);
     let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
     zip.start_file("mimetype", stored).unwrap();
     zip.write_all(b"application/vnd.adobe.indesign-idml-package")
         .unwrap();
@@ -3887,23 +3852,25 @@ fn kenten_marks_emit_above_each_glyph() {
 </idPkg:Spread>"#,
     )
     .unwrap();
-    zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
+    let composer = composer
+        .map(|c| format!(r#" Composer="{c}""#))
+        .unwrap_or_default();
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
   <Story Self="s1">
-    <ParagraphStyleRange>
-      <CharacterStyleRange AppliedFont="Inter" PointSize="12" KentenKind="Dot">
+    <ParagraphStyleRange{composer}>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="12" {char_attrs}>
         <Content>ABC</Content>
       </CharacterStyleRange>
     </ParagraphStyleRange>
   </Story>
-</idPkg:Story>"#,
-    )
-    .unwrap();
+</idPkg:Story>"#
+    );
+    zip.start_file("Stories/Story_s1.xml", deflated).unwrap();
+    zip.write_all(story.as_bytes()).unwrap();
     let bytes = zip.finish().unwrap().into_inner();
     let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
-
     let font_bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf"),
     )
@@ -3913,17 +3880,7 @@ fn kenten_marks_emit_above_each_glyph() {
         ..PipelineOptions::default()
     };
     let built = build_document(&doc, &options).expect("build");
-
-    // The kenten pass emits one ellipse command per glyph in
-    // the kenten-tagged run. "ABC" is 3 chars → 3 ellipse
-    // commands. The body text alone contributes ~3 glyph
-    // FillPath commands; with kenten we add ~3 more ellipses
-    // (each rendered as a FillPath of an ellipse path).
-    let cmd_count = built.pages[0].list.commands.len();
-    assert!(
-        cmd_count >= 6,
-        "expected glyphs + 3 kenten marks (≥6 cmds), got {cmd_count}"
-    );
+    built.pages[0].list.commands.len()
 }
 
 #[test]
