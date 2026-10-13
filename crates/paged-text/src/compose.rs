@@ -197,6 +197,12 @@ pub struct ComposeOptions<'a> {
     /// natural glyph). Default 1.0 so callers that don't carry a
     /// paragraph-level value keep the legacy behaviour.
     pub desired_space_ratio: f32,
+    /// IDML's `DesiredLetterSpacing`: space added between characters,
+    /// as a percentage of each run's own space width. InDesign 20.0.1
+    /// adds it after every character of a line but the last (`50` at
+    /// 20 pt Open Sans: +2.598 pt, half the 5.195 pt space), ragged or
+    /// justified. `0` (the default) adds none. Applied by `layout_runs`.
+    pub letter_spacing_pct: f32,
     /// Optional hyphenation engine. When set, the composer emits
     /// flagged Penalty items at every TeX-pattern break opportunity
     /// inside each word; paragraph-breaker decides whether to take
@@ -303,6 +309,7 @@ impl ComposeOptions<'_> {
             stretch_ratio: 0.33,
             shrink_ratio: 0.2,
             desired_space_ratio: 1.0,
+            letter_spacing_pct: 0.0,
             hyphenator: None,
             hyphenation_limits: crate::hyphenate::HyphenationLimits::default(),
             hyphen_penalty: 50,

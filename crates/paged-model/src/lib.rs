@@ -4637,13 +4637,17 @@ pub struct ParagraphStyleDef {
     /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
     /// Drives the composer's stretch ratio.
     pub maximum_word_spacing: Option<f32>,
-    /// Q-20: `MinimumLetterSpacing` pt (additive, signed). Allows
-    /// the composer to tighten inter-glyph advance up to this much
-    /// when justifying lines.
+    /// Q-20: `MinimumLetterSpacing`, a percentage of the space width
+    /// (signed): the least space justified text may set between
+    /// characters. Ragged text ignores it (InDesign 20.0.1).
     pub minimum_letter_spacing: Option<f32>,
-    /// Q-20: `DesiredLetterSpacing` pt (default 0 = none).
+    /// Q-20: `DesiredLetterSpacing`, a percentage of the space width
+    /// added between characters, ragged or justified, after every
+    /// character of a line but the last (default 0 = none).
     pub desired_letter_spacing: Option<f32>,
-    /// Q-20: `MaximumLetterSpacing` pt (additive, signed).
+    /// Q-20: `MaximumLetterSpacing`, a percentage of the space width
+    /// (signed): the most space justified text may set between
+    /// characters. Ragged text ignores it.
     pub maximum_letter_spacing: Option<f32>,
     /// Q-20: `MinimumGlyphScaling` percent (default 100 = identity).
     /// Allows per-glyph x-advance scaling for justification.

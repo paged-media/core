@@ -1672,8 +1672,9 @@ pub struct ResolvedParagraphAttrs {
     pub desired_word_spacing: Option<f32>,
     /// `MaximumWordSpacing` (% of normal). 100 = baseline.
     pub maximum_word_spacing: Option<f32>,
-    /// Q-20: cascaded `MinimumLetterSpacing` pt. Additive signed
-    /// adjustment to the inter-glyph advance budget. None ⇒ 0 pt.
+    /// Q-20: cascaded `Minimum`/`Desired`/`MaximumLetterSpacing`,
+    /// percentages of the space width (see `ParagraphStyleDef`).
+    /// None ⇒ 0.
     pub minimum_letter_spacing: Option<f32>,
     pub desired_letter_spacing: Option<f32>,
     pub maximum_letter_spacing: Option<f32>,
