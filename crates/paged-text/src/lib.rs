@@ -51,7 +51,7 @@ pub use layout::{
 };
 pub use shape::{
     apply_optical_margin, apply_tracking, optical_margin_offset, shape_run,
-    shape_run_with_features, Face, FigureStyle, KerningMethod, MarginSide, ShapedGlyph, ShapedRun,
-    ShapingFeatures, SmallCaps, Variation,
+    shape_run_with_features, Face, FigureStyle, KerningMethod, MarginSide, OtPosition, ShapedGlyph,
+    ShapedRun, ShapingFeatures, SmallCaps, Variation,
 };
 pub use single_line::SingleLineOptions;

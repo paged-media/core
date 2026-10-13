@@ -476,6 +476,20 @@ pub struct DropShadow {
     pub blur_radius: f32,
     pub color: Color,
     pub opacity: f32,
+    /// R-11 — how the shadow composites onto what lies under it (IDML
+    /// `BlendMode`, InDesign's default `Multiply`). The rasterisers draw
+    /// the stamp itself `Normal`; the EMITTER brackets a shadow whose
+    /// mode changes the result in a transparency group of that mode, so
+    /// the group's paper-backdrop rule applies (a `Screen` shadow shows on
+    /// paper, `effects-attrs` case 3).
+    pub blend_mode: BlendMode,
+    /// R-11 — IDML `Spread` as 0..1: how much of the blur band is solid
+    /// before it fades, applied as a choke on the blurred alpha
+    /// (`α' = min(1, α / (1 − spread))`).
+    pub spread: f32,
+    /// R-11 — IDML `Noise` as 0..1: hashed grain mixed into the shadow's
+    /// alpha.
+    pub noise: f32,
 }
 
 impl DropShadow {
@@ -488,6 +502,9 @@ impl DropShadow {
             blur_radius: 4.0,
             color: Color::rgba(0.0, 0.0, 0.0, 1.0),
             opacity: 0.3,
+            blend_mode: BlendMode::Normal,
+            spread: 0.0,
+            noise: 0.0,
         }
     }
 }
@@ -659,6 +676,11 @@ pub struct BevelEmboss {
     pub technique: BevelTechnique,
     /// Extra soften in pt applied to the shaded bevel layer.
     pub soften: f32,
+    /// How the highlight and the shadow composite (InDesign's defaults
+    /// are Screen and Multiply; its `HighlightBlendMode` and
+    /// `ShadowBlendMode` change them).
+    pub highlight_blend: BlendMode,
+    pub shadow_blend: BlendMode,
 }
 
 impl BevelEmboss {
@@ -676,6 +698,8 @@ impl BevelEmboss {
             direction: BevelDirection::Up,
             technique: BevelTechnique::Smooth,
             soften: 0.0,
+            highlight_blend: BlendMode::Screen,
+            shadow_blend: BlendMode::Multiply,
         }
     }
 }
@@ -813,6 +837,13 @@ pub struct GradientFeather {
     pub end_x: f32,
     pub end_y: f32,
     pub stops: Vec<GradientFeatherStop>,
+    /// A `Radial` feather's radius across the path's local y axis over
+    /// its radius along the local x axis (`start → end` sets the
+    /// latter, in page space). `1.0` is a circle; anything else is an
+    /// ellipse aligned with the path's own axes, as InDesign draws its
+    /// default radial feather on a frame taller than it is wide. Ignored
+    /// by `Linear`.
+    pub radial_aspect: f32,
 }
 
 /// Pixel-space transform applied to an offscreen layer after the
@@ -1005,6 +1036,18 @@ pub enum DisplayCommand {
         bounds: Rect,
         blend_mode: BlendMode,
         opacity: f32,
+        /// IDML `IsolateBlending`: the group's contents blend with each
+        /// other only, never with what lies under the group. `false` is
+        /// InDesign's default — a non-isolated group, whose contents see
+        /// the backdrop (a `Multiply` fill inside a frame at 50 %
+        /// multiplies with the page, `transparency-targets` case 37).
+        isolated: bool,
+        /// IDML `KnockoutGroup`: each element of the group composites
+        /// with the group's initial backdrop instead of with the elements
+        /// before it, so a later element replaces an earlier one where it
+        /// covers it (cases 43, 44). An "element" is a nested group; the
+        /// emitter brackets every member of a knockout group.
+        knockout: bool,
         transform: Transform,
     },
     /// End the most-recently-pushed transparency group. Mismatched
@@ -1521,6 +1564,35 @@ impl DisplayList {
             for entry in table.entries.iter_mut() {
                 if entry.command_index as usize >= at {
                     entry.command_index += 1;
+                }
+            }
+        }
+    }
+
+    /// Apply `f` to the transform of every command in `range`, and of every
+    /// glyph-run entry that belongs to one of them.
+    ///
+    /// An entry keeps its own copy of its outline command's transform (the
+    /// PDF writer sets its text matrix from it), so a post-emit pass that
+    /// moves commands — vertical justification, a rotated frame, a rotated
+    /// cell — must move the entries too, or the exported text stays where
+    /// the outlines were before the move. Use this rather than editing
+    /// `commands[..].transform_mut()` wherever the list may carry glyph
+    /// runs.
+    pub fn map_transforms(
+        &mut self,
+        range: std::ops::Range<usize>,
+        mut f: impl FnMut(&mut Transform),
+    ) {
+        let end = range.end.min(self.commands.len());
+        let start = range.start.min(end);
+        for cmd in &mut self.commands[start..end] {
+            f(cmd.transform_mut());
+        }
+        if let Some(table) = self.glyph_runs.as_mut() {
+            for entry in table.entries.iter_mut() {
+                if (start..end).contains(&(entry.command_index as usize)) {
+                    f(&mut entry.transform);
                 }
             }
         }

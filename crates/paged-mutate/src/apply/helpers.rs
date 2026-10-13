@@ -484,6 +484,7 @@ pub(super) fn default_drop_shadow() -> paged_model::DropShadowSetting {
         size: 4.0,
         opacity_pct: 30.0,
         effect_color: None,
+        ..Default::default()
     }
 }
 
@@ -516,6 +517,7 @@ pub(super) fn default_inner_shadow() -> paged_model::InnerShadowParams {
         choke_pct: Some(0.0),
         blend_mode: Some("Multiply".to_string()),
         noise_pct: Some(0.0),
+        ..Default::default()
     }
 }
 
@@ -527,6 +529,7 @@ pub(super) fn default_outer_glow() -> paged_model::OuterGlowParams {
         spread_pct: Some(0.0),
         blend_mode: Some("Screen".to_string()),
         noise_pct: Some(0.0),
+        ..Default::default()
     }
 }
 
@@ -539,6 +542,7 @@ pub(super) fn default_inner_glow() -> paged_model::InnerGlowParams {
         blend_mode: Some("Screen".to_string()),
         source: Some("EdgeGlow".to_string()),
         noise_pct: Some(0.0),
+        ..Default::default()
     }
 }
 
@@ -556,6 +560,7 @@ pub(super) fn default_bevel() -> paged_model::BevelEmbossParams {
         direction: Some("Up".to_string()),
         technique: Some("Smooth".to_string()),
         soften: Some(0.0),
+        ..Default::default()
     }
 }
 
@@ -590,6 +595,7 @@ pub(super) fn default_directional_feather() -> paged_model::DirectionalFeatherPa
         noise_pct: Some(0.0),
         choke_pct: Some(0.0),
         corner_type: None,
+        ..Default::default()
     }
 }
 
@@ -1185,12 +1191,72 @@ pub(super) fn find_directional_feather_mut<'a>(
 // `FrameOpacity`, which covers the same five kinds. `GraphicLine`
 // carries neither field on `paged_model::GraphicLine`, so it is
 // absent here on purpose rather than silently no-op'ing.
+/// R-10 — which of a page item's transparency targets a path edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TargetKind {
+    Fill,
+    Stroke,
+    Content,
+}
+
+/// R-10 — the slot of one transparency target on a page item: the fill
+/// and content targets on the four frame kinds, the stroke target on
+/// those and on a line. `None` when the node is absent or has no such
+/// target.
+pub(super) fn find_target_slot_mut<'a>(
+    doc: &'a mut Document,
+    node: &NodeId,
+    target: TargetKind,
+) -> Option<&'a mut Option<paged_model::TargetTransparency>> {
+    use TargetKind as T;
+    match (node, target) {
+        (NodeId::TextFrame(id), T::Fill) => {
+            find_text_frame_mut(doc, id).map(|f| &mut f.fill_transparency)
+        }
+        (NodeId::TextFrame(id), T::Stroke) => {
+            find_text_frame_mut(doc, id).map(|f| &mut f.stroke_transparency)
+        }
+        (NodeId::TextFrame(id), T::Content) => {
+            find_text_frame_mut(doc, id).map(|f| &mut f.content_transparency)
+        }
+        (NodeId::Rectangle(id), T::Fill) => {
+            find_rectangle_mut(doc, id).map(|f| &mut f.fill_transparency)
+        }
+        (NodeId::Rectangle(id), T::Stroke) => {
+            find_rectangle_mut(doc, id).map(|f| &mut f.stroke_transparency)
+        }
+        (NodeId::Rectangle(id), T::Content) => {
+            find_rectangle_mut(doc, id).map(|f| &mut f.content_transparency)
+        }
+        (NodeId::Oval(id), T::Fill) => find_oval_mut(doc, id).map(|f| &mut f.fill_transparency),
+        (NodeId::Oval(id), T::Stroke) => find_oval_mut(doc, id).map(|f| &mut f.stroke_transparency),
+        (NodeId::Oval(id), T::Content) => {
+            find_oval_mut(doc, id).map(|f| &mut f.content_transparency)
+        }
+        (NodeId::Polygon(id), T::Fill) => {
+            find_polygon_mut(doc, id).map(|f| &mut f.fill_transparency)
+        }
+        (NodeId::Polygon(id), T::Stroke) => {
+            find_polygon_mut(doc, id).map(|f| &mut f.stroke_transparency)
+        }
+        (NodeId::Polygon(id), T::Content) => {
+            find_polygon_mut(doc, id).map(|f| &mut f.content_transparency)
+        }
+        (NodeId::GraphicLine(id), T::Stroke) => {
+            find_graphic_line_mut(doc, id).map(|f| &mut f.stroke_transparency)
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn find_blend_mode_mut<'a>(
     doc: &'a mut Document,
     node: &NodeId,
 ) -> Option<&'a mut Option<String>> {
     match node {
         NodeId::TextFrame(id) => find_text_frame_mut(doc, id).map(|f| &mut f.blend_mode),
+        // R-10: a line's object blend mode.
+        NodeId::GraphicLine(id) => find_graphic_line_mut(doc, id).map(|l| &mut l.blend_mode),
         NodeId::Rectangle(id) => find_rectangle_mut(doc, id).map(|r| &mut r.blend_mode),
         NodeId::Polygon(id) => find_polygon_mut(doc, id).map(|p| &mut p.blend_mode),
         NodeId::Oval(id) => find_oval_mut(doc, id).map(|o| &mut o.blend_mode),

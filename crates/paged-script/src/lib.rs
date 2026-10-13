@@ -4532,7 +4532,10 @@ fn paged_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
         .to_string(ctx)?
         .to_std_string_escaped();
     let Some(element_id) = parse_element_id(&id) else {
-        return Ok(JsValue::null());
+        return Ok(match with_model(|m| inspect_story(m, &id)) {
+            Some(s) => JsValue::from(js_string!(s)),
+            None => JsValue::null(),
+        });
     };
     let payload = with_model(|m| {
         m.element_properties(&element_id)
@@ -4542,6 +4545,36 @@ fn paged_inspect(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
         Some(s) => Ok(JsValue::from(js_string!(s))),
         None => Ok(JsValue::null()),
     }
+}
+
+/// `paged.inspect("story:<id>")` — a story's snapshot in the shape an
+/// element's has (`{ id, kind, name, entries: [{ path, value }] }`): its
+/// `text` first, then every row the property schemas list for a story.
+/// `None` when the address names no story in this document.
+fn inspect_story(m: &CanvasModel, address: &str) -> Option<String> {
+    let resolved = m.resolve_address(address)?;
+    let paged_wire::Address::Story { id } = &resolved else {
+        return None;
+    };
+    let paths = std::iter::once("text").chain(
+        paged_introspect::virtual_paths::property_schemas()
+            .into_iter()
+            .filter(|row| row.address_kind == "story")
+            .map(|row| row.path),
+    );
+    let entries: Vec<serde_json::Value> = paths
+        .filter_map(|path| {
+            let value = m.get_property_at(&resolved, path).ok()?;
+            Some(serde_json::json!({ "path": path, "value": value }))
+        })
+        .collect();
+    serde_json::to_string(&serde_json::json!({
+        "id": { "kind": "story", "id": id },
+        "kind": "Story",
+        "name": null,
+        "entries": entries,
+    }))
+    .ok()
 }
 
 fn paged_layers(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context) -> JsResult<JsValue> {

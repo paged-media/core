@@ -144,23 +144,12 @@ pub fn emit_bevel_emboss(
     transform: &Transform,
     bevel: &BevelEmboss,
 ) {
+    // Each stamp in its own blend mode — the highlight Screen and the
+    // shadow Multiply unless the bevel names others (`HighlightBlendMode`,
+    // `ShadowBlendMode`) — and clipped as the stamp asks, as the
+    // rasterizers composite them.
     let stamps = paged_compose::mask::bevel_emboss_stamps(path, transform, bevel, ctx.effect_dpi);
-    clip_to_path(content, path, transform, |content| {
-        for stamp in stamps {
-            if stamp.mask.is_empty() {
-                continue;
-            }
-            stamp_mask(
-                content,
-                ctx.state,
-                ctx.resources,
-                &stamp.mask,
-                stamp.color,
-                (0.0, 0.0),
-                ctx.xobject_counter,
-            );
-        }
-    });
+    emit_stamps(content, ctx, path, transform, stamps);
 }
 
 /// Run `f` with the path clipped in and the blend mode set.
@@ -189,18 +178,5 @@ fn with_blend(
     content.save_state();
     crate::transparency::apply_gs(content, ctx.state, ctx.resources, Some(blend), None, false);
     f(content, ctx);
-    content.restore_state();
-}
-
-/// Run `f` with the path clipped in, blend mode untouched.
-fn clip_to_path(
-    content: &mut Content,
-    path: &PathData,
-    transform: &Transform,
-    f: impl FnOnce(&mut Content),
-) {
-    content.save_state();
-    crate::page::emit_transformed_clip(content, path, transform);
-    f(content);
     content.restore_state();
 }

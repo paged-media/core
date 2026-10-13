@@ -2164,6 +2164,7 @@ pub(super) fn apply_set_property(
             | NodeId::Rectangle(_)
             | NodeId::Polygon(_)
             | NodeId::Oval(_)
+            | NodeId::GraphicLine(_)
             | NodeId::Group(_),
             PropertyPath::FrameBlendMode,
         ) => {
@@ -2180,6 +2181,164 @@ pub(super) fn apply_set_property(
                 Value::Text(prev.unwrap_or_default()),
                 frame_style_hint(node),
             )
+        }
+        // ---- R-10 — a line's object opacity (it had none before) ----
+        (NodeId::GraphicLine(id), PropertyPath::FrameOpacity) => {
+            let new_opacity = expect_length(path, value)?;
+            let line = find_graphic_line_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev = line.opacity;
+            line.opacity = new_opacity;
+            (Value::Length(prev), frame_style_hint(node))
+        }
+        // ---- R-10 — a transparency target's opacity / blend mode ----
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameFillOpacity
+            | PropertyPath::FrameStrokeOpacity
+            | PropertyPath::FrameContentOpacity,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let target = match path {
+                PropertyPath::FrameFillOpacity => TargetKind::Fill,
+                PropertyPath::FrameStrokeOpacity => TargetKind::Stroke,
+                _ => TargetKind::Content,
+            };
+            let slot = find_target_slot_mut(doc, node, target).ok_or_else(|| {
+                OperationError::UnsupportedProperty {
+                    node: node.clone(),
+                    path,
+                }
+            })?;
+            let t = slot.get_or_insert_with(Default::default);
+            let prev = std::mem::replace(&mut t.opacity, new_val);
+            drop_empty_target(slot);
+            (Value::Length(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameFillBlendMode
+            | PropertyPath::FrameStrokeBlendMode
+            | PropertyPath::FrameContentBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let target = match path {
+                PropertyPath::FrameFillBlendMode => TargetKind::Fill,
+                PropertyPath::FrameStrokeBlendMode => TargetKind::Stroke,
+                _ => TargetKind::Content,
+            };
+            let slot = find_target_slot_mut(doc, node, target).ok_or_else(|| {
+                OperationError::UnsupportedProperty {
+                    node: node.clone(),
+                    path,
+                }
+            })?;
+            let t = slot.get_or_insert_with(Default::default);
+            let prev =
+                std::mem::replace(&mut t.blend_mode, (!new_val.is_empty()).then_some(new_val));
+            drop_empty_target(slot);
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
+        }
+        // ---- R-10 — how a group's members composite ----------------
+        (NodeId::Group(id), PropertyPath::GroupIsolateBlending | PropertyPath::GroupKnockout) => {
+            let new_val = expect_bool(path, value)?;
+            let group = find_group_mut(doc, id)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = if path == PropertyPath::GroupIsolateBlending {
+                &mut group.transparency.isolate_blending
+            } else {
+                &mut group.transparency.knockout_group
+            };
+            let prev = std::mem::replace(slot, new_val);
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        // ---- R-11 — the drop shadow's remaining attributes ----------
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowBlendMode,
+        ) => {
+            let new_val = expect_text(path, value)?;
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let prev =
+                std::mem::replace(&mut ds.blend_mode, (!new_val.is_empty()).then_some(new_val));
+            (
+                Value::Text(prev.unwrap_or_default()),
+                frame_style_hint(node),
+            )
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowSpread | PropertyPath::FrameDropShadowNoise,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let slot = if path == PropertyPath::FrameDropShadowSpread {
+                &mut ds.spread_pct
+            } else {
+                &mut ds.noise_pct
+            };
+            let prev = std::mem::replace(slot, new_val);
+            (Value::Length(prev), frame_style_hint(node))
+        }
+        (
+            NodeId::TextFrame(_)
+            | NodeId::Rectangle(_)
+            | NodeId::Oval(_)
+            | NodeId::Polygon(_)
+            | NodeId::GraphicLine(_),
+            PropertyPath::FrameDropShadowKnockedOut | PropertyPath::FrameDropShadowUseGlobalLight,
+        ) => {
+            let new_val = expect_bool(path, value)?;
+            let ds = find_drop_shadow_mut(doc, node)
+                .ok_or_else(|| OperationError::NodeNotFound(node.clone()))?;
+            let (slot, default) = if path == PropertyPath::FrameDropShadowKnockedOut {
+                (&mut ds.knocked_out, true)
+            } else {
+                (&mut ds.use_global_light, false)
+            };
+            // InDesign's default is stored as "unset", so an undo that
+            // writes it back restores the slot exactly.
+            let prev =
+                std::mem::replace(slot, (new_val != default).then_some(new_val)).unwrap_or(default);
+            (Value::Bool(prev), frame_style_hint(node))
+        }
+        // ---- R-11 — the document's global light ---------------------
+        (
+            NodeId::Document(_),
+            PropertyPath::DocumentGlobalLightAngle | PropertyPath::DocumentGlobalLightAltitude,
+        ) => {
+            let new_val = expect_length(path, value)?;
+            let pref = &mut doc.designmap.transparency_preference;
+            let slot = if path == PropertyPath::DocumentGlobalLightAngle {
+                &mut pref.global_light_angle
+            } else {
+                &mut pref.global_light_altitude
+            };
+            let prev = std::mem::replace(slot, new_val);
+            // Every shadow, inner shadow and bevel that follows the light
+            // repaints: the whole document.
+            (Value::Length(prev), InvalidationHint::default())
         }
         // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
         // The placed-image crop set + fitting-type enum live in
@@ -3252,4 +3411,15 @@ fn spread_holds_item(spread: &paged_model::Spread, id: &str) -> bool {
         || spread.polygons.iter().any(|f| is(&f.self_id))
         || spread.graphic_lines.iter().any(|f| is(&f.self_id))
         || spread.groups.iter().any(|f| is(&f.self_id))
+}
+
+/// R-10 — a target with nothing left set is removed, so a cleared one
+/// writes no block on save.
+fn drop_empty_target(slot: &mut Option<paged_model::TargetTransparency>) {
+    if slot
+        .as_ref()
+        .is_some_and(|t| t.opacity.is_none() && t.blend_mode.is_none() && t.effects.is_none())
+    {
+        *slot = None;
+    }
 }

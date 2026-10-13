@@ -1428,6 +1428,50 @@ pub enum PropertyPath {
     /// all six page-item kinds. `Value::Text`; `""` removes the name. The
     /// stable handle a stored selector (`frame[name="price"]`) points at.
     ItemName,
+
+    // ---- R-10 — per-target transparency --------------------------
+    // A page item's fill, stroke and content each composite with their
+    // own opacity and blend mode (see `paged_model::TargetTransparency`).
+    // `Length(None)` / `""` clears a value; a target left with nothing
+    // set is removed, so it writes no block on save.
+    /// `<FillTransparencySetting><BlendingSetting Opacity>`, percent.
+    /// TextFrame / Rectangle / Oval / Polygon.
+    FrameFillOpacity,
+    /// `<FillTransparencySetting><BlendingSetting BlendMode>`.
+    FrameFillBlendMode,
+    /// `<StrokeTransparencySetting><BlendingSetting Opacity>`, percent.
+    /// The four frame kinds and GraphicLine.
+    FrameStrokeOpacity,
+    /// `<StrokeTransparencySetting><BlendingSetting BlendMode>`.
+    FrameStrokeBlendMode,
+    /// The content target's opacity, percent: a text frame's
+    /// `<ContentTransparencySetting>`, a graphic frame's picture (the
+    /// `<Image>`'s own `<TransparencySetting>`).
+    FrameContentOpacity,
+    /// The content target's blend mode.
+    FrameContentBlendMode,
+    /// `<Group>`'s `<BlendingSetting IsolateBlending>`, `Value::Bool`.
+    GroupIsolateBlending,
+    /// `<Group>`'s `<BlendingSetting KnockoutGroup>`, `Value::Bool`.
+    GroupKnockout,
+
+    // ---- R-11 — drop-shadow attributes and the global light -------
+    /// `<DropShadowSetting BlendMode>`; `""` is InDesign's `Multiply`.
+    FrameDropShadowBlendMode,
+    /// `<DropShadowSetting Spread>`, percent.
+    FrameDropShadowSpread,
+    /// `<DropShadowSetting Noise>`, percent.
+    FrameDropShadowNoise,
+    /// `<DropShadowSetting KnockedOut>`, `Value::Bool`.
+    FrameDropShadowKnockedOut,
+    /// `<DropShadowSetting UseGlobalLight>`, `Value::Bool`.
+    FrameDropShadowUseGlobalLight,
+    /// `<TransparencyPreference GlobalLightAngle>` (`NodeId::Document`),
+    /// degrees; `Length(None)` is InDesign's 120.
+    DocumentGlobalLightAngle,
+    /// `<TransparencyPreference GlobalLightAltitude>` (`NodeId::Document`),
+    /// degrees; `Length(None)` is InDesign's 30.
+    DocumentGlobalLightAltitude,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1761,6 +1805,21 @@ impl PropertyPath {
             PropertyPath::TableStyleEndRowFillCount => "tableStyle.endRowFillCount",
             PropertyPath::TableStyleEndRowFillTint => "tableStyle.endRowFillTint",
             PropertyPath::ItemName => "item.name",
+            PropertyPath::FrameFillOpacity => "frame.fillOpacity",
+            PropertyPath::FrameFillBlendMode => "frame.fillBlendMode",
+            PropertyPath::FrameStrokeOpacity => "frame.strokeOpacity",
+            PropertyPath::FrameStrokeBlendMode => "frame.strokeBlendMode",
+            PropertyPath::FrameContentOpacity => "frame.contentOpacity",
+            PropertyPath::FrameContentBlendMode => "frame.contentBlendMode",
+            PropertyPath::GroupIsolateBlending => "group.isolateBlending",
+            PropertyPath::GroupKnockout => "group.knockout",
+            PropertyPath::FrameDropShadowBlendMode => "frame.dropShadowBlendMode",
+            PropertyPath::FrameDropShadowSpread => "frame.dropShadowSpread",
+            PropertyPath::FrameDropShadowNoise => "frame.dropShadowNoise",
+            PropertyPath::FrameDropShadowKnockedOut => "frame.dropShadowKnockedOut",
+            PropertyPath::FrameDropShadowUseGlobalLight => "frame.dropShadowUseGlobalLight",
+            PropertyPath::DocumentGlobalLightAngle => "document.globalLightAngle",
+            PropertyPath::DocumentGlobalLightAltitude => "document.globalLightAltitude",
         }
     }
 }
@@ -1870,6 +1929,7 @@ impl GradientFeatherSpec {
                     midpoint_pct: s.midpoint_pct,
                 })
                 .collect(),
+            ..Default::default()
         }
     }
 }
@@ -3570,12 +3630,17 @@ pub enum Operation {
         elements: Vec<NodeId>,
         verb: PathfinderRegionVerb,
     },
-    /// B-22 — Shape Builder's click/drag output: unite the NAMED faces
-    /// of the arrangement of `elements` into one result element.
+    /// B-22 — Shape Builder's click/drag output: ONE element built from
+    /// the selected faces of the arrangement of `elements`, united.
     /// `faces` carries the stable ids `requestPlanarRegions` reported.
-    /// `mode` picks whether the named faces are the ones kept or the
-    /// ones removed (a Shape-Builder alt-drag erases what it crosses).
-    /// Rides the same Batch machinery as `PathfinderRegion`.
+    /// `mode` selects the named faces (`Keep`) or every other face
+    /// (`Remove`; with no face named that is every face, so the op unites
+    /// its inputs). The result is written onto the topmost input covering
+    /// a selected face; every other input is removed — a face outside the
+    /// selection is not kept. A Shape Builder that leaves the faces its
+    /// gesture did not cross assembles those pieces itself and unites
+    /// only the crossed faces through this op. Rides the same Batch
+    /// machinery as `PathfinderRegion`.
     PathfinderFaces {
         elements: Vec<NodeId>,
         faces: Vec<String>,

@@ -179,6 +179,14 @@ pub fn export_page(
             // interact with the page backdrop; the blending colour
             // space is inherited from the parent group.
             PendingFormGroup::TransparencyInherit => {}
+            PendingFormGroup::TransparencyFlags { isolated, knockout } => {
+                if isolated {
+                    g.isolated(true);
+                }
+                if knockout {
+                    g.knockout(true);
+                }
+            }
             // Luminosity masks composite against a defined black
             // backdrop in their OWN space.
             PendingFormGroup::LuminosityGray => {
@@ -657,8 +665,18 @@ impl Walker<'_, '_> {
                     } else {
                         FrameKind::BlendGroup
                     };
-                    let needs_group =
-                        *blend_mode != paged_compose::BlendMode::Normal || *opacity < 0.999;
+                    // R-10: IDML's `IsolateBlending` / `KnockoutGroup`
+                    // need a real group even at Normal / 100 %.
+                    let (isolated, knockout) = match &commands[i] {
+                        DisplayCommand::BeginBlendGroup {
+                            isolated, knockout, ..
+                        } => (*isolated, *knockout),
+                        _ => (false, false),
+                    };
+                    let needs_group = *blend_mode != paged_compose::BlendMode::Normal
+                        || *opacity < 0.999
+                        || isolated
+                        || knockout;
                     if needs_group {
                         // Capture the bracketed commands into their
                         // own stream → transparency-group Form
@@ -673,7 +691,11 @@ impl Walker<'_, '_> {
                             form_ref,
                             data: inner.finish().to_vec(),
                             bbox: self.content_bbox,
-                            group: PendingFormGroup::TransparencyInherit,
+                            group: if isolated || knockout {
+                                PendingFormGroup::TransparencyFlags { isolated, knockout }
+                            } else {
+                                PendingFormGroup::TransparencyInherit
+                            },
                         });
                         let name = format!("Fm{}", self.form_counter);
                         self.form_counter += 1;
@@ -1250,6 +1272,8 @@ mod tests {
             },
             blend_mode: BlendMode::Multiply,
             opacity: 0.5,
+            isolated: false,
+            knockout: false,
             transform: ident(),
         }
     }

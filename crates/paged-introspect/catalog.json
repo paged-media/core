@@ -12,7 +12,7 @@
       "params": "(address, path)",
       "returns": "value JSON | null",
       "kind": "read",
-      "summary": "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."
+      "summary": "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). Text is read with path \"text\" (read-only): a story answers its paragraphs joined by \\n, a text frame its story's (the whole thread), a storyRange its characters. A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."
     },
     {
       "name": "paged.insertText",
@@ -96,7 +96,7 @@
       "params": "(id)",
       "returns": "ElementProperties JSON",
       "kind": "read",
-      "summary": "Full property snapshot for one element (or storyRange)."
+      "summary": "Full property snapshot for one element (or storyRange), or for a story (story:<id>: its text, then its story rows); null when the address names nothing."
     },
     {
       "name": "paged.tree",
@@ -131,7 +131,7 @@
       "params": "(selector)",
       "returns": "string[] JSON",
       "kind": "read",
-      "summary": "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."
+      "summary": "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, `textFrame[style=Price]` (a style matches a page item's object style and, on a text frame or story, the paragraph and character styles its story applies), unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."
     },
     {
       "name": "paged.schema",
@@ -957,7 +957,7 @@
       "params": "([id, ...], [faceId, ...], mode)",
       "returns": "bool",
       "kind": "author",
-      "summary": "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."
+      "summary": "Build ONE element from faces of the planar arrangement, united: mode keep = the named faces, remove = every other face (none named: every face, so the inputs unite). The result goes onto the topmost input covering a selected face; every other input is removed, so faces outside the selection are not kept. Face ids come from paged.planarRegions."
     },
     {
       "name": "paged.planarRegions",
@@ -1423,6 +1423,19 @@
     "frameDirectionalFeatherNoise",
     "frameDirectionalFeatherChoke",
     "frameBlendMode",
+    "frameFillOpacity",
+    "frameFillBlendMode",
+    "frameStrokeOpacity",
+    "frameStrokeBlendMode",
+    "frameContentOpacity",
+    "frameContentBlendMode",
+    "groupIsolateBlending",
+    "groupKnockout",
+    "frameDropShadowBlendMode",
+    "frameDropShadowSpread",
+    "frameDropShadowNoise",
+    "frameDropShadowKnockedOut",
+    "frameDropShadowUseGlobalLight",
     "frameGradientFeather",
     "cellFillColor",
     "cellFillTint",
@@ -5742,6 +5755,354 @@
     },
     {
       "addressKind": "frame",
+      "path": "frameFillOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameFillBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameStrokeBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameContentOpacity",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "Opacity",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameContentBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Normal",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "groupIsolateBlending",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "IsolateBlending",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "groupKnockout",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "BlendingSetting",
+          "attribute": "KnockoutGroup",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowBlendMode",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Normal",
+          "Multiply",
+          "Screen",
+          "Overlay",
+          "SoftLight",
+          "HardLight",
+          "ColorDodge",
+          "ColorBurn",
+          "Darken",
+          "Lighten",
+          "Difference",
+          "Exclusion",
+          "Hue",
+          "Saturation",
+          "Color",
+          "Luminosity"
+        ],
+        "open": true
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Multiply",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "BlendMode",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowSpread",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "Spread",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowNoise",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "Noise",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowKnockedOut",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "KnockedOut",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
+      "path": "frameDropShadowUseGlobalLight",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "DropShadowSetting",
+          "attribute": "UseGlobalLight",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "frame",
       "path": "frameGradientFeather",
       "type": {
         "kind": "struct",
@@ -7944,6 +8305,62 @@
         {
           "element": "DocumentPreference",
           "attribute": "SlugRightOrOutsideOffset",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentGlobalLightAngle",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "default": 120.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "TransparencyPreference",
+          "attribute": "GlobalLightAngle",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentGlobalLightAltitude",
+      "type": {
+        "kind": "number",
+        "unit": "degrees"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": -360.0,
+        "max": 360.0
+      },
+      "default": 30.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "TransparencyPreference",
+          "attribute": "GlobalLightAltitude",
           "kind": "attr"
         }
       ]

@@ -231,7 +231,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.set", "(address, path, value)", "bool", "write",
            "Set one property of any object (Mutation::Set). address is an idGrammar address — an element (rectangle:u12, storyRange:Story/u1@0..6), doc, page:#2, layer:<id>, swatch:Color/Red, style:object/<id>, cell:<table>/0,1, textVariable:<id>, … — and path any row propertySchemas lists for that kind (settablePaths on elements). The value is coerced by the path's schema (enum members, ranges, \"3mm\" on a length). null clears. A selector is not a target: paged.query it first. The protocol-70 target object ({kind:\"layer\",layerId}) is still accepted, deprecated. A plugin:<pluginId>/<kind>/<id> address goes to the host's object registry (ADR 323): it returns a Promise<true>, consecutive plugin sets fold into ONE batched host round trip, a refusal rejects with an Error whose .code is the registry's code (an unawaited refusal fails the script), and core + plugin writes of one script undo as one step. With no host registry it throws code noHost."),
         f!("paged.get", "(address, path)", "value JSON | null", "read",
-           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."),
+           "Read one property of any addressed object, as its wire value JSON (the read twin of paged.set; RequestGet on the wire). Text is read with path \"text\" (read-only): a story answers its paragraphs joined by \\n, a text frame its story's (the whole thread), a storyRange its characters. A plugin: address asks the host's object registry: a Promise of the value's JSON (null when absent or mixed); a refusal rejects with .code."),
         // --- authoring (Stage 1/2) ---
         f!("paged.insertText", "(storyId, offset, text)", "bool", "author",
            "Insert plain text at a story body offset; \\n splits paragraphs."),
@@ -256,7 +256,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.redo", "()", "bool", "history", "Redo the last undone mutation."),
         // --- reads / introspection (return JSON strings unless noted) ---
         f!("paged.inspect", "(id)", "ElementProperties JSON", "read",
-           "Full property snapshot for one element (or storyRange)."),
+           "Full property snapshot for one element (or storyRange), or for a story (story:<id>: its text, then its story rows); null when the address names nothing."),
         f!("paged.tree", "()", "SceneTreeNode[] JSON", "read",
            "Document hierarchy: spreads → pages → frames."),
         f!("paged.pages", "()", "PageSummary[] JSON", "read",
@@ -265,7 +265,7 @@ fn host_functions() -> Vec<HostFn> {
            "Loaded stories with selfId + characterCount + paragraphCount. The source of valid story ids."),
         f!("paged.layers", "()", "LayerSummary[] JSON", "read", "Document layers."),
         f!("paged.query", "(selector)", "string[] JSON", "read",
-           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
+           "Canonical addresses of every object a selector matches, document order (ADR 131): `page:#3 > frame`, `frame[name=\"price\"]`, `[label.x-paged:oid=a1b2]`, `textFrame[style=Price]` (a style matches a page item's object style and, on a text frame or story, the paragraph and character styles its story applies), unions with `,`. Throws SyntaxError (with the offset) on a malformed selector. A selector naming plugin: kinds or objects is evaluated by the host's object registry and returns a Promise of the same JSON."),
         f!("paged.schema", "(addressOrKind)", "PropertySchema[] JSON", "read",
            "The typed property schema rows (ADR 132) of an address's kind (frame:u1, swatch:Color/Red) or a kind name (frame, page). A plugin: address or kind asks the host's object registry: a Promise of its PropertySchema[] JSON."),
         f!("paged.invoke", "(id, args?)", "Promise<command result JSON>", "write",
@@ -427,7 +427,7 @@ fn host_functions() -> Vec<HostFn> {
         f!("paged.pathfinderMinusBack", "([id, ...])", "bool", "author",
            "Subtract the shapes behind from the frontmost one."),
         f!("paged.pathfinderFaces", "([id, ...], [faceId, ...], mode)", "bool", "author",
-           "Keep or drop named faces of the planar arrangement; mode = keep | remove. Face ids come from paged.planarRegions."),
+           "Build ONE element from faces of the planar arrangement, united: mode keep = the named faces, remove = every other face (none named: every face, so the inputs unite). The result goes onto the topmost input covering a selected face; every other input is removed, so faces outside the selection are not kept. Face ids come from paged.planarRegions."),
         f!("paged.planarRegions", "([id, ...], [x, y]?)", "PlanarRegionsResult JSON", "read",
            "The planar arrangement of the named paths: found, faces (each with an id), inputCount, complete, reason. With a point, only the face under it. This is how a script names a face for pathfinderFaces."),
         // --- opacity masks & text on a path ---
@@ -772,6 +772,23 @@ property_paths! {
         FrameDirectionalFeatherNoise => "frameDirectionalFeatherNoise" : pct().idml(idml![attr(DirectionalFeatherSetting, Noise)]),
         FrameDirectionalFeatherChoke => "frameDirectionalFeatherChoke" : pct().idml(idml![attr(DirectionalFeatherSetting, ChokeAmount)]),
         FrameBlendMode => "frameBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        // R-10 — the fill, stroke and content targets (the `<BlendingSetting>`
+        // under `<Fill|Stroke|ContentTransparencySetting>`, a picture's under
+        // its `<Image>`), and how a group's members composite.
+        FrameFillOpacity => "frameFillOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameFillBlendMode => "frameFillBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        FrameStrokeOpacity => "frameStrokeOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameStrokeBlendMode => "frameStrokeBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        FrameContentOpacity => "frameContentOpacity" : pct().default_num(100.0).idml(idml![attr(BlendingSetting, Opacity)]),
+        FrameContentBlendMode => "frameContentBlendMode" : enum_open(BLEND_MODES).default_text("Normal").idml(idml![attr(BlendingSetting, BlendMode)]),
+        GroupIsolateBlending => "groupIsolateBlending" : bool_().default_bool(false).idml(idml![attr(BlendingSetting, IsolateBlending)]),
+        GroupKnockout => "groupKnockout" : bool_().default_bool(false).idml(idml![attr(BlendingSetting, KnockoutGroup)]),
+        // R-11 — the drop shadow's remaining attributes.
+        FrameDropShadowBlendMode => "frameDropShadowBlendMode" : enum_open(BLEND_MODES).default_text("Multiply").idml(idml![attr(DropShadowSetting, BlendMode)]),
+        FrameDropShadowSpread => "frameDropShadowSpread" : pct().default_num(0.0).idml(idml![attr(DropShadowSetting, Spread)]),
+        FrameDropShadowNoise => "frameDropShadowNoise" : pct().default_num(0.0).idml(idml![attr(DropShadowSetting, Noise)]),
+        FrameDropShadowKnockedOut => "frameDropShadowKnockedOut" : bool_().default_bool(true).idml(idml![attr(DropShadowSetting, KnockedOut)]),
+        FrameDropShadowUseGlobalLight => "frameDropShadowUseGlobalLight" : bool_().default_bool(false).idml(idml![attr(DropShadowSetting, UseGlobalLight)]),
         // W0.4 — the seventh frame effect. Its six siblings were
         // advertised and it was not, under "no recorded reason"; the
         // apply arm takes the same node kinds as the others and the
@@ -900,6 +917,9 @@ property_paths! {
         DocumentSlugBottom => "documentSlugBottom" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugBottomOffset)]), "doc",
         DocumentSlugInsideOrLeft => "documentSlugInsideOrLeft" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugInsideOrLeftOffset)]), "doc",
         DocumentSlugRightOrOutside => "documentSlugRightOrOutside" : length_pos().default_num(0.0).idml(idml![attr(DocumentPreference, SlugRightOrOutsideOffset)]), "doc",
+        // R-11 — the document's global light.
+        DocumentGlobalLightAngle => "documentGlobalLightAngle" : deg().default_num(120.0).idml(idml![attr(TransparencyPreference, GlobalLightAngle)]), "doc",
+        DocumentGlobalLightAltitude => "documentGlobalLightAltitude" : deg().default_num(30.0).idml(idml![attr(TransparencyPreference, GlobalLightAltitude)]), "doc",
         TextVariableName => "textVariableName" : text().idml(idml![attr(TextVariable, Name)]), "textVariable",
         TextVariableType => "textVariableType" : enum_open(TEXT_VARIABLE_TYPES).idml(idml![attr(TextVariable, VariableType)]), "textVariable",
         TextVariableContents => "textVariableContents" : text().idml(idml![child(CustomTextVariablePreference, Contents)]), "textVariable",
@@ -1266,7 +1286,14 @@ mod tests {
         // ADR 132 closed on other kinds (page margins, document setup,
         // text variables, style definitions) are not element paths: they
         // are `propertySchemas` rows on their own address kinds.
-        assert_eq!(cat.settable_paths.len(), 221, "settable path count drifted");
+        //
+        // 221 -> 234: ADR 135 (R-10, R-11) — the fill, stroke and content
+        // transparency targets' opacity and blend mode (6), a group's
+        // isolate and knockout (2), and the drop shadow's blend mode,
+        // spread, noise, knocked-out and global-light flag (5). The
+        // document's global light is a `doc` schema row, not an element
+        // path.
+        assert_eq!(cat.settable_paths.len(), 234, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

@@ -1375,6 +1375,70 @@ fn effect_property_entries(
     ]
 }
 
+/// R-10 / R-11 — the read half of the per-target transparency paths and
+/// the drop shadow's remaining attributes. `fill` / `content` are `None`
+/// on a kind that has no such target (a line), which then answers no row
+/// for it; a target that IS there but unset reads 100 % / `""`.
+fn target_property_entries(
+    fill: Option<Option<&paged_model::TargetTransparency>>,
+    stroke: Option<&paged_model::TargetTransparency>,
+    content: Option<Option<&paged_model::TargetTransparency>>,
+    drop_shadow: Option<&paged_model::DropShadowSetting>,
+) -> Vec<crate::channel::PropertyEntry> {
+    use crate::channel::PropertyEntry;
+    use paged_mutate::{PropertyPath as P, Value as V};
+    let entry = |path, value| PropertyEntry {
+        path,
+        value: Some(value),
+    };
+    let mut out = Vec::new();
+    let mut target = |t: Option<&paged_model::TargetTransparency>, opacity: P, blend: P| {
+        out.push(entry(opacity, V::Length(t.and_then(|t| t.opacity))));
+        out.push(entry(
+            blend,
+            V::Text(t.and_then(|t| t.blend_mode.clone()).unwrap_or_default()),
+        ));
+    };
+    if let Some(t) = fill {
+        target(t, P::FrameFillOpacity, P::FrameFillBlendMode);
+    }
+    target(stroke, P::FrameStrokeOpacity, P::FrameStrokeBlendMode);
+    if let Some(t) = content {
+        target(t, P::FrameContentOpacity, P::FrameContentBlendMode);
+    }
+    out.extend([
+        entry(
+            P::FrameDropShadowBlendMode,
+            V::Text(
+                drop_shadow
+                    .and_then(|d| d.blend_mode.clone())
+                    .unwrap_or_default(),
+            ),
+        ),
+        entry(
+            P::FrameDropShadowSpread,
+            V::Length(drop_shadow.and_then(|d| d.spread_pct)),
+        ),
+        entry(
+            P::FrameDropShadowNoise,
+            V::Length(drop_shadow.and_then(|d| d.noise_pct)),
+        ),
+        entry(
+            P::FrameDropShadowKnockedOut,
+            V::Bool(drop_shadow.and_then(|d| d.knocked_out).unwrap_or(true)),
+        ),
+        entry(
+            P::FrameDropShadowUseGlobalLight,
+            V::Bool(
+                drop_shadow
+                    .and_then(|d| d.use_global_light)
+                    .unwrap_or(false),
+            ),
+        ),
+    ]);
+    out
+}
+
 impl From<&pipeline::PipelineStats> for DocumentStats {
     fn from(s: &pipeline::PipelineStats) -> Self {
         Self {
@@ -6607,6 +6671,12 @@ impl CanvasModel {
                             f.effects.as_ref(),
                             f.blend_mode.as_deref(),
                         ));
+                        entries.extend(target_property_entries(
+                            Some(f.fill_transparency.as_ref()),
+                            f.stroke_transparency.as_ref(),
+                            Some(f.content_transparency.as_ref()),
+                            f.drop_shadow.as_ref(),
+                        ));
                         // C-18 / E-1 — per-corner option + radius. A text
                         // frame's corners RENDER (its body is the same
                         // outline a rectangle paints), so these bind to a
@@ -6941,6 +7011,12 @@ impl CanvasModel {
                             f.effects.as_ref(),
                             f.blend_mode.as_deref(),
                         ));
+                        entries.extend(target_property_entries(
+                            Some(f.fill_transparency.as_ref()),
+                            f.stroke_transparency.as_ref(),
+                            Some(f.content_transparency.as_ref()),
+                            f.drop_shadow.as_ref(),
+                        ));
                         // W0.3 — per-corner option + radius.
                         entries.extend(corner_entries(&f.corners));
                         entries
@@ -6993,6 +7069,15 @@ impl CanvasModel {
                                 value: Some(Value::Text(
                                     g.transparency.blend_mode.clone().unwrap_or_default(),
                                 )),
+                            },
+                            // R-10 — how the members composite.
+                            PropertyEntry {
+                                path: PropertyPath::GroupIsolateBlending,
+                                value: Some(Value::Bool(g.transparency.isolate_blending)),
+                            },
+                            PropertyEntry {
+                                path: PropertyPath::GroupKnockout,
+                                value: Some(Value::Bool(g.transparency.knockout_group)),
                             },
                         ];
                         // C-18 / E-1 — a `<Group>` carries the corner
@@ -7153,6 +7238,12 @@ impl CanvasModel {
                             p.effects.as_ref(),
                             p.blend_mode.as_deref(),
                         ));
+                        entries.extend(target_property_entries(
+                            Some(p.fill_transparency.as_ref()),
+                            p.stroke_transparency.as_ref(),
+                            Some(p.content_transparency.as_ref()),
+                            p.drop_shadow.as_ref(),
+                        ));
                         // B-23 / E-1 — the polygon corner slots the
                         // kernel has applied since B-23 finally have a
                         // read half, so an editor panel has something to
@@ -7272,13 +7363,22 @@ impl CanvasModel {
                         entries.extend(corner_entries(&l.corners));
                         // ADR 132 — a line's effects are written and drawn
                         // (cast from its stroke band) now, so they read
-                        // too. Not the blend-mode row: a line has no
-                        // blend-mode write arm.
-                        entries.extend(
-                            effect_property_entries(l.effects.as_ref(), None)
-                                .into_iter()
-                                .filter(|e| e.path != PropertyPath::FrameBlendMode),
-                        );
+                        // too — and, since R-10, its object opacity and
+                        // blend mode and its stroke target.
+                        entries.extend(effect_property_entries(
+                            l.effects.as_ref(),
+                            l.blend_mode.as_deref(),
+                        ));
+                        entries.push(PropertyEntry {
+                            path: PropertyPath::FrameOpacity,
+                            value: Some(Value::Length(l.opacity)),
+                        });
+                        entries.extend(target_property_entries(
+                            None,
+                            l.stroke_transparency.as_ref(),
+                            None,
+                            l.drop_shadow.as_ref(),
+                        ));
                         entries
                     }),
                 // C-18 / E-1 — an `<Oval>` had NO descriptor arm at all
@@ -7424,6 +7524,12 @@ impl CanvasModel {
                         entries.extend(effect_property_entries(
                             o.effects.as_ref(),
                             o.blend_mode.as_deref(),
+                        ));
+                        entries.extend(target_property_entries(
+                            Some(o.fill_transparency.as_ref()),
+                            o.stroke_transparency.as_ref(),
+                            Some(o.content_transparency.as_ref()),
+                            o.drop_shadow.as_ref(),
                         ));
                         // Stored + mutable, never rendered — an ellipse
                         // has no corner. See
@@ -10124,10 +10230,11 @@ impl CanvasModel {
         type FramePathGeom<'a> = (
             paged_model::Bounds,
             Option<[f32; 6]>,
-            &'a [PathAnchor],
+            std::borrow::Cow<'a, [PathAnchor]>,
             &'a [usize],
             &'a [bool],
         );
+        use std::borrow::Cow;
 
         let raw = id.raw_id();
         for parsed in &self.scene().spreads {
@@ -10141,7 +10248,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -10154,16 +10261,27 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
                     }),
-                // Ovals don't carry a parsed PathGeometry — they're
-                // declared by GeometricBounds; render shows them as
-                // ellipses. Drop them silently rather than synthesise
-                // 4 fake anchors.
-                ElementId::Oval(_) => None,
+                // The model keeps an oval as bounds; its path is the
+                // inscribed four-arc ellipse — the outline the renderer
+                // draws and the planar arrangement reads.
+                ElementId::Oval(_) => spread
+                    .ovals
+                    .iter()
+                    .find(|f| f.self_id.as_deref() == Some(raw))
+                    .map(|f| {
+                        (
+                            f.bounds,
+                            f.item_transform,
+                            Cow::Owned(paged_mutate::apply::oval_anchors(f.bounds)),
+                            &[][..],
+                            &[false][..],
+                        )
+                    }),
                 ElementId::Polygon(_) => spread
                     .polygons
                     .iter()
@@ -10172,7 +10290,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -10185,7 +10303,7 @@ impl CanvasModel {
                         (
                             f.bounds,
                             f.item_transform,
-                            f.anchors.as_slice(),
+                            Cow::Borrowed(f.anchors.as_slice()),
                             f.subpath_starts.as_slice(),
                             f.subpath_open.as_slice(),
                         )
@@ -12001,6 +12119,17 @@ fn is_paint_path(path: &paged_mutate::PropertyPath) -> bool {
             | P::FrameDropShadowSize
             | P::FrameDropShadowOpacity
             | P::FrameDropShadowColor
+            | P::FrameFillOpacity
+            | P::FrameFillBlendMode
+            | P::FrameStrokeOpacity
+            | P::FrameStrokeBlendMode
+            | P::FrameContentOpacity
+            | P::FrameContentBlendMode
+            | P::FrameDropShadowBlendMode
+            | P::FrameDropShadowSpread
+            | P::FrameDropShadowNoise
+            | P::FrameDropShadowKnockedOut
+            | P::FrameDropShadowUseGlobalLight
             | P::FrameInnerShadowEnabled
             | P::FrameInnerShadowBlendMode
             | P::FrameInnerShadowColor

@@ -331,8 +331,9 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height (NOT first_baseline: the
 ///   cached layout is translated to it),
-///   leading_override, auto_leading_from_byte, justify_last_line, the tab layout (stops,
-///   default grid, line starts), and the inline objects' advances.
+///   leading_override, auto_leading_from_byte, justify_last_line,
+///   last_line_alignment, the tab layout (stops, default grid, line
+///   starts), and the inline objects' advances.
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
@@ -391,6 +392,15 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
         h.add_bool(f.contextual_alternates);
         h.add_u32(figure_style_tag(f.figure_style));
         h.add_u32(f.stylistic_sets);
+        h.add_u32(match f.small_caps {
+            crate::shape::SmallCaps::None => 0,
+            crate::shape::SmallCaps::Lowercase => 1,
+            crate::shape::SmallCaps::All => 2,
+        });
+        h.add_bool(f.stylistic_alternates);
+        h.add_bool(f.historical);
+        h.add_u32(f.position as u32);
+        h.add_bool(f.all_caps);
         h.sep();
     }
     fold_layout_options(&mut h, options);
@@ -411,6 +421,7 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_u32(options.auto_leading_from_byte);
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
+    h.add_u32(alignment_tag(options.last_line_alignment));
     match &options.tabs {
         Some(t) => {
             h.add_bool(true);
