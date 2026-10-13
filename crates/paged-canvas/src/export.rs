@@ -88,15 +88,24 @@ impl CanvasExportSession {
             .build_for_export()
             .map_err(|e| format!("export build failed: {e}"))?;
 
-        // Face bytes for every font the glyph tables reference.
+        // Face bytes for every font the glyph tables reference, keyed
+        // by `face_id` — the id that resolves to BYTES. `font_id` is
+        // the glyph-outline cache key with the wght mixed in; keying
+        // this map on it meant `face_data` missed every time, the
+        // `retain` below dropped the whole map, and the exporter fell
+        // through to drawing outlines. Every PDF the engine produced
+        // carried no text layer because of these two lines.
         let mut face_bytes: HashMap<u32, Vec<u8>> = HashMap::new();
         for page in &built.pages {
             if let Some(table) = &page.list.glyph_runs {
                 for entry in &table.entries {
-                    face_bytes.entry(entry.font_id).or_insert_with(|| {
+                    let Some(face_id) = entry.face_id else {
+                        continue;
+                    };
+                    face_bytes.entry(face_id).or_insert_with(|| {
                         model
                             .font_table()
-                            .face_data(entry.font_id)
+                            .face_data(face_id)
                             .map(|b| b.to_vec())
                             .unwrap_or_default()
                     });

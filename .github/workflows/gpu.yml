@@ -98,15 +98,27 @@ jobs:
             echo "::warning::lavapipe not detected by vulkaninfo; GPU tests may skip (still advisory)."
           fi
 
-      - name: cargo test -p paged-gpu --features vello-backend
+      - name: install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: cargo nextest -p paged-gpu --features vello-backend → JUnit
         id: gpu_tests
-        run: |
-          set -uo pipefail
-          # The vello_rs test module drives the Vello rasterizer; with
-          # lavapipe active, init_gpu() succeeds and the pixel assertions
-          # run instead of skipping.
-          cargo test -p paged-gpu --features vello-backend -- --nocapture
-          echo "rc=$?" >> "$GITHUB_OUTPUT"
+        # The vello_rs test module drives the Vello rasterizer; with
+        # lavapipe active, init_gpu() succeeds and the pixel assertions
+        # run instead of skipping. `--profile ci` writes
+        # target/nextest/ci/junit.xml (.config/nextest.toml), which the
+        # upload below hands to cockpit as the `core/vello-lavapipe` lane:
+        # before it, the only GPU evidence was this job's colour.
+        run: cargo nextest run -p paged-gpu --features vello-backend --profile ci --no-fail-fast
+
+      - name: upload JUnit artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vello-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: lane summary
         if: ${{ !cancelled() }}
@@ -115,9 +127,9 @@ jobs:
             echo "## GPU lane (Vello on lavapipe)"
             echo ""
             if [ "${{ steps.gpu_tests.outcome }}" = "success" ]; then
-              echo "✅ \`cargo test -p paged-gpu --features vello-backend\` PASSED on Mesa lavapipe."
+              echo "✅ \`cargo nextest run -p paged-gpu --features vello-backend\` PASSED on Mesa lavapipe."
             else
-              echo "❌ \`cargo test -p paged-gpu --features vello-backend\` did NOT pass on Mesa lavapipe."
+              echo "❌ \`cargo nextest run -p paged-gpu --features vello-backend\` did NOT pass on Mesa lavapipe."
               echo ""
               echo "This check is now VISIBLY red on failure (promotion step 1, audit 17082026 §1.10) but is"
               echo "deliberately **not** branch-protection-required during the one-week observation window."

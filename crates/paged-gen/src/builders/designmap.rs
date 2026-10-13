@@ -41,10 +41,6 @@ pub struct MarkerResources {
     pub text_variables: Vec<TextVariableDef>,
     pub hyperlinks: Vec<HyperlinkDef>,
     pub hyperlink_destinations: Vec<HyperlinkDestinationDef>,
-    /// W1.8 — optional document-level `<FootnoteOption>` carrying the
-    /// separator rule and footnote spacing. `None` emits nothing, keeping
-    /// every other sample's designmap byte-identical.
-    pub footnote_option: Option<FootnoteOptionDef>,
     /// W1.18b — `<Section>` definitions for chapter numbering / page
     /// labels. Empty for samples that don't exercise sections.
     pub sections: Vec<SectionDef>,
@@ -63,6 +59,55 @@ pub struct MarkerResources {
     /// without conditional text.
     pub conditions: Vec<ConditionSpec>,
     pub condition_sets: Vec<ConditionSetSpec>,
+    /// Named `<NumberingList>`s (see [`NumberingListSpec`]). Empty for
+    /// samples whose lists all use the default list.
+    pub numbering_lists: Vec<NumberingListSpec>,
+    /// Swatch groups (see [`ColorGroupSpec`]). Empty for samples without
+    /// colour groups.
+    pub color_groups: Vec<ColorGroupSpec>,
+}
+
+/// W1.22 — a named `<NumberingList>`: paragraphs that apply it
+/// (`AppliedNumberingList`) share one counter, and
+/// `ContinueNumbersAcrossStories` decides whether it runs on from one
+/// story into the next.
+///
+/// InDesign keeps numbering lists in `designmap.xml`, right after the
+/// `<idPkg:Styles>` reference (271 of the 305 census documents; its own
+/// export of a list added through the DOM, 2026-10-12). This generator
+/// used to write them into `Resources/Styles.xml` inside an invented
+/// `<RootNumberingListGroup>`, which InDesign does not read: the
+/// references numbered every list-bound paragraph in InDesign's default
+/// list, so story B restarted at 1 where the fixture continued at 3.
+pub struct NumberingListSpec {
+    /// e.g. `"NumberingList/Shared"` — the value `AppliedNumberingList`
+    /// names.
+    pub self_id: String,
+    pub name: String,
+    pub continue_across_stories: bool,
+    pub continue_across_documents: bool,
+}
+
+/// W4.7 — a named swatch group, written as InDesign writes it:
+///
+/// ```xml
+/// <ColorGroup Self="ColorGroup/Brand" Name="Brand" IsRootColorGroup="false">
+///   <ColorGroupSwatch Self="…" SwatchItemRef="Color/…"/>
+/// </ColorGroup>
+/// ```
+///
+/// in `designmap.xml`, after the stories and the navigation block (265
+/// of the 305 census documents; its own export, 2026-10-12). This
+/// generator used to write a `<ColorGroup ColorGroupSwatches="…">` into
+/// `Resources/Graphic.xml`, a spelling InDesign never writes: it made the
+/// group by name and left it EMPTY, every member staying in the root
+/// group. The root group (InDesign's container for every ungrouped
+/// swatch) is left for InDesign to build on open, which it does.
+pub struct ColorGroupSpec {
+    pub self_id: String,
+    pub name: String,
+    /// The member swatches' `Self` refs (`Color/<id>`), in order.
+    pub members: Vec<String>,
 }
 
 /// A document-level `<Layer>` (z-order band). Mirrors
@@ -87,24 +132,6 @@ pub struct BookmarkDef {
 pub struct IndexTopicDef {
     pub self_id: String,
     pub name: String,
-}
-
-/// W1.8 — a document-level `<FootnoteOption>` to emit. Attribute names
-/// mirror InDesign's DOM `FootnoteOption` object. Only the subset the
-/// renderer consumes is exposed; all fields are optional and omitted
-/// from the XML when `None`.
-#[derive(Default)]
-pub struct FootnoteOptionDef {
-    pub rule_on: Option<bool>,
-    pub rule_color: Option<String>,
-    pub rule_tint: Option<f32>,
-    pub rule_line_weight: Option<f32>,
-    pub rule_width: Option<f32>,
-    pub rule_left_indent: Option<f32>,
-    pub rule_offset: Option<f32>,
-    pub separator_text: Option<String>,
-    pub spacer: Option<f32>,
-    pub space_between: Option<f32>,
 }
 
 /// W1.4 / W1.18 — a `<TextVariable>` to emit. `contents` populates the
@@ -424,49 +451,29 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
         b.empty("TextVariablePreference", &attrs);
         b.end("TextVariable");
     }
-    // W1.8 — document-level footnote separator/spacing settings. InDesign
-    // wraps the `<FootnoteOption>` in a `<RootFootnoteStory>`; we mirror
-    // that. Each attribute is omitted when its field is `None`.
-    if let Some(fo) = markers.footnote_option.as_ref() {
-        let mut attrs: Vec<(&str, String)> = Vec::new();
-        if let Some(v) = fo.rule_on {
-            attrs.push(("RuleOn", v.to_string()));
-        }
-        if let Some(v) = fo.rule_color.as_deref() {
-            attrs.push(("RuleColor", v.to_string()));
-        }
-        if let Some(v) = fo.rule_tint {
-            attrs.push(("RuleTint", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.rule_line_weight {
-            attrs.push(("RuleLineWeight", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.rule_width {
-            attrs.push(("RuleWidth", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.rule_left_indent {
-            attrs.push(("RuleLeftIndent", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.rule_offset {
-            attrs.push(("RuleOffset", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.separator_text.as_deref() {
-            attrs.push(("SeparatorText", v.to_string()));
-        }
-        if let Some(v) = fo.spacer {
-            attrs.push(("Spacer", crate::xml::format_f32(v)));
-        }
-        if let Some(v) = fo.space_between {
-            attrs.push(("SpaceBetween", crate::xml::format_f32(v)));
-        }
-        let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        b.start("RootFootnoteStory", &[]);
-        b.empty("FootnoteOption", &attr_refs);
-        b.end("RootFootnoteStory");
-    }
     b.empty("idPkg:Graphic", &[("src", "Resources/Graphic.xml")]);
     b.empty("idPkg:Fonts", &[("src", "Resources/Fonts.xml")]);
     b.empty("idPkg:Styles", &[("src", "Resources/Styles.xml")]);
+    // Numbering lists, where InDesign writes them: after the styles
+    // reference, before the preferences one.
+    for l in &markers.numbering_lists {
+        let bool_str = |v: bool| if v { "true" } else { "false" };
+        b.empty(
+            "NumberingList",
+            &[
+                ("Self", l.self_id.as_str()),
+                ("Name", l.name.as_str()),
+                (
+                    "ContinueNumbersAcrossStories",
+                    bool_str(l.continue_across_stories),
+                ),
+                (
+                    "ContinueNumbersAcrossDocuments",
+                    bool_str(l.continue_across_documents),
+                ),
+            ],
+        );
+    }
     b.empty("idPkg:Preferences", &[("src", "Resources/Preferences.xml")]);
     b.empty("idPkg:Tags", &[("src", "XML/Tags.xml")]);
     for ms in &dm.master_spreads {
@@ -638,6 +645,30 @@ pub fn write_designmap_with_markers(dm: &DesignMap, markers: &MarkerResources) -
             "Topic",
             &[("Self", t.self_id.as_str()), ("Name", t.name.as_str())],
         );
+    }
+    // Swatch groups, after the navigation block as in InDesign's files.
+    // A member's `ColorGroupSwatch` Self is the group's plus a running
+    // index, the shape InDesign mints (`u12ColorGroupSwatch0`).
+    for g in &markers.color_groups {
+        b.start(
+            "ColorGroup",
+            &[
+                ("Self", g.self_id.as_str()),
+                ("Name", g.name.as_str()),
+                ("IsRootColorGroup", "false"),
+            ],
+        );
+        for (i, member) in g.members.iter().enumerate() {
+            let member_self = format!("{}ColorGroupSwatch{i:x}", g.self_id);
+            b.empty(
+                "ColorGroupSwatch",
+                &[
+                    ("Self", member_self.as_str()),
+                    ("SwatchItemRef", member.as_str()),
+                ],
+            );
+        }
+        b.end("ColorGroup");
     }
     b.empty("idPkg:BackingStory", &[("src", "XML/BackingStory.xml")]);
     b.end("Document");

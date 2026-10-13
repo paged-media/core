@@ -279,6 +279,7 @@ mod tests {
             runs.push(paged_compose::GlyphRunEntry {
                 command_index: i,
                 font_id: 0,
+                face_id: Some(0),
                 glyph_id: i,
                 font_size: 10.0,
                 transform: Transform::IDENTITY,

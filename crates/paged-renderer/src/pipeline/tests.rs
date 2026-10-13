@@ -704,66 +704,82 @@ fn approx(a: (f32, f32), b: (f32, f32)) {
 
 #[test]
 fn gradient_endpoints_zero_degrees_horizontal() {
-    // 0° = horizontal left → right (IDML's default direction).
+    // 0° runs left → right along the bottom edge, as long as the box is
+    // wide (gradient-geometry cases 1–2: InDesign writes back
+    // `GradientFillStart="0 h"`, `GradientFillLength="w"`).
     let (s, e) = linear_gradient_endpoints(None, None, None);
-    approx(s, (0.0, 0.5));
-    approx(e, (1.0, 0.5));
+    approx(s, (0.0, 1.0));
+    approx(e, (1.0, 1.0));
     // Some(0.0) must match None — both are the spec default.
     let (s, e) = linear_gradient_endpoints(Some(0.0), None, None);
-    approx(s, (0.0, 0.5));
-    approx(e, (1.0, 0.5));
+    approx(s, (0.0, 1.0));
+    approx(e, (1.0, 1.0));
 }
 
+/// The angle turns counter-clockwise ON THE PAGE: 90° runs from the
+/// bottom edge to the top. Asked of InDesign (gradient-geometry case 7):
+/// its PDF axis for an 80 × 80 square at 90° starts at the bottom-left
+/// corner and ends 80 pt above it. This test used to pin the opposite —
+/// 90° top → bottom, "IDML's y-down convention" — which put every
+/// vertical gradient's first stop at the wrong end of the frame.
 #[test]
-fn gradient_endpoints_ninety_degrees_vertical() {
-    // Regression for the fill-side default that used to be
-    // hardcoded `(0,0)→(0,1)` (top→bottom). 90° must keep that
-    // orientation: in IDML's y-down convention the +y axis points
-    // down the page, so 90° rotates the gradient line vertically.
+fn gradient_endpoints_ninety_degrees_runs_bottom_to_top() {
     let (s, e) = linear_gradient_endpoints(Some(90.0), None, None);
-    approx(s, (0.5, 0.0));
-    approx(e, (0.5, 1.0));
+    approx(s, (0.0, 1.0));
+    approx(e, (0.0, 0.0));
+    assert!(e.1 < s.1, "the first stop is at the BOTTOM");
 }
 
 #[test]
 fn gradient_endpoints_forty_five_degrees() {
-    // 45° at default length: half-vector magnitude = 0.5 along the
-    // unit vector `(cos 45°, sin 45°)`. Endpoints sit inside the
-    // unit rect (the half-distance projects shorter than the
-    // diagonal); that matches the existing fill-default behaviour.
+    // 45° points up and to the right from the bottom-left corner, as
+    // long as the box is wide (gradient-geometry case 4: start (150,
+    // 285), end (206.57, 228.43) on an 80 × 80 square at (150, 205)).
     let (s, e) = linear_gradient_endpoints(Some(45.0), None, None);
-    let r = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
-    approx(s, (0.5 - r, 0.5 - r));
-    approx(e, (0.5 + r, 0.5 + r));
+    let r = std::f32::consts::FRAC_1_SQRT_2;
+    approx(s, (0.0, 1.0));
+    approx(e, (r, 1.0 - r));
 }
 
 #[test]
 fn gradient_endpoints_negative_angle_matches_supplement() {
-    // -45° (= 315°) reflects the 45° endpoints across the
-    // horizontal axis. cos is symmetric, sin flips sign.
+    // -45° (= 315°) points down and to the right: cos is symmetric,
+    // sin flips sign.
     let (s_neg, e_neg) = linear_gradient_endpoints(Some(-45.0), None, None);
     let (s_pos, e_pos) = linear_gradient_endpoints(Some(315.0), None, None);
     approx(s_neg, s_pos);
     approx(e_neg, e_pos);
-    let r = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
-    approx(s_neg, (0.5 - r, 0.5 + r));
-    approx(e_neg, (0.5 + r, 0.5 - r));
+    let r = std::f32::consts::FRAC_1_SQRT_2;
+    approx(s_neg, (0.0, 1.0));
+    approx(e_neg, (r, 1.0 + r));
 }
 
 #[test]
 fn gradient_endpoints_explicit_length_compresses_line() {
-    // GradientFillLength in pt converts to unit-rect half-vector
-    // `(cos θ · L / (2·w), sin θ · L / (2·h))`. For a 200×100 rect
-    // at 0° with L = 100pt the half-vec is `(0.25, 0)` so endpoints
-    // hug the rect centre instead of running edge-to-edge.
+    // GradientFillLength in pt converts to a unit-rect step of
+    // `(cos θ · L / w, −sin θ · L / h)`. A 200 × 100 rect at 0° with
+    // L = 100 pt ramps over its left half.
     let (s, e) = linear_gradient_endpoints(Some(0.0), Some(100.0), Some((200.0, 100.0)));
-    approx(s, (0.25, 0.5));
-    approx(e, (0.75, 0.5));
-    // 90° on the same rect with L=100 → half-vec `(0, 0.5)` so the
-    // gradient line still spans edge-to-edge along the short axis.
-    let (s, e) = linear_gradient_endpoints(Some(90.0), Some(100.0), Some((200.0, 100.0)));
-    approx(s, (0.5, 0.0));
+    approx(s, (0.0, 1.0));
     approx(e, (0.5, 1.0));
+    // 90° on the same rect with L = 100 spans the short axis bottom → top.
+    let (s, e) = linear_gradient_endpoints(Some(90.0), Some(100.0), Some((200.0, 100.0)));
+    approx(s, (0.0, 1.0));
+    approx(e, (0.0, 0.0));
+}
+
+/// Without a length the axis is as long as the box is WIDE, whatever
+/// the angle: InDesign's 120 × 60 rectangle at 90° ramps over 120 pt
+/// from its bottom edge, so the frame shows only the first half
+/// (gradient-geometry case 8).
+#[test]
+fn gradient_endpoints_default_length_is_the_width() {
+    let (s, e) = linear_gradient_endpoints(Some(90.0), None, Some((120.0, 60.0)));
+    approx(s, (0.0, 1.0));
+    approx(e, (0.0, -1.0));
+    // A zero length — the corpus' `GradientFillLength="0"` — is no length.
+    let (_, e0) = linear_gradient_endpoints(Some(90.0), Some(0.0), Some((120.0, 60.0)));
+    approx(e0, e);
 }
 
 #[test]
@@ -773,8 +789,101 @@ fn gradient_endpoints_length_without_dims_falls_through_to_default() {
     // callers that lack geometry (e.g. legacy text-frame strokes
     // that don't track a bbox) still produce a sensible line.
     let (s, e) = linear_gradient_endpoints(Some(0.0), Some(100.0), None);
-    approx(s, (0.0, 0.5));
-    approx(e, (1.0, 0.5));
+    approx(s, (0.0, 1.0));
+    approx(e, (1.0, 1.0));
+}
+
+/// A stop's `Midpoint` bends the segment that ENDS at it. Asked of
+/// InDesign (gradient-geometry cases 23 and 24): black · paper · black
+/// with `Midpoint="20"` on stop 1 exports segment 0 as
+/// `f = 1 − (1 − t)^3.10628` (half-way at 20 % of the segment) and
+/// segment 1 linear; `Midpoint="80"` on stop 2 bends segment 1. This
+/// used to read the midpoint of the stop BEFORE the segment, which bent
+/// the wrong half of the ramp.
+#[test]
+fn midpoint_governs_segment_before_its_stop() {
+    use paged_model::{GradientEntry, GradientKind, GradientStopRef};
+    let mut palette = paged_model::Graphic::default();
+    for (id, k) in [("Color/K", 100.0), ("Color/P", 0.0)] {
+        palette.colors.insert(
+            id.into(),
+            paged_model::ColorEntry {
+                self_id: id.into(),
+                name: None,
+                space: paged_model::ColorSpace::Cmyk,
+                value: vec![0.0, 0.0, 0.0, k],
+                model: paged_model::ColorModel::Process,
+                alternate_space: None,
+                alternate_value: vec![],
+                tint: None,
+                alpha: None,
+            },
+        );
+    }
+    let stop = |c: &str, loc: f32, mid: Option<f32>| GradientStopRef {
+        stop_color: c.into(),
+        location_pct: loc,
+        midpoint_pct: mid,
+    };
+    palette.gradients.insert(
+        "Gradient/G".into(),
+        GradientEntry {
+            self_id: "Gradient/G".into(),
+            name: None,
+            kind: GradientKind::Linear,
+            stops: vec![
+                stop("Color/K", 0.0, None),
+                stop("Color/P", 50.0, Some(20.0)),
+                stop("Color/K", 100.0, None),
+            ],
+        },
+    );
+    let mut list = paged_compose::DisplayList::new();
+    let Some(Paint::LinearGradient(gid)) = color_id_to_paint_with_list_dir(
+        "Gradient/G",
+        &palette,
+        ColorCtx::default(),
+        &mut list,
+        None,
+        None,
+        Some((360.0, 40.0)),
+    ) else {
+        panic!("a linear gradient");
+    };
+    let g = list.linear_gradient(gid).expect("gradient");
+    let k = |off: f32| {
+        g.stops
+            .iter()
+            .find(|s| (s.offset - off).abs() < 1e-4)
+            .unwrap_or_else(|| panic!("a sub-stop at {off}"))
+            .color
+            .r
+    };
+    let (black, paper) = (k(0.0), k(0.5));
+    let half = |c: f32| (c - black) / (paper - black);
+    // Segment 0 (black → paper, 0..0.5) is bent: at t = 0.25 of the
+    // segment InDesign's curve is already 1 − 0.75^3.10628 = 0.59 of
+    // the way to paper. The old reading (stop 0's default midpoint)
+    // kept it linear at 0.25.
+    let f = half(k(0.125));
+    assert!((f - 0.590).abs() < 0.01, "segment 0 at t=0.25: {f}");
+    // Segment 1 (paper → black, 0.5..1) is linear: the midpoint on
+    // stop 1 does not reach it. The old reading bent THIS one.
+    let f = (k(0.75) - paper) / (black - paper);
+    assert!((f - 0.5).abs() < 0.01, "segment 1 at t=0.5: {f}");
+}
+
+/// The measured curve itself: half-way exactly at the midpoint, and
+/// the two mirrored forms InDesign exports (cases 23 and 24).
+#[test]
+fn midpoint_blend_is_indesigns_exponential() {
+    assert!((midpoint_blend(0.2, 0.2) - 0.5).abs() < 1e-5);
+    assert!((midpoint_blend(0.8, 0.8) - 0.5).abs() < 1e-5);
+    // Midpoint 80: f = t^3.10628.
+    assert!((midpoint_blend(0.5, 0.8) - 0.5f32.powf(3.10628)).abs() < 1e-4);
+    // Midpoint 20: f = 1 − (1 − t)^3.10628.
+    assert!((midpoint_blend(0.5, 0.2) - (1.0 - 0.5f32.powf(3.10628))).abs() < 1e-4);
+    assert_eq!(midpoint_blend(0.3, 0.5), 0.3);
 }
 
 fn anchor_at(x: f32, y: f32) -> paged_model::PathAnchor {
@@ -968,6 +1077,7 @@ fn font_table_with(cache: &[(&str, Option<&str>, &[u8])], fallback: Option<&[u8]
     }
     FontTable {
         faces: HashMap::new(),
+        outline_to_bytes: HashMap::new(),
         face_bytes: HashMap::new(),
         keys: hm.keys().cloned().collect(),
         cache: hm,
@@ -1413,9 +1523,11 @@ fn degraded_asset_markers_on_emits_pink_rect_and_ghost_cross() {
 /// outer)` where `outer` already incorporates the shape's
 /// `ItemTransform`. The composed transform IS what the rasterizer
 /// uses to push the unit-rect endpoints into page space (see
-/// `paged_gpu::cpu::build_linear_gradient_shader`), so a 90°-
-/// vertical gradient on a 90°-rotated frame should produce a
-/// horizontal page-space gradient line. Asserts that — guards
+/// `paged_gpu::cpu::build_linear_gradient_shader`), so a 90°
+/// (bottom → top) gradient on a 90°-rotated frame should produce a
+/// horizontal page-space gradient line — InDesign keeps the angle in
+/// the frame's inner coordinates (gradient-geometry column 3: a 0°
+/// gradient on a frame rotated 30° runs at 30° on the page). Asserts that — guards
 /// against a regression that would re-introduce the protocol's
 /// hypothesised bug (ItemTransform ignored on gradient projection).
 #[test]
@@ -1427,20 +1539,20 @@ fn q08_gradient_endpoints_rotate_with_item_transform() {
         h: 100.0,
     };
     let (s_unit, e_unit) = linear_gradient_endpoints(Some(90.0), None, None);
-    approx(s_unit, (0.5, 0.0));
-    approx(e_unit, (0.5, 1.0));
-    // Identity baseline: local vertical = page vertical.
+    approx(s_unit, (0.0, 1.0));
+    approx(e_unit, (0.0, 0.0));
+    // Identity baseline: local vertical = page vertical, bottom → top.
     let xf_id = Transform::for_rect_in(rect, Transform::IDENTITY);
-    approx(xf_id.apply(s_unit.0, s_unit.1), (50.0, 0.0));
-    approx(xf_id.apply(e_unit.0, e_unit.1), (50.0, 100.0));
+    approx(xf_id.apply(s_unit.0, s_unit.1), (0.0, 100.0));
+    approx(xf_id.apply(e_unit.0, e_unit.1), (0.0, 0.0));
     // ItemTransform `0 1 -1 0 200 0` packs to `[a, b, c, d, tx,
     // ty] = [0, 1, -1, 0, 200, 0]` — a 90° rotation about the
     // origin plus translate(+200, 0). Maps frame-local (x, y) to
     // page (200 - y, x).
     let outer_rot = Transform([0.0, 1.0, -1.0, 0.0, 200.0, 0.0]);
     let xf_rot = Transform::for_rect_in(rect, outer_rot);
-    approx(xf_rot.apply(s_unit.0, s_unit.1), (200.0, 50.0));
-    approx(xf_rot.apply(e_unit.0, e_unit.1), (100.0, 50.0));
+    approx(xf_rot.apply(s_unit.0, s_unit.1), (100.0, 0.0));
+    approx(xf_rot.apply(e_unit.0, e_unit.1), (200.0, 0.0));
 }
 
 /// Q-08 polygon fix: a Polygon fill emits `FillPath` whose
@@ -1466,14 +1578,16 @@ fn q08_polygon_gradient_rebases_to_bbox() {
     // `rebase_gradient_to_bbox` applies this mapping.
     let start = (bbox.x + s_unit.0 * bbox.w, bbox.y + s_unit.1 * bbox.h);
     let end = (bbox.x + e_unit.0 * bbox.w, bbox.y + e_unit.1 * bbox.h);
-    // Vertical line, horizontally centred on the bbox; length
+    // Vertical line up from the bbox's bottom-left corner; length
     // equals the input `length_pt`. Without the rebase the
-    // rasterizer would see (0.5, ~0.07) → (0.5, ~0.93) directly
-    // (sub-pt line near the spread origin → flat polygon).
-    let cx = bbox.x + bbox.w * 0.5;
-    assert!((start.0 - cx).abs() < 1e-3);
-    assert!((end.0 - cx).abs() < 1e-3);
-    assert!(((end.1 - start.1) - 577.7332).abs() < 1e-3);
+    // rasterizer would see unit coordinates directly (sub-pt line
+    // near the spread origin → flat polygon).
+    approx(start, (bbox.x, bbox.y + bbox.h));
+    assert!((end.0 - bbox.x).abs() < 1e-3);
+    assert!(
+        ((start.1 - end.1) - 577.7332).abs() < 1e-3,
+        "{start:?} → {end:?}"
+    );
 }
 
 /// Track 1a: oversized JPEGs go through `jpeg-decoder`'s
@@ -1710,6 +1824,10 @@ fn split_runs_overlay_spanning_two_runs_splits_both() {
 }
 
 // ── Phase 5 — conditional text filter ─────────────────────────
+//
+// The rule is InDesign's (`conditions::run_prints`, the `conditions`
+// fixture): a run prints while ANY condition it names is visible, and an
+// undeclared condition counts as a visible one.
 
 fn cond_run(text: &str, conditions: &[&str]) -> paged_model::CharacterRun {
     paged_model::CharacterRun {
@@ -1727,78 +1845,102 @@ fn cond(id: &str, visible: bool) -> paged_model::ConditionDef {
     }
 }
 
-/// Tiny smoke that mirrors the filter logic inline in
-/// `emit_paragraph_into_chain`. Keeps the test independent of
-/// constructing a full Document, while still exercising the
-/// "all conditions visible ⇒ keep; any invisible ⇒ drop" rule.
-fn filter_by_conditions(
-    runs: &[paged_model::CharacterRun],
+/// The run texts the renderer's own filter leaves standing.
+fn shown_runs(
+    runs: Vec<paged_model::CharacterRun>,
     table: &std::collections::BTreeMap<String, paged_model::ConditionDef>,
-) -> Vec<paged_model::CharacterRun> {
-    runs.iter()
-        .filter(|r| {
-            r.applied_conditions
-                .iter()
-                .all(|cid| table.get(cid).and_then(|c| c.visible).unwrap_or(true))
-        })
-        .cloned()
+) -> Vec<String> {
+    let paragraph = paged_model::Paragraph {
+        runs,
+        ..Default::default()
+    };
+    let shown = super::conditions::without_hidden_runs(&paragraph, table);
+    shown
+        .as_ref()
+        .unwrap_or(&paragraph)
+        .runs
+        .iter()
+        .map(|r| r.text.clone())
         .collect()
 }
 
 #[test]
 fn conditions_no_applied_keeps_run() {
-    let runs = vec![cond_run("body", &[])];
     let table = std::collections::BTreeMap::new();
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].text, "body");
+    assert_eq!(shown_runs(vec![cond_run("body", &[])], &table), ["body"]);
 }
 
 #[test]
 fn conditions_visible_keeps_run() {
-    let runs = vec![cond_run("draft text", &["Condition/Draft"])];
     let mut table = std::collections::BTreeMap::new();
     table.insert("Condition/Draft".to_string(), cond("Condition/Draft", true));
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
+    let runs = vec![cond_run("draft text", &["Condition/Draft"])];
+    assert_eq!(shown_runs(runs, &table), ["draft text"]);
 }
 
 #[test]
 fn conditions_invisible_drops_run() {
-    let runs = vec![
-        cond_run("keep", &[]),
-        cond_run("hide", &["Condition/Draft"]),
-    ];
     let mut table = std::collections::BTreeMap::new();
     table.insert(
         "Condition/Draft".to_string(),
         cond("Condition/Draft", false),
     );
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0].text, "keep");
-}
-
-#[test]
-fn conditions_multiple_all_must_be_visible() {
-    // Two conditions on one run; one is hidden ⇒ drop.
-    let runs = vec![cond_run("dual", &["Condition/A", "Condition/B"])];
-    let mut table = std::collections::BTreeMap::new();
-    table.insert("Condition/A".to_string(), cond("Condition/A", true));
-    table.insert("Condition/B".to_string(), cond("Condition/B", false));
-    let out = filter_by_conditions(&runs, &table);
-    assert!(out.is_empty());
+    let runs = vec![
+        cond_run("keep", &[]),
+        cond_run("hide", &["Condition/Draft"]),
+    ];
+    assert_eq!(shown_runs(runs, &table), ["keep"]);
 }
 
 #[test]
 fn conditions_unknown_id_treated_as_visible() {
-    // A reference to a condition not in the document's table
-    // shouldn't silently hide content. InDesign treats unknown
-    // condition refs as visible.
-    let runs = vec![cond_run("orphan", &["Condition/Missing"])];
-    let table = std::collections::BTreeMap::new();
-    let out = filter_by_conditions(&runs, &table);
-    assert_eq!(out.len(), 1);
+    // InDesign drops the whole `AppliedConditions` list of a run that
+    // names a condition the document does not declare, so the run prints —
+    // alone or beside a hidden condition.
+    let mut table = std::collections::BTreeMap::new();
+    table.insert("Condition/H".to_string(), cond("Condition/H", false));
+    let runs = vec![
+        cond_run("orphan", &["Condition/Missing"]),
+        cond_run("beside", &["Condition/H", "Condition/Missing"]),
+    ];
+    assert_eq!(shown_runs(runs, &table), ["orphan", "beside"]);
+}
+
+/// Every glyph's character on page 1 of the `conditions` sample in its
+/// inline spelling (no `<HiddenText>`: the flags alone say what is
+/// hidden), as built by the pipeline.
+fn conditions_inline_printed_text() -> String {
+    let bytes = paged_gen::write_idml(&paged_gen::samples::conditions::build_inline()).unwrap();
+    let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+    let font = std::fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts/OpenSans.ttf"),
+    )
+    .expect("OpenSans.ttf fixture");
+    let options = PipelineOptions {
+        font: Some(&font),
+        collect_glyph_runs: true,
+        ..PipelineOptions::default()
+    };
+    let built = build_document(&doc, &options).expect("build");
+    let table = built.pages[0].list.glyph_runs.as_ref().expect("glyph runs");
+    let mut entries: Vec<_> = table.entries.iter().collect();
+    entries.sort_by_key(|e| e.command_index);
+    entries.iter().filter_map(|e| e.unicode).collect()
+}
+
+#[test]
+fn multiple_conditions_any_visible_keeps() {
+    // InDesign 20.0.1 prints a run under a visible AND a hidden
+    // condition, in either order — in body text, in a table cell and on
+    // an anchored object's marker. Built through the whole pipeline.
+    let text = conditions_inline_printed_text();
+    for word in ["DELTA", "ECHO", "JULIETT", "LIMA"] {
+        assert!(text.contains(word), "{word} must print; got {text:?}");
+    }
+    for word in ["CHARLIE", "FOXTROT", "INDIA", "KILO", "MIKE", "NOVEMBER"] {
+        assert!(!text.contains(word), "{word} must not print; got {text:?}");
+    }
 }
 
 #[test]
@@ -3728,6 +3870,9 @@ fn footnotes_survive_a_forced_line_break_in_their_paragraph() {
 /// meaningful fraction of the frame height. `with_footnotes=false`
 /// produces the identical body with the footnotes stripped — the
 /// regression control.
+/// The references stand after the FIRST sentence: a note is set at the foot of
+/// the frame holding its reference's line and never pushes that line out
+/// (bee1e5d1, 4fa49151), so the pool can only push the text after it.
 fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8> {
     use std::io::Write;
     use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
@@ -3782,8 +3927,9 @@ fn footnote_reserve_idml(footnote_count: usize, with_footnotes: bool) -> Vec<u8>
   <Story Self="s1">
     <ParagraphStyleRange>
       <CharacterStyleRange AppliedFont="Inter" PointSize="12">
-        <Content>Body line one of the host paragraph. Body line two continues the host text. Body line three keeps the frame filled so the footnote pool must reserve space and push these lines upward.</Content>
+        <Content>Body line one of the host paragraph.</Content>
         {footnotes_xml}
+        <Content> Body line two continues the host text. Body line three keeps the frame filled so the footnote pool must reserve space and push these lines upward.</Content>
       </CharacterStyleRange>
     </ParagraphStyleRange>
   </Story>

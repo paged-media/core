@@ -127,10 +127,12 @@ fn gradient_swatches() -> Vec<ExtraGradient> {
                 GradientStop {
                     stop_color: "Color/Black".to_string(),
                     location_pct: 0.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/Paper".to_string(),
                     location_pct: 100.0,
+                    midpoint_pct: None,
                 },
             ],
         },
@@ -142,14 +144,17 @@ fn gradient_swatches() -> Vec<ExtraGradient> {
                 GradientStop {
                     stop_color: "Color/CMYKCyan".to_string(),
                     location_pct: 0.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/CMYKMagenta".to_string(),
                     location_pct: 50.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/CMYKYellow".to_string(),
                     location_pct: 100.0,
+                    midpoint_pct: None,
                 },
             ],
         },
@@ -161,10 +166,12 @@ fn gradient_swatches() -> Vec<ExtraGradient> {
                 GradientStop {
                     stop_color: "Color/Paper".to_string(),
                     location_pct: 0.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/Black".to_string(),
                     location_pct: 100.0,
+                    midpoint_pct: None,
                 },
             ],
         },
@@ -176,10 +183,12 @@ fn gradient_swatches() -> Vec<ExtraGradient> {
                 GradientStop {
                     stop_color: "Color/RGBCyan".to_string(),
                     location_pct: 0.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/RGBMagenta".to_string(),
                     location_pct: 100.0,
+                    midpoint_pct: None,
                 },
             ],
         },
@@ -191,18 +200,22 @@ fn gradient_swatches() -> Vec<ExtraGradient> {
                 GradientStop {
                     stop_color: "Color/CMYKCyan".to_string(),
                     location_pct: 0.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/CMYKMagenta".to_string(),
                     location_pct: 33.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/CMYKYellow".to_string(),
                     location_pct: 66.0,
+                    midpoint_pct: None,
                 },
                 GradientStop {
                     stop_color: "Color/Black".to_string(),
                     location_pct: 100.0,
+                    midpoint_pct: None,
                 },
             ],
         },

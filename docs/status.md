@@ -17,6 +17,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
 - **Edit.** 130 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
+- **Locks and deletes follow InDesign.** A locked item, and the content of a locked container,
+  is not moved, resized, reshaped, restacked or deleted: the operation is refused with
+  `OperationError::Locked`, and a gesture on it fails at `beginGesture`. Its attributes and its
+  text still change, and unlocking it is an ordinary property write. Deleting a container deletes
+  what is pasted into it, and a group goes with its last member. One undo restores either
+  ([ADR 133](adr/133-locks-and-deletes-follow-indesign.md)).
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
   about a given point) and snapping, as message kinds. Snapping is one engine resolver
@@ -100,8 +106,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `crates/paged-introspect/catalog.json`: 161 host functions, 221 settable paths, 403
   property schemas, 130 operations, and the 30 address forms of `idGrammar`. 355 of the
   schema rows name the IDML element and attribute their value is read from (`idml`).
-- **Fidelity tooling.** The fixture generator (60 samples), the image-diff tool, 59
-  reference PDFs with thresholds, and the scripts that drive InDesign to export them.
+- **Fidelity tooling.** The fixture generator (62 samples), the image-diff tool, 61
+  reference PDFs with thresholds (`docx-pagination` has none and is not gated), and the
+  scripts that drive InDesign to export them.
 
 ## Limits of what is shipped
 
@@ -114,23 +121,22 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **A commit rebuilds the whole document.** Caches make unchanged paragraphs and stories
   cheap, and only a build of text edits in one story reuses previous pages.
 - **Two mutation lanes.** Text edits have no `Operation` form; they use `TextOp` in
-  `paged-canvas`. Undo keeps the newest 10,000 entries.
-- **The command line sends 37 of the 67 message kinds.** The rest are listed with a reason
-  each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 30) need a pointer or a caret.
+  `paged-canvas`. Undo keeps the newest 10,000 steps; a batch is one step at any size and in
+  either lane.
+- **The command line sends 39 of the 70 message kinds.** The rest are listed with a reason
+  each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 31) need a pointer or a caret.
 - **The Vello path is not at parity with the CPU path.** Ink separations and coverage are
   CPU only; the `DropShadow` command is skipped and a path shadow is approximated by
-  stamped fills (`crates/paged-gpu/src/vello_rs.rs:1039-1059`).
+  stamped fills (`crates/paged-gpu/src/vello_rs.rs:1086-1125`).
 - **The viewer reads IDML parts only.** `ViewerSession::load` calls the IDML importer and
   does not read the native model part of a `.paged` container. It has no write surface.
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which
   is one JSON document (`crates/paged-canvas/src/model.rs:5122-5125`). A model part with
   another format version is ignored on load, and the IDML parts are parsed instead.
-- **Some object-model state does not reach an IDML save yet.** The IDML adapter (in the
-  plugin-publish repository) writes neither a page item's `Visible="false"` when it was hidden
-  in paged, nor a text variable authored in paged (its definition or its instances), nor an item
-  name set in paged; the engine model keeps all three. The first two are pinned by tests in
-  `crates/paged-canvas/tests/idml_export_object_model_state.rs` that turns red when the adapter
-  is fixed.
+- **Document bleed edited in paged does not reach an IDML save.** The IDML adapter writes no
+  `DocumentPreference`, so a bleed or slug set with `set` survives in the model part of a
+  `.paged` file only. (A hidden item's `Visible="false"` and text variables authored in paged
+  do reach the IDML: `crates/paged-canvas/tests/idml_export_object_model_state.rs`.)
 - **A cell's fill tint is not modelled.** `cellFillTint` reads `null` on every cell and its
   write is accepted but not stored, rendered or saved; the cell keeps its fill at 100 %.
   It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).
@@ -142,6 +148,8 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   writes after it another, with the UI edit between them: undoing the whole script then takes
   two steps, and undoing once takes back only the later part. Folding across the foreign
   record would swallow the UI edit into the script's step, which is worse.
+- **A layer's lock is enforced by hit testing only.** A mutation addressed to an item on a locked
+  layer applies; only the item's own lock, or its container's, is refused by the engine.
 - **Script wall-clock limits are checked at host-function calls**, not inside a loop that
   makes none; such a loop is bounded by the iteration limit.
 - **The fidelity gate needs the reference colour profile.** On a runner without a FOGRA39
@@ -151,21 +159,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **The size gate measures a stand-in.** `spikes/wasm-size` links the viewer crate and
   wgpu 22; the size of the published viewer wasm is printed at release, not enforced.
 
-## Releasing protocol 71
+## Releases
 
-Not tagged yet. The order, because core and the IDML adapter pin each other:
-
-1. Tag core `v0.71.0` from this batch (the tag guard checks `PROTOCOL_VERSION` 71); the
-   publish workflow ships the four packages.
-2. In plugin-publish, merge the protocol-71 export fixes (`Visible`/`Locked`, text variables
-   authored in paged, the text-path `EndBracket`, item names always written), re-pin its core
-   git dependency to the `v0.71.0` commit, and push.
-3. In core, re-pin `idml-import`/`idml-export` to that plugin-publish commit (both `Cargo.toml`
-   pins and `Cargo.lock`), flip `crates/paged-canvas/tests/idml_export_object_model_state.rs`
-   to expect the state in the save, update the "does not reach an IDML save" limit above, and
-   tag `v0.71.1` (patch: no wire change).
-4. plugin-sdk re-syncs the vendored wire and catalog and bumps its contract; the editor moves
-   its pins and sends `HostObjectsResult.committed`.
+Protocol 71 shipped as `v0.71.0` through `v0.71.6` (npm `latest` 0.71.6). The release order
+when core and the IDML adapter pin each other is in
+[`reference/protocol-governance.md`](reference/protocol-governance.md).
 
 ## Not built
 

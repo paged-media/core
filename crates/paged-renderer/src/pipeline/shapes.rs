@@ -1507,7 +1507,7 @@ pub(crate) fn emit_styled_stroke(
         StrokeStyleClass::Wavy { .. } => (None, None),
     };
     // Frame instance gap colour wins; fall back to the style def's. The
-    // instance tint (if any) rides through `apply_fill_tint`; otherwise
+    // instance tint (if any) rides through `apply_fill_tint_ctx`; otherwise
     // the style def's own `GapTint` dilutes the gap colour (punch-list).
     let (gap_color, gap_tint) = match gap_override {
         Some((gc, tint)) => (Some(gc), tint),
@@ -1519,7 +1519,11 @@ pub(crate) fn emit_styled_stroke(
     // first (drawn first ⇒ underneath).
     if let Some(gc) = gap_color {
         if let Some(gap_paint) = color_id_to_paint(gc, palette, color_ctx) {
-            let gap_paint = crate::pipeline::apply_fill_tint(gap_paint, gap_tint);
+            let gap_paint = crate::pipeline::apply_fill_tint_ctx(
+                gap_paint,
+                crate::pipeline::object_tint(palette, Some(gc), gap_tint),
+                &color_ctx,
+            );
             let (gap_path_id, _) = page
                 .list
                 .paths
@@ -1546,7 +1550,7 @@ pub(crate) fn emit_styled_stroke(
                 sub_stroke.width = sub_weight.max(0.05);
                 sub_stroke.dash = paged_compose::DashPattern::default();
                 for (line_idx, line) in lines.iter().enumerate() {
-                    let off = stroke_geom::offset_polyline(line, offset);
+                    let off = stroke_geom::offset_parallel(line, offset);
                     let path = stroke_geom::polyline_to_path(&off);
                     if path.is_empty() {
                         continue;

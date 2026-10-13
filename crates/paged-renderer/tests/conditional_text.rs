@@ -12,20 +12,23 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! W4.3 — end-to-end conditional-text visibility filtering.
+//! End-to-end conditional-text visibility, against InDesign's answer.
 //!
-//! Renders the `conditions` gen sample (the first generated fixture to
-//! carry populated `<Condition>` defs — closing the W2.14 honest gap)
-//! and asserts the renderer DROPS runs gated by a `Visible="false"`
-//! condition before layout, while ungated and `Visible="true"`-gated
-//! runs still emit glyphs. This exercises the real
-//! `emit_paragraph_into_chain` drop path against a parsed document —
-//! the inline `conditions_*` unit tests in `pipeline/mod.rs` only
-//! mirror the rule against a hand-built run list.
+//! Renders the `conditions` gen sample — a numbered matrix of runs under
+//! visible, hidden, several and undeclared conditions, in body text, on
+//! an anchored object's marker, in table cells and on footnote
+//! references — and asserts every case prints exactly when InDesign
+//! 20.0.1 printed it (`conditions::Case::prints`; the reference is
+//! `corpus/generated/conditions.pdf`).
+//!
+//! Both spellings: the fixture's own (hidden cases inside `<HiddenText>`,
+//! as InDesign writes them; the importer drops that text) and the inline
+//! one (every case in the story, the `Visible` flags alone saying what is
+//! hidden — what the renderer's filter has to get right).
 
 use std::path::PathBuf;
 
-use paged_gen::samples::conditions;
+use paged_gen::samples::conditions::{self, Place};
 use paged_renderer::{pipeline, PipelineOptions};
 
 fn read_font(name: &str) -> Vec<u8> {
@@ -50,11 +53,11 @@ fn glyph_text(page: &paged_renderer::BuiltPage) -> String {
         .collect()
 }
 
-fn build() -> paged_renderer::BuiltDocument {
-    let sample = conditions::build();
+fn build(sample: paged_gen::Sample) -> paged_renderer::BuiltDocument {
     let bytes = paged_gen::write_idml(&sample).unwrap();
-    let document = idml_import::import_idml_doc(&bytes).unwrap();
-    let font = read_font("Inter.ttf");
+    let mut document = idml_import::import_idml_doc(&bytes).unwrap();
+    anchor_footnotes(&mut document);
+    let font = read_font("OpenSans.ttf");
     let opts = PipelineOptions {
         font: Some(&font),
         collect_glyph_runs: true,
@@ -63,37 +66,121 @@ fn build() -> paged_renderer::BuiltDocument {
     pipeline::build_document(&document, &opts).unwrap()
 }
 
-#[test]
-fn hidden_condition_drops_run_while_visible_and_ungated_render() {
-    let built = build();
-    let text = glyph_text(&built.pages[0]);
+/// Give each footnote the anchor the importer does not record yet
+/// (`Footnote::anchor` is `None` from `idml-import`): the character
+/// offset right after its reference's word, where the sample writes the
+/// `<Footnote>`. Without it every reference reads as standing at its
+/// paragraph's start, and a hidden one cannot take its note along.
+fn anchor_footnotes(document: &mut paged_scene::Document) {
+    let cases = conditions::cases();
+    for story in &mut document.stories {
+        for paragraph in &mut story.story.paragraphs {
+            let mut spans = Vec::new();
+            let mut pos = 0u32;
+            for r in &paragraph.runs {
+                let n = r.text.chars().count() as u32;
+                spans.push((r.text.clone(), pos + n));
+                pos += n;
+            }
+            for note in &mut paragraph.footnotes {
+                let body: String = note
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| p.runs.iter())
+                    .map(|r| r.text.as_str())
+                    .collect();
+                let word = cases
+                    .iter()
+                    .find(|c| conditions::footnote_text(c.number) == body)
+                    .map(|c| c.word);
+                note.anchor = word.and_then(|w| {
+                    spans
+                        .iter()
+                        .find(|(text, _)| text.contains(w))
+                        .map(|&(_, end)| end)
+                });
+            }
+        }
+    }
+}
 
-    // The ungated run ("ALWAYS") always renders.
-    assert!(
-        text.contains(conditions::UNGATED_TEXT),
-        "ungated run {:?} must render; got {text:?}",
-        conditions::UNGATED_TEXT,
-    );
-    // The Visible="true"-gated run ("SHOWME") renders.
-    assert!(
-        text.contains(conditions::VISIBLE_TEXT),
-        "Visible-gated run {:?} must render; got {text:?}",
-        conditions::VISIBLE_TEXT,
-    );
-    // The Visible="false"-gated run ("DROPME") must NOT appear — the
-    // renderer drops it before layout.
-    assert!(
-        !text.contains(conditions::HIDDEN_TEXT),
-        "Hidden-gated run {:?} must be dropped pre-layout; leaked into {text:?}",
-        conditions::HIDDEN_TEXT,
-    );
-    // W4.8 — the multi-gated run ("BOTHME") carries BOTH conditions;
-    // the renderer keeps a run only when EVERY applied condition is
-    // visible, so it is dropped (Hidden is invisible). This is the
-    // end-to-end exercise of the multiple-conditions-per-run AND rule.
-    assert!(
-        !text.contains(conditions::MULTI_TEXT),
-        "multi-gated run {:?} must be dropped (one condition is hidden); leaked into {text:?}",
-        conditions::MULTI_TEXT,
-    );
+fn assert_prints_as_indesign(built: &paged_renderer::BuiltDocument, spelling: &str) {
+    let text = glyph_text(&built.pages[0]);
+    for case in conditions::cases() {
+        assert_eq!(
+            text.contains(case.word),
+            case.prints,
+            "{spelling}: case {} ({}) — InDesign {} {:?}; page text {text:?}",
+            case.number,
+            case.label,
+            if case.prints { "prints" } else { "hides" },
+            case.word,
+        );
+        if case.place == Place::Footnote {
+            let note: String = conditions::footnote_text(case.number)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            assert_eq!(
+                text.contains(&note),
+                case.prints,
+                "{spelling}: case {}'s note goes with its reference; page text {text:?}",
+                case.number,
+            );
+        }
+    }
+}
+
+#[test]
+fn fixture_prints_what_indesign_printed() {
+    assert_prints_as_indesign(&build(conditions::build()), "<HiddenText> spelling");
+}
+
+#[test]
+fn inline_conditions_print_what_indesign_printed() {
+    assert_prints_as_indesign(&build(conditions::build_inline()), "inline spelling");
+}
+
+/// The anchored squares a page draws: unit paths filled black at the
+/// sample's square size.
+fn anchored_squares(built: &paged_renderer::BuiltDocument) -> usize {
+    built.pages[0]
+        .list
+        .commands
+        .iter()
+        .filter(|c| match c {
+            paged_compose::DisplayCommand::FillPath { transform, .. } => {
+                let side = conditions::ANCHOR_SIDE_PT;
+                transform.0[0] == side && transform.0[3] == side
+            }
+            _ => false,
+        })
+        .count()
+}
+
+fn anchors_printing() -> usize {
+    conditions::cases()
+        .iter()
+        .filter(|c| c.place == Place::Anchor && c.prints)
+        .count()
+}
+
+/// A hidden anchor marker takes its object along: only the squares of
+/// the anchor cases InDesign prints are drawn (and the one that prints
+/// keeps its own place: the filter runs before objects are matched to
+/// their placeholder characters, which go by order).
+#[test]
+fn hidden_anchor_marker_takes_its_object() {
+    let built = build(conditions::build_inline());
+    assert_eq!(anchored_squares(&built), anchors_printing());
+}
+
+/// The same through the fixture's own spelling. `idml-import` drops the
+/// TEXT inside `<HiddenText>` but still attaches an anchored object
+/// written there to its paragraph, so the hidden square is drawn.
+#[test]
+#[ignore = "plugin-publish idml-import attaches an anchored object inside <HiddenText>"]
+fn hidden_text_takes_its_anchored_object() {
+    let built = build(conditions::build());
+    assert_eq!(anchored_squares(&built), anchors_printing());
 }

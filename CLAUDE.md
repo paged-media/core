@@ -71,11 +71,10 @@ formatted in one mechanical pass; the workaround is retired.
 
 ## Layout
 
-- `crates/idml-import/` — ZIP + XML → AST. Container, designmap, spreads
-  (TextFrame / Rectangle / Oval / Polygon / GraphicLine / Group), stories,
-  graphic, gradients, ItemTransform, NextTextFrame, TextFramePreference,
-  tabs, Image, styles + BasedOn cascade, bullets/numbering. Parses
-  `<GeometryPathType>` subpath boundaries for compound paths.
+- `idml-import` / `idml-export` — the IDML reader and writer live in the
+  `paged-media/plugin-publish` repository (ADR 022) and are git-depended
+  here by rev (13 `Cargo.toml` pins plus `Cargo.lock`; move them together).
+  An IDML spelling fix lands there first, then the pins move here.
 - `crates/paged-scene/` — `Document::open`. Resolves cascade,
   `frame_for_story`, `text_frame_index`, `frame_chain` (threading).
 - `crates/paged-text/` — `shape_run`, `compose_paragraph`,
@@ -96,7 +95,7 @@ formatted in one mechanical pass; the workaround is retired.
   back the editor; `paged-canvas-wasm` / `paged-introspect-wasm` are the
   wasm-bindgen surfaces it consumes.
 - `crates/paged-wire/` — the wire VOCABULARY: the identities (`PageId`,
-  `ElementId`, `TextCellAddr`, `ByteBuf`) and the 117 `Mutation` ops, in one
+  `ElementId`, `TextCellAddr`, `ByteBuf`) and the 130 `Mutation` ops, in one
   place so the CLI, the wasm wire, the Boa bridge, the plugin host and the
   editor speak one spelling. **Two halves, and the split is load-bearing:**
   the operations need `paged-mutate` for their payload types, the identities

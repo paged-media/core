@@ -4020,6 +4020,7 @@ mod tests {
             table.push(paged_compose::GlyphRunEntry {
                 command_index: 0,
                 font_id: 0,
+                face_id: None,
                 glyph_id: 1,
                 font_size: 3.0,
                 transform,

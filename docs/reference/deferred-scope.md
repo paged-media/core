@@ -307,12 +307,18 @@ snippet/InCopy round-trip requirement. Single-document IDML is the v1 contract.
 (goto-page/state, show-hide, submit-form, zoom), `<Sound>` / `<Movie>` media,
 and the animation + timing (`<AnimationSetting>`, motion presets, MSO timing).
 
-**What the engine does today.** **Not parsed / not rendered.** The
-`interactive-dynamic` chapter is tracked purely so the gap is visible
-(the feature registry's chapter header: "Print-first renderer: none of this is
-implemented"). No `<Button>` / `<Sound>` / `<Movie>` /
-`<AnimationSetting>` consumer exists in the IDML reader
-(`plugin-publish: crates/idml-import`).
+**What the engine does today.** **Laid out as InDesign lays it out; not
+modelled.** Asked of InDesign 20.0.1 (2026-10-12): each `<State>` of a
+`<Button>` or `<MultiStateObject>` holds a group and carries
+`Active="true|false"`; InDesign's layout shows the active state, placed by the
+container's `ItemTransform`, and its default print PDF leaves interactive
+elements out. The IDML reader reads a button or multi-state object as a group of
+its active state (`plugin-publish: crates/idml-import/src/spread.rs`,
+`a_button_and_a_multi_state_object_show_their_active_state_where_indesign_puts_it`);
+before, every state was drawn, stacked, at untransformed spread coordinates.
+States, behaviors, `<Sound>` / `<Movie>` and `<AnimationSetting>` are not
+modelled, and an IDML save passes the elements through only when their spread is
+unedited.
 
 **Why deferred.** These are dynamic/interactive behaviours with no print
 output — out of scope for a print-faithful renderer by design. They imply an
@@ -350,9 +356,15 @@ drag-and-drop text editing (an editor gesture, not an IDML element).
 - **Notes** — same suppression path; `<Note>` content is recognised and dropped
   (correct: editorial notes never render). Tested by `track5c_note_skipped`
   (`story.rs:2237`).
-- **Tracked changes** — **not parsed.** `Story`-level `TrackChanges` is noted as
-  a "followup parser slice" (`plugin-publish: crates/idml-import/src/story.rs:530`
-  comment); no `<Change>` consumer.
+- **Tracked changes** — **read as InDesign prints them; not modelled.** Asked of
+  InDesign 20.0.1 (2026-10-12): a story with tracking on is composed and exported
+  as if every change were accepted, and a deletion nests its own paragraph and
+  character ranges inside `<Change ChangeType="DeletedText">`. The reader skips
+  deletions and reads insertions and moves through their transparent `<Change>`
+  (`plugin-publish: crates/idml-import/src/story.rs`,
+  `a_tracked_story_reads_as_if_every_change_were_accepted`); before, the nested
+  ranges derailed the story and only the deleted words were drawn. Changes are not
+  modelled: no review, accept or reject, and a rewritten story drops them.
 - **Endnotes** — **not parsed.** No `<Endnote>` / endnote-story consumer. (NB:
   *footnotes* are a separate, partially-shipped feature — not in this family.)
 - **Drag-and-drop text** — **not implemented** (editor gesture; no wire path).

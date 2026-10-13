@@ -61,6 +61,7 @@ is not written yet.
 | [130](130-plugin-faces-shadows-and-batch-handles.md) | Scene-scoped faces, a drop shadow on every shape, handles on every batch lane | Accepted 2026-10-06 |
 | [131](131-one-address-grammar-and-selectors.md) | One address grammar for every object, with selectors | Accepted 2026-10-06 |
 | [132](132-typed-property-schemas-and-virtual-paths.md) | Typed property schemas, virtual paths and one `Set { address, path, value }` | Accepted 2026-10-06 |
+| [133](133-locks-and-deletes-follow-indesign.md) | Locks, container deletes and emptied groups follow InDesign | Accepted 2026-10-12 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

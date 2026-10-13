@@ -45,6 +45,7 @@ mod blend_shadow;
 mod build_engine;
 mod color_paint;
 mod compose_opts;
+mod conditions;
 mod datefmt;
 mod decorations;
 mod deltas;
@@ -105,7 +106,7 @@ pub(crate) use blend_shadow::{
 };
 pub use build_engine::build_index_paragraphs;
 use build_engine::*;
-pub(crate) use color_paint::{apply_fill_tint, stroke_for};
+pub(crate) use color_paint::{apply_fill_tint_ctx, object_tint, stroke_for};
 use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{
     build_footnote_paint_picker, build_run_paint_picker_resolved, build_run_stroke_picker,
@@ -1692,7 +1693,9 @@ pub fn build(document: &Document, options: &PipelineOptions) -> anyhow::Result<B
             let origin = frame_spread_top_left(frame.bounds, frame.item_transform);
             emit_paragraph(
                 &laid_out,
-                font_id,
+                // This path never mixes a wght into its id — it is the
+                // plain hash of `options.font` — so both halves agree.
+                paged_compose::FontRef::plain(font_id),
                 paragraph_size,
                 |cluster| picker.pick(cluster),
                 origin,

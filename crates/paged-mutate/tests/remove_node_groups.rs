@@ -495,3 +495,185 @@ fn grouping_again_after_deleting_an_item_below_a_group_is_accepted() {
     assert_eq!(members(&doc, &g), ["c74r2", "c74r3"]);
     assert_eq!(members(&doc, &second), ["c74r4", "c74r5"]);
 }
+
+// ---- C-84 — a group goes with its last member ----------------------
+//
+// Asked of InDesign (tools/indesign-export/object-integrity-probe.json,
+// 5a–5c): removing members keeps the group down to a group of one, and
+// removing its LAST member removes the group. The engine kept an EMPTY
+// group instead, and `batch(remove a, remove b, dissolve g)` then
+// applied with an inverse that could not re-create an empty group: the
+// undo failed whole, and the group and both members were gone for good.
+
+fn remove(node: &NodeId) -> Operation {
+    Operation::RemoveNode { node: node.clone() }
+}
+
+fn group_ids(doc: &Document) -> Vec<String> {
+    doc.spreads[0]
+        .spread
+        .groups
+        .iter()
+        .map(|g| g.self_id.clone().unwrap_or_default())
+        .collect()
+}
+
+/// `r1, group[a, b], r4` — the group sits between two other items, so a
+/// wrong z slot on the way back shows.
+fn staged_pair() -> (Document, NodeId, NodeId, String) {
+    let mut doc = fixture();
+    add_rect(&mut doc, "c84r1", 40.0);
+    let a = add_rect(&mut doc, "c84a", 100.0);
+    let b = add_rect(&mut doc, "c84b", 160.0);
+    let g = group(&mut doc, &[a.clone(), b.clone()]);
+    add_rect(&mut doc, "c84r4", 220.0);
+    (doc, a, b, g)
+}
+
+#[test]
+fn removing_members_keeps_a_group_of_one() {
+    let (mut doc, a, _, g) = staged_pair();
+    apply(&mut doc, &remove(&a)).expect("remove a");
+    assert_eq!(
+        members(&doc, &g),
+        ["c84b"],
+        "a group of one, as InDesign keeps"
+    );
+}
+
+#[test]
+fn removing_a_groups_last_member_removes_the_group_and_one_undo_restores_both() {
+    let (mut doc, a, b, g) = staged_pair();
+    let before = snapshot(&doc);
+    let tree_before = top_level(&doc);
+
+    let applied = apply(
+        &mut doc,
+        &Operation::Batch {
+            ops: vec![remove(&a), remove(&b)],
+        },
+    )
+    .expect("remove both members");
+    assert!(
+        !group_ids(&doc).contains(&g),
+        "the group went with its last member: {:?}",
+        group_ids(&doc)
+    );
+    let without_group: Vec<String> = tree_before.iter().filter(|x| **x != g).cloned().collect();
+    assert_eq!(top_level(&doc), without_group, "and left no entry behind");
+
+    let undone = apply(&mut doc, &applied.inverse).expect("one undo");
+    assert_eq!(top_level(&doc), tree_before);
+    assert_eq!(members(&doc, &g), ["c84a", "c84b"]);
+    assert_eq!(snapshot(&doc), before, "the document exactly as it was");
+
+    apply(&mut doc, &undone.inverse).expect("redo");
+    assert_eq!(top_level(&doc), without_group);
+}
+
+/// The plugin's exact batch. In InDesign the dissolve would name a group
+/// that no longer exists, so the batch is refused whole — it used to
+/// apply, with an undo that restored nothing.
+#[test]
+fn dissolving_a_group_after_removing_its_members_is_refused_whole() {
+    let (mut doc, a, b, g) = staged_pair();
+    let before = snapshot(&doc);
+    let err = apply(
+        &mut doc,
+        &Operation::Batch {
+            ops: vec![
+                remove(&a),
+                remove(&b),
+                Operation::DissolveGroup {
+                    group_id: g.clone(),
+                    restore_slots: None,
+                },
+            ],
+        },
+    )
+    .expect_err("the dissolve names a group that is gone");
+    assert!(
+        matches!(
+            err,
+            paged_mutate::OperationError::BatchFailed { failed_at: 2, .. }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(snapshot(&doc), before, "nothing applied");
+}
+
+/// The cascade climbs: a group whose only member was the emptied group
+/// goes too, and the undo re-creates both, nested, in their slots.
+#[test]
+fn an_emptied_nested_group_takes_an_emptied_parent_along() {
+    let mut doc = fixture();
+    add_rect(&mut doc, "c84n0", 40.0);
+    let a = add_rect(&mut doc, "c84na", 100.0);
+    let c = add_rect(&mut doc, "c84nc", 160.0);
+    let inner = group(&mut doc, std::slice::from_ref(&a));
+    let outer = group(&mut doc, &[NodeId::Group(inner.clone()), c.clone()]);
+    let before = snapshot(&doc);
+    let without_outer: Vec<String> = top_level(&doc)
+        .into_iter()
+        .filter(|x| *x != outer)
+        .collect();
+
+    // The inner group empties; the outer keeps `c`.
+    let applied = apply(&mut doc, &remove(&a)).expect("remove a");
+    assert!(!group_ids(&doc).contains(&inner), "{:?}", group_ids(&doc));
+    assert_eq!(members(&doc, &outer), ["c84nc"]);
+    apply(&mut doc, &applied.inverse).expect("undo");
+    assert_eq!(snapshot(&doc), before);
+
+    // Now both empty: removing `c` leaves the outer holding only the
+    // inner, and removing `a` empties the inner and so the outer.
+    let applied = apply(
+        &mut doc,
+        &Operation::Batch {
+            ops: vec![remove(&c), remove(&a)],
+        },
+    )
+    .expect("remove c and a");
+    assert!(
+        !group_ids(&doc).contains(&inner) && !group_ids(&doc).contains(&outer),
+        "{:?}",
+        group_ids(&doc)
+    );
+    assert_eq!(top_level(&doc), without_outer);
+    apply(&mut doc, &applied.inverse).expect("one undo");
+    assert_eq!(snapshot(&doc), before, "both groups back, nested, in place");
+}
+
+/// An empty group can still come from a file. Dissolving it used to
+/// record an inverse (`CreateGroup` with no members) that is refused, so
+/// its undo failed.
+#[test]
+fn dissolving_an_empty_group_from_a_file_is_undoable() {
+    let (mut doc, _, _, _) = staged_pair();
+    {
+        let spread = &mut doc.spreads[0].spread;
+        let index = spread.groups.len();
+        spread.groups.push(paged_model::Group {
+            self_id: Some("c84empty".to_string()),
+            members: Vec::new(),
+            transparency: Default::default(),
+            item_transform: Some([1.0, 0.0, 0.0, 1.0, 12.0, 0.0]),
+            corner_radius: Some(12.0),
+            corner_option: Some("RoundedCorner".to_string()),
+            corners: Default::default(),
+        });
+        spread.frames_in_order.insert(1, FrameRef::Group(index));
+    }
+    let before = snapshot(&doc);
+    let applied = apply(
+        &mut doc,
+        &Operation::DissolveGroup {
+            group_id: "c84empty".to_string(),
+            restore_slots: None,
+        },
+    )
+    .expect("dissolve the empty group");
+    assert!(!group_ids(&doc).contains(&"c84empty".to_string()));
+    apply(&mut doc, &applied.inverse).expect("undo");
+    assert_eq!(snapshot(&doc), before, "the group back, whole, in its slot");
+}

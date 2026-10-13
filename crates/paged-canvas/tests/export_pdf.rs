@@ -242,3 +242,36 @@ fn document_bleed_grows_the_media_box() {
         "MediaBox missing the 8.5pt document bleed"
     );
 }
+
+/// The text layer: a run set in a registered face is embedded as a font
+/// and shown with text operators, not drawn as outlines.
+///
+/// The glyph table keys each run by its outline id (`fnv(bytes) ^ wght`),
+/// and the exporter used to look the face BYTES up by that id. Every
+/// lookup missed and a miss means "draw outlines", so every exported PDF
+/// carried no text at all — unsearchable, unselectable — while every
+/// gate stayed green, because outlines rasterise identically.
+#[test]
+fn text_in_a_registered_face_is_embedded_not_outlined() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus");
+    let inter = std::fs::read(corpus.join("fonts/Inter.ttf")).expect("read Inter.ttf");
+    let idml =
+        paged_gen::write_idml(&paged_gen::samples::docx_pagination::build()).expect("write_idml");
+    let opts = CanvasOptions {
+        fonts: vec![inter],
+        ..CanvasOptions::default()
+    };
+    let model = CanvasModel::load("text", &idml, opts).expect("load");
+    let (mut session, pages) =
+        CanvasExportSession::begin(&model, &ExportPdfWireOptions::default()).expect("begin");
+    for _ in 0..pages {
+        session.export_next_page().expect("page");
+    }
+    let pdf = session.finish().expect("finish").pdf_bytes;
+    let has = |needle: &[u8]| pdf.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        has(b"/FontFile2") || has(b"/FontFile3"),
+        "no embedded font program: the text was exported as outlines"
+    );
+    assert!(has(b"/ToUnicode"), "an embedded font must map back to text");
+}

@@ -326,15 +326,9 @@ pub enum PropertyPath {
     /// why the invalidation is `structural`: this rewrites PAINT ORDER
     /// across the whole spread, not one frame's appearance.
     ItemLayer,
-    /// SDK Phase 5 (D3 completion) — applied cell style ref. Wire-
-    /// shape only for v1: the apply layer errors with
-    /// `UnsupportedProperty` until the Table NodeId surface
-    /// (Tier 2d) lands. Reserved so Cell Style panels can declare
-    /// their write surface today and the audit pipeline picks them up.
+    /// The cell style applied to a cell (`NodeId::TableCell`).
     AppliedCellStyle,
-    /// SDK Phase 5 (D3 completion) — applied table style ref. Same
-    /// placeholder treatment as `AppliedCellStyle`: wire-shape only,
-    /// apply layer errors until Tier 2d.
+    /// The table style applied to a table (`NodeId::Table`).
     AppliedTableStyle,
     /// SDK Phase 5 (v1 sweep) — whole-path replacement on any path-
     /// bearing page item. Value is `Value::FramePath { anchors,
@@ -1337,10 +1331,13 @@ pub enum PropertyPath {
     ElementVisible,
     /// W2.5 — element-level `Locked="true|false"` on any page item.
     /// `Value::Bool`. The renderer ignores it (locked items still
-    /// paint); the canvas hit-tester blocks selection of a locked item
-    /// — the `LayerLocked` precedent. Paint-neutral, so the
-    /// InvalidationHint is empty (no scene change). Plain `bool` parse
-    /// field (default `false`); round-trips bytewise.
+    /// paint). C-77 — the engine enforces it: an op that would move,
+    /// reshape, restack or remove a locked item (or the content of a
+    /// locked container) is refused with `OperationError::Locked`, as
+    /// InDesign refuses it; attribute writes, text edits and this write
+    /// itself still apply. Paint-neutral, so the InvalidationHint is
+    /// empty (no scene change). Plain `bool` parse field (default
+    /// `false`); round-trips bytewise.
     ElementLocked,
 
     // ---- v43 batch — stroke line ends (arrowheads) ---------------

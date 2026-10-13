@@ -622,7 +622,13 @@ pub(super) fn emit_text_path_into(
                 .fill_color
                 .as_deref()
                 .and_then(|id| color_id_to_paint(id, palette, color_ctx))
-                .map(|p| apply_fill_tint(p, resolved.fill_tint))
+                .map(|p| {
+                    apply_fill_tint_ctx(
+                        p,
+                        object_tint(palette, resolved.fill_color.as_deref(), resolved.fill_tint),
+                        &color_ctx,
+                    )
+                })
                 .unwrap_or(default_paint);
             // Pull the pre-configured (wght-baked) Face from the
             // FontTable cache when possible; build on the fly only
@@ -803,6 +809,9 @@ pub(super) fn emit_text_path_into(
             runs.push(paged_compose::GlyphRunEntry {
                 command_index: page.list.commands.len() as u32,
                 font_id: face_font_ids[g.face_idx],
+                // text-on-path never mixes a wght into its ids, so the
+                // outline id IS the byte-resolvable one.
+                face_id: Some(face_font_ids[g.face_idx]),
                 glyph_id: g.glyph_id,
                 font_size: g.point_size,
                 transform: final_xf,

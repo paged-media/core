@@ -485,12 +485,22 @@ impl Walker<'_, '_> {
             // this z-position.
             if let Some(entries) = self.glyph_by_cmd.get(&(i as u32)) {
                 let entry = entries[0];
+                // `face_id`, not `font_id`. The first resolves to face
+                // BYTES; the second is the glyph-outline cache key with
+                // the wght mixed in. Asking with the second missed
+                // every time, and a miss reads as "this font forbids
+                // embedding" — so every PDF came out with its text
+                // drawn as outlines and nothing said why.
+                //
+                // `face_id: None` is the honest case: the outlines have
+                // a wght variation baked in, so the bytes alone would
+                // render the wrong weight and outlines are correct.
                 let embeddable = match self.outline_font.get(&entry.font_id) {
                     Some(ok) => *ok,
                     None => {
-                        let ok = input
-                            .fonts
-                            .and_then(|f| f.font_bytes(entry.font_id))
+                        let ok = entry
+                            .face_id
+                            .and_then(|face| input.fonts.and_then(|f| f.font_bytes(face)))
                             .map(|bytes| self.state.fonts.check_embeddable(entry.font_id, bytes))
                             .unwrap_or(false);
                         self.outline_font.insert(entry.font_id, ok);
@@ -526,6 +536,7 @@ impl Walker<'_, '_> {
                                 let (name, fref, new_gid) = self.state.fonts.use_glyph(
                                     &mut self.state.refs,
                                     e.font_id,
+                                    e.face_id,
                                     e.glyph_id,
                                     e.unicode,
                                 );
@@ -539,9 +550,9 @@ impl Walker<'_, '_> {
                             .entry(font_name.clone())
                             .or_insert(font_ref);
                         let upem = *self.upem_cache.entry(entry.font_id).or_insert_with(|| {
-                            input
-                                .fonts
-                                .and_then(|f| f.font_bytes(entry.font_id))
+                            entry
+                                .face_id
+                                .and_then(|face| input.fonts.and_then(|f| f.font_bytes(face)))
                                 .and_then(|b| ttf_parser::Face::parse(b, 0).ok())
                                 .map(|f| f.units_per_em() as f32)
                                 .unwrap_or(1000.0)

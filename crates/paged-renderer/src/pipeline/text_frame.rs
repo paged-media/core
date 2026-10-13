@@ -1136,7 +1136,18 @@ pub(super) fn first_baseline_offset_64(
                 .and_then(|m| m.x_height)
                 .unwrap_or(X_HEIGHT_FALLBACK),
         ),
-        Some(F::EmBoxHeight) => pt_to_64(point_size),
+        // The em box is one em tall and centred on half the cap height:
+        // its top stands `(cap height + 1 em) / 2` above the baseline.
+        // InDesign 20.0.1 set Open Sans 20 pt (cap 1462/2048) 17.139 pt
+        // and Lora 20 pt (cap 700/1000) 17.0 pt below the top, in a
+        // frame and in a cell alike (`table-cell-baseline`); the point
+        // size this used to take is the em box's height, not its top.
+        Some(F::EmBoxHeight) => em_fraction_to_64(
+            0.5 + 0.5
+                * metrics
+                    .and_then(|m| m.cap_height)
+                    .unwrap_or(CAP_HEIGHT_FALLBACK),
+        ),
         // LeadingOffset: the first line's LEADING, never less than
         // MinimumFirstBaselineOffset. Measured against InDesign 2025 (the
         // `reflow` fixture, 2026-10-01): 12 pt leading puts the first
@@ -1452,7 +1463,10 @@ pub(super) fn emit_frame_scene_layer(
             let paint = Paint::Solid(paged_compose::scene_paint_to_color(t.paint));
             emit_glyph_slice(
                 &positioned,
-                face.font_id,
+                // A scene-layer face is the plugin's (ADR 126): its id keys
+                // the outline cache but resolves to no document bytes, so
+                // nothing embeds it — outlines, as before the text layer.
+                paged_compose::FontRef::varied(face.font_id),
                 t.size,
                 |_| paint,
                 origin,
