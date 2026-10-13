@@ -20,9 +20,11 @@
 //! duplicated from the template was page "1" (and printed "1" in a
 //! page-number marker), and an inserted page had no name at all: the
 //! outline called it "Page" and a host had only the page's id ("u5") to
-//! show. A duplicate drops the copied folio now, and the reads report each
-//! page's folio: its baked `Name`, else the number the section rules give
-//! it.
+//! show (the spreads collection labelled every spread by its id). A
+//! duplicate drops the copied folio now, and the reads report each page's
+//! folio: its baked `Name`, else the number the section rules give it. A
+//! spread reads as its pages' folios, and a batch that adds pages says the
+//! page list changed.
 
 use paged_canvas::{channel::Mutation, CanvasModel, CanvasOptions};
 use serde_json::json;
@@ -39,7 +41,7 @@ fn template() -> CanvasModel {
     .expect("load")
 }
 
-fn merge_like_batch(m: &mut CanvasModel) {
+fn merge_like_batch(m: &mut CanvasModel) -> paged_canvas::model::MutationOutcome {
     let page = m.built().pages[0].id.0.clone();
     let batch: Mutation = serde_json::from_value(json!({ "op": "batch", "args": { "ops": [
         { "op": "duplicatePage", "args": { "page": page } },
@@ -48,14 +50,20 @@ fn merge_like_batch(m: &mut CanvasModel) {
         { "op": "insertPage", "args": { "afterPageId": null, "masterId": null } },
     ] } }))
     .expect("wire spelling");
-    m.apply_mutation(&batch).expect("batch");
+    m.apply_mutation(&batch).expect("batch")
 }
 
 #[test]
 fn pages_minted_in_a_batch_read_as_page_numbers() {
     let mut m = template();
-    merge_like_batch(&mut m);
+    let outcome = merge_like_batch(&mut m);
     assert_eq!(m.built().pages.len(), 4);
+    // The host rebuilds its page grid on this flag (and the page sizes
+    // the wire derives from it); a batch that adds pages must raise it.
+    assert!(
+        outcome.page_structure_changed,
+        "the batch changed the page list"
+    );
 
     // The outline names each page by its folio.
     let outline: Vec<String> = m
@@ -70,6 +78,10 @@ fn pages_minted_in_a_batch_read_as_page_numbers() {
     let names: Vec<String> = m.pages().into_iter().map(|p| p.name).collect();
     assert_eq!(names, ["1", "2", "3", "4"], "the pages' names");
 
+    // A spread is labelled by its pages' folios, never by its id.
+    let spreads: Vec<String> = m.spreads().into_iter().map(|s| s.label).collect();
+    assert_eq!(spreads, ["1", "2", "3", "4"], "the spreads' labels");
+
     // The copies carry no stale folio of their own.
     let baked: Vec<Option<String>> = m
         .scene()
@@ -78,4 +90,21 @@ fn pages_minted_in_a_batch_read_as_page_numbers() {
         .flat_map(|s| s.spread.pages.iter().map(|p| p.name.clone()))
         .collect();
     assert_eq!(baked, [Some("1".to_string()), None, None, None]);
+}
+
+/// A batch with no handles applies as ONE operation, and its reply said
+/// the page list was unchanged (its own kind is not a page op), so the
+/// host never rebuilt its page grid for the pages it added; undoing it
+/// said the list changed.
+#[test]
+fn a_batch_of_page_inserts_reports_the_page_list_changed() {
+    let mut m = template();
+    let batch: Mutation = serde_json::from_value(json!({ "op": "batch", "args": { "ops": [
+        { "op": "insertPage", "args": { "afterPageId": null, "masterId": null } },
+        { "op": "insertPage", "args": { "afterPageId": null, "masterId": null } },
+    ] } }))
+    .expect("wire spelling");
+    let outcome = m.apply_mutation(&batch).expect("batch");
+    assert_eq!(outcome.page_ids.len(), 3);
+    assert!(outcome.page_structure_changed, "the batch added two pages");
 }

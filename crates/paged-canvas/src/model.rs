@@ -377,6 +377,25 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// Whether `mutation` changes the page list or a page's size, so the host
+/// must rebuild its page grid: the page ops themselves, and a batch that
+/// holds one. A batch used to report `false` whatever it held (only its
+/// own kind was matched), so pages a Data Merge minted in one batch never
+/// reached the grid, while undoing that batch reported `true`.
+fn changes_page_list(mutation: &Mutation) -> bool {
+    match mutation {
+        Mutation::InsertPage { .. }
+        | Mutation::DeletePage { .. }
+        | Mutation::ResizePage { .. }
+        // W0.5 — DuplicatePage adds a spread; the others change page
+        // labels/masters but keep the page count, so they don't force a
+        // grid rebuild.
+        | Mutation::DuplicatePage { .. } => true,
+        Mutation::Batch { ops } => ops.iter().any(changes_page_list),
+        _ => false,
+    }
+}
+
 /// An item's spread-space `ItemTransform` as seen from the page it sits
 /// on: the page's origin inside its spread folded in, so `bounds`
 /// through it lands in page coordinates — the space the hit test's
@@ -2784,17 +2803,9 @@ impl CanvasModel {
                 Vec::new()
             };
             // Page-list mutations (M7 extends this set with ResizePage)
-            // require the editor to rebuild its page grid.
-            let page_structure_changed = matches!(
-                mutation,
-                Mutation::InsertPage { .. }
-                    | Mutation::DeletePage { .. }
-                    | Mutation::ResizePage { .. }
-                    // W0.5 — DuplicatePage adds a spread; the others
-                    // change page labels/masters but keep the page
-                    // count, so they don't force a grid rebuild.
-                    | Mutation::DuplicatePage { .. }
-            );
+            // require the editor to rebuild its page grid — a batch that
+            // holds one too.
+            let page_structure_changed = changes_page_list(mutation);
             // v38 (Wave 2, C-2 / S-05) — §8.5 resize-vs-transform ruling.
             // A reflow notification fires ONLY when a frame's CONTENT BOX
             // changes — i.e. a `ResizeFrame`, which translates to a
@@ -8328,6 +8339,7 @@ impl CanvasModel {
     pub fn spreads(&self) -> Vec<crate::channel::SpreadSummary> {
         use crate::channel::{GuideSummary, SpreadSummary};
         use crate::model::GuideOrientationWire;
+        let folios = self.page_folios();
         self.scene
             .spreads
             .iter()
@@ -8362,8 +8374,22 @@ impl CanvasModel {
                         page_index: g.page_index,
                     })
                     .collect();
+                // InDesign names no spread; its Pages panel labels one by
+                // its pages' folios ("3", "2–3"). The id is the label only
+                // for a spread with no built page to name it by.
+                let named: Vec<&String> = parsed
+                    .spread
+                    .pages
+                    .iter()
+                    .filter_map(|p| folios.get(p.self_id.as_deref()?))
+                    .collect();
+                let label = match named.as_slice() {
+                    [] => self_id.clone(),
+                    [only] => (*only).clone(),
+                    [first, .., last] => format!("{first}–{last}"),
+                };
                 SpreadSummary {
-                    label: self_id.clone(),
+                    label,
                     self_id,
                     page_count,
                     guides,

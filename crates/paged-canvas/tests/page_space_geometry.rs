@@ -139,6 +139,8 @@ fn the_pages_sit_where_indesign_puts_them() {
             ("p2".to_string(), (0.0, -396.0))
         ]
     );
+    // The facing spread reads as its pages' folios.
+    assert_eq!(m.spreads()[0].label, "2–3");
 }
 
 #[test]

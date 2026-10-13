@@ -3073,8 +3073,10 @@ pub struct CharacterStyleSummary {
 
 /// SDK Phase 5 (v1 sweep) — one spread summary. Backs
 /// `documentCollection:spreads`. `pageCount` is the number of
-/// `<Page>` children in the spread; `label` is the spread's
-/// `Self` id (or filename when missing).
+/// `<Page>` children in the spread; `label` is what InDesign's Pages
+/// panel shows for it, its pages' folios (`"3"`, `"2–3"`, see
+/// [`PageSummary::name`]) — the spread's `Self` id (or filename) only
+/// when it has no built page.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]
