@@ -850,13 +850,51 @@ pub(crate) fn text_area_frame<'f>(
     frame: &'f TextFrame,
     document: &Document,
 ) -> std::borrow::Cow<'f, TextFrame> {
-    let share = stroke_text_inset(frame, document);
+    let styled = with_object_style_options(frame, document);
+    let share = stroke_text_inset(&styled, document);
     if share <= 0.0 {
+        return styled;
+    }
+    let mut folded = styled.into_owned();
+    folded.inset_spacing = Some(folded.inset_spacing.unwrap_or([0.0; 4]).map(|v| v + share));
+    std::borrow::Cow::Owned(folded)
+}
+
+/// The frame with the text-frame options it does not state taken from its
+/// object style (ADR 137): InDesign leaves an option the style supplies off
+/// the frame, so a frame of a style that centres its text is written with
+/// no `VerticalJustification` at all. Only the categories the style has
+/// switched on reach the frame (`StyleSheet::resolve_object`).
+pub(crate) fn with_object_style_options<'f>(
+    frame: &'f TextFrame,
+    document: &Document,
+) -> std::borrow::Cow<'f, TextFrame> {
+    let Some(style) = frame.applied_object_style.as_deref() else {
+        return std::borrow::Cow::Borrowed(frame);
+    };
+    let o = document.styles.resolve_object(style).text_frame;
+    let missing = (frame.vertical_justification.is_none() && o.vertical_justification.is_some())
+        || (frame.inset_spacing.is_none() && o.inset_spacing.is_some())
+        || (frame.column_count.is_none() && o.column_count.is_some())
+        || (frame.column_gutter.is_none() && o.column_gutter.is_some())
+        || (frame.first_baseline_offset.is_none() && o.first_baseline_offset.is_some())
+        || (frame.minimum_first_baseline_offset.is_none()
+            && o.minimum_first_baseline_offset.is_some())
+        || (frame.auto_sizing.is_none() && o.auto_sizing.is_some());
+    if !missing {
         return std::borrow::Cow::Borrowed(frame);
     }
-    let mut folded = frame.clone();
-    folded.inset_spacing = Some(frame.inset_spacing.unwrap_or([0.0; 4]).map(|v| v + share));
-    std::borrow::Cow::Owned(folded)
+    let mut f = frame.clone();
+    f.vertical_justification = f.vertical_justification.or(o.vertical_justification);
+    f.inset_spacing = f.inset_spacing.or(o.inset_spacing);
+    f.column_count = f.column_count.or(o.column_count);
+    f.column_gutter = f.column_gutter.or(o.column_gutter);
+    f.first_baseline_offset = f.first_baseline_offset.or(o.first_baseline_offset);
+    f.minimum_first_baseline_offset = f
+        .minimum_first_baseline_offset
+        .or(o.minimum_first_baseline_offset);
+    f.auto_sizing = f.auto_sizing.or(o.auto_sizing);
+    std::borrow::Cow::Owned(f)
 }
 
 pub(super) fn emit_text_frame_into(
