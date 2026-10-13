@@ -704,6 +704,7 @@ pub(super) fn build_perline_wrap_widths(
     // where it must (`paged_text` `ragged.rs`).
     if chain_shapes.iter().any(Option::is_some) || (any_chain_overlap && widths_vary) {
         lopts.compose.minimum_raggedness = true;
+        lopts.compose.overrun_size = None;
         lopts.compose.visible_lines = Some(visible_lines);
         lopts.compose.joined_lines = Some(twin_after.clone());
     }
@@ -1933,4 +1934,51 @@ pub(super) fn meets_next_column_wrap(em: &StoryEmitter, above_64: i32, baseline_
         .filter(|w| w.kind == WrapKind::NextColumn)
         .filter(|w| w.bounds.right > inner_left && w.bounds.left < inner_right)
         .any(|w| top < w.bounds.bottom && bottom > w.bounds.top)
+}
+
+/// How many lines the rest of the chain holds for a paragraph whose first
+/// baseline is `first_baseline_64` in the current frame: the rows of
+/// `leading_64` that fit above each frame's text bottom (less its footnote
+/// reserve), from the current frame on. `None` when the chain can grow, so
+/// no line is overset.
+pub(super) fn visible_rows(
+    em: &StoryEmitter,
+    first_baseline_64: i32,
+    leading_64: i32,
+    point_size: f32,
+    metrics: Option<&FontMetrics>,
+) -> Option<usize> {
+    if leading_64 <= 0 {
+        return None;
+    }
+    if em
+        .chain
+        .last()
+        .and_then(|f| f.auto_sizing)
+        .is_some_and(|a| a.grows_height())
+    {
+        return None;
+    }
+    let mut rows = 0usize;
+    for (k, frame) in em.chain.iter().enumerate().skip(em.frame_idx) {
+        let bottom_64 = ((frame.bounds.height() - super::build_engine::inset_bottom(frame))
+            * paged_text::shape::ADVANCE_PRECISION)
+            .round() as i32
+            - em.reserved_footnote_64.get(k).copied().unwrap_or(0);
+        let first_64 = if k == em.frame_idx {
+            first_baseline_64.max(0)
+        } else {
+            first_baseline_for_frame(
+                frame,
+                point_size,
+                (point_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
+                metrics,
+                Some(leading_64),
+            )
+        };
+        if first_64 <= bottom_64 {
+            rows += ((bottom_64 - first_64) / leading_64) as usize + 1;
+        }
+    }
+    Some(rows)
 }
