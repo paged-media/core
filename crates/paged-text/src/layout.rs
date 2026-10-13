@@ -1874,17 +1874,21 @@ pub fn apply_tab_stops(
 /// this stage of the pipeline). The leader inherits the font /
 /// point_size / paint of the run that owns the `\t`; IDML doesn't
 /// expose a separate style for the leader characters.
+///
+/// Returns the leaders drawn, in line order: what each tab prints
+/// that the paragraph's text does not hold.
 pub fn apply_tab_stops_with_leaders(
     line: &mut LaidOutLine,
     paragraph_text: &str,
     tab_stops: &[TabStopSpec],
     default_stop_pt: f32,
     leader_ctx: Option<&LeaderContext<'_, '_>>,
-) {
+) -> Vec<DrawnLeader> {
+    let mut drawn = Vec::new();
     let bytes = paragraph_text.as_bytes();
     let default_stop_64 = (default_stop_pt * ADVANCE_PRECISION).round() as i32;
     if default_stop_64 <= 0 && tab_stops.is_empty() {
-        return;
+        return drawn;
     }
     let mut i = 0;
     while i < line.glyphs.len() {
@@ -1941,7 +1945,7 @@ pub fn apply_tab_stops_with_leaders(
         // Leader emission: after the tab has been widened, tile the
         // leader string across [current_x .. target_segment_left]
         // using the run that owns this tab's `\t` cluster.
-        let leader_glyphs = leader_ctx
+        let (leader_glyphs, copies) = leader_ctx
             .zip(leader_str)
             .filter(|(_, s)| !s.is_empty())
             .and_then(|(ctx, leader)| {
@@ -1953,6 +1957,10 @@ pub fn apply_tab_stops_with_leaders(
             })
             .unwrap_or_default();
         if !leader_glyphs.is_empty() {
+            drawn.push(DrawnLeader {
+                cluster: line.glyphs[i].cluster,
+                text: leader_str.unwrap_or_default().repeat(copies),
+            });
             let n = leader_glyphs.len();
             let insert_at = i + 1;
             // Shift positioned glyphs to absolute x within the tab's
@@ -1969,6 +1977,16 @@ pub fn apply_tab_stops_with_leaders(
         }
         i += 1;
     }
+    drawn
+}
+
+/// A tab leader [`apply_tab_stops_with_leaders`] drew.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawnLeader {
+    /// The tab's cluster: its byte in the paragraph text.
+    pub cluster: u32,
+    /// The leader string, repeated as many whole times as it was drawn.
+    pub text: String,
 }
 
 /// The advance a tab takes from `pen` when the segment after it should
@@ -2053,15 +2071,16 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
     /// Shape `leader_str` with the run owning `tab_cluster` and tile
     /// whole copies across `gap_64` 1/64 pt. Returns positioned
     /// glyphs with `x` relative to the gap's left edge (caller adds
-    /// the absolute offset). `y` is the baseline carried in from the
-    /// tab glyph (so leader sits on the same baseline as the line).
+    /// the absolute offset) and how many copies they are. `y` is the
+    /// baseline carried in from the tab glyph (so leader sits on the
+    /// same baseline as the line).
     fn shape_leader_for_tab(
         &self,
         tab_cluster: u32,
         leader_str: &str,
         gap_64: i32,
         baseline_y: i32,
-    ) -> Option<Vec<PositionedGlyph>> {
+    ) -> Option<(Vec<PositionedGlyph>, usize)> {
         let run = self.run_for_cluster(tab_cluster)?;
         let shape = shape_run(run.face, leader_str, run.point_size);
         if shape.glyphs.is_empty() || shape.total_advance <= 0 {
@@ -2102,7 +2121,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                 pen_x += g.x_advance;
             }
         }
-        Some(out)
+        Some((out, copies))
     }
 }
 
