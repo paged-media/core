@@ -64,7 +64,8 @@ pub struct ScriptOptions {
     #[arg(long, default_value_t = 10_000_000)]
     pub max_loop_iterations: u64,
     /// Write the authored document here. The format follows the
-    /// extension: .paged, .idml or .pdf.
+    /// extension: .paged, .idml or .pdf. Without it the script's changes
+    /// are not saved (the run warns when there were any).
     #[arg(short, long, visible_alias = "export")]
     pub out: Option<PathBuf>,
     /// Also rasterise a page of the result here.
@@ -110,6 +111,7 @@ pub fn run(
     let mut session = Session::new();
     let handle = assets.open(&mut session, doc)?;
 
+    let before = session.model()?.current_state_hash();
     let result = session.run_script(&source, Some(budget(opts)?))?;
 
     // The script's own console output first: when it fails, the lines
@@ -133,6 +135,15 @@ pub fn run(
     // had no runs to look at; the script has just made some.
     if let Ok(model) = session.model() {
         crate::options::warn_if_nothing_shaped(&model.handle().stats);
+    }
+
+    // Without `-o` the authored document goes nowhere. That used to pass
+    // in silence, so a script that "worked" left its file untouched.
+    if opts.out.is_none() && session.model()?.current_state_hash() != before {
+        eprintln!(
+            "warning: the script changed the document, but its changes were not saved — \
+             pass -o <file> (.paged, .idml or .pdf) to write the result."
+        );
     }
 
     if let Some(out) = &opts.out {

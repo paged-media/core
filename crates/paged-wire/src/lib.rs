@@ -1149,6 +1149,13 @@ pub enum Mutation {
         #[tsify(type = "number[] | null")]
         bytes: Option<ByteBuf>,
     },
+    /// Set a page item's whole placement transform, in the space
+    /// `elementGeometry` reads it: the page the item sits on, its origin
+    /// at `(0, 0)` (spread space for an item on the pasteboard). The
+    /// engine adds the page's origin inside its spread back before
+    /// storing the `ItemTransform`, so read, translate, write moves the
+    /// item by exactly the step on any page. The `frameTransform`
+    /// property is the stored, spread-space matrix.
     MoveFrame {
         frame_id: String,
         transform: [f32; 6],
@@ -1818,12 +1825,16 @@ pub enum Mutation {
     PathfinderMinusBack {
         element_ids: Vec<ElementId>,
     },
-    /// B-22 (protocol v57) — Shape Builder's click/drag output: unite
-    /// the named faces of the arrangement into one result element.
+    /// B-22 (protocol v57) — Shape Builder's click/drag output: ONE
+    /// element built from the selected faces of the arrangement, united.
     /// `faces` carries the stable ids `RequestPlanarRegions` reported;
-    /// `mode` picks whether they are the faces KEPT or the faces
-    /// REMOVED (drag vs alt-drag). An unknown id is refused, not
-    /// ignored.
+    /// `mode` selects them (`keep`) or every other face (`remove`; with
+    /// no id named, every face — the op then unites its inputs). The
+    /// result is written onto the topmost input covering a selected face
+    /// and every other input is removed: a face outside the selection is
+    /// NOT kept. A Shape Builder that leaves the faces a gesture did not
+    /// cross builds those pieces itself (paged.draw does) and unites only
+    /// the crossed ones here. An unknown id is refused, not ignored.
     PathfinderFaces {
         element_ids: Vec<ElementId>,
         faces: Vec<String>,

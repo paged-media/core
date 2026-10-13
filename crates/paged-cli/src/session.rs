@@ -252,10 +252,13 @@ impl Default for Live {
         Self {
             session: Session::new(),
             handle: None,
+            // The protocol's fallback face is `defaultFont`, the caller's
+            // to give (its docs say so): no bundled face stands in here.
             pending: DocumentOptions {
                 fonts: Vec::new(),
                 font_family: Vec::new(),
                 font: None,
+                no_default_font: true,
                 cmyk_profile: None,
             },
         }

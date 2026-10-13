@@ -49,6 +49,8 @@ max_mean_for() {
     list-markers) echo 0.82 ;;
     list-overrides) echo 1.07 ;;
     list-marker-styles) echo 1.06 ;;
+    # Hinted text, see the note below min_ssim_for's header: 1.504 measured.
+    effects-attrs) echo 1.81 ;;
     *) echo "$MAX_MEAN_DE" ;;
   esac
 }
@@ -85,6 +87,15 @@ max_mean_for() {
 # densest text pages: reflow 0.9525 → 0.9125, list-overrides 0.9118 →
 # 0.9058, list-marker-styles 0.9117 → 0.9048 (mean ΔE stays inside its
 # budget). Same sizing rule as above, SSIM = worst - 0.005.
+# effects-attrs (core PR #70, 2026-10-13): the default face is now set at
+# its own ascender, as InDesign sets it (0.96875 em for Inter, was the
+# 0.8 em substitute heuristic), so page 2's 31 labels move down 1.27 pt.
+# The exported PDF moves them exactly that far (pdftotext -bbox: yMin
+# 64.73 -> 66.00 pt, i.e. 2.53 px at 144 dpi) and the renderer's ink moves
+# 2.46 px, but poppler's hinted raster moves 1.97 px: FreeType snaps the
+# baseline to a whole pixel. Native-vs-PDF ink on the labels went from
+# 0.09 to 0.59 px apart and the page's mean dE from 1.424 to 1.504 with
+# placement unchanged between the two lanes. Mean = worst * 1.20.
 min_ssim_for() {
   case "$1" in
     list-markers) echo 0.915 ;;

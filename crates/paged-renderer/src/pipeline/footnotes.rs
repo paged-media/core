@@ -532,6 +532,7 @@ pub(super) struct BodyStoryPageReset {
     images: usize,
     story_layout: usize,
     footnotes: usize,
+    cell_rects: usize,
     stats: PipelineStats,
 }
 
@@ -546,6 +547,7 @@ pub(super) fn snapshot_body_story_reset(pages: &[BuiltPage]) -> Vec<BodyStoryPag
             images: p.list.images.len(),
             story_layout: p.story_layout.len(),
             footnotes: p.footnotes.len(),
+            cell_rects: p.cell_rects.len(),
             stats: p.stats,
         })
         .collect()
@@ -560,6 +562,7 @@ pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPage
         page.list.images.truncate(s.images);
         page.story_layout.truncate(s.story_layout);
         page.footnotes.truncate(s.footnotes);
+        page.cell_rects.truncate(s.cell_rects);
         // The glyph-run side channel indexes commands ABSOLUTELY, so a
         // rolled-back pass leaves entries pointing past the end of the
         // list — harmless while nothing renumbered commands, a real

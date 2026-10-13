@@ -543,7 +543,7 @@ pub type KeepSeedStore = std::cell::RefCell<HashMap<(String, bool), KeepSeed>>;
 /// Splice on hit: push `paths` through `PathBuffer::push_anon`
 /// (rebasing each command's path-ids by the current pool size),
 /// extend `pages[i].story_layout` with `story_layout`, and extend
-/// `pages[i].footnotes` with `footnotes`.
+/// `pages[i].footnotes` / `pages[i].cell_rects` likewise.
 #[derive(Debug, Clone)]
 pub struct BodyStoryPageDelta {
     pub paths: Vec<paged_compose::PathData>,
@@ -558,6 +558,9 @@ pub struct BodyStoryPageDelta {
     pub commands: Vec<paged_compose::DisplayCommand>,
     pub story_layout: Vec<LineLayout>,
     pub footnotes: Vec<EmittedFootnote>,
+    /// The table cell rects the story pushed on the page (the cell
+    /// hit-test map), replayed like `story_layout`.
+    pub cell_rects: Vec<CellRect>,
     /// W2 — where each chain frame's piece of `commands` begins,
     /// relative to the start of the delta: `(chain_idx, rel_start)`,
     /// ascending. A replayed delta is appended at the page tail, so

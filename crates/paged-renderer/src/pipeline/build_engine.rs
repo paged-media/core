@@ -1143,7 +1143,14 @@ pub(super) fn build_document_inner(
             .iter()
             .map(|p| transform_bounds(p.bounds, p.item_transform))
             .collect();
-        let local_master_page_idx = geom.local_page_idx.min(master.spread.pages.len() - 1);
+        let body_page_bounds: Vec<paged_model::Bounds> = document.spreads[geom.host_spread_idx]
+            .spread
+            .pages
+            .iter()
+            .map(|p| transform_bounds(p.bounds, p.item_transform))
+            .collect();
+        let local_master_page_idx =
+            master_page_index(&body_page_bounds, geom.local_page_idx, &master_page_bounds);
         let master_page_origin = (
             master_page_bounds[local_master_page_idx].left,
             master_page_bounds[local_master_page_idx].top,
@@ -2961,6 +2968,9 @@ pub(super) fn build_document_inner(
                 )
             })
             .collect();
+        // The table cell rects already on each page: the story's own are
+        // the tail past this, captured into the cache delta beside its lines.
+        let pre_cells: Vec<usize> = pages.iter().map(|p| p.cell_rects.len()).collect();
         // The pool prints of the pages the story lays out on (its chain's),
         // for the cache capture below.
         let pre_prints: HashMap<usize, (u64, u64)> = chain_pages_pre
@@ -3561,11 +3571,12 @@ pub(super) fn build_document_inner(
                 let grew_list = list.paths.len() > snap.0 || list.commands.len() > snap.1;
                 let grew_layout = page.story_layout.len() > snap.5;
                 let grew_footnotes = page.footnotes.len() > snap.6;
+                let grew_cells = page.cell_rects.len() > pre_cells[page_idx];
                 if let Some((_, d)) = verbatim.iter().find(|(p, _)| *p == page_idx) {
                     per_page.push((page_idx, d.clone()));
                     continue;
                 }
-                if grew_list || grew_layout || grew_footnotes {
+                if grew_list || grew_layout || grew_footnotes || grew_cells {
                     // Output off the story's own chain pages has no print to
                     // replay against.
                     let Some(&(pre_print, _)) = pre_prints.get(&page_idx) else {
@@ -3599,6 +3610,7 @@ pub(super) fn build_document_inner(
                             commands: new_commands,
                             story_layout: new_story_layout,
                             footnotes: new_footnotes,
+                            cell_rects: page.cell_rects[pre_cells[page_idx]..].to_vec(),
                             segments,
                         }),
                     ));

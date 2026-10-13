@@ -43,11 +43,15 @@
 //! - `[kind=frame]` is the same as the `frame` head.
 //! - `[layer=…]` — a page item on the layer with that `Self` id or name.
 //! - `[style=…]` — the applied object style (page items), by `Self` id or
-//!   name.
+//!   name; on a text frame or a story, also any paragraph or character
+//!   style the story applies (the whole story, so every frame of a thread
+//!   answers): `textFrame[style="ParagraphStyle/Price"]`,
+//!   `textFrame[style=Price]`. `[style!=v]` holds when none of them is `v`.
 //! - `:nth(n)` keeps the n-th match (1-based) under each parent.
 //! - The containment tree: doc → spread → page → page items (groups and
 //!   paste-into hosts nest); doc → master → master items; doc → layer →
-//!   the items on it; doc → story → table → cell, story → field; doc →
+//!   the items on it; doc → story → table → cell, story → field, story →
+//!   the frames anchored in it (an anchored group's members nest); doc →
 //!   styles, swatches, gradients and the other resources.
 //!
 //! Examples: `page:#3 > frame`, `frame[name="price"]`,

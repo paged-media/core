@@ -49,9 +49,8 @@ fn paged(args: &[&str]) -> std::process::Output {
     out
 }
 
-/// A face to shape with. The document the script authors names no
-/// family at all, and core ships no fallback, so without one the page
-/// is legitimately blank — see `a_document_that_names_no_font_says_so`.
+/// A face to shape with, named explicitly (the CLI bundles one too —
+/// see `without_a_font_flag_the_bundled_face_sets_the_text_quietly`).
 fn a_font() -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts");
     root.join("Inter.ttf")
@@ -195,19 +194,56 @@ fn new_then_script_then_export_then_render_then_diff() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// With no `--font` the CLI shapes in the face it bundles (Inter, the
+/// editor's default face too), so a document that names no font — or a
+/// font this machine lacks — renders its text, quietly.
 #[test]
-fn a_document_that_names_no_font_says_so() {
+fn without_a_font_flag_the_bundled_face_sets_the_text_quietly() {
+    let d = dir("bundled");
+    let (blank, js) = (d.join("b.paged"), d.join("b.js"));
+    std::fs::write(&js, SCRIPT).unwrap();
+    paged(&["new", "-o", blank.to_str().unwrap()]);
+    let authored = d.join("b-out.paged");
+    let out = paged(&[
+        "script",
+        blank.to_str().unwrap(),
+        js.to_str().unwrap(),
+        "-o",
+        authored.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("shaped 0 glyphs"),
+        "no font flag should still shape the text: {stderr}"
+    );
+    let inspect = paged(&["inspect", authored.to_str().unwrap(), "--json"]);
+    assert!(
+        !String::from_utf8_lossy(&inspect.stderr).contains("shaped 0 glyphs"),
+        "inspect warns about a missing font it does not miss"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&inspect.stdout).expect("json");
+    assert!(
+        v["stats"]["glyphs"].as_u64().unwrap_or(0) > 0,
+        "the text was shaped: {v}"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// `--no-default-font` turns the bundled face off: then a document whose
+/// text no registered font answers for renders blank, and the CLI says
+/// why instead of writing a white page.
+#[test]
+fn without_the_bundled_face_a_document_that_names_no_font_says_so() {
     let d = dir("nofont");
     let (blank, js) = (d.join("nf.paged"), d.join("nf.js"));
     std::fs::write(&js, SCRIPT).unwrap();
     paged(&["new", "-o", blank.to_str().unwrap()]);
 
-    // No --font, no --fonts: the text cannot be shaped, and the whole
-    // point is that the CLI says why instead of writing a white page.
     let out = paged(&[
         "script",
         blank.to_str().unwrap(),
         js.to_str().unwrap(),
+        "--no-default-font",
         "-o",
         d.join("nf-out.paged").to_str().unwrap(),
     ]);
@@ -215,6 +251,33 @@ fn a_document_that_names_no_font_says_so() {
     assert!(
         warning.contains("shaped 0 glyphs"),
         "expected the no-font warning on stderr, got: {warning}"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A script that changes the document but has nowhere to write it says
+/// so: `paged script` without `-o` used to discard the edits silently.
+/// A script that only reads stays quiet.
+#[test]
+fn a_script_without_out_says_its_changes_are_not_saved() {
+    let d = dir("noout");
+    let (blank, edit, read) = (d.join("n.paged"), d.join("edit.js"), d.join("read.js"));
+    std::fs::write(&edit, SCRIPT).unwrap();
+    std::fs::write(&read, "console.log(JSON.parse(paged.pages()).length);").unwrap();
+    paged(&["new", "-o", blank.to_str().unwrap()]);
+
+    let out = paged(&["script", blank.to_str().unwrap(), edit.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not saved") && stderr.contains("-o"),
+        "an edit without -o must say it was not saved: {stderr}"
+    );
+
+    let out = paged(&["script", blank.to_str().unwrap(), read.to_str().unwrap()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("not saved"),
+        "a read-only script changes nothing: {stderr}"
     );
     let _ = std::fs::remove_dir_all(&d);
 }

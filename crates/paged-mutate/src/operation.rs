@@ -3630,12 +3630,17 @@ pub enum Operation {
         elements: Vec<NodeId>,
         verb: PathfinderRegionVerb,
     },
-    /// B-22 — Shape Builder's click/drag output: unite the NAMED faces
-    /// of the arrangement of `elements` into one result element.
+    /// B-22 — Shape Builder's click/drag output: ONE element built from
+    /// the selected faces of the arrangement of `elements`, united.
     /// `faces` carries the stable ids `requestPlanarRegions` reported.
-    /// `mode` picks whether the named faces are the ones kept or the
-    /// ones removed (a Shape-Builder alt-drag erases what it crosses).
-    /// Rides the same Batch machinery as `PathfinderRegion`.
+    /// `mode` selects the named faces (`Keep`) or every other face
+    /// (`Remove`; with no face named that is every face, so the op unites
+    /// its inputs). The result is written onto the topmost input covering
+    /// a selected face; every other input is removed — a face outside the
+    /// selection is not kept. A Shape Builder that leaves the faces its
+    /// gesture did not cross assembles those pieces itself and unites
+    /// only the crossed faces through this op. Rides the same Batch
+    /// machinery as `PathfinderRegion`.
     PathfinderFaces {
         elements: Vec<NodeId>,
         faces: Vec<String>,

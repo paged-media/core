@@ -101,6 +101,10 @@ struct Node<'a> {
     layer: Option<&'a str>,
     /// Page items: the applied object style.
     style: Option<&'a str>,
+    /// Text frames: the story they pour; stories: their own id. A style
+    /// selector also matches the paragraph and character styles that
+    /// story applies.
+    story: Option<&'a str>,
     /// Body pages: 1-based position in the document.
     page_number: Option<u32>,
 }
@@ -111,6 +115,10 @@ pub struct Index<'a> {
     children: Vec<Vec<usize>>,
     layer_names: HashMap<&'a str, Option<&'a str>>,
     style_names: HashMap<&'a str, Option<&'a str>>,
+    /// Paragraph and character styles, `Self` id → name.
+    text_style_names: HashMap<&'a str, Option<&'a str>>,
+    /// Story id → the paragraph and character styles it applies, each once.
+    story_styles: HashMap<&'a str, Vec<&'a str>>,
     stories: HashSet<&'a str>,
 }
 
@@ -212,6 +220,8 @@ impl<'a> Index<'a> {
             children: Vec::new(),
             layer_names: HashMap::new(),
             style_names: HashMap::new(),
+            text_style_names: HashMap::new(),
+            story_styles: HashMap::new(),
             stories: HashSet::new(),
         };
         let dm = &doc.designmap;
@@ -222,6 +232,7 @@ impl<'a> Index<'a> {
             labels: &dm.labels,
             layer: None,
             style: None,
+            story: None,
             page_number: None,
         });
 
@@ -241,6 +252,29 @@ impl<'a> Index<'a> {
         for def in doc.styles.object_styles.values() {
             ix.style_names
                 .insert(def.self_id.as_str(), def.name.as_deref());
+        }
+        for def in doc.styles.paragraph_styles.values() {
+            ix.text_style_names
+                .insert(def.self_id.as_str(), def.name.as_deref());
+        }
+        for def in doc.styles.character_styles.values() {
+            ix.text_style_names
+                .insert(def.self_id.as_str(), def.name.as_deref());
+        }
+        for parsed in &doc.stories {
+            let mut used: Vec<&str> = Vec::new();
+            for para in &parsed.story.paragraphs {
+                let runs = para
+                    .runs
+                    .iter()
+                    .filter_map(|r| r.character_style.as_deref());
+                for s in para.paragraph_style.as_deref().into_iter().chain(runs) {
+                    if !used.contains(&s) {
+                        used.push(s);
+                    }
+                }
+            }
+            ix.story_styles.insert(parsed.self_id.as_str(), used);
         }
 
         let mut page_number = 0u32;
@@ -265,6 +299,7 @@ impl<'a> Index<'a> {
                         labels: labels_of(spread, id),
                         layer: None,
                         style: None,
+                        story: None,
                         page_number: Some(page_number),
                     })
                 });
@@ -320,6 +355,7 @@ impl<'a> Index<'a> {
                 root,
                 None,
             );
+            ix.nodes[story].story = Some(parsed.self_id.as_str());
             let mut cursor = 0u32;
             for para in &parsed.story.paragraphs {
                 if let Some(table) = &para.table {
@@ -358,6 +394,9 @@ impl<'a> Index<'a> {
                         );
                     }
                     cursor += run.text.chars().count() as u32;
+                }
+                for frame in &para.anchored_frames {
+                    ix.walk_anchored(frame, story, 0);
                 }
             }
         }
@@ -435,6 +474,7 @@ impl<'a> Index<'a> {
             labels: NO_LABELS,
             layer: None,
             style: None,
+            story: None,
             page_number: None,
         })
     }
@@ -520,15 +560,24 @@ impl<'a> Index<'a> {
                 },
                 None => item,
             };
-            this = Some(self.push(Node {
-                addr,
-                parents,
-                name: spread.item_names.get(id).map(String::as_str),
-                labels: labels_of(spread, id),
-                layer: info.layer,
-                style: info.style,
-                page_number: None,
-            }));
+            this = Some(
+                self.push(Node {
+                    addr,
+                    parents,
+                    name: spread.item_names.get(id).map(String::as_str),
+                    labels: labels_of(spread, id),
+                    layer: info.layer,
+                    style: info.style,
+                    story: match fr {
+                        FrameRef::TextFrame(i) => spread
+                            .text_frames
+                            .get(i)
+                            .and_then(|f| f.parent_story.as_deref()),
+                        _ => None,
+                    },
+                    page_number: None,
+                }),
+            );
         }
         let mut kids: Vec<FrameRef> = Vec::new();
         if let FrameRef::Group(g) = fr {
@@ -553,6 +602,38 @@ impl<'a> Index<'a> {
                 seen,
                 depth + 1,
             );
+        }
+    }
+
+    /// A frame anchored in a story, under that story: a page item in
+    /// InDesign's model (a kind selector lists it, its address resolves),
+    /// but which page it lands on is a layout fact the containment tree
+    /// does not have. An anchored group's members nest under it.
+    fn walk_anchored(
+        &mut self,
+        frame: &'a paged_model::AnchoredFrame,
+        parent: usize,
+        depth: usize,
+    ) {
+        use paged_model::AnchoredFrameKind;
+        if depth > 64 {
+            return;
+        }
+        let Some(id) = frame.self_id.as_deref() else {
+            return;
+        };
+        let kind = match frame.frame_kind {
+            AnchoredFrameKind::TextFrame => AddressKind::TextFrame,
+            AnchoredFrameKind::Rectangle => AddressKind::Rectangle,
+            AnchoredFrameKind::Group => AddressKind::Group,
+        };
+        let Some(addr) = Address::page_item(kind, id) else {
+            return;
+        };
+        let node = self.simple(addr, parent, None);
+        self.nodes[node].style = frame.applied_object_style.as_deref();
+        for child in &frame.children {
+            self.walk_anchored(child, node, depth + 1);
         }
     }
 
@@ -625,14 +706,38 @@ impl<'a> Index<'a> {
                     .and_then(|l| self.layer_names.get(l).copied().flatten()),
                 v,
             ),
-            Filter::Style(op, v) => id_or_name(
-                *op,
+            Filter::Style(op, v) => self.style_matches(n, *op, v),
+            Filter::Nth(_) => true,
+        }
+    }
+
+    /// `[style…]`: the applied object style, and — on a text frame or a
+    /// story — every paragraph and character style the story applies, each
+    /// by `Self` id or name. `!=` holds when none of them is `v`.
+    fn style_matches(&self, n: &Node<'_>, op: Op, v: &str) -> bool {
+        let object = |op: Op| {
+            id_or_name(
+                op,
                 n.style,
                 n.style
                     .and_then(|s| self.style_names.get(s).copied().flatten()),
                 v,
-            ),
-            Filter::Nth(_) => true,
+            )
+        };
+        let text: &[&str] = n
+            .story
+            .and_then(|s| self.story_styles.get(s))
+            .map_or(&[], Vec::as_slice);
+        let in_text = |op: Op| {
+            text.iter().any(|s| {
+                let name = self.text_style_names.get(s).copied().flatten();
+                id_or_name(op, Some(s), name, v)
+            })
+        };
+        match op {
+            Op::Exists => n.style.is_some() || !text.is_empty(),
+            Op::Ne => !(object(Op::Eq) || in_text(Op::Eq)),
+            op => object(op) || in_text(op),
         }
     }
 
