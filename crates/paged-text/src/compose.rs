@@ -278,7 +278,9 @@ pub struct ComposeOptions<'a> {
     /// 20.0.1: `tools/indesign-export/fit-tolerance-probe.*`). `0`: lines
     /// fit their measure exactly. The minimum-raggedness breaker reads
     /// `overrun_size` instead, whose allowance follows each line's last
-    /// word (ADR 142).
+    /// word (ADR 142), and justified text in a plain frame is broken by
+    /// pricing its over-shrunk lines (ADR 144); this remains for justified
+    /// text in shaped and wrapped frames.
     pub fit_tolerance: i32,
     /// With `minimum_raggedness`, in a plain frame: the paragraph's size
     /// (pt). A line may then overrun its measure by the allowance InDesign
