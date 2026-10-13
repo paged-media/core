@@ -10624,8 +10624,8 @@ impl CanvasModel {
     /// layout cache, no emit caches, no grow hint) and compares it with the
     /// incremental `built`: page count, page ids, every page's
     /// [`paged_compose::DisplayList::digest`], every page's `story_layout`
-    /// (caret and hit-test geometry, which the digest does not cover) and
-    /// the diagnostics. `Err` names the first difference.
+    /// and `cell_rects` (caret and hit-test geometry, which the digest does
+    /// not cover) and the diagnostics. `Err` names the first difference.
     ///
     /// Two builds plus a digest per page: a CI / debug lane, never the hot
     /// path. Enabled per model with [`Self::set_digest_gate`] or for every
@@ -11877,6 +11877,14 @@ fn compare_builds(incremental: &BuiltDocument, cold: &BuiltDocument) -> Result<(
                 a.id.0,
                 a.story_layout.len(),
                 b.story_layout.len()
+            ));
+        }
+        if format!("{:?}", a.cell_rects) != format!("{:?}", b.cell_rects) {
+            return Err(format!(
+                "page {i} ({}) cell_rects differ ({} vs {} cells)",
+                a.id.0,
+                a.cell_rects.len(),
+                b.cell_rects.len()
             ));
         }
     }
