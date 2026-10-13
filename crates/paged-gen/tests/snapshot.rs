@@ -2477,6 +2477,7 @@ fn opentype_paragraph_styles_read_back() {
     assert_eq!(p(ot::HIST).otf.historical, Some(true));
     assert_eq!(p(ot::SUPERSCRIPT).position.as_deref(), Some("OTSuperscript"));
     assert_eq!(p(ot::FRACTION).otf.fraction, Some(true));
+}
 
 // ── A-08: the generator spells these elements as InDesign writes them ──
 //
