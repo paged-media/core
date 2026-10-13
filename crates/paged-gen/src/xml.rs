@@ -30,6 +30,11 @@ use quick_xml::events::{BytesCData, BytesDecl, BytesEnd, BytesStart, BytesText, 
 use quick_xml::Writer;
 use std::io::Cursor;
 
+/// `s` escaped for XML character data (`&`, `<`, `>`, quotes).
+pub fn escape_text(s: &str) -> String {
+    quick_xml::escape::escape(s).into_owned()
+}
+
 /// Round `v` to 4 decimals and drop trailing zeros / decimal point.
 /// `-0` collapses to `0` so two equivalent matrices format identically.
 pub fn format_f32(v: f32) -> String {
@@ -118,6 +123,13 @@ impl XmlBuilder {
         self.writer
             .write_event(Event::End(BytesEnd::new(name)))
             .expect("end");
+    }
+
+    /// Emit an already well-formed XML fragment verbatim.
+    pub fn raw(&mut self, xml: &str) {
+        self.writer
+            .write_event(Event::Text(BytesText::from_escaped(xml)))
+            .expect("raw");
     }
 
     /// Emit raw text content (escaped automatically).

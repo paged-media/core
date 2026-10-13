@@ -5306,33 +5306,16 @@ fn emit_paragraph_lines(
         emit_table_into_chain(em, table, pages, total_stats);
         return;
     }
-    // Phase 4 typography — nested character styles. If the paragraph
-    // style declares `<NestedStyle>` children, splice the runs at
-    // overlay boundaries and override the `character_style` field on
-    // each sliced fragment. The rest of the function then sees a run
-    // list whose applied character styles already reflect the nested
-    // overrides; no other code path needs to know about nested styles.
-    let paragraph_owned;
-    let paragraph: &paged_model::Paragraph = {
-        let nested = &em
-            .document
-            .resolved_paragraph_attrs(paragraph)
-            .nested_styles;
-        if nested.is_empty() {
-            paragraph
-        } else {
-            let paragraph_text: String = paragraph.runs.iter().map(|r| r.text.as_str()).collect();
-            let overlay = compute_nested_style_overlay(&paragraph_text, nested);
-            if overlay.is_empty() {
-                paragraph
-            } else {
-                paragraph_owned = paged_model::Paragraph {
-                    runs: split_runs_for_nested_styles(&paragraph.runs, &overlay),
-                    ..paragraph.clone()
-                };
-                &paragraph_owned
-            }
-        }
+    // Nested styles (and the style's drop cap they may name): layered
+    // into the runs once, on the whole paragraph, before it is split at
+    // its forced breaks — a segment carries what it was given, and a
+    // nested style never restarts at a forced line break.
+    let paragraph_nested;
+    let paragraph: &paged_model::Paragraph = if em.in_segments {
+        paragraph
+    } else {
+        paragraph_nested = with_nested_styles(em.document, paragraph);
+        &paragraph_nested
     };
     // IDML's paragraph mark `<Br/>` reads as `\n` inside run text, so
     // one style range can hold several paragraphs. The composer treats
@@ -5986,6 +5969,7 @@ fn emit_paragraph_lines(
                     resolved_runs[i].kerning_method.as_deref(),
                     &resolved_runs[i].otf,
                     resolved_runs[i].capitalization.as_deref(),
+                    resolved_runs[i].position.as_deref(),
                 ),
             }
         })
@@ -6015,6 +5999,7 @@ fn emit_paragraph_lines(
                     m.kerning_method.as_deref(),
                     &m.otf,
                     m.capitalization.as_deref(),
+                    m.position.as_deref(),
                 ),
             },
         );
@@ -6944,6 +6929,14 @@ fn emit_paragraph_lines(
         em.color_ctx,
         bullet_paint_override.map(|(len, _)| len).unwrap_or(0),
     );
+    // A drop cap's characters are shaped and drawn apart, and the body
+    // is laid out without them: its clusters start after the cap. The
+    // pickers count from the paragraph's first byte, so they move back
+    // by the cap's bytes — or a run starting right after the cap (a
+    // nested style's) paints one character late.
+    let cap_bytes = drop_cap_spec_emit.as_ref().map_or(0, |cap| cap.0 as u32);
+    let picker = picker.without_leading(cap_bytes);
+    let stroke_picker = stroke_picker.without_leading(cap_bytes);
     let any_text_stroke = stroke_picker.any_visible();
 
     let space_after_64 =

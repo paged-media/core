@@ -573,7 +573,7 @@ fn write_paragraph(b: &mut XmlBuilder, paragraph: &Paragraph, last: bool) {
             let tracking_str: String;
             let baseline_str: String;
             // An `AppliedCharacterStyle` in the escape hatch REPLACES the
-            // default, as `AppliedParagraphStyle` does for the paragraph.
+            // default, as on the paragraph.
             let mut r_attrs: Vec<(&str, &str)> = Vec::new();
             if !run
                 .extra_char_attrs

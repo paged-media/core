@@ -26,13 +26,22 @@ fn default_options_do_not_collect_glyph_runs() {
 
 #[test]
 fn position_metrics_super_sub_and_normal() {
-    // Superscript / numerator lift (positive offset); subscript /
-    // denominator drop (negative); both shrink to 58.3 %.
+    // Superscript lifts (positive offset), subscript drops (negative);
+    // both shrink to 58.3 %.
     assert_eq!(position_metrics(Some("Superscript")), (0.583, 0.333));
-    assert_eq!(position_metrics(Some("OTSuperscript")), (0.583, 0.333));
-    assert_eq!(position_metrics(Some("OTNumerator")), (0.583, 0.333));
     assert_eq!(position_metrics(Some("Subscript")), (0.583, -0.333));
-    assert_eq!(position_metrics(Some("OTDenominator")), (0.583, -0.333));
+    // The OpenType positions are glyph substitutions, never scaled or
+    // shifted (InDesign 20.0.1, `opentype` o02/o04/o05/o08: Inter's
+    // `two.sups` at full size on the baseline; Roboto, which has no
+    // `sups`, prints a plain "2").
+    for ot in [
+        "OTSuperscript",
+        "OTSubscript",
+        "OTNumerator",
+        "OTDenominator",
+    ] {
+        assert_eq!(position_metrics(Some(ot)), (1.0, 0.0), "{ot}");
+    }
     // Normal / absent / unknown ⇒ identity (no scale, no shift).
     assert_eq!(position_metrics(Some("Normal")), (1.0, 0.0));
     assert_eq!(position_metrics(None), (1.0, 0.0));
@@ -1621,7 +1630,11 @@ fn track_1a_oversized_jpeg_routes_through_streaming_decoder() {
 }
 
 // Track 1a: small JPEGs (longest edge ≤ cap) skip the streaming
-// ── Phase 4 typography — nested-style overlay walker ──────────
+// ── Nested styles — the overlay walker and the run layering ──────
+//
+// The `indesign_*` tests pin what InDesign 20.0.1 set, character by
+// character, for one nested style on the text shown (asked 2026-10-12
+// through its DOM; see `pipeline/nested_styles.rs`).
 
 fn ns(
     style: &str,
@@ -1637,61 +1650,28 @@ fn ns(
     }
 }
 
+/// The text each range covers, with its style, in order.
+fn overlay_slices<'t>(
+    text: &'t str,
+    list: &[paged_model::NestedStyle],
+    drop_cap: u32,
+) -> Vec<(&'t str, String)> {
+    compute_nested_style_overlay(text, list, drop_cap)
+        .into_iter()
+        .map(|a| (&text[a.byte_range], a.applied_character_style))
+        .collect()
+}
+
+/// What one nested style (style "R") covers of `text`.
+fn styled(text: &str, delim: paged_model::NestedDelimiter, rep: i32, inc: bool) -> &str {
+    let ov = compute_nested_style_overlay(text, &[ns("R", delim, rep, inc)], 0);
+    assert!(ov.len() <= 1);
+    ov.first().map_or("", |a| &text[a.byte_range.clone()])
+}
+
 #[test]
 fn nested_overlay_empty_when_no_entries() {
-    assert!(compute_nested_style_overlay("hello world", &[]).is_empty());
-}
-
-#[test]
-fn nested_overlay_characters_simple() {
-    let ov = compute_nested_style_overlay(
-        "abcdef",
-        &[ns(
-            "S/Bold",
-            paged_model::NestedDelimiter::Characters,
-            3,
-            true,
-        )],
-    );
-    assert_eq!(ov.len(), 1);
-    assert_eq!(ov[0].byte_range, 0..3);
-    assert_eq!(ov[0].applied_character_style, "S/Bold");
-}
-
-#[test]
-fn nested_overlay_words_inclusive_captures_trailing_space() {
-    // "the quick brown" — Words=1 inclusive should cover "the ".
-    let ov = compute_nested_style_overlay(
-        "the quick brown",
-        &[ns("S/Lead", paged_model::NestedDelimiter::Words, 1, true)],
-    );
-    assert_eq!(ov.len(), 1);
-    assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the ");
-}
-
-#[test]
-fn nested_overlay_words_exclusive_excludes_space() {
-    let ov = compute_nested_style_overlay(
-        "the quick brown",
-        &[ns("S/Lead", paged_model::NestedDelimiter::Words, 1, false)],
-    );
-    assert_eq!(ov.len(), 1);
-    assert_eq!(&"the quick brown"[ov[0].byte_range.clone()], "the");
-}
-
-#[test]
-fn nested_overlay_char_delimiter_until_colon() {
-    let ov = compute_nested_style_overlay(
-        "Heading: body copy",
-        &[ns(
-            "S/Bold",
-            paged_model::NestedDelimiter::Char(':'),
-            1,
-            true,
-        )],
-    );
-    assert_eq!(ov.len(), 1);
-    assert_eq!(&"Heading: body copy"[ov[0].byte_range.clone()], "Heading:");
+    assert!(compute_nested_style_overlay("hello world", &[], 0).is_empty());
 }
 
 #[test]
@@ -1704,6 +1684,7 @@ fn nested_overlay_chained_entries_consume_in_order() {
             ns("S/A", paged_model::NestedDelimiter::Characters, 3, true),
             ns("S/B", paged_model::NestedDelimiter::Characters, 5, true),
         ],
+        0,
     );
     assert_eq!(ov.len(), 2);
     assert_eq!(ov[0].byte_range, 0..3);
@@ -1714,6 +1695,7 @@ fn nested_overlay_chained_entries_consume_in_order() {
 
 #[test]
 fn nested_overlay_stops_at_end_of_text() {
+    // Repetition exceeds text length → range extends to end.
     let ov = compute_nested_style_overlay(
         "abc",
         &[ns(
@@ -1722,20 +1704,20 @@ fn nested_overlay_stops_at_end_of_text() {
             100,
             true,
         )],
+        0,
     );
-    // Repetition exceeds text length → range extends to end.
     assert_eq!(ov.len(), 1);
     assert_eq!(ov[0].byte_range, 0..3);
 }
 
 #[test]
 fn nested_overlay_skips_unknown_delimiter() {
+    // An unknown delimiter matches nothing: no range, no cursor advance.
     let ov = compute_nested_style_overlay(
         "hello",
         &[ns("S/X", paged_model::NestedDelimiter::Unknown, 1, true)],
+        0,
     );
-    // Unknown delimiter yields a zero-length match → no override
-    // emitted, no cursor advance.
     assert!(ov.is_empty());
 }
 
@@ -1744,8 +1726,271 @@ fn nested_overlay_zero_repetition_is_noop() {
     let ov = compute_nested_style_overlay(
         "hello world",
         &[ns("S/X", paged_model::NestedDelimiter::Words, 0, true)],
+        0,
     );
     assert!(ov.is_empty());
+}
+
+#[test]
+fn nested_overlay_digit_class() {
+    assert_eq!(
+        styled("a1b2c3d4", paged_model::NestedDelimiter::AnyDigit, 3, true),
+        "a1b2c3"
+    );
+}
+
+#[test]
+fn indesign_words_take_the_white_space_run_through_and_stop_up_to() {
+    use paged_model::NestedDelimiter::Words;
+    assert_eq!(
+        styled("Alpha, beta  gamma delta", Words, 1, true),
+        "Alpha, "
+    );
+    assert_eq!(
+        styled("Alpha, beta  gamma delta", Words, 1, false),
+        "Alpha,"
+    );
+    assert_eq!(
+        styled("Alpha  beta  gamma delta", Words, 2, true),
+        "Alpha  beta  "
+    );
+    assert_eq!(
+        styled("Alpha  beta  gamma delta", Words, 2, false),
+        "Alpha  beta"
+    );
+    // White space before the first word belongs to it.
+    assert_eq!(styled("  Lead space word", Words, 1, true), "  Lead ");
+    // A hyphen joins.
+    assert_eq!(
+        styled("Well-known x-ray tests", Words, 2, true),
+        "Well-known x-ray "
+    );
+}
+
+#[test]
+fn indesign_word_separators_are_white_space_but_the_no_break_spaces() {
+    use paged_model::NestedDelimiter::Words;
+    assert_eq!(styled("One\ttwo three", Words, 1, true), "One\t");
+    assert_eq!(styled("One\ttwo three", Words, 1, false), "One");
+    assert_eq!(
+        styled("One\u{2009}two three", Words, 1, true),
+        "One\u{2009}"
+    );
+    assert_eq!(
+        styled("One\u{2003}two three", Words, 1, true),
+        "One\u{2003}"
+    );
+    assert_eq!(
+        styled("One\u{2028}two three", Words, 1, true),
+        "One\u{2028}"
+    );
+    // A no-break space and an em dash join two words.
+    assert_eq!(
+        styled("One\u{a0}two three", Words, 1, true),
+        "One\u{a0}two "
+    );
+    assert_eq!(
+        styled("one\u{2014}two three", Words, 1, true),
+        "one\u{2014}two "
+    );
+}
+
+#[test]
+fn indesign_up_to_n_characters_stops_before_the_nth() {
+    use paged_model::NestedDelimiter::Characters;
+    assert_eq!(styled("Alpha beta", Characters, 3, true), "Alp");
+    assert_eq!(styled("Alpha beta", Characters, 3, false), "Al");
+    assert_eq!(styled("Alpha beta", Characters, 1, true), "A");
+    assert_eq!(styled("Alpha beta", Characters, 1, false), "");
+    // Spaces are characters.
+    assert_eq!(styled("a b c d e", Characters, 4, true), "a b ");
+}
+
+#[test]
+fn indesign_letters_digits_tabs_and_literal_characters() {
+    use paged_model::NestedDelimiter as D;
+    assert_eq!(styled("12ab cd", D::AnyLetter, 2, true), "12ab");
+    assert_eq!(styled("12ab cd", D::AnyLetter, 2, false), "12a");
+    assert_eq!(styled("12\u{e9}b cd", D::AnyLetter, 2, true), "12\u{e9}b");
+    assert_eq!(styled("a b c d", D::AnyLetter, 3, false), "a b ");
+    assert_eq!(styled("ab12 3", D::AnyDigit, 2, true), "ab12");
+    assert_eq!(styled("ab12 3", D::AnyDigit, 2, false), "ab1");
+    assert_eq!(styled("ab12 3", D::AnyDigit, 1, false), "ab");
+    assert_eq!(styled("a\tb\tc\td", D::Tab, 2, true), "a\tb\t");
+    assert_eq!(styled("a\tb\tc\td", D::Tab, 2, false), "a\tb");
+    assert_eq!(styled("\tlead tab", D::Tab, 1, false), "");
+    assert_eq!(styled("Key: value: more", D::Char(':'), 1, true), "Key:");
+    assert_eq!(styled("Key: value: more", D::Char(':'), 1, false), "Key");
+    assert_eq!(
+        styled("Key: value: more", D::Char(':'), 2, true),
+        "Key: value:"
+    );
+    assert_eq!(styled(":lead colon", D::Char(':'), 1, false), "");
+    // Several literal characters: any one of them ends a repetition.
+    assert_eq!(
+        styled("One, two. three", D::AnyOf(".,".into()), 1, true),
+        "One,"
+    );
+    assert_eq!(
+        styled("One, two. three", D::AnyOf(".,".into()), 2, true),
+        "One, two."
+    );
+    assert_eq!(
+        styled("aa\u{2003}bb\u{2003}cc", D::EmSpace, 1, true),
+        "aa\u{2003}"
+    );
+    assert_eq!(
+        styled("aa\u{2002}bb\u{2002}cc", D::EnSpace, 1, true),
+        "aa\u{2002}"
+    );
+    assert_eq!(
+        styled("aa\u{a0}bb\u{a0}cc", D::NonbreakingSpace, 1, true),
+        "aa\u{a0}"
+    );
+    assert_eq!(
+        styled("line one\u{2028}line two", D::ForcedLineBreak, 1, true),
+        "line one\u{2028}"
+    );
+    assert_eq!(
+        styled("line one\u{2028}line two", D::ForcedLineBreak, 1, false),
+        "line one"
+    );
+    // End Nested Style Here is styled with the range either way.
+    assert_eq!(
+        styled("Styled\u{3}rest of it", D::EndNestedStyle, 1, true),
+        "Styled\u{3}"
+    );
+    assert_eq!(
+        styled("Styled\u{3}rest of it", D::EndNestedStyle, 1, false),
+        "Styled\u{3}"
+    );
+}
+
+#[test]
+fn indesign_a_sentence_ends_at_punctuation_followed_by_white_space() {
+    use paged_model::NestedDelimiter::Sentences;
+    assert_eq!(
+        styled("One two. Three four.", Sentences, 1, true),
+        "One two. "
+    );
+    // Up to keeps the full stop.
+    assert_eq!(
+        styled("One two. Three four.", Sentences, 1, false),
+        "One two."
+    );
+    assert_eq!(styled("Wow! Next? Yes.", Sentences, 2, true), "Wow! Next? ");
+    assert_eq!(
+        styled("Dr. Who said 3.5 is fine. Next.", Sentences, 1, true),
+        "Dr. "
+    );
+    // A full stop before a digit or a letter ends nothing.
+    assert_eq!(
+        styled("Pi is 3.14 ok. Next.", Sentences, 1, true),
+        "Pi is 3.14 ok. "
+    );
+    assert_eq!(
+        styled("Pi is 3.14 ok. Next.", Sentences, 1, false),
+        "Pi is 3.14 ok."
+    );
+    assert_eq!(
+        styled("Ends with dot.Next word. Last", Sentences, 1, true),
+        "Ends with dot.Next word. "
+    );
+    // Closing quotes stay with their sentence.
+    assert_eq!(
+        styled(
+            "He said \u{201c}stop.\u{201d} Next one.",
+            Sentences,
+            1,
+            true
+        ),
+        "He said \u{201c}stop.\u{201d} "
+    );
+    assert_eq!(
+        styled(
+            "He said \u{201c}stop.\u{201d} Next one.",
+            Sentences,
+            1,
+            false
+        ),
+        "He said \u{201c}stop.\u{201d}"
+    );
+    assert_eq!(
+        styled("Wait... more. Done.", Sentences, 1, true),
+        "Wait... "
+    );
+    assert_eq!(styled("One.  Two.", Sentences, 1, true), "One.  ");
+    assert_eq!(styled("No end here", Sentences, 1, true), "No end here");
+}
+
+#[test]
+fn indesign_repeat_loops_the_entries_before_it() {
+    use paged_model::NestedDelimiter::{Repeat, Words};
+    let text = "one two three four five six";
+    let two = overlay_slices(
+        text,
+        &[
+            ns("R", Words, 1, true),
+            ns("B", Words, 1, true),
+            ns("-", Repeat, 2, true),
+        ],
+        0,
+    );
+    let got: Vec<(&str, &str)> = two.iter().map(|(t, s)| (*t, s.as_str())).collect();
+    assert_eq!(
+        got,
+        [
+            ("one ", "R"),
+            ("two ", "B"),
+            ("three ", "R"),
+            ("four ", "B"),
+            ("five ", "R"),
+            ("six", "B")
+        ]
+    );
+    // Repeat 1 loops only the last entry: every word after the first.
+    let one = overlay_slices(
+        text,
+        &[
+            ns("R", Words, 1, true),
+            ns("B", Words, 1, true),
+            ns("-", Repeat, 1, true),
+        ],
+        0,
+    );
+    assert_eq!(one[0], ("one ", "R".to_string()));
+    assert!(one[1..].iter().all(|(_, s)| s == "B"));
+    assert_eq!(one.last().unwrap().0, "six");
+}
+
+#[test]
+fn indesign_a_delimiter_that_never_comes_ends_the_list() {
+    use paged_model::NestedDelimiter::{Char, Words};
+    let got = overlay_slices(
+        "No colon here at all",
+        &[ns("R", Char(':'), 1, true), ns("B", Words, 1, true)],
+        0,
+    );
+    assert_eq!(got, [("No colon here at all", "R".to_string())]);
+}
+
+#[test]
+fn indesign_dropcap_covers_the_cap_and_the_next_style_follows_it() {
+    use paged_model::NestedDelimiter::{Characters, Dropcap};
+    let got = overlay_slices(
+        "DropStyled characters here",
+        &[ns("M", Dropcap, 1, true), ns("R", Characters, 3, true)],
+        2,
+    );
+    assert_eq!(got, [("Dr", "M".to_string()), ("opS", "R".to_string())]);
+    // Without a Dropcap entry the first style counts from the first
+    // character, the cap included.
+    let got = overlay_slices(
+        "DropTwo characters here",
+        &[ns("R", Characters, 3, true)],
+        2,
+    );
+    assert_eq!(got, [("Dro", "R".to_string())]);
 }
 
 fn mk_run(text: &str, style: Option<&str>) -> paged_model::CharacterRun {
@@ -1777,11 +2022,11 @@ fn split_runs_overlay_inside_single_run_splits_into_three() {
     let out = split_runs_for_nested_styles(&runs, &overlay);
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].text, "the ");
-    assert_eq!(out[0].character_style, None);
+    assert_eq!(out[0].nested_character_style, None);
     assert_eq!(out[1].text, "quick");
-    assert_eq!(out[1].character_style.as_deref(), Some("S/Bold"));
+    assert_eq!(out[1].nested_character_style.as_deref(), Some("S/Bold"));
     assert_eq!(out[2].text, " brown");
-    assert_eq!(out[2].character_style, None);
+    assert_eq!(out[2].nested_character_style, None);
 }
 
 #[test]
@@ -1795,13 +2040,18 @@ fn split_runs_overlay_at_run_start_no_pre_fragment() {
     let out = split_runs_for_nested_styles(&runs, &overlay);
     assert_eq!(out.len(), 2);
     assert_eq!(out[0].text, "Heading");
-    assert_eq!(out[0].character_style.as_deref(), Some("S/H"));
+    assert_eq!(out[0].nested_character_style.as_deref(), Some("S/H"));
     assert_eq!(out[1].text, " text");
-    assert_eq!(out[1].character_style, None);
+    assert_eq!(out[1].nested_character_style, None);
 }
 
+/// A nested style is layered UNDER a character style applied by hand:
+/// the run keeps its own style, and carries the nested one beside it
+/// (InDesign 20.0.1: a hand-applied underline-only style inside a nested
+/// 20 pt red range printed 20 pt red AND underlined; a hand-applied
+/// blue-only style printed blue at 20 pt).
 #[test]
-fn split_runs_overlay_spanning_two_runs_splits_both() {
+fn split_runs_layer_the_nested_style_under_a_hand_applied_one() {
     // Runs: "abc" + "defgh" (paragraph bytes 0..8). Overlay [2..6) =
     // "cdef" — covers tail of run0 and head of run1.
     let runs = vec![mk_run("abc", None), mk_run("defgh", Some("S/Base"))];
@@ -1810,17 +2060,25 @@ fn split_runs_overlay_spanning_two_runs_splits_both() {
         applied_character_style: "S/Lead".into(),
     }];
     let out = split_runs_for_nested_styles(&runs, &overlay);
-    // Expected fragments: "ab" (no override), "c" (S/Lead from
-    // run0), "def" (S/Lead from run1), "gh" (S/Base from run1).
-    assert_eq!(out.len(), 4);
-    assert_eq!(out[0].text, "ab");
-    assert_eq!(out[0].character_style, None);
-    assert_eq!(out[1].text, "c");
-    assert_eq!(out[1].character_style.as_deref(), Some("S/Lead"));
-    assert_eq!(out[2].text, "def");
-    assert_eq!(out[2].character_style.as_deref(), Some("S/Lead"));
-    assert_eq!(out[3].text, "gh");
-    assert_eq!(out[3].character_style.as_deref(), Some("S/Base"));
+    let got: Vec<(&str, Option<&str>, Option<&str>)> = out
+        .iter()
+        .map(|r| {
+            (
+                r.text.as_str(),
+                r.character_style.as_deref(),
+                r.nested_character_style.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("ab", None, None),
+            ("c", None, Some("S/Lead")),
+            ("def", Some("S/Base"), Some("S/Lead")),
+            ("gh", Some("S/Base"), None),
+        ]
+    );
 }
 
 // ── Phase 5 — conditional text filter ─────────────────────────
@@ -1941,17 +2199,6 @@ fn multiple_conditions_any_visible_keeps() {
     for word in ["CHARLIE", "FOXTROT", "INDIA", "KILO", "MIKE", "NOVEMBER"] {
         assert!(!text.contains(word), "{word} must not print; got {text:?}");
     }
-}
-
-#[test]
-fn nested_overlay_digit_class() {
-    // First 3 digits in mixed text.
-    let ov = compute_nested_style_overlay(
-        "a1b2c3d4",
-        &[ns("S/Num", paged_model::NestedDelimiter::AnyDigit, 3, true)],
-    );
-    assert_eq!(ov.len(), 1);
-    assert_eq!(&"a1b2c3d4"[ov[0].byte_range.clone()], "a1b2c3");
 }
 
 // ── Phase 5 renderer — index paragraph builder ────────────────

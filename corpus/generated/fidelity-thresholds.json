@@ -604,6 +604,24 @@
       "max_p99_de": 85.6,
       "min_ssim": 0.9442,
       "rationale": "Gated 2026-10-13 from its first InDesign measurement (R-04, KerningMethod with and without $ID/, from run, paragraph style and character style, tracking 0/+50/-25). Worst page mean 1.586 / p99 71.3 / SSIM 0.9492; the residue is the Optical rows, which fall back to metrics kerning until optical kerning lands (R-40, calibration set kerning.optical-advances.json). Sized at worst x 1.20 / worst - 0.005; tighten when R-40 lands."
+    },
+    {
+      "name": "nested-styles",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.237,
+      "max_p99_de": 5.92,
+      "min_ssim": 0.9901,
+      "rationale": "Added 2026-10-12 (ADR 134, A-11): nested styles in InDesign's spelling (<Properties><AllNestedStyles>), asked of InDesign 20.0.1. Twenty frames: a tab, word, character, literal-character and sentence delimiter, each through and up to; a chain of three; a Repeat loop; a drop cap whose character style is the first nested style (Dropcap) and a style drop cap with none; a 15 pt red nested range with an underline style applied by hand inside it; a style that inherits its parent's list and one that cleared it (EmptyNestedStyles); a range's own list. origin/main's engine read no <AllNestedStyles> list and drew every paragraph in its body style: mean 0.566 / p99 24.615 / SSIM 0.9854. With the lists read, the ranges set by InDesign's rules, the nested style layered under the hand-applied one and the drop cap's paint following the cap: 0.197 / 4.933 / 0.9951; sized at worst x 1.20 and SSIM - 0.005. The frames carry no stroke on purpose (a hairline rasterises differently in the reference). The residue is glyph anti-aliasing."
+    },
+    {
+      "name": "opentype",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.16,
+      "max_p99_de": 5.0,
+      "min_ssim": 0.9932,
+      "rationale": "Added 2026-10-12 (ADR 134, R-21 + A-10): OpenType positions and features on runs and on paragraph styles, asked of InDesign 20.0.1 in Inter, EB Garamond and Roboto (pdffonts: all embedded, none substituted). The reference's glyph ids say what InDesign applied: OTSuperscript/OTSubscript/OTNumerator/OTDenominator are sups/subs/numr/dnom at full size on the baseline (subs, not EB Garamond's distinct sinf), Roboto (no sups) prints a plain 2; OTFStylisticAlternate is salt, OTFHistorical hist, OTFSwash swsh; All Caps sets case and cpsp (2.18 pt wider in Inter), typed capitals neither; a paragraph style's Ligatures=false, OTFFigureStyle, OTFStylisticAlternate, OTFHistorical, Position and OTFFraction reach its runs. origin/main's engine scaled and raised the OT positions and read none of the paragraph-style attributes: mean 0.744 / p99 21.105 / SSIM 0.9689. After: 0.133 / 4.168 / 0.9982; sized at worst x 1.20 and SSIM - 0.005. Frames unstroked, as in nested-styles."
     }
 ]
 }

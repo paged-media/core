@@ -51,7 +51,9 @@ pub mod masters;
 pub mod mixed_leading;
 pub mod navigation;
 pub mod nested_groups;
+pub mod nested_styles;
 pub mod numbering;
+pub mod opentype;
 pub mod paste_into;
 pub mod preflight;
 pub mod rect_shadows;
@@ -162,6 +164,8 @@ pub const SAMPLES: &[&str] = &[
     "table-cell-baseline",
     "justification",
     "kerning",
+    "nested-styles",
+    "opentype",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -234,6 +238,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "table-cell-baseline" => table_cell_baseline::build(),
         "justification" => justification::build(),
         "kerning" => kerning::build(),
+        "nested-styles" => nested_styles::build(),
+        "opentype" => opentype::build(),
         _ => return None,
     })
 }
@@ -262,7 +268,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            67,
+            69,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
