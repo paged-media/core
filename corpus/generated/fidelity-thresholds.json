@@ -83,6 +83,7 @@
     },
     {
       "name": "effects",
+      "text_gate": true,
       "max_pages_with_pdf": 12,
       "max_mean_de": 0.15,
       "max_p99_de": 1.0,
@@ -136,6 +137,7 @@
     },
     {
       "name": "images",
+      "text_gate": true,
       "max_pages_with_pdf": 5,
       "max_mean_de": 0.13,
       "max_p99_de": 0.5,
@@ -294,6 +296,7 @@
     },
     {
       "name": "strokes-fills",
+      "text_gate": true,
       "max_pages_with_pdf": 25,
       "max_mean_de": 0.713,
       "max_p99_de": 2.5,
