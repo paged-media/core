@@ -104,3 +104,22 @@ the scenario reported STALE; record it again with the change that moved it.
 - `ExportFormat.PDF_TYPE` corresponds to the print PDF path. For
   interactive samples (Phase 4+, if interactive PDF lands in scope)
   swap to `ExportFormat.INTERACTIVE_PDF` and a different preset.
+
+## Probes
+
+Besides the export pass, each `*-probe.sh` asks InDesign one question and
+pins the answer (a `*-probe.json` beside it where the answer is data). They
+take the InDesign GUI for a few seconds and share the lock
+`/tmp/paged-indesign.lock` with other sessions.
+
+- `cells-probe`, `conditions-probe`, `inline-objects-probe`,
+  `nested-styles-probe`, `object-integrity-probe`, `reflow-probe`: open a
+  generated fixture and read back what InDesign made of it.
+- `spelling-and-spacing-probe`: builds its own sample through InDesign's
+  scripting, so nothing Paged wrote stands between question and answer, and
+  reports the attribute spellings InDesign exports (`DropcapDetail`,
+  `RubyFlag="1"`, `CapToSmallCap`, `TextAlignment` / `PathAlignment` on a
+  `<TextPath>`), letter spacing as a share of the space width, tracking and
+  letter spacing left off a line's last character, superscript and
+  subscript shifts, paragraph-rule offsets, and where type on a path sits
+  for each text and path alignment (measured from InDesign's PDF).

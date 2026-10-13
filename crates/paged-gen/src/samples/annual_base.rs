@@ -1463,7 +1463,8 @@ fn write_vertical_exhibit_story(
         &[
             ("AppliedCharacterStyle", NO_CHAR_STYLE),
             ("PointSize", "13"),
-            ("Ruby", "true"),
+            // InDesign writes the ruby flag as `RubyFlag="1"`.
+            ("RubyFlag", "1"),
             ("RubyString", ruby),
             ("RubyType", "GroupRuby"),
         ],

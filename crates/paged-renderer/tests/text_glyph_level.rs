@@ -2664,3 +2664,138 @@ fn cycle4_q07_negative_tracking_tightens_emitted_glyph_advances() {
         "Tracking=-100 should tighten the 4-A span vs Tracking=0; observed base_span={base_span}, tightened_span={tightened_span}"
     );
 }
+
+// ─────────────── Letter spacing and a line's last character ───────────────
+//
+// InDesign 20.0.1, measured: `DesiredLetterSpacing` is a percentage of the
+// space width added between characters (50 at 20 pt Open Sans: +2.598 pt,
+// half its 5.195 pt space), and neither letter spacing nor tracking is
+// added after a line's last character — right-aligned lines at +50 letter
+// spacing and at +100 tracking end exactly on the measure. Real documents
+// carry letter spacing on paragraph styles, so the tests do too.
+
+fn build_spacing_idml(
+    style_attrs: &str,
+    para_attrs: &str,
+    char_attrs: &str,
+    text: &str,
+) -> Vec<u8> {
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <RootParagraphStyleGroup>
+    <ParagraphStyle Self="ParagraphStyle/Spaced" Name="Spaced" {style_attrs}/>
+  </RootParagraphStyleGroup>
+</idPkg:Styles>"#
+    );
+    let spread = br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Spread Self="sp1">
+    <Page Self="p1" GeometricBounds="0 0 200 612"/>
+    <TextFrame Self="frameA" ParentStory="u10" GeometricBounds="40 40 160 572" StrokeWeight="0"/>
+  </Spread>
+</idPkg:Spread>"#;
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+  <Story Self="u10">
+    <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Spaced" {para_attrs}>
+      <CharacterStyleRange AppliedFont="Inter" PointSize="36" {char_attrs}>
+        <Content>{text}</Content>
+      </CharacterStyleRange>
+    </ParagraphStyleRange>
+  </Story>
+</idPkg:Story>"#
+    );
+    write_zip(|zip| {
+        put(zip, "designmap.xml", DESIGNMAP_STYLED);
+        put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
+        put(zip, "Resources/Styles.xml", styles.as_bytes());
+        put(zip, "Spreads/Spread_sp1.xml", spread);
+        put(zip, "Stories/Story_u10.xml", story.as_bytes());
+    })
+}
+
+fn spacing_glyphs(
+    style_attrs: &str,
+    para_attrs: &str,
+    char_attrs: &str,
+    text: &str,
+) -> Vec<(f32, f32, f32)> {
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let doc = idml_import::import_idml_doc(&build_spacing_idml(
+        style_attrs,
+        para_attrs,
+        char_attrs,
+        text,
+    ))
+    .unwrap();
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    glyph_xys(&built.pages[0].list.commands)
+}
+
+#[test]
+fn desired_letter_spacing_is_a_share_of_the_space_width() {
+    // The space's width, as the renderer sets it: the gap "H H" opens over
+    // "HH" (H, unlike A, does not kern against a space in Inter).
+    let pair = spacing_glyphs("", "", "", "HH");
+    let spaced = spacing_glyphs("", "", "", "H H");
+    let space = (spaced[1].0 - spaced[0].0) - (pair[1].0 - pair[0].0);
+    assert!(
+        space > 5.0,
+        "a 36 pt space is several points wide, got {space}"
+    );
+
+    let plain = spacing_glyphs(r#"DesiredLetterSpacing="0""#, "", "", "AAAA");
+    let half = spacing_glyphs(r#"DesiredLetterSpacing="50""#, "", "", "AAAA");
+    assert_eq!(plain.len(), 4);
+    assert_eq!(half.len(), 4);
+    let per_gap = ((half[3].0 - half[0].0) - (plain[3].0 - plain[0].0)) / 3.0;
+    assert!(
+        (per_gap - space / 2.0).abs() < 0.05,
+        "DesiredLetterSpacing=50 adds half a space ({}) between characters, got {per_gap}",
+        space / 2.0
+    );
+}
+
+#[test]
+fn a_right_aligned_lines_last_character_carries_no_spacing() {
+    // The last glyph of a right-aligned line sits where it would with no
+    // tracking or letter spacing at all: only the glyphs before it move.
+    let right = r#"Justification="RightAlign""#;
+    let glyphs = |style: &str, chr: &str| spacing_glyphs(style, right, chr, "AAAA");
+    let plain = glyphs("", "");
+    let tracked = glyphs("", r#"Tracking="200""#);
+    let lettered = glyphs(r#"DesiredLetterSpacing="50""#, "");
+    let last = |g: &[(f32, f32, f32)]| g.last().unwrap().0;
+    assert!(
+        (last(&tracked) - last(&plain)).abs() < 0.05,
+        "tracking moved the last glyph: {} → {}",
+        last(&plain),
+        last(&tracked)
+    );
+    assert!(
+        (last(&lettered) - last(&plain)).abs() < 0.05,
+        "letter spacing moved the last glyph: {} → {}",
+        last(&plain),
+        last(&lettered)
+    );
+    // The glyphs before it did spread: three gaps of 7.2 pt at Tracking=200.
+    assert!(
+        tracked[0].0 < plain[0].0 - 15.0,
+        "tracking spread the line: {} vs {}",
+        tracked[0].0,
+        plain[0].0
+    );
+    assert!(
+        lettered[0].0 < plain[0].0 - 10.0,
+        "letter spacing spread the line: {} vs {}",
+        lettered[0].0,
+        plain[0].0
+    );
+}

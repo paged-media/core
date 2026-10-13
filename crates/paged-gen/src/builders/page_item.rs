@@ -319,9 +319,11 @@ impl ClipPathSpec {
 pub struct TextPathChild {
     pub self_id: String,
     pub parent_story: String,
-    /// `PathTypeAlignment` — `BaselinePathType` (default),
-    /// `CenterPathType`, `AscenderPathType`, `DescenderPathType`.
-    pub path_type_alignment: Option<&'static str>,
+    /// `TextAlignment`, as InDesign 20.0.1 writes it: which part of the
+    /// type sits on the path — `BaselineTextAlignment` (the default),
+    /// `CenterTextAlignment`, `AscenderTextAlignment`,
+    /// `DescenderTextAlignment`.
+    pub text_alignment: Option<&'static str>,
     /// `PathEffect` — `RainbowPathEffect` (default) etc.
     pub path_effect: Option<&'static str>,
     /// `StartBracket` / `EndBracket` — arc-length window for the text.
@@ -335,8 +337,8 @@ impl TextPathChild {
             ("Self", self.self_id.clone()),
             ("ParentStory", self.parent_story.clone()),
         ];
-        if let Some(a) = self.path_type_alignment {
-            attrs.push(("PathTypeAlignment", a.to_string()));
+        if let Some(a) = self.text_alignment {
+            attrs.push(("TextAlignment", a.to_string()));
         }
         if let Some(e) = self.path_effect {
             attrs.push(("PathEffect", e.to_string()));

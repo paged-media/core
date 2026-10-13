@@ -672,7 +672,9 @@ pub const FITTING: &[&str] = &[
     "FrameToContent",
 ];
 pub const DROP_SHADOW_MODES: &[&str] = &["None", "Drop"];
-pub const CASES: &[&str] = &["Normal", "AllCaps", "SmallCaps", "OTSmallCaps"];
+/// `Capitalization` as InDesign writes it: `CapToSmallCap` is "all small
+/// caps" (capitals too), the corpus's only spelling of it.
+pub const CASES: &[&str] = &["Normal", "AllCaps", "SmallCaps", "CapToSmallCap"];
 pub const POSITIONS: &[&str] = &[
     "Normal",
     "Superscript",

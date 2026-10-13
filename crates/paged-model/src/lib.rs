@@ -856,11 +856,13 @@ pub struct Page {
     /// auto-page-number markers; if absent, it falls back to the
     /// 1-based body page index.
     pub name: Option<String>,
-    /// `ShowMasterItems` attribute on the `<Page>` element. When
-    /// `Some(false)` the page hides **all** master-spread overlay
-    /// items (InDesign's "Hide Master Items" per-page toggle); the
-    /// renderer skips stamping master frames/lines/text onto it.
-    /// `None`/`Some(true)` ⇒ stamp as usual.
+    /// Whether master items show on this page. InDesign decides it per
+    /// SPREAD (`<Spread ShowMasterItems>`), which the importer copies
+    /// onto each of the spread's pages; a `ShowMasterItems` written on
+    /// the `<Page>` itself is read first, though InDesign ignores it
+    /// there. When `Some(false)` the renderer skips stamping master
+    /// frames/lines/text onto the page; `None`/`Some(true)` ⇒ stamp as
+    /// usual.
     pub show_master_items: Option<bool>,
 }
 
@@ -2400,17 +2402,17 @@ pub struct TextPath {
     /// Story reference (e.g. `u3ae`). Same shape as
     /// `TextFrame::parent_story`.
     pub parent_story: String,
-    /// `PathAlignment` — a non-standard knob the early foundation read;
-    /// kept for back-compat. Real InDesign IDML uses `PathTypeAlignment`
-    /// (below) for the glyph's vertical seat on the path. The current
-    /// renderer ignores this field; prefer `path_type_alignment`.
+    /// `PathAlignment` — which edge of the host's stroke the text rides:
+    /// `CenterPathAlignment` (the default), `TopPathAlignment` or
+    /// `BottomPathAlignment`, half the stroke weight off the path
+    /// (InDesign 20.0.1). Honoured by `emit_text_path_into`.
     pub path_alignment: Option<String>,
-    /// `PathTypeAlignment` — IDML's vertical alignment of each glyph to
-    /// the path: `BaselinePathType` (default — glyph baseline rides the
-    /// path), `CenterPathType` (glyph em-box centre on the path),
-    /// `AscenderPathType` (glyph top on the path), `DescenderPathType`
-    /// (glyph bottom on the path). The renderer honours Baseline /
-    /// Center; Ascender / Descender land too but are exercised less.
+    /// The glyph's vertical seat on the path: InDesign's `TextAlignment`
+    /// (`BaselineTextAlignment`, the default; `CenterTextAlignment`,
+    /// `AscenderTextAlignment`, `DescenderTextAlignment`), or the
+    /// `PathTypeAlignment` spelling (`…PathType`) older Paged builds
+    /// wrote, which the importer reads when `TextAlignment` is absent.
+    /// Ascender / Descender / Center seat on the font's bounding box.
     pub path_type_alignment: Option<String>,
     /// `PathEffect` — `RainbowPathEffect` (default; glyph rotated to the
     /// local tangent), `SkewPathEffect`, `Path3DRibbonEffect`,
@@ -2425,8 +2427,9 @@ pub struct TextPath {
     /// which the text flows, in path-local arc-length units.
     ///
     /// **Honoured by the renderer.** `emit_text_path_into` clamps both
-    /// to the tessellated length, centres the run inside the window
-    /// when it fits, and drops (plus reports as `OversetTextDropped`)
+    /// to the tessellated length, places the run inside the window as
+    /// its first paragraph's justification says (left by default) when
+    /// it fits, and drops (plus reports as `OversetTextDropped`)
     /// glyphs whose origin lands past `EndBracket`. This doc used to
     /// say "captured for future fidelity; the current renderer flows
     /// from t=0" — that stopped being true when the bracket window
@@ -4637,13 +4640,17 @@ pub struct ParagraphStyleDef {
     /// `MaximumWordSpacing` percentage (`133` = 133% of normal).
     /// Drives the composer's stretch ratio.
     pub maximum_word_spacing: Option<f32>,
-    /// Q-20: `MinimumLetterSpacing` pt (additive, signed). Allows
-    /// the composer to tighten inter-glyph advance up to this much
-    /// when justifying lines.
+    /// Q-20: `MinimumLetterSpacing`, a percentage of the space width
+    /// (signed): the least space justified text may set between
+    /// characters. Ragged text ignores it (InDesign 20.0.1).
     pub minimum_letter_spacing: Option<f32>,
-    /// Q-20: `DesiredLetterSpacing` pt (default 0 = none).
+    /// Q-20: `DesiredLetterSpacing`, a percentage of the space width
+    /// added between characters, ragged or justified, after every
+    /// character of a line but the last (default 0 = none).
     pub desired_letter_spacing: Option<f32>,
-    /// Q-20: `MaximumLetterSpacing` pt (additive, signed).
+    /// Q-20: `MaximumLetterSpacing`, a percentage of the space width
+    /// (signed): the most space justified text may set between
+    /// characters. Ragged text ignores it.
     pub maximum_letter_spacing: Option<f32>,
     /// Q-20: `MinimumGlyphScaling` percent (default 100 = identity).
     /// Allows per-glyph x-advance scaling for justification.

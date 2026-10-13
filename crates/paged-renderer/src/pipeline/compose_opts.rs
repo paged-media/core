@@ -129,17 +129,18 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     if resolved.maximum_word_spacing.is_none() {
         lopts.compose.stretch_ratio = lopts.compose.stretch_ratio.max(0.1);
     }
-    // Q-20: fold letter-spacing budget into the per-word stretch /
-    // shrink budget so the breaker can lean on inter-glyph space when
-    // word-space alone can't justify a line. IDML's
-    // `Min/Desired/Max LetterSpacing` is in pt and applies *between
-    // glyphs*; we approximate by adding `letter_delta_pt * avg_chars_per_word`
-    // into the existing space stretch / shrink ratios. Default values
-    // (0 pt) are a no-op. Real per-glyph distribution after the
-    // breaker picks breaks is queued.
+    // Q-20: `Min/Desired/MaxLetterSpacing` are percentages of the space
+    // width, between characters (InDesign 20.0.1: 50 adds half the font's
+    // space after every character of a line but the last; Min and Max
+    // change nothing in ragged text). Desired is set as real spacing by
+    // `layout_runs`; the Min..Max band is folded into the per-word stretch
+    // / shrink budget below, so the breaker can lean on inter-glyph space
+    // when word space alone can't justify a line. Real per-glyph
+    // distribution after the breaker picks breaks is queued.
     let ls_min = resolved.minimum_letter_spacing.unwrap_or(0.0);
     let ls_desired = resolved.desired_letter_spacing.unwrap_or(0.0);
     let ls_max = resolved.maximum_letter_spacing.unwrap_or(0.0);
+    lopts.compose.letter_spacing_pct = ls_desired;
     // The Single-line Composer (`Composer="HL Single"`) sets one line at
     // a time (paged-text `single_line.rs`). It carries the letter-spacing
     // band itself, per character, so the approximation below — which
@@ -169,25 +170,16 @@ pub(super) fn apply_paragraph_compose_options<'a>(
                 .max(0.0),
         });
     }
-    if !single_line && (ls_min != 0.0 || ls_desired != 0.0 || ls_max != 0.0) {
-        // Cycle-6 Track 3: bounded mapping from LS budget (pt) to
-        // stretch_add / shrink_add. The cycle-5 formula
-        // `(ls_max - ls_desired) * AVG_CHARS_PER_WORD / space_width`
-        // saturated `.min(2.0)` on typical IDML LS values (e.g.
-        // newspaper's body MaximumLetterSpacing=25 ⇒ stretch_add ≈ 78
-        // clamped to 2.0), making any AVG_CHARS_PER_WORD-style tweak
-        // invisible to the harness. The new mapping caps the
-        // contribution at 0.5 / 0.25 (half of the legacy ceiling) so
-        // the breaker has letter-spacing budget without overwhelming
-        // word-spacing budget. `LS_BUDGET_PT_FOR_FULL_STRETCH = 24.0`
-        // calibrates from the InDesign default 25pt-vs-0 spread
-        // mapping to ~full contribution; smaller spreads fall below
-        // proportionally and remain unsaturated.
-        const LS_BUDGET_PT_FOR_FULL_STRETCH: f32 = 12.0;
-        let stretch_budget = (ls_max - ls_desired).max(0.0);
-        let shrink_budget = (ls_desired - ls_min).max(0.0);
-        let stretch_add = (stretch_budget / LS_BUDGET_PT_FOR_FULL_STRETCH).clamp(0.0, 0.5);
-        let shrink_add = (shrink_budget / LS_BUDGET_PT_FOR_FULL_STRETCH).clamp(0.0, 0.25);
+    if !single_line && (ls_min != 0.0 || ls_max != ls_desired) {
+        // The band, read as a word space's worth: each of a word's
+        // letters may take (Max - Desired) % of a space more, so a word
+        // gap gains that much times the letters per word. Capped so the
+        // letter band never outweighs the word-space band (the cycle-6
+        // calibration: InDesign's common -5 / 25 band lands on both caps,
+        // as it did when these values were misread as points).
+        const LETTERS_PER_WORD: f32 = 5.0;
+        let stretch_add = ((ls_max - ls_desired).max(0.0) / 100.0 * LETTERS_PER_WORD).min(0.5);
+        let shrink_add = ((ls_desired - ls_min).max(0.0) / 100.0 * LETTERS_PER_WORD).min(0.25);
         lopts.compose.stretch_ratio = (lopts.compose.stretch_ratio + stretch_add).min(2.0);
         lopts.compose.shrink_ratio = (lopts.compose.shrink_ratio + shrink_add).min(0.5);
     }
