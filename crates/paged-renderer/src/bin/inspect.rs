@@ -223,8 +223,11 @@ struct Args {
     /// laid-out line to this file (JSONL). Each record carries
     /// `story_id`, `paragraph_idx`, `line_idx`, `page_idx`,
     /// `frame_idx`, `first_byte`, `last_byte`, `baseline_y_pt`,
-    /// `width_pt`. The reference side (`corpus/envato/breaks-extract.py`)
-    /// reconstructs the same shape from PDF word geometry.
+    /// `width_pt`, `source_text`; `generated` when the line prints what its
+    /// story does not hold (a list marker, a tab leader, a page number), and
+    /// `text_path` on the one line of type on a path. The reference side
+    /// (`corpus/envato/breaks-extract.py`) reconstructs the same shape from
+    /// PDF word geometry.
     #[arg(long, value_name = "PATH")]
     emit_breaks: Option<PathBuf>,
     /// Cycle-6 Track 1: restrict `--emit-breaks` collection to a

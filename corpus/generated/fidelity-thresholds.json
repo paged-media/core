@@ -224,6 +224,7 @@
     },
     {
       "name": "navigation",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.66,
       "max_p99_de": 1.681,
@@ -355,6 +356,7 @@
     },
     {
       "name": "text-advanced",
+      "text_gate": true,
       "max_pages_with_pdf": 17,
       "max_mean_de": 0.76,
       "max_p99_de": 19.04,
@@ -380,6 +382,7 @@
     },
     {
       "name": "text-letterspacing",
+      "text_gate": true,
       "max_pages_with_pdf": 2,
       "max_mean_de": 0.851,
       "max_p99_de": 27.77,
@@ -468,6 +471,7 @@
     },
     {
       "name": "list-overrides",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
       "max_mean_de": 0.931,
       "max_p99_de": 20.88,

@@ -2610,6 +2610,8 @@ pub(super) fn build_document_inner(
             for tp in &poly.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     &poly.anchors,
                     poly.item_transform,
@@ -2668,6 +2670,8 @@ pub(super) fn build_document_inner(
             for tp in &rect.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     anchors,
                     rect.item_transform,
@@ -2716,6 +2720,8 @@ pub(super) fn build_document_inner(
             for tp in &line.text_paths {
                 emit_text_path_into(
                     &mut pages[page_idx],
+                    page_idx,
+                    &mut breaks,
                     tp,
                     anchors,
                     line.item_transform,
@@ -3835,9 +3841,9 @@ pub(super) struct GeneratedText {
     /// holds none.
     pub texts: Vec<Option<String>>,
     /// Per run: each substitution as `(byte in the substituted text, its
-    /// length)`. Each stands for one marker of the model's text — a
-    /// private-use character, three bytes of UTF-8.
-    pub spans: Vec<Vec<(u32, u32)>>,
+    /// length, what it prints)`. Each stands for one marker of the model's
+    /// text — a private-use character, three bytes of UTF-8.
+    pub spans: Vec<Vec<(u32, u32, GeneratedKind)>>,
 }
 
 /// The characters the story parser leaves for generated text print what
@@ -3916,7 +3922,7 @@ pub(super) fn substitute_generated_markers(
         }
         let mut text = String::with_capacity(run.text.len());
         for ch in run.text.chars() {
-            let printed = if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+            let (printed, kind) = if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
                 let waiting = (reference as usize) < em.pending_footnotes.len();
                 let label = if waiting {
                     options.label(em.footnote_counter + 1 + reference)
@@ -3924,18 +3930,81 @@ pub(super) fn substitute_generated_markers(
                     String::new()
                 };
                 reference += 1;
-                label
+                (label, GeneratedKind::FootnoteNumber)
+            } else if ch == paged_model::SECTION_MARKER {
+                (page(ch), GeneratedKind::SectionMarker)
             } else if paged_model::is_page_marker(ch) {
-                page(ch)
+                (page(ch), GeneratedKind::PageNumber)
             } else {
                 text.push(ch);
                 continue;
             };
-            out.spans[i].push((text.len() as u32, printed.len() as u32));
+            out.spans[i].push((text.len() as u32, printed.len() as u32, kind));
             text.push_str(&printed);
         }
         out.texts[i] = Some(text);
     }
+    out
+}
+
+/// What a paragraph prints that its story does not hold, as half-open
+/// byte ranges of the concatenated text of `styled_runs` (the paragraph's
+/// runs as shaped, led by the list marker's run when it is shaped on its
+/// own: `head_run` is then 1), in text order.
+///
+/// `marker_len` is the list marker's length, which opens the text;
+/// `marker_in_first_run` says it is the head of run 0 rather than a run
+/// of its own. A text variable's run is generated whole. A run whose
+/// generated markers were substituted keeps their spans when it is
+/// printed as substituted (capitals that keep its length included).
+/// `placeholders` are the bytes of the inline objects' placeholders.
+pub(super) fn paragraph_generated_spans(
+    styled_runs: &[paged_text::StyledRun],
+    head_run: usize,
+    marker_len: usize,
+    marker_in_first_run: bool,
+    is_variable: impl Fn(usize) -> bool,
+    generated: &GeneratedText,
+    placeholders: impl Iterator<Item = usize>,
+) -> Vec<GeneratedRange> {
+    let mut out = Vec::new();
+    if marker_len > 0 {
+        out.push((0..marker_len, GeneratedKind::ListMarker, None));
+    }
+    let mut end = 0usize;
+    for (k, run) in styled_runs.iter().enumerate() {
+        let run_start = end;
+        end += run.text.len();
+        let Some(i) = k.checked_sub(head_run) else {
+            continue;
+        };
+        let start = if i == 0 && marker_in_first_run {
+            (run_start + marker_len).min(end)
+        } else {
+            run_start
+        };
+        if is_variable(i) {
+            if start < end {
+                out.push((start..end, GeneratedKind::TextVariable, None));
+            }
+            continue;
+        }
+        let Some(substituted) = generated.texts.get(i).and_then(|t| t.as_deref()) else {
+            continue;
+        };
+        if end - start != substituted.len() {
+            continue;
+        }
+        for &(at, len, kind) in &generated.spans[i] {
+            let at = start + at as usize;
+            if len > 0 {
+                out.push((at..at + len as usize, kind, None));
+            }
+        }
+    }
+    let placeholder_len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8();
+    out.extend(placeholders.map(|p| (p..p + placeholder_len, GeneratedKind::AnchoredObject, None)));
+    out.sort_by_key(|(r, ..)| r.start);
     out
 }
 
@@ -6808,7 +6877,7 @@ fn emit_paragraph_lines(
                 0
             };
             if generated.texts[i].is_some() && capitalized[i].is_none() && var_text(i).is_none() {
-                for &(at, len) in spans {
+                for &(at, len, _) in spans {
                     let model_len = paged_model::FOOTNOTE_REFERENCE_MARKER.len_utf8() as u32;
                     synthetic.push(((start + at).saturating_sub(dropped), len, model_len));
                 }
@@ -7084,6 +7153,8 @@ fn emit_paragraph_lines(
     // pass actually needs it.
     let needs_paragraph_text = paragraph.runs.iter().any(|r| r.text.contains('\t'))
         || list_first_text.as_deref().is_some_and(|t| t.contains('\t'));
+    // The leaders each line's tabs drew, for its break record.
+    let mut line_leaders: Vec<Vec<paged_text::layout::DrawnLeader>> = Vec::new();
     if needs_paragraph_text {
         let tab_stops = paragraph_tab_stops(
             &resolved_paragraph,
@@ -7112,13 +7183,16 @@ fn emit_paragraph_lines(
             None
         };
         for line in laid_out.lines.iter_mut() {
-            paged_text::layout::apply_tab_stops_with_leaders(
+            let drawn = paged_text::layout::apply_tab_stops_with_leaders(
                 line,
                 &paragraph_text,
                 &tab_stops,
                 36.0,
                 leader_ctx.as_ref(),
             );
+            if em.options.collect_breaks {
+                line_leaders.push(drawn);
+            }
         }
     }
 
@@ -7299,6 +7373,31 @@ fn emit_paragraph_lines(
         Some(buf)
     } else {
         None
+    };
+    // What the paragraph prints that its story does not hold, as byte
+    // ranges of its whole text (a drop cap's letters included, which the
+    // text above starts after), for the break records.
+    let drop_split = dropped_text_for_breaks.as_deref().map_or(0, str::len);
+    let generated_for_breaks: Vec<GeneratedRange> = if em.options.collect_breaks {
+        paragraph_generated_spans(
+            &styled_runs,
+            head_run,
+            list_first_text
+                .as_ref()
+                .and(list_prefix_text.as_deref())
+                .map_or(0, str::len),
+            marker_run.is_none(),
+            |i| {
+                paragraph
+                    .runs
+                    .get(i)
+                    .is_some_and(|r| r.text_variable.is_some())
+            },
+            &generated,
+            placeholder_bytes.iter().map(|&p| p as usize + drop_split),
+        )
+    } else {
+        Vec::new()
     };
     // The running baseline shift owed to every frame advance so far in
     // THIS paragraph.
@@ -7595,6 +7694,27 @@ fn emit_paragraph_lines(
                     body.to_string()
                 })
                 .unwrap_or_default();
+            // The line's stretch of the paragraph's whole text, as
+            // `source_text` holds it.
+            let pt_len = paragraph_text_for_breaks.as_deref().map_or(0, str::len);
+            let end = drop_split + line.byte_range.end.min(pt_len);
+            let start = if current_line_idx == 0 && dropped_text_for_breaks.is_some() {
+                0
+            } else {
+                drop_split + line.byte_range.start.min(pt_len)
+            };
+            let leaders: Vec<_> = line_leaders
+                .get(current_line_idx)
+                .into_iter()
+                .flatten()
+                .map(|l| {
+                    let at = l.cluster as usize + drop_split;
+                    (at..at + 1, GeneratedKind::TabLeader, Some(l.text.clone()))
+                })
+                .collect();
+            let mut generated = GeneratedSpan::clip_to_line(&generated_for_breaks, start..end);
+            generated.extend(GeneratedSpan::clip_to_line(&leaders, start..end));
+            generated.sort_by_key(|g| g.start);
             em.breaks.push(BreakRecord {
                 story_id: em.current_story_id.clone(),
                 paragraph_idx: em.paragraph_idx,
@@ -7606,6 +7726,8 @@ fn emit_paragraph_lines(
                 baseline_y_pt: line.baseline_y as f32 / paged_text::shape::ADVANCE_PRECISION,
                 width_pt: line.width as f32 / paged_text::shape::ADVANCE_PRECISION,
                 source_text,
+                generated,
+                text_path: None,
             });
         }
 
