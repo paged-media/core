@@ -143,7 +143,11 @@ pub fn cases() -> [Case; 12] {
             Own::Nothing,
         ),
         anchor("9 · based on 7", "OS Anchor Child", Own::Nothing),
-        anchor("10 · style 7, object: x offset −20", "OS Anchor", Own::XOffset),
+        anchor(
+            "10 · style 7, object: x offset −20",
+            "OS Anchor",
+            Own::XOffset,
+        ),
         anchor(
             "11 · style: above the line, centred",
             "OS Above",
@@ -274,12 +278,7 @@ fn rect(id: String, size: (f32, f32), at: (f32, f32), fill: Option<&str>) -> Rec
 /// A case's object: named so the probe finds it, applying its style.
 fn object(seq: u32, case: &Case, at: (f32, f32)) -> Rect {
     let size = if case.anchored { ANCHORED } else { BOX };
-    let mut r = rect(
-        self_id(SAMPLE, "Object", seq),
-        size,
-        at,
-        Some(OBJECT_TINT),
-    );
+    let mut r = rect(self_id(SAMPLE, "Object", seq), size, at, Some(OBJECT_TINT));
     r.extra_attrs = vec![
         ("Name".to_string(), format!("case{} object", seq + 1)),
         (

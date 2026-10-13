@@ -5639,6 +5639,11 @@ pub(super) fn emit_paragraph_into_chain(
         super::conditions::without_hidden_runs(paragraph, declared)
     };
     let paragraph = shown.as_ref().unwrap_or(paragraph);
+    // An anchored object takes the options it leaves out from its object
+    // style (ADR 143): read them over it once, before anything below asks
+    // where an object sits.
+    let styled = anchored::with_style_anchoring(paragraph, &em.document.styles);
+    let paragraph = styled.as_ref().unwrap_or(paragraph);
     // A footnote is set at the foot of the frame holding its REFERENCE's
     // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
     // the line holding each one's reference is placed

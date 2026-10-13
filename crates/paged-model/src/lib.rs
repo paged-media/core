@@ -4210,6 +4210,19 @@ pub struct ObjectStyleDef {
     /// sets top-aligned. These options do not pass down `BasedOn` (ADR 137).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_frame: Option<TextFrameOptions>,
+    /// The style's own `<TextWrapPreference>`: the wrap an item of the
+    /// style takes when it states none (ADR 143). Like the text-frame
+    /// options it reaches items only with its category on, and does not
+    /// pass down `BasedOn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<TextWrap>,
+    /// The style's own `<AnchoredObjectSetting>`. InDesign leaves the
+    /// options an anchored item takes from its style off the item and
+    /// writes only those it overrides (`<AnchoredObjectSetting
+    /// AnchorXoffset="20"/>`), so an item's setting is read over this one,
+    /// attribute by attribute (ADR 143).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchored: Option<AnchoredObjectSetting>,
 }
 
 /// `Enable*` on an `<ObjectStyle>`: whether each option category is part
@@ -4265,6 +4278,26 @@ impl ObjectStyleDef {
             out.auto_sizing = tf.auto_sizing;
         }
         out
+    }
+
+    /// The style's own text wrap, when it switches the category on
+    /// (`EnableTextWrapAndOthers`; absent is off).
+    pub fn own_text_wrap(&self) -> Option<TextWrap> {
+        if self.enable.text_wrap_and_others == Some(true) {
+            self.text_wrap
+        } else {
+            None
+        }
+    }
+
+    /// The style's own anchored-object options, when it switches the
+    /// category on (`EnableAnchoredObjectOptions`; absent is off).
+    pub fn own_anchored(&self) -> Option<&AnchoredObjectSetting> {
+        if self.enable.anchored_object_options == Some(true) {
+            self.anchored.as_ref()
+        } else {
+            None
+        }
     }
 }
 
@@ -6223,6 +6256,94 @@ pub struct AnchoredObjectSetting {
     pub vertical_reference_point: Option<String>,
     /// `VerticalAlignment` — `TopAlign`, `CenterAlign`, `BottomAlign`.
     pub vertical_alignment: Option<String>,
+    /// Which of the plain-valued attributes the element stated, when it
+    /// was read from IDML: an item writes only what it overrides of its
+    /// object style's options ([`AnchoredObjectSetting::over`]). `None`:
+    /// every one is the item's own (a setting made in paged, or one read
+    /// before this was recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stated: Option<AnchoredStated>,
+}
+
+/// The plain-valued attributes an `<AnchoredObjectSetting>` stated (the
+/// others are `Option`s and say so themselves).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnchoredStated {
+    pub spine_relative: bool,
+    pub anchor_x_offset: bool,
+    pub anchor_y_offset: bool,
+    pub lock_position: bool,
+}
+
+impl AnchoredObjectSetting {
+    /// This setting read over its object style's own: what it states wins,
+    /// what it leaves out comes from `style` (InDesign 20.0.1,
+    /// `object-style-options` case 10: an item stating only
+    /// `AnchorXoffset="-20"` keeps the style's position, point, alignment
+    /// and y offset).
+    pub fn over(&self, style: &AnchoredObjectSetting) -> AnchoredObjectSetting {
+        let all = AnchoredStated {
+            spine_relative: true,
+            anchor_x_offset: true,
+            anchor_y_offset: true,
+            lock_position: true,
+        };
+        let stated = self.stated.unwrap_or(all);
+        fn pick<T>(own: bool, mine: T, theirs: T) -> T {
+            if own {
+                mine
+            } else {
+                theirs
+            }
+        }
+        AnchoredObjectSetting {
+            anchored_position: self
+                .anchored_position
+                .clone()
+                .or_else(|| style.anchored_position.clone()),
+            spine_relative: pick(
+                stated.spine_relative,
+                self.spine_relative,
+                style.spine_relative,
+            ),
+            anchor_x_offset: pick(
+                stated.anchor_x_offset,
+                self.anchor_x_offset,
+                style.anchor_x_offset,
+            ),
+            anchor_y_offset: pick(
+                stated.anchor_y_offset,
+                self.anchor_y_offset,
+                style.anchor_y_offset,
+            ),
+            anchor_point: self
+                .anchor_point
+                .clone()
+                .or_else(|| style.anchor_point.clone()),
+            lock_position: pick(
+                stated.lock_position,
+                self.lock_position,
+                style.lock_position,
+            ),
+            horizontal_reference_point: self
+                .horizontal_reference_point
+                .clone()
+                .or_else(|| style.horizontal_reference_point.clone()),
+            horizontal_alignment: self
+                .horizontal_alignment
+                .clone()
+                .or_else(|| style.horizontal_alignment.clone()),
+            vertical_reference_point: self
+                .vertical_reference_point
+                .clone()
+                .or_else(|| style.vertical_reference_point.clone()),
+            vertical_alignment: self
+                .vertical_alignment
+                .clone()
+                .or_else(|| style.vertical_alignment.clone()),
+            stated: None,
+        }
+    }
 }
 /// `<Table>` element parsed from a Story. Cells reference rows /
 /// columns by their `Name` (the IDML index, "0"..n-1). Cells in
@@ -6802,6 +6923,34 @@ impl StyleSheet {
 
     /// Walk an ObjectStyle's `BasedOn` chain. Same depth-bounded
     /// pattern as `resolve_paragraph` / `resolve_character`.
+    /// An item's text wrap: its own when it states one, else its object
+    /// style's own, with the style's category on (ADR 143).
+    pub fn item_text_wrap(&self, own: Option<TextWrap>, applied: Option<&str>) -> Option<TextWrap> {
+        own.or_else(|| {
+            applied
+                .and_then(|id| self.object_styles.get(id))
+                .and_then(ObjectStyleDef::own_text_wrap)
+        })
+    }
+
+    /// An item's anchored-object options: its own read over its object
+    /// style's own, with the style's category on (ADR 143).
+    pub fn item_anchored(
+        &self,
+        own: Option<&AnchoredObjectSetting>,
+        applied: Option<&str>,
+    ) -> Option<AnchoredObjectSetting> {
+        let style = applied
+            .and_then(|id| self.object_styles.get(id))
+            .and_then(ObjectStyleDef::own_anchored);
+        match (own, style) {
+            (Some(own), Some(style)) => Some(own.over(style)),
+            (Some(own), None) => Some(own.clone()),
+            (None, Some(style)) => Some(style.clone()),
+            (None, None) => None,
+        }
+    }
+
     pub fn resolve_object(&self, id: &str) -> ResolvedObject {
         let mut acc = ResolvedObject::default();
         let mut closed = ObjectStyleCategories::default();

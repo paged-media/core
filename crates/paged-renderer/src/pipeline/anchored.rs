@@ -166,6 +166,68 @@ pub(super) struct InlineObjects {
     pub placed: Vec<Option<PlacedObject>>,
 }
 
+/// `paragraph` with each anchored object's options read over its object
+/// style's own (ADR 143): InDesign writes on the object only what it
+/// overrides of its style. `None` when no object's style supplies any.
+pub(super) fn with_style_anchoring(
+    paragraph: &paged_model::Paragraph,
+    styles: &paged_model::StyleSheet,
+) -> Option<paged_model::Paragraph> {
+    let from_style = |af: &paged_model::AnchoredFrame| {
+        af.applied_object_style
+            .as_deref()
+            .and_then(|id| styles.object_styles.get(id))
+            .and_then(|s| s.own_anchored())
+            .is_some()
+    };
+    if !paragraph.anchored_frames.iter().any(from_style) {
+        return None;
+    }
+    let mut out = paragraph.clone();
+    for af in &mut out.anchored_frames {
+        af.setting = styles.item_anchored(af.setting.as_ref(), af.applied_object_style.as_deref());
+    }
+    Some(out)
+}
+
+/// The page-local baseline of the laid-out line that holds the anchor of
+/// `paragraph`'s `index`th anchored object, on the current frame's page.
+/// `None` when that line was not set there.
+fn anchor_line_baseline(
+    em: &StoryEmitter,
+    pages: &[BuiltPage],
+    paragraph: &paged_model::Paragraph,
+    index: usize,
+) -> Option<f32> {
+    let offset = paragraph.anchored_frame_offsets.get(index).copied()? as usize;
+    let mut byte = 0usize;
+    let mut chars = 0usize;
+    'runs: for run in &paragraph.runs {
+        for c in run.text.chars() {
+            if chars == offset {
+                break 'runs;
+            }
+            chars += 1;
+            byte += c.len_utf8();
+        }
+    }
+    let byte = byte as u32;
+    let page = pages.get(*em.chain_pages.get(em.frame_idx)?)?;
+    let lines = page.story_layout.iter().filter(|l| {
+        l.story_id == em.current_story_id && l.cell.is_none() && l.paragraph_idx == em.paragraph_idx
+    });
+    lines
+        .filter(|l| l.byte_range.start <= byte)
+        .min_by_key(|l| {
+            if byte < l.byte_range.end {
+                0
+            } else {
+                1 + byte - l.byte_range.end
+            }
+        })
+        .map(|l| l.baseline_y_pt)
+}
+
 fn anchored_position(af: &paged_model::AnchoredFrame) -> &str {
     af.setting
         .as_ref()
@@ -453,10 +515,23 @@ pub(super) fn emit_anchored_frames_for_paragraph(
         para_origin_y
     };
 
-    for af in &paragraph.anchored_frames {
+    for (i, af) in paragraph.anchored_frames.iter().enumerate() {
         if sits_in_line(af) {
             continue;
         }
+        // An object is placed against the line holding its anchor
+        // (`object-style-options` case 7, InDesign 20.0.1: its top at the
+        // first line's baseline + 6 pt in a two-line paragraph), not
+        // against where the paragraph ends.
+        let anchor_baseline =
+            anchor_line_baseline(em, pages, paragraph, i).unwrap_or(baseline_y_pt);
+        let shift = anchor_baseline - baseline_y_pt;
+        let baseline_y_pt = anchor_baseline;
+        let line_metrics = LineRefMetrics {
+            x_height_y: line_metrics.x_height_y + shift,
+            cap_height_y: line_metrics.cap_height_y + shift,
+            top_of_leading_y: line_metrics.top_of_leading_y + shift,
+        };
         let setting = af.setting.as_ref();
         let (offset_x, offset_y) = setting
             .map(|s| (s.anchor_x_offset, s.anchor_y_offset))

@@ -480,7 +480,10 @@ pub(super) fn collect_wrap_rects_per_page(
             }
         };
         for f in &parsed.spread.text_frames {
-            if let Some(w) = f.text_wrap {
+            if let Some(w) = document
+                .styles
+                .item_text_wrap(f.text_wrap, f.applied_object_style.as_deref())
+            {
                 // W1.7 Phase B: a neighbouring frame wraps around the
                 // GROWN box of an auto-sized frame, not its authored
                 // undersized rect. Substitute the precomputed grown
@@ -496,22 +499,34 @@ pub(super) fn collect_wrap_rects_per_page(
             }
         }
         for r in &parsed.spread.rectangles {
-            if let Some(w) = r.text_wrap {
+            if let Some(w) = document
+                .styles
+                .item_text_wrap(r.text_wrap, r.applied_object_style.as_deref())
+            {
                 push(&mut out, r.bounds, r.item_transform, w);
             }
         }
         for o in &parsed.spread.ovals {
-            if let Some(w) = o.text_wrap {
+            if let Some(w) = document
+                .styles
+                .item_text_wrap(o.text_wrap, o.applied_object_style.as_deref())
+            {
                 push(&mut out, o.bounds, o.item_transform, w);
             }
         }
         for p in &parsed.spread.polygons {
-            if let Some(w) = p.text_wrap {
+            if let Some(w) = document
+                .styles
+                .item_text_wrap(p.text_wrap, p.applied_object_style.as_deref())
+            {
                 push(&mut out, p.bounds, p.item_transform, w);
             }
         }
         for l in &parsed.spread.graphic_lines {
-            if let Some(w) = l.text_wrap {
+            if let Some(w) = document
+                .styles
+                .item_text_wrap(l.text_wrap, l.applied_object_style.as_deref())
+            {
                 push(&mut out, l.bounds, l.item_transform, w);
             }
         }
