@@ -6400,6 +6400,10 @@ fn emit_paragraph_lines(
         em.hyphenator_for(&resolved_paragraph, &resolved_runs),
         &resolved_paragraph,
     );
+    lopts.compose.fit_tolerance = fit_tolerance_64(
+        paragraph_size,
+        lopts.alignment == paged_text::Alignment::Justify,
+    );
     // Explicit `Leading` on the leading run mirrors IDML semantics:
     // every line uses the override regardless of the largest glyph
     // size on the line. Auto leading (no override) keeps existing

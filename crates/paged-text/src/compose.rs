@@ -271,6 +271,15 @@ pub struct ComposeOptions<'a> {
     /// frame. To InDesign that row is ONE line, so with
     /// `minimum_raggedness` no word is hyphenated across the gap.
     pub joined_lines: Option<Vec<bool>>,
+    /// How far (1/64 pt) a line may run past its measure before the
+    /// Paragraph Composer breaks it. InDesign keeps a word that overruns
+    /// the measure by a sliver — 1/32 em in ragged text, 3/64 em in
+    /// justified text, at any word spacing and however many spaces the
+    /// line holds (asked of InDesign 20.0.1:
+    /// `tools/indesign-export/fit-tolerance-probe.*`). `0`: lines fit
+    /// their measure exactly. The minimum-raggedness breaker keeps its
+    /// own, measured squeeze instead.
+    pub fit_tolerance: i32,
     /// Set the paragraph with InDesign's Single-line Composer
     /// (`Composer="HL Single"`) instead of the Paragraph Composer: one
     /// line at a time, as Word does (`single_line.rs`). `None` is the
@@ -319,6 +328,7 @@ impl ComposeOptions<'_> {
             minimum_raggedness: false,
             visible_lines: None,
             joined_lines: None,
+            fit_tolerance: 0,
             single_line: None,
         }
     }

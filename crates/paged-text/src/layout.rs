@@ -1503,6 +1503,15 @@ fn knuth_plass_breaks(
             return breaks;
         }
     }
+    // InDesign lets a line run a sliver past its measure before it
+    // breaks it (`ComposeOptions::fit_tolerance`).
+    let widened: Vec<i32>;
+    let lengths: &[i32] = if opts.fit_tolerance > 0 {
+        widened = lengths.iter().map(|l| l + opts.fit_tolerance).collect();
+        &widened
+    } else {
+        lengths
+    };
     // paragraph_breaker returns an empty break list when no feasible
     // fit exists at the configured tolerance. Real-world body copy
     // that interleaves many run-color-switch boxes or runs past the
@@ -2507,6 +2516,7 @@ mod tests {
                 minimum_raggedness: false,
                 visible_lines: None,
                 joined_lines: None,
+                fit_tolerance: 0,
                 single_line: None,
             },
             line_height: 20,
