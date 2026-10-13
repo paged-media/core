@@ -933,7 +933,11 @@ impl Rect {
             attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
         }
         attrs.push(("Visible", "true".to_string()));
-        attrs.push(("Name", "$ID/".to_string()));
+        // The unnamed default, unless the sample names the item itself
+        // (InDesign refuses an element that carries an attribute twice).
+        if !self.extra_attrs.iter().any(|(k, _)| k == "Name") {
+            attrs.push(("Name", "$ID/".to_string()));
+        }
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
         push_color_attr(&mut attrs, "FillColor", &self.fill_color);
         attrs.push((
