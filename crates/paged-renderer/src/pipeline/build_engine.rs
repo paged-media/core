@@ -3682,13 +3682,12 @@ pub(super) fn build_document_inner(
     // Phase 5 — footnote pool post-pass. For each page that captured
     // footnotes during the story emit, lay out the bodies at the
     // bottom of the host frame's content area. Bodies stack
-    // upward from the frame's bottom; per-page running numbers
-    // prefix each body. Overlay rather than reflow today —
-    // body content remains where it was, and footnotes can
+    // upward from the frame's bottom; each prints its number where its
+    // text holds its reference character. Overlay rather than reflow
+    // today — body content remains where it was, and footnotes can
     // overlap it if the host frame is fully populated.
     // Cross-page overflow (a footnote pool taller than the host
-    // frame) and anchor-character superscript substitution are
-    // queued follow-ups.
+    // frame) is a queued follow-up.
     let footnote_options = options.clone();
     emit_footnote_pools(
         &mut pages,
@@ -3698,6 +3697,7 @@ pub(super) fn build_document_inner(
         document,
         palette,
         color_ctx,
+        &mut breaks,
     );
 
     // Size every transparency group to what it actually PAINTS.
@@ -3813,6 +3813,154 @@ pub(super) fn build_document_inner(
     })
 }
 
+/// A paragraph segment's run texts with the generated markers the story
+/// parser left in them substituted, and where each substitution landed.
+pub(super) struct GeneratedText {
+    /// Per run: its text with every marker substituted, or `None` when it
+    /// holds none.
+    pub texts: Vec<Option<String>>,
+    /// Per run: each substitution as `(byte in the substituted text, its
+    /// length)`. Each stands for one marker of the model's text — a
+    /// private-use character, three bytes of UTF-8.
+    pub spans: Vec<Vec<(u32, u32)>>,
+}
+
+/// The characters the story parser leaves for generated text print what
+/// they stand for: the page markers the page's label (or the next /
+/// previous frame's page, or the section marker), and a footnote
+/// reference its note's number.
+///
+/// A reference is a character of its line (asked of InDesign 20.0.1,
+/// `footnote-references`): it prints the number in its own run's
+/// formatting — InDesign spells a reference's superscript on the range
+/// around it — so it takes width and can move a break. Notes are numbered
+/// through the story in the order their references are placed
+/// (`capture_footnotes`, `FootnoteOptions::label`); the references of this
+/// paragraph before this segment were placed with an earlier segment's
+/// lines, so the j-th reference here is the j-th note still waiting. A
+/// reference with no note left prints nothing.
+pub(super) fn substitute_generated_markers(
+    em: &StoryEmitter,
+    paragraph: &paged_model::Paragraph,
+) -> GeneratedText {
+    let n = paragraph.runs.len();
+    let mut out = GeneratedText {
+        texts: vec![None; n],
+        spans: vec![Vec::new(); n],
+    };
+    if !paragraph
+        .runs
+        .iter()
+        .any(|r| r.text.chars().any(paged_model::is_generated_marker))
+    {
+        return out;
+    }
+    // A page marker prints the label of the page this frame sits on (the
+    // labels table is keyed by flat body-page index and carries the
+    // user-visible label: Arabic / Roman / section-overridden). Measured on
+    // InDesign 20.0.1: the NEXT page number is the page of the next frame
+    // in the story's thread and the PREVIOUS one that of the previous
+    // frame, each falling back to the frame's own page at the end of the
+    // thread (a frame outside any thread — a master footer — prints its
+    // own page); the section marker is the `Marker` of the page's section.
+    let cur_idx = em.chain_pages[em.frame_idx];
+    let label_of = |idx: usize| {
+        em.page_labels
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| (idx + 1).to_string())
+    };
+    let page = |ch: char| -> String {
+        match ch {
+            paged_model::NEXT_PAGE_NUMBER_MARKER => em
+                .chain_pages
+                .get(em.frame_idx + 1)
+                .map_or_else(|| label_of(cur_idx), |&idx| label_of(idx)),
+            paged_model::PREVIOUS_PAGE_NUMBER_MARKER => em
+                .frame_idx
+                .checked_sub(1)
+                .and_then(|i| em.chain_pages.get(i))
+                .map_or_else(|| label_of(cur_idx), |&idx| label_of(idx)),
+            paged_model::SECTION_MARKER => em
+                .page_numbering
+                .section_of
+                .get(cur_idx)
+                .copied()
+                .flatten()
+                .and_then(|si| em.document.designmap.sections.get(si))
+                .and_then(|sec| sec.marker.clone())
+                .unwrap_or_default(),
+            _ => label_of(cur_idx),
+        }
+    };
+    let options = &em.document.designmap.footnote_options;
+    let mut reference = 0u32;
+    for (i, run) in paragraph.runs.iter().enumerate() {
+        if !run.text.chars().any(paged_model::is_generated_marker) {
+            continue;
+        }
+        let mut text = String::with_capacity(run.text.len());
+        for ch in run.text.chars() {
+            let printed = if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+                let waiting = (reference as usize) < em.pending_footnotes.len();
+                let label = if waiting {
+                    options.label(em.footnote_counter + 1 + reference)
+                } else {
+                    String::new()
+                };
+                reference += 1;
+                label
+            } else if paged_model::is_page_marker(ch) {
+                page(ch)
+            } else {
+                text.push(ch);
+                continue;
+            };
+            out.spans[i].push((text.len() as u32, printed.len() as u32));
+            text.push_str(&printed);
+        }
+        out.texts[i] = Some(text);
+    }
+    out
+}
+
+/// A paragraph's footnotes as `capture_footnotes` waits for them: each
+/// at the byte of its reference in the paragraph's text, in text order.
+/// A note's reference is its [`paged_model::FOOTNOTE_REFERENCE_MARKER`]:
+/// when the paragraph holds one per note, the k-th note waits for the
+/// k-th marker wherever an edit left its recorded anchor (an undone
+/// deletion re-inserts the marker, not the offset). Otherwise each note
+/// waits at its anchor.
+pub(super) fn queued_footnotes(
+    paragraph: &paged_model::Paragraph,
+) -> Vec<(u32, paged_model::Footnote)> {
+    let mut notes: Vec<(u32, paged_model::Footnote)> = paragraph
+        .footnotes
+        .iter()
+        .map(|f| {
+            let byte = paragraph.byte_of_char_offset(f.anchor.unwrap_or(0)) as u32;
+            (byte, f.clone())
+        })
+        .collect();
+    notes.sort_by_key(|(byte, _)| *byte);
+    let mut markers = Vec::new();
+    let mut at = 0u32;
+    for run in &paragraph.runs {
+        for (b, ch) in run.text.char_indices() {
+            if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+                markers.push(at + b as u32);
+            }
+        }
+        at += run.text.len() as u32;
+    }
+    if markers.len() == notes.len() {
+        for ((byte, _), marker) in notes.iter_mut().zip(markers) {
+            *byte = marker;
+        }
+    }
+    notes
+}
+
 /// Hand the pending footnotes whose anchor is at or before byte `up_to`
 /// (all of them for `None`) to the page of the frame being filled: the
 /// frame their reference's line is in. They are numbered in the order
@@ -3850,6 +3998,7 @@ pub(super) fn capture_footnotes(
     if let Some(slot) = em.footnote_ref_baseline_64.get_mut(em.frame_idx) {
         *slot = (*slot).max(ref_baseline_64);
     }
+    let ref_baseline_pt = sy - oy + ref_baseline_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
     for (_, note) in em.pending_footnotes.drain(..take) {
         em.footnote_counter += 1;
         pages[page].footnotes.push(EmittedFootnote {
@@ -3859,6 +4008,7 @@ pub(super) fn capture_footnotes(
             footnote_self_id: note.self_id,
             paragraphs: note.paragraphs,
             host_frame_rect_pt,
+            ref_baseline_pt,
         });
     }
 }
@@ -5362,13 +5512,23 @@ pub(super) fn emit_paragraph_into_chain(
         super::conditions::without_hidden_runs(paragraph, declared)
     };
     let paragraph = shown.as_ref().unwrap_or(paragraph);
+    // A footnote is set at the foot of the frame holding its REFERENCE's
+    // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
+    // the line holding each one's reference is placed
+    // (`capture_footnotes`). Queued once for the whole paragraph, before
+    // a split and before any placeholder goes in: the pieces of a split
+    // paragraph report paragraph-wide bytes of the model's text, so the
+    // anchors hold.
+    if !em.in_segments {
+        em.pending_footnotes = queued_footnotes(paragraph);
+    }
     // An inline or above-line anchored object is a character of its
     // line, as InDesign sets it: the paragraph composes with one
     // placeholder character per object at its anchor, and the objects
     // are drawn where those characters landed, once every segment of
-    // the paragraph is laid out. The segments and a table paragraph's
-    // text re-enter here while `inline_objects` is set.
-    if em.inline_objects.is_none() && paragraph.table.is_none() {
+    // the paragraph is laid out. The segments re-enter here while
+    // `inline_objects` is set.
+    if em.inline_objects.is_none() {
         if let Some((with_objects, objects)) = anchored::with_object_placeholders(paragraph) {
             em.inline_objects = Some(objects);
             emit_paragraph_lines(em, &with_objects, pages, total_stats);
@@ -5388,23 +5548,29 @@ fn emit_paragraph_lines(
     total_stats: &mut PipelineStats,
 ) {
     // Tables ride on a paragraph but render with their own
-    // grid-of-mini-frames pipeline. Hand off here so the rest of
-    // this function stays focused on the run/glyph case. A paragraph
-    // that carries TEXT as well as the table (`…text<Br/><Table>` in
-    // one range — the break before a table is a paragraph end to
-    // InDesign, so the text is its own paragraph and the table
-    // follows it; measured 2026-09-06 on the annual's page 117, where
-    // a four-line paragraph vanished under its table) composes the
-    // text first, then the table.
-    if let Some(table) = paragraph.table.as_ref() {
-        if paragraph.runs.iter().any(|r| !r.text.is_empty()) {
-            let text_only = paged_model::Paragraph {
-                table: None,
-                ..paragraph.clone()
-            };
-            emit_paragraph_into_chain(em, &text_only, pages, total_stats);
-        }
-        emit_table_into_chain(em, table, pages, total_stats);
+    // grid-of-mini-frames pipeline. A paragraph that is only its table
+    // hands off here. One that carries TEXT as well is split below: the
+    // table is a character of its paragraph on a line of its own, so the
+    // text before it ends a line and the text after it starts the next,
+    // both lines of the one paragraph (asked of InDesign 20.0.1,
+    // `table-inline-text`; `…text<Br/><Table>` in one range is two
+    // paragraphs, the break before the table being a paragraph mark —
+    // measured 2026-09-06 on the annual's page 117).
+    let has_text = paragraph.runs.iter().any(|r| !r.text.is_empty());
+    if let Some(table) = paragraph.table.as_ref().filter(|_| !has_text) {
+        // The table's line takes its paragraph's alignment (InDesign
+        // 20.0.1, `table-inline-text`: centred and right-aligned
+        // paragraphs centre and right-align the table).
+        let line_align = match em
+            .document
+            .resolved_paragraph_attrs(paragraph)
+            .justification
+        {
+            Some(paged_model::Justification::CenterAlign) => 0.5,
+            Some(paged_model::Justification::RightAlign) => 1.0,
+            _ => 0.0,
+        };
+        emit_table_into_chain(em, table, line_align, pages, total_stats);
         return;
     }
     // Nested styles (and the style's drop cap they may name): layered
@@ -5429,26 +5595,11 @@ fn emit_paragraph_lines(
     // stay lines of ONE paragraph: `SegmentState` withholds what only
     // the paragraph's first / last line carries, keeps the lines'
     // bytes and indices paragraph-wide, and counts the paragraph once.
-    // A footnote is set at the foot of the frame holding its REFERENCE's
-    // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
-    // the line holding each one's anchor is placed (`capture_footnotes`).
-    // Queued once for the whole paragraph, before a split: the pieces of a
-    // split paragraph report paragraph-wide bytes, so the anchors hold.
-    if !em.in_segments {
-        em.pending_footnotes = paragraph
-            .footnotes
+    if paragraph.table.is_some()
+        || paragraph
+            .runs
             .iter()
-            .map(|f| {
-                let byte = paragraph.byte_of_char_offset(f.anchor.unwrap_or(0)) as u32;
-                (byte, f.clone())
-            })
-            .collect();
-        em.pending_footnotes.sort_by_key(|(byte, _)| *byte);
-    }
-    if paragraph
-        .runs
-        .iter()
-        .any(|r| r.text.contains(['\n', super::geom::FORCED_LINE_BREAK]))
+            .any(|r| r.text.contains(['\n', super::geom::FORCED_LINE_BREAK]))
     {
         let mut line_base = 0;
         // The paragraph is still to be counted: its opening piece was empty.
@@ -5811,6 +5962,9 @@ fn emit_paragraph_lines(
         (Some(id), Some(ledger)) => Some(ledger.borrow().get(id).copied().unwrap_or(0)),
         _ => None,
     };
+    // The characters the story parser left for generated text print what
+    // they stand for (`substitute_generated_markers`).
+    let generated = substitute_generated_markers(em, paragraph);
     // The marker belongs to the paragraph's first line only; a line after
     // a forced break neither shows one nor advances the counter.
     let list_prefix_text: Option<String> = em
@@ -5827,10 +5981,10 @@ fn emit_paragraph_lines(
         .flatten()
         .filter(|_| !paragraph.runs.is_empty());
     let list_first_text: Option<String> = list_prefix_text.as_deref().and_then(|prefix| {
-        paragraph
-            .runs
-            .first()
-            .map(|r| format!("{prefix}{}", r.text))
+        paragraph.runs.first().map(|r| {
+            let text = generated.texts[0].as_deref().unwrap_or(&r.text);
+            format!("{prefix}{text}")
+        })
     });
     // The marker shaped as its own run: its text and attributes.
     let marker_run: Option<(&str, &paged_scene::ResolvedRunAttrs)> = list_prefix_text
@@ -5855,65 +6009,6 @@ fn emit_paragraph_lines(
             .borrow_mut()
             .insert(id.to_string(), em.numbered_counter);
     }
-
-    // Page-marker substitution. The parser leaves a private-use sentinel
-    // per marker in run.text; expand them for the page this frame sits
-    // on. The labels table is keyed by flat body-page index and carries
-    // the user-visible label (Arabic / Roman / section-overridden).
-    // Measured on InDesign 20.0.1: the NEXT page number is the page of the
-    // next frame in the story's thread and the PREVIOUS one that of the
-    // previous frame, each falling back to the frame's own page at the end
-    // of the thread (a frame outside any thread — a master footer — prints
-    // its own page); the section marker is the `Marker` of the page's
-    // section.
-    let cur_idx = em.chain_pages[em.frame_idx];
-    let label_of = |idx: usize| {
-        em.page_labels
-            .get(idx)
-            .cloned()
-            .unwrap_or_else(|| (idx + 1).to_string())
-    };
-    let current_page_str = label_of(cur_idx);
-    let needs_page_subst = paragraph
-        .runs
-        .iter()
-        .any(|r| r.text.chars().any(paged_model::is_page_marker))
-        || list_first_text
-            .as_deref()
-            .is_some_and(|t| t.contains(paged_model::AUTO_PAGE_NUMBER_MARKER));
-    let page_substituted: Vec<String> = if needs_page_subst {
-        let next_page_str = em
-            .chain_pages
-            .get(em.frame_idx + 1)
-            .map_or_else(|| current_page_str.clone(), |&idx| label_of(idx));
-        let previous_page_str = em
-            .frame_idx
-            .checked_sub(1)
-            .and_then(|i| em.chain_pages.get(i))
-            .map_or_else(|| current_page_str.clone(), |&idx| label_of(idx));
-        let section_marker = em
-            .page_numbering
-            .section_of
-            .get(cur_idx)
-            .copied()
-            .flatten()
-            .and_then(|si| em.document.designmap.sections.get(si))
-            .and_then(|sec| sec.marker.clone())
-            .unwrap_or_default();
-        paragraph
-            .runs
-            .iter()
-            .map(|r| {
-                r.text
-                    .replace(paged_model::AUTO_PAGE_NUMBER_MARKER, &current_page_str)
-                    .replace(paged_model::NEXT_PAGE_NUMBER_MARKER, &next_page_str)
-                    .replace(paged_model::PREVIOUS_PAGE_NUMBER_MARKER, &previous_page_str)
-                    .replace(paged_model::SECTION_MARKER, &section_marker)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
 
     // W1.4 — text-variable substitution. Each run tagged with
     // `text_variable` (produced by the parser splitting a
@@ -5978,8 +6073,8 @@ fn emit_paragraph_lines(
                 Some("AllCaps") => {
                     let src: &str = if let Some(v) = var_text(i) {
                         v
-                    } else if needs_page_subst {
-                        page_substituted[i].as_str()
+                    } else if let Some(t) = generated.texts[i].as_deref() {
+                        t
                     } else {
                         &run.text
                     };
@@ -6038,8 +6133,8 @@ fn emit_paragraph_lines(
                             c
                         } else if let Some(v) = var_text(i) {
                             v
-                        } else if needs_page_subst {
-                            page_substituted[i].as_str()
+                        } else if let Some(t) = generated.texts[i].as_deref() {
+                            t
                         } else {
                             &run.text
                         }
@@ -6048,8 +6143,8 @@ fn emit_paragraph_lines(
                     c
                 } else if let Some(v) = var_text(i) {
                     v
-                } else if needs_page_subst {
-                    page_substituted[i].as_str()
+                } else if let Some(t) = generated.texts[i].as_deref() {
+                    t
                 } else {
                     &run.text
                 },
@@ -6675,18 +6770,54 @@ fn emit_paragraph_lines(
     // The list marker leads the shaped text and is not in the model's:
     // a line's bytes count from the paragraph's own first character.
     let marker_bytes = list_prefix_text.as_deref().map_or(0, |p| p.len() as u32);
+    // Past the list marker, the shaped text differs from the model's
+    // where the engine put something in or printed something else: a
+    // placeholder is three bytes the model lacks, a generated marker is
+    // three model bytes printed as its text. Each as (shaped start after
+    // the marker, shaped length, model length), in text order.
+    let placeholder_len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8() as u32;
+    let mut synthetic: Vec<(u32, u32, u32)> = placeholder_bytes
+        .iter()
+        .map(|&p| (p.saturating_sub(marker_bytes), placeholder_len, 0))
+        .collect();
+    {
+        let dropped = drop_cap_spec_emit.as_ref().map_or(0, |t| t.0 as u32);
+        let mut start = 0u32;
+        for (i, spans) in generated.spans.iter().enumerate() {
+            let shaped = styled_runs
+                .get(head_run + i)
+                .map_or(0, |r| r.text.len() as u32);
+            let merged_marker = if i == 0 && marker_run.is_none() {
+                marker_bytes
+            } else {
+                0
+            };
+            if generated.texts[i].is_some() && capitalized[i].is_none() && var_text(i).is_none() {
+                for &(at, len) in spans {
+                    let model_len = paged_model::FOOTNOTE_REFERENCE_MARKER.len_utf8() as u32;
+                    synthetic.push(((start + at).saturating_sub(dropped), len, model_len));
+                }
+            }
+            start += shaped.saturating_sub(merged_marker);
+        }
+    }
+    synthetic.sort_unstable();
     let model_byte = |b: u32| -> u32 {
         let b = b.saturating_sub(marker_bytes);
-        if placeholder_bytes.is_empty() {
-            return b;
+        // The segment's base counts the placeholders of the segments
+        // before it.
+        let mut delta = i64::from(placeholder_len) * objects_before as i64;
+        for &(start, len, model_len) in &synthetic {
+            if start >= b {
+                break;
+            }
+            if start + len > b {
+                // Inside a printed marker: its character.
+                return (i64::from(start) - delta).max(0) as u32;
+            }
+            delta += i64::from(len) - i64::from(model_len);
         }
-        let before = objects_before
-            + placeholder_bytes
-                .iter()
-                .filter(|&&p| p.saturating_sub(marker_bytes) < b)
-                .count();
-        let len = paged_text::layout::OBJECT_REPLACEMENT.len_utf8() as u32;
-        b.saturating_sub(len * before as u32)
+        (i64::from(b) - delta).max(0) as u32
     };
 
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);

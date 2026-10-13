@@ -178,6 +178,14 @@ pub(super) struct FontMetrics {
 }
 
 impl FontTable {
+    /// Whether any face is at hand: the legacy single font, or one the
+    /// asset resolver supplied for a family the document names. (A build
+    /// whose fonts all come through the resolver — the inspector's
+    /// `--font-family`, the editor's asset seam — has no `fallback`.)
+    pub(super) fn has_any_face(&self) -> bool {
+        self.fallback.is_some() || !self.cache.is_empty()
+    }
+
     /// Concept 3 (PDF export) — the ORIGINAL face bytes for a
     /// font-table id, for subsetting/embedding. `None` for unknown
     /// ids.

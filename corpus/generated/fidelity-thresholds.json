@@ -91,11 +91,12 @@
     },
     {
       "name": "footnotes",
+      "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.521,
-      "max_p99_de": 3.209,
-      "min_ssim": 0.9675,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.529 / p99 7.679 / ssim 0.9667 (was 0.583 / 16.451 / 0.9648); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): the generator wrote the document's <FootnoteOption> into designmap.xml inside a <RootFootnoteStory>, where InDesign does not read it, so the reference drew InDesign's default separator (a 72 pt rule, no spacing) while the engine drew the fixture's; it is now in Resources/Preferences.xml, where InDesign keeps it (asked of InDesign 20.0.1: its DOM reads the 140 pt rule, 2 pt offset, '. ' separator and the 2/4 pt spacing back). Against the new reference the page measures mean 0.434 / p99 2.674 / ssim 0.9725 (was 0.529 / 7.679 / 0.9667); TIGHTENED by the rule above (worst * 1.20, ssim worst - 0.005)."
+      "max_mean_de": 0.082,
+      "max_p99_de": 1.0,
+      "min_ssim": 0.9939,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.583 / p99 16.451 / SSIM 0.9648 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.529 / p99 7.679 / ssim 0.9667 (was 0.583 / 16.451 / 0.9648); re-sized by the rule above. RE-REFERENCED 2026-10-12 (A-08): the generator wrote the document's <FootnoteOption> into designmap.xml inside a <RootFootnoteStory>, where InDesign does not read it, so the reference drew InDesign's default separator (a 72 pt rule, no spacing) while the engine drew the fixture's; it is now in Resources/Preferences.xml, where InDesign keeps it (asked of InDesign 20.0.1: its DOM reads the 140 pt rule, 2 pt offset, '. ' separator and the 2/4 pt spacing back). Against the new reference the page measures mean 0.434 / p99 2.674 / ssim 0.9725 (was 0.529 / 7.679 / 0.9667); TIGHTENED by the rule above (worst * 1.20, ssim worst - 0.005). TIGHTENED 2026-10-13 (L-01b, A-05): references print as characters of their line, the notes carry their own numbers, and the footnote area sits on the frame's foot as InDesign sets it (footnote-pool-probe: last baseline on the content bottom, overset lines dropped until the area clears the reference line plus Spacer, the rule taking no room); worst page now mean 0.068 / p99 0.2 / SSIM 0.9989 (main: 0.434 / 2.67 / 0.9725, with no references or note numbers drawn and the area overlapping the body). Mean at worst x 1.2, p99 at the 1.0 floor, SSIM at worst - 0.005."
     },
     {
       "name": "geometry",
@@ -587,6 +588,24 @@
       "max_p99_de": 3.55,
       "min_ssim": 0.991,
       "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing."
+    },
+    {
+      "name": "footnote-references",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.073,
+      "max_p99_de": 1.22,
+      "min_ssim": 0.9942,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (L-01b, A-05: a reference is a character of its line, formatted by its run; StartAt 3; the note's number where its text holds InDesign's ACE 4, a tab after it). Worst page mean 0.061 / p99 1.02 / SSIM 0.9992; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+    },
+    {
+      "name": "table-inline-text",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 1.183,
+      "max_p99_de": 60.2,
+      "min_ssim": 0.9474,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-06: a table is a character of its paragraph on a line of its own; text before and after it stays one paragraph, its alignment places the table; a paragraph mark before the table makes two). Worst page mean 0.986 / p99 50.17 / SSIM 0.9524: every case composes as InDesign's, and the residue is one-to-two-point offsets of the lines around each table. Mean and p99 at worst x 1.20, SSIM at worst - 0.005."
     },
     {
       "name": "transparency-targets",

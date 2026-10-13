@@ -869,7 +869,7 @@ fn paragraph_plain_text(p: &Paragraph) -> String {
     let mut buf = String::new();
     for run in &p.runs {
         for ch in run.text.chars() {
-            if paged_model::is_page_marker(ch) {
+            if paged_model::is_generated_marker(ch) {
                 continue;
             }
             buf.push(ch);
