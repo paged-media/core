@@ -125,6 +125,8 @@ pub(super) fn compose_footnote_paragraphs(
     let mut run_text_lens_per_para: Vec<Vec<usize>> = Vec::new();
 
     for para in &fn_.paragraphs {
+        // A footnote paragraph takes its nested styles as a body one does.
+        let para = &*super::with_nested_styles(document, para);
         // Resolve every run's attrs against the footnote paragraph's
         // own style cascade — the footnote body parses into the same
         // Paragraph/CharacterRun shape as a top-level story, so the
@@ -225,6 +227,7 @@ pub(super) fn compose_footnote_paragraphs(
                         resolved_runs[i].kerning_method.as_deref(),
                         &resolved_runs[i].otf,
                         resolved_runs[i].capitalization.as_deref(),
+                        resolved_runs[i].position.as_deref(),
                     ),
                 }
             })

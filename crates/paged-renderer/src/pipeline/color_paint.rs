@@ -732,6 +732,18 @@ pub struct RunPaintPicker {
 }
 
 impl RunPaintPicker {
+    /// The picker for a paragraph laid out without its first `bytes`
+    /// (a drop cap's characters, shaped and drawn apart): the body's
+    /// clusters start at 0 after them, so every band moves back by as
+    /// much — a run that starts right after the cap paints from the
+    /// body's first glyph.
+    pub fn without_leading(mut self, bytes: u32) -> Self {
+        for (start, _) in &mut self.bands {
+            *start = start.saturating_sub(bytes);
+        }
+        self
+    }
+
     pub fn pick(&self, cluster: u32) -> Paint {
         let mut chosen = self.default;
         for (start, paint) in &self.bands {
@@ -759,6 +771,14 @@ pub struct RunStrokePicker {
 }
 
 impl RunStrokePicker {
+    /// See [`RunPaintPicker::without_leading`].
+    pub fn without_leading(mut self, bytes: u32) -> Self {
+        for (start, _) in &mut self.bands {
+            *start = start.saturating_sub(bytes);
+        }
+        self
+    }
+
     pub fn pick(&self, cluster: u32) -> Option<(Paint, Stroke)> {
         let mut chosen: Option<(Paint, Stroke)> = None;
         for (start, entry) in &self.bands {

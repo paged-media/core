@@ -205,6 +205,65 @@ pub struct ShapingFeatures {
     /// `Capitalization`, for the two values that are a shaping
     /// question rather than a text transform.
     pub small_caps: SmallCaps,
+    /// `OTFStylisticAlternate` — enables `salt`.
+    pub stylistic_alternates: bool,
+    /// `OTFHistorical` — enables `hist`.
+    pub historical: bool,
+    /// `Position` OTSuperscript / OTSubscript / OTNumerator /
+    /// OTDenominator — the font's own `sups` / `subs` / `numr` / `dnom`
+    /// glyphs, at the run's size and on its baseline.
+    pub position: OtPosition,
+    /// `Capitalization="AllCaps"`: InDesign shapes it with the font's
+    /// case-sensitive forms (`case`) and capital spacing (`cpsp`) — and
+    /// capitals typed as such with neither (asked of InDesign 20.0.1,
+    /// the `opentype` fixture: Inter's "(hello)-[world] 10:30" in All
+    /// Caps sets `parenleft.case` and is 2.18 pt wider, Inter's `cpsp`
+    /// +32 units on each of its ten capitals; typed "(HELLO)-[WORLD]"
+    /// sets the plain glyphs at their plain advances).
+    pub all_caps: bool,
+}
+
+/// The OpenType `Position` values: each is a glyph substitution, not the
+/// scaled, shifted glyph of `Superscript` / `Subscript`.
+///
+/// Asked of InDesign 20.0.1 (2026-10-12, the `opentype` fixture):
+/// OTSuperscript sets Inter's `two.sups` at the run's full size on its
+/// baseline; OTSubscript sets `two.subs` (EB Garamond's `subs`, not its
+/// distinct `sinf`); OTNumerator / OTDenominator set `one.numr` /
+/// `four.dnom`. In a face without the feature (Roboto has no `sups`)
+/// the plain glyph prints, neither scaled nor raised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OtPosition {
+    #[default]
+    Normal,
+    Superscript,
+    Subscript,
+    Numerator,
+    Denominator,
+}
+
+impl OtPosition {
+    /// Map an IDML `Position` value; `Superscript` / `Subscript` (the
+    /// scaled kinds) and `Normal` are not OpenType positions.
+    pub fn from_idml(s: Option<&str>) -> Self {
+        match s {
+            Some("OTSuperscript") => OtPosition::Superscript,
+            Some("OTSubscript") => OtPosition::Subscript,
+            Some("OTNumerator") => OtPosition::Numerator,
+            Some("OTDenominator") => OtPosition::Denominator,
+            _ => OtPosition::Normal,
+        }
+    }
+
+    fn tag(self) -> Option<&'static [u8; 4]> {
+        match self {
+            OtPosition::Normal => None,
+            OtPosition::Superscript => Some(b"sups"),
+            OtPosition::Subscript => Some(b"subs"),
+            OtPosition::Numerator => Some(b"numr"),
+            OtPosition::Denominator => Some(b"dnom"),
+        }
+    }
 }
 
 /// InDesign's small-capital settings, as OpenType features.
@@ -321,6 +380,10 @@ impl Default for ShapingFeatures {
             small_caps: SmallCaps::None,
             figure_style: FigureStyle::Default,
             stylistic_sets: 0,
+            stylistic_alternates: false,
+            historical: false,
+            position: OtPosition::Normal,
+            all_caps: false,
         }
     }
 }
@@ -378,6 +441,19 @@ impl ShapingFeatures {
                 on(&mut out, b"smcp");
                 on(&mut out, b"c2sc");
             }
+        }
+        if self.stylistic_alternates {
+            on(&mut out, b"salt");
+        }
+        if self.historical {
+            on(&mut out, b"hist");
+        }
+        if let Some(t) = self.position.tag() {
+            on(&mut out, t);
+        }
+        if self.all_caps {
+            on(&mut out, b"case");
+            on(&mut out, b"cpsp");
         }
         // Stylistic sets: bit i (0-based) ⇒ ss{i+1}. The shaper needs a
         // 4-byte tag per set, so format `ss01`..`ss20` (the OpenType
@@ -921,6 +997,12 @@ mod tests {
             (|f| f.swash = true, "swsh"),
             (|f| f.slashed_zero = true, "zero"),
             (|f| f.titling = true, "titl"),
+            (|f| f.stylistic_alternates = true, "salt"),
+            (|f| f.historical = true, "hist"),
+            (|f| f.position = OtPosition::Superscript, "sups"),
+            (|f| f.position = OtPosition::Subscript, "subs"),
+            (|f| f.position = OtPosition::Numerator, "numr"),
+            (|f| f.position = OtPosition::Denominator, "dnom"),
         ];
         for (set, tag) in cases {
             let mut f = ShapingFeatures::default();
@@ -935,6 +1017,44 @@ mod tests {
             assert_eq!(rb[0].tag.to_string(), *tag, "{tag}: wrong tag");
             assert_eq!(rb[0].value, 1, "{tag}: expected enabling value");
         }
+    }
+
+    /// InDesign 20.0.1 sets All Caps with `case` and `cpsp` (the
+    /// `opentype` fixture, o10 / o22).
+    #[test]
+    fn all_caps_asks_for_case_sensitive_forms_and_capital_spacing() {
+        let f = ShapingFeatures {
+            all_caps: true,
+            ..ShapingFeatures::default()
+        };
+        let tags: Vec<String> = f.to_harfrust().iter().map(|x| x.tag.to_string()).collect();
+        assert_eq!(tags, ["case", "cpsp"]);
+    }
+
+    #[test]
+    fn ot_position_maps_only_the_opentype_positions() {
+        assert_eq!(
+            OtPosition::from_idml(Some("OTSuperscript")),
+            OtPosition::Superscript
+        );
+        assert_eq!(
+            OtPosition::from_idml(Some("OTSubscript")),
+            OtPosition::Subscript
+        );
+        assert_eq!(
+            OtPosition::from_idml(Some("OTNumerator")),
+            OtPosition::Numerator
+        );
+        assert_eq!(
+            OtPosition::from_idml(Some("OTDenominator")),
+            OtPosition::Denominator
+        );
+        // The scaled positions are geometry, not features.
+        assert_eq!(
+            OtPosition::from_idml(Some("Superscript")),
+            OtPosition::Normal
+        );
+        assert_eq!(OtPosition::from_idml(None), OtPosition::Normal);
     }
 
     #[test]

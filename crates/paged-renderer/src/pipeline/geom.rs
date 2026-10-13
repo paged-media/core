@@ -620,6 +620,11 @@ fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
         keep_last_lines: paragraph.keep_last_lines,
         rule_above: paragraph.rule_above.clone(),
         rule_below: paragraph.rule_below.clone(),
+        // The lists are already layered into the runs (and a segment
+        // never recomputes them); they ride along for the read side.
+        nested_styles: paragraph.nested_styles.clone(),
+        line_styles: paragraph.line_styles.clone(),
+        grep_styles: paragraph.grep_styles.clone(),
         space_before: None,
         space_after: None,
         tab_list: paragraph.tab_list.clone(),
@@ -698,6 +703,11 @@ pub(super) fn split_paragraph_into_segments(
         keep_last_lines: paragraph.keep_last_lines,
         rule_above: paragraph.rule_above.clone(),
         rule_below: paragraph.rule_below.clone(),
+        // The lists are already layered into the runs (and a segment
+        // never recomputes them); they ride along for the read side.
+        nested_styles: paragraph.nested_styles.clone(),
+        line_styles: paragraph.line_styles.clone(),
+        grep_styles: paragraph.grep_styles.clone(),
         space_before: paragraph.space_before,
         space_after: None, // applied to last sub-paragraph only
         tab_list: paragraph.tab_list.clone(),
@@ -970,6 +980,11 @@ pub(super) fn split_paragraph_into_segments(
                 keep_last_lines: paragraph.keep_last_lines,
                 rule_above: paragraph.rule_above.clone(),
                 rule_below: paragraph.rule_below.clone(),
+                // The lists are already layered into the runs (and a segment
+                // never recomputes them); they ride along for the read side.
+                nested_styles: paragraph.nested_styles.clone(),
+                line_styles: paragraph.line_styles.clone(),
+                grep_styles: paragraph.grep_styles.clone(),
                 space_before: paragraph.space_before,
                 space_after: paragraph.space_after,
                 tab_list: paragraph.tab_list.clone(),

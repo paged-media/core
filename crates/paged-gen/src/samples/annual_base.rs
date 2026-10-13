@@ -805,12 +805,12 @@ FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\"><Properties><AppliedFont type=\"str
     // BasedOn cascading from Annual Body.
     f.push_str("<RootParagraphStyleGroup>");
     let para =
-        |f: &mut String, self_id: &str, name: &str, attrs: &str, leading: f32, child: &str| {
+        |f: &mut String, self_id: &str, name: &str, attrs: &str, leading: f32, props: &str| {
             let (attrs, font) = split_applied_font(attrs);
             let font_prop = applied_font_property(font.as_deref());
             f.push_str(&format!(
                 "<ParagraphStyle Self=\"{self_id}\" Name=\"{name}\" {attrs}>\
-<Properties>{font_prop}<Leading type=\"unit\">{leading}</Leading></Properties>{child}\
+<Properties>{font_prop}<Leading type=\"unit\">{leading}</Leading>{props}</Properties>\
 </ParagraphStyle>"
             ));
         };
@@ -913,19 +913,23 @@ BulletsAndNumberingListType=\"NumberedList\""
         13.0,
         "",
     );
-    // Catalog Entry carries a real <NestedStyle> (the parser reads
-    // flat NestedStyle children of ParagraphStyle — same shape the
-    // typed ParagraphStyleSpec builder emits).
+    // Catalog Entry carries a nested style (through the first full
+    // stop), in InDesign's `<AllNestedStyles>` spelling — the one the
+    // typed ParagraphStyleSpec builder emits too.
     para(
         &mut f,
         STYLE_CATALOG_ENTRY,
         "Catalog Entry",
         &format!("BasedOn=\"{STYLE_BODY}\" FirstLineIndent=\"0\""),
         13.0,
-        &format!(
-            "<NestedStyle AppliedCharacterStyle=\"{CHAR_SPECIMEN_NUMBER}\" \
-Delimiter=\".\" Repetition=\"1\" Inclusive=\"true\"/>"
-        ),
+        &crate::builders::resources::all_nested_styles_xml(&[
+            crate::builders::resources::NestedStyleSpec {
+                applied_character_style: CHAR_SPECIMEN_NUMBER,
+                delimiter: ".",
+                repetition: 1,
+                inclusive: true,
+            },
+        ]),
     );
     para(
         &mut f,

@@ -34,8 +34,10 @@ pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
 pub mod inline_objects;
+pub mod justification;
 pub mod keeps;
 pub mod keeps_reflow;
+pub mod kerning;
 pub mod layers_z;
 pub mod layout;
 pub mod line_ends;
@@ -50,7 +52,9 @@ pub mod masters;
 pub mod mixed_leading;
 pub mod navigation;
 pub mod nested_groups;
+pub mod nested_styles;
 pub mod numbering;
+pub mod opentype;
 pub mod paste_into;
 pub mod preflight;
 pub mod rect_shadows;
@@ -162,6 +166,10 @@ pub const SAMPLES: &[&str] = &[
     "table-cell-baseline",
     "table-inline-text",
     "footnote-references",
+    "justification",
+    "kerning",
+    "nested-styles",
+    "opentype",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -234,6 +242,10 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "table-cell-baseline" => table_cell_baseline::build(),
         "table-inline-text" => table_inline_text::build(),
         "footnote-references" => footnote_references::build(),
+        "justification" => justification::build(),
+        "kerning" => kerning::build(),
+        "nested-styles" => nested_styles::build(),
+        "opentype" => opentype::build(),
         _ => return None,
     })
 }
@@ -262,7 +274,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            67,
+            71,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
