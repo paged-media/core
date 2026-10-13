@@ -107,7 +107,7 @@ pub struct TableStyleSpec {
 /// Same as [`graphic_xml`] but appends caller-supplied custom swatches
 /// after the built-in Black + Paper.
 pub fn graphic_xml_with_extras(extras: &[ExtraColor]) -> Vec<u8> {
-    write_graphic(extras, &[])
+    write_graphic(extras, &[], &[])
 }
 
 /// Like [`graphic_xml_with_extras`] but also emits gradient swatches.
@@ -115,8 +115,52 @@ pub fn graphic_xml_with_extras_and_gradients(
     extras: &[ExtraColor],
     gradients: &[ExtraGradient],
 ) -> Vec<u8> {
-    write_graphic(extras, gradients)
+    write_graphic(extras, gradients, &[])
 }
+
+/// Like [`graphic_xml_with_extras`] but also declares stroke styles, so
+/// a page item can reference one via `StrokeType="<the style's Self>"`:
+/// InDesign's built-in styles ([`BUILTIN_STROKE_STYLES`]) and the custom
+/// ones (W1.2, see [`StrokeStyleSpec`]). Both live in Graphic.xml, where
+/// InDesign writes them.
+///
+/// The built-ins are declared because InDesign resolves a built-in
+/// `StrokeType` only against its declaration in the package: asked of
+/// InDesign 20.0.1 (2026-10-12), every built-in reference of the
+/// strokes-fills fixture — Dashed, Canned Dotted, Japanese Dots, Wavy —
+/// read back as Solid while Graphic.xml declared none of them (the
+/// line-ends fixture found the same for Dashed).
+pub fn graphic_xml_with_stroke_styles(
+    extras: &[ExtraColor],
+    stroke_styles: &[StrokeStyleSpec],
+) -> Vec<u8> {
+    write_graphic(extras, &[], stroke_styles)
+}
+
+/// InDesign's built-in stroke styles, as every Graphic.xml it writes
+/// declares them (`<StrokeStyle Self="StrokeStyle/$ID/<name>"
+/// Name="$ID/<name>"/>`), in its order. There is no `Dotted` among them:
+/// InDesign's dotted built-in is `Canned Dotted`.
+pub const BUILTIN_STROKE_STYLES: &[&str] = &[
+    "Triple_Stroke",
+    "ThickThinThick",
+    "ThinThickThin",
+    "ThickThick",
+    "ThickThin",
+    "ThinThick",
+    "ThinThin",
+    "Japanese Dots",
+    "White Diamond",
+    "Left Slant Hash",
+    "Right Slant Hash",
+    "Straight Hash",
+    "Wavy",
+    "Canned Dotted",
+    "Canned Dashed 3x2",
+    "Canned Dashed 4x4",
+    "Dashed",
+    "Solid",
+];
 
 /// W4.7 — a fully-specified `<Color>` swatch for [`graphic_xml_rich`].
 /// Covers the spot-ink / mixed-ink / standalone-tint variants the
@@ -161,14 +205,6 @@ pub struct RichColor {
     pub base_color: Option<String>,
 }
 
-/// W4.7 — a `<ColorGroup>` named grouping of swatch self-ids.
-pub struct ColorGroupSpec {
-    pub self_id: String,
-    pub name: String,
-    /// `ColorGroupSwatches` — the member `Color/<id>` refs.
-    pub members: Vec<String>,
-}
-
 /// W4.7 — a `<Swatch>` that wraps (aliases) a `<Color>` by `Self`
 /// reference. IDML uses these for the named-swatch-over-color layer
 /// the editor's Swatches panel surfaces.
@@ -180,16 +216,14 @@ pub struct SwatchSpec {
 }
 
 /// W4.7 — `Resources/Graphic.xml` carrying rich `<Color>` swatches
-/// (spot / mixed-ink / standalone-tint), `<ColorGroup>` groupings, and
-/// `<Swatch>` aliases alongside the built-in Black + Paper. Kept
-/// separate from [`write_graphic`] so the existing `ExtraColor` call
-/// sites stay byte-identical.
-pub fn graphic_xml_rich(
-    colors: &[RichColor],
-    groups: &[ColorGroupSpec],
-    swatches: &[SwatchSpec],
-) -> Vec<u8> {
-    graphic_xml_rich_full(colors, &[], groups, swatches)
+/// (spot / mixed-ink / standalone-tint) and `<Swatch>` aliases alongside
+/// the built-in Black + Paper. Kept separate from [`write_graphic`] so
+/// the existing `ExtraColor` call sites stay byte-identical.
+///
+/// Colour groups are NOT written here: InDesign keeps `<ColorGroup>` in
+/// `designmap.xml` (see `designmap::ColorGroupSpec`).
+pub fn graphic_xml_rich(colors: &[RichColor], swatches: &[SwatchSpec]) -> Vec<u8> {
+    graphic_xml_rich_full(colors, &[], swatches)
 }
 
 /// Like [`graphic_xml_rich`] but also emits `<Gradient>` swatches
@@ -202,7 +236,6 @@ pub fn graphic_xml_rich(
 pub fn graphic_xml_rich_full(
     colors: &[RichColor],
     gradients: &[ExtraGradient],
-    groups: &[ColorGroupSpec],
     swatches: &[SwatchSpec],
 ) -> Vec<u8> {
     let mut b = XmlBuilder::new();
@@ -307,17 +340,6 @@ pub fn graphic_xml_rich_full(
             ],
         );
     }
-    for g in groups {
-        let members = g.members.join(" ");
-        b.empty(
-            "ColorGroup",
-            &[
-                ("Self", g.self_id.as_str()),
-                ("Name", g.name.as_str()),
-                ("ColorGroupSwatches", members.as_str()),
-            ],
-        );
-    }
     b.end("idPkg:Graphic");
     b.into_bytes()
 }
@@ -340,10 +362,14 @@ fn write_gradient_stop(b: &mut XmlBuilder, stop: &GradientStop) {
 /// `Resources/Graphic.xml` — registers `Color/Black` and `Color/Paper`,
 /// the two swatches every IDML carries by default.
 pub fn graphic_xml() -> Vec<u8> {
-    write_graphic(&[], &[])
+    write_graphic(&[], &[], &[])
 }
 
-fn write_graphic(extras: &[ExtraColor], gradients: &[ExtraGradient]) -> Vec<u8> {
+fn write_graphic(
+    extras: &[ExtraColor],
+    gradients: &[ExtraGradient],
+    stroke_styles: &[StrokeStyleSpec],
+) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -409,6 +435,16 @@ fn write_graphic(extras: &[ExtraColor], gradients: &[ExtraGradient]) -> Vec<u8> 
             write_gradient_stop(&mut b, stop);
         }
         b.end("Gradient");
+    }
+    if !stroke_styles.is_empty() {
+        for name in BUILTIN_STROKE_STYLES {
+            let self_id = format!("StrokeStyle/$ID/{name}");
+            let id_name = format!("$ID/{name}");
+            b.empty("StrokeStyle", &[("Self", &self_id), ("Name", &id_name)]);
+        }
+    }
+    for ss in stroke_styles {
+        write_stroke_style(&mut b, ss);
     }
     b.end("idPkg:Graphic");
     b.into_bytes()
@@ -572,31 +608,104 @@ pub fn fonts_xml() -> Vec<u8> {
     fonts_xml_for(&[OPEN_SANS])
 }
 
-/// One custom `<…StrokeStyle>` resource to emit in `Resources/Styles.xml`.
-/// Covers the four W1.2 stroke-STYLE families. Only the fields each kind
-/// uses are honoured; the rest stay `None`.
+/// One custom stroke style, written into `Resources/Graphic.xml` in the
+/// spelling InDesign 20.0.1 writes (asked of it 2026-10-12: styles made
+/// through its DOM — `dashedStrokeStyles.add({dashArray: [8, 6]})`,
+/// `stripedStrokeStyles.add({stripeArray: [0, 60, 80, 100]})` — and
+/// exported as IDML):
+///
+/// ```xml
+/// <DashedStrokeStyle Self="DashedStrokeStyle/Gap Dash" DashArray="8 6"
+///   StrokeCornerAdjustment="DashesAndGaps" EndCap="ButtEndCap" Name="Gap Dash"/>
+/// <StripedStrokeStyle Self="StripedStrokeStyle/Thick Thin"
+///   StripeArray="0 60 80 100" Name="Thick Thin"/>
+/// ```
+///
+/// A page item names the style by that `Self` in its `StrokeType`.
+///
+/// This generator used to write them into `Resources/Styles.xml`, with
+/// the dashes in a `Pattern` attribute and the stripes as `<Stripe>`
+/// children. InDesign made the styles from that by name but read neither
+/// the dashes nor the stripes: its DOM gave the dashed style its default
+/// 12 pt dash and the striped one its default `0 25 75 100`. Two more of
+/// the fields were never InDesign's and are gone: a gap colour is a
+/// property of the STROKE (`GapColor` / `GapTint` on the page item), not
+/// of the style, and InDesign has no user-defined wavy style
+/// (`doc.wavyStrokeStyles` does not exist; the wave is the built-in
+/// `StrokeStyle/$ID/Wavy`).
 pub struct StrokeStyleSpec {
+    /// The style's `Self`, which `StrokeType` references. InDesign spells
+    /// it `<Kind>StrokeStyle/<Name>`.
     pub self_id: &'static str,
     pub name: &'static str,
-    /// `"Dashed"`, `"Dotted"`, `"Striped"`, or `"Wavy"`.
+    /// `"Dashed"` or `"Striped"`.
     pub kind: &'static str,
-    /// Dashed/Dotted `Pattern` attribute (space-separated pt lengths).
-    pub pattern: Option<&'static str>,
-    /// `GapColor` / `GapTint` for the gap-colour under-stroke pass.
-    pub gap_color: Option<&'static str>,
-    pub gap_tint: Option<&'static str>,
-    /// `<Stripe Left=… Width=…/>` children (0..1 ratios) for Striped.
+    /// Dashed: `DashArray`, dash and gap lengths in points.
+    pub dash_array: Option<&'static str>,
+    /// Striped: `(left, width)` of each stripe as 0..1 fractions of the
+    /// stroke weight, written as `StripeArray`'s percent start/end pairs.
     pub stripes: &'static [(f32, f32)],
-    /// Wavy `Width` / `Wavelength` (0..1 ratios).
-    pub wave_width: Option<&'static str>,
-    pub wave_length: Option<&'static str>,
+}
+
+fn write_stroke_style(b: &mut XmlBuilder, ss: &StrokeStyleSpec) {
+    match ss.kind {
+        "Dashed" => {
+            let dashes = ss
+                .dash_array
+                .expect("a dashed stroke style needs its DashArray");
+            b.empty(
+                "DashedStrokeStyle",
+                &[
+                    ("Self", ss.self_id),
+                    ("DashArray", dashes),
+                    ("StrokeCornerAdjustment", "DashesAndGaps"),
+                    ("EndCap", "ButtEndCap"),
+                    ("Name", ss.name),
+                ],
+            );
+        }
+        "Striped" => {
+            let stripe_array = ss
+                .stripes
+                .iter()
+                .flat_map(|&(left, width)| [left * 100.0, (left + width) * 100.0])
+                .map(crate::xml::format_f32)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let attrs = [
+                ("Self", ss.self_id),
+                ("StripeArray", stripe_array.as_str()),
+                ("Name", ss.name),
+            ];
+            // ◪ The `<Stripe Left Width>` children are the engine's older
+            // spelling of the same stripes. The importer this repository
+            // pins reads only them, not `StripeArray`; InDesign reads the
+            // attribute and passes over the children (asked: its DOM
+            // reports `stripeArray` 0,60,80,100 for the strokes-fills
+            // style, and 0,25,75,100 — its default — when only the
+            // children were written). Drop them once the importer reads
+            // `StripeArray`.
+            b.start("StripedStrokeStyle", &attrs);
+            for &(left, width) in ss.stripes {
+                let left_s = crate::xml::format_f32(left);
+                let width_s = crate::xml::format_f32(width);
+                b.empty("Stripe", &[("Left", &left_s), ("Width", &width_s)]);
+            }
+            b.end("StripedStrokeStyle");
+        }
+        "Wavy" => panic!(
+            "InDesign has no user-defined wavy stroke style; reference the built-in \
+             `StrokeStyle/$ID/Wavy` instead"
+        ),
+        other => panic!("unknown stroke style kind {other}"),
+    }
 }
 
 /// `Resources/Styles.xml` — declares the implicit `[No paragraph
 /// style]` and `[No character style]` plus a default Open Sans
 /// paragraph style for body text.
 pub fn styles_xml() -> Vec<u8> {
-    styles_xml_full(&[], &[])
+    styles_xml_full(&[])
 }
 
 /// Like [`styles_xml`] but also emits a `<RootTableStyleGroup>`
@@ -604,53 +713,21 @@ pub fn styles_xml() -> Vec<u8> {
 /// drive the renderer's alternating-fill path (which resolves off an
 /// `AppliedTableStyle`, not per-cell fills).
 pub fn styles_xml_with_table_styles(table_styles: &[TableStyleSpec]) -> Vec<u8> {
-    styles_xml_full(table_styles, &[])
-}
-
-/// Like [`styles_xml`] but also emits custom `<…StrokeStyle>` resources
-/// (W1.2) so a page item can reference a striped / wavy / gap-coloured
-/// dash via `StrokeType="StrokeStyle/<id>"`.
-pub fn styles_xml_with_stroke_styles(stroke_styles: &[StrokeStyleSpec]) -> Vec<u8> {
-    styles_xml_full(&[], stroke_styles)
-}
-
-/// W1.22 (engine gap 22) — `Resources/Styles.xml` carrying a single
-/// `<NumberingList Self="NumberingList/Shared">` resource (plus the
-/// default `[No ...]` styles). `continue_across_stories` toggles the
-/// list's `ContinueNumbersAcrossStories` flag — the numbering sample
-/// emits two variants (true / false) to exercise the renderer's
-/// cross-story continuity decision. Built by post-processing the
-/// default `styles_xml()` output: splice the `<RootNumberingListGroup>`
-/// in just before the closing `</idPkg:Styles>` tag so the existing
-/// builder family stays the single source of the default structure.
-pub fn styles_xml_with_numbering_list(continue_across_stories: bool) -> Vec<u8> {
-    let base = styles_xml();
-    let group = format!(
-        "<RootNumberingListGroup>\
-<NumberingList Self=\"NumberingList/Shared\" Name=\"Shared\" \
-ContinueNumbersAcrossStories=\"{continue_across_stories}\" \
-ContinueNumbersAcrossDocuments=\"false\"/>\
-</RootNumberingListGroup>"
-    );
-    let text = String::from_utf8(base).expect("styles_xml is valid utf-8");
-    let closing = "</idPkg:Styles>";
-    let spliced = match text.rfind(closing) {
-        Some(idx) => format!("{}{}{}", &text[..idx], group, &text[idx..]),
-        None => format!("{text}{group}"),
-    };
-    spliced.into_bytes()
+    styles_xml_full(table_styles)
 }
 
 /// W4.9 — splice an arbitrary raw style-XML `fragment` in just before
 /// the closing `</idPkg:Styles>` tag of the default [`styles_xml`]
-/// output. The same post-processing trick
-/// [`styles_xml_with_numbering_list`] uses, but generic: lets a sample
+/// output. A generic post-processing trick: lets a sample
 /// emit richer style cascades (next-style chains, `<CellStyle>` /
-/// `<TableStyle>` BasedOn, named-list definitions, OTF-bearing
-/// `<CharacterStyle>`s) without growing the typed builder family.
-/// The parser keys every style element by `Self` regardless of which
-/// `Root…Group` wrapper holds it, so the caller may inline whatever
-/// well-formed fragment it needs.
+/// `<TableStyle>` BasedOn, OTF-bearing `<CharacterStyle>`s, TOC styles)
+/// without growing the typed builder family.
+/// Our parser keys every style element by `Self` regardless of which
+/// wrapper holds it; InDesign does not, and silently drops whatever sits
+/// inside a wrapper it does not know (`<RootTOCStyleGroup>`,
+/// `<RootNumberingListGroup>`), so a fragment uses only InDesign's own
+/// groups. Numbering lists are not styles at all in InDesign's files:
+/// they are `designmap.xml` children (`designmap::NumberingListSpec`).
 pub fn styles_xml_with_raw(fragment: &str) -> Vec<u8> {
     let mut text = String::from_utf8(styles_xml()).expect("styles_xml is valid utf-8");
     // MERGE INTO the root groups, never append a second one.
@@ -685,8 +762,9 @@ pub fn styles_xml_with_raw(fragment: &str) -> Vec<u8> {
             text.insert_str(at, &format!("{open}{inner}{close}"));
         }
     }
-    // Everything that is NOT one of those groups — conditions, TOC
-    // styles, numbering lists — still appends whole.
+    // Everything that is NOT one of those groups — TOC styles, which
+    // InDesign writes as direct children of `<idPkg:Styles>` — still
+    // appends whole.
     let rest = strip_known_groups(fragment);
     let closing = "</idPkg:Styles>";
     let spliced = match text.rfind(closing) {
@@ -838,13 +916,11 @@ pub fn all_nested_styles_xml(entries: &[NestedStyleSpec]) -> String {
     out
 }
 
-/// Combined builder behind the [`styles_xml`] family — table styles
-/// and custom stroke styles in one `Resources/Styles.xml`.
-pub fn styles_xml_full(
-    table_styles: &[TableStyleSpec],
-    stroke_styles: &[StrokeStyleSpec],
-) -> Vec<u8> {
-    styles_xml_full_with(table_styles, stroke_styles, &[])
+/// Combined builder behind the [`styles_xml`] family — the default
+/// styles plus table styles in one `Resources/Styles.xml`. (Custom stroke
+/// styles are Graphic.xml's: [`graphic_xml_with_stroke_styles`].)
+pub fn styles_xml_full(table_styles: &[TableStyleSpec]) -> Vec<u8> {
+    styles_xml_full_with(table_styles, &[])
 }
 
 /// Like [`styles_xml`] but also emits the supplied named paragraph
@@ -853,12 +929,11 @@ pub fn styles_xml_full(
 /// `applyStyle` is render-provable AND the fixture still round-trips
 /// byte-identically through `paged-write`.
 pub fn styles_xml_with_paragraph_styles(extra_paragraph_styles: &[ParagraphStyleSpec]) -> Vec<u8> {
-    styles_xml_full_with(&[], &[], extra_paragraph_styles)
+    styles_xml_full_with(&[], extra_paragraph_styles)
 }
 
 fn styles_xml_full_with(
     table_styles: &[TableStyleSpec],
-    stroke_styles: &[StrokeStyleSpec],
     extra_paragraph_styles: &[ParagraphStyleSpec],
 ) -> Vec<u8> {
     let mut b = XmlBuilder::new();
@@ -1020,45 +1095,6 @@ fn styles_xml_full_with(
         b.empty("TableStyle", &a);
     }
     b.end("RootTableStyleGroup");
-    // Custom stroke-style resources (W1.2). InDesign serialises these as
-    // top-level children of `idPkg:Styles`; the parser keys them by
-    // `Self`, and page items reference them via `StrokeType`.
-    for ss in stroke_styles {
-        let elem = match ss.kind {
-            "Dashed" => "DashedStrokeStyle",
-            "Dotted" => "DottedStrokeStyle",
-            "Striped" => "StripedStrokeStyle",
-            "Wavy" => "WavyStrokeStyle",
-            other => panic!("unknown stroke style kind {other}"),
-        };
-        let mut attrs: Vec<(&str, &str)> = vec![("Self", ss.self_id), ("Name", ss.name)];
-        if let Some(p) = ss.pattern {
-            attrs.push(("Pattern", p));
-        }
-        if let Some(gc) = ss.gap_color {
-            attrs.push(("GapColor", gc));
-        }
-        if let Some(gt) = ss.gap_tint {
-            attrs.push(("GapTint", gt));
-        }
-        if let Some(w) = ss.wave_width {
-            attrs.push(("Width", w));
-        }
-        if let Some(wl) = ss.wave_length {
-            attrs.push(("Wavelength", wl));
-        }
-        if ss.stripes.is_empty() {
-            b.empty(elem, &attrs);
-        } else {
-            b.start(elem, &attrs);
-            for &(left, width) in ss.stripes {
-                let left_s = crate::xml::format_f32(left);
-                let width_s = crate::xml::format_f32(width);
-                b.empty("Stripe", &[("Left", &left_s), ("Width", &width_s)]);
-            }
-            b.end(elem);
-        }
-    }
     b.end("idPkg:Styles");
     b.into_bytes()
 }
@@ -1075,6 +1111,43 @@ fn styles_xml_full_with(
 /// was composed with, and the package says so (the exporter states the
 /// same on an older package — `idml-export::preferences`).
 pub fn preferences_xml() -> Vec<u8> {
+    preferences_xml_with_footnote_option(None)
+}
+
+/// W1.8 — the document's `<FootnoteOption>`: the separator rule and the
+/// footnote spacing. Attribute names mirror InDesign's DOM
+/// `FootnoteOption`; only the subset the renderer consumes is exposed,
+/// and a `None` field is left out (InDesign then keeps its own default).
+#[derive(Default)]
+pub struct FootnoteOptionDef {
+    pub rule_on: Option<bool>,
+    pub rule_color: Option<String>,
+    pub rule_tint: Option<f32>,
+    pub rule_line_weight: Option<f32>,
+    pub rule_width: Option<f32>,
+    pub rule_left_indent: Option<f32>,
+    pub rule_offset: Option<f32>,
+    pub separator_text: Option<String>,
+    pub spacer: Option<f32>,
+    pub space_between: Option<f32>,
+}
+
+/// [`preferences_xml`] plus the document's `<FootnoteOption>`, which
+/// InDesign keeps HERE, in `Resources/Preferences.xml`, after the text
+/// preference — 271 of the 305 census documents, and its own export of a
+/// document whose footnote options were set through the DOM (2026-10-12).
+/// This generator used to write it into `designmap.xml` inside a
+/// `<RootFootnoteStory>`, which InDesign does not read: every reference
+/// printed InDesign's default rule rather than the fixture's.
+///
+/// `RuleColor` is a typed `<Properties>` child in InDesign's spelling
+/// (`<RuleColor type="object">Color/…</RuleColor>`), never an attribute:
+/// asked of InDesign 20.0.1, a rule colour written only as an attribute
+/// read back Black, the child alone read back the colour. ◪ It is ALSO
+/// written as that attribute, the engine's older spelling, because the
+/// importer this repository pins reads only the attribute (InDesign
+/// passes over it); drop it once the importer reads the child.
+pub fn preferences_xml_with_footnote_option(footnote: Option<&FootnoteOptionDef>) -> Vec<u8> {
     let mut b = XmlBuilder::new();
     b.write_decl();
     b.start(
@@ -1088,6 +1161,61 @@ pub fn preferences_xml() -> Vec<u8> {
         ],
     );
     b.empty("TextPreference", &[("UseOpticalSize", "false")]);
+    if let Some(fo) = footnote {
+        write_footnote_option(&mut b, fo);
+    }
     b.end("idPkg:Preferences");
     b.into_bytes()
+}
+
+/// `<FootnoteOption>` with InDesign's attribute order (`SeparatorText`,
+/// `SpaceBetween`, `Spacer`, then the rule) and its `<Properties>` child.
+fn write_footnote_option(b: &mut XmlBuilder, fo: &FootnoteOptionDef) {
+    let num = crate::xml::format_f32;
+    let mut attrs: Vec<(&str, String)> = Vec::new();
+    if let Some(v) = fo.separator_text.as_deref() {
+        attrs.push(("SeparatorText", v.to_string()));
+    }
+    if let Some(v) = fo.space_between {
+        attrs.push(("SpaceBetween", num(v)));
+    }
+    if let Some(v) = fo.spacer {
+        attrs.push(("Spacer", num(v)));
+    }
+    if let Some(v) = fo.rule_on {
+        attrs.push(("RuleOn", v.to_string()));
+    }
+    if let Some(v) = fo.rule_line_weight {
+        attrs.push(("RuleLineWeight", num(v)));
+    }
+    if let Some(v) = fo.rule_tint {
+        attrs.push(("RuleTint", num(v)));
+    }
+    if let Some(v) = fo.rule_left_indent {
+        attrs.push(("RuleLeftIndent", num(v)));
+    }
+    if let Some(v) = fo.rule_width {
+        attrs.push(("RuleWidth", num(v)));
+    }
+    if let Some(v) = fo.rule_offset {
+        attrs.push(("RuleOffset", num(v)));
+    }
+    if let Some(v) = fo.rule_color.as_deref() {
+        // The older spelling, for the pinned importer (see
+        // `preferences_xml_with_footnote_option`).
+        attrs.push(("RuleColor", v.to_string()));
+    }
+    let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    match fo.rule_color.as_deref() {
+        Some(color) => {
+            b.start("FootnoteOption", &attr_refs);
+            b.start("Properties", &[]);
+            b.start("RuleColor", &[("type", "object")]);
+            b.text(color);
+            b.end("RuleColor");
+            b.end("Properties");
+            b.end("FootnoteOption");
+        }
+        None => b.empty("FootnoteOption", &attr_refs),
+    }
 }

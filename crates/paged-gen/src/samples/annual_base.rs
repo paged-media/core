@@ -124,14 +124,14 @@
 //!     authoring time. Same for `KeepWithNext` on `Head 1`.
 
 use crate::builders::designmap::{
-    write_designmap_with_markers, BookmarkDef, DesignMap, FootnoteOptionDef, HyperlinkDef,
+    write_designmap_with_markers, BookmarkDef, ColorGroupSpec, DesignMap, HyperlinkDef,
     HyperlinkDestinationDef, IndexTopicDef, LayerDef, MarkerResources, TextVariableDef,
 };
 use crate::builders::master::{write_facing_master, FacingMaster};
 use crate::builders::page_item::{PageItem, Rect};
 use crate::builders::resources::{
-    container_xml, graphic_xml_rich_full, preferences_xml, styles_xml_with_raw, ColorGroupSpec,
-    ExtraGradient, GradientStop, RichColor,
+    container_xml, graphic_xml_rich_full, preferences_xml_with_footnote_option,
+    styles_xml_with_raw, ExtraGradient, FootnoteOptionDef, GradientStop, RichColor,
 };
 use crate::builders::resources::{ConditionSetSpec, ConditionSpec};
 use crate::builders::spread::{
@@ -572,7 +572,13 @@ fn graphic() -> Vec<u8> {
             },
         ],
     }];
-    let groups = [ColorGroupSpec {
+    graphic_xml_rich_full(&colors, &gradients, &[])
+}
+
+/// The brand swatch group — a `designmap.xml` child, where InDesign
+/// keeps colour groups.
+fn color_groups() -> Vec<ColorGroupSpec> {
+    vec![ColorGroupSpec {
         self_id: COLOR_GROUP_BRAND.to_string(),
         name: COLOR_GROUP_BRAND_NAME.to_string(),
         // Screen Blue is deliberately absent — the warning specimen
@@ -585,8 +591,24 @@ fn graphic() -> Vec<u8> {
             SWATCH_SLATE.to_string(),
             SWATCH_LAB_MARIGOLD.to_string(),
         ],
-    }];
-    graphic_xml_rich_full(&colors, &gradients, &groups, &[])
+    }]
+}
+
+/// The full `FootnoteOptionDef` battery (no create-footnote-option op
+/// exists on the wire) — written into `Resources/Preferences.xml`.
+fn footnote_option() -> FootnoteOptionDef {
+    FootnoteOptionDef {
+        rule_on: Some(true),
+        rule_color: Some(SWATCH_VERMILION.to_string()),
+        rule_tint: Some(100.0),
+        rule_line_weight: Some(0.5),
+        rule_width: Some(62.0),
+        rule_left_indent: Some(0.0),
+        rule_offset: Some(4.0),
+        separator_text: Some(" ".to_string()),
+        spacer: Some(13.0),
+        space_between: Some(6.5),
+    }
 }
 
 /// `Resources/Fonts.xml` — the annual's families, each face spelled as
@@ -1158,10 +1180,11 @@ EndRowFillColor=\"Color/Paper\" EndRowFillCount=\"1\"/>\
 </RootTableStyleGroup>"
     ));
 
-    // TOC: three levels, page numbers on, tab separator.
+    // TOC: three levels, page numbers on, tab separator. A direct child
+    // of `<idPkg:Styles>`, as InDesign writes it (a `<RootTOCStyleGroup>`
+    // wrapper hid it from InDesign).
     f.push_str(&format!(
-        "<RootTOCStyleGroup>\
-<TOCStyle Self=\"{TOC_STYLE}\" Name=\"Annual Contents\" Title=\"Contents\" \
+        "<TOCStyle Self=\"{TOC_STYLE}\" Name=\"Annual Contents\" Title=\"Contents\" \
 TitleStyle=\"{STYLE_PART_TITLE}\">\
 <TOCStyleEntry Name=\"Part Title\" IncludeStyle=\"{STYLE_PART_TITLE}\" \
 FormatStyle=\"{STYLE_TOC_PART}\" Level=\"1\" PageNumber=\"On\" Separator=\"^t\"/>\
@@ -1169,8 +1192,7 @@ FormatStyle=\"{STYLE_TOC_PART}\" Level=\"1\" PageNumber=\"On\" Separator=\"^t\"/
 FormatStyle=\"{STYLE_TOC_CHAPTER}\" Level=\"2\" PageNumber=\"On\" Separator=\"^t\"/>\
 <TOCStyleEntry Name=\"Head 1\" IncludeStyle=\"{STYLE_HEAD_1}\" \
 FormatStyle=\"{STYLE_TOC_HEAD}\" Level=\"3\" PageNumber=\"On\" Separator=\"^t\"/>\
-</TOCStyle>\
-</RootTOCStyleGroup>"
+</TOCStyle>"
     ));
 
     styles_xml_with_raw(&f)
@@ -2461,20 +2483,6 @@ them.",
                 name: name.to_string(),
             })
             .collect(),
-        // The full FootnoteOptionDef battery (no create-footnote-option
-        // op exists on the wire).
-        footnote_option: Some(FootnoteOptionDef {
-            rule_on: Some(true),
-            rule_color: Some(SWATCH_VERMILION.to_string()),
-            rule_tint: Some(100.0),
-            rule_line_weight: Some(0.5),
-            rule_width: Some(62.0),
-            rule_left_indent: Some(0.0),
-            rule_offset: Some(4.0),
-            separator_text: Some(" ".to_string()),
-            spacer: Some(13.0),
-            space_between: Some(6.5),
-        }),
         // NO sections — a live `insertSection` on p1 re-bakes the
         // Page.Name labels to numeric folios (see module doc).
         sections: Vec::new(),
@@ -2519,6 +2527,8 @@ them.",
                 ],
             },
         ],
+        numbering_lists: Vec::new(),
+        color_groups: color_groups(),
     };
 
     let designmap = write_designmap_with_markers(
@@ -2537,7 +2547,7 @@ them.",
         graphic_xml: graphic(),
         fonts_xml: fonts(),
         styles_xml: styles(),
-        preferences_xml: preferences_xml(),
+        preferences_xml: preferences_xml_with_footnote_option(Some(&footnote_option())),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
         mapping_xml: mapping_xml(),

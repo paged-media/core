@@ -24,8 +24,9 @@
 //!      `Title` then `Body`; the parse round-trip asserts the chain
 //!      resolves, and the render proves the styled paragraphs lay out.
 //!   2. **named-list definition cascade** — a `<NumberingList>` resource
-//!      bound through a paragraph style + a child style `BasedOn` it, so
-//!      the list reference cascades down the BasedOn chain.
+//!      (a `designmap.xml` child, where InDesign keeps it) bound through a
+//!      paragraph style + a child style `BasedOn` it, so the list
+//!      reference cascades down the BasedOn chain.
 //!   3. **cell + table styles cascade (BasedOn)** — a base `<CellStyle>`
 //!      (supplies the fill) + a derived cell style `BasedOn` it, and a
 //!      base `<TableStyle>` + a derived table style `BasedOn` it. A table
@@ -41,7 +42,9 @@
 //!      single-word-rich body so the breaker's zone restriction is in
 //!      play. The render proves it composes multiple justified lines.
 
-use crate::builders::designmap::{write_designmap, DesignMap};
+use crate::builders::designmap::{
+    write_designmap_with_markers, DesignMap, MarkerResources, NumberingListSpec,
+};
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
 use crate::builders::resources::{
@@ -103,8 +106,9 @@ PointSize=\"16\" FillColor=\"Color/Black\" NextStyle=\"{STYLE_BODY}\"/>\
 <ParagraphStyle Self=\"{STYLE_BODY}\" Name=\"Body\" AppliedFont=\"Open Sans\" \
 PointSize=\"12\" FillColor=\"Color/Black\" NextStyle=\"{STYLE_BODY}\"/>\
 <ParagraphStyle Self=\"{STYLE_LIST_BASE}\" Name=\"ListBase\" AppliedFont=\"Open Sans\" \
-PointSize=\"12\" FillColor=\"Color/Black\" BulletsAndNumberingListType=\"NumberedList\" \
-AppliedNumberingList=\"{NUMBERING_LIST}\"/>\
+PointSize=\"12\" FillColor=\"Color/Black\" BulletsAndNumberingListType=\"NumberedList\">\
+<Properties><AppliedNumberingList type=\"object\">{NUMBERING_LIST}</AppliedNumberingList>\
+</Properties></ParagraphStyle>\
 <ParagraphStyle Self=\"{STYLE_LIST_DERIVED}\" Name=\"ListDerived\" \
 BasedOn=\"{STYLE_LIST_BASE}\" PointSize=\"12\"/>\
 <ParagraphStyle Self=\"{STYLE_JUSTIFIED}\" Name=\"JustifiedHyphen\" \
@@ -121,11 +125,7 @@ VerticalJustification=\"CenterAlign\"/>\
 <TableStyle Self=\"{TABLE_BASE}\" Name=\"TableBase\" \
 BodyRegionCellStyle=\"{CELL_DERIVED}\"/>\
 <TableStyle Self=\"{TABLE_DERIVED}\" Name=\"TableDerived\" BasedOn=\"{TABLE_BASE}\"/>\
-</RootTableStyleGroup>\
-<RootNumberingListGroup>\
-<NumberingList Self=\"{NUMBERING_LIST}\" Name=\"Steps\" \
-ContinueNumbersAcrossStories=\"false\" ContinueNumbersAcrossDocuments=\"false\"/>\
-</RootNumberingListGroup>"
+</RootTableStyleGroup>"
     );
     styles_xml_with_raw(&fragment)
 }
@@ -418,12 +418,23 @@ fn build_with_otf(otf_on: bool) -> Sample {
         story_refs.push(story_id);
     }
 
-    let designmap = write_designmap(&DesignMap {
-        self_id: "d".to_string(),
-        master_spreads: master_refs,
-        spreads: spread_refs,
-        stories: story_refs,
-    });
+    let designmap = write_designmap_with_markers(
+        &DesignMap {
+            self_id: "d".to_string(),
+            master_spreads: master_refs,
+            spreads: spread_refs,
+            stories: story_refs,
+        },
+        &MarkerResources {
+            numbering_lists: vec![NumberingListSpec {
+                self_id: NUMBERING_LIST.to_string(),
+                name: "Steps".to_string(),
+                continue_across_stories: false,
+                continue_across_documents: false,
+            }],
+            ..MarkerResources::default()
+        },
+    );
 
     Sample {
         container_xml: container_xml(),
