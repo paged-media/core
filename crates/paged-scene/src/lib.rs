@@ -494,6 +494,12 @@ impl Document {
         if let Some(id) = run.character_style.as_deref() {
             acc.merge_below_character(&self.styles.resolve_character(id));
         }
+        // A nested style sits under the character style applied by hand
+        // and over the paragraph style (see
+        // `CharacterRun::nested_character_style`).
+        if let Some(id) = run.nested_character_style.as_deref() {
+            acc.merge_below_character(&self.styles.resolve_character(id));
+        }
         acc.merge_below_paragraph(
             &self
                 .styles
@@ -1149,6 +1155,9 @@ impl ResolvedRunAttrs {
         if self.kerning_method.is_none() {
             self.kerning_method = p.kerning_method.clone();
         }
+        // The paragraph style's `OTF*` toggles reach every run whose own
+        // and character-style values leave them unset.
+        self.otf.merge_below(&p.otf);
         self.overprint_fill = self.overprint_fill.or(p.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(p.overprint_stroke);
     }
@@ -1242,10 +1251,12 @@ impl ResolvedParagraphAttrs {
             rule_above: paragraph.rule_above.clone(),
             rule_below: paragraph.rule_below.clone(),
             border: Default::default(),
-            // Nested styles are not declared inline on a
-            // ParagraphStyleRange in normal IDML; `merge_below` pulls
-            // them from the applied ParagraphStyle.
-            nested_styles: Vec::new(),
+            // A range's own lists (InDesign writes one when the
+            // paragraph's list differs from its style's) win over the
+            // style chain's; `merge_below` fills an empty one.
+            nested_styles: paragraph.nested_styles.clone(),
+            line_styles: paragraph.line_styles.clone(),
+            grep_styles: paragraph.grep_styles.clone(),
         }
     }
 
@@ -1373,10 +1384,17 @@ impl ResolvedParagraphAttrs {
         merge_rule_attrs(&mut self.rule_below, &p.rule_below);
         // Q-09: per-field paragraph-border inheritance.
         merge_border_attrs(&mut self.border, &p.border);
-        // Phase 4 — nested styles replace as a list when the lower
-        // attrs have none of their own (mirrors styles.rs cascade).
-        if self.nested_styles.is_empty() && !p.nested_styles.is_empty() {
+        // The style lists replace as whole lists: the style chain's
+        // (already settled by `resolve_paragraph`) reaches a range that
+        // declares none of its own.
+        if self.nested_styles.is_empty() {
             self.nested_styles = p.nested_styles.clone();
+        }
+        if self.line_styles.is_empty() {
+            self.line_styles = p.line_styles.clone();
+        }
+        if self.grep_styles.is_empty() {
+            self.grep_styles = p.grep_styles.clone();
         }
     }
 }
@@ -1704,11 +1722,15 @@ pub struct ResolvedParagraphAttrs {
     pub rule_below: paged_model::ParagraphRule,
     /// Q-09: cascaded rectangular paragraph border.
     pub border: paged_model::ParagraphBorder,
-    /// Phase 4 typography — cascaded `<NestedStyle>` entries from the
-    /// applied paragraph style. The renderer walks the paragraph
-    /// text against this list to override the character style on
-    /// leading byte ranges.
+    /// Cascaded nested styles: the paragraph's own list
+    /// (`<ParagraphStyleRange><Properties><AllNestedStyles>`), else its
+    /// style chain's. The renderer walks the paragraph text against this
+    /// list to layer a character style under leading byte ranges.
     pub nested_styles: Vec<paged_model::NestedStyle>,
+    /// Cascaded line styles (read and kept; not applied yet).
+    pub line_styles: Vec<paged_model::LineStyle>,
+    /// Cascaded GREP styles (read and kept; not applied yet).
+    pub grep_styles: Vec<paged_model::GrepStyle>,
 }
 
 /// IDML's `AppliedParagraphStyle` is OPTIONAL, and a range without one
@@ -2245,6 +2267,149 @@ mod tests {
         }
 
         zip.finish().unwrap().into_inner()
+    }
+
+    /// A nested style sits UNDER a character style applied by hand and
+    /// over the paragraph style: InDesign 20.0.1 printed a hand-applied
+    /// underline-only style inside a nested 20 pt red range 20 pt red AND
+    /// underlined, and a hand-applied blue-only style blue at 20 pt. A
+    /// run's own attribute beats both.
+    #[test]
+    fn a_nested_style_layers_under_the_character_style_applied_by_hand() {
+        use paged_model::{CharacterStyleDef, ParagraphStyleDef};
+        let mut doc = Document::default();
+        doc.styles.paragraph_styles.insert(
+            "ParagraphStyle/Body".into(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/Body".into(),
+                point_size: Some(11.0),
+                fill_color: Some("Color/Black".into()),
+                ..Default::default()
+            },
+        );
+        let char_style = |id: &str, f: &dyn Fn(&mut CharacterStyleDef)| {
+            let mut c = CharacterStyleDef {
+                self_id: id.into(),
+                ..Default::default()
+            };
+            f(&mut c);
+            c
+        };
+        for c in [
+            char_style("CharacterStyle/RedBig", &|c| {
+                c.fill_color = Some("Color/Red".into());
+                c.point_size = Some(20.0);
+            }),
+            char_style("CharacterStyle/Under", &|c| c.underline = Some(true)),
+            char_style("CharacterStyle/Blue", &|c| {
+                c.fill_color = Some("Color/Blue".into())
+            }),
+        ] {
+            doc.styles.character_styles.insert(c.self_id.clone(), c);
+        }
+        let paragraph = Paragraph {
+            paragraph_style: Some("ParagraphStyle/Body".into()),
+            ..Default::default()
+        };
+        let run = |hand: Option<&str>| CharacterRun {
+            character_style: hand.map(String::from),
+            nested_character_style: Some("CharacterStyle/RedBig".into()),
+            ..Default::default()
+        };
+        let under = doc.resolved_run_attrs(&paragraph, &run(Some("CharacterStyle/Under")));
+        assert_eq!(under.fill_color.as_deref(), Some("Color/Red"));
+        assert_eq!(under.point_size, Some(20.0));
+        assert_eq!(under.underline, Some(true));
+        let blue = doc.resolved_run_attrs(&paragraph, &run(Some("CharacterStyle/Blue")));
+        assert_eq!(blue.fill_color.as_deref(), Some("Color/Blue"));
+        assert_eq!(blue.point_size, Some(20.0));
+        let local = CharacterRun {
+            fill_color: Some("Color/Black".into()),
+            ..run(None)
+        };
+        assert_eq!(
+            doc.resolved_run_attrs(&paragraph, &local)
+                .fill_color
+                .as_deref(),
+            Some("Color/Black")
+        );
+    }
+
+    /// A paragraph style's `OTF*` toggles reach a run whose own and
+    /// character-style values leave them unset.
+    #[test]
+    fn a_paragraph_styles_opentype_toggles_reach_its_runs() {
+        use paged_model::{CharacterStyleDef, ParagraphStyleDef};
+        let mut doc = Document::default();
+        let mut style = ParagraphStyleDef {
+            self_id: "ParagraphStyle/Hist".into(),
+            ligatures_on: Some(false),
+            kerning_method: Some("Optical".into()),
+            ..Default::default()
+        };
+        style.otf.historical = Some(true);
+        style.otf.stylistic_alternate = Some(true);
+        doc.styles
+            .paragraph_styles
+            .insert(style.self_id.clone(), style);
+        let mut plain = CharacterStyleDef {
+            self_id: "CharacterStyle/NoSalt".into(),
+            ..Default::default()
+        };
+        plain.otf.stylistic_alternate = Some(false);
+        doc.styles
+            .character_styles
+            .insert(plain.self_id.clone(), plain);
+        let paragraph = Paragraph {
+            paragraph_style: Some("ParagraphStyle/Hist".into()),
+            ..Default::default()
+        };
+        let run = CharacterRun {
+            character_style: Some("CharacterStyle/NoSalt".into()),
+            ..Default::default()
+        };
+        let r = doc.resolved_run_attrs(&paragraph, &run);
+        assert_eq!(r.otf.historical, Some(true));
+        assert_eq!(r.otf.stylistic_alternate, Some(false));
+        assert_eq!(r.ligatures_on, Some(false));
+        assert_eq!(r.kerning_method.as_deref(), Some("Optical"));
+    }
+
+    /// A range's own nested-style list replaces its style's.
+    #[test]
+    fn a_ranges_own_nested_styles_replace_its_styles() {
+        use paged_model::{NestedDelimiter, NestedStyle, ParagraphStyleDef};
+        let ns = |style: &str| NestedStyle {
+            applied_character_style: style.into(),
+            delimiter: NestedDelimiter::Words,
+            repetition: 1,
+            inclusive: true,
+        };
+        let mut doc = Document::default();
+        doc.styles.paragraph_styles.insert(
+            "ParagraphStyle/Body".into(),
+            ParagraphStyleDef {
+                self_id: "ParagraphStyle/Body".into(),
+                nested_styles: vec![ns("CharacterStyle/FromStyle")],
+                ..Default::default()
+            },
+        );
+        let styled = Paragraph {
+            paragraph_style: Some("ParagraphStyle/Body".into()),
+            ..Default::default()
+        };
+        let local = Paragraph {
+            nested_styles: vec![ns("CharacterStyle/Local")],
+            ..styled.clone()
+        };
+        assert_eq!(
+            doc.resolved_paragraph_attrs(&styled).nested_styles,
+            [ns("CharacterStyle/FromStyle")]
+        );
+        assert_eq!(
+            doc.resolved_paragraph_attrs(&local).nested_styles,
+            [ns("CharacterStyle/Local")]
+        );
     }
 
     #[test]
