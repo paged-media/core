@@ -1331,10 +1331,13 @@ pub enum PropertyPath {
     ElementVisible,
     /// W2.5 — element-level `Locked="true|false"` on any page item.
     /// `Value::Bool`. The renderer ignores it (locked items still
-    /// paint); the canvas hit-tester blocks selection of a locked item
-    /// — the `LayerLocked` precedent. Paint-neutral, so the
-    /// InvalidationHint is empty (no scene change). Plain `bool` parse
-    /// field (default `false`); round-trips bytewise.
+    /// paint). C-77 — the engine enforces it: an op that would move,
+    /// reshape, restack or remove a locked item (or the content of a
+    /// locked container) is refused with `OperationError::Locked`, as
+    /// InDesign refuses it; attribute writes, text edits and this write
+    /// itself still apply. Paint-neutral, so the InvalidationHint is
+    /// empty (no scene change). Plain `bool` parse field (default
+    /// `false`); round-trips bytewise.
     ElementLocked,
 
     // ---- v43 batch — stroke line ends (arrowheads) ---------------

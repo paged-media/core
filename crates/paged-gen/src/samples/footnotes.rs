@@ -18,7 +18,8 @@
 //!
 //!   * a document-level **`<FootnoteOption>`** with the separator-rule
 //!     turned on (explicit weight / width / left-indent / offset), so the
-//!     renderer draws the rule above the pool from real designmap data.
+//!     renderer draws the rule above the pool from real document data —
+//!     in `Resources/Preferences.xml`, where InDesign keeps it.
 //!   * a footnote whose body carries **per-run styling** — a bold run and
 //!     a larger run inside one footnote — to prove footnote bodies now
 //!     compose through the same run/shaping path as body text instead of
@@ -32,13 +33,12 @@
 //! `story` builder) so it can nest `<Footnote>` with its own styled body
 //! paragraphs without touching the shared `Run` shape.
 
-use crate::builders::designmap::{
-    write_designmap_with_markers, DesignMap, FootnoteOptionDef, MarkerResources,
-};
+use crate::builders::designmap::{write_designmap, DesignMap};
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
 use crate::builders::resources::{
-    container_xml, fonts_xml, graphic_xml, preferences_xml, styles_xml,
+    container_xml, fonts_xml, graphic_xml, preferences_xml_with_footnote_option, styles_xml,
+    FootnoteOptionDef,
 };
 use crate::builders::xml_folder::{backing_story_xml, mapping_xml, tags_xml};
 use crate::geometry::translate;
@@ -231,7 +231,7 @@ pub fn build() -> Sample {
     ];
 
     // Document-level FootnoteOption: separator rule ON with explicit
-    // geometry so the renderer draws it from real designmap data.
+    // geometry so the renderer draws it from real document data.
     let footnote_option = FootnoteOptionDef {
         rule_on: Some(true),
         rule_color: Some("Color/Black".to_string()),
@@ -243,11 +243,6 @@ pub fn build() -> Sample {
         space_between: Some(2.0),
         spacer: Some(4.0),
         ..FootnoteOptionDef::default()
-    };
-    let markers = MarkerResources {
-        layers: Vec::new(),
-        footnote_option: Some(footnote_option),
-        ..MarkerResources::default()
     };
 
     let master_bytes = write_master(&Master {
@@ -298,15 +293,12 @@ pub fn build() -> Sample {
         item_transform: None,
     });
 
-    let designmap = write_designmap_with_markers(
-        &DesignMap {
-            self_id: "d".to_string(),
-            master_spreads: vec![master_id.clone()],
-            spreads: vec![spread0_id.clone()],
-            stories: vec![story_id.clone()],
-        },
-        &markers,
-    );
+    let designmap = write_designmap(&DesignMap {
+        self_id: "d".to_string(),
+        master_spreads: vec![master_id.clone()],
+        spreads: vec![spread0_id.clone()],
+        stories: vec![story_id.clone()],
+    });
 
     Sample {
         container_xml: container_xml(),
@@ -314,7 +306,7 @@ pub fn build() -> Sample {
         graphic_xml: graphic_xml(),
         fonts_xml: fonts_xml(),
         styles_xml: styles_xml(),
-        preferences_xml: preferences_xml(),
+        preferences_xml: preferences_xml_with_footnote_option(Some(&footnote_option)),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
         mapping_xml: mapping_xml(),

@@ -910,6 +910,10 @@ fn emit_anchored_rect_via_pipeline(
         blend_mode: None,
         effects: None,
         gradient_fill_angle: af.gradient_fill_angle,
+        // `AnchoredFrame` carries no `GradientFillStart` / `Length` (the
+        // adapter reads only the angle on an anchored frame), so the
+        // ramp takes InDesign's default placement — bottom-left corner,
+        // the frame's width — which `gradient-geometry` case 27 measures.
         gradient_fill_length: None,
         gradient_fill_start: None,
         gradient_stroke_angle: None,

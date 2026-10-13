@@ -1501,6 +1501,15 @@ pub struct CanvasModel {
     /// build the batch executor runs when its children are done. A batch
     /// whose children changed nothing owes nothing and builds nothing.
     rebuild_owed: bool,
+    /// C-79 — while set, [`Self::push_applied`] does not evict. The
+    /// mixed-batch executor holds the cap while its children log their
+    /// records, then collapses them into ONE entry and applies the cap
+    /// to that. Evicting mid-batch shifted the batch's own records under
+    /// the `log_base` it collapses (and rolls back) from: against a full
+    /// log a five-child batch became five undo steps, and a batch larger
+    /// than the cap lost its first children to eviction outright, so no
+    /// undo could remove them.
+    applied_log_cap_held: bool,
     /// ADR 027 §4 — when set, every rebuild is checked against a
     /// cold build ([`Self::digest_gate_check`]) and a difference panics.
     /// Seeded from `PAGED_DIGEST_GATE=1`; a CI / debug lane only.
@@ -1798,6 +1807,10 @@ fn paragraph_style_entries(
 /// session reaches. Pragmatic count cap over a byte-accounting scheme:
 /// the per-entry size is bounded in practice and a count is O(1) to
 /// enforce without walking the payloads.
+///
+/// The cap counts UNDO STEPS: a batch is one entry whatever its size and
+/// whichever lane it takes (C-79 — the per-child lane used to apply the
+/// cap to each child as it logged, mid-batch).
 pub const MAX_APPLIED_LOG: usize = 10_000;
 
 /// One entry in the applied / redo logs.
@@ -2154,6 +2167,7 @@ impl CanvasModel {
             pending_op_apply_ms: 0.0,
             rebuild_deferred: false,
             rebuild_owed: false,
+            applied_log_cap_held: false,
             digest_gate: std::env::var("PAGED_DIGEST_GATE").is_ok_and(|v| v == "1"),
             keep_seeds: Default::default(),
             pending_keep_hints: HashMap::new(),
@@ -2855,7 +2869,14 @@ impl CanvasModel {
     ) -> Result<MutationOutcome, crate::channel::WorkerError> {
         // A nested batch keeps the outer deferral (restore, don't clear).
         let outer = std::mem::replace(&mut self.rebuild_deferred, true);
+        // C-79 — and the undo-log cap waits for the collapse: it counts
+        // the batch as the one entry it becomes, never its children.
+        let outer_cap_held = std::mem::replace(&mut self.applied_log_cap_held, true);
         let result = self.apply_mixed_batch_children(ops);
+        self.applied_log_cap_held = outer_cap_held;
+        if !outer_cap_held {
+            self.enforce_applied_log_cap();
+        }
         self.rebuild_deferred = outer;
         // An inner batch leaves the debt to the outer one, which owns
         // the single build.
@@ -11087,6 +11108,17 @@ impl CanvasModel {
     /// separate cap.
     fn push_applied(&mut self, rec: AppliedRecord) {
         self.applied_log.push(rec);
+        // C-79 — a batch collecting its children holds the cap; it is
+        // applied to the collapsed entry when the batch is done.
+        if !self.applied_log_cap_held {
+            self.enforce_applied_log_cap();
+        }
+    }
+
+    /// The `MAX_APPLIED_LOG` eviction itself (oldest first). Separate
+    /// from [`Self::push_applied`] so the mixed-batch executor can run it
+    /// once over its collapsed entry (C-79).
+    fn enforce_applied_log_cap(&mut self) {
         if self.applied_log.len() > MAX_APPLIED_LOG {
             // O(n) on the eviction only; eviction happens at most once
             // per push past the cap, so amortised O(1). A VecDeque would
@@ -13566,6 +13598,149 @@ nGP4z8DwHxkzoAsAAA8hD/EEN8afAAAAAElFTkSuQmCC";
             "seq 1 kept"
         );
         assert_eq!(model.applied_log.last().unwrap().applied_seq, 100);
+    }
+
+    // ---- C-79 — the cap applies to the COLLAPSED batch ------------------
+
+    /// A batch that takes the per-child (mixed) lane: a `SetDocumentDefaults`
+    /// child is what sends it there, as in the paged.draw SVG import that
+    /// found this.
+    fn c79_defaults(fill: &str) -> Mutation {
+        Mutation::SetDocumentDefaults {
+            fill_color: Some(fill.to_string()),
+            stroke_color: None,
+            stroke_weight: None,
+        }
+    }
+
+    fn c79_frame(model: &CanvasModel, x: f32) -> Mutation {
+        Mutation::InsertFrame {
+            page_id: model.page_ids().next().expect("a page").clone(),
+            bounds: (100.0, x, 140.0, x + 30.0),
+        }
+    }
+
+    fn c79_rectangles(model: &CanvasModel) -> usize {
+        model.scene.spreads[0].spread.rectangles.len()
+    }
+
+    /// Against a FULL log, a five-child batch was five undo steps: each
+    /// child's record evicted the oldest entry, so the batch's records
+    /// slid below the `log_base` it collapses from and none were
+    /// collapsed. It is one entry, and it evicts one.
+    #[test]
+    fn c79_a_mixed_batch_against_a_full_log_is_one_undo_step() {
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-c79a", &bytes, CanvasOptions::default()).unwrap();
+        for seq in 1..=MAX_APPLIED_LOG as u64 {
+            model.push_applied(dummy_record(seq));
+        }
+        let rects = c79_rectangles(&model);
+        let defaults = model.document_defaults.fill_color.clone();
+        let ops = vec![
+            c79_defaults("Color/Black"),
+            c79_frame(&model, 10.0),
+            c79_frame(&model, 50.0),
+            c79_frame(&model, 90.0),
+            c79_defaults("Color/Paper"),
+        ];
+        model
+            .apply_mutation(&Mutation::Batch { ops })
+            .expect("batch applies");
+
+        assert_eq!(model.applied_log.len(), MAX_APPLIED_LOG);
+        assert_eq!(
+            model.applied_log.first().unwrap().applied_seq,
+            2,
+            "the batch is ONE entry: exactly the oldest entry made room for it"
+        );
+        match &model.applied_log.last().unwrap().kind {
+            LoggedMutation::Composite(children) => assert_eq!(children.len(), 5),
+            other => panic!("the batch's entry is a Composite, got {other:?}"),
+        }
+        assert_eq!(c79_rectangles(&model), rects + 3);
+
+        model.undo().expect("one undo");
+        assert_eq!(c79_rectangles(&model), rects, "one undo removes all three");
+        assert_eq!(model.document_defaults.fill_color, defaults);
+        assert_eq!(
+            model.applied_log.last().unwrap().applied_seq,
+            MAX_APPLIED_LOG as u64,
+            "and leaves the entries before the batch alone"
+        );
+    }
+
+    /// A batch with more children than the cap: its first children were
+    /// evicted mid-batch and no undo could remove what they made (a
+    /// 12 001-child import left 500 shapes behind).
+    #[test]
+    fn c79_a_mixed_batch_larger_than_the_cap_is_one_undo_step() {
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-c79b", &bytes, CanvasOptions::default()).unwrap();
+        let rects = c79_rectangles(&model);
+        let defaults = model.document_defaults.fill_color.clone();
+        // The shape comes FIRST: it is what eviction used to take.
+        let mut ops = vec![c79_frame(&model, 10.0)];
+        ops.extend((0..MAX_APPLIED_LOG + 5).map(|i| {
+            c79_defaults(if i % 2 == 0 {
+                "Color/Black"
+            } else {
+                "Color/Paper"
+            })
+        }));
+        let children = ops.len();
+        model
+            .apply_mutation(&Mutation::Batch { ops })
+            .expect("batch applies");
+
+        assert_eq!(model.applied_log.len(), 1, "one entry");
+        match &model.applied_log[0].kind {
+            LoggedMutation::Composite(logged) => assert_eq!(
+                logged.len(),
+                children,
+                "every child's record is in it, the first included"
+            ),
+            other => panic!("the batch's entry is a Composite, got {other:?}"),
+        }
+        model.undo().expect("one undo");
+        assert_eq!(c79_rectangles(&model), rects, "the undo removes the shape");
+        assert_eq!(model.document_defaults.fill_color, defaults);
+        assert!(model.undo().is_none(), "and nothing is left to undo");
+    }
+
+    /// The rollback reads the same range: against a full log a failing
+    /// batch reverted none of its applied children.
+    #[test]
+    fn c79_a_failing_mixed_batch_against_a_full_log_rolls_back_whole() {
+        let bytes = minimal_idml_bytes();
+        let mut model = CanvasModel::load("doc-c79c", &bytes, CanvasOptions::default()).unwrap();
+        for seq in 1..=MAX_APPLIED_LOG as u64 {
+            model.push_applied(dummy_record(seq));
+        }
+        let rects = c79_rectangles(&model);
+        let defaults = model.document_defaults.fill_color.clone();
+        let ops = vec![
+            c79_defaults("Color/Black"),
+            c79_frame(&model, 10.0),
+            c79_frame(&model, 50.0),
+            Mutation::DeleteFrame {
+                frame_id: "c79-no-such-frame".to_string(),
+            },
+        ];
+        assert!(model.apply_mutation(&Mutation::Batch { ops }).is_err());
+
+        assert_eq!(c79_rectangles(&model), rects, "both shapes rolled back");
+        assert_eq!(model.document_defaults.fill_color, defaults);
+        assert_eq!(model.applied_log.len(), MAX_APPLIED_LOG);
+        assert_eq!(
+            model.applied_log.first().unwrap().applied_seq,
+            1,
+            "the log is as it was: nothing evicted"
+        );
+        assert_eq!(
+            model.applied_log.last().unwrap().applied_seq,
+            MAX_APPLIED_LOG as u64
+        );
     }
 
     // ── S-13 — measure_text font-metrics query ──────────────────────

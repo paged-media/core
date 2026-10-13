@@ -83,12 +83,13 @@
 //!   31), so the tint reads as a genuine 20% of the accent AND renders.
 
 use crate::builders::designmap::{
-    write_designmap_with_markers, DesignMap, FootnoteOptionDef, LayerDef, MarkerResources,
+    write_designmap_with_markers, DesignMap, LayerDef, MarkerResources,
 };
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::{PageItem, Rect};
 use crate::builders::resources::{
-    container_xml, fonts_xml, graphic_xml_rich, preferences_xml, styles_xml_with_raw, RichColor,
+    container_xml, fonts_xml, graphic_xml_rich, preferences_xml_with_footnote_option,
+    styles_xml_with_raw, FootnoteOptionDef, RichColor,
 };
 use crate::builders::resources::{ConditionSetSpec, ConditionSpec};
 use crate::builders::spread::{write_spread, MarginPreference, Spread};
@@ -248,7 +249,7 @@ fn graphic() -> Vec<u8> {
             base_color: None,
         },
     ];
-    graphic_xml_rich(&colors, &[], &[])
+    graphic_xml_rich(&colors, &[])
 }
 
 /// `Resources/Styles.xml` — the named paragraph + character styles, the
@@ -305,15 +306,13 @@ NextStyle=\"{STYLE_BODY}\">\
 <Properties><Leading type=\"unit\">26</Leading></Properties>\
 </ParagraphStyle>\
 </RootParagraphStyleGroup>\
-<RootTOCStyleGroup>\
 <TOCStyle Self=\"{TOC_STYLE}\" Name=\"Showcase Contents\" Title=\"Contents\" \
 TitleStyle=\"{STYLE_TITLE}\">\
 <TOCStyleEntry Name=\"Showcase Title\" IncludeStyle=\"{STYLE_TITLE}\" \
 FormatStyle=\"{STYLE_BODY}\" Level=\"1\" PageNumber=\"On\" Separator=\"^t\"/>\
 <TOCStyleEntry Name=\"Showcase Heading\" IncludeStyle=\"{STYLE_HEADING}\" \
 FormatStyle=\"{STYLE_BODY}\" Level=\"2\" PageNumber=\"On\" Separator=\"^t\"/>\
-</TOCStyle>\
-</RootTOCStyleGroup>"
+</TOCStyle>"
     );
     styles_xml_with_raw(&fragment)
 }
@@ -584,20 +583,6 @@ pub fn build() -> Sample {
                 name: LAYER_NOTES_NAME.to_string(),
             },
         ],
-        // There is no create-footnote-option op on the wire either, so
-        // the separator rule has to be authored here.
-        footnote_option: Some(FootnoteOptionDef {
-            rule_on: Some(true),
-            rule_color: Some(SWATCH_ACCENT.to_string()),
-            rule_line_weight: Some(0.5),
-            rule_width: Some(144.0),
-            rule_left_indent: Some(0.0),
-            rule_offset: Some(3.0),
-            separator_text: Some(" ".to_string()),
-            space_between: Some(2.0),
-            spacer: Some(6.0),
-            ..FootnoteOptionDef::default()
-        }),
         // Conditional text — designmap children in InDesign's spelling
         // (measured 2026-09-05; the Styles.xml wrapper hid them).
         conditions: vec![
@@ -638,7 +623,20 @@ pub fn build() -> Sample {
         graphic_xml: graphic(),
         fonts_xml: fonts_xml(),
         styles_xml: styles(),
-        preferences_xml: preferences_xml(),
+        // There is no create-footnote-option op on the wire either, so
+        // the separator rule has to be authored here.
+        preferences_xml: preferences_xml_with_footnote_option(Some(&FootnoteOptionDef {
+            rule_on: Some(true),
+            rule_color: Some(SWATCH_ACCENT.to_string()),
+            rule_line_weight: Some(0.5),
+            rule_width: Some(144.0),
+            rule_left_indent: Some(0.0),
+            rule_offset: Some(3.0),
+            separator_text: Some(" ".to_string()),
+            space_between: Some(2.0),
+            spacer: Some(6.0),
+            ..FootnoteOptionDef::default()
+        })),
         backing_story_xml: backing_story_xml(),
         tags_xml: tags_xml(),
         mapping_xml: mapping_xml(),

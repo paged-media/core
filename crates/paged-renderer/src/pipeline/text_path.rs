@@ -622,7 +622,13 @@ pub(super) fn emit_text_path_into(
                 .fill_color
                 .as_deref()
                 .and_then(|id| color_id_to_paint(id, palette, color_ctx))
-                .map(|p| apply_fill_tint(p, resolved.fill_tint))
+                .map(|p| {
+                    apply_fill_tint_ctx(
+                        p,
+                        object_tint(palette, resolved.fill_color.as_deref(), resolved.fill_tint),
+                        &color_ctx,
+                    )
+                })
                 .unwrap_or(default_paint);
             // Pull the pre-configured (wght-baked) Face from the
             // FontTable cache when possible; build on the fly only

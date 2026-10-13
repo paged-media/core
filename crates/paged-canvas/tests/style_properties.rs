@@ -158,7 +158,12 @@ fn every_value_read_is_accepted_back_unchanged() {
         .style_properties(StyleCollection::Paragraph, &style)
         .expect("resolves");
     assert_eq!(before.style_id, style);
-    assert_eq!(before.based_on.as_deref(), Some("$ID/[No paragraph style]"));
+    // InDesign spells a root parent `$ID/[No paragraph style]`; the reader
+    // keys it as the root's id so the cascade reaches the root.
+    assert_eq!(
+        before.based_on.as_deref(),
+        Some("ParagraphStyle/$ID/[No paragraph style]")
+    );
     for (path, value) in &edits {
         let got = before
             .entries

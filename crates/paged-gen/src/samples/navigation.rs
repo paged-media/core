@@ -162,20 +162,20 @@ fn body_story_xml(story_id: &str, xref_source: &str) -> Vec<u8> {
 }
 
 /// `Resources/Styles.xml` carrying the `Heading` paragraph style and the
-/// TOC style whose entry picks up `Heading`-styled paragraphs.
+/// TOC style whose entry picks up `Heading`-styled paragraphs — a direct
+/// child of `<idPkg:Styles>`, where InDesign writes TOC styles (the
+/// `<RootTOCStyleGroup>` wrapper this used to sit in hid it from InDesign).
 fn styles() -> Vec<u8> {
     let fragment = format!(
         "<RootParagraphStyleGroup>\
 <ParagraphStyle Self=\"{HEADING_STYLE}\" Name=\"Heading\" AppliedFont=\"Open Sans\" \
 PointSize=\"20\" FillColor=\"Color/Black\"/>\
 </RootParagraphStyleGroup>\
-<RootTOCStyleGroup>\
 <TOCStyle Self=\"{TOC_STYLE}\" Name=\"Contents\" Title=\"Contents\" \
 TitleStyle=\"{NO_PARA_STYLE}\">\
 <TOCStyleEntry Name=\"Heading\" IncludeStyle=\"{HEADING_STYLE}\" \
 FormatStyle=\"{NO_PARA_STYLE}\" Level=\"1\" PageNumber=\"On\" Separator=\"^t\"/>\
-</TOCStyle>\
-</RootTOCStyleGroup>"
+</TOCStyle>"
     );
     styles_xml_with_raw(&fragment)
 }

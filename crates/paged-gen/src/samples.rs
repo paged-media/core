@@ -27,6 +27,7 @@ pub mod footnotes;
 pub mod forced_line_break;
 pub mod geometry;
 pub mod geometry_groups;
+pub mod gradient_geometry;
 pub mod gradients;
 pub mod hard_hyphen;
 pub mod image_clipping;
@@ -64,6 +65,7 @@ pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
 pub mod tab_breaks;
+pub mod table_cell_baseline;
 pub mod tables;
 pub mod tables_overset;
 pub mod tables_rows;
@@ -75,6 +77,7 @@ pub mod text_letterspacing;
 pub mod text_on_path;
 pub mod text_overset;
 pub mod text_wrap;
+pub mod tints;
 pub mod transparency;
 pub mod variables;
 
@@ -152,6 +155,9 @@ pub const SAMPLES: &[&str] = &[
     "line-ends",
     "line-shadows",
     "rect-shadows",
+    "gradient-geometry",
+    "tints",
+    "table-cell-baseline",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -219,6 +225,9 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "line-ends" => line_ends::build(),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
+        "gradient-geometry" => gradient_geometry::build(),
+        "tints" => tints::build(),
+        "table-cell-baseline" => table_cell_baseline::build(),
         _ => return None,
     })
 }
@@ -247,7 +256,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            62,
+            65,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

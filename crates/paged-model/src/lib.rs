@@ -241,7 +241,8 @@ pub enum FirstBaselineOffset {
     CapHeight,
     /// Baseline at one x-height below the top inset.
     XHeight,
-    /// Baseline at one em-box-height below the top inset.
+    /// Baseline below the top inset by the em box's top: an em tall,
+    /// centred on half the cap height. InDesign spells it `EmboxHeight`.
     EmBoxHeight,
     /// Distance is `MinimumFirstBaselineOffset` pt below the inset.
     LeadingOffset,
@@ -256,7 +257,11 @@ impl FirstBaselineOffset {
             "AscentOffset" => Some(Self::AscentOffset),
             "CapHeight" => Some(Self::CapHeight),
             "XHeight" => Some(Self::XHeight),
-            "EmBoxHeight" => Some(Self::EmBoxHeight),
+            // InDesign's spelling (its own export, 2026-10-12). InDesign
+            // reads `EmBoxHeight` — the wire and catalog name — as
+            // `AscentOffset`; it is still accepted here so a file written
+            // with it reads back as it was meant.
+            "EmboxHeight" | "EmBoxHeight" => Some(Self::EmBoxHeight),
             "LeadingOffset" => Some(Self::LeadingOffset),
             "FixedHeight" => Some(Self::FixedHeight),
             _ => None,
@@ -1313,24 +1318,23 @@ pub struct Rectangle {
     /// renderer treats the field as "no effect"; when set it's
     /// surfaced for downstream tooling but visibly emits nothing.
     pub effects: Option<FrameEffects>,
-    /// `GradientFillAngle` in degrees. IDML serialises a gradient
-    /// fill direction as an angle around the frame's centre — 0°
-    /// is horizontal (left → right), 90° is vertical (top → bottom).
-    /// `None` ⇒ keep the renderer's default top-to-bottom unit-rect
-    /// endpoints. Combined with `gradient_fill_length` the renderer
-    /// places the gradient line through the frame's center.
+    /// `GradientFillAngle` in degrees, counter-clockwise as seen on the
+    /// page: the axis runs from the start in the direction
+    /// `(cos θ, −sin θ)` of the item's (y-down) inner coordinates, so
+    /// 0° is left → right and 90° bottom → top (asked of InDesign, the
+    /// `gradient-geometry` fixture). The angle is in inner coordinates
+    /// and turns with a rotated item.
     pub gradient_fill_angle: Option<f32>,
-    /// `GradientFillLength` in points — the page-space length of the
-    /// gradient line through the frame's centre. `None` falls back to
-    /// the bbox diagonal (covers the rect end-to-end). Values smaller
-    /// than the diagonal compress the gradient (extreme stops paint
-    /// flat regions outside the line); values larger expand it.
+    /// `GradientFillLength` in points — the length of the axis from
+    /// `gradient_fill_start` (a radial gradient's radius). `None` or 0
+    /// is InDesign's default: the width of the item's inner bounding
+    /// box, whatever the angle.
     pub gradient_fill_length: Option<f32>,
     /// `GradientFillStart` — the gradient's start point in the item's
-    /// own (inner) coordinates. A radial gradient is centred there with
-    /// `gradient_fill_length` as its radius (PowerPoint's centred glows
-    /// arrive this way); a linear one still runs through the centre.
-    /// `None`, or a length of 0, keeps InDesign's default placement.
+    /// own (inner) coordinates. A linear axis begins there; a radial
+    /// gradient is centred there with `gradient_fill_length` as its
+    /// radius (PowerPoint's centred glows arrive this way). `None` is
+    /// InDesign's default: the inner bounding box's bottom-left corner.
     #[serde(default)]
     pub gradient_fill_start: Option<[f32; 2]>,
     /// `GradientStrokeAngle` in degrees — same convention as
@@ -2562,9 +2566,11 @@ pub struct GradientStopRef {
     pub stop_color: String,
     /// `Location` attribute, 0..=100 in IDML.
     pub location_pct: f32,
-    /// `Midpoint` attribute, 0..=100 (default 50): where, *within the
-    /// segment to the next stop*, the colour reaches the halfway blend.
-    /// `None` ⇒ the file omitted it ⇒ treat as the linear 50.
+    /// `Midpoint` attribute, 0..=100 (default 50): where, within the
+    /// segment that ENDS at this stop (from the previous one), the
+    /// colour reaches the halfway blend — asked of InDesign, the
+    /// `gradient-geometry` fixture; a first stop's midpoint governs
+    /// nothing. `None` ⇒ the file omitted it ⇒ treat as the linear 50.
     pub midpoint_pct: Option<f32>,
 }
 

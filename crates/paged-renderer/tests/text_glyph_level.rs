@@ -1913,7 +1913,7 @@ fn face_cache_multi_paragraph_render_is_deterministic_and_reuses_glyphs() {
 // and emit one synthetic paragraph per chapter (heading text + tab +
 // page label) into the TOC frame's glyph stream.
 
-fn build_toc_idml() -> Vec<u8> {
+fn build_toc_idml(stored: Option<&str>) -> Vec<u8> {
     let designmap = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
   <idPkg:Styles src="Resources/Styles.xml"/>
@@ -1985,20 +1985,25 @@ fn build_toc_idml() -> Vec<u8> {
 </idPkg:Story>"#
         )
     };
-    // Page-4 TOC story carries one placeholder paragraph (real
-    // unresolved IDMLs serialise an empty `<ParagraphStyleRange>`
-    // here). The renderer ignores it once the AppliedTOCStyle
-    // binding is detected.
-    let toc_story = br#"<?xml version="1.0" encoding="UTF-8"?>
+    // Page-4 TOC story: an UNRESOLVED table of contents is an empty
+    // `<ParagraphStyleRange>` (what real unresolved IDMLs serialise), and
+    // only that is built at render. A story that holds entries prints
+    // them, as InDesign does until Update Table of Contents.
+    let content = stored
+        .map(|t| format!("<Content>{t}</Content>"))
+        .unwrap_or_default();
+    let toc_story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
   <Story Self="u40">
     <ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body">
       <CharacterStyleRange AppliedFont="Inter" PointSize="14">
-        <Content>placeholder</Content>
+        {content}
       </CharacterStyleRange>
     </ParagraphStyleRange>
   </Story>
-</idPkg:Story>"#;
+</idPkg:Story>"#
+    );
     write_zip(|zip| {
         put(zip, "designmap.xml", designmap);
         put(zip, "Resources/Graphic.xml", GRAPHIC_XML);
@@ -2019,13 +2024,40 @@ fn build_toc_idml() -> Vec<u8> {
             "Stories/Story_u30.xml",
             chapter("u30", "Chapter Three").as_bytes(),
         );
-        put(zip, "Stories/Story_u40.xml", toc_story);
+        put(zip, "Stories/Story_u40.xml", toc_story.as_bytes());
     })
+}
+
+/// A TOC story that already holds entries prints them, even when they are
+/// stale: InDesign rebuilds a table of contents only on Update Table of
+/// Contents, and its PDF shows the stored text (docs audit 2026-10).
+#[test]
+fn a_toc_story_with_stored_entries_prints_them_unchanged() {
+    let bytes = build_toc_idml(Some("Stale entry 9"));
+    let doc = idml_import::import_idml_doc(&bytes).unwrap();
+    let mut resolver = BytesResolver::new();
+    resolver.add_font("Inter", None, read_font("Inter.ttf"));
+    let opts = PipelineOptions {
+        assets: Some(&resolver),
+        ..PipelineOptions::default()
+    };
+    let built = pipeline::build_document(&doc, &opts).unwrap();
+    let toc_glyphs = glyph_xys(&built.pages[3].list.commands);
+    let mut baselines: Vec<f32> = toc_glyphs.iter().map(|g| g.1).collect();
+    baselines.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    baselines.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    assert_eq!(
+        baselines.len(),
+        1,
+        "the one stored line, not three rebuilt entries"
+    );
+    // "Stale entry 9": 11 visible glyphs (spaces draw nothing).
+    assert_eq!(toc_glyphs.len(), 11, "{toc_glyphs:?}");
 }
 
 #[test]
 fn toc_story_swaps_in_resolved_entries_with_heading_text_and_page_numbers() {
-    let bytes = build_toc_idml();
+    let bytes = build_toc_idml(None);
     let doc = idml_import::import_idml_doc(&bytes).unwrap();
     let mut resolver = BytesResolver::new();
     resolver.add_font("Inter", None, read_font("Inter.ttf"));
