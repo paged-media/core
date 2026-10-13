@@ -623,11 +623,11 @@
       "name": "hard-hyphen",
       "text_gate": true,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.089,
-      "max_p99_de": 1.52,
-      "min_ssim": 0.9928,
-      "max_ink_mean_de": 5.356,
-      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 8.432 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.074 / p99 1.27 / SSIM 0.9979 / ink 4.463; sized at worst x 1.20 and SSIM - 0.005."
+      "max_mean_de": 0.053,
+      "max_p99_de": 1.42,
+      "min_ssim": 0.9946,
+      "max_ink_mean_de": 2.772,
+      "rationale": "Added 2026-10-02 (RFI C-54): a line breaks after a hyphen the text already has. One page, six texts at five frame widths, Inter 10/12; the reference is InDesign 20.0.1's export. 27 of 30 frames break exactly as InDesign's (crates/paged-renderer/tests/hard_hyphen_pipeline.rs pins all 30, the other three as named known differences that are not about the hyphen rule). Measured mean 0.130 / p99 1.479 / ssim 0.9946; sized at worst * 1.20 and ssim - 0.005. INK GATED 2026-10-13: worst page ink mean 8.432 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.074 / p99 1.27 / SSIM 0.9979 / ink 4.463; sized at worst x 1.20 and SSIM - 0.005. TIGHTENED 2026-10-14 (ADR 144: justified text prices an over-shrunk line; the justified row now breaks as InDesign does, KNOWN empty): worst page mean 0.044 / p99 1.18 / SSIM 0.9996 / ink 2.310; sized at worst x 1.20 and SSIM - 0.005."
     },
     {
       "name": "line-ends",
@@ -757,6 +757,16 @@
       "min_ssim": 0.9943,
       "max_ink_mean_de": 3.449,
       "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 8.824 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.143 / p99 2.864 / ssim 0.9946 (thresholds were 0.192 / 4.1 / 0.9892); re-sized by the rule above. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.066 / p99 2.42 / SSIM 0.9993 / ink 2.874; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142)."
+    },
+    {
+      "name": "justified-breaks",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 1.975,
+      "max_p99_de": 69.95,
+      "min_ssim": 0.9185,
+      "max_ink_mean_de": 23.154,
+      "rationale": "Added 2026-10-14 (ADR 144): justified text in Open Sans 10/12, four paragraphs in 140/170/200 pt frames, hyphenated (page 1) and not (page 2), asked of InDesign 20.0.1. With the justified breaker fitted on the larger justified-probe, 15 of the 24 frames set every line as InDesign does (12 with Knuth-Plass at TeX's tolerance); the rest differ by a word or a hyphenation point, and a paragraph that breaks one line differently shifts every glyph after it, so the pixel measure is large. Worst page mean 1.645 / p99 58.29 / SSIM 0.9235 / ink 19.295 (Knuth-Plass: mean 2.464); sized at worst x 1.20 and SSIM - 0.005. Text-gated on characters."
     }
   ]
 }

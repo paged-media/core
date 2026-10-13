@@ -29,6 +29,7 @@ pub mod compose;
 pub(crate) mod first_fit;
 pub mod frame_shape;
 pub mod hyphenate;
+pub(crate) mod justified;
 pub mod layout;
 pub mod libhyphen;
 pub(crate) mod ragged;
