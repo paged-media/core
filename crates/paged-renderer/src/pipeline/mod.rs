@@ -808,7 +808,8 @@ pub struct CellRect {
 /// struct's `paragraphs` are the source body verbatim, untouched.
 #[derive(Debug, Clone)]
 pub struct EmittedFootnote {
-    /// Per-page running number, 1-based. Resets at every page.
+    /// The note's number through its story, 1-based (its label is
+    /// `FootnoteOptions::label`).
     pub number: u32,
     /// `<Story Self="...">` id of the host story (the one carrying
     /// the anchor character, not the footnote story itself).
@@ -824,6 +825,9 @@ pub struct EmittedFootnote {
     /// capture time. The footnote-pool emit pass uses this to know
     /// where to lay out the body text at the bottom of the frame.
     pub host_frame_rect_pt: Rect,
+    /// Page-local baseline of the line holding the note's reference: the
+    /// pool never rises above it (see `emit_footnote_pools`).
+    pub ref_baseline_pt: f32,
 }
 
 /// Disjoint paragraph-address qualifier for a laid-out line that
@@ -1444,7 +1448,7 @@ fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayo
                     .runs
                     .iter()
                     .flat_map(|r| r.text.chars())
-                    .filter(|c| !paged_model::is_page_marker(*c))
+                    .filter(|c| !paged_model::is_generated_marker(*c))
                     .collect();
                 let text = text.trim_end_matches(['\n', '\r']).to_string();
                 if !text.is_empty() {
@@ -1495,7 +1499,7 @@ fn build_post_layout_ctx(document: &Document, first: &BuiltDocument) -> PostLayo
         for m in list.iter_mut() {
             m.3 =
                 m.3.chars()
-                    .filter(|c| !paged_model::is_page_marker(*c))
+                    .filter(|c| !paged_model::is_generated_marker(*c))
                     .collect();
         }
         list.retain(|m| !m.3.trim().is_empty());

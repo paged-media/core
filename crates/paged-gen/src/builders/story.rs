@@ -722,7 +722,7 @@ fn write_run_content(b: &mut XmlBuilder, text: &str) {
     flush(b, &mut buf);
 }
 
-fn write_table(b: &mut XmlBuilder, t: &Table) {
+pub(crate) fn write_table(b: &mut XmlBuilder, t: &Table) {
     let header = t.header_row_count.to_string();
     let footer = t.footer_row_count.to_string();
     let body = t.body_row_count.to_string();

@@ -537,6 +537,15 @@ pub fn shape_run_with_features(
             0xE2 if i + 2 < bytes.len() && bytes[i + 1] == 0x80 => {
                 matches!(bytes[i + 2], 0xA8 | 0xA9)
             }
+            // U+E018–U+E01C: the private-use markers the story parser
+            // leaves for generated text (`paged_model::is_generated_marker`:
+            // page numbers, the section marker, a footnote reference). The
+            // paragraph composer prints what they stand for; a path that
+            // does not (a table cell, text on a path) draws nothing for
+            // one instead of the font's missing-glyph box.
+            0xEE if i + 2 < bytes.len() && bytes[i + 1] == 0x80 => {
+                matches!(bytes[i + 2], 0x98..=0x9C)
+            }
             _ => false,
         }
     };

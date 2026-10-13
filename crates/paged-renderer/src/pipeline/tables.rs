@@ -102,6 +102,7 @@ impl<'a> AlternatingFillAxis<'a> {
 pub(super) fn emit_table_into_chain(
     em: &mut StoryEmitter,
     table: &paged_model::Table,
+    line_align: f32,
     pages: &mut [BuiltPage],
     total_stats: &mut PipelineStats,
 ) {
@@ -281,9 +282,23 @@ pub(super) fn emit_table_into_chain(
         )
     };
     let (border_off_top, border_off_left) = outer_border_offsets(table);
+    // The table is a character of its line, so the line's alignment
+    // places it (`line_align`: 0 left, ½ centred, 1 right): asked of
+    // InDesign 20.0.1 (`table-inline-text`), the extent it aligns is the
+    // table's width plus its outer strokes — the strokes' outer edges.
+    let line_shift = {
+        let column = em
+            .region_widths
+            .get(em.frame_idx)
+            .copied()
+            .or(em.column_width_pt)
+            .unwrap_or(0.0);
+        let extent = total_w + border_off_left + outer_border_right_offset(table);
+        ((column - extent) * line_align).max(0.0)
+    };
     let mut chain_idx = em.frame_idx;
     let (mut tab_left, mut frame_top_in_page, mut frame_height, mut top_inset, mut target_page) =
-        frame_basis_for(chain_idx, em.column_x_shift_pt);
+        frame_basis_for(chain_idx, em.column_x_shift_pt + line_shift);
     tab_left += border_off_left;
     let mut row_top_y_in_frame = if em.y_cursor >= 0 {
         em.y_cursor as f32 / paged_text::shape::ADVANCE_PRECISION
@@ -456,7 +471,7 @@ pub(super) fn emit_table_into_chain(
                 current_frame_last_bottom,
             ));
             chain_idx += 1;
-            let (l, ftop, h_next, ti, tp) = frame_basis_for(chain_idx, 0.0);
+            let (l, ftop, h_next, ti, tp) = frame_basis_for(chain_idx, line_shift);
             tab_left = l + border_off_left;
             frame_top_in_page = ftop;
             frame_height = h_next;
@@ -1432,9 +1447,13 @@ pub(super) fn emit_table_into_chain(
     em.y_cursor = ((final_y_in_frame + em.options.default_point_size * 0.8)
         * paged_text::shape::ADVANCE_PRECISION)
         .round() as i32;
-    total_stats.paragraphs += 1;
-    let stat_page = em.chain_pages[em.frame_idx];
-    pages[stat_page].stats.paragraphs += 1;
+    // A table inside a paragraph's text is a line of that paragraph,
+    // which its first line counts.
+    if em.segment.counts_paragraph {
+        total_stats.paragraphs += 1;
+        let stat_page = em.chain_pages[em.frame_idx];
+        pages[stat_page].stats.paragraphs += 1;
+    }
 }
 
 /// Every grid position a merged cell swallows.
@@ -1517,6 +1536,35 @@ fn outer_border_offsets(table: &paged_model::Table) -> (f32, f32) {
         }
     }
     (top * 0.5, left * 0.5)
+}
+
+/// Half the weight of the stroke drawn on the table's right edge (the
+/// widest of its last column's right edges), the counterpart of
+/// [`outer_border_offsets`]' left half.
+fn outer_border_right_offset(table: &paged_model::Table) -> f32 {
+    let columns = table.columns.len() as u32;
+    let mut right = 0.0f32;
+    for cell in &table.cells {
+        let Some((c, _)) = cell.coords() else {
+            continue;
+        };
+        if c + cell.column_span.max(1) < columns {
+            continue;
+        }
+        if cell
+            .right_edge_stroke_color
+            .as_deref()
+            .is_some_and(is_none_swatch_id)
+        {
+            continue;
+        }
+        right = right.max(
+            cell.right_edge_stroke_weight
+                .unwrap_or(DEFAULT_CELL_EDGE_WEIGHT)
+                .max(0.0),
+        );
+    }
+    right * 0.5
 }
 
 fn covered_grid_positions(table: &paged_model::Table) -> std::collections::HashSet<(u32, u32)> {
