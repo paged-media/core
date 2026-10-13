@@ -124,6 +124,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   99th of that word, and the overrun comes out of the word spaces. Justified text keeps one
   allowance per paragraph. A drop cap spans the paragraph's leading at the face's cap height.
   46 of the 73 generator fixtures set every line as InDesign does.
+- **Align to baseline grid** ([ADR 140](adr/140-align-to-baseline-grid.md)). A paragraph aligned
+  to the grid stands each line on the first grid line at or below it, on the document's grid or its
+  frame's own, first line only where it says so; every baseline of the two grid fixtures matches
+  InDesign's to 0.001 pt.
 - **Positions are exact sums** ([ADR 138](adr/138-positions-are-exact-sums.md)). Baselines and
   glyph advances are summed exactly and rounded once, so a 14.4 pt leading or a 12 pt Open Sans
   line does not drift off InDesign's positions down a page or along a line.

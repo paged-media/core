@@ -96,7 +96,8 @@ const LABEL: &str = "Label";
 // stays out of the two-digit cases, whose first line ends on a break the
 // two ragged-right composers weigh differently ("…judge | my vow"). Line
 // breaks are not what this fixture is about.
-const A: &str = "Quick zephyrs blow, vexing daft Jim, while five boxing wizards jump over the lazy dog.";
+const A: &str =
+    "Quick zephyrs blow, vexing daft Jim, while five boxing wizards jump over the lazy dog.";
 const B: &str = "Sphinx of black quartz, judge my vow; pack my box with five dozen liquor jugs.";
 const C: &str = "Bright vixens jump and dozy fowl quack over the lazy dog.";
 
@@ -153,7 +154,11 @@ fn grid_slot(col: usize, row: usize, grid: BaselineFrameGrid) -> Slot {
     }
 }
 
-fn frame_grid(relative_option: &'static str, starting_offset: f32, increment: f32) -> BaselineFrameGrid {
+fn frame_grid(
+    relative_option: &'static str,
+    starting_offset: f32,
+    increment: f32,
+) -> BaselineFrameGrid {
     BaselineFrameGrid {
         use_custom: true,
         starting_offset,
@@ -203,7 +208,12 @@ fn aligned_by_range(style: &'static str, alignment: &'static str, text: &str) ->
 /// `baseline-grid`, page 1: the document grid.
 pub fn page_one_cases() -> Vec<Case> {
     vec![
-        Case::new(1, "1 · not aligned (control)", slot(0, 0), vec![para(BODY, A), para(BODY, B)]),
+        Case::new(
+            1,
+            "1 · not aligned (control)",
+            slot(0, 0),
+            vec![para(BODY, A), para(BODY, B)],
+        ),
         Case::new(
             2,
             "2 · aligned by the style",
@@ -244,7 +254,11 @@ pub fn page_one_cases() -> Vec<Case> {
             6,
             "6 · 24/28.8 heading among 10/12 body",
             slot(2, 1),
-            vec![para(BODY_GRID, C), para(HEAD_GRID, "Heading"), para(BODY_GRID, B)],
+            vec![
+                para(BODY_GRID, C),
+                para(HEAD_GRID, "Heading"),
+                para(BODY_GRID, B),
+            ],
         ),
         Case::new(
             7,
@@ -365,7 +379,11 @@ pub fn page_two_cases() -> Vec<Case> {
             20,
             "20 · frame grid: inset, every 9, heading among body",
             grid_slot(1, 2, frame_grid("TopOfInset", 0.0, 9.0)),
-            vec![para(BODY_GRID, C), para(HEAD_GRID, "Heading"), para(BODY_GRID, B)],
+            vec![
+                para(BODY_GRID, C),
+                para(HEAD_GRID, "Heading"),
+                para(BODY_GRID, B),
+            ],
         ),
     ]
 }
@@ -373,7 +391,12 @@ pub fn page_two_cases() -> Vec<Case> {
 /// `baseline-grid-margin`, page 1 (top margin 45).
 pub fn margin_page_one_cases() -> Vec<Case> {
     vec![
-        Case::new(1, "1 · not aligned (control)", slot(0, 0), vec![para(BODY, A), para(BODY, B)]),
+        Case::new(
+            1,
+            "1 · not aligned (control)",
+            slot(0, 0),
+            vec![para(BODY, A), para(BODY, B)],
+        ),
         Case::new(
             2,
             "2 · aligned by the style",
@@ -384,7 +407,11 @@ pub fn margin_page_one_cases() -> Vec<Case> {
             3,
             "3 · 24/28.8 heading among 10/12 body",
             slot(2, 0),
-            vec![para(BODY_GRID, C), para(HEAD_GRID, "Heading"), para(BODY_GRID, B)],
+            vec![
+                para(BODY_GRID, C),
+                para(HEAD_GRID, "Heading"),
+                para(BODY_GRID, B),
+            ],
         ),
         Case::new(
             4,
@@ -431,7 +458,11 @@ pub fn margin_page_two_cases() -> Vec<Case> {
             8,
             "8 · 24/28.8 heading among 10/12 body",
             slot(1, 0),
-            vec![para(BODY_GRID, C), para(HEAD_GRID, "Heading"), para(BODY_GRID, B)],
+            vec![
+                para(BODY_GRID, C),
+                para(HEAD_GRID, "Heading"),
+                para(BODY_GRID, B),
+            ],
         ),
         Case::new(
             9,
@@ -532,7 +563,13 @@ fn style_ref(name: &'static str) -> &'static str {
     }
 }
 
-fn frame(id: String, story: String, at: (f32, f32), size: (f32, f32), pref: TextFramePref) -> PageItem {
+fn frame(
+    id: String,
+    story: String,
+    at: (f32, f32),
+    size: (f32, f32),
+    pref: TextFramePref,
+) -> PageItem {
     Rect {
         self_id: id,
         width_pt: size.0,
@@ -611,7 +648,14 @@ fn build_document(sample: &str, relative: &str, start: f32, pages: Vec<PageSpec>
                 self_id(sample, "LabelFrame", n),
                 label_story,
                 s.label_at.unwrap_or((s.at.0, s.at.1 - 14.0)),
-                (if s.label_at.is_some() { 360.0 } else { s.size.0 }, 10.0),
+                (
+                    if s.label_at.is_some() {
+                        360.0
+                    } else {
+                        s.size.0
+                    },
+                    10.0,
+                ),
                 plain(),
             ));
             let body = story(
@@ -642,7 +686,12 @@ fn build_document(sample: &str, relative: &str, start: f32, pages: Vec<PageSpec>
             page_height_pt: PAGE_H_PT,
             page_items: items,
             override_list: Vec::new(),
-            margins: Some(MarginPreference::symmetric(page.margin_top, 36.0, 36.0, 36.0)),
+            margins: Some(MarginPreference::symmetric(
+                page.margin_top,
+                36.0,
+                36.0,
+                36.0,
+            )),
             item_transform: None,
         });
         spreads.push((spread_id, xml));
@@ -734,7 +783,10 @@ mod tests {
             assert_eq!(doc.spreads.len(), 2);
             let grid = &doc.designmap.grid_preference;
             assert_eq!(grid.baseline_division, Some(DIVISION));
-            assert_eq!(grid.baseline_grid_relative_option.as_deref(), Some(relative));
+            assert_eq!(
+                grid.baseline_grid_relative_option.as_deref(),
+                Some(relative)
+            );
         }
     }
 }

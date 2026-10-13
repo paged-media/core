@@ -133,7 +133,7 @@ fn top_margin(document: &Document, page: &BuiltPage) -> f32 {
 
 fn translation_only(m: Option<[f32; 6]>) -> bool {
     const EPS: f32 = 1e-4;
-    m.is_none_or(|m| {
+    m.map_or(true, |m| {
         (m[0] - 1.0).abs() < EPS && m[1].abs() < EPS && m[2].abs() < EPS && (m[3] - 1.0).abs() < EPS
     })
 }
@@ -172,8 +172,11 @@ mod tests {
     #[test]
     fn a_line_on_a_grid_line_stays() {
         assert_eq!(snapped(PAGE_GRID_AT_100, 20.0), 20.0);
-        // A hair below a grid line by the composer's rounding is on it.
-        assert_eq!(snapped(PAGE_GRID_AT_100, 20.0 + 1.0 / 128.0), 20.0);
+        // A hair below a grid line by the composer's rounding is on it: an
+        // exact baseline 1/128 pt below moves up onto the line, not down
+        // a step.
+        let exact = (20.0 + 1.0 / 128.0) * f64::from(P);
+        assert!(PAGE_GRID_AT_100.snap_exact(exact).abs() < 1.0);
     }
 
     #[test]

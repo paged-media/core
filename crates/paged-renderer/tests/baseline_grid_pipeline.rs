@@ -87,8 +87,8 @@ fn check(stem: &str, sample: paged_gen::Sample, pages: [Vec<sample::Case>; 2]) {
                 .map(|l| l.baseline_y_pt)
                 .collect();
             compared += want.len();
-            let same = got.len() == want.len()
-                && got.iter().zip(&want).all(|(g, w)| (g - w).abs() <= TOL);
+            let same =
+                got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| (g - w).abs() <= TOL);
             if !same {
                 mismatches.push(format!(
                     "{stem} case {} ({}):\n  engine   {got:?}\n  InDesign {want:?}",
@@ -119,6 +119,9 @@ fn baseline_grid_from_the_top_margin() {
     check(
         sample::SAMPLE_MARGIN,
         sample::build_margin(),
-        [sample::margin_page_one_cases(), sample::margin_page_two_cases()],
+        [
+            sample::margin_page_one_cases(),
+            sample::margin_page_two_cases(),
+        ],
     );
 }
