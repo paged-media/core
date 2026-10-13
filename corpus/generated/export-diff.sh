@@ -51,6 +51,11 @@ max_mean_for() {
     list-marker-styles) echo 1.06 ;;
     # Hinted text, see the note below min_ssim_for's header: 1.504 measured.
     effects-attrs) echo 1.81 ;;
+    # Hinted text again: since 2026-10-13 the sample sets 44 lines of 12 pt
+    # a page (it set 11). The exported page and the renderer's align best
+    # unshifted and carry the same ink (19.71 vs 19.44 grey on page 6); poppler's
+    # hinted stems are the difference. 1.670 measured; worst * 1.20.
+    text-wrap) echo 2.0 ;;
     *) echo "$MAX_MEAN_DE" ;;
   esac
 }
