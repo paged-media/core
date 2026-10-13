@@ -377,6 +377,111 @@ fn page_item_element_id(
 /// The element an operation created, or the LAST of them. `doc` is the
 /// document the op was (or is about to be) applied to: a duplicate's
 /// clones are named by walking its SOURCES, which are there either way.
+/// The append slots of a batch's spread inserts, kept true while earlier
+/// children of the same batch remove page items.
+///
+/// A batch translates every child against the scene as it stood before
+/// the batch, and a creating child appends to its kind's list on the
+/// spread: its slot is that list's length there. A `deleteFrame` earlier
+/// in the batch shortens the list before the insert applies, so the slot
+/// pointed past the end and the apply refused the whole batch. This
+/// counts what the batch removed and added per spread and kind, and pulls
+/// an insert's slot back to the list's length at the moment it applies.
+/// A batch that removes nothing keeps every slot it had.
+#[derive(Default)]
+struct AppendSlots {
+    /// `(spread id, kind)` → page items the batch removed so far.
+    removed: HashMap<(String, &'static str), usize>,
+    /// `(spread id, kind)` → page items the batch inserted so far.
+    added: HashMap<(String, &'static str), usize>,
+    /// Ids the batch inserted, with their spread: a later removal of one
+    /// of them shortens that list too.
+    minted: HashMap<String, String>,
+}
+
+impl AppendSlots {
+    fn kind(node: &paged_mutate::NodeId) -> Option<(&'static str, &str)> {
+        use paged_mutate::NodeId;
+        match node {
+            NodeId::TextFrame(id) => Some(("textFrame", id)),
+            NodeId::Rectangle(id) => Some(("rectangle", id)),
+            NodeId::Oval(id) => Some(("oval", id)),
+            NodeId::Polygon(id) => Some(("polygon", id)),
+            NodeId::GraphicLine(id) => Some(("graphicLine", id)),
+            _ => None,
+        }
+    }
+
+    fn ids<'a>(
+        spread: &'a paged_model::Spread,
+        kind: &str,
+    ) -> Box<dyn Iterator<Item = Option<&'a str>> + 'a> {
+        match kind {
+            "textFrame" => Box::new(spread.text_frames.iter().map(|f| f.self_id.as_deref())),
+            "rectangle" => Box::new(spread.rectangles.iter().map(|f| f.self_id.as_deref())),
+            "oval" => Box::new(spread.ovals.iter().map(|f| f.self_id.as_deref())),
+            "polygon" => Box::new(spread.polygons.iter().map(|f| f.self_id.as_deref())),
+            "graphicLine" => Box::new(spread.graphic_lines.iter().map(|f| f.self_id.as_deref())),
+            _ => Box::new(std::iter::empty()),
+        }
+    }
+
+    fn spread_id(parsed: &paged_scene::ParsedSpread) -> String {
+        parsed
+            .spread
+            .self_id
+            .clone()
+            .unwrap_or_else(|| parsed.src.clone())
+    }
+
+    fn rebase(&mut self, scene: &Document, op: &mut paged_mutate::Operation) {
+        use paged_mutate::{NodeId, Operation};
+        match op {
+            Operation::RemoveNode { node } => {
+                let Some((kind, id)) = Self::kind(node) else {
+                    return;
+                };
+                let spread = self.minted.get(id).cloned().or_else(|| {
+                    scene
+                        .spreads
+                        .iter()
+                        .find(|p| Self::ids(&p.spread, kind).any(|s| s == Some(id)))
+                        .map(Self::spread_id)
+                });
+                if let Some(spread) = spread {
+                    *self.removed.entry((spread, kind)).or_default() += 1;
+                }
+            }
+            Operation::InsertNode {
+                parent: NodeId::Spread(spread),
+                position,
+                node,
+                ..
+            } => {
+                let node_id = node.node_id();
+                let Some((kind, id)) = Self::kind(&node_id) else {
+                    return;
+                };
+                let key = (spread.clone(), kind);
+                let removed = self.removed.get(&key).copied().unwrap_or(0);
+                if removed > 0 {
+                    let before = scene
+                        .spreads
+                        .iter()
+                        .find(|p| Self::spread_id(p) == *spread)
+                        .map_or(0, |p| Self::ids(&p.spread, kind).count());
+                    let added = self.added.get(&key).copied().unwrap_or(0);
+                    let live = (before + added).saturating_sub(removed);
+                    *position = (*position).min(live);
+                }
+                *self.added.entry(key).or_default() += 1;
+                self.minted.insert(id.to_string(), spread.clone());
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The `(element, handle)` pairs a translated batch bound, in order.
 ///
 /// Translation drops every `bindCreated` child (it contributes no
@@ -3855,6 +3960,7 @@ impl CanvasModel {
                     .iter()
                     .any(|op| matches!(op, Mutation::BindCreated { .. }));
                 let mut scope = crate::batch_handles::HandleScope::default();
+                let mut slots = AppendSlots::default();
                 for child in ops {
                     // D-22 — a page's id is minted by the applier, so this
                     // lane cannot know it before apply. A handle-using batch
@@ -3924,7 +4030,9 @@ impl CanvasModel {
                     };
                     // FINDING #6 — thread the SAME mint counter so each
                     // child insert in the batch mints a distinct self_id.
-                    let op = self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    let mut op =
+                        self.try_translate_frame_mutation_to_operation(child, mint_offset)?;
+                    slots.rebase(&self.scene, &mut op);
                     if let Some(id) = created_element_id(&self.scene, &op) {
                         if uses_handles {
                             scope.set_created(Some(crate::batch_handles::BoundHandle {
