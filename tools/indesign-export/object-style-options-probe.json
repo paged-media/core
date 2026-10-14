@@ -1,0 +1,2541 @@
+{
+  "indesign": "20.0.1.32",
+  "authored": [
+    {
+      "name": "host",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        440,
+        20,
+        600,
+        300
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "anchored-plain",
+      "type": "Rectangle",
+      "style": "A Right",
+      "bounds": [
+        468.5,
+        263.5,
+        492.5,
+        299.5
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 4,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "anchored-x",
+      "type": "Rectangle",
+      "style": "A Right",
+      "bounds": [
+        468.5,
+        283.5,
+        492.5,
+        319.5
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 20,
+        "y": 4,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "anchored-none",
+      "type": "Rectangle",
+      "style": "[Ohne]",
+      "bounds": [
+        440,
+        138.907,
+        464,
+        174.907
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "wrap-textframe",
+      "type": "TextFrame",
+      "style": "W BBox",
+      "bounds": [
+        380,
+        20,
+        420,
+        200
+      ],
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          6,
+          9,
+          12,
+          15
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "wrap-own",
+      "type": "Rectangle",
+      "style": "[Ohne]",
+      "bounds": [
+        320,
+        20,
+        360,
+        80
+      ],
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "fit-override",
+      "type": "Rectangle",
+      "style": "F Fill",
+      "bounds": [
+        270,
+        20,
+        310,
+        80
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "FILL_PROPORTIONALLY",
+        "alignment": "TOP_LEFT_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          3,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "fit-plain",
+      "type": "Rectangle",
+      "style": "F Fill",
+      "bounds": [
+        220,
+        20,
+        260,
+        80
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "FILL_PROPORTIONALLY",
+        "alignment": "TOP_LEFT_ANCHOR",
+        "autoFit": true,
+        "crops": [
+          0,
+          3,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "wrap-child",
+      "type": "Rectangle",
+      "style": "W Child",
+      "bounds": [
+        170,
+        20,
+        210,
+        80
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "wrap-mode-none",
+      "type": "Rectangle",
+      "style": "W BBox",
+      "bounds": [
+        120,
+        20,
+        160,
+        80
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "wrap-offsets",
+      "type": "Rectangle",
+      "style": "W BBox",
+      "bounds": [
+        70,
+        20,
+        110,
+        80
+      ],
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "wrap-plain",
+      "type": "Rectangle",
+      "style": "W BBox",
+      "bounds": [
+        20,
+        20,
+        60,
+        80
+      ],
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          6,
+          9,
+          12,
+          15
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "authored_styles": [
+    {
+      "name": "W BBox",
+      "basedOn": null,
+      "enable": {
+        "wrap": true,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          6,
+          9,
+          12,
+          15
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "W Child",
+      "basedOn": "W BBox",
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "A Right",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": true,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 4,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "F Fill",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": true
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "FILL_PROPORTIONALLY",
+        "alignment": "TOP_LEFT_ANCHOR",
+        "autoFit": true,
+        "crops": [
+          0,
+          3,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "[Ohne]",
+      "basedOn": "ERR Error: Ungültige Anforderung für Stammformat.",
+      "enable": {
+        "wrap": "ERR Error: Ungültige Anforderung für Stammformat.",
+        "anchored": "ERR Error: Ungültige Anforderung für Stammformat.",
+        "fitting": "ERR Error: Ungültige Anforderung für Stammformat."
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "read": [
+    {
+      "name": "case12 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        705,
+        312.276,
+        805,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case12 object",
+      "type": "Rectangle",
+      "style": "OS Anchor Unflagged",
+      "bounds": [
+        705,
+        350.526,
+        721,
+        374.526
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "TOP_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case11 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        705,
+        36,
+        805,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case11 object",
+      "type": "Rectangle",
+      "style": "OS Above",
+      "bounds": [
+        707.745,
+        147.5,
+        723.745,
+        171.5
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ABOVE_LINE",
+        "anchorPoint": "BOTTOM_LEFT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "CENTER_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case10 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        580,
+        312.276,
+        680,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case10 object",
+      "type": "Rectangle",
+      "style": "OS Anchor",
+      "bounds": [
+        594.551,
+        515.276,
+        610.551,
+        539.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": -20,
+        "y": 6,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case9 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        580,
+        36,
+        680,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case9 object",
+      "type": "Rectangle",
+      "style": "OS Anchor Child",
+      "bounds": [
+        580,
+        74.25,
+        596,
+        98.25
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case8 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        455,
+        312.276,
+        555,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case8 object",
+      "type": "Rectangle",
+      "style": "OS Anchor Off",
+      "bounds": [
+        455,
+        350.526,
+        471,
+        374.526
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "TOP_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case7 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        455,
+        36,
+        555,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case7 object",
+      "type": "Rectangle",
+      "style": "OS Anchor",
+      "bounds": [
+        469.551,
+        259,
+        485.551,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 6,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case6 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        330,
+        312.276,
+        430,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case6 object",
+      "type": "Rectangle",
+      "style": "OS Jump",
+      "bounds": [
+        350,
+        312.276,
+        384,
+        382.276
+      ],
+      "wrap": {
+        "mode": "JUMP_OBJECT_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case5 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        330,
+        36,
+        430,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case5 object",
+      "type": "Rectangle",
+      "style": "OS Wrap",
+      "bounds": [
+        350,
+        36,
+        384,
+        106
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case4 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        205,
+        312.276,
+        305,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case4 object",
+      "type": "Rectangle",
+      "style": "OS Wrap Child",
+      "bounds": [
+        225,
+        312.276,
+        259,
+        382.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case3 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        205,
+        36,
+        305,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case3 object",
+      "type": "Rectangle",
+      "style": "OS Wrap Unflagged",
+      "bounds": [
+        225,
+        36,
+        259,
+        106
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case2 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        80,
+        312.276,
+        180,
+        559.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case2 object",
+      "type": "Rectangle",
+      "style": "OS Wrap Off",
+      "bounds": [
+        100,
+        312.276,
+        134,
+        382.276
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "case1 text",
+      "type": "TextFrame",
+      "style": "[Ohne]",
+      "bounds": [
+        80,
+        36,
+        180,
+        283
+      ],
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": null
+    },
+    {
+      "name": "case1 object",
+      "type": "Rectangle",
+      "style": "OS Wrap",
+      "bounds": [
+        100,
+        36,
+        134,
+        106
+      ],
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "anchorPoint": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "hAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vRef": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "vAlign": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "x": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "y": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "spineRelative": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "lockPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend.",
+        "pinPosition": "ERR Error: Diese Eigenschaft ist im aktuellen Status nicht zutreffend."
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "read_lines": [
+    {
+      "name": "case12 text",
+      "lines": [
+        [
+          312.276,
+          556.628,
+          721
+        ],
+        [
+          312.276,
+          442.131,
+          730.6
+        ]
+      ]
+    },
+    {
+      "name": "case11 text",
+      "lines": [
+        [
+          36,
+          272.766,
+          730.6
+        ],
+        [
+          36,
+          149.441,
+          740.2
+        ]
+      ]
+    },
+    {
+      "name": "case10 text",
+      "lines": [
+        [
+          312.276,
+          549.042,
+          588.551
+        ],
+        [
+          312.276,
+          425.717,
+          598.151
+        ]
+      ]
+    },
+    {
+      "name": "case9 text",
+      "lines": [
+        [
+          36,
+          280.352,
+          596
+        ],
+        [
+          36,
+          165.855,
+          605.6
+        ]
+      ]
+    },
+    {
+      "name": "case8 text",
+      "lines": [
+        [
+          312.276,
+          556.628,
+          471
+        ],
+        [
+          312.276,
+          442.131,
+          480.6
+        ]
+      ]
+    },
+    {
+      "name": "case7 text",
+      "lines": [
+        [
+          36,
+          272.766,
+          463.551
+        ],
+        [
+          36,
+          149.441,
+          473.151
+        ]
+      ]
+    },
+    {
+      "name": "case6 text",
+      "lines": [
+        [
+          312.276,
+          543.174,
+          338.551
+        ],
+        [
+          312.276,
+          542.889,
+          405.751
+        ],
+        [
+          312.276,
+          549.944,
+          415.351
+        ],
+        [
+          312.276,
+          551.221,
+          424.951
+        ]
+      ]
+    },
+    {
+      "name": "case5 text",
+      "lines": [
+        [
+          36,
+          266.898,
+          338.551
+        ],
+        [
+          36,
+          266.613,
+          348.151
+        ],
+        [
+          36,
+          273.668,
+          357.751
+        ],
+        [
+          36,
+          274.945,
+          367.351
+        ],
+        [
+          36,
+          269.906,
+          376.951
+        ],
+        [
+          36,
+          267.352,
+          386.551
+        ]
+      ]
+    },
+    {
+      "name": "case4 text",
+      "lines": [
+        [
+          312.276,
+          543.174,
+          213.551
+        ],
+        [
+          312.276,
+          542.889,
+          223.151
+        ],
+        [
+          312.276,
+          549.944,
+          232.751
+        ],
+        [
+          312.276,
+          551.221,
+          242.351
+        ],
+        [
+          312.276,
+          546.182,
+          251.951
+        ],
+        [
+          312.276,
+          543.628,
+          261.551
+        ]
+      ]
+    },
+    {
+      "name": "case3 text",
+      "lines": [
+        [
+          36,
+          266.898,
+          213.551
+        ],
+        [
+          36,
+          266.613,
+          223.151
+        ],
+        [
+          36,
+          273.668,
+          232.751
+        ],
+        [
+          36,
+          274.945,
+          242.351
+        ],
+        [
+          36,
+          269.906,
+          251.951
+        ],
+        [
+          36,
+          267.352,
+          261.551
+        ]
+      ]
+    },
+    {
+      "name": "case2 text",
+      "lines": [
+        [
+          312.276,
+          543.174,
+          88.551
+        ],
+        [
+          312.276,
+          542.889,
+          98.151
+        ],
+        [
+          312.276,
+          549.944,
+          107.751
+        ],
+        [
+          312.276,
+          551.221,
+          117.351
+        ],
+        [
+          312.276,
+          546.182,
+          126.951
+        ],
+        [
+          312.276,
+          543.628,
+          136.551
+        ]
+      ]
+    },
+    {
+      "name": "case1 text",
+      "lines": [
+        [
+          36,
+          266.898,
+          88.551
+        ],
+        [
+          118,
+          272.41,
+          98.151
+        ],
+        [
+          118,
+          279.336,
+          107.751
+        ],
+        [
+          118,
+          277.672,
+          117.351
+        ],
+        [
+          118,
+          278.563,
+          126.951
+        ],
+        [
+          118,
+          271.809,
+          136.551
+        ]
+      ]
+    }
+  ],
+  "read_styles": [
+    {
+      "name": "[Ohne]",
+      "basedOn": "ERR Error: Ungültige Anforderung für Stammformat.",
+      "enable": {
+        "wrap": "ERR Error: Ungültige Anforderung für Stammformat.",
+        "anchored": "ERR Error: Ungültige Anforderung für Stammformat.",
+        "fitting": "ERR Error: Ungültige Anforderung für Stammformat."
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "[Einfacher Grafikrahmen]",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "[Einfacher Textrahmen]",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "[Einfaches Raster]",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Wrap",
+      "basedOn": null,
+      "enable": {
+        "wrap": true,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Wrap Off",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Wrap Unflagged",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "BOUNDING_BOX_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Wrap Child",
+      "basedOn": "OS Wrap",
+      "enable": {
+        "wrap": true,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Jump",
+      "basedOn": null,
+      "enable": {
+        "wrap": true,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "JUMP_OBJECT_TEXT_WRAP",
+        "offset": [
+          4,
+          4,
+          4,
+          12
+        ],
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Anchor",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": true,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 6,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Anchor Off",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 6,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Anchor Child",
+      "basedOn": "OS Anchor",
+      "enable": {
+        "wrap": false,
+        "anchored": true,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "INLINE_POSITION",
+        "anchorPoint": "BOTTOM_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "LEFT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Above",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": true,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ABOVE_LINE",
+        "anchorPoint": "BOTTOM_LEFT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "CENTER_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 0,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "name": "OS Anchor Unflagged",
+      "basedOn": null,
+      "enable": {
+        "wrap": false,
+        "anchored": false,
+        "fitting": false
+      },
+      "wrap": {
+        "mode": "NONE",
+        "offset": "NOTHING",
+        "side": "BOTH_SIDES",
+        "inverse": false
+      },
+      "anchored": {
+        "position": "ANCHORED",
+        "anchorPoint": "TOP_RIGHT_ANCHOR",
+        "hRef": "TEXT_FRAME",
+        "hAlign": "RIGHT_ALIGN",
+        "vRef": "LINE_BASELINE",
+        "vAlign": "BOTTOM_ALIGN",
+        "x": 0,
+        "y": 6,
+        "spineRelative": false,
+        "lockPosition": false,
+        "pinPosition": true
+      },
+      "fitting": {
+        "fitting": "NONE",
+        "alignment": "CENTER_ANCHOR",
+        "autoFit": false,
+        "crops": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "exported_items": {
+    "wrap-plain": {
+      "AppliedObjectStyle": "ObjectStyle/W BBox",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"BoundingBoxTextWrap\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"12\" Left=\"9\" Right=\"15\" Top=\"6\"/></TextWrapPreference>"
+    },
+    "wrap-offsets": {
+      "AppliedObjectStyle": "ObjectStyle/W BBox",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"BoundingBoxTextWrap\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"1\" Left=\"1\" Right=\"1\" Top=\"1\"/></TextWrapPreference>"
+    },
+    "wrap-mode-none": {
+      "AppliedObjectStyle": "ObjectStyle/W BBox",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"12\" Left=\"9\" Right=\"15\" Top=\"6\"/></TextWrapPreference>"
+    },
+    "wrap-child": {
+      "AppliedObjectStyle": "ObjectStyle/W Child",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "fit-plain": {
+      "AppliedObjectStyle": "ObjectStyle/F Fill",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "fit-override": {
+      "AppliedObjectStyle": "ObjectStyle/F Fill",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "wrap-own": {
+      "AppliedObjectStyle": "ObjectStyle/$ID/[None]",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"BoundingBoxTextWrap\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "wrap-textframe": {
+      "AppliedObjectStyle": "ObjectStyle/W BBox",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"BoundingBoxTextWrap\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"12\" Left=\"9\" Right=\"15\" Top=\"6\"/></TextWrapPreference>"
+    },
+    "host": {
+      "AppliedObjectStyle": "ObjectStyle/$ID/[None]",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "anchored-plain": {
+      "AppliedObjectStyle": "ObjectStyle/A Right",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "anchored-x": {
+      "AppliedObjectStyle": "ObjectStyle/A Right",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>",
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorXoffset=\"20\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    },
+    "anchored-none": {
+      "AppliedObjectStyle": "ObjectStyle/$ID/[None]",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>"
+    }
+  },
+  "exported_styles": {
+    "$ID/[None]": {
+      "enable": {},
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorPoint=\"BottomRightAnchor\" AnchorSpaceAbove=\"0\" AnchorXoffset=\"0\" AnchorYoffset=\"0\" AnchoredPosition=\"InlinePosition\" HorizontalAlignment=\"LeftAlign\" HorizontalReferencePoint=\"TextFrame\" LockPosition=\"false\" PinPosition=\"true\" SpineRelative=\"false\" VerticalAlignment=\"BottomAlign\" VerticalReferencePoint=\"LineBaseline\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><ContourOption ContourPathName=\"$ID/\" ContourType=\"SameAsClipping\" IncludeInsideEdges=\"false\"/><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>"
+    },
+    "W BBox": {
+      "enable": {
+        "EnableTextWrapAndOthers": "true",
+        "EnableAnchoredObjectOptions": "false",
+        "EnableFrameFittingOptions": "false"
+      },
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorPoint=\"BottomRightAnchor\" AnchorSpaceAbove=\"0\" AnchorXoffset=\"0\" AnchorYoffset=\"0\" AnchoredPosition=\"InlinePosition\" HorizontalAlignment=\"LeftAlign\" HorizontalReferencePoint=\"TextFrame\" LockPosition=\"false\" PinPosition=\"true\" SpineRelative=\"false\" VerticalAlignment=\"BottomAlign\" VerticalReferencePoint=\"LineBaseline\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"BoundingBoxTextWrap\" TextWrapSide=\"BothSides\"><ContourOption ContourPathName=\"$ID/\" ContourType=\"SameAsClipping\" IncludeInsideEdges=\"false\"/><TextWrapOffset Bottom=\"12\" Left=\"9\" Right=\"15\" Top=\"6\"/></TextWrapPreference>",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>"
+    },
+    "W Child": {
+      "enable": {
+        "EnableTextWrapAndOthers": "false",
+        "EnableAnchoredObjectOptions": "false",
+        "EnableFrameFittingOptions": "false"
+      },
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorPoint=\"BottomRightAnchor\" AnchorSpaceAbove=\"0\" AnchorXoffset=\"0\" AnchorYoffset=\"0\" AnchoredPosition=\"InlinePosition\" HorizontalAlignment=\"LeftAlign\" HorizontalReferencePoint=\"TextFrame\" LockPosition=\"false\" PinPosition=\"true\" SpineRelative=\"false\" VerticalAlignment=\"BottomAlign\" VerticalReferencePoint=\"LineBaseline\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><ContourOption ContourPathName=\"$ID/\" ContourType=\"SameAsClipping\" IncludeInsideEdges=\"false\"/><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>"
+    },
+    "A Right": {
+      "enable": {
+        "EnableTextWrapAndOthers": "false",
+        "EnableAnchoredObjectOptions": "true",
+        "EnableFrameFittingOptions": "false"
+      },
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorPoint=\"TopRightAnchor\" AnchorSpaceAbove=\"0\" AnchorXoffset=\"0\" AnchorYoffset=\"4\" AnchoredPosition=\"Anchored\" HorizontalAlignment=\"RightAlign\" HorizontalReferencePoint=\"TextFrame\" LockPosition=\"false\" PinPosition=\"true\" SpineRelative=\"false\" VerticalAlignment=\"BottomAlign\" VerticalReferencePoint=\"LineBaseline\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><ContourOption ContourPathName=\"$ID/\" ContourType=\"SameAsClipping\" IncludeInsideEdges=\"false\"/><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"false\" BottomCrop=\"0\" FittingAlignment=\"CenterAnchor\" FittingOnEmptyFrame=\"None\" LeftCrop=\"0\" RightCrop=\"0\" TopCrop=\"0\"/>"
+    },
+    "F Fill": {
+      "enable": {
+        "EnableTextWrapAndOthers": "false",
+        "EnableAnchoredObjectOptions": "false",
+        "EnableFrameFittingOptions": "true"
+      },
+      "AnchoredObjectSetting": "<AnchoredObjectSetting AnchorPoint=\"BottomRightAnchor\" AnchorSpaceAbove=\"0\" AnchorXoffset=\"0\" AnchorYoffset=\"0\" AnchoredPosition=\"InlinePosition\" HorizontalAlignment=\"LeftAlign\" HorizontalReferencePoint=\"TextFrame\" LockPosition=\"false\" PinPosition=\"true\" SpineRelative=\"false\" VerticalAlignment=\"BottomAlign\" VerticalReferencePoint=\"LineBaseline\"/>",
+      "TextWrapPreference": "<TextWrapPreference ApplyToMasterPageOnly=\"false\" Inverse=\"false\" TextWrapMode=\"None\" TextWrapSide=\"BothSides\"><ContourOption ContourPathName=\"$ID/\" ContourType=\"SameAsClipping\" IncludeInsideEdges=\"false\"/><TextWrapOffset Bottom=\"0\" Left=\"0\" Right=\"0\" Top=\"0\"/></TextWrapPreference>",
+      "FrameFittingOption": "<FrameFittingOption AutoFit=\"true\" BottomCrop=\"0\" FittingAlignment=\"TopLeftAnchor\" FittingOnEmptyFrame=\"FillProportionally\" LeftCrop=\"3\" RightCrop=\"0\" TopCrop=\"0\"/>"
+    }
+  }
+}

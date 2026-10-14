@@ -68,8 +68,10 @@ is not written yet.
 | [137](137-object-style-text-frame-options.md) | A text frame takes the options it does not state from its object style | Accepted 2026-10-13 |
 | [138](138-positions-are-exact-sums.md) | A position is the exact sum of the advances before it, rounded once | Accepted 2026-10-13 |
 | [139](139-jump-object-and-next-column-wraps.md) | Jump-object and next-column wraps, and how wrapped lines break | Accepted 2026-10-13 |
+| [140](140-align-to-baseline-grid.md) | A paragraph aligned to the baseline grid stands each line on the next grid line | Accepted 2026-10-14 |
 | [141](141-a-line-may-overrun-its-measure-by-a-sliver.md) | A line may overrun its measure by a sliver; the hyphenation zone does not widen the gaps | Accepted 2026-10-13 |
 | [142](142-ragged-text-breaks-by-minimum-raggedness.md) | Ragged text breaks by minimum raggedness, and a line keeps its last word by a share of it | Accepted 2026-10-14 |
+| [143](143-object-style-wrap-and-anchoring.md) | An item takes the text wrap and anchoring it leaves out from its object style | Accepted 2026-10-14 |
 | [144](144-justified-text-prices-over-shrunk-lines.md) | Justified text prices an over-shrunk line instead of forbidding it | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in

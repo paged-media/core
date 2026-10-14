@@ -1219,6 +1219,8 @@ impl ResolvedParagraphAttrs {
             keep_with_next: paragraph.keep_with_next,
             start_paragraph: paragraph.start_paragraph,
             span_columns: paragraph.span_columns,
+            grid_alignment: paragraph.grid_alignment,
+            grid_align_first_line_only: paragraph.grid_align_first_line_only,
             applied_language: None,
             // Spacing set on the range beats the style (InDesign applies a
             // paragraph's own letter spacing over its style's, measured with
@@ -1328,6 +1330,10 @@ impl ResolvedParagraphAttrs {
         self.keep_with_next = self.keep_with_next.or(p.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(p.start_paragraph);
         self.span_columns.inherit(&p.span_columns);
+        self.grid_alignment = self.grid_alignment.or(p.grid_alignment);
+        self.grid_align_first_line_only = self
+            .grid_align_first_line_only
+            .or(p.grid_align_first_line_only);
         if self.applied_language.is_none() {
             self.applied_language = p.applied_language.clone();
         }
@@ -1666,6 +1672,10 @@ pub struct ResolvedParagraphAttrs {
     pub start_paragraph: Option<paged_model::StartParagraph>,
     /// Span / split columns, direct > style.
     pub span_columns: paged_model::SpanColumns,
+    /// `GridAlignment`, direct > style.
+    pub grid_alignment: Option<paged_model::GridAlignment>,
+    /// `GridAlignFirstLineOnly`, direct > style.
+    pub grid_align_first_line_only: Option<bool>,
     /// `AppliedLanguage` from the cascade — feeds dictionary picking
     /// for hyphenation. Strings like `"$ID/English: USA"`.
     pub applied_language: Option<String>,

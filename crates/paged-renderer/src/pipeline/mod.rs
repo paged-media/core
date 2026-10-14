@@ -41,6 +41,7 @@ use crate::AssetResolver;
 
 mod anchored;
 mod auto_size;
+mod baseline_grid;
 mod blend_shadow;
 mod build_engine;
 mod color_paint;

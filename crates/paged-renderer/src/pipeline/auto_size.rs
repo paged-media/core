@@ -147,7 +147,7 @@ impl<'a> Measurer<'a> {
     pub(super) fn fit_all(&self) -> HashMap<String, AutoSized> {
         let mut out = HashMap::new();
         for parsed in &self.document.spreads {
-            let obstacles = next_column_obstacles(&parsed.spread);
+            let obstacles = next_column_obstacles(&parsed.spread, &self.document.styles);
             for frame in &parsed.spread.text_frames {
                 let Some(id) = frame.self_id.as_deref() else {
                     continue;
@@ -580,7 +580,10 @@ pub(super) fn anchor(authored: Bounds, w: f32, h: f32, rp: RP) -> Bounds {
 
 /// Spread-coord AABBs (wrap offsets applied) of every item on the
 /// spread whose text wrap is `NextColumnTextWrap`.
-fn next_column_obstacles(spread: &paged_model::Spread) -> Vec<Bounds> {
+fn next_column_obstacles(
+    spread: &paged_model::Spread,
+    styles: &paged_model::StyleSheet,
+) -> Vec<Bounds> {
     fn inflate(b: Bounds, m: Option<[f32; 6]>, wrap: paged_model::TextWrap) -> Option<Bounds> {
         if !matches!(wrap.mode, TextWrapMode::NextColumnTextWrap) {
             return None;
@@ -596,23 +599,28 @@ fn next_column_obstacles(spread: &paged_model::Spread) -> Vec<Bounds> {
     }
     let mut out = Vec::new();
     out.extend(spread.text_frames.iter().filter_map(|f| {
-        f.text_wrap
+        styles
+            .item_text_wrap(f.text_wrap, f.applied_object_style.as_deref())
             .and_then(|w| inflate(f.bounds, f.item_transform, w))
     }));
     out.extend(spread.rectangles.iter().filter_map(|r| {
-        r.text_wrap
+        styles
+            .item_text_wrap(r.text_wrap, r.applied_object_style.as_deref())
             .and_then(|w| inflate(r.bounds, r.item_transform, w))
     }));
     out.extend(spread.ovals.iter().filter_map(|o| {
-        o.text_wrap
+        styles
+            .item_text_wrap(o.text_wrap, o.applied_object_style.as_deref())
             .and_then(|w| inflate(o.bounds, o.item_transform, w))
     }));
     out.extend(spread.polygons.iter().filter_map(|p| {
-        p.text_wrap
+        styles
+            .item_text_wrap(p.text_wrap, p.applied_object_style.as_deref())
             .and_then(|w| inflate(p.bounds, p.item_transform, w))
     }));
     out.extend(spread.graphic_lines.iter().filter_map(|l| {
-        l.text_wrap
+        styles
+            .item_text_wrap(l.text_wrap, l.applied_object_style.as_deref())
             .and_then(|w| inflate(l.bounds, l.item_transform, w))
     }));
     out

@@ -759,6 +759,34 @@
       "rationale": "Gated 2026-10-13 from its first InDesign measurement (A-12, ADR 137: text-frame options a frame takes from its object style — vertical justification, insets, columns, first baseline; a category switched off; a frame's own option; styles based on another). Worst page mean 0.160 / p99 3.42 / SSIM 0.9942; mean and p99 at worst x 1.20, SSIM at worst - 0.005. INK GATED 2026-10-13: worst page ink mean 8.824 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-13 (exact leading and advances, ADR 138): worst page now mean 0.143 / p99 2.864 / ssim 0.9946 (thresholds were 0.192 / 4.1 / 0.9892); re-sized by the rule above. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.066 / p99 2.42 / SSIM 0.9993 / ink 2.874; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142)."
     },
     {
+      "name": "baseline-grid",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.37,
+      "max_p99_de": 10.55,
+      "min_ssim": 0.9908,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (ADR 140: align to baseline grid, asked of InDesign 20.0.1). Open Sans 10/12 on a 14 pt document grid from the top of the page + 36 (top margin 45), twenty cases: not aligned; aligned by the style, by the range, and a range None over an aligned style; SpaceBefore 5; a 24/28.8 heading; first line only; aligned / not / aligned; leading 15; an empty paragraph; two columns; a frame above the grid's first line; and frames with their own grid (top of inset, frame, page and margin, one declared but unused, one under unaligned text, first line only, a heading). InDesign's probe and the engine's break records agree on all 123 body baselines to 0.001 pt. origin/main's engine read no GridAlignment and kept every line on its leading: worst page mean 4.339 / p99 84.138 / SSIM 0.7371. After: 0.308 / 8.792 / 0.9958; mean and p99 at worst x 1.20, SSIM at worst - 0.005. Frames unstroked; every measure clear of where a line ends, so the line breaks are the same on both sides. The residue is glyph anti-aliasing."
+    },
+    {
+      "name": "baseline-grid-margin",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.168,
+      "max_p99_de": 4.73,
+      "min_ssim": 0.9931,
+      "rationale": "Gated 2026-10-13 from its first InDesign measurement (ADR 140): the document grid from the top MARGIN (TopOfMarginOfBaselineGridRelativeOption, BaselineStart 0, every 14), the margin 45 pt on page 1 and 60.5 on page 2; not aligned, aligned, a heading, first line only, SpaceBefore 5 on a range, and a frame above the margin. All 50 body baselines agree with InDesign's probe to 0.001 pt. origin/main's engine: worst page mean 1.793 / p99 76.680 / SSIM 0.8885. After: 0.140 / 3.936 / 0.9981; mean and p99 at worst x 1.20, SSIM at worst - 0.005."
+    },
+    {
+      "name": "object-style-options",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.257,
+      "max_p99_de": 6.75,
+      "min_ssim": 0.9928,
+      "max_ink_mean_de": 4.276,
+      "rationale": "Added 2026-10-14 (A-12 step 2, ADR 143): the text wrap and anchored-object options an item takes from its object style, asked of InDesign 20.0.1 (tools/indesign-export/object-style-options-probe.*). Twelve cases: a bounding-box wrap from the style, its category off, its flag absent, a style based on it with nothing of its own, the object stating None, a jump-object wrap; a custom anchored object (top-right on the frame edge, 6 pt below the anchor line), its category off, a style based on it, the object stating only AnchorXoffset -20, above the line and centred, its flag absent. Every object stands where InDesign's DOM puts it, to 0.01 pt. origin/main's engine took no option from the style and set custom anchored objects against the line after their paragraph: mean 1.521 / p99 50.79 / SSIM 0.9003 / ink 24.040. After: 0.213 / 5.62 / 0.9978 / ink 3.563; sized at worst x 1.20 and SSIM - 0.005."
+    },
+    {
       "name": "justified-breaks",
       "text_gate": true,
       "max_pages_with_pdf": 2,
