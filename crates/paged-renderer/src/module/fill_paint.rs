@@ -152,12 +152,6 @@ fn place_linear_at_start(
     gid: paged_compose::GradientId,
     frame: &ResolvedFrame<'_>,
 ) {
-    let Some([sx, sy]) = frame.gradient_fill_start else {
-        return;
-    };
-    if !(sx.is_finite() && sy.is_finite()) {
-        return;
-    }
     let bbox = match frame.geometry {
         Geometry::Rect { rect }
         | Geometry::TextFrameRect { rect }
@@ -168,10 +162,20 @@ fn place_linear_at_start(
     if !(bbox.w > 0.0 && bbox.h > 0.0) {
         return;
     }
-    let len = frame
+    let stated_len = frame
         .gradient_fill_length
-        .filter(|l| l.is_finite() && *l > 0.0)
-        .unwrap_or(bbox.w);
+        .filter(|l| l.is_finite() && *l > 0.0);
+    let ([sx, sy], len) = match frame.gradient_fill_start {
+        Some([sx, sy]) if sx.is_finite() && sy.is_finite() => {
+            ([sx, sy], stated_len.unwrap_or(bbox.w))
+        }
+        Some(_) => return,
+        // An upright frame keeps the default the paint was built with.
+        None => match rotated_linear_default(bbox, frame.item_transform) {
+            Some((start, default_len)) => (start, stated_len.unwrap_or(default_len)),
+            None => return,
+        },
+    };
     let (sin, cos) = frame
         .gradient_fill_angle
         .unwrap_or(0.0)
@@ -192,6 +196,69 @@ fn place_linear_at_start(
             g.end = unit(ex, ey);
         }
     }
+}
+
+/// Where InDesign starts a linear gradient on a ROTATED frame that states
+/// no `GradientFillStart`, and how long it makes it: `(start, length)` in
+/// the frame's inner coordinates, or `None` for a frame at 0°, which keeps
+/// the upright default (`pipeline::color_paint::linear_gradient_endpoints`:
+/// the inner box's bottom-left corner, the box's width).
+///
+/// Asked of InDesign 20.0.1 by opening frames turned every 15° and reading
+/// back the start and length it writes (ADR 147). Only the rotation θ of
+/// the item's transform counts — a scale, shear or flip leaves the answer
+/// of the rotation alone (a horizontal flip is θ = 180°). With the box
+/// turned by θ into its parent's axes:
+///
+/// * the length is the width of that turned box;
+/// * at exactly 90°, 180° and 270° the start is a corner of the inner box:
+///   top-right, bottom-right and bottom-left;
+/// * strictly between 0° and 180° it is the left-centre of the turned box,
+///   carried back into inner coordinates;
+/// * strictly between 180° and 360° it is the inner corner the turn puts
+///   furthest left.
+///
+/// The angle stays the frame's `GradientFillAngle`, in inner coordinates,
+/// so the axis turns with the frame from that start.
+fn rotated_linear_default(bbox: Rect, item_transform: Option<[f32; 6]>) -> Option<([f32; 2], f32)> {
+    let [a, b, ..] = item_transform?;
+    if a.hypot(b) < 1e-6 {
+        return None;
+    }
+    let theta = (-b).atan2(a).to_degrees().rem_euclid(360.0);
+    const EPS: f32 = 1e-3;
+    let near = |t: f32| (theta - t).abs() < EPS;
+    if near(0.0) || near(360.0) {
+        return None;
+    }
+    let (sin, cos) = theta.to_radians().sin_cos();
+    // Inner → parent, rotation only (an IDML transform maps the inner
+    // y-down plane with `b = −sin θ`, `c = sin θ`).
+    let turn = |x: f32, y: f32| (cos * x + sin * y, -sin * x + cos * y);
+    let (x0, y0, x1, y1) = (bbox.x, bbox.y, bbox.x + bbox.w, bbox.y + bbox.h);
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+    let turned = corners.map(|(x, y)| turn(x, y));
+    let min_x = turned.iter().map(|p| p.0).fold(f32::INFINITY, f32::min);
+    let max_x = turned.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max);
+    let min_y = turned.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+    let max_y = turned.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+    let length = max_x - min_x;
+    let start = if near(90.0) {
+        [x1, y0]
+    } else if near(180.0) {
+        [x1, y1]
+    } else if near(270.0) {
+        [x0, y1]
+    } else if theta < 180.0 {
+        let (px, py) = (min_x, (min_y + max_y) * 0.5);
+        [cos * px - sin * py, sin * px + cos * py]
+    } else {
+        let i = (0..4)
+            .min_by(|&i, &j| turned[i].0.total_cmp(&turned[j].0))
+            .unwrap_or(0);
+        [corners[i].0, corners[i].1]
+    };
+    Some((start, length))
 }
 
 /// An explicit `GradientFillStart` + `GradientFillLength` centres a
@@ -252,6 +319,80 @@ fn rebase_radial_gradient_to_bbox(
 mod tests {
     use super::*;
     use paged_compose::{DisplayList, GradientStop, RadialGradient};
+
+    fn turned(theta: f32, sx: f32, sy: f32) -> [f32; 6] {
+        let (sin, cos) = theta.to_radians().sin_cos();
+        // R(θ)·diag(sx, sy), as an IDML ItemTransform.
+        [cos * sx, -sin * sx, sin * sy, cos * sy, 0.0, 0.0]
+    }
+
+    /// Every frame of the recorded probe
+    /// (`tools/indesign-export/gradient-defaults-probe.sh`, ADR 147): an
+    /// 80 × 60 rectangle turned 0°, 15° … 255° with no gradient start, and
+    /// the start and length InDesign 20.0.1 wrote back for it.
+    #[test]
+    fn a_rotated_frame_starts_its_gradient_where_indesign_does() {
+        let probe: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tools/indesign-export/gradient-defaults-probe.json"
+        ))
+        .expect("probe recording parses");
+        let frames = probe["frames"].as_array().expect("frames");
+        assert_eq!(frames.len(), 18);
+        let num = |v: &serde_json::Value| v.as_f64().expect("number") as f32;
+        for f in frames {
+            let theta = num(&f["rotation"]);
+            let bbox = Rect {
+                x: 0.0,
+                y: 0.0,
+                w: num(&f["box"][0]),
+                h: num(&f["box"][1]),
+            };
+            let (ex, ey, el) = (num(&f["start"][0]), num(&f["start"][1]), num(&f["length"]));
+            let ([x, y], len) = rotated_linear_default(bbox, Some(turned(theta, 1.0, 1.0)))
+                // Upright: the existing default, (0, h) and the width.
+                .unwrap_or(([0.0, bbox.h], bbox.w));
+            assert!(
+                (x - ex).abs() < 0.05 && (y - ey).abs() < 0.05 && (len - el).abs() < 0.05,
+                "{theta}°: start ({x:.2}, {y:.2}) length {len:.2}, InDesign ({ex}, {ey}) {el}"
+            );
+        }
+        let upright = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 80.0,
+            h: 60.0,
+        };
+        assert_eq!(rotated_linear_default(upright, None), None);
+    }
+
+    /// Scale, shear and flip leave the rotation's answer alone: InDesign
+    /// wrote the same start for 30° scaled 1.5 × 0.5 as for 30°, and a
+    /// horizontal flip is 180°.
+    #[test]
+    fn only_the_rotation_counts() {
+        let bbox = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 80.0,
+            h: 60.0,
+        };
+        let plain = rotated_linear_default(bbox, Some(turned(30.0, 1.0, 1.0)));
+        assert_eq!(
+            rotated_linear_default(bbox, Some(turned(30.0, 1.5, 0.5))),
+            plain
+        );
+        let ([x, y], len) =
+            rotated_linear_default(bbox, Some([-1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).unwrap();
+        assert!(
+            (x - 80.0).abs() < 1e-3 && (y - 60.0).abs() < 1e-3 && (len - 80.0).abs() < 1e-3,
+            "flipped: start ({x}, {y}) length {len}"
+        );
+        // A vertical flip is still 0°.
+        assert_eq!(
+            rotated_linear_default(bbox, Some([1.0, 0.0, 0.0, -1.0, 0.0, 0.0])),
+            None
+        );
+    }
 
     fn page_with(list: DisplayList) -> BuiltPage {
         BuiltPage {

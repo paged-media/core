@@ -379,7 +379,9 @@ pub fn lab_entry_to_paint(entry: &paged_model::ColorEntry) -> Option<Paint> {
 ///   coordinates is `(cos θ, −sin θ)`. 90° runs from the bottom to the
 ///   top, 135° up and to the left, −90° downwards;
 /// * with no start the axis begins at the inner bounding box's
-///   BOTTOM-LEFT corner (InDesign writes `GradientFillStart="0 h"`);
+///   BOTTOM-LEFT corner (InDesign writes `GradientFillStart="0 h"`) —
+///   for an upright frame; a rotated one starts elsewhere and runs
+///   longer (`module::fill_paint::rotated_linear_default`, ADR 147);
 /// * with no length it is as long as the box is WIDE (it writes
 ///   `GradientFillLength="w"`) whatever the angle — so a 120 × 60
 ///   rectangle at 90° shows only the first half of its ramp, and one

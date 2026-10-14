@@ -74,6 +74,7 @@ is not written yet.
 | [143](143-object-style-wrap-and-anchoring.md) | An item takes the text wrap and anchoring it leaves out from its object style | Accepted 2026-10-14 |
 | [144](144-justified-text-prices-over-shrunk-lines.md) | Justified text prices an over-shrunk line instead of forbidding it | Accepted 2026-10-14 |
 | [145](145-a-pages-number-comes-from-its-sections.md) | A page's number comes from its sections, not from `Page@Name` | Accepted 2026-10-14 |
+| [147](147-a-rotated-frames-gradient-default.md) | A rotated frame's gradient starts where InDesign puts it | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

@@ -1125,7 +1125,15 @@ pub(super) fn emit_rectangle_into(
                 }
             ) || gap_override.is_some();
             let handled = if styled {
-                let base = axis_rect_path(inset);
+                // A wave's side and phase follow the outline's direction,
+                // so it runs the way InDesign writes a rectangle: down
+                // the left edge first. Stripes keep the clockwise outline
+                // their offsets were measured on.
+                let base = if matches!(class, StrokeStyleClass::Wavy { .. }) {
+                    indesign_rect_path(inset)
+                } else {
+                    axis_rect_path(inset)
+                };
                 let seed = resolved
                     .self_id
                     .map(|id| fnv_1a_u64(id.as_bytes()))
@@ -1166,6 +1174,31 @@ pub(super) fn emit_rectangle_into(
 /// the rect's own coords. Used by the W1.2 styled-stroke emitter, which
 /// needs a polyline-able outline (the cheap `emit_stroke_rect_*`
 /// primitive doesn't expose one).
+/// A rectangle's outline in the order InDesign writes one
+/// (`<PathPointType>` top-left, bottom-left, bottom-right, top-right):
+/// counter-clockwise on the page, down the left edge first.
+pub(crate) fn indesign_rect_path(r: Rect) -> paged_compose::PathData {
+    use paged_compose::PathSegment::{Close, LineTo, MoveTo};
+    paged_compose::PathData {
+        segments: vec![
+            MoveTo { x: r.x, y: r.y },
+            LineTo {
+                x: r.x,
+                y: r.y + r.h,
+            },
+            LineTo {
+                x: r.x + r.w,
+                y: r.y + r.h,
+            },
+            LineTo {
+                x: r.x + r.w,
+                y: r.y,
+            },
+            Close,
+        ],
+    }
+}
+
 pub(crate) fn axis_rect_path(r: Rect) -> paged_compose::PathData {
     use paged_compose::PathSegment::{Close, LineTo, MoveTo};
     paged_compose::PathData {
@@ -1543,16 +1576,21 @@ fn builtin_stripe_fractions(name: &str) -> Option<Vec<paged_model::StripeDef>> {
 }
 
 /// Wavy stroke amplitude / period / pen-width in pt. `width` and
-/// `wavelength` are InDesign 0..1 ratios of the total weight; absent
-/// values fall back to IDML-sensible defaults (amplitude = the weight,
-/// period = 3× the weight, pen = 1/4 the weight, min 0.5pt).
+/// `wavelength` are InDesign 0..1 ratios of the total weight. Without
+/// them, InDesign's canned Wavy, measured on `strokes-fills` "wavy" (a
+/// 10 pt stroke): the pen is a quarter of the weight, the wave fills the
+/// weight's band (amplitude (weight − pen) / 2, 3.75 pt there) and its
+/// period is four times the weight (40 pt).
 fn wavy_params(width: Option<f32>, wavelength: Option<f32>, weight: f32) -> (f32, f32, f32) {
-    let amplitude = width.map(|w| w * weight).unwrap_or(weight).max(0.1);
+    let sub_weight = (weight * 0.25).max(0.5);
+    let amplitude = width
+        .map(|w| w * weight)
+        .unwrap_or((weight - sub_weight) * 0.5)
+        .max(0.1);
     let period = wavelength
         .map(|wl| (wl * weight).max(1.0))
-        .unwrap_or(weight * 3.0)
+        .unwrap_or(weight * 4.0)
         .max(1.0);
-    let sub_weight = (weight * 0.25).max(0.5);
     (amplitude, period, sub_weight)
 }
 

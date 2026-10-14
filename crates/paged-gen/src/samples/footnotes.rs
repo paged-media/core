@@ -116,23 +116,21 @@ fn write_footnote(b: &mut XmlBuilder, fn_: &Fn) {
     );
     for run in &fn_.runs {
         let pt = run.point_size.map(crate::xml::format_f32);
-        let mut attrs: Vec<(&str, &str)> = vec![
-            (
-                "AppliedCharacterStyle",
-                "CharacterStyle/$ID/[No character style]",
-            ),
-            ("AppliedFont", BODY_FONT),
-        ];
+        let mut attrs: Vec<(&str, &str)> = vec![(
+            "AppliedCharacterStyle",
+            "CharacterStyle/$ID/[No character style]",
+        )];
         if let Some(ref p) = pt {
             attrs.push(("PointSize", p.as_str()));
         }
-        if let Some(fs) = run.font_style {
-            attrs.push(("FontStyle", fs));
-        }
+        // InDesign writes the face with the family; the save-back's face
+        // pass spells it out otherwise (idml-export `face.rs`).
+        attrs.push(("FontStyle", run.font_style.unwrap_or("Regular")));
         if let Some(fc) = run.fill_color {
             attrs.push(("FillColor", fc));
         }
         b.start("CharacterStyleRange", &attrs);
+        applied_font(b, BODY_FONT);
         b.start("Content", &[]);
         b.text(run.text);
         b.end("Content");
@@ -140,6 +138,16 @@ fn write_footnote(b: &mut XmlBuilder, fn_: &Fn) {
     }
     b.end("ParagraphStyleRange");
     b.end("Footnote");
+}
+
+/// `AppliedFont` is a typed `<Properties>` child in InDesign's IDML; as an
+/// attribute it is ignored on open.
+fn applied_font(b: &mut XmlBuilder, family: &str) {
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text(family);
+    b.end("AppliedFont");
+    b.end("Properties");
 }
 
 /// Emit the footnotes story: one body paragraph whose single content run
@@ -164,10 +172,11 @@ fn write_footnotes_story(story_id: &str, footnotes: &[Fn]) -> Vec<u8> {
                 "AppliedCharacterStyle",
                 "CharacterStyle/$ID/[No character style]",
             ),
-            ("AppliedFont", BODY_FONT),
             ("PointSize", "12"),
+            ("FontStyle", "Regular"),
         ],
     );
+    applied_font(&mut b, BODY_FONT);
     b.start("Content", &[]);
     b.text(
         "Body copy that references three footnotes. The footnote pool sits \

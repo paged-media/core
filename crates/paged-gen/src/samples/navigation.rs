@@ -179,8 +179,10 @@ fn body_story_xml(story_id: &str, xref_source: &str) -> Vec<u8> {
 fn styles() -> Vec<u8> {
     let fragment = format!(
         "<RootParagraphStyleGroup>\
-<ParagraphStyle Self=\"{HEADING_STYLE}\" Name=\"Heading\" AppliedFont=\"Open Sans\" \
-PointSize=\"20\" FillColor=\"Color/Black\"/>\
+<ParagraphStyle Self=\"{HEADING_STYLE}\" Name=\"Heading\" \
+PointSize=\"20\" FontStyle=\"Regular\" FillColor=\"Color/Black\">\
+<Properties><AppliedFont type=\"string\">Open Sans</AppliedFont></Properties>\
+</ParagraphStyle>\
 </RootParagraphStyleGroup>\
 <TOCStyle Self=\"{TOC_STYLE}\" Name=\"Contents\" Title=\"Contents\" \
 TitleStyle=\"{NO_PARA_STYLE}\">\

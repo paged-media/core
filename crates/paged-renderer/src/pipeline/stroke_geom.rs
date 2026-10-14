@@ -461,7 +461,12 @@ pub(crate) fn offset_closed_outline(line: &Polyline, distance: f32, inward: bool
 
 /// Resample `line` along its arc length and displace each sample along
 /// the local normal by `amplitude·sin(2π·s/period)`, producing a sine
-/// wave that rides the path centreline. `period` and `amplitude` are in
+/// wave that rides the path centreline. The normal is `(dy, −dx)` in the
+/// path's y-down coordinates, and `s` runs from the contour's start: the
+/// side and phase InDesign 20.0.1 draws its Wavy stroke with (measured on
+/// `strokes-fills` "wavy": on a rectangle traced down its left edge
+/// first, the wave leaves the start towards the inside and crosses the
+/// edge every half period). `period` and `amplitude` are in
 /// pt; `samples_per_period` controls smoothness. Returns an open
 /// polyline (a wavy stroke is always rendered as an open ribbon, even
 /// over a closed source path, matching InDesign's preview).
@@ -522,12 +527,12 @@ pub(crate) fn sine_polyline(
         let (bx, by) = pts[seg + 1];
         let cx = ax + (bx - ax) * local_t;
         let cy = ay + (by - ay) * local_t;
-        // Local tangent → left normal.
+        // Local tangent → the normal InDesign waves along.
         let dx = bx - ax;
         let dy = by - ay;
         let len = (dx * dx + dy * dy).sqrt();
         let (nx, ny) = if len > 1e-6 {
-            (-dy / len, dx / len)
+            (dy / len, -dx / len)
         } else {
             (0.0, 0.0)
         };
@@ -735,7 +740,7 @@ mod tests {
     fn sine_polyline_quarter_period_peaks_at_amplitude() {
         // A 40pt line with period 40 → one full wave. The sample at
         // s=10 (quarter period) hits +amplitude along the normal
-        // (walking +x ⇒ normal +y), i.e. y ≈ +amp.
+        // (walking +x ⇒ normal −y), i.e. y ≈ −amp.
         let line = poly(&[(0.0, 0.0), (40.0, 0.0)], false);
         let wave = sine_polyline(&line, 5.0, 40.0, 40);
         let near = wave
@@ -743,7 +748,7 @@ mod tests {
             .iter()
             .min_by(|a, b| (a.0 - 10.0).abs().partial_cmp(&(b.0 - 10.0).abs()).unwrap())
             .unwrap();
-        assert!((near.1 - 5.0).abs() < 0.2, "quarter-period y={}", near.1);
+        assert!((near.1 + 5.0).abs() < 0.2, "quarter-period y={}", near.1);
     }
 
     #[test]
