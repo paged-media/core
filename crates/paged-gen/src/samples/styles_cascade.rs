@@ -109,8 +109,9 @@ PointSize=\"12\" FillColor=\"Color/Black\" NextStyle=\"{STYLE_BODY}\"/>\
 PointSize=\"12\" FillColor=\"Color/Black\" BulletsAndNumberingListType=\"NumberedList\">\
 <Properties><AppliedNumberingList type=\"object\">{NUMBERING_LIST}</AppliedNumberingList>\
 </Properties></ParagraphStyle>\
-<ParagraphStyle Self=\"{STYLE_LIST_DERIVED}\" Name=\"ListDerived\" \
-BasedOn=\"{STYLE_LIST_BASE}\" PointSize=\"12\"/>\
+<ParagraphStyle Self=\"{STYLE_LIST_DERIVED}\" Name=\"ListDerived\" PointSize=\"12\">\
+<Properties><BasedOn type=\"object\">{STYLE_LIST_BASE}</BasedOn></Properties>\
+</ParagraphStyle>\
 <ParagraphStyle Self=\"{STYLE_JUSTIFIED}\" Name=\"JustifiedHyphen\" \
 AppliedFont=\"Open Sans\" PointSize=\"12\" FillColor=\"Color/Black\" \
 Justification=\"LeftJustified\" Hyphenation=\"true\" HyphenationZone=\"36\"/>\
@@ -118,13 +119,15 @@ Justification=\"LeftJustified\" Hyphenation=\"true\" HyphenationZone=\"36\"/>\
 <RootCellStyleGroup>\
 <CellStyle Self=\"{CELL_BASE}\" Name=\"CellBase\" FillColor=\"{CELL_FILL}\" \
 VerticalJustification=\"CenterAlign\"/>\
-<CellStyle Self=\"{CELL_DERIVED}\" Name=\"CellDerived\" BasedOn=\"{CELL_BASE}\"/>\
+<CellStyle Self=\"{CELL_DERIVED}\" Name=\"CellDerived\">\
+<Properties><BasedOn type=\"object\">{CELL_BASE}</BasedOn></Properties></CellStyle>\
 </RootCellStyleGroup>\
 <RootTableStyleGroup>\
 <TableStyle Self=\"TableStyle/$ID/[No table style]\" Name=\"$ID/[No table style]\"/>\
 <TableStyle Self=\"{TABLE_BASE}\" Name=\"TableBase\" \
 BodyRegionCellStyle=\"{CELL_DERIVED}\"/>\
-<TableStyle Self=\"{TABLE_DERIVED}\" Name=\"TableDerived\" BasedOn=\"{TABLE_BASE}\"/>\
+<TableStyle Self=\"{TABLE_DERIVED}\" Name=\"TableDerived\">\
+<Properties><BasedOn type=\"object\">{TABLE_BASE}</BasedOn></Properties></TableStyle>\
 </RootTableStyleGroup>"
     );
     styles_xml_with_raw(&fragment)
