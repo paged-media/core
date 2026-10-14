@@ -47,7 +47,7 @@ const IDENTITY: Affine = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 /// unknown index or a group with no member geometry.
 pub(crate) fn group_box(spread: &Spread, group_idx: usize) -> Option<(Bounds, Option<Affine>)> {
     spread.groups.get(group_idx)?;
-    let placement = chain_transform(spread, group_idx);
+    let placement = paged_mutate::group_frame::composed_transform(spread, group_idx);
     // A singular group transform (never in well-formed IDML) has no inner
     // space to measure in; the members' spread-space extent is the honest
     // answer then.
@@ -61,31 +61,6 @@ pub(crate) fn group_box(spread: &Spread, group_idx: usize) -> Option<(Bounds, Op
     let mut acc: Option<Bounds> = None;
     collect(spread, group_idx, &to_group, &mut acc, 0);
     acc.map(|b| (b, placement))
-}
-
-/// The group's raw transform composed with every enclosing group's,
-/// outermost first.
-fn chain_transform(spread: &Spread, group_idx: usize) -> Option<Affine> {
-    let mut acc = spread.groups[group_idx].item_transform;
-    let mut current = group_idx;
-    // A malformed member list could name an ancestor twice; the depth cap
-    // keeps a cycle from spinning.
-    for _ in 0..spread.groups.len() {
-        let Some(parent) = spread
-            .groups
-            .iter()
-            .position(|g| g.members.contains(&FrameRef::Group(current)))
-        else {
-            break;
-        };
-        acc = match (spread.groups[parent].item_transform, acc) {
-            (None, a) => a,
-            (Some(p), None) => Some(p),
-            (Some(p), Some(a)) => Some(multiply(p, a)),
-        };
-        current = parent;
-    }
-    acc
 }
 
 fn collect(spread: &Spread, gi: usize, to_group: &Affine, acc: &mut Option<Bounds>, depth: usize) {

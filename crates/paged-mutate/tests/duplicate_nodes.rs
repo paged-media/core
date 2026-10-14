@@ -471,9 +471,18 @@ fn a_group_duplicates_with_every_member_and_nested_group() {
         ids,
         "the clone's subtree is the minted ids, in clone order"
     );
-    // Node for node the same, each moved by the offset.
+    // Node for node the same, each moved by the offset — except a nested
+    // group's own transform, which is stored relative to the group
+    // holding it: that group moved, so it keeps its own. (A leaf's
+    // transform is composed into spread space and moves.)
     for (s, c) in source_tree.iter().zip(&ids) {
-        assert_same_node_moved(&doc, s, c, 30.0, 0.0);
+        let nested_group = *c != clone && matches!(locate(&doc, c).1, FrameRef::Group(_));
+        let (dx, dy) = if nested_group {
+            (0.0, 0.0)
+        } else {
+            (30.0, 0.0)
+        };
+        assert_same_node_moved(&doc, s, c, dx, dy);
     }
     // No clone shares a member with its source, and members stay out of
     // the z-order — only the group's own ref is listed, right above the

@@ -952,6 +952,24 @@ pub(super) fn apply_create_group(
     let spread = &mut doc.spreads[spread_idx].spread;
     let new_group_idx = spread.groups.len();
 
+    // A member group's stored transform is relative to the group holding
+    // it, which becomes the new group: a new group that carries a
+    // transform of its own (the re-create that undoes a dissolve) divides
+    // it out, so the member's spread-space frame stays where it is.
+    if let Some(inv) = spec
+        .item_transform
+        .and_then(crate::path_math::affine_inverse)
+    {
+        for r in &member_refs {
+            if let FrameRef::Group(c) = *r {
+                if let Some(g) = spread.groups.get_mut(c) {
+                    g.item_transform = crate::group_frame::compose(Some(inv), g.item_transform)
+                        .and_then(crate::group_frame::none_if_identity);
+                }
+            }
+        }
+    }
+
     // Inverse-only for the TOP-LEVEL create: the members' exact
     // pre-group `frames_in_order` slots, so undo restores scattered
     // z-order bytewise. Nested re-creates leave it `None` (the
@@ -1212,6 +1230,26 @@ pub(super) fn apply_dissolve_group(
 
     // ---- mutation ----
     let spread = &mut doc.spreads[spread_idx].spread;
+    // A member group's stored transform is relative to the group being
+    // dissolved, and it now sits in that group's parent: the dissolved
+    // group's own transform folds into it, so its spread-space frame stays
+    // where it is (the leaves carry theirs composed already).
+    if let Some(own) = spread.groups[group_idx].item_transform {
+        let subs: Vec<usize> = spread.groups[group_idx]
+            .members
+            .iter()
+            .filter_map(|r| match *r {
+                FrameRef::Group(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        for c in subs {
+            if let Some(g) = spread.groups.get_mut(c) {
+                g.item_transform = crate::group_frame::compose(Some(own), g.item_transform)
+                    .and_then(crate::group_frame::none_if_identity);
+            }
+        }
+    }
     let group = spread.groups.remove(group_idx);
 
     match &site {
@@ -1297,21 +1335,23 @@ pub(super) fn apply_dissolve_group(
     })
 }
 
-/// W1.20 (groups v2) — move/scale/rotate a group as a unit. Sets the
-/// group's own `ItemTransform` to `transform` and rebases every
-/// descendant's pre-baked EFFECTIVE transform by the delta
-/// `transform * inv(prev)` so the members follow rigidly. The renderer
-/// and the hit-tester both read each leaf's effective `item_transform`,
-/// so they agree by construction. Nested child groups' own transforms
-/// ride the delta too (keeping the stored "un-composed group
-/// transform" field consistent for re-serialization). Inverse: the
-/// same op carrying the captured `prev` as the new transform.
+/// W1.20 (groups v2) — move/scale/rotate a group as a unit. `transform`
+/// is the group's new STORED `ItemTransform`, relative to the group that
+/// holds it (spread space for a top-level group), as IDML and the model
+/// store it. Every descendant LEAF, whose transform is composed into
+/// spread space, is rebased by the spread-space delta
+/// `P ∘ new ∘ old⁻¹ ∘ P⁻¹` (`P` the group's parent frame; the identity
+/// at top level, where this is `new ∘ old⁻¹`), so the members follow
+/// rigidly and the renderer and the hit-tester agree. Nested groups keep
+/// their stored transforms: they are relative to this group and move
+/// with it. Inverse: the same op carrying the captured `prev`.
 pub(super) fn apply_set_group_transform(
     doc: &mut paged_scene::Document,
     group_id: &str,
     transform: Option<[f32; 6]>,
     prev_arg: Option<[f32; 6]>,
 ) -> Result<AppliedOperation, OperationError> {
+    use crate::group_frame::{none_if_identity, out_of_frame, parent_frame};
     use crate::path_math::{affine_multiply, group_rebase_delta, AFFINE_IDENTITY};
     use paged_model::FrameRef;
 
@@ -1344,10 +1384,12 @@ pub(super) fn apply_set_group_transform(
     let captured_prev = g_old;
     let _ = prev_arg;
 
-    // Delta that maps the old effective geometry to the new:
-    // `delta = g_new * inv(g_old)`. A singular old transform (never in
-    // well-formed IDML) makes the rebase a no-op rather than panicking.
-    let Some(delta) = group_rebase_delta(g_old, g_new) else {
+    // The spread-space delta: `new ∘ old⁻¹` in the group's parent frame.
+    // A singular old transform or parent frame (never in well-formed
+    // IDML) makes the rebase a no-op rather than panicking.
+    let delta = group_rebase_delta(g_old, g_new)
+        .and_then(|d| out_of_frame(parent_frame(spread, group_idx), d));
+    let Some(delta) = delta else {
         // Degenerate prior transform: still store the new own-transform
         // (no member rebase possible) so at least the group field is set.
         spread.groups[group_idx].item_transform = transform;
@@ -1369,27 +1411,21 @@ pub(super) fn apply_set_group_transform(
         });
     };
 
-    // Collect every descendant FrameRef (leaves + nested groups),
-    // descending through nested groups. We then rebase each.
+    // Every descendant leaf, descending through nested groups (whose own
+    // stored transforms stay as they are).
     let mut leaves: Vec<FrameRef> = Vec::new();
-    let mut nested_groups: Vec<usize> = Vec::new();
-    fn walk(
-        spread: &paged_model::Spread,
-        gi: usize,
-        leaves: &mut Vec<FrameRef>,
-        nested_groups: &mut Vec<usize>,
-    ) {
+    fn walk(spread: &paged_model::Spread, gi: usize, leaves: &mut Vec<FrameRef>, depth: usize) {
+        if depth > spread.groups.len() {
+            return;
+        }
         for m in &spread.groups[gi].members {
             match *m {
-                FrameRef::Group(child) => {
-                    nested_groups.push(child);
-                    walk(spread, child, leaves, nested_groups);
-                }
+                FrameRef::Group(child) => walk(spread, child, leaves, depth + 1),
                 leaf => leaves.push(leaf),
             }
         }
     }
-    walk(spread, group_idx, &mut leaves, &mut nested_groups);
+    walk(spread, group_idx, &mut leaves, 0);
 
     // Rebase a leaf's effective transform: `leaf' = delta * leaf`
     // (`None` ⇒ identity leaf, so `leaf' = delta`). An exact-identity
@@ -1397,12 +1433,7 @@ pub(super) fn apply_set_group_transform(
     // applied to the rebased value) restores the original `None`
     // bytewise — the common translate/undo path round-trips exactly.
     let rebase = |cur: Option<[f32; 6]>| -> Option<[f32; 6]> {
-        let m = affine_multiply(delta, cur.unwrap_or(AFFINE_IDENTITY));
-        if m == AFFINE_IDENTITY {
-            None
-        } else {
-            Some(m)
-        }
+        none_if_identity(affine_multiply(delta, cur.unwrap_or(AFFINE_IDENTITY)))
     };
     for leaf in &leaves {
         match *leaf {
@@ -1431,19 +1462,9 @@ pub(super) fn apply_set_group_transform(
                     f.item_transform = rebase(f.item_transform);
                 }
             }
-            FrameRef::Group(_) => unreachable!("groups collected separately"),
+            FrameRef::Group(_) => unreachable!("walk descends into groups"),
         }
     }
-    // Nested child groups: their own (un-composed) transform also rides
-    // the delta, keeping the stored field consistent with the rebased
-    // member geometry on re-serialization. Same exact-identity → `None`
-    // collapse as the leaf rebase so undo round-trips bytewise.
-    for child in &nested_groups {
-        if let Some(g) = spread.groups.get_mut(*child) {
-            g.item_transform = rebase(g.item_transform);
-        }
-    }
-    // Finally set THIS group's own transform.
     spread.groups[group_idx].item_transform = transform;
 
     // Invalidation: every leaf node id that moved (frame geometry).

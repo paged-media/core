@@ -741,6 +741,7 @@ mod tests {
             anchor_spread: None,
             pivot_spread: None,
             camera_scale: None,
+            group_frames: std::collections::HashMap::new(),
         }
     }
 

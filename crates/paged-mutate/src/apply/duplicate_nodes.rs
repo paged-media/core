@@ -521,6 +521,9 @@ struct Cloner<'a> {
     dy: f32,
     ids: std::slice::Iter<'a, String>,
     story_ids: std::slice::Iter<'a, String>,
+    /// How many groups the clone being made sits inside, counted from the
+    /// duplicated root: 0 for the root itself.
+    group_depth: usize,
 }
 
 impl Cloner<'_> {
@@ -548,18 +551,35 @@ impl Cloner<'_> {
         let new_ref = match r {
             FrameRef::Group(gi) => {
                 let source = spread.groups[gi].clone();
+                // A group's stored transform is relative to the group that
+                // holds it. The duplicated ROOT group moves by the offset
+                // seen from its parent's frame (the spread's, at top
+                // level); a group inside it moves with it and keeps its
+                // own transform. Leaves move by the offset in spread
+                // space, where their transforms live.
+                let item_transform = if self.group_depth == 0 {
+                    let frame = crate::group_frame::parent_frame(spread, gi);
+                    match crate::group_frame::translation_in_frame(frame, dx, dy) {
+                        Some((lx, ly)) => translated(source.item_transform, lx, ly),
+                        None => source.item_transform,
+                    }
+                } else {
+                    source.item_transform
+                };
                 // Members first: `group_pass` brackets innermost-first by
                 // walking `groups` in reverse, which relies on a nested
                 // group sitting BEFORE its outer in the vec.
+                self.group_depth += 1;
                 let members: Vec<FrameRef> = source
                     .members
                     .iter()
                     .map(|m| self.clone_ref(spread, stories, *m))
                     .collect();
+                self.group_depth -= 1;
                 spread.groups.push(paged_model::Group {
                     self_id: Some(new_id.clone()),
                     members,
-                    item_transform: translated(source.item_transform, dx, dy),
+                    item_transform,
                     ..source
                 });
                 FrameRef::Group(spread.groups.len() - 1)
@@ -737,6 +757,7 @@ pub(super) fn apply_duplicate_nodes(
         dy,
         ids: ids.iter(),
         story_ids: story_ids.iter(),
+        group_depth: 0,
     };
     let mut touched_spreads: Vec<usize> = Vec::new();
     for (source, (si, _)) in sources.iter().zip(&located) {

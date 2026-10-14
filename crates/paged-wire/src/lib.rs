@@ -1591,6 +1591,14 @@ pub enum Mutation {
     /// delta so the members follow rigidly; the hit-tester sees them at
     /// their transformed positions automatically. `transform: None` ⇒
     /// identity.
+    ///
+    /// `transform` is the group's STORED transform, the one the group's
+    /// `frameTransform` / `groupTransform` reads answer: relative to the
+    /// group that holds it, as IDML stores it (spread space for a
+    /// top-level group). Nested groups keep theirs and move with it. To
+    /// move a group by `(dx, dy)` on the spread, add `(dx, dy)` seen from
+    /// its parent's frame: for a top-level group, or one whose ancestors
+    /// only translate, that is `(dx, dy)` itself.
     SetGroupTransform {
         group_id: String,
         #[serde(default)]

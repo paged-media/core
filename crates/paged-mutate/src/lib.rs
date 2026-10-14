@@ -47,6 +47,7 @@ use paged_scene::Document;
 pub mod apply;
 pub mod bezier_conv;
 pub mod error;
+pub mod group_frame;
 pub mod history;
 pub mod ids;
 pub mod invert;
