@@ -345,6 +345,100 @@ impl SpanColumns {
     }
 }
 
+/// How a paragraph sets its lines beyond justification: auto leading,
+/// a lone word on a justified line, the last line's right indent and
+/// balanced ragged lines (`AutoLeading`, `SingleWordJustification`,
+/// `LastLineIndent`, `<BalanceRaggedLines>`). Asked of InDesign 20.0.1
+/// (`paragraph-attrs`, ADR 153). Each field is `None` when the
+/// paragraph (or style) does not say, and cascades like the others.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct LineSetting {
+    /// `AutoLeading`, percent of a line's largest size (InDesign 120).
+    pub auto_leading: Option<f32>,
+    /// `SingleWordJustification`: how a justified line holding one word
+    /// is set (InDesign `FullyJustified`).
+    pub single_word: Option<SingleWordJustification>,
+    /// `LastLineIndent` (pt): the last line's right indent.
+    pub last_line_indent: Option<f32>,
+    /// `<BalanceRaggedLines>`.
+    pub balance: Option<BalanceRaggedLines>,
+}
+
+impl LineSetting {
+    /// Fill every unset field from `outer`.
+    pub fn inherit(&mut self, outer: &LineSetting) {
+        self.auto_leading = self.auto_leading.or(outer.auto_leading);
+        self.single_word = self.single_word.or(outer.single_word);
+        self.last_line_indent = self.last_line_indent.or(outer.last_line_indent);
+        self.balance = self.balance.or(outer.balance);
+    }
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == LineSetting::default()
+    }
+}
+
+/// `SingleWordJustification` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SingleWordJustification {
+    FullyJustified,
+    LeftAlign,
+    CenterAlign,
+    RightAlign,
+}
+
+impl SingleWordJustification {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "FullyJustified" => Self::FullyJustified,
+            "LeftAlign" => Self::LeftAlign,
+            "CenterAlign" => Self::CenterAlign,
+            "RightAlign" => Self::RightAlign,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::FullyJustified => "FullyJustified",
+            Self::LeftAlign => "LeftAlign",
+            Self::CenterAlign => "CenterAlign",
+            Self::RightAlign => "RightAlign",
+        }
+    }
+}
+
+/// `<BalanceRaggedLines type="enumeration">` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BalanceRaggedLines {
+    NoBalancing,
+    FullyBalanced,
+    PyramidShape,
+    VeeShape,
+}
+
+impl BalanceRaggedLines {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "NoBalancing" => Self::NoBalancing,
+            "FullyBalanced" => Self::FullyBalanced,
+            "PyramidShape" => Self::PyramidShape,
+            "VeeShape" => Self::VeeShape,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::NoBalancing => "NoBalancing",
+            Self::FullyBalanced => "FullyBalanced",
+            Self::PyramidShape => "PyramidShape",
+            Self::VeeShape => "VeeShape",
+        }
+    }
+}
+
 /// IDML `<TextFramePreference FirstBaselineOffset="...">` values.
 /// Drives where the first line's baseline sits inside the frame's
 /// inset box.
@@ -4763,6 +4857,9 @@ pub struct CharacterStyleDef {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `NoBreak` — the run's text is not broken across lines (ADR 153).
+    #[serde(default)]
+    pub no_break: Option<bool>,
     /// `OverprintFill="true"` declared on the `<CharacterStyle>`.
     /// Cascades through `BasedOn` like every other field. None ⇒
     /// inherit; bottom of cascade = false (IDML's default).
@@ -5085,6 +5182,10 @@ pub struct ParagraphStyleDef {
     /// Span / split columns (`SpanColumnType` and its companions).
     #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
     pub span_columns: SpanColumns,
+    /// Auto leading, single-word justification, the last line's indent
+    /// and balanced ragged lines (ADR 153).
+    #[serde(default, skip_serializing_if = "LineSetting::is_unset")]
+    pub line_setting: LineSetting,
     /// `GridAlignment` — whether the paragraph's lines align to the
     /// baseline grid. `None` inherits; absent everywhere is `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5318,6 +5419,8 @@ pub struct ResolvedCharacter {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `NoBreak` — the run's text is not broken across lines (ADR 153).
+    pub no_break: Option<bool>,
     /// Cascaded `OverprintFill` flag. See
     /// [`CharacterStyleDef::overprint_fill`]. None at the bottom of
     /// the cascade ⇒ false (the IDML default).
@@ -5466,6 +5569,8 @@ pub struct ResolvedParagraph {
     pub start_paragraph: Option<StartParagraph>,
     /// Span / split columns (`SpanColumnType` and its companions).
     pub span_columns: SpanColumns,
+    /// [`LineSetting`], cascaded.
+    pub line_setting: LineSetting,
     /// `GridAlignment`, cascaded.
     pub grid_alignment: Option<GridAlignment>,
     /// `GridAlignFirstLineOnly`, cascaded.
@@ -5711,6 +5816,7 @@ impl ResolvedCharacter {
         }
         self.tracking = self.tracking.or(def.tracking);
         self.underline = self.underline.or(def.underline);
+        self.no_break = self.no_break.or(def.no_break);
         self.strikethru = self.strikethru.or(def.strikethru);
         self.overprint_fill = self.overprint_fill.or(def.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(def.overprint_stroke);
@@ -5837,6 +5943,7 @@ impl ResolvedParagraph {
         self.keep_with_next = self.keep_with_next.or(def.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(def.start_paragraph);
         self.span_columns.inherit(&def.span_columns);
+        self.line_setting.inherit(&def.line_setting);
         self.grid_alignment = self.grid_alignment.or(def.grid_alignment);
         self.grid_align_first_line_only = self
             .grid_align_first_line_only
@@ -6169,6 +6276,10 @@ pub struct Paragraph {
     /// Span / split columns (`SpanColumnType` and its companions).
     #[serde(default, skip_serializing_if = "SpanColumns::is_unset")]
     pub span_columns: SpanColumns,
+    /// Auto leading, single-word justification, the last line's indent
+    /// and balanced ragged lines (ADR 153).
+    #[serde(default, skip_serializing_if = "LineSetting::is_unset")]
+    pub line_setting: LineSetting,
     /// `GridAlignment` — whether the paragraph's lines align to the
     /// baseline grid. `None` inherits; absent everywhere is `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6913,6 +7024,9 @@ pub struct CharacterRun {
     pub underline: Option<bool>,
     /// `StrikeThru="true"` on the CharacterStyleRange.
     pub strikethru: Option<bool>,
+    /// `NoBreak` — the run's text is not broken across lines (ADR 153).
+    #[serde(default)]
+    pub no_break: Option<bool>,
     /// Explicit `Leading` in pt. `None` ⇒ Auto leading
     /// (`point_size × 1.2`). InDesign serialises `Leading` as a
     /// number on the CharacterStyleRange, with magic `Auto` not

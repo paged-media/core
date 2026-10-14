@@ -338,8 +338,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   see module docs), and every OTF shaping-feature toggle.
 /// - LayoutOptions: alignment, line_height and its exact value (NOT
 ///   first_baseline: the cached layout is translated to it),
-///   leading_override, auto_leading_from_byte, justify_last_line,
-///   last_line_alignment, the tab layout (stops, default grid, line
+///   leading_override, auto_leading_from_byte, auto_leading, justify_last_line,
+///   last_line_alignment, single_word_alignment, the tab layout (stops, default grid, line
 ///   starts), the inline objects' advances and the ruby bases' spacing
 ///   (`glyph_aki`).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
@@ -434,9 +434,18 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
         h.add_optional_i32(*leading);
     }
     h.add_u32(options.auto_leading_from_byte);
+    h.add_u32(options.auto_leading.to_bits());
+    h.add_u32(options.compose.last_line_indent as u32);
+    h.add_u32(u32::from(options.compose.balance_ragged));
+    h.add_u32(options.no_break.len() as u32);
+    for r in &options.no_break {
+        h.add_u32(r.start);
+        h.add_u32(r.end);
+    }
     h.add_u32(alignment_tag(options.alignment));
     h.add_bool(options.justify_last_line);
     h.add_u32(alignment_tag(options.last_line_alignment));
+    h.add_u32(alignment_tag(options.single_word_alignment));
     match &options.tabs {
         Some(t) => {
             h.add_bool(true);

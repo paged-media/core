@@ -56,6 +56,13 @@ pub(crate) struct RaggedLines<'a> {
     /// `None`: the spaces may shrink by `space_shrink`, at `SQUEEZE_WEIGHT`
     /// (a shaped or wrapped frame's measured squeeze).
     pub overrun_size: Option<f32>,
+    /// `Some(n)`: balance the paragraph's ragged lines
+    /// (`BalanceRaggedLines`, `FullyBalanced`) — set it in exactly `n`
+    /// lines, pricing the last line's slack like the others, so the
+    /// lines come out as even as the words allow. Asked of InDesign
+    /// 20.0.1 (`paragraph-attrs` D, ADR 153): it keeps the line count
+    /// and evens the lines, the last included.
+    pub balance_lines: Option<usize>,
 }
 
 /// What squeezing a line costs per pt² it is over its measure, against
@@ -183,11 +190,12 @@ pub(crate) fn min_ragged_breaks<T>(
     };
     // A line index only matters while it can change the measure or the
     // price: past both ends every line is alike.
-    let horizon = if free_after == usize::MAX {
-        lengths.len()
-    } else {
-        lengths.len().max(free_after)
+    let horizon = match lines.balance_lines {
+        Some(n) => n,
+        None if free_after == usize::MAX => lengths.len(),
+        None => lengths.len().max(free_after),
     };
+    let balance = lines.balance_lines.is_some();
     let measure = |l: usize| lengths[l.min(lengths.len() - 1)] as i64;
 
     // dp[c][l]: the cheapest way to end a line at candidate `c` with
@@ -231,7 +239,7 @@ pub(crate) fn min_ragged_breaks<T>(
                 first = false;
                 let cost = if tightest > m {
                     OVERFULL_COST * (1.0 + (tightest - m) as f64 / 64.0)
-                } else if forced(j) && w <= m || line >= free_after {
+                } else if forced(j) && w <= m && !balance || line >= free_after {
                     0.0
                 } else if w > m {
                     if lines.overrun_size.is_some() {
@@ -249,6 +257,11 @@ pub(crate) fn min_ragged_breaks<T>(
                     };
                     slack * slack + hyphen_cost
                 };
+                // Balanced lines count exactly; a line past the count
+                // is no solution.
+                if balance && line + 1 > horizon {
+                    break;
+                }
                 let next = (line + 1).min(horizon);
                 let node = (base + cost, from, w);
                 let slot = &mut dp[c][next];
@@ -269,6 +282,7 @@ pub(crate) fn min_ragged_breaks<T>(
         }
     }
     let Some(best_l) = (0..=horizon)
+        .filter(|&l| !balance || l == horizon)
         .filter_map(|l| dp[last_c][l].map(|n| (l, n.0)))
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(l, _)| l)
@@ -329,6 +343,7 @@ mod tests {
             hyphen_penalty: 50,
             space_shrink: 0.0,
             overrun_size: None,
+            balance_lines: None,
         }
     }
 
@@ -345,6 +360,26 @@ mod tests {
             from = b.index;
         }
         out
+    }
+
+    /// Balanced ragged lines (`paragraph-attrs` D, ADR 153): as many
+    /// lines, the last priced too. Measure 1000; words 450, 450, 100, 100
+    /// with 64-wide spaces: minimum raggedness sets [450 450 | 100 100]
+    /// (the last line free), balancing [450 | 450 100 100].
+    #[test]
+    fn balanced_lines_keep_their_count_and_even_out() {
+        let items = words(&[450, 450, 100, 100]);
+        let plain = min_ragged_breaks(&items, &[1000], &lines(usize::MAX));
+        assert_eq!(line_words(&items, &plain), vec![2, 2]);
+        let even = min_ragged_breaks(
+            &items,
+            &[1000],
+            &RaggedLines {
+                balance_lines: Some(2),
+                ..lines(usize::MAX)
+            },
+        );
+        assert_eq!(line_words(&items, &even), vec![1, 3]);
     }
 
     #[test]

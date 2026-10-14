@@ -2649,6 +2649,7 @@ fn measure_cell_paragraph(
     let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
     let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
+    set_auto_leading(&mut lopts, &resolved_paragraph, paragraph_size);
     // Measuring only: the binding side moves a line, never its breaks.
     (lopts.alignment, lopts.last_line_alignment) =
         map_justification(resolved_paragraph.justification, BindingEdge::default());
@@ -2899,6 +2900,7 @@ pub(super) fn emit_cell_paragraph(
     let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
     let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
+    set_auto_leading(&mut lopts, &resolved_paragraph, paragraph_size);
     let binding = pages
         .get(target_page)
         .map(BuiltPage::binding_edge)
