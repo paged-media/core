@@ -340,7 +340,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   first_baseline: the cached layout is translated to it),
 ///   leading_override, auto_leading_from_byte, justify_last_line,
 ///   last_line_alignment, the tab layout (stops, default grid, line
-///   starts), and the inline objects' advances.
+///   starts), the inline objects' advances and the ruby bases' spacing
+///   (`glyph_aki`).
 /// - ComposeOptions: column_width, column_widths, tolerance, looseness,
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
@@ -459,6 +460,13 @@ fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.add_u32(options.object_advances.len() as u32);
     for a in &options.object_advances {
         h.add_i32(*a);
+    }
+    // So does a ruby base spaced out to its ruby.
+    h.add_u32(options.glyph_aki.len() as u32);
+    for (range, share) in &options.glyph_aki {
+        h.add_u32(range.start);
+        h.add_u32(range.end);
+        h.add_i32(*share);
     }
     fold_compose_options(h, &options.compose);
 }

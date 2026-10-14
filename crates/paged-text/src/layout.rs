@@ -214,6 +214,12 @@ pub struct LayoutOptions<'a> {
     /// object takes in its line, where InDesign sets it like a glyph.
     /// Replacement characters past the list keep their shaped advance.
     pub object_advances: Vec<i32>,
+    /// Space set on both sides of each glyph whose source byte lies in a
+    /// range, 1/64 pt: the glyph moves right by it and its advance grows
+    /// by twice it. A ruby wider than its base spaces the base out so,
+    /// 1:2:1 — a share before the first character, two between each two,
+    /// one after the last (InDesign's default `RubyParent121Aki`).
+    pub glyph_aki: Vec<(std::ops::Range<u32>, i32)>,
 }
 
 /// U+FFFC OBJECT REPLACEMENT CHARACTER: the character an inline anchored
@@ -269,6 +275,7 @@ impl LayoutOptions<'_> {
             last_line_alignment: Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
+            glyph_aki: Vec::new(),
         }
     }
 }
@@ -871,6 +878,21 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .map(|(g, &n)| g.x_advance - (n as f32 * factor).round() as i32)
                 .collect(),
         );
+        // A ruby base spaced out to its ruby (`LayoutOptions::glyph_aki`).
+        // Not spacing a line's end gives back: a base ending a line keeps
+        // its share after it.
+        if !options.glyph_aki.is_empty() {
+            let at = run_starts[run_starts.len() - 1] as u32;
+            for g in s.glyphs.iter_mut() {
+                let byte = at + g.cluster;
+                if let Some((_, share)) = options.glyph_aki.iter().find(|(r, _)| r.contains(&byte))
+                {
+                    g.x_offset += share;
+                    g.x_advance += 2 * share;
+                }
+            }
+            s.total_advance = s.glyphs.iter().map(|g| g.x_advance).sum();
+        }
         run_shapes.push(s);
     }
 
@@ -2589,6 +2611,7 @@ mod tests {
             last_line_alignment: Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
+            glyph_aki: Vec::new(),
         }
     }
 

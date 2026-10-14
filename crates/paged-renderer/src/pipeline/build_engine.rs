@@ -7059,6 +7059,34 @@ fn emit_paragraph_lines(
         (i64::from(b) - delta).max(0) as u32
     };
 
+    // Kenten and ruby print only under InDesign's Japanese composers
+    // (`HL Composer J` / `HL Single J`): InDesign 20.0.1 set neither under
+    // the Paragraph or World-Ready Composer, same font and text
+    // (tools/indesign-export/cjk-composer-probe). A ruby wider than its
+    // base spaces the base out before the lines break.
+    let japanese = resolved_paragraph
+        .composer
+        .as_ref()
+        .is_some_and(paged_model::Composer::is_japanese);
+    let ruby = if japanese {
+        super::ruby::ruby_groups(styled_runs_ref, &resolved_runs, head_run)
+    } else {
+        Vec::new()
+    };
+    lopts.glyph_aki = ruby
+        .iter()
+        .filter(|g| g.share_64 > 0)
+        .map(|g| (g.base.clone(), g.share_64))
+        .collect();
+    // Each styled run's first byte, to find a character's run.
+    let styled_starts: Vec<u32> = styled_runs_ref
+        .iter()
+        .scan(0u32, |at, r| {
+            let start = *at;
+            *at += r.text.len() as u32;
+            Some(start)
+        })
+        .collect();
     let mut laid_out = paged_text::cache::layout_runs_cached(styled_runs_ref, &lopts);
 
     // The paragraph's first line was placed one leading below the line
@@ -8294,51 +8322,48 @@ fn emit_paragraph_lines(
             &mut pages[target_page].list,
         );
 
-        // Phase 7 — Kenten emphasis marks. For each glyph whose
-        // source run has `kenten_kind` resolved to something other
-        // than "None", stamp a small mark above the glyph centre.
-        // Mark = a black-filled circle at ~10% of base point size
-        // (matches InDesign's default visual density for the
-        // common "Black Circle" / "Sesame Dot" presets); position
-        // = above the line's baseline by ~1.1 × base point size.
-        // Per-character `KentenKind` variants (Dot / Sesame /
-        // White / Custom) all stamp the same simple filled circle
-        // today; richer glyphs (the actual ・ / ﹅ shapes) are a
-        // follow-up.
-        //
-        // Kenten and ruby print only under InDesign's Japanese composers
-        // (`HL Composer J` / `HL Single J`): InDesign 20.0.1 set neither
-        // under the Paragraph or World-Ready Composer, same font and text
-        // (tools/indesign-export/cjk-composer-probe).
-        let japanese = resolved_paragraph
-            .composer
-            .as_ref()
-            .is_some_and(paged_model::Composer::is_japanese);
+        // Kenten and ruby (`ruby`), under the Japanese composers only.
         if japanese {
-            emit_kenten_for_line(
+            let origin = (sx - ox, sy - oy);
+            let face_of = |k: usize| {
+                let i = k.checked_sub(head_run).unwrap_or(marker_slot);
+                let face = outline_faces.get(*unique_idx.get(i)?)?.as_ref()?;
+                Some((face, em.font_table.font_ref(font_ids[i])))
+            };
+            let run_of = |cluster: u32| {
+                styled_starts
+                    .partition_point(|&s| s <= cluster)
+                    .saturating_sub(1)
+            };
+            super::ruby::emit_kenten_for_line(
                 &line,
-                paragraph,
-                &resolved_runs,
-                (sx - ox, sy - oy),
+                |g| {
+                    let r = resolved_runs.get(run_of(g.cluster).checked_sub(head_run)?)?;
+                    let kind = super::ruby::Kenten::from_idml(r.kenten_kind.as_deref()?)?;
+                    let size = r
+                        .kenten_font_size
+                        .filter(|s| *s > 0.0)
+                        .unwrap_or(g.point_size * 0.5);
+                    Some((kind, size))
+                },
+                |font_id| {
+                    font_ids
+                        .iter()
+                        .position(|f| *f == font_id)
+                        .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
+                        .map_or(0.88, |f| super::ruby::em_box(f).top)
+                },
+                |cluster| picker.pick(cluster),
+                origin,
                 &mut pages[target_page].list,
             );
-        }
-
-        // Phase 7 — Ruby annotations. For each run with
-        // `ruby_flag = true` and a non-empty `ruby_string`, shape
-        // the ruby text at half the run's point size using the
-        // document's fallback font and emit it centered above the
-        // base run's glyphs. Per-character vs. group alignment is
-        // collapsed to "group centered" in the MVP — distributing
-        // ruby chars per base char (`PerCharacter` mode) requires
-        // a more involved layout pass and is queued.
-        if let (true, Some(font)) = (japanese, em.options.font) {
-            emit_ruby_for_line(
+            super::ruby::emit_ruby_for_line(
                 &line,
-                paragraph,
-                &resolved_runs,
-                font,
-                (sx - ox, sy - oy),
+                &ruby,
+                styled_runs_ref,
+                face_of,
+                |cluster| picker.pick(cluster),
+                origin,
                 &mut pages[target_page].list,
             );
         }
