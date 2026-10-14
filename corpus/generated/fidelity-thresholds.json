@@ -88,11 +88,11 @@
       "name": "corners",
       "text_gate": "lines",
       "max_pages_with_pdf": 5,
-      "max_mean_de": 0.993,
-      "max_p99_de": 22.83,
-      "min_ssim": 0.9751,
-      "max_ink_mean_de": 19.999,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 16.665 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. OPEN FINDING 2026-10-14: the sample writes bare CornerOption names (Rounded, Inset, ...) and only CornerOption/CornerRadius on the rectangle. InDesign draws p4's 'Inset' with square corners (the page's 0.827). Respelt the way InDesign writes them (RoundedCorner, InsetCorner, ...), InDesign ignored the rectangle's CornerOption on every page and rounded the triangle's corners at sizes of its own: how InDesign resolves CornerOption against the per-corner TopLeft/... options needs a DOM probe before the sample or the engine changes."
+      "max_mean_de": 0.798,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9772,
+      "max_ink_mean_de": 15.89,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.827 / p99 18.262 / SSIM 0.9831 across 5 page(s); sized at worst + ~20%. INK GATED 2026-10-13: worst page ink mean 16.665 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. CORNERS READ AS INDESIGN READS THEM 2026-10-14 (ADR 149): asked of InDesign 20.0.1 through its DOM, a frame's corners come from the four per-corner attributes only (the item-level CornerOption / CornerRadius are not read), an unset per-corner radius is 12 pt, and a bare 'Rounded' / 'Inset' / 'Beveled' / 'Fancy' or 'BeveledCorner' is no option. The sample now writes InDesign's tokens and all four per-corner attributes, the reference is re-exported, and the engine reads corners the same way: p4 (inset) 0.827 -> 0.300. Worst page now p5 (Fancy, an approximated shape). Re-sized at worst * 1.20 and ssim - 0.005."
     },
     {
       "name": "effects",
@@ -287,11 +287,11 @@
     {
       "name": "paste-into",
       "max_pages_with_pdf": 1,
-      "max_mean_de": 0.407,
-      "max_p99_de": 1.85,
-      "min_ssim": 0.9851,
-      "max_ink_mean_de": 3.712,
-      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.531 / p99 5.834 / ssim 0.9811 (was 0.630 / 17.532 / 0.9765); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 4.726 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.339 / p99 1.53 / SSIM 0.9901 / ink 3.093; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142).",
+      "max_mean_de": 0.05,
+      "max_p99_de": 0.37,
+      "min_ssim": 0.9945,
+      "max_ink_mean_de": 1.0,
+      "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.777 / p99 28.534 / SSIM 0.9690 across 1 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.531 / p99 5.834 / ssim 0.9811 (was 0.630 / 17.532 / 0.9765); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 4.726 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. TIGHTENED 2026-10-14 (ADR 142: ragged text by minimum raggedness, a line's overrun allowance from its last word, drop caps at the paragraph's leading and the face's cap height): worst page mean 0.339 / p99 1.53 / SSIM 0.9901 / ink 3.093; sized at worst x 1.20 and SSIM - 0.005. TEXT GATE \"lines\" 2026-10-14: every line matches InDesign's since ragged text breaks by minimum raggedness (ADR 142). CORNERS 2026-10-14 (ADR 149): the container's corners were a bare CornerOption='Rounded', which InDesign does not read (its reference drew the container square while the engine rounded it, 0.34). The sample now spells them as InDesign does (RoundedCorner and the four per-corner attributes), the reference is re-exported with the rounded container, and the children clip to it in both: 0.042 / p99 0.31 / ssim 0.9995 / ink 0.29. Re-sized at worst * 1.20 and ssim - 0.005 (ink floored at 1.0).",
       "text_gate": "lines"
     },
     {
@@ -664,12 +664,12 @@
     {
       "name": "table-cell-baseline",
       "text_gate": "lines",
-      "max_pages_with_pdf": 1,
+      "max_pages_with_pdf": 2,
       "max_mean_de": 0.176,
       "max_p99_de": 3.55,
       "min_ssim": 0.991,
       "max_ink_mean_de": 4.224,
-      "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 3.520 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%."
+      "rationale": "Added 2026-10-12 (Wave 1 R-06): where a table cell sets its first baseline, asked of InDesign 20.0.1. Page 1: a row per FirstBaselineOffset (Ascent, Cap, X, Leading, Embox, Fixed min 30, Ascent min 30, Cap min 30, Embox in Lora) x top inset {0, 6} x VerticalJustification {Top, Center}, written on the <Cell>, Open Sans / Lora 20 pt, and three em-box/ascent text frames below. Page 2 is the same table with the policy from a <CellStyle>: InDesign sets it identically, but plugin-publish's idml-import does not read a CellStyle's FirstBaselineOffset, so page 2 (mean 1.078) is not gated until that half lands. origin/main's engine (every cell on its ascent; em box = point size): page 1 mean 1.140 / p99 65.829 / SSIM 0.9532. With the cell's policy, the minimum as a floor and the em box at (cap height + 1 em) / 2: 0.147 / 2.961 / 0.9960, every cell within 0.05 pt of InDesign's DOM; sized at worst x 1.20 and SSIM - 0.005. The residue is glyph anti-aliasing. INK GATED 2026-10-13: worst page ink mean 3.520 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. PAGE 2 GATED 2026-10-14: the policy from a cell style — InDesign keeps FirstBaselineOffset / MinimumFirstBaselineOffset on the <CellStyle>, which the reader now takes (plugin-publish) and cells fall back to: p2 1.074 -> 0.129 (ink 26.3 -> 3.2). Both pages now gated; the page-1 budget already covers p2's 0.129 / p99 2.69 / ssim 0.9961 / ink 3.46."
     },
     {
       "name": "footnote-references",

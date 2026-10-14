@@ -93,8 +93,6 @@ pub(crate) struct ResolvedFrame<'a> {
     /// `stroke_gap_color` (FINDING #7.5). Empty slice ⇒ fall back to
     /// the stroke style.
     pub stroke_dash: &'a [f32],
-    pub corner_radius: Option<f32>,
-    pub corner_option: Option<&'a str>,
     /// Q-16: per-corner `(option, radius)` overrides. When any corner
     /// is non-empty, `corner_path_module` produces a 4-corner path
     /// instead of the symmetric one driven by `corner_radius` /
@@ -362,8 +360,6 @@ impl<'a> ResolvedFrame<'a> {
             // way — all four names address the box's corners for the
             // `TextFrameRect` case, and a pathed text frame takes the
             // polygon's uniform treatment.
-            corner_radius: frame.corner_radius,
-            corner_option: frame.corner_option.as_deref(),
             corners: frame.corners,
             applied_object_style: frame.applied_object_style.as_deref(),
             overprint_fill: frame.overprint_fill,
@@ -418,8 +414,6 @@ impl<'a> ResolvedFrame<'a> {
             stroke_gap_color: rect.stroke_gap_color.as_deref(),
             stroke_gap_tint: rect.stroke_gap_tint,
             stroke_dash: &rect.stroke_dash,
-            corner_radius: rect.corner_radius,
-            corner_option: rect.corner_option.as_deref(),
             corners: rect.corners,
             applied_object_style: rect.applied_object_style.as_deref(),
             overprint_fill: rect.overprint_fill,
@@ -465,8 +459,6 @@ impl<'a> ResolvedFrame<'a> {
             // handing them to the paint modules could only produce
             // geometry InDesign does not draw. Stored, mutable and
             // round-tripped; never rendered.
-            corner_radius: None,
-            corner_option: None,
             corners: Default::default(),
             applied_object_style: oval.applied_object_style.as_deref(),
             overprint_fill: oval.overprint_fill,
@@ -527,8 +519,6 @@ impl<'a> ResolvedFrame<'a> {
             // (see `paged_model::Polygon::corners`), but the whole set
             // is threaded so the object-style cascade and introspection
             // see the same shape they do for a rect.
-            corner_radius: poly.corner_radius,
-            corner_option: poly.corner_option.as_deref(),
             corners: poly.corners,
             applied_object_style: poly.applied_object_style.as_deref(),
             overprint_fill: poly.overprint_fill,
@@ -583,8 +573,6 @@ impl<'a> ResolvedFrame<'a> {
             // `CornerOption`) but an OPEN stroke-only contour has no
             // enclosed corner, so they are not threaded. Its interior
             // joins are shaped by `end_join` / `miter_limit` instead.
-            corner_radius: None,
-            corner_option: None,
             corners: Default::default(),
             applied_object_style: line.applied_object_style.as_deref(),
             overprint_fill: false,
@@ -605,6 +593,8 @@ mod tests {
     fn rect_with_anchors(anchors: Vec<PathAnchor>) -> Rectangle {
         Rectangle {
             self_id: None,
+            corner_radius: None,
+            corner_option: None,
             bounds: Bounds {
                 top: 0.0,
                 left: 0.0,
@@ -642,8 +632,6 @@ mod tests {
             end_join: None,
             miter_limit: None,
             item_layer: None,
-            corner_radius: None,
-            corner_option: None,
             corners: Default::default(),
             is_anchored: false,
             opacity: None,
@@ -677,6 +665,8 @@ mod tests {
     fn text_frame_with(anchors: Vec<PathAnchor>) -> TextFrame {
         TextFrame {
             self_id: None,
+            corner_radius: None,
+            corner_option: None,
             parent_story: None,
             bounds: Bounds {
                 top: 0.0,
@@ -736,8 +726,6 @@ mod tests {
             nonprinting: false,
             visible: true,
             locked: false,
-            corner_radius: None,
-            corner_option: None,
             corners: Default::default(),
         }
     }

@@ -703,18 +703,20 @@ pub enum CornerOption {
 }
 
 impl CornerOption {
+    /// InDesign's tokens, and no others: asked of InDesign 20.0.1
+    /// (ADR 149), a bare `Rounded` / `Inset` / `Beveled` / `Fancy` and
+    /// the spelling `BeveledCorner` all read back as no corner. The one
+    /// exception is `BeveledCorner`, the member the wire's corner enum
+    /// carries (`frameCornerOption*`, `objectStyleCornerOption`); the
+    /// IDML writer spells it `BevelCorner`.
     pub fn from_idml(s: &str) -> Option<Self> {
         match s {
             "None" => Some(Self::None),
-            "RoundedCorner" | "Rounded" => Some(Self::Rounded),
-            "InverseRoundedCorner" | "InverseRounded" => Some(Self::Inverse),
-            "InsetCorner" | "Inset" => Some(Self::Inset),
-            // B-23: `BevelCorner` is the token InDesign actually
-            // writes (14 occurrences in the real-export corpus);
-            // `BeveledCorner` is the spelling the generator emits.
-            // Both must resolve or a bevelled frame silently squares.
-            "BeveledCorner" | "BevelCorner" | "Beveled" | "Bevel" => Some(Self::Bevel),
-            "FancyCorner" | "Fancy" => Some(Self::Fancy),
+            "RoundedCorner" => Some(Self::Rounded),
+            "InverseRoundedCorner" => Some(Self::Inverse),
+            "InsetCorner" => Some(Self::Inset),
+            "BevelCorner" | "BeveledCorner" => Some(Self::Bevel),
+            "FancyCorner" => Some(Self::Fancy),
             _ => None,
         }
     }
@@ -4531,6 +4533,14 @@ pub struct CellStyleDef {
     pub left_edge_stroke_type: Option<String>,
     #[serde(default)]
     pub right_edge_stroke_type: Option<String>,
+    /// `FirstBaselineOffset` / `MinimumFirstBaselineOffset`, which
+    /// InDesign keeps on the cell style rather than repeating them on each
+    /// `<Cell>` (`table-cell-baseline` page 2). See
+    /// [`TableCell::first_baseline_offset`].
+    #[serde(default)]
+    pub first_baseline_offset: Option<String>,
+    #[serde(default)]
+    pub minimum_first_baseline_offset: Option<f32>,
 }
 /// `<TableStyle>` — table-level defaults that flow through to
 /// cells. Carries the region → CellStyle map (Header / Body /
@@ -4642,6 +4652,8 @@ pub struct ResolvedCell {
     pub bottom_edge_stroke_type: Option<String>,
     pub left_edge_stroke_type: Option<String>,
     pub right_edge_stroke_type: Option<String>,
+    pub first_baseline_offset: Option<String>,
+    pub minimum_first_baseline_offset: Option<f32>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
@@ -5538,6 +5550,12 @@ impl ResolvedTable {
 }
 impl ResolvedCell {
     pub fn merge_below(&mut self, def: &CellStyleDef) {
+        if self.first_baseline_offset.is_none() {
+            self.first_baseline_offset = def.first_baseline_offset.clone();
+        }
+        self.minimum_first_baseline_offset = self
+            .minimum_first_baseline_offset
+            .or(def.minimum_first_baseline_offset);
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }

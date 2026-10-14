@@ -793,11 +793,7 @@ fn emit_rectangle_polygon_path(
         // B-23: a Q-11 lifted Rectangle keeps its corner attributes, so
         // its curved outline gets the same uniform corner effect a
         // Polygon does (the four names can't address an N-corner path).
-        let corner = uniform_corner(
-            resolved.corner_radius,
-            resolved.corner_option,
-            &resolved.corners,
-        );
+        let corner = uniform_corner(&resolved.corners);
         let path =
             super::text_path::polygon_outline_path(anchors, subpath_starts, subpath_open, corner);
         let cache_key = match resolved.self_id {
@@ -1757,34 +1753,10 @@ pub(crate) fn apply_opacity(paint: Paint, opacity_pct: Option<f32>) -> Paint {
     }
 }
 
-/// Effective corner radius for a Rectangle, considering CornerOption.
-/// Returns `Some(radius)` only when the corner-option string names a
-/// rounding variant and the radius is positive; otherwise `None` so
-/// the renderer takes the cheap unit-rect path.
-/// Effective corner radius for a Rectangle, considering CornerOption.
-/// Reads the already-resolved fields off `ResolvedFrame` so the
-/// corner-path module never imports `Rectangle`. Returns
-/// `Some(radius)` only when the option names a rounding variant and
-/// the radius is positive; otherwise `None` so the renderer takes
-/// the cheap unit-rect path.
-pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> Option<f32> {
-    let r = radius?;
-    if r <= 0.0 {
-        return None;
-    }
-    // Normalise through `CornerOption::from_idml` so the full IDML
-    // vocabulary is accepted — InDesign serialises these as
-    // `RoundedCorner`, `BeveledCorner`, `InverseRoundedCorner`,
-    // `InsetCorner`, `FancyCorner` (and the bare aliases). A hand-rolled
-    // match on the short enum names silently dropped the radius for any
-    // `…Corner`-suffixed value (W1.8: this was why a `Beveled` rect fell
-    // back to the plain axis-aligned rect with no corner geometry).
-    // Every non-`None` option consumes the radius.
-    match option.and_then(paged_model::CornerOption::from_idml) {
-        Some(opt) if opt.rounds() => Some(r),
-        _ => None,
-    }
-}
+/// The corner size InDesign gives a corner whose option is set and whose
+/// radius is not: 12 pt (InDesign 20.0.1 read back an unset
+/// `TopRightCornerRadius` as 12 next to a stated `CornerRadius` of 20).
+pub(crate) const DEFAULT_CORNER_RADIUS_PT: f32 = 12.0;
 
 /// Q-16: resolve the 4 per-corner radii for a Rectangle. Per-corner
 /// `CornerSpec` wins when set; otherwise fall back to the legacy
@@ -1793,39 +1765,16 @@ pub(crate) fn corner_radius_from(radius: Option<f32>, option: Option<&str>) -> O
 /// walk. `None` means "this corner is square" (no rounding); a corner
 /// with positive radius but a `Some(CornerOption::None)` override
 /// also clamps to square.
-pub(crate) fn per_corner_radii(
-    corner_radius: Option<f32>,
-    corner_option: Option<&str>,
-    corners: &[paged_model::CornerSpec; 4],
-) -> [Option<f32>; 4] {
-    let fallback = corner_radius_from(corner_radius, corner_option);
+pub(crate) fn per_corner_radii(corners: &[paged_model::CornerSpec; 4]) -> [Option<f32>; 4] {
     let mut out = [None; 4];
     for (i, spec) in corners.iter().enumerate() {
-        // Decide rounding-on-off for this corner:
-        //   explicit Some(option) wins; absent option falls through to
-        //   the global `corner_option`.
-        let rounds = match spec.option {
-            Some(opt) => opt.rounds(),
-            None => corner_option
-                .map(|s| !matches!(s, "None" | "Square"))
-                .unwrap_or(false),
-        };
-        if !rounds {
-            continue;
+        if spec.option.is_some_and(|o| o.rounds()) {
+            out[i] = Some(
+                spec.radius
+                    .filter(|r| *r > 0.0 && r.is_finite())
+                    .unwrap_or(DEFAULT_CORNER_RADIUS_PT),
+            );
         }
-        let r = spec.radius.or(corner_radius).filter(|r| *r > 0.0);
-        // When the per-corner spec carries an option but no explicit
-        // radius, inherit from the global fallback. When no fallback
-        // either, the corner squares back off via `out[i] = None`.
-        out[i] = r.or(fallback);
-    }
-    // Fast path: if no per-corner override touched the array, fall
-    // back to the symmetric fallback for all four corners.
-    if corners
-        .iter()
-        .all(|s| s.option.is_none() && s.radius.is_none())
-    {
-        return [fallback, fallback, fallback, fallback];
     }
     out
 }
@@ -1852,17 +1801,9 @@ pub(crate) fn rounded_rect_path(rect: Rect, radius: f32) -> paged_compose::PathD
 /// wins; otherwise the global `corner_option` applies; otherwise the
 /// corner is square (`None`).
 pub(crate) fn per_corner_kinds(
-    corner_option: Option<&str>,
     corners: &[paged_model::CornerSpec; 4],
 ) -> [paged_model::CornerOption; 4] {
-    let global = corner_option
-        .and_then(paged_model::CornerOption::from_idml)
-        .unwrap_or(paged_model::CornerOption::None);
-    let mut out = [paged_model::CornerOption::None; 4];
-    for (i, spec) in corners.iter().enumerate() {
-        out[i] = spec.option.unwrap_or(global);
-    }
-    out
+    corners.map(|spec| spec.option.unwrap_or(paged_model::CornerOption::None))
 }
 
 /// One corner's local frame, in whatever coordinate space the caller
@@ -2151,20 +2092,16 @@ pub(crate) fn corner_rect_path(
 ///
 /// `None` ⇒ this polygon has no corner effect (square corners).
 pub(crate) fn uniform_corner(
-    corner_radius: Option<f32>,
-    corner_option: Option<&str>,
     corners: &[paged_model::CornerSpec; 4],
 ) -> Option<(paged_model::CornerOption, f32)> {
-    let kind = corners[0]
-        .option
-        .or_else(|| corner_option.and_then(paged_model::CornerOption::from_idml))?;
+    let kind = corners[0].option?;
     if !kind.rounds() {
         return None;
     }
     let radius = corners[0]
         .radius
-        .or(corner_radius)
-        .filter(|r| *r > 0.0 && r.is_finite())?;
+        .filter(|r| *r > 0.0 && r.is_finite())
+        .unwrap_or(DEFAULT_CORNER_RADIUS_PT);
     Some((kind, radius))
 }
 
@@ -2653,11 +2590,7 @@ pub(super) fn emit_polygon_missing_image_placeholder(
             &poly.anchors,
             &poly.subpath_starts,
             &poly.subpath_open,
-            uniform_corner(
-                poly.corner_radius,
-                poly.corner_option.as_deref(),
-                &poly.corners,
-            ),
+            uniform_corner(&poly.corners),
         );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),

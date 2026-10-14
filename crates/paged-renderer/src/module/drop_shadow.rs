@@ -327,13 +327,13 @@ impl RectOutline {
 /// when negative), each corner radius adjusted to stay concentric —
 /// the geometry `corner_path_module` strokes.
 fn rect_outline(frame: &ResolvedFrame<'_>, rect: Rect, offset: f32) -> RectOutline {
-    let radii = per_corner_radii(frame.corner_radius, frame.corner_option, &frame.corners);
+    let radii = per_corner_radii(&frame.corners);
     let moved = inset_rect(rect, offset);
     if radii.iter().all(Option::is_none) {
         return RectOutline::Plain(moved);
     }
     let radii = radii.map(|r| r.map(|r| (r - offset).max(0.0)));
-    let kinds = per_corner_kinds(frame.corner_option, &frame.corners);
+    let kinds = per_corner_kinds(&frame.corners);
     RectOutline::Path(corner_rect_path(moved, radii, kinds))
 }
 

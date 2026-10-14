@@ -208,11 +208,7 @@ pub(super) fn emit_polygon_into(
     // B-23: the polygon's corner effect (if any) is resolved once and
     // reused by the fill path, the stroke-alignment base path, and the
     // effects path — they must all describe the same outline.
-    let corner = super::shapes::uniform_corner(
-        resolved.corner_radius,
-        resolved.corner_option,
-        &resolved.corners,
-    );
+    let corner = super::shapes::uniform_corner(&resolved.corners);
     let path_id = if let Geometry::Polygon {
         anchors,
         subpath_starts,
