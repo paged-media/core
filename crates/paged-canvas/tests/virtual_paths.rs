@@ -925,19 +925,34 @@ fn a_set_of_colour_settings_is_one_undo_step() {
     );
 }
 
-/// v71 — the cell row `cellFillTint` is read-write in the schema, so a
-/// cell answers it (`null`: no tint of its own — the swatch at 100 %).
+/// A cell answers `cellFillTint` (`null`: no tint of its own — its
+/// style's, else the swatch at 100 %), stores a write and undoes it: the
+/// `<Cell FillTint>` is modelled (ADR 152).
 #[test]
 fn a_cell_answers_its_fill_tint() {
-    let (m, t) = build();
+    let (mut m, t) = build();
     let cell = VirtualTarget::Cell {
         story_id: t.table.0.clone(),
         table_id: t.table.1.clone(),
         row: 0,
         col: 0,
     };
-    let v = m.get_property(&cell, "cellFillTint");
-    assert!(v.is_ok(), "cellFillTint on a cell: {v:?}");
+    let before = m.get_property(&cell, "cellFillTint");
+    assert!(before.is_ok(), "cellFillTint on a cell: {before:?}");
+    m.apply_mutation(&Mutation::Set {
+        address: cell.clone().into(),
+        path: "cellFillTint".into(),
+        value: Value::Number(40.0),
+    })
+    .expect("set cellFillTint");
+    let after = m.get_property(&cell, "cellFillTint").unwrap();
+    assert!(
+        matches!(after, Value::Number(n) if (n - 40.0).abs() < 1e-6)
+            || matches!(after, Value::Length(Some(n)) if (n - 40.0).abs() < 1e-6),
+        "read back {after:?}"
+    );
+    m.undo().expect("undo");
+    assert_eq!(m.get_property(&cell, "cellFillTint"), before);
 }
 
 /// v71 polish — the schema says a nullable row clears with `null`, so the

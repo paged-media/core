@@ -694,6 +694,7 @@ pub fn style_paths(family: &str) -> &'static [P] {
         ],
         "cell" => &[
             P::CellFillColor,
+            P::CellFillTint,
             P::CellVerticalJustification,
             P::CellStyleRotationAngle,
             P::CellTopEdgeStrokeColor,

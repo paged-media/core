@@ -8197,14 +8197,9 @@ impl CanvasModel {
                 path: PropertyPath::CellFillColor,
                 value: Some(Value::ColorRef(cell.fill_color.clone())),
             },
-            // v71 — the schema row is read-write, so the read answers.
-            // The model has no per-cell tint yet (the IDML adapter does
-            // not parse the cell's `FillTint`), so it is always `None`:
-            // the fill swatch at 100 %. The write is the typed no-op the
-            // apply arm documents until `TableCell` carries the field.
             PropertyEntry {
                 path: PropertyPath::CellFillTint,
-                value: Some(Value::Length(None)),
+                value: Some(Value::Length(cell.fill_tint)),
             },
             PropertyEntry {
                 path: PropertyPath::CellInsetTop,

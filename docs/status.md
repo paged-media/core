@@ -182,9 +182,6 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   shape; the composer cannot leave a row empty in mid-frame, which that needs
   ([ADR 151](adr/151-which-side-text-wraps-to.md)). A contour from an image uses the frame's path,
   and an object style's `IgnoreWrap` is not read.
-- **A cell's fill tint is not modelled.** `cellFillTint` reads `null` on every cell and its
-  write is accepted but not stored, rendered or saved; the cell keeps its fill at 100 %.
-  It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
 - **An edit made while a script waits splits the script's undo step.** The fold merges only

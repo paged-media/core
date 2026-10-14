@@ -2529,6 +2529,7 @@ fn set_cell_style_field(
 ) -> Result<Value, OperationError> {
     match path {
         PropertyPath::CellFillColor => style_color(path, value, &mut def.fill_color),
+        PropertyPath::CellFillTint => style_length(path, value, &mut def.fill_tint),
         PropertyPath::CellVerticalJustification => {
             style_text(path, value, &mut def.vertical_justification)
         }

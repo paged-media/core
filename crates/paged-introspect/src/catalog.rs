@@ -795,7 +795,7 @@ property_paths! {
         // bridge already encodes its spec. PROMOTED 2026-09-09.
         FrameGradientFeather => "frameGradientFeather" : structure("GradientFeatherSpec", Wire::GradientFeather),
         CellFillColor => "cellFillColor" : color().idml(idml![attr(Cell | CellStyle, FillColor)]),
-        CellFillTint => "cellFillTint" : pct().default_num(100.0),
+        CellFillTint => "cellFillTint" : pct().default_num(100.0).idml(idml![attr(Cell | CellStyle, FillTint)]),
         CellInsetTop => "cellInsetTop" : length_pos().idml(idml![attr(Cell, TextTopInset)]),
         CellInsetLeft => "cellInsetLeft" : length_pos().idml(idml![attr(Cell, TextLeftInset)]),
         CellInsetBottom => "cellInsetBottom" : length_pos().idml(idml![attr(Cell, TextBottomInset)]),
