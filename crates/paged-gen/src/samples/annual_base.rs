@@ -762,7 +762,45 @@ fn split_applied_font(attrs: &str) -> (String, Option<String>) {
         rest.push(' ');
     }
     rest.push_str(tail);
+    // InDesign writes the face with the family. A style that names a
+    // variable font without one gets the instance InDesign picks from
+    // the point size, and at some sizes none it can resolve: the 7.5 pt
+    // footnotes and the 9.5 pt body came back substituted (the footnotes
+    // in Open Sans) while the engine set the family's Regular. See
+    // idml-export `face.rs`, which spells it on save for the same reason.
+    if !rest.contains("FontStyle=\"") {
+        if !rest.is_empty() {
+            rest.push(' ');
+        }
+        rest.push_str("FontStyle=\"Regular\"");
+    }
     (rest, Some(font))
+}
+
+/// Split a `BasedOn="…"` attribute out of a style's attribute string.
+/// InDesign reads a style's parent only as the typed `<Properties>` child
+/// `<BasedOn type="object">`; as an attribute it is no parent at all
+/// (asked of InDesign 20.0.1 through its DOM: the Footnote style came back
+/// `basedOn` undefined and set in Open Sans, not in its parent's Source
+/// Serif 4).
+fn split_based_on(attrs: &str) -> (String, Option<String>) {
+    let Some(at) = attrs.find("BasedOn=\"") else {
+        return (attrs.to_string(), None);
+    };
+    let value_start = at + "BasedOn=\"".len();
+    let Some(rel_end) = attrs[value_start..].find('"') else {
+        return (attrs.to_string(), None);
+    };
+    let value_end = value_start + rel_end;
+    let parent = attrs[value_start..value_end].to_string();
+    let mut rest = String::with_capacity(attrs.len());
+    rest.push_str(attrs[..at].trim_end());
+    let tail = attrs[value_end + 1..].trim_start();
+    if !rest.is_empty() && !tail.is_empty() {
+        rest.push(' ');
+    }
+    rest.push_str(tail);
+    (rest, Some(parent))
 }
 
 /// `<AppliedFont type="string">…` for a `<Properties>` block, or
@@ -786,8 +824,8 @@ FontStyle=\"Italic\"><Properties><AppliedFont type=\"string\">EB Garamond</Appli
 <CharacterStyle Self=\"{CHAR_STRONG}\" Name=\"Annual Strong\" \
 FontStyle=\"Bold\"><Properties><AppliedFont type=\"string\">Source Serif 4</AppliedFont></Properties></CharacterStyle>\
 <CharacterStyle Self=\"{CHAR_SMALL_CAPS}\" Name=\"Small Caps\" \
-Capitalization=\"SmallCaps\" Tracking=\"20\"><Properties><AppliedFont type=\"string\">EB Garamond</AppliedFont></Properties></CharacterStyle>\
-<CharacterStyle Self=\"{CHAR_CODE_INLINE}\" Name=\"Code Inline\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
+Capitalization=\"SmallCaps\" Tracking=\"20\" FontStyle=\"Regular\"><Properties><AppliedFont type=\"string\">EB Garamond</AppliedFont></Properties></CharacterStyle>\
+<CharacterStyle Self=\"{CHAR_CODE_INLINE}\" Name=\"Code Inline\" FontStyle=\"Regular\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
 <CharacterStyle Self=\"{CHAR_LEAD_IN}\" Name=\"Lead-In\" \
 Capitalization=\"SmallCaps\" Tracking=\"40\"/>\
 <CharacterStyle Self=\"{CHAR_SUPERIOR}\" Name=\"Superior\" \
@@ -797,23 +835,31 @@ FillColor=\"{SWATCH_SCREEN_BLUE}\" Underline=\"true\"/>\
 <CharacterStyle Self=\"{CHAR_ACCENT_INK}\" Name=\"Accent Ink\" \
 FillColor=\"{SWATCH_VERMILION}\"/>\
 <CharacterStyle Self=\"{CHAR_SPECIMEN_NUMBER}\" Name=\"Specimen Number\" \
-FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
+FillColor=\"{SWATCH_SLATE}\" Tracking=\"20\" FontStyle=\"Regular\"><Properties><AppliedFont type=\"string\">JetBrains Mono</AppliedFont></Properties></CharacterStyle>\
 </RootCharacterStyleGroup>"
     ));
 
     // Paragraph styles. Convention: leading as <Properties><Leading>,
     // BasedOn cascading from Annual Body.
     f.push_str("<RootParagraphStyleGroup>");
-    let para =
-        |f: &mut String, self_id: &str, name: &str, attrs: &str, leading: f32, props: &str| {
-            let (attrs, font) = split_applied_font(attrs);
-            let font_prop = applied_font_property(font.as_deref());
-            f.push_str(&format!(
+    let para = |f: &mut String,
+                self_id: &str,
+                name: &str,
+                attrs: &str,
+                leading: f32,
+                props: &str| {
+        let (attrs, font) = split_applied_font(attrs);
+        let (attrs, based_on) = split_based_on(&attrs);
+        let font_prop = applied_font_property(font.as_deref());
+        let based_on_prop = based_on
+            .map(|b| format!("<BasedOn type=\"object\">{b}</BasedOn>"))
+            .unwrap_or_default();
+        f.push_str(&format!(
                 "<ParagraphStyle Self=\"{self_id}\" Name=\"{name}\" {attrs}>\
-<Properties>{font_prop}<Leading type=\"unit\">{leading}</Leading>{props}</Properties>\
+<Properties>{based_on_prop}{font_prop}<Leading type=\"unit\">{leading}</Leading>{props}</Properties>\
 </ParagraphStyle>"
             ));
-        };
+    };
     para(
         &mut f,
         STYLE_BODY,
@@ -1168,7 +1214,8 @@ VerticalJustification=\"CenterAlign\" \
 BottomEdgeStrokeColor=\"{SWATCH_INK}\" BottomEdgeStrokeWeight=\"1\"/>\
 <CellStyle Self=\"{CELL_TD}\" Name=\"Annual TD\" \
 BottomEdgeStrokeColor=\"{SWATCH_SLATE}\" BottomEdgeStrokeWeight=\"0.25\"/>\
-<CellStyle Self=\"{CELL_TD_NUMBER}\" Name=\"Annual TD Number\" BasedOn=\"{CELL_TD}\"/>\
+<CellStyle Self=\"{CELL_TD_NUMBER}\" Name=\"Annual TD Number\">\
+<Properties><BasedOn type=\"object\">{CELL_TD}</BasedOn></Properties></CellStyle>\
 </RootCellStyleGroup>\
 <RootTableStyleGroup>\
 <TableStyle Self=\"{TABLE_STYLE_ANNUAL}\" Name=\"Annual Table\" \
@@ -1415,7 +1462,7 @@ fn write_footnote_exhibit_story(story_id: &str, body: &str, notes: &[(&str, &str
     b.into_bytes()
 }
 
-/// A vertical-writing exhibit: `StoryDirection="VerticalWritingDirection"`
+/// A vertical-writing exhibit: `<StoryPreference StoryOrientation="Vertical">`
 /// with real Japanese set in Noto Sans JP — story direction is content
 /// state no mutation writes, so the scripts chapter's vertical pages
 /// read from here. One run carries GroupRuby, one a kenten mark (both
@@ -1433,10 +1480,7 @@ fn write_vertical_exhibit_story(
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
     b.start(
         "Story",
-        &[
-            ("Self", story_id),
-            ("StoryDirection", "VerticalWritingDirection"),
-        ],
+        &[("Self", story_id), ("StoryOrientation", "Vertical")],
     );
     b.start(
         "ParagraphStyleRange",
