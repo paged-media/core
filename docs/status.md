@@ -170,9 +170,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which
   is one JSON document (`crates/paged-canvas/src/model.rs:5122-5125`). A model part with
   another format version is ignored on load, and the IDML parts are parsed instead.
-- **Hash and diamond stroke styles draw solid.** `Left Slant Hash`, `Right Slant Hash`,
-  `Straight Hash` and `White Diamond` are hairline marks in InDesign; dashed and dotted styles
-  are laid out side by side as InDesign lays them out ([ADR 148](adr/148-dashes-are-laid-out-side-by-side.md)).
+- **Hash and diamond stroke styles draw their marks with the default cap and join, and no gap
+  colour.** The marks are laid out along the path as InDesign lays them out
+  ([ADR 150](adr/150-hashes-and-diamonds-are-marks-along-the-path.md)); a frame's own `EndCap` /
+  `EndJoin` and a gap colour under them are not measured yet.
 - **Line and GREP styles are read and kept, not applied.** `<AllLineStyles>` and
   `<AllGREPStyles>` reach the model and the IDML export; the renderer sets no line or GREP style.
   End Nested Style Here (`<?ACE 3?>`) is not kept by the story reader, so a nested style that
