@@ -1,0 +1,66 @@
+{
+  "comment": "CPU ↔ Vello budgets for corpus/generated/parity-diff.sh: the worst page's mean ΔE2000 between the two rasterizers at 144 dpi. Measured on Metal (Apple M-series) 2026-10-14; sized at the measurement + ~20 %. Never loosen one to make a run pass: fix the lane, then tighten (ADR 146). A fixture with no entry gets the default.",
+  "default_worst_mean_de": 0.2,
+  "fixtures": [
+    {
+      "name": "transparency-targets",
+      "worst_mean_de": 0.89,
+      "measured": 0.74,
+      "rationale": "Page 4, cases 43-48: knockout groups and non-isolated groups at 50 % with Multiply members. A Vello layer is always isolated and cannot read its initial backdrop, so both draw as isolated groups (ADR 146, known gap)."
+    },
+    {
+      "name": "text-wrap",
+      "worst_mean_de": 0.47,
+      "measured": 0.389,
+      "rationale": "Dense small text: glyph-edge antialiasing differs between the lanes (analytic coverage vs area coverage), balanced in sign, p99 ~45 levels, summed over every edge pixel. Same glyph paths, same positions."
+    },
+    {
+      "name": "reflow",
+      "worst_mean_de": 0.41,
+      "measured": 0.342,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "keeps-reflow",
+      "worst_mean_de": 0.4,
+      "measured": 0.332,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "shaped-bands",
+      "worst_mean_de": 0.4,
+      "measured": 0.335,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "justified-breaks",
+      "worst_mean_de": 0.39,
+      "measured": 0.323,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "justification",
+      "worst_mean_de": 0.29,
+      "measured": 0.239,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "object-style-options",
+      "worst_mean_de": 0.28,
+      "measured": 0.234,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "baseline-grid",
+      "worst_mean_de": 0.27,
+      "measured": 0.221,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    },
+    {
+      "name": "composer",
+      "worst_mean_de": 0.25,
+      "measured": 0.204,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap)."
+    }
+  ]
+}

@@ -28,6 +28,10 @@ on:
     paths:
       - 'crates/paged-gpu/**'
       - 'crates/paged-compose/**'
+      # The parity step below renders the generated corpus, so what
+      # builds the display list and what the fixtures are reach it too.
+      - 'crates/paged-renderer/**'
+      - 'corpus/generated/**'
       - '.github/workflows/gpu.yml'
   workflow_dispatch:
 
@@ -111,6 +115,43 @@ jobs:
         # before it, the only GPU evidence was this job's colour.
         run: cargo nextest run -p paged-gpu --features vello-backend --profile ci --no-fail-fast
 
+      - name: CPU ↔ Vello parity over the generated corpus (advisory)
+        id: parity
+        # P-0: the unit tests above check single commands; this renders
+        # every page of every generated fixture through BOTH backends and
+        # diffs them against the budgets in
+        # corpus/generated/parity-thresholds.json. Before it the GPU lane
+        # the editor and viewer draw with skipped shadows, drew dashes
+        # solid and blended against the paper, and no check noticed.
+        #
+        # Advisory (continue-on-error) until lavapipe's numbers are
+        # calibrated against the Metal measurements the budgets come
+        # from; then it becomes hard, as the fidelity gate did.
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          IDML_PARITY_OUT: /tmp/idml-parity
+        run: |
+          set -euo pipefail
+          bash scripts/regen-fixtures.sh
+          cargo build --release -p paged-renderer --features gpu --bin paged-inspect
+          cargo build --release -p paged-fidelity --bin paged-diff
+          ./corpus/generated/parity-diff.sh
+
+      - name: upload parity report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vello-parity
+          # parity.json + per-fixture pages.json, and heatmaps for any
+          # page over budget.
+          path: |
+            /tmp/idml-parity/parity.json
+            /tmp/idml-parity/*/pages.json
+            /tmp/idml-parity/*/heat-*.png
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: upload JUnit artifact
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -137,6 +178,12 @@ jobs:
             fi
             echo ""
             echo "Promotion step 2 — marking this check required — is a repo-settings flip after the observation week (W0.7)."
+            echo ""
+            if [ "${{ steps.parity.outcome }}" = "success" ]; then
+              echo "✅ CPU ↔ Vello parity: every generated fixture within its budget."
+            else
+              echo "⚠️ CPU ↔ Vello parity (advisory): see the vello-parity artifact's parity.json."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           # Also emit a workflow annotation so it shows on the checks tab.
           if [ "${{ steps.gpu_tests.outcome }}" != "success" ]; then

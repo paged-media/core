@@ -730,6 +730,29 @@ pub fn fit_transparency_group_bounds(list: &mut DisplayList) {
     }
 }
 
+/// The page-space rect everything in `list` can paint into, or `None`
+/// when it paints nothing: the union of every command's painted extent
+/// and every group's and layer's own bounds (a blurred layer paints out
+/// to its bounds, not to its contents' extent).
+///
+/// For a rasterizer that has to open a layer over the whole page's
+/// content and wants it no larger than that content. Conservative in
+/// the same way as the group fit: a rotated path contributes its
+/// rotated box's bounds.
+pub fn painted_bounds(list: &DisplayList) -> Option<Rect> {
+    let mut cache = PathBboxes::default();
+    let mut acc: Option<Extent> = None;
+    for cmd in &list.commands {
+        let e = match cmd {
+            DisplayCommand::BeginBlendGroup { bounds, .. }
+            | DisplayCommand::PushLayer { bounds, .. } => Some(Extent::from_rect(*bounds)),
+            _ => painted_extent(cmd, &list.paths, &list.images, &mut cache),
+        };
+        acc = union_opt(acc, e.filter(|e| e.is_finite()));
+    }
+    acc.map(Extent::to_rect)
+}
+
 /// The first transparency group in `list` that paints outside its own
 /// `bounds`, or `None` when the invariant holds.
 ///
@@ -839,6 +862,38 @@ mod tests {
             "shadow's trailing edge must be inside the group: {b:?}"
         );
         assert!(transparency_group_overflow(&list).is_none());
+    }
+
+    /// The page's painted bounds cover every command and every group's
+    /// own bounds, and an empty page paints nothing.
+    #[test]
+    fn painted_bounds_cover_paint_and_groups() {
+        let mut list = DisplayList::new();
+        assert_eq!(painted_bounds(&list), None);
+        let rect = unit_rect(&mut list);
+        let geom = Rect {
+            x: 20.0,
+            y: 10.0,
+            w: 100.0,
+            h: 60.0,
+        };
+        list.commands.push(DisplayCommand::FillPath {
+            path_id: rect,
+            paint: Paint::Solid(Color::BLACK),
+            transform: Transform::for_rect_in(geom, Transform::IDENTITY),
+        });
+        assert_eq!(painted_bounds(&list), Some(geom));
+        // A group reaches further than the fill inside it.
+        let group = Rect {
+            x: 0.0,
+            y: 5.0,
+            w: 200.0,
+            h: 70.0,
+        };
+        list.commands.insert(0, begin(group));
+        list.commands
+            .push(DisplayCommand::EndBlendGroup(Transform::IDENTITY));
+        assert_eq!(painted_bounds(&list), Some(group));
     }
 
     /// A group whose contents match its geometry keeps the bounds it
