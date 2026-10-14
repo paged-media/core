@@ -261,6 +261,16 @@ pub struct ComposeOptions<'a> {
     /// this where lines have different measures (a shaped frame; see
     /// `ragged.rs`). Justified text ignores it.
     pub minimum_raggedness: bool,
+    /// The paragraph's `LastLineIndent` (1/64 pt): its last line breaks
+    /// at the measure less this. Set only when the composed text ends the
+    /// paragraph (a forced line break ends a line, not the paragraph).
+    /// An invisible box of this width before the finishing glue does it
+    /// for every breaker alike (`paragraph-attrs` C, ADR 153).
+    pub last_line_indent: i32,
+    /// Balance ragged lines (`BalanceRaggedLines`): once a ragged
+    /// paragraph is broken, set it again in as many lines, as even as
+    /// the words allow (`ragged::RaggedLines::balance_lines`).
+    pub balance_ragged: bool,
     /// How many composer lines the frame (chain) holds. With
     /// `minimum_raggedness` the lines past it are overset and their slack
     /// costs nothing — all but the first, the line InDesign sets to find
@@ -334,6 +344,8 @@ impl ComposeOptions<'_> {
             kinsoku_enforce: false,
             mojikumi_half_width: false,
             minimum_raggedness: false,
+            last_line_indent: 0,
+            balance_ragged: false,
             visible_lines: None,
             joined_lines: None,
             fit_tolerance: 0,
@@ -877,6 +889,19 @@ pub fn compose_paragraph(
                 false,
             );
         }
+    }
+    // The last line's right indent, as room its content takes.
+    if options.last_line_indent > 0 {
+        push(
+            &mut items,
+            &mut meta,
+            Item::Box {
+                width: options.last_line_indent,
+                data: (),
+            },
+            text.len(),
+            false,
+        );
     }
     // Paragraph end: infinite stretch + forced break (TeX convention).
     push(

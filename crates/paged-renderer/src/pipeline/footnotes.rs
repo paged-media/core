@@ -309,7 +309,9 @@ pub(super) fn compose_footnote_paragraphs(
                 lopts.compose.minimum_raggedness = true;
                 lopts.compose.overrun_size = Some(paragraph_size);
             }
+            set_auto_leading(&mut lopts, &resolved_paragraph, paragraph_size);
             apply_leadings(&mut lopts, &resolved_runs, &styled_runs, 0);
+            apply_no_break(&mut lopts, &resolved_runs, &styled_runs, 0);
             let first_64 = to_64(first_line_indent_pt);
             if first_64 != 0 {
                 let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;

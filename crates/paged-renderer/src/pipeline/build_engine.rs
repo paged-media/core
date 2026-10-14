@@ -6519,6 +6519,17 @@ fn emit_paragraph_lines(
     (lopts.alignment, lopts.last_line_alignment) =
         map_justification(resolved_paragraph.justification, binding);
     lopts.justify_last_line = !em.segment.closes_paragraph;
+    // The last line's right indent, on the segment that ends the
+    // paragraph only (ADR 153).
+    if em.segment.closes_paragraph {
+        lopts.compose.last_line_indent = resolved_paragraph
+            .line_setting
+            .last_line_indent
+            .filter(|v| *v > 0.0)
+            .map_or(0, |v| {
+                (v * paged_text::shape::ADVANCE_PRECISION).round() as i32
+            });
+    }
     if let Some((prefix, _)) = marker_run {
         lopts.auto_leading_from_byte = prefix.len() as u32;
     }
@@ -6531,7 +6542,11 @@ fn emit_paragraph_lines(
         paragraph_size,
         lopts.alignment == paged_text::Alignment::Justify,
     );
+    // Auto leading is the paragraph's `AutoLeading` per cent of a line's
+    // largest size (InDesign's 120 by default; ADR 153).
+    set_auto_leading(&mut lopts, &resolved_paragraph, paragraph_size);
     apply_leadings(&mut lopts, &resolved_runs, &styled_runs, head_run);
+    apply_no_break(&mut lopts, &resolved_runs, &styled_runs, head_run);
 
     // First-baseline metrics for this paragraph's head run. A
     // family-keyed override (`--font-metrics`) wins, so a documented

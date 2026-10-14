@@ -955,6 +955,7 @@ impl ResolvedRunAttrs {
             tracking: run.tracking,
             underline: run.underline,
             strikethru: run.strikethru,
+            no_break: run.no_break,
             leading: run.leading,
             ruby_flag: run.ruby_flag,
             ruby_type: run.ruby_type.clone(),
@@ -1004,6 +1005,7 @@ impl ResolvedRunAttrs {
             tracking,
             underline,
             strikethru,
+            no_break,
             leading,
             ruby_flag,
             ruby_type,
@@ -1039,6 +1041,7 @@ impl ResolvedRunAttrs {
         fill(&mut self.tracking, tracking);
         fill(&mut self.underline, underline);
         fill(&mut self.strikethru, strikethru);
+        fill(&mut self.no_break, no_break);
         fill(&mut self.leading, leading);
         fill(&mut self.ruby_flag, ruby_flag);
         fill(&mut self.ruby_type, ruby_type);
@@ -1084,6 +1087,7 @@ impl ResolvedRunAttrs {
         self.tracking = self.tracking.or(c.tracking);
         self.underline = self.underline.or(c.underline);
         self.strikethru = self.strikethru.or(c.strikethru);
+        self.no_break = self.no_break.or(c.no_break);
         self.ruby_flag = self.ruby_flag.or(c.ruby_flag);
         if self.ruby_type.is_none() {
             self.ruby_type = c.ruby_type.clone();
@@ -1219,6 +1223,7 @@ impl ResolvedParagraphAttrs {
             keep_with_next: paragraph.keep_with_next,
             start_paragraph: paragraph.start_paragraph,
             span_columns: paragraph.span_columns,
+            line_setting: paragraph.line_setting,
             grid_alignment: paragraph.grid_alignment,
             grid_align_first_line_only: paragraph.grid_align_first_line_only,
             applied_language: None,
@@ -1330,6 +1335,7 @@ impl ResolvedParagraphAttrs {
         self.keep_with_next = self.keep_with_next.or(p.keep_with_next);
         self.start_paragraph = self.start_paragraph.or(p.start_paragraph);
         self.span_columns.inherit(&p.span_columns);
+        self.line_setting.inherit(&p.line_setting);
         self.grid_alignment = self.grid_alignment.or(p.grid_alignment);
         self.grid_align_first_line_only = self
             .grid_align_first_line_only
@@ -1534,6 +1540,8 @@ pub struct ResolvedRunAttrs {
     pub tracking: Option<f32>,
     pub underline: Option<bool>,
     pub strikethru: Option<bool>,
+    /// `NoBreak`, direct > character style (ADR 153).
+    pub no_break: Option<bool>,
     /// Explicit `Leading` in pt. `None` ⇒ Auto leading
     /// (`point_size × 1.2`).
     pub leading: Option<f32>,
@@ -1672,6 +1680,8 @@ pub struct ResolvedParagraphAttrs {
     pub start_paragraph: Option<paged_model::StartParagraph>,
     /// Span / split columns, direct > style.
     pub span_columns: paged_model::SpanColumns,
+    /// Line setting (ADR 153), direct > style.
+    pub line_setting: paged_model::LineSetting,
     /// `GridAlignment`, direct > style.
     pub grid_alignment: Option<paged_model::GridAlignment>,
     /// `GridAlignFirstLineOnly`, direct > style.

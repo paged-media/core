@@ -192,6 +192,15 @@ pub struct LayoutOptions<'a> {
     /// auto-leaded text keeps the 12 pt leading (`list-marker-styles`
     /// m14/m15). `0` lets every glyph count.
     pub auto_leading_from_byte: u32,
+    /// Byte ranges of the paragraph text set with `NoBreak`: no line
+    /// breaks inside one, at a space or a hyphenation point
+    /// (`paragraph-attrs` E, ADR 153).
+    pub no_break: Vec<std::ops::Range<u32>>,
+    /// Auto leading as a multiple of a line's largest size: the
+    /// paragraph's `AutoLeading` over 100 (InDesign's 120 % ⇒ 1.2; a
+    /// 14 pt word on a 175 % paragraph leads its line 24.5 pt,
+    /// `paragraph-attrs` A4, ADR 153).
+    pub auto_leading: f32,
     /// Justify the LAST line too, under [`Alignment::Justify`]. InDesign
     /// does for a line ending in a forced line break (U+2028): it ends
     /// the line, not the paragraph, so the line keeps full measure.
@@ -204,6 +213,12 @@ pub struct LayoutOptions<'a> {
     /// it to the measure as well — `Justify` — letter-spacing it when it
     /// is one word.
     pub last_line_alignment: Alignment,
+    /// How a justified paragraph sets a line other than its last that
+    /// holds one word, with no space to stretch
+    /// (`SingleWordJustification`): `Justify` letter-spaces it to the
+    /// measure, InDesign's default; the others place it ragged
+    /// (`paragraph-attrs` B, ADR 153).
+    pub single_word_alignment: Alignment,
     /// The paragraph's tab stops, when the composer should measure each
     /// tab at the width it takes on its line (see [`TabLayout`]). `None`
     /// measures a tab as its glyph's own advance and leaves the snapping
@@ -270,9 +285,12 @@ impl LayoutOptions<'_> {
             first_baseline_exact: None,
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
+            no_break: Vec::new(),
+            auto_leading: 1.2,
             alignment: Alignment::Left,
             justify_last_line: false,
             last_line_alignment: Alignment::Left,
+            single_word_alignment: Alignment::Justify,
             tabs: None,
             object_advances: Vec::new(),
             glyph_aki: Vec::new(),
@@ -324,6 +342,7 @@ pub fn layout_paragraph<S: TextShaper>(
             options.column_width(),
             options.alignment,
             options.last_line_setting(i == last_index),
+            options.single_word_alignment,
             text.as_bytes(),
             false,
             options.compose.single_line.is_some(),
@@ -435,6 +454,7 @@ fn apply_alignment(
     column_width: i32,
     alignment: Alignment,
     last_line: Option<Alignment>,
+    single_word: Alignment,
     paragraph_bytes: &[u8],
     squeeze_ragged: bool,
     squeeze_justified: bool,
@@ -471,8 +491,11 @@ fn apply_alignment(
             shift_ragged(glyphs, extra, last, paragraph_bytes, tabs_set)
         }
         (Alignment::Justify, None) => {
-            if extra > 0 {
-                spread_spaces(glyphs, extra, paragraph_bytes);
+            if extra > 0 && !spread_spaces(glyphs, extra, paragraph_bytes) {
+                match single_word {
+                    Alignment::Justify => spread_letters(glyphs, extra),
+                    ragged => shift_ragged(glyphs, extra, ragged, paragraph_bytes, tabs_set),
+                }
             }
         }
         (ragged, _) => shift_ragged(glyphs, extra, ragged, paragraph_bytes, tabs_set),
@@ -1059,6 +1082,14 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     let mut items: Vec<Item<()>> = Vec::with_capacity(words.len() * 4 + 2);
     let mut byte_ends: Vec<usize> = Vec::with_capacity(items.capacity());
     let mut is_hyphen: Vec<bool> = Vec::with_capacity(items.capacity());
+    // Whether a break between bytes `before` and `after` (a gap's two
+    // ends, or one hyphenation point) would split a `NoBreak` span.
+    let held = |before: usize, after: usize| {
+        options
+            .no_break
+            .iter()
+            .any(|r| (r.start as usize) < before && after < r.end as usize)
+    };
     for (i, w) in words.iter().enumerate() {
         let word_width = sum_advances_in(&flat, w.start as u32..w.end as u32);
         // A word is hyphenation-eligible only when its start falls
@@ -1115,6 +1146,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .into_iter()
                 .filter(|&b| b > 0 && b < word_text.len())
                 .map(|b| w.start + b)
+                .filter(|&b| !held(b, b))
                 .collect()
             }
             None => Vec::new(),
@@ -1177,6 +1209,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         });
         byte_ends.push(w.end);
         is_hyphen.push(false);
+        if glue_follows && held(w.end, words[i + 1].start) {
+            // A `NoBreak` span runs over this gap: no break at its glue.
+            items.push(Item::Penalty {
+                width: 0,
+                penalty: paragraph_breaker::INFINITE_PENALTY,
+                flagged: false,
+            });
+            byte_ends.push(w.end);
+            is_hyphen.push(false);
+        }
         if glue_follows {
             // The hyphenation zone decides only which words may be
             // hyphenated (above). It once also widened every gap's stretch
@@ -1212,6 +1254,16 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             byte_ends.push(w.end);
             is_hyphen.push(false);
         }
+    }
+    // The last line's right indent, as room its content takes
+    // (`ComposeOptions::last_line_indent`).
+    if options.compose.last_line_indent > 0 {
+        items.push(Item::Box {
+            width: options.compose.last_line_indent,
+            data: (),
+        });
+        byte_ends.push(paragraph_text.len());
+        is_hyphen.push(false);
     }
     items.push(Item::Glue {
         width: 0,
@@ -1483,6 +1535,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             line_column,
             options.alignment,
             options.last_line_setting(i == last_break),
+            options.single_word_alignment,
             bytes,
             opts.minimum_raggedness,
             single_line.is_some() || !opts.minimum_raggedness,
@@ -1553,22 +1606,34 @@ fn knuth_plass_breaks(
         let chars = &chars[chars.len().saturating_sub(items.len()).min(chars.len())..];
         return crate::single_line::single_line_breaks(items, lengths, chars, params);
     }
-    if opts.minimum_raggedness && alignment != Alignment::Justify {
-        let breaks = crate::ragged::min_ragged_breaks(
-            items,
-            lengths,
-            &crate::ragged::RaggedLines {
-                free_after: opts
-                    .visible_lines
-                    .map_or(usize::MAX, |v| v.saturating_add(1)),
-                joined: opts.joined_lines.as_deref().unwrap_or(&[]),
-                hyphen_penalty: opts.hyphen_penalty,
-                space_shrink: opts.shrink_ratio,
-                overrun_size: opts.overrun_size,
-            },
-        );
-        if !breaks.is_empty() {
+    let ragged_lines = |balance_lines: Option<usize>| crate::ragged::RaggedLines {
+        free_after: opts
+            .visible_lines
+            .map_or(usize::MAX, |v| v.saturating_add(1)),
+        joined: opts.joined_lines.as_deref().unwrap_or(&[]),
+        hyphen_penalty: opts.hyphen_penalty,
+        space_shrink: opts.shrink_ratio,
+        overrun_size: opts.overrun_size,
+        balance_lines,
+    };
+    // Balanced ragged lines: break as usual, then again in as many lines,
+    // as even as the words allow (ADR 153).
+    let balanced = |breaks: Vec<Breakpoint>| -> Vec<Breakpoint> {
+        if !opts.balance_ragged || alignment == Alignment::Justify || breaks.len() < 2 {
             return breaks;
+        }
+        let even =
+            crate::ragged::min_ragged_breaks(items, lengths, &ragged_lines(Some(breaks.len())));
+        if even.is_empty() {
+            breaks
+        } else {
+            even
+        }
+    };
+    if opts.minimum_raggedness && alignment != Alignment::Justify {
+        let breaks = crate::ragged::min_ragged_breaks(items, lengths, &ragged_lines(None));
+        if !breaks.is_empty() {
+            return balanced(breaks);
         }
     }
     // Justified text breaks the way InDesign's Paragraph Composer was
@@ -1645,7 +1710,7 @@ fn knuth_plass_breaks(
     if breaks.is_empty() && !items.is_empty() {
         breaks = crate::first_fit::first_fit_breaks(items, lengths);
     }
-    breaks
+    balanced(breaks)
 }
 
 /// The paragraph a tab-aware break pass works over: the breaker items
@@ -1885,14 +1950,21 @@ pub fn max_line_height_for_glyphs(glyphs: &[PositionedGlyph]) -> Option<i32> {
 /// `from_byte` (see [`LayoutOptions::auto_leading_from_byte`]); a line
 /// with none of those falls back to all of its glyphs.
 pub fn auto_line_height(glyphs: &[PositionedGlyph], from_byte: u32) -> Option<i32> {
-    let counted = glyphs
-        .iter()
-        .filter(|g| g.cluster >= from_byte)
-        .map(|g| g.point_size)
-        .reduce(f32::max);
-    counted
-        .map(|max_pt| (max_pt * 1.2 * ADVANCE_PRECISION).round() as i32)
-        .or_else(|| max_line_height_for_glyphs(glyphs))
+    auto_line_height_at(glyphs, from_byte, 1.2)
+}
+
+/// [`auto_line_height`] at `ratio` × the largest size, not 1.2 ×.
+pub fn auto_line_height_at(glyphs: &[PositionedGlyph], from_byte: u32, ratio: f32) -> Option<i32> {
+    let largest = |from: u32| {
+        glyphs
+            .iter()
+            .filter(|g| g.cluster >= from)
+            .map(|g| g.point_size)
+            .reduce(f32::max)
+    };
+    largest(from_byte)
+        .or_else(|| largest(0))
+        .map(|max_pt| (max_pt * ratio * ADVANCE_PRECISION).round() as i32)
 }
 
 /// The leading of a line holding `glyphs`: how far it sits below the line
@@ -1906,11 +1978,11 @@ pub fn auto_line_height(glyphs: &[PositionedGlyph], from_byte: u32) -> Option<i3
 /// does not count. `None` for a line with no glyph to ask.
 pub fn line_leading(glyphs: &[PositionedGlyph], options: &LayoutOptions) -> Option<i32> {
     if options.run_leadings.is_empty() {
-        return options
-            .leading_override
-            .or_else(|| auto_line_height(glyphs, options.auto_leading_from_byte));
+        return options.leading_override.or_else(|| {
+            auto_line_height_at(glyphs, options.auto_leading_from_byte, options.auto_leading)
+        });
     }
-    let auto = |pt: f32| (pt * 1.2 * ADVANCE_PRECISION).round() as i32;
+    let auto = |pt: f32| (pt * options.auto_leading * ADVANCE_PRECISION).round() as i32;
     glyphs
         .iter()
         .filter(|g| g.cluster >= options.auto_leading_from_byte)
@@ -1925,7 +1997,7 @@ pub fn line_leading(glyphs: &[PositionedGlyph], options: &LayoutOptions) -> Opti
         })
         .reduce(i32::max)
         .or(options.leading_override)
-        .or_else(|| auto_line_height(glyphs, 0))
+        .or_else(|| auto_line_height_at(glyphs, 0, options.auto_leading))
 }
 
 /// [`line_leading`] before it is rounded to 1/64 pt: auto leading is
@@ -1953,7 +2025,7 @@ pub fn line_leading_exact(glyphs: &[PositionedGlyph], options: &LayoutOptions) -
     };
     size(options.auto_leading_from_byte)
         .or_else(|| size(0))
-        .map(|pt| pt as f64 * 1.2 * ADVANCE_PRECISION as f64)
+        .map(|pt| pt as f64 * options.auto_leading as f64 * ADVANCE_PRECISION as f64)
 }
 
 /// In-cell alignment for a tab stop. IDML's `Alignment` attribute on
@@ -2592,6 +2664,8 @@ mod tests {
                 kinsoku_enforce: false,
                 mojikumi_half_width: false,
                 minimum_raggedness: false,
+                last_line_indent: 0,
+                balance_ragged: false,
                 visible_lines: None,
                 joined_lines: None,
                 fit_tolerance: 0,
@@ -2607,8 +2681,11 @@ mod tests {
             first_baseline_exact: None,
             run_leadings: Vec::new(),
             auto_leading_from_byte: 0,
+            no_break: Vec::new(),
+            auto_leading: 1.2,
             justify_last_line: false,
             last_line_alignment: Alignment::Left,
+            single_word_alignment: Alignment::Justify,
             tabs: None,
             object_advances: Vec::new(),
             glyph_aki: Vec::new(),
@@ -2686,6 +2763,41 @@ mod tests {
         let out = layout_paragraph("ab cd", &shaper, &opts(20, Alignment::Justify));
         let first = &out.lines[0].glyphs[0];
         assert_eq!(first.x, 0);
+    }
+
+    /// A justified line that holds one word, before the last
+    /// (`SingleWordJustification`, `paragraph-attrs` B, ADR 153): letter-
+    /// spaced to the measure by default, centred when asked.
+    #[test]
+    fn a_single_word_line_is_letter_spaced_or_placed() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let text = "abcdefg hijklmn op";
+        let out = layout_paragraph(text, &shaper, &opts(8, Alignment::Justify));
+        assert!(out.lines.len() >= 3, "{:?}", out.lines.len());
+        assert_eq!(
+            right_edge(&out.lines[0]),
+            80,
+            "letter-spaced to the measure"
+        );
+        let centred = LayoutOptions {
+            single_word_alignment: Alignment::Center,
+            ..opts(8, Alignment::Justify)
+        };
+        let out = layout_paragraph(text, &shaper, &centred);
+        assert_eq!(out.lines[0].glyphs[0].x, 5, "centred at natural width");
+    }
+
+    /// `LastLineIndent` (`paragraph-attrs` C, ADR 153): the last line
+    /// breaks at the measure less the indent.
+    #[test]
+    fn the_last_line_breaks_short_of_its_indent() {
+        let shaper = MonospaceMeasurer::new(10, 10);
+        let out = layout_paragraph("ab cd ef", &shaper, &opts(8, Alignment::Left));
+        assert_eq!(out.lines.len(), 1);
+        let mut indented = opts(8, Alignment::Left);
+        indented.compose.last_line_indent = 20;
+        let out = layout_paragraph("ab cd ef", &shaper, &indented);
+        assert_eq!(out.lines.len(), 2, "ef goes down a line");
     }
 
     fn justified(column_chars: i32, last: Alignment) -> LayoutOptions<'static> {

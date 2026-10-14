@@ -81,6 +81,7 @@ is not written yet.
 | [150](150-hashes-and-diamonds-are-marks-along-the-path.md) | Hashes and diamonds are marks along the path | Accepted 2026-10-14 |
 | [151](151-which-side-text-wraps-to.md) | Which side text wraps to, and the contour it wraps round | Accepted 2026-10-14 |
 | [152](152-a-cells-fill-tint.md) | A cell's fill tint, on the cell and from its style | Accepted 2026-10-14 |
+| [153](153-a-paragraphs-line-setting.md) | A paragraph's line setting: auto leading, a lone word, the last line, balance, no break | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

@@ -69,6 +69,62 @@ pub(super) fn apply_leadings(
     }
 }
 
+/// Set `lopts`' line setting from the paragraph (ADR 153): auto leading
+/// from its `AutoLeading` (per cent, InDesign's 120 when unset) with the
+/// default line height a line of `size` pt takes, and how a justified
+/// line of one word is set.
+pub(super) fn set_auto_leading(
+    lopts: &mut paged_text::LayoutOptions<'_>,
+    paragraph: &paged_scene::ResolvedParagraphAttrs,
+    size: f32,
+) {
+    let ratio = paragraph
+        .line_setting
+        .auto_leading
+        .filter(|p| *p > 0.0)
+        .map_or(1.2, |p| p / 100.0);
+    lopts.auto_leading = ratio;
+    lopts.compose.balance_ragged =
+        paragraph.line_setting.balance == Some(paged_model::BalanceRaggedLines::FullyBalanced);
+    use paged_model::SingleWordJustification as W;
+    lopts.single_word_alignment = match paragraph.line_setting.single_word {
+        None | Some(W::FullyJustified) => paged_text::Alignment::Justify,
+        Some(W::LeftAlign) => paged_text::Alignment::Left,
+        Some(W::CenterAlign) => paged_text::Alignment::Center,
+        Some(W::RightAlign) => paged_text::Alignment::Right,
+    };
+    let exact = size as f64 * ratio as f64 * paged_text::shape::ADVANCE_PRECISION as f64;
+    lopts.line_height = exact.round() as i32;
+    lopts.line_height_exact = Some(exact);
+}
+
+/// Text set with `NoBreak`, onto `lopts` as the byte ranges no line
+/// break splits (ADR 153). `styled_runs` / `head_run` as for
+/// [`apply_leadings`].
+pub(super) fn apply_no_break(
+    lopts: &mut paged_text::LayoutOptions<'_>,
+    resolved_runs: &[paged_scene::ResolvedRunAttrs],
+    styled_runs: &[paged_text::StyledRun<'_>],
+    head_run: usize,
+) {
+    let mut at = 0u32;
+    for (k, run) in styled_runs.iter().enumerate() {
+        let len = run.text.len() as u32;
+        let held = k
+            .checked_sub(head_run)
+            .and_then(|i| resolved_runs.get(i))
+            .and_then(|r| r.no_break)
+            .unwrap_or(false);
+        if held && len > 0 {
+            match lopts.no_break.last_mut() {
+                Some(last) if last.end == at => last.end = at + len,
+                _ => lopts.no_break.push(at..at + len),
+            }
+        }
+        at += len;
+    }
+}
+
 /// Apply IDML paragraph-style attributes that drive the line breaker
 /// onto a fresh `LayoutOptions`. Hyphenation defaults to *on* (IDML's
 /// own default) when the cascade leaves the field unset; explicit
