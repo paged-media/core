@@ -181,22 +181,31 @@ fn c18_plain_text_frame_still_emits_no_corner_path() {
     );
 }
 
-/// C-18 — the legacy global `CornerOption` / `CornerRadius` pair drives a
-/// text frame too, not only the four per-corner slots.
+/// C-18 — the item-level `CornerOption` / `CornerRadius` pair alone draws
+/// a square frame: InDesign 20.0.1 reads a frame's corners from the four
+/// per-corner attributes only (ADR 149), and every frame it writes carries
+/// them beside the pair.
 #[test]
-fn c18_text_frame_honours_the_global_corner_pair() {
+fn c18_the_item_level_corner_pair_alone_draws_square() {
     let global = path_segments(
         &built(&text_frame(
             r#"CornerOption="RoundedCorner" CornerRadius="20""#,
         ))
         .pages[0],
     );
-    let per_corner = path_segments(&built(&text_frame(ROUNDED)).pages[0]);
-    assert!(!global.is_empty(), "the global pair emitted no path");
+    let cubics = |p: &Vec<Vec<PathSegment>>| {
+        p.iter()
+            .flatten()
+            .filter(|s| matches!(s, PathSegment::CubicTo { .. }))
+            .count()
+    };
     assert_eq!(
-        global, per_corner,
-        "the global pair and four equal per-corner slots must agree",
+        cubics(&global),
+        0,
+        "the pair alone rounds nothing: {global:#?}"
     );
+    let per_corner = path_segments(&built(&text_frame(ROUNDED)).pages[0]);
+    assert!(cubics(&per_corner) >= 4, "the per-corner slots round it");
 }
 
 /// C-18 — an OVAL's corner attributes are stored, mutable and

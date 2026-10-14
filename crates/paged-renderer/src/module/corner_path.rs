@@ -58,14 +58,14 @@ pub(crate) fn corner_path_module(frame: &ResolvedFrame<'_>, page: &mut BuiltPage
     // Q-16: resolve 4 per-corner radii (falls back to the symmetric
     // `corner_radius` / `corner_option` pair when no per-corner
     // override is set).
-    let radii = per_corner_radii(frame.corner_radius, frame.corner_option, &frame.corners);
+    let radii = per_corner_radii(&frame.corners);
     if radii.iter().all(|r| r.is_none()) {
         return CornerPaths::none();
     }
     // Per-corner shape (Rounded / Inverse / Bevel / Inset / Fancy). The
     // decorative variants are now emitted with bespoke geometry rather
     // than collapsing to Rounded.
-    let kinds = per_corner_kinds(frame.corner_option, &frame.corners);
+    let kinds = per_corner_kinds(&frame.corners);
     let path = corner_rect_path(rect, radii, kinds);
     let key_bytes = frame
         .self_id

@@ -4686,46 +4686,44 @@ fn b23_anchor(x: f32, y: f32) -> paged_model::PathAnchor {
     }
 }
 
-/// The uniform-corner resolver implements the documented addressing
-/// decision: slot 0 (`TopLeft`) wins, the global `CornerOption` /
-/// `CornerRadius` pair is the fallback, and a `None`-valued option means
-/// square corners even when a radius is present.
+/// The uniform-corner resolver reads slot 0 (`TopLeft`) only, as InDesign
+/// reads a polygon's corners (ADR 149): the item-level `CornerOption` /
+/// `CornerRadius` pair is not read, an option without a radius takes
+/// InDesign's 12 pt, and a `None` option means square corners.
 #[test]
-fn b23_uniform_corner_resolves_topleft_then_global() {
+fn b23_uniform_corner_reads_the_topleft_slot_only() {
     use paged_model::{CornerOption, CornerSpec};
     let empty = [CornerSpec::default(); 4];
+    assert_eq!(shapes::uniform_corner(&empty), None);
 
-    // Global pair only.
-    assert_eq!(
-        shapes::uniform_corner(Some(12.0), Some("RoundedCorner"), &empty),
-        Some((CornerOption::Rounded, 12.0))
-    );
-    // Explicit `None` option squares the corners despite the radius.
-    assert_eq!(
-        shapes::uniform_corner(Some(12.0), Some("None"), &empty),
-        None
-    );
-    // Radius without an option ⇒ no effect (matches the corpus's
-    // `CornerRadius`-only polygons, which InDesign renders square).
-    assert_eq!(shapes::uniform_corner(Some(12.0), None, &empty), None);
-
-    // Slot 0 wins over the global pair.
     let mut per = empty;
     per[0] = CornerSpec {
         option: Some(CornerOption::Bevel),
         radius: Some(5.0),
     };
     assert_eq!(
-        shapes::uniform_corner(Some(12.0), Some("RoundedCorner"), &per),
+        shapes::uniform_corner(&per),
         Some((CornerOption::Bevel, 5.0))
     );
+    // No radius: InDesign's default corner size.
+    per[0].radius = None;
+    assert_eq!(
+        shapes::uniform_corner(&per),
+        Some((CornerOption::Bevel, 12.0))
+    );
+    // An explicit `None` option squares the corners despite a radius.
+    per[0] = CornerSpec {
+        option: Some(CornerOption::None),
+        radius: Some(12.0),
+    };
+    assert_eq!(shapes::uniform_corner(&per), None);
 
     // The other three slots are rect-only addressing: a TopRight-only
     // option does NOT drive polygon geometry. This is the corpus's
     // five-point arch, whose curvature is already in its PathGeometry.
     let mut tr_only = empty;
     tr_only[1].option = Some(CornerOption::Rounded);
-    assert_eq!(shapes::uniform_corner(Some(243.36), None, &tr_only), None);
+    assert_eq!(shapes::uniform_corner(&tr_only), None);
 }
 
 /// Open contours and sub-three-anchor contours are copied through
