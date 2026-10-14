@@ -29,9 +29,13 @@ const DOM_VERSION: (&str, &str) = ("DOMVersion", "20.0");
 pub struct Story {
     pub self_id: String,
     pub paragraphs: Vec<Paragraph>,
-    /// Escape-hatch `<Story>` attributes (e.g. `StoryDirection=
-    /// "VerticalWritingDirection"` for CJK tategaki). Emitted verbatim
-    /// after `Self`; empty keeps every sample's story byte-identical.
+    /// Escape-hatch `<Story>` attributes, emitted verbatim after `Self`;
+    /// empty keeps every sample's story byte-identical. One key is not an
+    /// attribute: `("StoryOrientation", "Vertical")` becomes the
+    /// `<StoryPreference StoryOrientation="Vertical"/>` child, which is
+    /// where InDesign reads vertical writing (a `StoryDirection` attribute
+    /// on `<Story>` it ignores: the annual's tategaki pages came back
+    /// horizontal).
     pub extra_story_attrs: Vec<(&'static str, &'static str)>,
 }
 
@@ -386,10 +390,18 @@ pub fn write_story(s: &Story) -> Vec<u8> {
     b.write_decl();
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
     let mut story_attrs: Vec<(&str, &str)> = vec![("Self", s.self_id.as_str())];
+    let mut orientation = None;
     for (k, v) in &s.extra_story_attrs {
-        story_attrs.push((*k, *v));
+        if *k == "StoryOrientation" {
+            orientation = Some(*v);
+        } else {
+            story_attrs.push((*k, *v));
+        }
     }
     b.start("Story", &story_attrs);
+    if let Some(o) = orientation {
+        b.empty("StoryPreference", &[("StoryOrientation", o)]);
+    }
     let paragraph_count = s.paragraphs.len();
     for (para_idx, paragraph) in s.paragraphs.iter().enumerate() {
         write_paragraph(&mut b, paragraph, para_idx + 1 == paragraph_count);

@@ -1462,7 +1462,7 @@ fn write_footnote_exhibit_story(story_id: &str, body: &str, notes: &[(&str, &str
     b.into_bytes()
 }
 
-/// A vertical-writing exhibit: `StoryDirection="VerticalWritingDirection"`
+/// A vertical-writing exhibit: `<StoryPreference StoryOrientation="Vertical">`
 /// with real Japanese set in Noto Sans JP — story direction is content
 /// state no mutation writes, so the scripts chapter's vertical pages
 /// read from here. One run carries GroupRuby, one a kenten mark (both
@@ -1480,10 +1480,7 @@ fn write_vertical_exhibit_story(
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
     b.start(
         "Story",
-        &[
-            ("Self", story_id),
-            ("StoryDirection", "VerticalWritingDirection"),
-        ],
+        &[("Self", story_id), ("StoryOrientation", "Vertical")],
     );
     b.start(
         "ParagraphStyleRange",
