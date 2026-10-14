@@ -33,7 +33,8 @@
 //! rasterizers and the PDF writer draw the same dashes.
 
 use crate::display_list::{
-    DisplayCommand, DisplayList, LineCap, Paint, PathData, PathId, PathSegment, Stroke, Transform,
+    DisplayCommand, DisplayList, LineCap, Paint, PathData, PathId, PathSegment, Stroke,
+    StrokeMarks, Transform,
 };
 
 /// A fitted stroke's pieces, in page space: the dashes inside the sides,
@@ -47,13 +48,13 @@ pub struct FittedDashes {
 
 /// One side: the flattened points from one anchor to the next, with the
 /// cumulative length at each.
-struct Side {
-    points: Vec<(f32, f32)>,
+pub(crate) struct Side {
+    pub(crate) points: Vec<(f32, f32)>,
     cum: Vec<f32>,
 }
 
 impl Side {
-    fn new(points: Vec<(f32, f32)>) -> Self {
+    pub(crate) fn new(points: Vec<(f32, f32)>) -> Self {
         let mut cum = Vec::with_capacity(points.len());
         let mut total = 0.0f32;
         cum.push(0.0);
@@ -64,7 +65,7 @@ impl Side {
         Side { points, cum }
     }
 
-    fn len(&self) -> f32 {
+    pub(crate) fn len(&self) -> f32 {
         *self.cum.last().unwrap_or(&0.0)
     }
 
@@ -85,13 +86,13 @@ impl Side {
         )
     }
 
-    fn at(&self, s: f32) -> (f32, f32) {
+    pub(crate) fn at(&self, s: f32) -> (f32, f32) {
         let (i, t) = self.locate(s);
         let (a, b) = (self.points[i], self.points[i + 1]);
         (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
     }
 
-    fn tangent(&self, s: f32) -> (f32, f32) {
+    pub(crate) fn tangent(&self, s: f32) -> (f32, f32) {
         let (i, _) = self.locate(s);
         let (a, b) = (self.points[i], self.points[i + 1]);
         let l = (b.0 - a.0).hypot(b.1 - a.1);
@@ -145,7 +146,7 @@ fn flatten_cubic(
 }
 
 /// The path's contours as sides, in page space, each with its closed flag.
-fn contours(path: &PathData, transform: &Transform) -> Vec<(Vec<Side>, bool)> {
+pub(crate) fn contours(path: &PathData, transform: &Transform) -> Vec<(Vec<Side>, bool)> {
     let mut out = Vec::new();
     let mut sides: Vec<Side> = Vec::new();
     let mut start = (0.0f32, 0.0f32);
@@ -320,6 +321,14 @@ pub fn push_stroke(
     paint: Paint,
     transform: Transform,
 ) {
+    if stroke.dash.marks != StrokeMarks::None {
+        if let Some(path) = list.paths.get(path_id) {
+            let marks =
+                crate::stroke_marks::fit_marks(path, &transform, stroke.dash.marks, stroke.width);
+            crate::stroke_marks::push_marks(list, marks, paint);
+            return;
+        }
+    }
     let fitted = if stroke.dash.is_solid() {
         None
     } else {

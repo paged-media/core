@@ -802,11 +802,11 @@
       "name": "stroke-styles",
       "text_gate": false,
       "max_pages_with_pdf": 1,
-      "max_mean_de": 1.5,
-      "max_p99_de": 98.0,
-      "min_ssim": 0.9661,
-      "max_ink_mean_de": 35.92,
-      "rationale": "Added 2026-10-14 (ADR 148, R-14): InDesign's built-in dashed, dotted and hashed stroke styles, asked of InDesign 20.0.1 and read from its PDF (tools/indesign-export/pdf-strokes.py). Nine rows (Dashed, Canned Dashed 3x2, Canned Dashed 4x4, Canned Dotted, Japanese Dots, Left / Right Slant Hash, Straight Hash, White Diamond) x three shapes (120 x 60 at 2 pt, 137 x 61 at 5 pt, an open 150 pt line at 4 pt). Rows 1-5 are fitted side by side as InDesign does and measure 0.00-0.95 per cell. Rows 6-9 (hashes and diamonds) are not modelled and draw solid where InDesign draws hairline marks (cells 5-31): the page measures mean 1.246 / p99 81.67 / ssim 0.9711 / ink 29.93; sized at worst * 1.20 and ssim - 0.005. Tighten when the hashes land."
+      "max_mean_de": 0.29,
+      "max_p99_de": 10.78,
+      "min_ssim": 0.9883,
+      "max_ink_mean_de": 8.6,
+      "rationale": "Added 2026-10-14 (ADR 148, R-14): InDesign's built-in dashed, dotted and hashed stroke styles, asked of InDesign 20.0.1 and read from its PDF (tools/indesign-export/pdf-strokes.py). Nine rows (Dashed, Canned Dashed 3x2, Canned Dashed 4x4, Canned Dotted, Japanese Dots, Left / Right Slant Hash, Straight Hash, White Diamond) x three shapes (120 x 60 at 2 pt, 137 x 61 at 5 pt, an open 150 pt line at 4 pt). Rows 1-5 are fitted side by side as InDesign does and measure 0.00-0.95 per cell. Rows 6-9 (hashes and diamonds) are not modelled and draw solid where InDesign draws hairline marks (cells 5-31): the page measures mean 1.246 / p99 81.67 / ssim 0.9711 / ink 29.93; sized at worst * 1.20 and ssim - 0.005. Tighten when the hashes land. TIGHTENED 2026-10-14 (ADR 150): the hashes and diamonds are laid out as marks along the whole contour as InDesign lays them out (straight hashes square across, slant hashes with each end at its own place along the path, diamonds fitted to the weight): the page measures mean 0.241 / p99 8.98 / ssim 0.9933 / ink 7.167, the rest being hairline antialiasing. Re-sized at worst * 1.20 and ssim - 0.005."
     }
   ]
 }

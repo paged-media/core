@@ -1369,6 +1369,22 @@ pub struct DashPattern {
     /// Up to 8 entries; only `pattern[..len]` is meaningful. An empty
     /// pattern means solid.
     pub pattern: [f32; 8],
+    /// A stroke style drawn as repeated marks instead of dashes.
+    /// `dash_fit::push_stroke` lays the marks out; a stroke that never
+    /// reaches it draws solid, as `len == 0` says.
+    pub marks: StrokeMarks,
+}
+
+/// InDesign's built-in stroke styles that are marks along the path, not
+/// dashes of it (`crate::stroke_marks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeMarks {
+    #[default]
+    None,
+    LeftSlantHash,
+    RightSlantHash,
+    StraightHash,
+    WhiteDiamond,
 }
 
 impl DashPattern {

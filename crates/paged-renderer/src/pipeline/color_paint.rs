@@ -1080,8 +1080,18 @@ pub(crate) fn stroke_for(
         "Canned Dashed 4x4" => (Some(&[4.0, 4.0]), false),
         "Canned Dotted" => (Some(&[0.0, 3.0]), false),
         "Japanese Dots" => (Some(&[0.0, 2.0]), false),
-        // Solid, the striped built-ins, Wavy (drawn by `emit_styled_stroke`)
-        // and the hashes and diamonds, which are not modelled yet.
+        // Marks along the path, laid out by `paged_compose::stroke_marks`
+        // (ADR 150).
+        "Left Slant Hash" | "Right Slant Hash" | "Straight Hash" | "White Diamond" => {
+            s.dash.marks = match suffix {
+                "Left Slant Hash" => paged_compose::StrokeMarks::LeftSlantHash,
+                "Right Slant Hash" => paged_compose::StrokeMarks::RightSlantHash,
+                "Straight Hash" => paged_compose::StrokeMarks::StraightHash,
+                _ => paged_compose::StrokeMarks::WhiteDiamond,
+            };
+            return s;
+        }
+        // Solid, the striped built-ins and Wavy (drawn by `emit_styled_stroke`).
         _ => (None, false),
     };
     let is_dotted = pattern.is_some_and(|p| p.first() == Some(&0.0));
