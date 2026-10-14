@@ -1093,6 +1093,8 @@ fn font_table_with(cache: &[(&str, Option<&str>, &[u8])], fallback: Option<&[u8]
         substituted: Default::default(),
         fallback: fallback.map(Bytes::copy_from_slice),
         fallback_families: Vec::new(),
+        fallback_styles: None,
+        face_families: HashMap::new(),
         metrics: HashMap::new(),
         family_metrics: HashMap::new(),
     }
@@ -1176,6 +1178,55 @@ fn resolve_paragraph_bytes_carries_resolver_substitution_flag() {
         .expect("paragraph kept");
     assert_eq!(&pool[0].0[..], b"STANDIN");
     assert!(pool[0].1, "resolver-substituted key must stay flagged");
+}
+
+#[test]
+fn the_default_face_is_its_own_family_only_in_the_styles_it_has() {
+    // No resolver: the renderer-wide default font is the only face. A
+    // static Regular serves its family's unstyled and Regular runs; a Bold
+    // run it sets in Regular, which is a substitution like any other. A
+    // variable face covers its whole `wght` axis.
+    let read = |name: &str| {
+        std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts")
+                .join(name),
+        )
+        .expect("font fixture")
+    };
+    let doc = Document::default();
+    let roboto = read("Roboto-Regular.ttf");
+    let table = FontTable::build(
+        &doc,
+        &PipelineOptions {
+            font: Some(&roboto),
+            ..PipelineOptions::default()
+        },
+    );
+    assert_eq!(table.resolution("Roboto", None).map(|r| r.1), Some(false));
+    assert_eq!(
+        table.resolution("Roboto", Some("Regular")).map(|r| r.1),
+        Some(false)
+    );
+    assert_eq!(
+        table.resolution("Roboto", Some("Bold")).map(|r| r.1),
+        Some(true)
+    );
+    let inter = inter_font_bytes();
+    let table = FontTable::build(
+        &doc,
+        &PipelineOptions {
+            font: Some(&inter),
+            ..PipelineOptions::default()
+        },
+    );
+    for style in [None, Some("Bold"), Some("Light")] {
+        assert_eq!(
+            table.resolution("Inter", style).map(|r| r.1),
+            Some(false),
+            "{style:?}"
+        );
+    }
 }
 
 #[test]

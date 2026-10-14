@@ -130,7 +130,7 @@ use footnotes::*;
 use geom::*;
 pub(crate) use geom::{
     fnv_1a_u64, frame_fill_is_transparent, frame_stroke_is_visible, path_signature,
-    transform_bounds,
+    transform_bounds, wght_for_font_style,
 };
 use image_convert::{cmyk32_to_rgba, l16_to_rgba, l8_to_rgba, rgb24_to_rgba};
 use image_decode::decode_image_bytes;

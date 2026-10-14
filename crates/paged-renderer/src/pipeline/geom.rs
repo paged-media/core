@@ -848,7 +848,7 @@ pub(crate) fn frame_stroke_is_visible(stroke_color: Option<&str>, stroke_weight:
 /// Italic are matched on substring so combined styles still get
 /// the right weight; the italic axis is handled separately by
 /// loading a different font file (resolver-side).
-pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
+pub(crate) fn wght_for_font_style(style: Option<&str>) -> f32 {
     let s = match style {
         Some(s) => s,
         None => return 400.0,
