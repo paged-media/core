@@ -19,7 +19,7 @@ serde_json = "1"
 zip = { workspace = true }
 
 [dev-dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "788cff5553dea139036e392d48952c3dadb7f10f" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "f20d42a18a03aab6822c4562e2bce95b8c33963a" }
 # A hermetic IDML fixture to import; the reconstruct path under test never
 # touches IDML. paged-renderer builds both docs for the digest comparison
 # (default-features off — the digest needs layout, not the CPU rasterizer).

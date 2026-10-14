@@ -3512,16 +3512,20 @@ pub enum Operation {
     /// the v1 `SetProperty(Group, FrameTransform)` arm (which stores
     /// only the group's own `ItemTransform` and relies on the editor to
     /// pair it with per-leaf rebase ops in a Batch), this op does the
-    /// whole composition atomically: it sets the group's own transform
-    /// to `transform` AND rebases every descendant's EFFECTIVE
-    /// `item_transform` by the delta `transform * inv(prev)` so the
+    /// whole composition atomically: it sets the group's own stored
+    /// transform to `transform` AND rebases every descendant leaf's
+    /// EFFECTIVE `item_transform` by the spread-space delta
+    /// `P * transform * inv(prev) * inv(P)` (`P` the frame of the groups
+    /// holding this one; the identity for a top-level group), so the
     /// members follow the group rigidly (renderer + hit-test agree —
     /// both read each leaf's pre-baked effective transform). Nested
-    /// child groups' own transforms ride the delta too. Inverse: the
+    /// groups keep their own transforms: they are stored relative to
+    /// this group, as IDML stores them, and move with it. Inverse: the
     /// same op carrying the captured `prev` as the new transform.
     SetGroupTransform {
         group: String,
-        /// New group-local `ItemTransform` `[a, b, c, d, tx, ty]`;
+        /// New `ItemTransform` `[a, b, c, d, tx, ty]`, relative to the
+        /// group holding this one (spread space for a top-level group);
         /// `None` ⇒ identity.
         #[serde(default)]
         transform: Option<[f32; 6]>,

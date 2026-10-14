@@ -8703,10 +8703,12 @@ impl CanvasModel {
     /// `is_missing` — panels.md gap 4 — is true when no face serves the
     /// family: none registered for it, and the default face is not one
     /// of it (the renderer then substitutes the default face). The
-    /// default face counts for its own family: a host that ships Inter
-    /// as the default and opens a document set in Inter is not missing
-    /// a font. The parse layer has no Fonts.xml registry, so this is
-    /// derived from content rather than declared.
+    /// default face counts for its own family in the styles it has: a
+    /// host that ships Inter as the default and opens a document set in
+    /// Inter is not missing a font, while a static Regular face does not
+    /// serve its family's Bold runs (they set in Regular). The parse
+    /// layer has no Fonts.xml registry, so this is derived from content
+    /// rather than declared.
     pub fn fonts(&self) -> Vec<crate::channel::FontSummary> {
         use crate::channel::FontSummary;
         use std::collections::{BTreeMap, BTreeSet};
@@ -8715,11 +8717,15 @@ impl CanvasModel {
         // strings the text is set in, unioned with the styles the worker
         // registered face bytes for via `RegisterFont`.
         let mut styles: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        // Every style the text asks of each family, unstyled included:
+        // what the default face has to supply to serve the family.
+        let mut asked: BTreeMap<String, BTreeSet<Option<String>>> = BTreeMap::new();
         fn walk(
             scene: &Document,
             para: &paged_model::Paragraph,
             counts: &mut BTreeMap<String, u32>,
             styles: &mut BTreeMap<String, BTreeSet<String>>,
+            asked: &mut BTreeMap<String, BTreeSet<Option<String>>>,
         ) {
             for run in &para.runs {
                 let resolved = scene.resolved_run_attrs(para, run);
@@ -8727,7 +8733,12 @@ impl CanvasModel {
                     continue;
                 };
                 *counts.entry(family.clone()).or_default() += 1;
-                if let Some(style) = resolved.font_style.filter(|s| !s.is_empty()) {
+                let style = resolved.font_style.filter(|s| !s.is_empty());
+                asked
+                    .entry(family.clone())
+                    .or_default()
+                    .insert(style.clone());
+                if let Some(style) = style {
                     styles.entry(family).or_default().insert(style);
                 }
             }
@@ -8738,12 +8749,12 @@ impl CanvasModel {
                 .flat_map(|c| c.paragraphs.iter());
             let notes = para.footnotes.iter().flat_map(|f| f.paragraphs.iter());
             for inner in cells.chain(notes) {
-                walk(scene, inner, counts, styles);
+                walk(scene, inner, counts, styles, asked);
             }
         }
         for story in &self.scene.stories {
             for para in &story.story.paragraphs {
-                walk(&self.scene, para, &mut counts, &mut styles);
+                walk(&self.scene, para, &mut counts, &mut styles, &mut asked);
             }
         }
         // Union in the styles the worker registered face bytes for, so
@@ -8764,22 +8775,36 @@ impl CanvasModel {
         // default-font fall-through would mask every missing family as
         // resolved. Family match is case-insensitive to tolerate
         // `"Open Sans"` vs `"open sans"` registration drift.
-        let mut registered: BTreeSet<String> = self
+        let registered: BTreeSet<String> = self
             .font_registry
             .iter()
             .map(|e| e.family.to_lowercase())
             .collect();
-        if let Some(bytes) = self.font_bytes.as_deref() {
-            registered.extend(
-                paged_renderer::asset::face_family_names(bytes)
-                    .into_iter()
-                    .map(|f| f.to_lowercase()),
-            );
-        }
+        let default_families: BTreeSet<String> = self
+            .font_bytes
+            .as_deref()
+            .map(paged_renderer::asset::face_family_names)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.to_lowercase())
+            .collect();
+        let default_styles = self
+            .font_bytes
+            .as_deref()
+            .and_then(paged_renderer::asset::FaceStyles::of);
+        let default_serves = |family: &str| {
+            default_families.contains(&family.trim().to_lowercase())
+                && default_styles.as_ref().is_some_and(|face| {
+                    asked
+                        .get(family)
+                        .map_or(true, |all| all.iter().all(|s| face.supplies(s.as_deref())))
+                })
+        };
         counts
             .into_iter()
             .map(|(family, reference_count)| {
-                let is_missing = !registered.contains(&family.trim().to_lowercase());
+                let is_missing =
+                    !registered.contains(&family.trim().to_lowercase()) && !default_serves(&family);
                 let styles = styles
                     .get(&family)
                     .map(|s| s.iter().cloned().collect())
@@ -9981,11 +10006,16 @@ impl CanvasModel {
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
                         .map(|f| (f.bounds, f.item_transform, false)),
-                    // Groups themselves are not directly addressable
-                    // through geometry today — the overlay draws the
-                    // leaves. A future revision can compute the group's
-                    // union bbox once Phase B introduces "enter group".
-                    ElementId::Group(_) => None,
+                    // A group answers the box InDesign draws around it:
+                    // its members' outlines measured in the group's own
+                    // space, placed by the group's composed transform, so
+                    // a rotated group reads as an oriented box.
+                    ElementId::Group(_) => spread
+                        .groups
+                        .iter()
+                        .position(|g| g.self_id.as_deref() == Some(raw))
+                        .and_then(|gi| crate::group_box::group_box(spread, gi))
+                        .map(|(bounds, transform)| (bounds, transform, false)),
                     // StoryRange is a property-address, not a
                     // geometric element — its bounds are the host
                     // frame's. The caret/selection-rect surface

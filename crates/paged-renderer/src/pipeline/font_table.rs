@@ -148,6 +148,13 @@ pub struct FontTable {
     /// The families the fallback face claims ([`crate::asset::face_family_names`]):
     /// it stands in for any other family, but is the face of these.
     pub(super) fallback_families: Vec<String>,
+    /// The styles the fallback face can set ([`crate::asset::FaceStyles`]):
+    /// of its own family, only these are the face rather than a stand-in.
+    pub(super) fallback_styles: Option<crate::asset::FaceStyles>,
+    /// The families each face in the table claims, keyed by `font_id`, so
+    /// [`Self::metrics_for_real_face`] can tell a face of the run's own
+    /// family standing in for a style it lacks from a foreign stand-in.
+    pub(super) face_families: HashMap<u32, Vec<String>>,
     /// Metrics keyed by `fnv_1a_u32(bytes)` (same id the rest of
     /// the pipeline uses for glyph-cache routing).
     pub(super) metrics: HashMap<u32, FontMetrics>,
@@ -438,6 +445,12 @@ impl FontTable {
         if let Some(b) = fallback.as_ref() {
             record(b.as_ref());
         }
+        let mut face_families: HashMap<u32, Vec<String>> = HashMap::new();
+        for b in cache.values().chain(fallback.as_ref()) {
+            face_families
+                .entry(font_id(b))
+                .or_insert_with(|| crate::asset::face_family_names(b));
+        }
         // Family-keyed override map. The override carries an
         // ascender (mandatory) plus optional cap-height / x-height —
         // missing optional values fall back to whichever metrics
@@ -490,6 +503,8 @@ impl FontTable {
                 .as_deref()
                 .map(crate::asset::face_family_names)
                 .unwrap_or_default(),
+            fallback_styles: fallback.as_deref().and_then(crate::asset::FaceStyles::of),
+            face_families,
             fallback,
             metrics,
             family_metrics,
@@ -556,11 +571,17 @@ impl FontTable {
             }
             // The renderer-wide default font standing in for a named
             // family that resolved nowhere is a substitution — unless
-            // the family asked for is the default face's own.
+            // it is the face asked for: the default face's own family,
+            // in a style the face has (a static Regular asked for Bold
+            // sets the run in Regular).
             let own = self
                 .fallback_families
                 .iter()
-                .any(|f| f.eq_ignore_ascii_case(family.trim()));
+                .any(|f| f.eq_ignore_ascii_case(family.trim()))
+                && self
+                    .fallback_styles
+                    .as_ref()
+                    .is_some_and(|s| s.supplies(style));
             return self.fallback.clone().map(|b| (b, !own));
         }
         // No family requested at all: the configured default IS the
@@ -622,20 +643,31 @@ impl FontTable {
     }
 
     /// Metrics of the face `(family, style)` shapes with — but only
-    /// when that face is the one asked for. A substitute's ascender
-    /// says nothing about where InDesign, which had the real face, put
-    /// the first baseline, so a substituted lookup yields `None` and
-    /// the caller keeps its heuristic.
+    /// when that face is the one asked for, or another face of its
+    /// family. A foreign substitute's ascender says nothing about where
+    /// InDesign, which had the real face, put the first baseline, so
+    /// such a lookup yields `None` and the caller keeps its heuristic.
     pub(super) fn metrics_for_real_face(
         &self,
         family: Option<&str>,
         style: Option<&str>,
     ) -> Option<&FontMetrics> {
         let (bytes, substituted) = self.bytes_for(family, style)?;
-        if substituted {
+        let id = font_id(&bytes);
+        // A face of the run's own family set in place of a style it lacks
+        // (a static Regular asked for Bold) is reported as a substitute,
+        // but its vertical metrics are its family's: the real face's
+        // ascender, where InDesign puts the first baseline, is far closer
+        // to them than to the heuristic a foreign stand-in falls back on.
+        let own_family = family.is_some_and(|f| {
+            self.face_families
+                .get(&id)
+                .is_some_and(|names| names.iter().any(|n| n.eq_ignore_ascii_case(f.trim())))
+        });
+        if substituted && !own_family {
             return None;
         }
-        self.metrics.get(&font_id(&bytes))
+        self.metrics.get(&id)
     }
 
     /// Override-aware metrics lookup keyed by IDML family name.

@@ -145,7 +145,7 @@ impl AssetResolver for BytesResolver {
     fn resolve_font_traced(&self, family: &str, style: Option<&str>) -> Option<ResolvedFont> {
         // Styled or bare-family registration is the asked-for face;
         // the `default_font` catch-all is a substitution unless it is
-        // a face of the asked-for family itself.
+        // the asked-for face itself: of the family, with the style.
         if let Some(b) = self
             .fonts
             .get(&font_key(family, style))
@@ -157,7 +157,7 @@ impl AssetResolver for BytesResolver {
             });
         }
         self.default_font.clone().map(|bytes| ResolvedFont {
-            substituted: !face_is_family(&bytes, family),
+            substituted: !face_supplies(&bytes, family, style),
             bytes,
         })
     }
@@ -259,6 +259,86 @@ pub fn face_is_family(bytes: &[u8], family: &str) -> bool {
         .any(|n| n.eq_ignore_ascii_case(family))
 }
 
+/// Whether `bytes` set `(family, style)` themselves: a face of the family
+/// ([`face_is_family`]) that also has the style ([`FaceStyles::supplies`]).
+/// A static Regular asked for Bold is its family but not that face, and
+/// the renderer would set the run in Regular: a substitution like any
+/// other.
+pub fn face_supplies(bytes: &[u8], family: &str, style: Option<&str>) -> bool {
+    face_is_family(bytes, family) && FaceStyles::of(bytes).is_some_and(|s| s.supplies(style))
+}
+
+/// The styles one face can set, read the way the renderer uses a face:
+/// it varies `wght` (when the face has the axis) and nothing else, so a
+/// variable face covers every weight on its axis, a static face its one
+/// weight, and either is italic only when its own bytes are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceStyles {
+    /// `wght` axis range, or the static face's weight as `(w, w)`.
+    weight: (f32, f32),
+    italic: bool,
+    /// The face's own subfamily names (`name` IDs 17 and 2): a style
+    /// asked for by the face's own name is the face.
+    names: Vec<String>,
+}
+
+impl FaceStyles {
+    /// `None` when the bytes do not parse as a font.
+    pub fn of(bytes: &[u8]) -> Option<Self> {
+        let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+        let wght = ttf_parser::Tag::from_bytes(b"wght");
+        let weight = face
+            .variation_axes()
+            .into_iter()
+            .find(|a| a.tag == wght)
+            .map(|a| (a.min_value, a.max_value))
+            .unwrap_or_else(|| {
+                let w = f32::from(face.weight().to_number());
+                (w, w)
+            });
+        let mut names: Vec<String> = Vec::new();
+        for id in [
+            ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY,
+            ttf_parser::name_id::SUBFAMILY,
+        ] {
+            let found = face
+                .names()
+                .into_iter()
+                .filter(|n| n.name_id == id)
+                .find_map(|n| n.to_string());
+            if let Some(name) = found.map(|n| n.trim().to_string()) {
+                if !name.is_empty() && !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        Some(Self {
+            weight,
+            italic: face.is_italic() || face.is_oblique(),
+            names,
+        })
+    }
+
+    /// Whether a run asking for `style` (IDML's `FontStyle`; `None` is
+    /// Regular) is set in this face as asked: the face's own style name,
+    /// or a weight it covers with the slant it has.
+    pub fn supplies(&self, style: Option<&str>) -> bool {
+        let style = style.map(str::trim).filter(|s| !s.is_empty());
+        if let Some(s) = style {
+            if self.names.iter().any(|n| n.eq_ignore_ascii_case(s)) {
+                return true;
+            }
+        }
+        let wants_italic = style.is_some_and(|s| {
+            let lower = s.to_ascii_lowercase();
+            lower.contains("italic") || lower.contains("oblique")
+        });
+        let w = crate::pipeline::wght_for_font_style(style);
+        let (min, max) = self.weight;
+        wants_italic == self.italic && w >= min - 0.5 && w <= max + 0.5
+    }
+}
+
 fn font_key(family: &str, style: Option<&str>) -> String {
     match style {
         Some(s) if !s.is_empty() && s != "Regular" => format!("{family} {s}"),
@@ -293,6 +373,68 @@ fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn corpus_font(name: &str) -> Vec<u8> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/fonts")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    #[test]
+    fn a_static_face_supplies_its_one_style() {
+        let regular = FaceStyles::of(&corpus_font("Roboto-Regular.ttf")).unwrap();
+        assert!(regular.supplies(None));
+        assert!(regular.supplies(Some("Regular")));
+        assert!(!regular.supplies(Some("Bold")));
+        assert!(!regular.supplies(Some("Light")));
+        assert!(!regular.supplies(Some("Italic")));
+        let bold = FaceStyles::of(&corpus_font("Roboto-Bold.ttf")).unwrap();
+        assert!(bold.supplies(Some("Bold")));
+        assert!(!bold.supplies(None));
+        assert!(!bold.supplies(Some("Bold Italic")));
+        let italic = FaceStyles::of(&corpus_font("Roboto-Italic.ttf")).unwrap();
+        assert!(italic.supplies(Some("Italic")));
+        assert!(!italic.supplies(None));
+    }
+
+    #[test]
+    fn a_variable_face_supplies_every_weight_on_its_axis_and_no_slant() {
+        let inter = FaceStyles::of(&corpus_font("Inter.ttf")).unwrap();
+        for style in [
+            None,
+            Some("Thin"),
+            Some("Light"),
+            Some("Medium"),
+            Some("Bold"),
+            Some("Black"),
+        ] {
+            assert!(inter.supplies(style), "{style:?}");
+        }
+        // The renderer varies `wght` only: an upright face sets an
+        // italic run upright.
+        assert!(!inter.supplies(Some("Italic")));
+        assert!(!inter.supplies(Some("Bold Italic")));
+    }
+
+    #[test]
+    fn a_static_default_face_is_substituted_for_a_weight_it_lacks() {
+        let r = BytesResolver::new().with_default_font(corpus_font("Roboto-Regular.ttf"));
+        let regular = r.resolve_font_traced("Roboto", None).unwrap();
+        assert!(!regular.substituted, "Roboto Regular is the face itself");
+        let bold = r.resolve_font_traced("Roboto", Some("Bold")).unwrap();
+        assert!(bold.substituted, "a Regular face sets Bold runs in Regular");
+        assert!(r.resolve_font_traced("Lora", None).unwrap().substituted);
+    }
+
+    #[test]
+    fn a_variable_default_face_is_its_own_family_at_every_weight() {
+        let r = BytesResolver::new().with_default_font(corpus_font("Inter.ttf"));
+        for style in [None, Some("Bold"), Some("Light"), Some("Black")] {
+            let rf = r.resolve_font_traced("Inter", style).unwrap();
+            assert!(!rf.substituted, "{style:?}");
+        }
+    }
 
     #[test]
     fn registered_font_round_trips() {

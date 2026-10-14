@@ -104,3 +104,14 @@ flo_curves = { git = "https://github.com/drietsch/flo_curves", rev = "6196f18" }
 # release's; only debug info is added, and only to benches.
 [profile.bench]
 debug = 1
+
+# The published wasm packages (publish-wasm.yml: canvas-wasm,
+# introspect-wasm, sdk). One codegen unit and whole-program LTO let the
+# optimiser see across every crate before `wasm-opt -Oz` runs, which is
+# what keeps the editor's whole-app wasm budget. Native release builds
+# keep `release` (fast to link, and what the tests and benches use).
+# Output lands in `target/wasm32-unknown-unknown/wasm-release/`.
+[profile.wasm-release]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

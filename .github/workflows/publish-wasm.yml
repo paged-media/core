@@ -214,13 +214,16 @@ jobs:
           echo "/tmp/binaryen-version_${BINARYEN}/bin" >> "$GITHUB_PATH"
           "/tmp/binaryen-version_${BINARYEN}/bin/wasm-opt" --version
 
+      # The three wasm builds use the `wasm-release` profile (Cargo.toml:
+      # release + fat LTO + one codegen unit), so they land in
+      # target/wasm32-unknown-unknown/wasm-release/, not .../release/.
       - name: Build @paged-media/canvas-wasm
         run: |
           set -euo pipefail
-          cargo build --release --target wasm32-unknown-unknown -p paged-canvas-wasm --features gpu
+          cargo build --profile wasm-release --target wasm32-unknown-unknown -p paged-canvas-wasm --features gpu
           OUT=dist/canvas-wasm
           mkdir -p "$OUT"
-          wasm-bindgen target/wasm32-unknown-unknown/release/paged_canvas_wasm.wasm \
+          wasm-bindgen target/wasm32-unknown-unknown/wasm-release/paged_canvas_wasm.wasm \
             --target web --out-dir "$OUT"
           wasm-opt -Oz "$OUT/paged_canvas_wasm_bg.wasm" -o "$OUT/paged_canvas_wasm_bg.wasm.opt" \
             && mv "$OUT/paged_canvas_wasm_bg.wasm.opt" "$OUT/paged_canvas_wasm_bg.wasm"
@@ -237,10 +240,10 @@ jobs:
       - name: Build @paged-media/introspect-wasm
         run: |
           set -euo pipefail
-          cargo build --release --target wasm32-unknown-unknown -p paged-introspect-wasm
+          cargo build --profile wasm-release --target wasm32-unknown-unknown -p paged-introspect-wasm
           OUT=dist/introspect-wasm
           mkdir -p "$OUT"
-          wasm-bindgen target/wasm32-unknown-unknown/release/paged_introspect_wasm.wasm \
+          wasm-bindgen target/wasm32-unknown-unknown/wasm-release/paged_introspect_wasm.wasm \
             --target web --out-dir "$OUT"
           wasm-opt -Oz "$OUT/paged_introspect_wasm_bg.wasm" -o "$OUT/paged_introspect_wasm_bg.wasm.opt" \
             && mv "$OUT/paged_introspect_wasm_bg.wasm.opt" "$OUT/paged_introspect_wasm_bg.wasm"
@@ -273,10 +276,10 @@ jobs:
       - name: Build @paged-media/sdk (paged-sdk WebGPU ViewerSession)
         run: |
           set -euo pipefail
-          cargo build --release --target wasm32-unknown-unknown -p paged-sdk --features gpu
+          cargo build --profile wasm-release --target wasm32-unknown-unknown -p paged-sdk --features gpu
           OUT=dist/sdk
           mkdir -p "$OUT"
-          wasm-bindgen target/wasm32-unknown-unknown/release/paged_sdk.wasm \
+          wasm-bindgen target/wasm32-unknown-unknown/wasm-release/paged_sdk.wasm \
             --target web --out-dir "$OUT"
           wasm-opt -Oz "$OUT/paged_sdk_bg.wasm" -o "$OUT/paged_sdk_bg.wasm.opt" \
             && mv "$OUT/paged_sdk_bg.wasm.opt" "$OUT/paged_sdk_bg.wasm"

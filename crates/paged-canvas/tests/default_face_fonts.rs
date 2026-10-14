@@ -24,13 +24,20 @@
 //! counted every style's font whether any text used it: `layout` sets all
 //! its runs in Inter, yet reported the root style's Open Sans as missing.
 
+use std::io::Write;
 use std::path::PathBuf;
 
 use paged_canvas::{CanvasModel, CanvasOptions, FontEntry};
 
-fn inter() -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/fonts/Inter.ttf");
+fn corpus_font(name: &str) -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/fonts")
+        .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+fn inter() -> Vec<u8> {
+    corpus_font("Inter.ttf")
 }
 
 /// The `layout` fixture with EVERY run set in Inter: its body already
@@ -143,4 +150,139 @@ fn only_fonts_the_text_uses_are_listed() {
         .map(|p| p.runs.len() as u32)
         .sum();
     assert_eq!(fonts[0].reference_count, runs);
+}
+
+/// One text frame whose story sets one run per `(family, style)`.
+fn styled_runs_idml(runs: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let ranges: String = runs
+        .iter()
+        .map(|(family, style)| {
+            let style_attr = style.map_or(String::new(), |s| format!(r#" FontStyle="{s}""#));
+            format!(
+                r#"<CharacterStyleRange{style_attr}><Properties><AppliedFont type="string">{family}</AppliedFont></Properties><Content>{family} {} </Content></CharacterStyleRange>"#,
+                style.unwrap_or("plain")
+            )
+        })
+        .collect();
+    let story = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Story Self="story1"><ParagraphStyleRange>{ranges}</ParagraphStyleRange></Story></idPkg:Story>"#
+    );
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", opts).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        zip.start_file("designmap.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="13.1" Self="d1">
+<idPkg:Spread src="Spreads/Spread_s1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+<idPkg:Story src="Stories/Story_story1.xml" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"/>
+</Document>"#,
+        )
+        .unwrap();
+        zip.start_file("Spreads/Spread_s1.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="13.1">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<TextFrame Self="tf1" ParentStory="story1" GeometricBounds="72 72 720 540" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+        )
+        .unwrap();
+        zip.start_file("Stories/Story_story1.xml", opts).unwrap();
+        zip.write_all(story.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+fn with_default_face(face: &str, runs: &[(&str, Option<&str>)]) -> CanvasModel {
+    let opts = CanvasOptions {
+        fonts: vec![corpus_font(face)],
+        ..CanvasOptions::default()
+    };
+    CanvasModel::load("styled", &styled_runs_idml(runs), opts).expect("load")
+}
+
+/// The `FontSubstituted` diagnostics' messages.
+fn substitutions(m: &CanvasModel) -> Vec<String> {
+    m.built()
+        .diagnostics
+        .items
+        .iter()
+        .filter(|d| format!("{:?}", d.code).contains("FontSubstituted"))
+        .map(|d| d.message.clone())
+        .collect()
+}
+
+fn is_missing(m: &CanvasModel, family: &str) -> bool {
+    m.fonts()
+        .into_iter()
+        .find(|f| f.family == family)
+        .unwrap_or_else(|| panic!("the text is set in {family}"))
+        .is_missing
+}
+
+/// A STATIC default face is its own family only in the style it has:
+/// asked for a weight it lacks, it sets the run in its own weight, which
+/// is reported as a substitution like any other stand-in.
+#[test]
+fn a_static_default_face_is_a_substitute_for_a_weight_it_lacks() {
+    let m = with_default_face(
+        "Roboto-Regular.ttf",
+        &[("Roboto", None), ("Roboto", Some("Bold"))],
+    );
+    let subs = substitutions(&m);
+    assert_eq!(subs.len(), 1, "{subs:?}");
+    assert!(subs[0].contains("\"Roboto Bold\""), "{subs:?}");
+    assert!(is_missing(&m, "Roboto"), "Roboto Bold is not served");
+
+    let m = with_default_face(
+        "Roboto-Regular.ttf",
+        &[("Roboto", None), ("Roboto", Some("Regular"))],
+    );
+    assert!(substitutions(&m).is_empty(), "{:?}", substitutions(&m));
+    assert!(!is_missing(&m, "Roboto"), "Regular is the face itself");
+}
+
+/// Reported as a substitute, the family's own face still places the first
+/// baseline at the family's ascender (the real Bold's), not at the
+/// heuristic a foreign stand-in falls back on: the layout is the one the
+/// family's face gives.
+#[test]
+fn a_style_substitute_of_the_default_family_keeps_the_familys_first_baseline() {
+    let first_baseline = |style: Option<&str>| {
+        let m = with_default_face("Roboto-Regular.ttf", &[("Roboto", style)]);
+        baselines(&m).first().expect("a laid-out line").4
+    };
+    let regular = first_baseline(None);
+    let bold = first_baseline(Some("Bold"));
+    assert!(
+        (regular - bold).abs() < 1e-3,
+        "Regular {regular} vs Bold {bold}"
+    );
+}
+
+/// A VARIABLE default face covers every weight on its `wght` axis, so it
+/// stays its own family at any of them.
+#[test]
+fn a_variable_default_face_is_its_own_family_at_every_weight() {
+    let m = with_default_face(
+        "Inter.ttf",
+        &[
+            ("Inter", None),
+            ("Inter", Some("Light")),
+            ("Inter", Some("Bold")),
+            ("Inter", Some("Black")),
+        ],
+    );
+    assert!(substitutions(&m).is_empty(), "{:?}", substitutions(&m));
+    assert!(!is_missing(&m, "Inter"));
 }

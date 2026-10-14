@@ -53,6 +53,7 @@ pub mod export;
 mod export_losses;
 pub mod geometry;
 pub mod gesture;
+mod group_box;
 pub mod hit;
 pub mod model;
 pub mod mutate;

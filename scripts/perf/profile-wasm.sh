@@ -4,8 +4,9 @@
 # The published wasm has no name section, so a browser profile shows
 # `wasm-function[14849]`. Both performance bugs found in October 2026 (the
 # per-paragraph font hash and the per-repaint image decode) were only
-# diagnosable with function names: keep the release optimisation, add the
-# name section (`wasm-opt -Oz -g`).
+# diagnosable with function names: keep the published build's optimisation
+# (the `wasm-release` profile publish-wasm.yml uses), add the name section
+# (`wasm-opt -Oz -g`).
 #
 #   scripts/perf/profile-wasm.sh [OUT_DIR]      # default: target/wasm-named
 #
@@ -27,8 +28,8 @@ if [ "$want" != "$have" ]; then
   echo "  cargo install wasm-bindgen-cli --version $want --locked --root <dir>  (then put <dir>/bin on PATH)" >&2
   exit 1
 fi
-CARGO_INCREMENTAL=0 cargo build --release --target wasm32-unknown-unknown -p paged-canvas-wasm --features gpu
+CARGO_INCREMENTAL=0 cargo build --profile wasm-release --target wasm32-unknown-unknown -p paged-canvas-wasm --features gpu
 mkdir -p "$OUT"
-wasm-bindgen target/wasm32-unknown-unknown/release/paged_canvas_wasm.wasm --target web --out-dir "$OUT"
+wasm-bindgen "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm-release/paged_canvas_wasm.wasm" --target web --out-dir "$OUT"
 wasm-opt -Oz -g "$OUT/paged_canvas_wasm_bg.wasm" -o "$OUT/paged_canvas_wasm_bg.wasm"
 echo "named wasm in $OUT ($(du -h "$OUT/paged_canvas_wasm_bg.wasm" | cut -f1))"

@@ -345,6 +345,20 @@ pub(crate) struct GestureSession {
     /// snap pass to convert its CSS-px tolerance to doc-space pt.
     /// `None` defaults to `1.0` (legacy behavior).
     pub camera_scale: Option<f32>,
+    /// Every snapshotted GROUP's place, keyed by its `Self` id: the
+    /// spread-space frame of its parent group (`None` at top level) and
+    /// whether that parent moves in this session too. A group's stored
+    /// transform is relative to its parent, so a group whose parent moves
+    /// keeps it, and one whose parent stays takes the move seen from the
+    /// parent's frame (see `paged_mutate::group_frame`).
+    pub(crate) group_frames: std::collections::HashMap<String, GroupFrame>,
+}
+
+/// See [`GestureSession::group_frames`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GroupFrame {
+    pub(crate) parent_frame: Option<[f32; 6]>,
+    pub(crate) parent_moves: bool,
 }
 
 /// Phase D — the effect a gesture has on one node, dispatched per
@@ -521,6 +535,7 @@ impl CanvasModel {
         } else {
             None
         };
+        let group_frames = self.group_frames_of(&snapshots);
         self.next_gesture_handle += 1;
         let handle = GestureHandle(self.next_gesture_handle);
         self.active_gesture = Some(GestureSession {
@@ -532,6 +547,7 @@ impl CanvasModel {
             anchor_spread,
             pivot_spread,
             camera_scale,
+            group_frames,
         });
         Ok(handle)
     }
@@ -959,6 +975,46 @@ impl CanvasModel {
         Err(GestureError::ElementNotFound(id.clone()))
     }
 
+    /// Where every snapshotted group sits: its parent's spread-space
+    /// frame and whether the parent is snapshotted (moves) too.
+    fn group_frames_of(
+        &self,
+        snapshots: &[NodeSnapshot],
+    ) -> std::collections::HashMap<String, GroupFrame> {
+        let moving: std::collections::HashSet<&str> = snapshots
+            .iter()
+            .filter_map(|s| match &s.node_id {
+                NodeId::Group(id) => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut out = std::collections::HashMap::new();
+        for id in &moving {
+            for parsed in &self.scene.spreads {
+                let spread = &parsed.spread;
+                let Some(gi) = spread
+                    .groups
+                    .iter()
+                    .position(|g| g.self_id.as_deref() == Some(*id))
+                else {
+                    continue;
+                };
+                let parent_moves = paged_mutate::group_frame::parent_group(spread, gi)
+                    .and_then(|p| spread.groups[p].self_id.as_deref())
+                    .is_some_and(|p| moving.contains(p));
+                out.insert(
+                    id.to_string(),
+                    GroupFrame {
+                        parent_frame: paged_mutate::group_frame::parent_frame(spread, gi),
+                        parent_moves,
+                    },
+                );
+                break;
+            }
+        }
+        out
+    }
+
     /// Track L — recursively expand any `Group` id in `ids` into
     /// `[group, member, ...]`, where members are walked through any
     /// nested sub-groups. Non-group ids pass through unchanged.
@@ -1074,7 +1130,45 @@ fn is_pure_translate_or_identity(m: Option<[f32; 6]>) -> bool {
 /// Pure function; both `update_gesture` (to write the preview) and
 /// `commit_gesture` (to build the canonical op) call into this so
 /// they always agree on what the gesture does.
+///
+/// A GROUP's stored transform is relative to its parent group, while
+/// the gesture's matrices are spread space: a group whose parent moves
+/// too keeps its transform (its frame rides the parent's), and one in a
+/// parent that stays is moved as its spread-space transform and stored
+/// back relative to the parent.
 fn compute_node_mutation(
+    snap: &NodeSnapshot,
+    session: &GestureSession,
+    delta: (f32, f32),
+) -> NodeMutation {
+    use paged_mutate::group_frame::{compose, stored_in_frame};
+    let NodeId::Group(id) = &snap.node_id else {
+        return compute_node_mutation_in_spread(snap, session, delta);
+    };
+    let Some(place) = session.group_frames.get(id).copied() else {
+        return compute_node_mutation_in_spread(snap, session, delta);
+    };
+    if place.parent_moves {
+        return NodeMutation::Transform(snap.item_transform);
+    }
+    if place.parent_frame.is_none() {
+        return compute_node_mutation_in_spread(snap, session, delta);
+    }
+    let in_spread = NodeSnapshot {
+        item_transform: compose(place.parent_frame, snap.item_transform),
+        ..snap.clone()
+    };
+    match compute_node_mutation_in_spread(&in_spread, session, delta) {
+        NodeMutation::Transform(Some(m)) => {
+            NodeMutation::Transform(stored_in_frame(place.parent_frame, m).or(snap.item_transform))
+        }
+        NodeMutation::Transform(None) => NodeMutation::Transform(snap.item_transform),
+        other => other,
+    }
+}
+
+/// [`compute_node_mutation`] for a node whose transform is spread space.
+fn compute_node_mutation_in_spread(
     snap: &NodeSnapshot,
     session: &GestureSession,
     delta: (f32, f32),
@@ -2105,6 +2199,7 @@ pub(crate) fn compute_new_bounds(
         anchor_spread: None,
         pivot_spread: None,
         camera_scale: None,
+        group_frames: std::collections::HashMap::new(),
     };
     match compute_node_mutation(&snap, &session, delta) {
         NodeMutation::Bounds(b) => b,
@@ -2610,6 +2705,7 @@ mod tests {
             anchor_spread: Some((100.0, 50.0)),
             pivot_spread: Some((50.0, 50.0)),
             camera_scale: None,
+            group_frames: std::collections::HashMap::new(),
         };
         compute_node_mutation(&snap, &session, (0.0, 50.0))
     }
