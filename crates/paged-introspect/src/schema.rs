@@ -597,6 +597,10 @@ pub const START_PARAGRAPH: &[&str] = &[
     "NextEvenPage",
 ];
 pub const SPAN_COLUMN_TYPE: &[&str] = &["SingleColumn", "SpanColumns", "SplitColumns"];
+pub const SINGLE_WORD_JUSTIFICATION: &[&str] =
+    &["FullyJustified", "LeftAlign", "CenterAlign", "RightAlign"];
+pub const BALANCE_RAGGED_LINES: &[&str] =
+    &["NoBalancing", "FullyBalanced", "PyramidShape", "VeeShape"];
 pub const FIRST_BASELINE: &[&str] = &[
     "AscentOffset",
     "CapHeight",

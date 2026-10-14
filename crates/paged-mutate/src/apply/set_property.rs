@@ -2548,6 +2548,7 @@ pub(super) fn apply_set_property(
             | PropertyPath::CharacterSkew
             | PropertyPath::CharacterUnderline
             | PropertyPath::CharacterStrikethru
+            | PropertyPath::CharacterNoBreak
             | PropertyPath::CharacterLigatures
             | PropertyPath::CharacterOtfFeatures,
         ) => {
@@ -2667,6 +2668,10 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphBulletsCharacterStyle
             | PropertyPath::ParagraphNumberingCharacterStyle
             | PropertyPath::ParagraphComposer
+            | PropertyPath::ParagraphAutoLeading
+            | PropertyPath::ParagraphSingleWordJustification
+            | PropertyPath::ParagraphLastLineIndent
+            | PropertyPath::ParagraphBalanceRaggedLines
             | PropertyPath::ParagraphAppliedNumberingList,
         ) => {
             return apply_paragraph_property(doc, story_id, *start, *end, node, path, value);

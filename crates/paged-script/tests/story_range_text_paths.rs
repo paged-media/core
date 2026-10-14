@@ -191,6 +191,12 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphNumberingCharacterStyle",
         // The composer (protocol 65).
         "paragraphComposer",
+        // A paragraph's line setting and a run's no-break (ADR 153).
+        "paragraphAutoLeading",
+        "paragraphSingleWordJustification",
+        "paragraphLastLineIndent",
+        "paragraphBalanceRaggedLines",
+        "characterNoBreak",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -205,7 +211,8 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         // 221: ADR 131/132 added `itemName`.
         // 234: ADR 135 added the transparency targets, group isolate and
         // knockout, and the drop shadow's attributes.
-        234,
+        // 239: ADR 153 added the line setting and no-break.
+        239,
         "the advertised roster changed; move the count with the decision"
     );
 }

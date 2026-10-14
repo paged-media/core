@@ -5231,6 +5231,88 @@ mod tests {
         .is_ok());
     }
 
+    /// ADR 153 — the line-setting paths set the paragraph's own
+    /// `LineSetting`, undo restores it, and an unknown enum string is
+    /// refused with the slot untouched; `characterNoBreak` sets the run.
+    #[test]
+    fn line_setting_paths_round_trip() {
+        use paged_model::{BalanceRaggedLines, LineSetting, SingleWordJustification};
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let ops = [
+            (
+                PropertyPath::ParagraphAutoLeading,
+                Value::Length(Some(150.0)),
+            ),
+            (
+                PropertyPath::ParagraphLastLineIndent,
+                Value::Length(Some(18.0)),
+            ),
+            (
+                PropertyPath::ParagraphSingleWordJustification,
+                Value::Text("CenterAlign".into()),
+            ),
+            (
+                PropertyPath::ParagraphBalanceRaggedLines,
+                Value::Text("FullyBalanced".into()),
+            ),
+        ];
+        let mut inverses = Vec::new();
+        for (path, value) in ops {
+            inverses.push(
+                project
+                    .apply(story_range_op(path, value))
+                    .expect("apply")
+                    .inverse,
+            );
+        }
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0].line_setting,
+            LineSetting {
+                auto_leading: Some(150.0),
+                single_word: Some(SingleWordJustification::CenterAlign),
+                last_line_indent: Some(18.0),
+                balance: Some(BalanceRaggedLines::FullyBalanced),
+            }
+        );
+        for bad in [
+            (PropertyPath::ParagraphSingleWordJustification, "Justify"),
+            (PropertyPath::ParagraphBalanceRaggedLines, "true"),
+        ] {
+            let err = project
+                .apply(story_range_op(bad.0, Value::Text(bad.1.into())))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "{err:?}"
+            );
+        }
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0]
+                .line_setting
+                .balance,
+            Some(BalanceRaggedLines::FullyBalanced),
+            "a refused write leaves the slot"
+        );
+        for inverse in inverses.iter().rev() {
+            crate::apply(project.document_mut(), inverse).expect("undo");
+        }
+        assert!(project.document().stories[0].story.paragraphs[0]
+            .line_setting
+            .is_unset());
+
+        let applied = project
+            .apply(story_range_op(
+                PropertyPath::CharacterNoBreak,
+                Value::Bool(true),
+            ))
+            .expect("no break");
+        let runs = &project.document().stories[0].story.paragraphs[0].runs;
+        assert!(runs.iter().any(|r| r.no_break == Some(true)));
+        crate::apply(project.document_mut(), &applied.inverse).expect("undo");
+        let runs = &project.document().stories[0].story.paragraphs[0].runs;
+        assert!(runs.iter().all(|r| r.no_break != Some(true)));
+    }
+
     /// An unknown `StartParagraph` string is refused, never stored or
     /// silently cleared.
     #[test]

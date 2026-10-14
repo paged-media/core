@@ -694,6 +694,79 @@ pub(super) fn set_para_composer_field(
 pub(crate) const COMPOSER_EXPECTED: &str =
     "Text: \"\" | \"HL Composer\" | \"HL Single\" | \"HL Composer Optyca\" | \"HL Single Optyca\"";
 
+/// Set an `Option<T>` closed IDML enum from a `Value::Text`, the same
+/// contract as [`set_para_start_paragraph_field`]: `""` clears, an
+/// unknown string is refused (`TypeMismatch` naming `expected`) and the
+/// slot left untouched, the prior comes back as `Value::Text`
+/// (`None ⇒ ""`).
+pub(super) fn set_para_enum_field<T: Copy>(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<T>,
+    from_idml: fn(&str) -> Option<T>,
+    as_idml: fn(T) -> &'static str,
+    expected: &str,
+) -> Result<(Value, Value), OperationError> {
+    let mismatch = || OperationError::TypeMismatch {
+        path,
+        expected: expected.to_string(),
+    };
+    let Value::Text(new_val) = value else {
+        return Err(mismatch());
+    };
+    let next = if new_val.is_empty() {
+        None
+    } else {
+        Some(from_idml(new_val).ok_or_else(mismatch)?)
+    };
+    let prev = slot.map(as_idml).unwrap_or_default().to_string();
+    *slot = next;
+    Ok((Value::Text(prev), Value::Text(new_val.clone())))
+}
+
+/// The values `paragraphSingleWordJustification` takes.
+pub(crate) const SINGLE_WORD_EXPECTED: &str =
+    "Text: \"\" | FullyJustified | LeftAlign | CenterAlign | RightAlign";
+
+/// The values `paragraphBalanceRaggedLines` takes.
+pub(crate) const BALANCE_EXPECTED: &str =
+    "Text: \"\" | NoBalancing | FullyBalanced | PyramidShape | VeeShape";
+
+/// The line-setting paths (ADR 153) on a paragraph's or a paragraph
+/// style's [`paged_model::LineSetting`]; `None` for any other path.
+pub(super) fn set_line_setting_field(
+    path: PropertyPath,
+    value: &Value,
+    ls: &mut paged_model::LineSetting,
+) -> Option<Result<(Value, Value), OperationError>> {
+    use paged_model::{BalanceRaggedLines, SingleWordJustification};
+    Some(match path {
+        PropertyPath::ParagraphAutoLeading => {
+            set_para_length_field(path, value, &mut ls.auto_leading)
+        }
+        PropertyPath::ParagraphLastLineIndent => {
+            set_para_length_field(path, value, &mut ls.last_line_indent)
+        }
+        PropertyPath::ParagraphSingleWordJustification => set_para_enum_field(
+            path,
+            value,
+            &mut ls.single_word,
+            SingleWordJustification::from_idml,
+            SingleWordJustification::as_idml,
+            SINGLE_WORD_EXPECTED,
+        ),
+        PropertyPath::ParagraphBalanceRaggedLines => set_para_enum_field(
+            path,
+            value,
+            &mut ls.balance,
+            BalanceRaggedLines::from_idml,
+            BalanceRaggedLines::as_idml,
+            BALANCE_EXPECTED,
+        ),
+        _ => return None,
+    })
+}
+
 /// W0.2 — set the whole `ParagraphRule` struct (`rule_above` /
 /// `rule_below`) from a `Value::ParagraphRule`. `ParagraphRule(None)`
 /// clears the rule to the all-`None` default. The captured prior is
@@ -862,6 +935,13 @@ pub(super) fn apply_paragraph_field(
             set_para_start_paragraph_field(path, value, &mut para.start_paragraph)
         }
         PropertyPath::ParagraphComposer => set_para_composer_field(path, value, &mut para.composer),
+        PropertyPath::ParagraphAutoLeading
+        | PropertyPath::ParagraphSingleWordJustification
+        | PropertyPath::ParagraphLastLineIndent
+        | PropertyPath::ParagraphBalanceRaggedLines => {
+            set_line_setting_field(path, value, &mut para.line_setting)
+                .expect("a line-setting path")
+        }
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount
         | PropertyPath::ParagraphSpanColumnMinSpaceBefore
@@ -1211,6 +1291,9 @@ pub(super) fn apply_character_field_on_run(
         }
         PropertyPath::CharacterStrikethru => {
             set_run_bool_field(run, path, value, false, |r| &mut r.strikethru)
+        }
+        PropertyPath::CharacterNoBreak => {
+            set_run_bool_field(run, path, value, false, |r| &mut r.no_break)
         }
         // Ligatures default ON (OpenType/InDesign): undo of a toggle on a
         // defaulted run must restore the visible ON state (punch-list).

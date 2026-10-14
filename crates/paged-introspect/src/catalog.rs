@@ -854,6 +854,7 @@ property_paths! {
         CharacterSkew => "characterSkew" : deg().range(-85.0, 85.0).default_num(0.0).idml(idml![attr(CharacterStyleRange, Skew)]),
         CharacterUnderline => "characterUnderline" : bool_().default_bool(false).idml(idml![attr(CharacterStyleRange | ParagraphStyle | CharacterStyle, Underline)]),
         CharacterStrikethru => "characterStrikethru" : bool_().default_bool(false).idml(idml![attr(CharacterStyleRange | ParagraphStyle | CharacterStyle, StrikeThru)]),
+        CharacterNoBreak => "characterNoBreak" : bool_().default_bool(false).idml(idml![attr(CharacterStyleRange | CharacterStyle, NoBreak)]),
         CharacterLigatures => "characterLigatures" : bool_().default_bool(true).idml(idml![attr(CharacterStyleRange | CharacterStyle, Ligatures)]),
         CharacterOtfFeatures => "characterOtfFeatures" : text(),
         ParagraphLeftIndent => "paragraphLeftIndent" : length().default_num(0.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, LeftIndent)]),
@@ -890,6 +891,11 @@ property_paths! {
         // virtual path on frame / group targets.
         ItemName => "itemName" : text().idml(idml![attr(TextFrame | Rectangle | Oval | Polygon | GraphicLine | Group, Name)]),
         ParagraphComposer => "paragraphComposer" : enum_open(COMPOSERS).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, Composer)]),
+        // ADR 153 — a paragraph's line setting.
+        ParagraphAutoLeading => "paragraphAutoLeading" : pct().range(0.0, 500.0).default_num(120.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, AutoLeading)]),
+        ParagraphSingleWordJustification => "paragraphSingleWordJustification" : enum_(SINGLE_WORD_JUSTIFICATION).default_text("FullyJustified").idml(idml![attr(ParagraphStyleRange | ParagraphStyle, SingleWordJustification)]),
+        ParagraphLastLineIndent => "paragraphLastLineIndent" : length().default_num(0.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, LastLineIndent)]),
+        ParagraphBalanceRaggedLines => "paragraphBalanceRaggedLines" : enum_(BALANCE_RAGGED_LINES).default_text("NoBalancing").idml(idml![child(ParagraphStyleRange | ParagraphStyle, BalanceRaggedLines)]),
     }
 
     // ADR 132 — paths whose TARGET is not a page item: a layer, a page,
@@ -1293,7 +1299,11 @@ mod tests {
         // spread, noise, knocked-out and global-light flag (5). The
         // document's global light is a `doc` schema row, not an element
         // path.
-        assert_eq!(cat.settable_paths.len(), 234, "settable path count drifted");
+        //
+        // 234 -> 239: ADR 153 — a paragraph's line setting (auto leading,
+        // single-word justification, the last line's indent, balanced
+        // ragged lines) and a run's no-break.
+        assert_eq!(cat.settable_paths.len(), 239, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

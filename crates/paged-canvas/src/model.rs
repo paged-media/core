@@ -1851,7 +1851,12 @@ fn into_entries(
 fn character_style_entries(
     d: &paged_model::CharacterStyleDef,
 ) -> Vec<crate::channel::PropertyEntry> {
-    into_entries(style_run_entries!(d))
+    let mut pairs = style_run_entries!(d);
+    pairs.push((
+        paged_mutate::PropertyPath::CharacterNoBreak,
+        paged_mutate::Value::Bool(d.no_break.unwrap_or(false)),
+    ));
+    into_entries(pairs)
 }
 
 /// Every path `set_paragraph_style_field` accepts, read off the definition.
@@ -1989,7 +1994,37 @@ fn paragraph_style_entries(
             ),
         ),
     ]);
+    pairs.extend(line_setting_entries(&d.line_setting));
     into_entries(pairs)
+}
+
+/// The line-setting paths (ADR 153), read off a paragraph's or a
+/// paragraph style's own [`paged_model::LineSetting`]: lengths as
+/// `Length(None)` and enums as `""` when the level does not say.
+fn line_setting_entries(
+    ls: &paged_model::LineSetting,
+) -> [(paged_mutate::PropertyPath, paged_mutate::Value); 4] {
+    use paged_mutate::{PropertyPath as P, Value as V};
+    [
+        (P::ParagraphAutoLeading, V::Length(ls.auto_leading)),
+        (
+            P::ParagraphSingleWordJustification,
+            V::Text(
+                ls.single_word
+                    .map(|w| w.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (P::ParagraphLastLineIndent, V::Length(ls.last_line_indent)),
+        (
+            P::ParagraphBalanceRaggedLines,
+            V::Text(
+                ls.balance
+                    .map(|b| b.as_idml().to_string())
+                    .unwrap_or_default(),
+            ),
+        ),
+    ]
 }
 
 /// W1.24 (audit B19) — hard cap on the undo log's length.
@@ -7639,6 +7674,7 @@ impl CanvasModel {
         let mut skews: Vec<Option<f32>> = Vec::new();
         let mut underlines: Vec<Option<bool>> = Vec::new();
         let mut strikethrus: Vec<Option<bool>> = Vec::new();
+        let mut no_breaks: Vec<Option<bool>> = Vec::new();
         let mut ligatures: Vec<Option<bool>> = Vec::new();
         let mut space_before: Vec<Option<f32>> = Vec::new();
         let mut space_after: Vec<Option<f32>> = Vec::new();
@@ -7662,6 +7698,7 @@ impl CanvasModel {
         let mut keep_last_lines: Vec<Option<u32>> = Vec::new();
         let mut start_paragraphs: Vec<Option<paged_model::StartParagraph>> = Vec::new();
         let mut span_columns: Vec<paged_model::SpanColumns> = Vec::new();
+        let mut line_settings: Vec<paged_model::LineSetting> = Vec::new();
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
@@ -7740,6 +7777,7 @@ impl CanvasModel {
                 keep_last_lines.push(para.keep_last_lines);
                 start_paragraphs.push(para.start_paragraph);
                 span_columns.push(para.span_columns);
+                line_settings.push(para.line_setting);
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
@@ -7783,6 +7821,7 @@ impl CanvasModel {
                 skews.push(run.skew);
                 underlines.push(run.underline);
                 strikethrus.push(run.strikethru);
+                no_breaks.push(run.no_break);
                 ligatures.push(run.ligatures_on);
             }
         }
@@ -7898,6 +7937,10 @@ impl CanvasModel {
             PropertyEntry {
                 path: PropertyPath::CharacterStrikethru,
                 value: collapse_uniform(&strikethrus).map(|o| Value::Bool(o.unwrap_or(false))),
+            },
+            PropertyEntry {
+                path: PropertyPath::CharacterNoBreak,
+                value: collapse_uniform(&no_breaks).map(|o| Value::Bool(o.unwrap_or(false))),
             },
             // Ligatures default ON per OpenType / InDesign (unlike
             // underline / strikethru, which default OFF); a run with no
@@ -8084,6 +8127,45 @@ impl CanvasModel {
                 path: PropertyPath::ParagraphComposer,
                 value: collapse_uniform(&composers)
                     .map(|o| Value::Text(o.map(|c| c.as_idml().to_string()).unwrap_or_default())),
+            },
+            // ADR 153 — the line setting, read off each paragraph's own
+            // fields (lengths `None` / enums `""` ⇒ inherit).
+            PropertyEntry {
+                path: PropertyPath::ParagraphAutoLeading,
+                value: collapse_uniform(
+                    &line_settings
+                        .iter()
+                        .map(|l| l.auto_leading)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphSingleWordJustification,
+                value: collapse_uniform(
+                    &line_settings
+                        .iter()
+                        .map(|l| l.single_word)
+                        .collect::<Vec<_>>(),
+                )
+                .map(|o| Value::Text(o.map(|w| w.as_idml().to_string()).unwrap_or_default())),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphLastLineIndent,
+                value: collapse_uniform(
+                    &line_settings
+                        .iter()
+                        .map(|l| l.last_line_indent)
+                        .collect::<Vec<_>>(),
+                )
+                .map(Value::Length),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphBalanceRaggedLines,
+                value: collapse_uniform(
+                    &line_settings.iter().map(|l| l.balance).collect::<Vec<_>>(),
+                )
+                .map(|o| Value::Text(o.map(|b| b.as_idml().to_string()).unwrap_or_default())),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphRuleAbove,

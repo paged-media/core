@@ -667,6 +667,10 @@ pub fn style_paths(family: &str) -> &'static [P] {
             P::CharacterStrikethru,
             P::CharacterLigatures,
             P::CharacterKerningMethod,
+            P::ParagraphAutoLeading,
+            P::ParagraphSingleWordJustification,
+            P::ParagraphLastLineIndent,
+            P::ParagraphBalanceRaggedLines,
         ],
         "character" => &[
             P::CharacterFontSize,
@@ -682,6 +686,7 @@ pub fn style_paths(family: &str) -> &'static [P] {
             P::CharacterStrikethru,
             P::CharacterLigatures,
             P::CharacterKerningMethod,
+            P::CharacterNoBreak,
         ],
         "object" => &[
             P::FrameFillColor,

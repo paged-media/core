@@ -2258,6 +2258,14 @@ pub(super) fn set_paragraph_style_field(
         PropertyPath::ParagraphComposer => {
             Ok(super::paragraph::set_para_composer_field(path, value, &mut def.composer)?.0)
         }
+        PropertyPath::ParagraphAutoLeading
+        | PropertyPath::ParagraphSingleWordJustification
+        | PropertyPath::ParagraphLastLineIndent
+        | PropertyPath::ParagraphBalanceRaggedLines => Ok(
+            super::paragraph::set_line_setting_field(path, value, &mut def.line_setting)
+                .expect("a line-setting path")?
+                .0,
+        ),
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount
         | PropertyPath::ParagraphSpanColumnMinSpaceBefore
@@ -2415,6 +2423,9 @@ pub(super) fn set_character_style_field(
         }
         PropertyPath::CharacterStrikethru => {
             Ok(super::paragraph::set_para_bool_field(path, value, &mut def.strikethru, false)?.0)
+        }
+        PropertyPath::CharacterNoBreak => {
+            Ok(super::paragraph::set_para_bool_field(path, value, &mut def.no_break, false)?.0)
         }
         // Ligatures default ON and kerning to the font's metrics; a style
         // may switch either off (Word's own default is neither).
