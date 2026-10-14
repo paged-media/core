@@ -29,6 +29,7 @@
 #   ./corpus/generated/text-diff.sh                 # every fixture with "text_gate": true
 #   ./corpus/generated/text-diff.sh text keeps      # these fixtures (hard)
 #   IDML_TEXT_GATE=advisory ./text-diff.sh ...      # report, never fail
+#   IDML_TEXT_MODE=lines IDML_TEXT_GATE=advisory ./text-diff.sh   # survey every fixture in lines mode
 #
 # Exit: 0 all compared fixtures match (or advisory), 1 a mismatch, 2 setup error.
 
@@ -106,11 +107,14 @@ PY
         "${FONT_FLAGS[@]}" ${DATE_FLAG[@]+"${DATE_FLAG[@]}"} --no-missing-image-placeholder \
         --emit-breaks "$dir/cand.jsonl" >/dev/null 2>&1
     pdftotext -bbox-layout "$pdf" "$dir/ref.html"
-    MODE="$(python3 -c "
+    # IDML_TEXT_MODE=lines surveys every fixture in lines mode (which of
+    # the "chars" fixtures could be promoted); the gate's own mode is the
+    # fixture's `text_gate`.
+    MODE="${IDML_TEXT_MODE:-$(python3 -c "
 import json
 spec = next((f for f in json.load(open('$THRESHOLDS'))['fixtures'] if f['name'] == '$NAME'), {})
 print('lines' if spec.get('text_gate') == 'lines' else 'chars')
-")"
+")}"
     set +e
     python3 - "$dir/ref.html" "$dir/cand.jsonl" "$NAME" "$dir/text-gate.json" "$MODE" <<'PY'
 import json, re, sys, html
@@ -197,7 +201,8 @@ for pi, page in enumerate(pages):
         text = norm(" ".join(html.unescape(w.text or "") for w in words))
         if text:
             rows.append({"page": pi, "text": text,
-                         "y": max(float(w.get("yMax")) for w in words)})
+                         "y": max(float(w.get("yMax")) for w in words),
+                         "x": min(float(w.get("xMin")) for w in words)})
     # A marker the engine printed on this page is dropped where a line
     # opens with it, a line that is only the marker first.
     left = Counter(markers.get(pi, {}))
@@ -230,6 +235,34 @@ def chars(rows):
 def unhyphen(t):
     return t[:-1] if t.endswith("-") else t
 
+def join_fragments(rows, cand_lines):
+    """pdftotext splits a line whose word spaces are wide (a justified line
+    with few words, a forced break) into several `<line>`s on one baseline.
+    Join a left-to-right run of such fragments back into one line, but only
+    where the joined text is a line the engine set: fragments that are
+    really two columns on a shared baseline stay apart."""
+    out, used = [], set()
+    by_y = {}
+    for i, r in enumerate(rows):
+        by_y.setdefault(round(r["y"] * 2) / 2, []).append(i)
+    for idxs in by_y.values():
+        if len(idxs) < 2:
+            continue
+        idxs.sort(key=lambda i: rows[i].get("x", 0.0))
+        k = 0
+        while k < len(idxs):
+            for j in range(len(idxs), k + 1, -1):
+                run = idxs[k:j]
+                joined = norm(" ".join(rows[i]["text"] for i in run))
+                if unhyphen(joined) in cand_lines:
+                    out.append(dict(rows[run[0]], text=joined))
+                    used.update(run)
+                    k = j - 1
+                    break
+            k += 1
+    out.extend(r for i, r in enumerate(rows) if i not in used)
+    return out
+
 problems = []
 leader_notes = []
 # Only the pages the reference has: a sample that grew after its reference
@@ -251,6 +284,7 @@ for page in compared:
         problem["indesign_only"] = "".join(sorted((rc - ccnt).elements()))[:120]
         problem["paged_only"] = "".join(sorted((ccnt - rc).elements()))[:120]
     if mode == "lines":
+        rr = join_fragments(rr, {unhyphen(c["text"]) for c in cc})
         rl = sorted(unhyphen(r["text"]) for r in rr)
         cl = sorted(unhyphen(c["text"]) for c in cc)
         if rl != cl:
