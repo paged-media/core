@@ -1221,6 +1221,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         baseline_frame_grid: None,
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
+        ignore_wrap: None,
         item_layer: None,
         is_anchored: true,
         opacity: None,

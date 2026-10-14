@@ -1137,6 +1137,10 @@ pub struct TextFrame {
     pub applied_object_style: Option<String>,
     /// `<TextWrapPreference>` parsed off the frame.
     pub text_wrap: Option<TextWrap>,
+    /// `<TextFramePreference IgnoreWrap>` — the frame's text ignores
+    /// every text wrap. `None` ⇒ false.
+    #[serde(default)]
+    pub ignore_wrap: Option<bool>,
     /// `ItemLayer` reference. Renderer skips items whose layer is
     /// hidden or non-printable.
     pub item_layer: Option<String>,
@@ -1329,6 +1333,7 @@ impl TextFrame {
             baseline_frame_grid: None,
             applied_object_style: None,
             text_wrap: None,
+            ignore_wrap: None,
             item_layer: None,
             is_anchored: false,
             opacity: None,
@@ -2405,6 +2410,15 @@ pub struct TextWrap {
     /// lets text flow into interior holes of a contour. `None` ⇒ the
     /// IDML default (`false`). `Option<bool>` keeps `TextWrap` `Copy`.
     pub include_inside_edges: Option<bool>,
+    /// `TextWrapSide` — which side of the obstacle text may stand on.
+    /// `None` ⇒ the IDML default, both sides.
+    #[serde(default)]
+    pub side: Option<TextWrapSide>,
+    /// `ApplyToMasterPageOnly` — a master item's wrap acts on the
+    /// master's own text only, not on the pages that apply the master.
+    /// `None` ⇒ false.
+    #[serde(default)]
+    pub apply_to_master_page_only: Option<bool>,
 }
 
 impl TextWrap {
@@ -2414,7 +2428,48 @@ impl TextWrap {
         invert: None,
         contour_type: None,
         include_inside_edges: None,
+        side: None,
+        apply_to_master_page_only: None,
     };
+}
+
+/// `TextWrapSide` — the side of a wrap obstacle text may stand on.
+/// Asked of InDesign 20.0.1 (`text-wrap-sides`, ADR 151): the spine
+/// sides resolve from the page (a verso's spine is on its right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextWrapSide {
+    BothSides,
+    LeftSide,
+    RightSide,
+    SideTowardsSpine,
+    SideAwayFromSpine,
+    LargestArea,
+}
+
+impl TextWrapSide {
+    /// The IDML token; `None` for one InDesign does not write.
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "BothSides" => Self::BothSides,
+            "LeftSide" => Self::LeftSide,
+            "RightSide" => Self::RightSide,
+            "SideTowardsSpine" => Self::SideTowardsSpine,
+            "SideAwayFromSpine" => Self::SideAwayFromSpine,
+            "LargestArea" => Self::LargestArea,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::BothSides => "BothSides",
+            Self::LeftSide => "LeftSide",
+            Self::RightSide => "RightSide",
+            Self::SideTowardsSpine => "SideTowardsSpine",
+            Self::SideAwayFromSpine => "SideAwayFromSpine",
+            Self::LargestArea => "LargestArea",
+        }
+    }
 }
 
 /// W2.5 — `<ContourOption ContourType="...">` source for a contour

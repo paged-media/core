@@ -292,6 +292,9 @@ fn object(seq: u32, case: &Case, at: (f32, f32)) -> Rect {
                 mode: "None",
                 offsets: [0.0; 4],
                 side: Some("BothSides"),
+                inverse: false,
+                master_only: false,
+                contour_type: None,
             })
         }
         // A marker the story's bytes swap for [`OWN_X_OFFSET`]: the builder

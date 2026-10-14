@@ -472,6 +472,16 @@
       "rationale": "Gated 2026-09-08 from its first InDesign measurement — it had a reference but no threshold, so nothing held it. Worst page mean 0.639 / p99 24.438 / SSIM 0.9735 across 6 page(s); sized at worst + ~20%. TIGHTENED 2026-10-01 (stroke-inset: a text frame's stroke insets its text, and the gate draws glyphs at pdftoppm's sub-pixel phase): worst page now mean 0.214 / p99 7.433 / ssim 0.9941 (was 0.639 / 24.570 / 0.9734); re-sized by the rule above. INK GATED 2026-10-13: worst page ink mean 6.725 (mean ΔE over the pixels either image inks, L* < 60); sized at worst + ~20%. RE-GATED 2026-10-13: the sample's story was lengthened to run past its obstacles (it set 11 lines that ended above all of them, so no wrap mode reached a line) and its reference was exported again; jump-object / next-column wraps and the ragged breaker for wrapped frames (ADR 139) and exact positions (ADR 138) landed with it. Worst page measured mean 0.541 / p99 12.611 / ssim 0.9895; sized at worst * 1.20 and worst_ssim - 0.005."
     },
     {
+      "name": "text-wrap-sides",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 14,
+      "max_mean_de": 0.652,
+      "max_p99_de": 16.7,
+      "min_ssim": 0.9821,
+      "max_ink_mean_de": 6.48,
+      "rationale": "Added 2026-10-14 (R-30, R-31, ADR 151): which side of an obstacle text wraps to, asked of InDesign 20.0.1. One case per page of a facing Letter document: TextWrapSide Both/Left/Right, LargestArea with the obstacle right and left, SideTowardsSpine and SideAwayFromSpine on a verso and a recto, a body frame's IgnoreWrap, contour wraps round an oval and a triangle (the outline grown by the top offset plus the stroke's outer half, round joins, ends floored on the text area's whole-point grid), a master item's wrap acting on the page and with ApplyToMasterPageOnly not. Pages 1-14 measure mean 0.329-0.543 / p99 <= 13.92 / ssim >= 0.9871 / ink <= 5.4; sized at worst x 1.20 and ssim - 0.005. Page 15 (Inverse) is ungated: InDesign sets the text inside the rectangle (hidden under its Paper fill), which the engine does not model yet."
+    },
+    {
       "name": "transparency",
       "text_gate": "lines",
       "max_pages_with_pdf": 12,

@@ -90,6 +90,7 @@ pub mod text_letterspacing;
 pub mod text_on_path;
 pub mod text_overset;
 pub mod text_wrap;
+pub mod text_wrap_sides;
 pub mod tints;
 pub mod transparency;
 pub mod transparency_targets;
@@ -118,6 +119,7 @@ pub const SAMPLES: &[&str] = &[
     "text-overset",
     "text-in-shape",
     "text-wrap",
+    "text-wrap-sides",
     "effects",
     "footnotes",
     "gradients",
@@ -202,6 +204,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "text-overset" => text_overset::build(),
         "text-in-shape" => text_in_shape::build(),
         "text-wrap" => text_wrap::build(),
+        "text-wrap-sides" => text_wrap_sides::build(),
         "effects" => effects::build(),
         "footnotes" => footnotes::build(),
         "gradients" => gradients::build(),
@@ -299,7 +302,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            79,
+            80,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

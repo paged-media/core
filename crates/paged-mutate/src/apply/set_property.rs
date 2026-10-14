@@ -995,6 +995,8 @@ pub(super) fn apply_set_property(
                     invert: prev_invert,
                     contour_type: prev_contour,
                     include_inside_edges: prev_inside,
+                    side: tw.and_then(|t| t.side),
+                    apply_to_master_page_only: tw.and_then(|t| t.apply_to_master_page_only),
                 });
             }
             let _ = prev_offsets;
@@ -1031,6 +1033,8 @@ pub(super) fn apply_set_property(
                 invert: prev_invert,
                 contour_type: prev_contour,
                 include_inside_edges: prev_inside,
+                side: tw.and_then(|t| t.side),
+                apply_to_master_page_only: tw.and_then(|t| t.apply_to_master_page_only),
             });
             (
                 Value::Bounds(prev_offsets),
@@ -1079,6 +1083,8 @@ pub(super) fn apply_set_property(
                 invert: prev_invert,
                 contour_type: new_contour,
                 include_inside_edges: prev_inside,
+                side: tw.and_then(|t| t.side),
+                apply_to_master_page_only: tw.and_then(|t| t.apply_to_master_page_only),
             });
             (
                 Value::Text(prev),
@@ -1112,6 +1118,8 @@ pub(super) fn apply_set_property(
                 invert: prev_invert,
                 contour_type: prev_contour,
                 include_inside_edges: Some(new_val),
+                side: tw.and_then(|t| t.side),
+                apply_to_master_page_only: tw.and_then(|t| t.apply_to_master_page_only),
             });
             (
                 Value::Bool(prev),
@@ -2797,6 +2805,8 @@ pub(super) fn apply_set_property(
                 invert: Some(new_val),
                 contour_type: prev_contour,
                 include_inside_edges: prev_inside,
+                side: tw.and_then(|t| t.side),
+                apply_to_master_page_only: tw.and_then(|t| t.apply_to_master_page_only),
             });
             (
                 Value::Bool(prev),

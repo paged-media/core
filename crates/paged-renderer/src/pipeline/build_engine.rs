@@ -1081,6 +1081,11 @@ pub(super) fn build_document_inner(
     // a later master-story pass that emits page-number footers, headers,
     // and other master story content per body page.)
     let mut master_text_emissions: Vec<(usize, TextFrame)> = Vec::new();
+    // Text wraps of master items, per live page in its spread coords: a
+    // master item's wrap acts on the page's own text unless it applies
+    // to the master only (asked of InDesign 20.0.1, `text-wrap-sides`
+    // pages 14 and 15, ADR 151).
+    let mut master_wraps: Vec<Vec<WrapShape>> = vec![Vec::new(); page_geometries.len()];
     //
     // Per IDML spec §10.3.3, master items live in master-spread
     // coords (each master page maps to spread via its own
@@ -1233,6 +1238,96 @@ pub(super) fn build_document_inner(
         // polygon covered a master's placed picture. Items the walk does
         // not reach (pasted-in children, mask sources) keep the legacy
         // kind-by-kind order after it.
+        {
+            let verso = pages[i].binding_edge() == super::metrics::BindingEdge::Right;
+            let overridden = |id: Option<&str>| id.is_some_and(|id| override_set.contains(id));
+            let mut add = |src: WrapSource<'_>,
+                           wrap: Option<paged_model::TextWrap>,
+                           self_id: Option<&str>| {
+                let Some(wrap) = wrap else {
+                    return;
+                };
+                if wrap.apply_to_master_page_only == Some(true) || overridden(self_id) {
+                    return;
+                }
+                if !item_belongs(transform_bounds(src.bounds, src.item_transform)) {
+                    return;
+                }
+                let live = WrapSource {
+                    item_transform: Some(compose_outer_matrix(mpt_outer, src.item_transform)),
+                    ..src
+                };
+                if let Some(shape) = live.shape(wrap, verso) {
+                    master_wraps[i].push(shape);
+                }
+            };
+            let styles = &document.styles;
+            let ms = &master.spread;
+            for f in &ms.text_frames {
+                add(
+                    WrapSource {
+                        bounds: f.bounds,
+                        item_transform: f.item_transform,
+                        anchors: &f.anchors,
+                        subpath_starts: &f.subpath_starts,
+                        subpath_open: &f.subpath_open,
+                        oval: false,
+                        stroke_color: f.stroke_color.as_deref(),
+                        stroke_weight: f.stroke_weight,
+                    },
+                    styles.item_text_wrap(f.text_wrap, f.applied_object_style.as_deref()),
+                    f.self_id.as_deref(),
+                );
+            }
+            for r in &ms.rectangles {
+                add(
+                    WrapSource {
+                        bounds: r.bounds,
+                        item_transform: r.item_transform,
+                        anchors: &r.anchors,
+                        subpath_starts: &r.subpath_starts,
+                        subpath_open: &r.subpath_open,
+                        oval: false,
+                        stroke_color: r.stroke_color.as_deref(),
+                        stroke_weight: r.stroke_weight,
+                    },
+                    styles.item_text_wrap(r.text_wrap, r.applied_object_style.as_deref()),
+                    r.self_id.as_deref(),
+                );
+            }
+            for o in &ms.ovals {
+                add(
+                    WrapSource {
+                        bounds: o.bounds,
+                        item_transform: o.item_transform,
+                        anchors: &[],
+                        subpath_starts: &[],
+                        subpath_open: &[],
+                        oval: true,
+                        stroke_color: o.stroke_color.as_deref(),
+                        stroke_weight: o.stroke_weight,
+                    },
+                    styles.item_text_wrap(o.text_wrap, o.applied_object_style.as_deref()),
+                    o.self_id.as_deref(),
+                );
+            }
+            for p in &ms.polygons {
+                add(
+                    WrapSource {
+                        bounds: p.bounds,
+                        item_transform: p.item_transform,
+                        anchors: &p.anchors,
+                        subpath_starts: &p.subpath_starts,
+                        subpath_open: &p.subpath_open,
+                        oval: false,
+                        stroke_color: p.stroke_color.as_deref(),
+                        stroke_weight: p.stroke_weight,
+                    },
+                    styles.item_text_wrap(p.text_wrap, p.applied_object_style.as_deref()),
+                    p.self_id.as_deref(),
+                );
+            }
+        }
         let master_order = master_paint_order(&master.spread);
         let mut emit_master = |fr: paged_model::FrameRef| {
             match fr {
@@ -2361,8 +2456,11 @@ pub(super) fn build_document_inner(
     // contribute. Used by StoryEmitter::new to shrink the head text
     // frame's effective column width and shift its origin past any
     // intruding shape.
-    let wrap_rects_per_page =
+    let mut wrap_rects_per_page =
         collect_wrap_rects_per_page(document, &spread_page_ranges, &auto_sized_bounds);
+    for (page, wraps) in wrap_rects_per_page.iter_mut().zip(master_wraps) {
+        page.extend(wraps);
+    }
 
     // Master-story pass: emit each master text frame's hosted story
     // (page-number footers, running headers) per body page that
@@ -3009,23 +3107,23 @@ pub(super) fn build_document_inner(
             .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
             .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
         let chain_pages = chain_pages_pre.clone();
-        let head_page_idx = chain_pages[0];
-        let head_wrap_rects: &[WrapShape] = wrap_rects_per_page
-            .get(head_page_idx)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
         // Per-chain wrap rects so threaded frames inherit per-line
         // wrap. Each chain index maps to its frame's page's
-        // exclusion list.
+        // exclusion list; a frame that ignores text wrap gets none.
         let chain_wrap_rects: Vec<&[WrapShape]> = chain_pages
             .iter()
-            .map(|&p| {
+            .zip(chain.iter())
+            .map(|(&p, f)| {
+                if f.ignore_wrap == Some(true) {
+                    return &[][..];
+                }
                 wrap_rects_per_page
                     .get(p)
                     .map(|v| v.as_slice())
                     .unwrap_or(&[])
             })
             .collect();
+        let head_wrap_rects: &[WrapShape] = chain_wrap_rects.first().copied().unwrap_or(&[]);
         // Phase 7 — clone chain refs + page indices BEFORE moving them
         // into the StoryEmitter so the vertical-writing post-pass can
         // resolve the host frame for each page.
@@ -4544,7 +4642,14 @@ impl<'a> StoryEmitter<'a> {
             }
             let frame_cx = (head_frame_spread.left + head_frame_spread.right) * 0.5;
             let rect_cx = (w.left + w.right) * 0.5;
-            if rect_cx < frame_cx {
+            // Text stands on the side the wrap names; both sides and the
+            // largest area take the wider one.
+            let text_right = match shape.side {
+                WrapSide::Right => true,
+                WrapSide::Left => false,
+                WrapSide::Both | WrapSide::Largest => rect_cx < frame_cx,
+            };
+            if text_right {
                 let new_left = w.right.max(head_frame_spread.left);
                 shrink_left = shrink_left.max(new_left - head_frame_spread.left);
             } else {

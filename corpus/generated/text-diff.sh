@@ -115,8 +115,14 @@ import json
 spec = next((f for f in json.load(open('$THRESHOLDS'))['fixtures'] if f['name'] == '$NAME'), {})
 print('lines' if spec.get('text_gate') == 'lines' else 'chars')
 ")}"
+    # The pages the pixel gate compares (`max_pages_with_pdf`); 0 = all.
+    MAX_PAGES="$(python3 -c "
+import json
+spec = next((f for f in json.load(open('$THRESHOLDS'))['fixtures'] if f['name'] == '$NAME'), {})
+print(spec.get('max_pages_with_pdf', 0))
+")"
     set +e
-    python3 - "$dir/ref.html" "$dir/cand.jsonl" "$NAME" "$dir/text-gate.json" "$MODE" <<'PY'
+    python3 - "$dir/ref.html" "$dir/cand.jsonl" "$NAME" "$dir/text-gate.json" "$MODE" "$MAX_PAGES" <<'PY'
 import json, re, sys, html
 from collections import Counter
 from xml.etree import ElementTree as ET
@@ -265,11 +271,15 @@ def join_fragments(rows, cand_lines):
 
 problems = []
 leader_notes = []
-# Only the pages the reference has: a sample that grew after its reference
-# was exported has pages InDesign never set, which the pixel gate skips
-# too (`max_pages_with_pdf`). They are counted, not compared.
-compared = sorted(p for p in set(R) | set(C) if p < len(pages))
-beyond = sorted(p for p in set(C) if p >= len(pages))
+# Only the pages the reference has, and of those the ones the pixel gate
+# compares (`max_pages_with_pdf`): a sample that grew after its reference
+# was exported has pages InDesign never set, and a fixture may hold a case
+# past its gated pages that the engine does not model yet. They are
+# counted, not compared.
+limit = int(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6].isdigit() else 0
+gated = min(len(pages), limit) if limit > 0 else len(pages)
+compared = sorted(p for p in set(R) | set(C) if p < gated)
+beyond = sorted(p for p in set(C) if p >= gated)
 for page in compared:
     rr, cc = R.get(page, []), C.get(page, [])
     rc, ccnt = chars(rr), chars(cc)
@@ -308,7 +318,7 @@ if problems:
     for p in problems[:6]:
         print(f"  page {p['page']}: " + json.dumps({k: v for k, v in p.items() if k != 'page'}, ensure_ascii=False)[:300])
     sys.exit(1)
-extra = f"; {len(beyond)} page(s) past the reference not compared" if beyond else ""
+extra = f"; {len(beyond)} page(s) past the gated reference not compared" if beyond else ""
 print(f"[{name}] text ok ({len(ref)} lines, {result['pages_compared']} pages{extra})")
 for n in notes:
     print(f"  note, page {n['page']}: list marker(s) InDesign does not print: "

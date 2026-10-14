@@ -547,6 +547,9 @@ pub fn build() -> Sample {
                     mode: "BoundingBoxTextWrap",
                     offsets: [3.0, 3.0, 3.0, 3.0],
                     side: Some("BothSides"),
+                    inverse: false,
+                    master_only: false,
+                    contour_type: None,
                 })
             } else {
                 None
