@@ -118,6 +118,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   raggedness, squeezing word spaces to keep a word. A jump-object wrap leaves its rows empty and
   text resumes below it on the leading grid; at a next-column wrap the rest of the story moves to
   the next frame. A contour wrap is written `Contour`, the value InDesign reads.
+  Text stands on the side the wrap names (left, right, the larger area, towards or away from the
+  spine), a contour wrap follows the item's outline grown by its offset and stroke, a frame's
+  `IgnoreWrap` is honoured, and a master item's wrap acts on the pages that show it unless it
+  applies to the master only ([ADR 151](adr/151-which-side-text-wraps-to.md)).
 - **Line breaks as InDesign's Paragraph Composer sets them** ([ADR 141](adr/141-a-line-may-overrun-its-measure-by-a-sliver.md),
   [ADR 142](adr/142-ragged-text-breaks-by-minimum-raggedness.md)). Ragged text breaks by minimum
   raggedness in every frame; a line keeps its last word while it overruns its measure by about a
@@ -174,6 +178,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `<AllGREPStyles>` reach the model and the IDML export; the renderer sets no line or GREP style.
   End Nested Style Here (`<?ACE 3?>`) is not kept by the story reader, so a nested style that
   ends there runs on to its other limits.
+- **An inverted text wrap wraps round its obstacle.** InDesign sets the band's text inside the
+  shape; the composer cannot leave a row empty in mid-frame, which that needs
+  ([ADR 151](adr/151-which-side-text-wraps-to.md)). A contour from an image uses the frame's path,
+  and an object style's `IgnoreWrap` is not read.
 - **A cell's fill tint is not modelled.** `cellFillTint` reads `null` on every cell and its
   write is accepted but not stored, rendered or saved; the cell keeps its fill at 100 %.
   It needs a `TableCell` field and the IDML adapter's parse and emit (ADR 132).

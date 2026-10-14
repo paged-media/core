@@ -255,10 +255,12 @@ pub fn text_frame_drawn_from_path(frame: &TextFrame) -> bool {
     !text_frame_is_rect_path(&frame.anchors, &frame.subpath_starts, &frame.subpath_open)
 }
 
-/// Q-11 — a `<Rectangle>` with more than four anchors carries a stylised
-/// outline and is drawn as that polygon; four or fewer is the box.
+/// A `<Rectangle>` paints its path whenever the path is not the ordinary
+/// box: InDesign draws the element's path whatever it is (an oval's four
+/// curved anchors, a triangle's three), as `text-wrap-sides` pages 12 and
+/// 13 show. Counting anchors (Q-11: "more than four") drew both as boxes.
 pub fn rectangle_drawn_from_path(rect: &Rectangle) -> bool {
-    rect.anchors.len() > 4
+    !text_frame_is_rect_path(&rect.anchors, &rect.subpath_starts, &rect.subpath_open)
 }
 
 /// A polygon is drawn from its anchors whenever it has any; an
@@ -707,6 +709,7 @@ mod tests {
             baseline_frame_grid: None,
             applied_object_style: None,
             text_wrap: None,
+            ignore_wrap: None,
             item_layer: None,
             is_anchored: false,
             opacity: None,

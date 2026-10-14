@@ -245,6 +245,7 @@ mod tests {
             baseline_frame_grid: None,
             applied_object_style: None,
             text_wrap: None,
+            ignore_wrap: None,
             item_layer: None,
             is_anchored: false,
             opacity: None,

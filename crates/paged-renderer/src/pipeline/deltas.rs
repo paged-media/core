@@ -94,6 +94,15 @@ pub(super) fn body_story_signature(
             rects.len().hash(&mut h);
             for r in rects {
                 r.kind.hash(&mut h);
+                r.side.hash(&mut h);
+                if let Some(c) = &r.contour {
+                    c.reach.to_bits().hash(&mut h);
+                    c.points.len().hash(&mut h);
+                    for (x, y) in &c.points {
+                        x.to_bits().hash(&mut h);
+                        y.to_bits().hash(&mut h);
+                    }
+                }
                 r.bounds.top.to_bits().hash(&mut h);
                 r.bounds.left.to_bits().hash(&mut h);
                 r.bounds.bottom.to_bits().hash(&mut h);

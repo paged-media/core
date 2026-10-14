@@ -605,6 +605,9 @@ pub struct TextFramePref {
     /// under the frame, not a child of it. `None` ⇒ omit (the document
     /// grid applies).
     pub baseline_frame_grid: Option<BaselineFrameGrid>,
+    /// `IgnoreWrap` — the frame's text ignores every text wrap. `None` ⇒
+    /// omit (false).
+    pub ignore_wrap: Option<bool>,
 }
 
 /// `<BaselineFrameGridOption>` payload — a text frame's custom baseline
@@ -637,6 +640,28 @@ pub struct TextWrap {
     /// `"RightSide"`, `"LargestArea"`, `"SideAwayFromSpine"`,
     /// `"SideTowardsSpine"`. None ⇒ omit the attribute.
     pub side: Option<&'static str>,
+    /// `Inverse` — text flows inside the wrap shape instead of round it.
+    pub inverse: bool,
+    /// `ApplyToMasterPageOnly` — a master item's wrap acts on the
+    /// master's own text only.
+    pub master_only: bool,
+    /// `<ContourOption ContourType>` for a contour wrap — `"SameAsClipping"`,
+    /// `"GraphicFrame"`, `"BoundingBox"`, … `None` ⇒ no element.
+    pub contour_type: Option<&'static str>,
+}
+
+impl TextWrap {
+    /// A wrap of `mode` with `offsets`, both sides, not inverted.
+    pub fn new(mode: &'static str, offsets: [f32; 4]) -> Self {
+        TextWrap {
+            mode,
+            offsets,
+            side: None,
+            inverse: false,
+            master_only: false,
+            contour_type: None,
+        }
+    }
 }
 
 /// `<AnchoredObjectSetting>` payload — IDML's spec for how an
@@ -1152,6 +1177,9 @@ impl Rect {
             if let Some(bal) = tfp.vertical_balance_columns {
                 tfa.push(("VerticalBalanceColumns", if bal { "true" } else { "false" }));
             }
+            if let Some(iw) = tfp.ignore_wrap {
+                tfa.push(("IgnoreWrap", if iw { "true" } else { "false" }));
+            }
             // The insets are a typed `<InsetSpacing>` child of
             // `<Properties>`, never an attribute. Measured on InDesign
             // 20.0.1: opening an IDML that spells them as
@@ -1210,8 +1238,11 @@ impl Rect {
             let left = format_f32(tw.offsets[1]);
             let bottom = format_f32(tw.offsets[2]);
             let right = format_f32(tw.offsets[3]);
-            let mut twa: Vec<(&str, &str)> =
-                vec![("Inverse", "false"), ("ApplyToMasterPageOnly", "false")];
+            let flag = |v: bool| if v { "true" } else { "false" };
+            let mut twa: Vec<(&str, &str)> = vec![
+                ("Inverse", flag(tw.inverse)),
+                ("ApplyToMasterPageOnly", flag(tw.master_only)),
+            ];
             if let Some(side) = tw.side {
                 twa.push(("TextWrapSide", side));
             }
@@ -1228,6 +1259,16 @@ impl Rect {
                 ],
             );
             b.end("Properties");
+            if let Some(ct) = tw.contour_type {
+                b.empty(
+                    "ContourOption",
+                    &[
+                        ("ContourType", ct),
+                        ("IncludeInsideEdges", "false"),
+                        ("ContourPathName", "$ID/"),
+                    ],
+                );
+            }
             b.end("TextWrapPreference");
         }
         // `<AnchoredObjectSetting>` — sibling of Properties. The

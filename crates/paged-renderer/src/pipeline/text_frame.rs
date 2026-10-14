@@ -553,9 +553,19 @@ pub(super) fn build_perline_wrap_widths(
                 if aabb.bottom <= line_top || aabb.top >= line_bottom {
                     continue;
                 }
-                let Some((wl, wr)) = shape.x_extent_in_band(line_top, line_bottom) else {
+                let Some((mut wl, mut wr)) = shape.x_extent_in_band(line_top, line_bottom) else {
                     continue;
                 };
+                // A contour's zone ends on the text area's whole-point
+                // grid, both ends floored as a shaped frame's bands are:
+                // InDesign's lines beside a triangle start at the floor
+                // of the grown outline's reach (`text-wrap-sides`, ADR 151).
+                if shape.contour.is_some() {
+                    (wl, wr) = snap_band(wl, wr, frame_inner_left);
+                }
+                let (wl, wr) = shape
+                    .side
+                    .exclusion(wl, wr, frame_inner_left, frame_inner_right);
                 if wl <= frame_inner_left && wr >= frame_inner_right {
                     continue;
                 }

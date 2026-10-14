@@ -79,6 +79,7 @@ is not written yet.
 | [148](148-dashes-are-laid-out-side-by-side.md) | Dashes are laid out side by side, as InDesign lays them out | Accepted 2026-10-14 |
 | [149](149-corners-are-read-per-corner.md) | A frame's corners are read per corner, in InDesign's tokens | Accepted 2026-10-14 |
 | [150](150-hashes-and-diamonds-are-marks-along-the-path.md) | Hashes and diamonds are marks along the path | Accepted 2026-10-14 |
+| [151](151-which-side-text-wraps-to.md) | Which side text wraps to, and the contour it wraps round | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

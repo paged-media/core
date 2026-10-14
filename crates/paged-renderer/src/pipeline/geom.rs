@@ -265,11 +265,182 @@ pub(crate) fn transform_bounds(b: paged_model::Bounds, m: Option<[f32; 6]>) -> p
 /// side-shrink heuristic; the polygon corners drive per-line carve
 /// against rotated obstacles so a rotated rect's wrap follows its
 /// actual angled edges instead of its much wider unrotated AABB.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct WrapShape {
     pub(super) bounds: paged_model::Bounds,
     pub(super) corners: [(f32, f32); 4],
     pub(super) kind: WrapKind,
+    /// The side of the obstacle a line may use, resolved for its page.
+    pub(super) side: WrapSide,
+    /// A contour wrap's outline; `None` for a bounding-box wrap.
+    pub(super) contour: Option<std::sync::Arc<WrapContour>>,
+}
+
+/// A contour wrap's zone: every point within `reach` of the outline
+/// (the outline grown with round joins), as InDesign draws it. Asked of
+/// InDesign 20.0.1 (`text-wrap-sides` pages 12 and 13, ADR 151): the
+/// reach is the wrap's top offset plus the outer half of a visible
+/// stroke, and a triangle's corner reaches exactly that far.
+#[derive(Debug)]
+pub(super) struct WrapContour {
+    /// The outline in spread coords, sampled at most `CONTOUR_STEP_PT`
+    /// apart.
+    pub(super) points: Vec<(f32, f32)>,
+    pub(super) reach: f32,
+}
+
+/// The densest a contour's outline is sampled, in pt.
+const CONTOUR_STEP_PT: f32 = 0.25;
+
+/// The side of a wrap obstacle a line may use (`TextWrapSide`), with
+/// the spine sides resolved for the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum WrapSide {
+    Both,
+    /// Text stands left of the obstacle only.
+    Left,
+    /// Text stands right of the obstacle only.
+    Right,
+    /// Whichever side has more room on the line.
+    Largest,
+}
+
+impl WrapSide {
+    /// Asked of InDesign 20.0.1 (`text-wrap-sides` pages 2–9): a verso's
+    /// spine is on its right, so text towards it stands right of the
+    /// obstacle there and left of it on a recto.
+    pub(super) fn resolve(side: Option<paged_model::TextWrapSide>, verso: bool) -> Self {
+        use paged_model::TextWrapSide as S;
+        match side {
+            None | Some(S::BothSides) => WrapSide::Both,
+            Some(S::LeftSide) => WrapSide::Left,
+            Some(S::RightSide) => WrapSide::Right,
+            Some(S::LargestArea) => WrapSide::Largest,
+            Some(S::SideTowardsSpine) if verso => WrapSide::Right,
+            Some(S::SideTowardsSpine) => WrapSide::Left,
+            Some(S::SideAwayFromSpine) if verso => WrapSide::Left,
+            Some(S::SideAwayFromSpine) => WrapSide::Right,
+        }
+    }
+
+    /// The span a line in the text area `left..right` loses to an
+    /// obstacle whose zone on the line is `wl..wr`.
+    pub(super) fn exclusion(self, wl: f32, wr: f32, left: f32, right: f32) -> (f32, f32) {
+        let text_left = (wl, f32::INFINITY);
+        let text_right = (f32::NEG_INFINITY, wr);
+        match self {
+            WrapSide::Both => (wl, wr),
+            WrapSide::Left => text_left,
+            WrapSide::Right => text_right,
+            WrapSide::Largest if wl - left >= right - wr => text_left,
+            WrapSide::Largest => text_right,
+        }
+    }
+}
+
+/// What a wrap obstacle's zone is built from: its geometry and the
+/// stroke a contour reaches past.
+pub(super) struct WrapSource<'a> {
+    pub(super) bounds: paged_model::Bounds,
+    pub(super) item_transform: Option<[f32; 6]>,
+    pub(super) anchors: &'a [PathAnchor],
+    pub(super) subpath_starts: &'a [usize],
+    pub(super) subpath_open: &'a [bool],
+    pub(super) oval: bool,
+    pub(super) stroke_color: Option<&'a str>,
+    pub(super) stroke_weight: Option<f32>,
+}
+
+impl WrapSource<'_> {
+    /// The zone `wrap` keeps text out of around this item, on a page
+    /// that is a verso or not; `None` for no active wrap.
+    pub(super) fn shape(&self, wrap: paged_model::TextWrap, verso: bool) -> Option<WrapShape> {
+        use paged_model::TextWrapMode as M;
+        if !wrap.mode.is_active() {
+            return None;
+        }
+        // Bounding box and contour narrow the lines; jump object and
+        // next column move them instead (`WrapKind`).
+        let kind = match wrap.mode {
+            M::BoundingBoxTextWrap | M::ContourTextWrap => WrapKind::Around,
+            M::JumpObjectTextWrap => WrapKind::JumpObject,
+            M::NextColumnTextWrap => WrapKind::NextColumn,
+            _ => return None,
+        };
+        let side = WrapSide::resolve(wrap.side, verso);
+        if wrap.mode == M::ContourTextWrap {
+            if let Some(contour) = self.contour(wrap) {
+                return Some(WrapShape::from_contour(contour, kind, side));
+            }
+        }
+        Some(WrapShape {
+            kind,
+            side,
+            ..WrapShape::from_inner(self.bounds, self.item_transform, wrap.offsets)
+        })
+    }
+
+    /// The item's outline in spread coords, densely sampled, with the
+    /// wrap's reach: InDesign uses only the top offset for a contour.
+    fn contour(&self, wrap: paged_model::TextWrap) -> Option<WrapContour> {
+        let path = if self.oval {
+            super::shapes::ellipse_outline_path(Rect {
+                x: self.bounds.left,
+                y: self.bounds.top,
+                w: self.bounds.width(),
+                h: self.bounds.height(),
+            })
+        } else if self.anchors.is_empty() {
+            super::shapes::axis_rect_path(Rect {
+                x: self.bounds.left,
+                y: self.bounds.top,
+                w: self.bounds.width(),
+                h: self.bounds.height(),
+            })
+        } else {
+            super::text_path::polygon_path_from_anchors_with_open(
+                self.anchors,
+                self.subpath_starts,
+                self.subpath_open,
+            )
+        };
+        let map = |(x, y): (f32, f32)| match self.item_transform {
+            Some(m) => apply_matrix(&m, x, y),
+            None => (x, y),
+        };
+        let mut points = Vec::new();
+        for line in super::stroke_geom::flatten_path(&path, 32) {
+            let pts: Vec<(f32, f32)> = line.points.iter().copied().map(map).collect();
+            let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else {
+                continue;
+            };
+            let closing = line.closed.then_some((last, first));
+            let edges = pts.windows(2).map(|w| (w[0], w[1])).chain(closing);
+            points.push(first);
+            for (a, b) in edges {
+                let n = ((b.0 - a.0).hypot(b.1 - a.1) / CONTOUR_STEP_PT)
+                    .ceil()
+                    .max(1.0);
+                for k in 1..=n as usize {
+                    let t = k as f32 / n;
+                    points.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+                }
+            }
+        }
+        if points.is_empty() {
+            return None;
+        }
+        let stroke = self.stroke_weight.unwrap_or(0.0);
+        let stroke_reach = if frame_stroke_is_visible(self.stroke_color, stroke) {
+            stroke * 0.5
+        } else {
+            0.0
+        };
+        Some(WrapContour {
+            points,
+            reach: (wrap.offsets[0] + stroke_reach).max(0.0),
+        })
+    }
 }
 
 /// How text treats a wrap obstacle.
@@ -346,6 +517,44 @@ impl WrapShape {
             bounds,
             corners,
             kind: WrapKind::Around,
+            side: WrapSide::Both,
+            contour: None,
+        }
+    }
+
+    /// A contour wrap's zone: its bounds are the outline's grown by the
+    /// reach.
+    fn from_contour(contour: WrapContour, kind: WrapKind, side: WrapSide) -> Self {
+        let r = contour.reach;
+        let (mut l, mut t, mut rt, mut b) = (
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        );
+        for &(x, y) in &contour.points {
+            l = l.min(x);
+            rt = rt.max(x);
+            t = t.min(y);
+            b = b.max(y);
+        }
+        let bounds = paged_model::Bounds {
+            top: t - r,
+            left: l - r,
+            bottom: b + r,
+            right: rt + r,
+        };
+        Self {
+            bounds,
+            corners: [
+                (bounds.left, bounds.top),
+                (bounds.right, bounds.top),
+                (bounds.right, bounds.bottom),
+                (bounds.left, bounds.bottom),
+            ],
+            kind,
+            side,
+            contour: Some(std::sync::Arc::new(contour)),
         }
     }
 
@@ -361,6 +570,30 @@ impl WrapShape {
     pub(super) fn x_extent_in_band(&self, band_top: f32, band_bottom: f32) -> Option<(f32, f32)> {
         if self.bounds.bottom <= band_top || self.bounds.top >= band_bottom {
             return None;
+        }
+        if let Some(c) = &self.contour {
+            // The grown outline across the band: each outline point
+            // reaches `reach` round it, so one a distance `dy` above or
+            // below the band still covers sqrt(reach² − dy²) either side.
+            let mut span: Option<(f32, f32)> = None;
+            for &(x, y) in &c.points {
+                let dy = if y < band_top {
+                    band_top - y
+                } else if y > band_bottom {
+                    y - band_bottom
+                } else {
+                    0.0
+                };
+                if dy > c.reach {
+                    continue;
+                }
+                let half = (c.reach * c.reach - dy * dy).max(0.0).sqrt();
+                span = Some(match span {
+                    Some((a, b)) => (a.min(x - half), b.max(x + half)),
+                    None => (x - half, x + half),
+                });
+            }
+            return span;
         }
         let mut min_x = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
@@ -450,85 +683,115 @@ pub(super) fn collect_wrap_rects_per_page(
                 .iter()
                 .position(|b| cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom)
         };
-        let push = |out: &mut Vec<Vec<WrapShape>>,
-                    inner_bounds: paged_model::Bounds,
-                    item_transform: Option<[f32; 6]>,
-                    wrap: paged_model::TextWrap| {
-            if !wrap.mode.is_active() {
+        let verso: Vec<bool> = page_bounds
+            .iter()
+            .map(|b| {
+                super::metrics::BindingEdge::of_page(b.left, b.width())
+                    == super::metrics::BindingEdge::Right
+            })
+            .collect();
+        let mut push = |src: WrapSource<'_>, wrap: Option<paged_model::TextWrap>| {
+            let Some(wrap) = wrap else {
                 return;
-            }
-            // Bounding box and contour narrow the lines (a contour
-            // degrades to its AABB — the same for a plain rectangle
-            // host, a first cut for richer contour types). Jump object
-            // and next column move lines instead (`WrapKind`).
-            let kind = match wrap.mode {
-                paged_model::TextWrapMode::BoundingBoxTextWrap
-                | paged_model::TextWrapMode::ContourTextWrap => WrapKind::Around,
-                paged_model::TextWrapMode::JumpObjectTextWrap => WrapKind::JumpObject,
-                paged_model::TextWrapMode::NextColumnTextWrap => WrapKind::NextColumn,
-                _ => return,
             };
-            let shape = WrapShape {
-                kind,
-                ..WrapShape::from_inner(inner_bounds, item_transform, wrap.offsets)
+            // Route by the item's own box; the zone may lean past it.
+            let routed = WrapShape::from_inner(src.bounds, src.item_transform, [0.0; 4]);
+            let Some(local_idx) = route(routed.bounds) else {
+                return;
             };
-            if let Some(local_idx) = route(shape.bounds) {
-                let page_idx = range.start + local_idx;
-                if page_idx < out.len() {
-                    out[page_idx].push(shape);
-                }
+            let Some(shape) = src.shape(wrap, verso[local_idx]) else {
+                return;
+            };
+            let page_idx = range.start + local_idx;
+            if page_idx < out.len() {
+                out[page_idx].push(shape);
             }
         };
+        let styles = &document.styles;
         for f in &parsed.spread.text_frames {
-            if let Some(w) = document
-                .styles
-                .item_text_wrap(f.text_wrap, f.applied_object_style.as_deref())
-            {
-                // W1.7 Phase B: a neighbouring frame wraps around the
-                // GROWN box of an auto-sized frame, not its authored
-                // undersized rect. Substitute the precomputed grown
-                // inner-coord bounds when this frame auto-sizes so the
-                // exclusion rect matches the painted box.
-                let wrap_bounds = f
-                    .self_id
-                    .as_deref()
-                    .and_then(|id| auto_sized_bounds.get(id))
-                    .copied()
-                    .unwrap_or(f.bounds);
-                push(&mut out, wrap_bounds, f.item_transform, w);
-            }
+            // W1.7 Phase B: a neighbouring frame wraps around the
+            // GROWN box of an auto-sized frame, not its authored
+            // undersized rect. Substitute the precomputed grown
+            // inner-coord bounds when this frame auto-sizes so the
+            // exclusion rect matches the painted box.
+            let grown = f
+                .self_id
+                .as_deref()
+                .and_then(|id| auto_sized_bounds.get(id))
+                .copied();
+            push(
+                WrapSource {
+                    bounds: grown.unwrap_or(f.bounds),
+                    item_transform: f.item_transform,
+                    anchors: if grown.is_some() { &[] } else { &f.anchors },
+                    subpath_starts: &f.subpath_starts,
+                    subpath_open: &f.subpath_open,
+                    oval: false,
+                    stroke_color: f.stroke_color.as_deref(),
+                    stroke_weight: f.stroke_weight,
+                },
+                styles.item_text_wrap(f.text_wrap, f.applied_object_style.as_deref()),
+            );
         }
         for r in &parsed.spread.rectangles {
-            if let Some(w) = document
-                .styles
-                .item_text_wrap(r.text_wrap, r.applied_object_style.as_deref())
-            {
-                push(&mut out, r.bounds, r.item_transform, w);
-            }
+            push(
+                WrapSource {
+                    bounds: r.bounds,
+                    item_transform: r.item_transform,
+                    anchors: &r.anchors,
+                    subpath_starts: &r.subpath_starts,
+                    subpath_open: &r.subpath_open,
+                    oval: false,
+                    stroke_color: r.stroke_color.as_deref(),
+                    stroke_weight: r.stroke_weight,
+                },
+                styles.item_text_wrap(r.text_wrap, r.applied_object_style.as_deref()),
+            );
         }
         for o in &parsed.spread.ovals {
-            if let Some(w) = document
-                .styles
-                .item_text_wrap(o.text_wrap, o.applied_object_style.as_deref())
-            {
-                push(&mut out, o.bounds, o.item_transform, w);
-            }
+            push(
+                WrapSource {
+                    bounds: o.bounds,
+                    item_transform: o.item_transform,
+                    anchors: &[],
+                    subpath_starts: &[],
+                    subpath_open: &[],
+                    oval: true,
+                    stroke_color: o.stroke_color.as_deref(),
+                    stroke_weight: o.stroke_weight,
+                },
+                styles.item_text_wrap(o.text_wrap, o.applied_object_style.as_deref()),
+            );
         }
         for p in &parsed.spread.polygons {
-            if let Some(w) = document
-                .styles
-                .item_text_wrap(p.text_wrap, p.applied_object_style.as_deref())
-            {
-                push(&mut out, p.bounds, p.item_transform, w);
-            }
+            push(
+                WrapSource {
+                    bounds: p.bounds,
+                    item_transform: p.item_transform,
+                    anchors: &p.anchors,
+                    subpath_starts: &p.subpath_starts,
+                    subpath_open: &p.subpath_open,
+                    oval: false,
+                    stroke_color: p.stroke_color.as_deref(),
+                    stroke_weight: p.stroke_weight,
+                },
+                styles.item_text_wrap(p.text_wrap, p.applied_object_style.as_deref()),
+            );
         }
         for l in &parsed.spread.graphic_lines {
-            if let Some(w) = document
-                .styles
-                .item_text_wrap(l.text_wrap, l.applied_object_style.as_deref())
-            {
-                push(&mut out, l.bounds, l.item_transform, w);
-            }
+            push(
+                WrapSource {
+                    bounds: l.bounds,
+                    item_transform: l.item_transform,
+                    anchors: &l.anchors,
+                    subpath_starts: &l.subpath_starts,
+                    subpath_open: &l.subpath_open,
+                    oval: false,
+                    stroke_color: l.stroke_color.as_deref(),
+                    stroke_weight: l.stroke_weight,
+                },
+                styles.item_text_wrap(l.text_wrap, l.applied_object_style.as_deref()),
+            );
         }
     }
     out
