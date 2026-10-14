@@ -2437,6 +2437,11 @@ impl From<crate::gesture::GestureError> for GestureFailure {
 /// composed affine into the PAGE the element sits on (see
 /// [`Self::item_transform`]). The overlay layer multiplies bounds
 /// corners by the transform to draw the oriented selection chrome.
+///
+/// A GROUP answers the box InDesign draws around it: `bounds` is the
+/// union of its members' outlines in the group's own coordinate space
+/// and `item_transform` the group's composed transform, so a rotated
+/// group reads as a rotated box, the same shape as a rotated frame's.
 #[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
 #[tsify(into_wasm_abi, from_wasm_abi, missing_as_null)]
 #[serde(rename_all = "camelCase")]

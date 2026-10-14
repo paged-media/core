@@ -9981,11 +9981,16 @@ impl CanvasModel {
                         .iter()
                         .find(|f| f.self_id.as_deref() == Some(raw))
                         .map(|f| (f.bounds, f.item_transform, false)),
-                    // Groups themselves are not directly addressable
-                    // through geometry today — the overlay draws the
-                    // leaves. A future revision can compute the group's
-                    // union bbox once Phase B introduces "enter group".
-                    ElementId::Group(_) => None,
+                    // A group answers the box InDesign draws around it:
+                    // its members' outlines measured in the group's own
+                    // space, placed by the group's composed transform, so
+                    // a rotated group reads as an oriented box.
+                    ElementId::Group(_) => spread
+                        .groups
+                        .iter()
+                        .position(|g| g.self_id.as_deref() == Some(raw))
+                        .and_then(|gi| crate::group_box::group_box(spread, gi))
+                        .map(|(bounds, transform)| (bounds, transform, false)),
                     // StoryRange is a property-address, not a
                     // geometric element — its bounds are the host
                     // frame's. The caret/selection-rect surface
