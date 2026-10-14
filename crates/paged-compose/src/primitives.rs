@@ -286,13 +286,17 @@ pub fn unit_ellipse() -> PathData {
     }
 }
 
+/// The unit square traced the way InDesign writes a rectangle: down the
+/// left edge first. A fill does not care; a stroke laid out along the
+/// path does, since its marks start at the first anchor and take their
+/// side from the direction (`stroke_marks`, ADR 150).
 fn unit_rect() -> PathData {
     PathData {
         segments: vec![
             PathSegment::MoveTo { x: 0.0, y: 0.0 },
-            PathSegment::LineTo { x: 1.0, y: 0.0 },
-            PathSegment::LineTo { x: 1.0, y: 1.0 },
             PathSegment::LineTo { x: 0.0, y: 1.0 },
+            PathSegment::LineTo { x: 1.0, y: 1.0 },
+            PathSegment::LineTo { x: 1.0, y: 0.0 },
             PathSegment::Close,
         ],
     }

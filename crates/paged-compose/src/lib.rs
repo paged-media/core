@@ -29,6 +29,7 @@ pub mod perf;
 pub mod pixel_layer;
 pub mod primitives;
 pub mod scene_layer;
+pub mod stroke_marks;
 pub mod text;
 
 pub use display_list::{
@@ -38,7 +39,7 @@ pub use display_list::{
     GradientFeatherKind, GradientFeatherStop, GradientId, GradientStop, ImageId, InnerGlow,
     InnerShadow, LayerEffect, LineCap, LineJoin, LinearGradient, LinkRegion, LinkRegionTable,
     LinkTarget, OuterGlow, Paint, PathBuffer, PathData, PathId, PathSegment, RadialGradient, Rect,
-    Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, SweepGradient, Transform,
+    Satin, SoftMaskType, SpotInk, SpotInkId, Stroke, StrokeMarks, SweepGradient, Transform,
 };
 pub use extent::{
     fit_transparency_group_bounds, transparency_group_overflow, GroupFit, GROUP_AA_PAD_PT,
