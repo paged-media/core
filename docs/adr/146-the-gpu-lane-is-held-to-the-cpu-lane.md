@@ -45,8 +45,9 @@ causes were defects, not rasterizer noise:
    `parity-thresholds.json`: a default, and per-fixture entries above it, each with its
    measured cause. The never-loosen rule of `fidelity-thresholds.json` applies. The CPU side
    renders without `--snap-glyph-origins`, which imitates pdftoppm's glyph phase for the
-   InDesign comparison and has no Vello counterpart. In CI the gate runs in the `gpu.yml`
-   lavapipe job, advisory until lavapipe's numbers are calibrated against Metal's.
+   InDesign comparison and has no Vello counterpart. In CI the gate runs, hard, in the `gpu.yml`
+   lavapipe job: the budgets were measured on Metal, and lavapipe puts all 77 fixtures inside
+   them too.
 
 ## Known gaps (budgeted, not fixed)
 
@@ -60,6 +61,16 @@ causes were defects, not rasterizer noise:
   antialias glyph outlines differently (analytic coverage on tiny-skia, area coverage on Vello),
   and the difference sums over thousands of glyphs. It is not a layout difference: both lanes
   draw the same glyph paths at the same positions.
+
+## The lane that tested nothing
+
+Running the gate in CI showed every Vello page blank. Mesa now installs its lavapipe driver as
+`lvp_icd.json`; `gpu.yml` pointed the Vulkan loader at `lvp_icd.x86_64.json`, so there was no
+device, `init_gpu` failed, and every `vello_rs` test returned early on its empty buffer and
+passed. The sanity step only warned. The lane had been green while testing nothing. The ICD is
+now found by glob, a missing device fails the lane, and `paged-inspect --backend vello` prints
+Vello's warnings and exits 3 on an all-empty render, so a parity run cannot measure a blank
+page again.
 
 ## Consequences
 

@@ -136,7 +136,7 @@ jobs:
         # before it, the only GPU evidence was this job's colour.
         run: cargo nextest run -p paged-gpu --features vello-backend --profile ci --no-fail-fast
 
-      - name: CPU ↔ Vello parity over the generated corpus (advisory)
+      - name: CPU ↔ Vello parity over the generated corpus
         id: parity
         # P-0: the unit tests above check single commands; this renders
         # every page of every generated fixture through BOTH backends and
@@ -145,10 +145,9 @@ jobs:
         # the editor and viewer draw with skipped shadows, drew dashes
         # solid and blended against the paper, and no check noticed.
         #
-        # Advisory (continue-on-error) until lavapipe's numbers are
-        # calibrated against the Metal measurements the budgets come
-        # from; then it becomes hard, as the fidelity gate did.
-        continue-on-error: true
+        # Hard: the budgets were measured on Metal, and the first run on
+        # lavapipe with a real device (2026-10-14) put all 77 fixtures
+        # inside them too.
         timeout-minutes: 45
         env:
           IDML_PARITY_OUT: /tmp/idml-parity
@@ -203,7 +202,7 @@ jobs:
             if [ "${{ steps.parity.outcome }}" = "success" ]; then
               echo "✅ CPU ↔ Vello parity: every generated fixture within its budget."
             else
-              echo "⚠️ CPU ↔ Vello parity (advisory): see the vello-parity artifact's parity.json."
+              echo "❌ CPU ↔ Vello parity: a fixture is over its budget; see the vello-parity artifact's parity.json and heatmaps."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           # Also emit a workflow annotation so it shows on the checks tab.
