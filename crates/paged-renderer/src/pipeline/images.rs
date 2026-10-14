@@ -382,11 +382,7 @@ pub(super) fn emit_polygon_image(
             &poly.anchors,
             &poly.subpath_starts,
             &poly.subpath_open,
-            super::shapes::uniform_corner(
-                poly.corner_radius,
-                poly.corner_option.as_deref(),
-                &poly.corners,
-            ),
+            super::shapes::uniform_corner(&poly.corners),
         );
         let cache_key = match poly.self_id.as_deref() {
             Some(sid) => fnv_1a_u64(sid.as_bytes()),

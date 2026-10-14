@@ -125,10 +125,24 @@ pub fn build() -> Sample {
     host.fill_color = Some("Color/Paper".into());
     host.stroke_color = Some("Color/Black".into());
     host.stroke_weight_pt = Some(2.0);
-    host.extra_attrs = vec![
-        ("CornerOption".to_string(), "Rounded".to_string()),
-        ("CornerRadius".to_string(), HOST_CORNER_RADIUS.to_string()),
-    ];
+    // InDesign's tokens and its four per-corner attributes, the ones it
+    // reads (ADR 149): a bare `Rounded` drew the container square.
+    host.extra_attrs = std::iter::once(("CornerOption".to_string(), "RoundedCorner".to_string()))
+        .chain(std::iter::once((
+            "CornerRadius".to_string(),
+            HOST_CORNER_RADIUS.to_string(),
+        )))
+        .chain(
+            ["TopLeft", "TopRight", "BottomLeft", "BottomRight"]
+                .into_iter()
+                .flat_map(|c| {
+                    [
+                        (format!("{c}CornerOption"), "RoundedCorner".to_string()),
+                        (format!("{c}CornerRadius"), HOST_CORNER_RADIUS.to_string()),
+                    ]
+                }),
+        )
+        .collect();
 
     // Child 1 — black rect protruding past the host's left edge and
     // over the rounded top-left corner. Child transforms are

@@ -1022,11 +1022,7 @@ pub(super) fn emit_text_frame_into(
             anchors,
             subpath_starts,
             subpath_open,
-            super::shapes::uniform_corner(
-                resolved.corner_radius,
-                resolved.corner_option,
-                &resolved.corners,
-            ),
+            super::shapes::uniform_corner(&resolved.corners),
         );
         let cache_key = match resolved.self_id {
             Some(id) => fnv_1a_u64(id.as_bytes()),

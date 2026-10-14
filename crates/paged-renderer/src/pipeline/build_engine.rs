@@ -257,11 +257,7 @@ pub(super) fn container_clip_geometry(
                 &rect.anchors,
                 &rect.subpath_starts,
                 &rect.subpath_open,
-                super::shapes::uniform_corner(
-                    rect.corner_radius,
-                    rect.corner_option.as_deref(),
-                    &rect.corners,
-                ),
+                super::shapes::uniform_corner(&rect.corners),
             )
         } else {
             let r = Rect {
@@ -270,13 +266,9 @@ pub(super) fn container_clip_geometry(
                 w: rect.bounds.width(),
                 h: rect.bounds.height(),
             };
-            let radii = per_corner_radii(
-                rect.corner_radius,
-                rect.corner_option.as_deref(),
-                &rect.corners,
-            );
+            let radii = per_corner_radii(&rect.corners);
             if radii.iter().any(|r| r.is_some()) {
-                let kinds = per_corner_kinds(rect.corner_option.as_deref(), &rect.corners);
+                let kinds = per_corner_kinds(&rect.corners);
                 corner_rect_path(r, radii, kinds)
             } else {
                 super::shapes::axis_rect_path(r)
@@ -319,11 +311,7 @@ pub(super) fn container_clip_geometry(
                 &poly.anchors,
                 &poly.subpath_starts,
                 &poly.subpath_open,
-                super::shapes::uniform_corner(
-                    poly.corner_radius,
-                    poly.corner_option.as_deref(),
-                    &poly.corners,
-                ),
+                super::shapes::uniform_corner(&poly.corners),
             )
         };
         return Some((path, poly.item_transform));
@@ -8404,8 +8392,8 @@ fn emit_paragraph_lines(
                 let y_bot =
                     text_origin_pt.1 + baseline_pt_local + line_h_pt_local * 0.2 + off_bottom;
                 if x_right > x_left && y_bot > y_top {
-                    let radii = per_corner_radii(None, None, &b.corners);
-                    let kinds = per_corner_kinds(None, &b.corners);
+                    let radii = per_corner_radii(&b.corners);
+                    let kinds = per_corner_kinds(&b.corners);
                     let any_rounded = radii.iter().any(|r| r.map(|v| v > 0.0).unwrap_or(false));
                     if any_rounded {
                         let outline_rect = paged_compose::Rect {

@@ -79,12 +79,25 @@ pub(crate) fn object_style_cascade<'a>(frame: &mut ResolvedFrame<'a>, style: &'a
     // matching today by leaving the resolved-frame default in
     // place is functionally equivalent.
 
-    if matches!(frame.geometry, Geometry::Rect { .. }) {
-        if frame.corner_radius.is_none() {
-            frame.corner_radius = style.corner_radius;
-        }
-        if frame.corner_option.is_none() {
-            frame.corner_option = style.corner_option.as_deref();
+    // The style's corner pair fills a frame that states none of its four
+    // corners: InDesign reads a frame's corners from the four per-corner
+    // attributes only (ADR 149), and the style's `CornerOption` is the
+    // one the editor's `objectStyleCornerOption` writes.
+    if matches!(frame.geometry, Geometry::Rect { .. })
+        && frame
+            .corners
+            .iter()
+            .all(|c| c.option.is_none() && c.radius.is_none())
+    {
+        if let Some(option) = style
+            .corner_option
+            .as_deref()
+            .and_then(paged_model::CornerOption::from_idml)
+        {
+            frame.corners = [paged_model::CornerSpec {
+                option: Some(option),
+                radius: style.corner_radius,
+            }; 4];
         }
     }
 }

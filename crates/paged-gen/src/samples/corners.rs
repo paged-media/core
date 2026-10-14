@@ -29,11 +29,8 @@
 //! The page label names the option so a per-page diff reads
 //! "corners · inset" on failure.
 //!
-//! This sample carries no paired InDesign-exported PDF and is therefore
-//! NOT in `fidelity-thresholds.json` — the hard fidelity gate skips it
-//! (the gate's fixture list is driven by that JSON). It exists so the
-//! corner emitter is exercised end-to-end through `build_document`
-//! alongside the pure-geometry unit tests.
+//! Gated against InDesign's PDF (`corners.pdf`) like every fixture in
+//! `fidelity-thresholds.json`.
 
 use crate::builders::{
     designmap::{write_designmap, DesignMap},
@@ -68,14 +65,15 @@ const POLY_LEG_PT: f32 = 200.0;
 /// legible rather than swallowing the triangle.
 const POLY_CORNER_RADIUS_PT: f32 = 20.0;
 
-/// `(label, IDML CornerOption enum value)` per page.
+/// `(label, IDML CornerOption enum value)` per page, in InDesign's
+/// tokens: a bare `Rounded` or `Inset` is no option to InDesign (ADR 149).
 fn variants() -> Vec<(&'static str, &'static str)> {
     vec![
-        ("corners · rounded", "Rounded"),
-        ("corners · inverse-rounded", "InverseRounded"),
-        ("corners · bevel", "Beveled"),
-        ("corners · inset", "Inset"),
-        ("corners · fancy", "Fancy"),
+        ("corners · rounded", "RoundedCorner"),
+        ("corners · inverse-rounded", "InverseRoundedCorner"),
+        ("corners · bevel", "BevelCorner"),
+        ("corners · inset", "InsetCorner"),
+        ("corners · fancy", "FancyCorner"),
     ]
 }
 
@@ -122,10 +120,28 @@ pub fn build() -> Sample {
             parent_story: None,
             next_text_frame: None,
             previous_text_frame: None,
-            extra_attrs: vec![
-                ("CornerOption".to_string(), (*corner_option).to_string()),
-                ("CornerRadius".to_string(), CORNER_RADIUS_PT.to_string()),
-            ],
+            // As InDesign writes a frame's corners: the item-level pair
+            // AND the four per-corner attributes, which are the ones it
+            // reads (ADR 149).
+            extra_attrs: std::iter::once((
+                "CornerOption".to_string(),
+                (*corner_option).to_string(),
+            ))
+            .chain(std::iter::once((
+                "CornerRadius".to_string(),
+                CORNER_RADIUS_PT.to_string(),
+            )))
+            .chain(
+                ["TopLeft", "TopRight", "BottomLeft", "BottomRight"]
+                    .into_iter()
+                    .flat_map(|c| {
+                        [
+                            (format!("{c}CornerOption"), (*corner_option).to_string()),
+                            (format!("{c}CornerRadius"), CORNER_RADIUS_PT.to_string()),
+                        ]
+                    }),
+            )
+            .collect(),
             blending: None,
             drop_shadow: None,
             placed_image: None,

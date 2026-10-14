@@ -77,6 +77,7 @@ is not written yet.
 | [146](146-the-gpu-lane-is-held-to-the-cpu-lane.md) | The GPU lane is held to the CPU lane | Accepted 2026-10-14 |
 | [147](147-a-rotated-frames-gradient-default.md) | A rotated frame's gradient starts where InDesign puts it | Accepted 2026-10-14 |
 | [148](148-dashes-are-laid-out-side-by-side.md) | Dashes are laid out side by side, as InDesign lays them out | Accepted 2026-10-14 |
+| [149](149-corners-are-read-per-corner.md) | A frame's corners are read per corner, in InDesign's tokens | Accepted 2026-10-14 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
