@@ -32,7 +32,7 @@
 
 use crate::builders::designmap::{
     write_designmap_with_markers, DesignMap, HyperlinkDef, HyperlinkDestinationDef,
-    MarkerResources, TextVariableDef,
+    MarkerResources, TextVariableDef, VariablePreference,
 };
 use crate::builders::master::{write_master, Master};
 use crate::builders::page_item::Rect;
@@ -187,13 +187,24 @@ pub fn build() -> Sample {
                 name: "Season".to_string(),
                 variable_type: "CustomTextType".to_string(),
                 contents: Some("Spring 2026".to_string()),
+                // InDesign's spelling (asked of InDesign 20.0.1: it read the
+                // older `<TextVariablePreference Contents>` as empty).
+                preference: Some(VariablePreference::CustomText {
+                    contents: "Spring 2026".to_string(),
+                }),
                 ..Default::default()
             },
             TextVariableDef {
                 self_id: pagecount_var.clone(),
                 name: "Page Count".to_string(),
-                variable_type: "PageCountType".to_string(),
+                // InDesign has no `PageCountType`: a page count is the
+                // last page number, `Current` format, of the section.
+                variable_type: "LastPageNumberType".to_string(),
                 contents: None,
+                preference: Some(VariablePreference::PageNumber {
+                    scope: "SectionScope",
+                    format: "Current",
+                }),
                 ..Default::default()
             },
         ],

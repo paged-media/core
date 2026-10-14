@@ -2385,10 +2385,14 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
     );
 
     // p14 (verso body): the verso running head + a folio resolving the
-    // page's label (Page.Name is authoritative pre-section).
+    // page's number from the sections, as InDesign computes it (it
+    // ignores the sample's descriptive `Page@Name`, `… p014 …`).
     let p14 = glyphs(13);
     assert!(p14.contains("THEPAGEDANNUAL"), "verso head on p14: {p14}");
-    assert!(p14.contains("p014"), "folio label on p14: {p14}");
+    assert!(
+        p14.ends_with("14") && !p14.contains("p014"),
+        "folio label on p14: {p14}"
+    );
 
     // p15: the override replaces the master's recto head — the
     // replacement text renders, the RunningHeader variable's baked
@@ -2421,12 +2425,18 @@ fn annual_base_renders_furniture_override_and_facing_sides() {
 
     // p43 (recto vertical): folio-only furniture.
     let p43 = glyphs(42);
-    assert!(p43.contains("p043"), "folio on p43: {p43}");
+    assert!(
+        p43.ends_with("43") && !p43.contains("p043"),
+        "folio on p43: {p43}"
+    );
 
     // p124 (verso data): B-style furniture on the fine grid.
     let p124 = glyphs(123);
     assert!(p124.contains("THEPAGEDANNUAL"), "data verso head: {p124}");
-    assert!(p124.contains("p124"), "folio on p124: {p124}");
+    assert!(
+        p124.contains("124") && !p124.contains("p124"),
+        "folio on p124: {p124}"
+    );
 
     // Pixel-level non-blank proof for the requested pages.
     let white = paged_compose::Color {

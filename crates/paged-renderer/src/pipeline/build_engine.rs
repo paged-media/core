@@ -906,13 +906,14 @@ pub(super) fn build_document_inner(
                 host_spread_idx: spread_idx,
                 local_page_idx: local_idx,
             });
-            // Page.Name carries the user-visible label as InDesign
-            // rendered it (Arabic / Roman / arbitrary section
-            // override) and stays authoritative. When absent, the
-            // section walk computes the label from the document's
-            // `<Section>` numbering rules (falling back to the 1-based
-            // body-page index when no section applies).
-            page_labels.push(section_walk.next_label(p.self_id.as_deref(), p.name.as_deref()));
+            // A page's number is what the document's `<Section>` rules
+            // give it, as InDesign computes it on open: it ignores
+            // `Page@Name` (InDesign 20.0.1 prints `3` on `annual-base`'s
+            // page named `annual-base · p003 · front`, and `markers`' page
+            // count as the section's last number, not the last page's
+            // name). InDesign writes the computed label there itself, so
+            // its own documents agree either way.
+            page_labels.push(section_walk.derived_label(p.self_id.as_deref()));
             page_numbering.numbers.push(section_walk.current_number());
             page_numbering
                 .section_of

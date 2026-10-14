@@ -81,7 +81,7 @@ pub const BOOKMARK_TWO: &str = "Bookmark/Further";
 
 /// Emit one `Heading`-styled paragraph carrying `text` — the TOC pickup
 /// target.
-fn write_heading(b: &mut XmlBuilder, text: &str) {
+fn write_heading(b: &mut XmlBuilder, text: &str, last: bool) {
     b.start(
         "ParagraphStyleRange",
         &[("AppliedParagraphStyle", HEADING_STYLE)],
@@ -96,6 +96,11 @@ fn write_heading(b: &mut XmlBuilder, text: &str) {
     b.start("Content", &[]);
     b.text(text);
     b.end("Content");
+    if !last {
+        // InDesign ends a paragraph with `<Br/>`; ranges without one run
+        // into a single paragraph.
+        b.empty("Br", &[]);
+    }
     b.end("CharacterStyleRange");
     b.end("ParagraphStyleRange");
 }
@@ -108,7 +113,7 @@ fn body_story_xml(story_id: &str, xref_source: &str) -> Vec<u8> {
     b.start("idPkg:Story", &[PKG_NS, DOM_VERSION]);
     b.start("Story", &[("Self", story_id)]);
 
-    write_heading(&mut b, HEADING_ONE);
+    write_heading(&mut b, HEADING_ONE, false);
 
     // Body paragraph with two index markers and an xref source span.
     b.start(
@@ -152,9 +157,15 @@ fn body_story_xml(story_id: &str, xref_source: &str) -> Vec<u8> {
     b.end("Content");
     b.end("CharacterStyleRange");
     b.end("CrossReferenceSource");
+    b.start(
+        "CharacterStyleRange",
+        &[("AppliedCharacterStyle", NO_CHAR_STYLE)],
+    );
+    b.empty("Br", &[]);
+    b.end("CharacterStyleRange");
     b.end("ParagraphStyleRange");
 
-    write_heading(&mut b, HEADING_TWO);
+    write_heading(&mut b, HEADING_TWO, true);
 
     b.end("Story");
     b.end("idPkg:Story");
