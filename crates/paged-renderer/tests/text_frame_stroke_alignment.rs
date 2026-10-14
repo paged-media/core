@@ -159,7 +159,9 @@ fn a_rectangular_text_frame_strokes_where_its_alignment_says() {
 
 #[test]
 fn a_rounded_text_frame_strokes_the_rounded_rectangles_aligned_outline() {
-    const ROUNDED: &str = r#"CornerOption="RoundedCorner" CornerRadius="20""#;
+    // Per corner: InDesign reads a frame's corners from these four
+    // pairs only, not from an item-level CornerOption (ADR 149).
+    const ROUNDED: &str = r#"TopLeftCornerOption="RoundedCorner" TopLeftCornerRadius="20" TopRightCornerOption="RoundedCorner" TopRightCornerRadius="20" BottomLeftCornerOption="RoundedCorner" BottomLeftCornerRadius="20" BottomRightCornerOption="RoundedCorner" BottomRightCornerRadius="20""#;
     for alignment in ["InsideAlignment", "OutsideAlignment"] {
         let a = alignment_attr(Some(alignment));
         let tf = one_stroke(&format!(

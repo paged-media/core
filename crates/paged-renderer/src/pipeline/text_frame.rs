@@ -1048,7 +1048,7 @@ pub(super) fn emit_text_frame_into(
             let (id, _) = page
                 .list
                 .paths
-                .intern(key, super::shapes::axis_rect_path(inset));
+                .intern(key, super::shapes::indesign_rect_path(inset));
             aligned_stroke = Some(id);
         }
     }
