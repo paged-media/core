@@ -174,12 +174,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   colour.** The marks are laid out along the path as InDesign lays them out
   ([ADR 150](adr/150-hashes-and-diamonds-are-marks-along-the-path.md)); a frame's own `EndCap` /
   `EndJoin` and a gap colour under them are not measured yet.
-- **Paragraph line setting is read and rendered, not editable.** Auto leading, single-word
+- **Paragraph line setting is read, rendered and saved, not editable.** Auto leading, single-word
   justification, the last line's indent, balanced ragged lines (`FullyBalanced`; not the pyramid
-  or vee shapes) and no-break text set as InDesign sets them
-  ([ADR 153](adr/153-a-paragraphs-line-setting.md)); no property path writes them yet, and a
-  paragraph the engine rewrites does not write them back. A no-break span wider than its line is
-  set squeezed where InDesign oversets the rest of the story.
+  or vee shapes) and no-break text set as InDesign sets them, and the IDML export writes them
+  back ([ADR 153](adr/153-a-paragraphs-line-setting.md)); no property path writes them yet. A
+  no-break span wider than its line is set squeezed where InDesign oversets the rest of the
+  story.
 - **Line and GREP styles are read and kept, not applied.** `<AllLineStyles>` and
   `<AllGREPStyles>` reach the model and the IDML export; the renderer sets no line or GREP style.
   End Nested Style Here (`<?ACE 3?>`) is not kept by the story reader, so a nested style that
