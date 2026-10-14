@@ -3806,7 +3806,7 @@ fn ruby_annotation_emits_above_base_run() {
 fn kenten_marks_emit_above_each_glyph() {
     // `KentenKind` on "ABC": one mark per glyph under a Japanese composer
     // (single-line too); none under the default composer.
-    let kenten = r#"KentenKind="Dot""#;
+    let kenten = r#"KentenKind="KentenSesameDot""#;
     for composer in ["HL Composer J", "HL Single J"] {
         let marked = cjk_decoration_commands(Some(composer), kenten);
         assert!(

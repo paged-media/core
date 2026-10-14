@@ -137,3 +137,10 @@ take the InDesign GUI for a few seconds and share the lock
   (a `<Br/>` between them) keeps the range's space before and after, an
   empty one too, and a flush-right or centred line with a tab aligns only
   its text after the last tab. Answers in `footnote-paragraphs-probe.json`.
+- `ruby-kenten-probe`: how big, and where, InDesign sets ruby and emphasis
+  marks by default: both at half the base's size, each mark's em box
+  standing on the base's (a face's `BASE` ideographic baseline, or one em
+  centred on half its cap height), kenten centred on their characters,
+  ruby spread 1:2:1 over a wider base and a narrower base spaced out to
+  its ruby, per-character ruby split at spaces. Read from InDesign's PDF
+  with `pdf-text.py`; answers in `ruby-kenten-probe.json`.

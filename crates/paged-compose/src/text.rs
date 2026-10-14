@@ -411,6 +411,7 @@ mod tests {
             last_line_alignment: paged_text::Alignment::Left,
             tabs: None,
             object_advances: Vec::new(),
+            glyph_aki: Vec::new(),
         };
         layout_paragraph(text, &shaper, &opts)
     }
