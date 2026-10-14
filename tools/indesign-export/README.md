@@ -129,3 +129,11 @@ take the InDesign GUI for a few seconds and share the lock
 - `master-items-probe`: InDesign writes `ShowMasterItems` on `<Spread>`
   and ignores it on `<Page>`; a spread that shows master items prints them
   whatever its page says.
+- `footnote-paragraphs-probe`: a note's own paragraph settings — alignment,
+  indents, leading, tab stops, word and letter spacing, glyph scaling, a
+  paragraph style — lay out its lines as they lay out body text, and its
+  `SpaceBefore` / `SpaceAfter` count only between the note's own
+  paragraphs. It also pins two body-text rules: every paragraph of a range
+  (a `<Br/>` between them) keeps the range's space before and after, an
+  empty one too, and a flush-right or centred line with a tab aligns only
+  its text after the last tab. Answers in `footnote-paragraphs-probe.json`.

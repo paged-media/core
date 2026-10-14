@@ -630,14 +630,19 @@ pub(super) fn wght_for_font_style(style: Option<&str>) -> f32 {
 /// land on their own rows rather than collapsing into
 /// glue-separated runs of one paragraph.
 ///
-/// `SpaceBefore` is suppressed on every sub-paragraph past the
-/// first so consecutive lines in the same logical paragraph don't
-/// accumulate extra leading. `tab_list` and other paragraph
-/// metadata copy through unchanged.
+/// Every piece keeps the range's `SpaceBefore` and `SpaceAfter`, as
+/// every paragraph of a range has them: InDesign sets two paragraphs of
+/// one range (SpaceBefore 12, SpaceAfter 9, 12 pt Open Sans) 35.4 pt
+/// apart, the leading plus both, and an empty paragraph between them
+/// takes the same (InDesign 20.0.1,
+/// `tools/indesign-export/footnote-paragraphs-probe`, `bodyparas` and
+/// `bodyempty`). `tab_list` and other paragraph metadata copy through
+/// unchanged.
 ///
 /// A [`FORCED_LINE_BREAK`] splits the same way; the segments record it
 /// so the emitter can treat the pieces as lines of ONE paragraph (and
-/// count it once in the build's stats).
+/// count it once in the build's stats) — the emitter withholds the
+/// spacing there (`SegmentState::mask`).
 #[cfg(test)]
 pub(super) fn split_paragraph_at_breaks(
     paragraph: &paged_model::Paragraph,
@@ -669,7 +674,7 @@ pub(super) struct BreakSegment {
 
 /// The template of a segment that continues a split paragraph: the
 /// paragraph's whole-paragraph attributes, without what only its first
-/// line carries (space before, the drop cap, the anchored objects, the
+/// segment carries (the drop cap, the anchored objects, the
 /// footnotes and index markers, which ride the first segment).
 fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
     paged_model::Paragraph {
@@ -707,8 +712,8 @@ fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
         nested_styles: paragraph.nested_styles.clone(),
         line_styles: paragraph.line_styles.clone(),
         grep_styles: paragraph.grep_styles.clone(),
-        space_before: None,
-        space_after: None,
+        space_before: paragraph.space_before,
+        space_after: paragraph.space_after,
         tab_list: paragraph.tab_list.clone(),
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
@@ -803,7 +808,7 @@ pub(super) fn split_paragraph_into_segments(
         line_styles: paragraph.line_styles.clone(),
         grep_styles: paragraph.grep_styles.clone(),
         space_before: paragraph.space_before,
-        space_after: None, // applied to last sub-paragraph only
+        space_after: paragraph.space_after,
         tab_list: paragraph.tab_list.clone(),
         bullets_list_type: paragraph.bullets_list_type.clone(),
         bullet_character: paragraph.bullet_character,
@@ -1003,18 +1008,14 @@ pub(super) fn split_paragraph_into_segments(
             current.runs.push(hint);
         }
     }
-    // Flush the trailing sub-paragraph + propagate the original
-    // SpaceAfter so the chain's vertical spacing matches.
+    // Flush the trailing sub-paragraph.
     if !current.runs.is_empty() {
-        current.space_after = paragraph.space_after;
         subs.push(BreakSegment {
             paragraph: current,
             byte_base: current_base,
             opens_paragraph: current_opens,
             closes_paragraph: true,
         });
-    } else if let Some(last) = subs.last_mut() {
-        last.paragraph.space_after = paragraph.space_after;
     }
     // P-25 guard: drop a trailing sub-paragraph whose every run is
     // empty or `\n`-only. The split loop above already discards the
@@ -1041,11 +1042,8 @@ pub(super) fn split_paragraph_into_segments(
             })
             .unwrap_or(false)
     {
-        // Carry the dropped tail's space_after over to the new last.
-        let dropped = subs.pop().expect("len > 1 just checked");
+        subs.pop();
         if let Some(last) = subs.last_mut() {
-            last.paragraph.space_after =
-                last.paragraph.space_after.or(dropped.paragraph.space_after);
             last.closes_paragraph = true;
         }
     }
@@ -1158,10 +1156,7 @@ fn push_table_segment(
 ) {
     let anchored = paragraph.table_anchor.is_some();
     if current.runs.iter().any(|r| !r.text.is_empty()) {
-        let mut text = std::mem::replace(current, continuation(paragraph));
-        if !anchored {
-            text.space_after = paragraph.space_after;
-        }
+        let text = std::mem::replace(current, continuation(paragraph));
         subs.push(BreakSegment {
             byte_base: current_base,
             paragraph: text,

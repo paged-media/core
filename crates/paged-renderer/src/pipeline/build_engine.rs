@@ -3413,6 +3413,7 @@ pub(super) fn build_document_inner(
                         options,
                         document,
                         font_table,
+                        &hyphenators,
                         palette,
                         color_ctx,
                     );
@@ -3703,6 +3704,7 @@ pub(super) fn build_document_inner(
         &mut pages,
         &adopted,
         font_table,
+        &hyphenators,
         &footnote_options,
         document,
         palette,
@@ -4471,7 +4473,7 @@ impl Default for SegmentState {
 impl SegmentState {
     /// Drop the paragraph-boundary attributes a segment inside a
     /// paragraph doesn't own.
-    fn mask(
+    pub(super) fn mask(
         &self,
         mut attrs: paged_scene::ResolvedParagraphAttrs,
     ) -> paged_scene::ResolvedParagraphAttrs {
@@ -5584,7 +5586,7 @@ pub(super) fn build_toc_paragraphs(
 /// to the 36 pt default; and a plain tab in a hanging paragraph with no
 /// list at all stops at the indent the same way. Later lines start AT
 /// the left indent, so the extra stop can never be ahead of their pen.
-fn paragraph_tab_stops(
+pub(super) fn paragraph_tab_stops(
     resolved: &paged_scene::ResolvedParagraphAttrs,
     left_indent_pt: f32,
     first_line_indent_pt: f32,
@@ -6424,43 +6426,7 @@ fn emit_paragraph_lines(
         paragraph_size,
         lopts.alignment == paged_text::Alignment::Justify,
     );
-    // Explicit `Leading` on the leading run mirrors IDML semantics:
-    // every line uses the override regardless of the largest glyph
-    // size on the line. Auto leading (no override) keeps existing
-    // behaviour.
-    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
-        if leading_pt > 0.0 {
-            lopts.leading_override =
-                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
-            lopts.leading_override_exact =
-                Some(leading_pt as f64 * paged_text::shape::ADVANCE_PRECISION as f64);
-        }
-    }
-    // Runs that ask for DIFFERENT leadings: each line takes the largest
-    // among its characters (`paged_text::layout::line_leading`). When
-    // they all agree, the override above (or auto leading) says it all.
-    {
-        let explicit = |r: &paged_scene::ResolvedRunAttrs| {
-            r.leading
-                .filter(|l| *l > 0.0)
-                .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
-        };
-        let leadings: Vec<Option<i32>> = resolved_runs.iter().map(explicit).collect();
-        if leadings.windows(2).any(|w| w[0] != w[1]) {
-            let mut at = 0u32;
-            let mut out = Vec::with_capacity(styled_runs.len());
-            for (k, run) in styled_runs.iter().enumerate() {
-                // A marker shaped as its own run leads the text; its
-                // glyphs never count (`auto_leading_from_byte`).
-                let leading = k
-                    .checked_sub(head_run)
-                    .and_then(|i| leadings.get(i).copied().flatten());
-                out.push((at, leading));
-                at += run.text.len() as u32;
-            }
-            lopts.run_leadings = out;
-        }
-    }
+    apply_leadings(&mut lopts, &resolved_runs, &styled_runs, head_run);
 
     // First-baseline metrics for this paragraph's head run. A
     // family-keyed override (`--font-metrics`) wins, so a documented
@@ -6842,14 +6808,11 @@ fn emit_paragraph_lines(
     // Tabs: let the composer set each tab at its stop while it breaks,
     // so a line is measured at the width its tabs actually take. The
     // stops are frame-relative, so it needs every line's start x — the
-    // same shifts applied after layout below. Right / centre aligned
-    // paragraphs keep the old order (break, align, then snap): the
-    // measured rules cover ragged-left and justified text only.
-    if matches!(
-        lopts.alignment,
-        paged_text::Alignment::Left | paged_text::Alignment::Justify
-    ) && styled_runs_ref.iter().any(|r| r.text.contains('\t'))
-    {
+    // same shifts applied after layout below. A flush-right or centred
+    // line then moves only its text after the last tab (InDesign 20.0.1,
+    // `tools/indesign-export/footnote-paragraphs-probe`, `bodyright` and
+    // `bodycenter`; `paged_text`'s `shift_ragged`).
+    if styled_runs_ref.iter().any(|r| r.text.contains('\t')) {
         let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
         let left_64 = to_64(left_indent_pt);
         let first_64 = to_64(resolved_paragraph.first_line_indent.unwrap_or(0.0));
