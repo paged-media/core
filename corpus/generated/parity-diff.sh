@@ -94,8 +94,9 @@ for NAME in "${FIXTURES[@]}"; do
         if ! "$INSPECT" "$IDML" --render "$OUT/$backend.png" --backend "$backend" \
             --default-font "$DEFAULT_FONT" "${FONT_FLAGS[@]}" \
             --no-missing-image-placeholder --dpi "$DPI" >/dev/null 2>"$OUT/$backend.err"; then
+            # paged-inspect exits 3 when Vello drew nothing at all.
             echo "error: $NAME: the $backend render failed:" >&2
-            tail -5 "$OUT/$backend.err" >&2
+            tail -8 "$OUT/$backend.err" >&2
             exit 2
         fi
         # A build without the `gpu` feature renders "vello" on the CPU,
