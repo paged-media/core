@@ -17,27 +17,22 @@
 //! `PathRasterizer` impl that drives Vello-via-wgpu. Coverage today:
 //!  - `FillPath` with solid paints, linear and radial gradients
 //!    (linear RGB → sRGB at the boundary)
-//!  - `StrokePath` with peniko `Stroke` + cap/join/miter mapping
+//!  - `StrokePath` with peniko `Stroke` + cap/join/miter/dash mapping
 //!  - `Image` via peniko `ImageData` + `ImageBrush` + `draw_image`
 //!  - `PushClip` / `PopClip` via Vello clip layers
 //!  - `BeginBlendGroup` / `EndBlendGroup` via Vello blend layers
 //!    (peniko `Mix` mapped 1:1 from our `BlendMode`, `Compose::SrcOver`)
 //!  - `FillPathBlend` per-command non-Normal blend wrapped in a
 //!    transient blend layer (Normal stays on the fast `scene.fill` path)
-//!  - Background fill from `RasterOptions::background`
+//!  - Background fill from `RasterOptions::background`, under the
+//!    page's content, which is one isolated group: blend modes read
+//!    an empty backdrop, not the paper, as on the CPU lane
 //!  - Paths converted from our PathData (line / quad / cubic / close)
 //!    into `kurbo::BezPath`; the per-command transform applies to
 //!    every control point at conversion time so vello sees the
 //!    final page-space coordinates and stroke widths come out right
 //!
 //! Approximate (no image-space Gaussian convolution in vello):
-//!  - PathShadow / InnerShadow / OuterGlow / InnerGlow / Satin /
-//!    Feather — rendered via a multi-stamp falloff: a centre fill
-//!    plus a series of expanding strokes at decreasing alpha,
-//!    optionally clipped to the path's interior. Visually soft
-//!    but not a true Gaussian; the CPU rasterizer remains the path
-//!    of record for fidelity. See `stamp_blurred_path` for the
-//!    falloff shape.
 //!  - `PushLayer { effect: LayerEffect::GaussianBlur }` /
 //!    `PopLayer` — Vello has no image-space Gaussian over a layer
 //!    buffer in the version we link against (the
@@ -51,17 +46,11 @@
 //!    — the only approximation is the grid discretisation. See
 //!    `emit_blurred_layer`.
 //!
-//! Stubbed (logged-and-skipped):
-//!  - DropShadow — rect-stamp drop shadows arrive through
-//!    `PathShadow` in current emitters; this arm rarely fires.
-//!  - BevelEmboss — chisel-edge approximation regresses sample
-//!    geometry without the per-pixel normal field; left as
-//!    log+skip so the rest of the page still renders. The CPU
-//!    rasterizer now honours the W1.4 parity knobs
-//!    (`style` Inner/Outer/Emboss/Pillow, `direction` Up/Down,
-//!    `technique` Smooth/Chisel*, `soften`); reproducing those in
-//!    Vello needs a height-field/normal pass it doesn't have, so
-//!    this stays a renderer-gap (CPU is the path of record).
+//! Shared with the CPU rasterizer (the same coverage masks, built by
+//! `paged_compose::mask` and painted here as images):
+//!  - DropShadow / PathShadow, InnerShadow, OuterGlow, InnerGlow,
+//!    Satin, BevelEmboss — `paint_effect_stamps`
+//!  - Feather, DirectionalFeather, GradientFeather — `apply_feather_mask`
 //!
 //! Exact (matches the CPU rasterizer, the path of record):
 //!  - C-28 `BeginSoftMask` / `BeginMaskedContent` / `EndSoftMask`
@@ -88,15 +77,14 @@
 //!    content is not folded and stays isolated; no emitter produces
 //!    that today.
 //!
-//! Partial-parity note: the Satin approximation below is a
-//! two-stamp additive blend; the CPU rasterizer's W1.4 `invert`
-//! flips a *difference* mask it doesn't compute, so the Vello
-//! preview ignores `invert` (renderer-gap).
+//! Not at parity (ADR 146): a knockout group, and a non-isolated
+//! group below 100 % opacity whose members blend, are drawn as
+//! isolated groups — a Vello layer cannot read its initial backdrop.
 //!
 //! The CPU rasterizer (`cpu.rs`) remains the path of record for the
-//! fidelity harness; the Vello backend's job is to keep the
-//! WASM/native preview from dropping frames on common-case
-//! primitives, with effect approximations close enough for preview.
+//! fidelity harness. This lane is held to it page by page by
+//! `corpus/generated/parity-diff.sh` against
+//! `corpus/generated/parity-thresholds.json`.
 //!
 //! wgpu lifecycle: an instance + adapter + device + queue + Vello
 //! `Renderer` are created lazily on first `rasterize()` call and
@@ -111,7 +99,7 @@ use paged_compose::{
     BlendMode as ComposeBlendMode, Color as ComposeColor, DisplayCommand, DisplayList, LayerEffect,
     LineCap, LineJoin, Paint, PathSegment,
 };
-use vello::kurbo::{self, Shape as KurboShape, Stroke as KurboStroke};
+use vello::kurbo::{self, Stroke as KurboStroke};
 use vello::peniko::{
     BlendMode as PenikoBlendMode, Blob, BrushRef, Color as PenikoColor,
     ColorStop as PenikoColorStop, Compose, Fill, Gradient as PenikoGradient, ImageAlphaType,
@@ -693,6 +681,35 @@ fn build_scene_with_transform_filtered(
     // the matching `PopLayer`. All `scene.X(...)` calls below route
     // to `scene_stack.last_mut().unwrap()` — the current target.
     let mut scene_stack: Vec<Scene> = vec![Scene::new()];
+    // The page is one isolated group over the paper: the paper is not a
+    // backdrop a blend mode reads, as in InDesign, where a Screen or
+    // Multiply object on blank paper shows its own colour. The render's
+    // clear colour IS the paper here, so without this layer every blend
+    // read white (`transparency-targets` case 6: a Screen fill drawn
+    // white). The CPU lane blends into a transparent group buffer.
+    //
+    // The layer covers what the page paints, padded well past any
+    // antialiasing or cap the extent walk rounds off, not the whole
+    // surface: a presenter appends one page scene per visible page, and
+    // a surface-sized layer per page is per-tile work on every tile.
+    let page_layer = paged_compose::extent::painted_bounds(list).map(|b| {
+        const PAD_PT: f64 = 72.0;
+        kurbo::Rect::new(
+            b.x as f64 - PAD_PT,
+            b.y as f64 - PAD_PT,
+            (b.x + b.w) as f64 + PAD_PT,
+            (b.y + b.h) as f64 + PAD_PT,
+        )
+    });
+    if let Some(rect) = &page_layer {
+        scene_stack[0].push_layer(
+            Fill::NonZero,
+            PenikoBlendMode::default(),
+            1.0,
+            page_to_px,
+            rect,
+        );
+    }
 
     // Per-push bookkeeping. `Encoded` means the push translated
     // directly into a `push_layer` call on the current target scene
@@ -993,10 +1010,7 @@ fn build_scene_with_transform_filtered(
                 let Some(brush) = resolve_paint(paint, list, transform) else {
                     continue;
                 };
-                let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
-                    .with_caps(map_cap(stroke.cap))
-                    .with_join(map_join(stroke.join))
-                    .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+                let ks = kurbo_stroke(stroke);
                 scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
             }
             DisplayCommand::FillPathOverprint {
@@ -1040,10 +1054,7 @@ fn build_scene_with_transform_filtered(
                 let Some(brush) = resolve_paint(paint, list, transform) else {
                     continue;
                 };
-                let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
-                    .with_caps(map_cap(stroke.cap))
-                    .with_join(map_join(stroke.join))
-                    .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+                let ks = kurbo_stroke(stroke);
                 scene.stroke(&ks, page_to_px, brush.as_ref(), None, &path);
             }
             DisplayCommand::Image {
@@ -1083,44 +1094,18 @@ fn build_scene_with_transform_filtered(
                 let pixel_to_px = page_to_px * unit_to_page * pixel_to_unit;
                 scene.draw_image(&brush, pixel_to_px);
             }
-            DisplayCommand::DropShadow { .. } => {
-                // Stub — rect-stamp drop shadows now flow through
-                // `PathShadow` (multi-stamp falloff) or through the
-                // new `PushLayer { GaussianBlur }` + `FillPath` +
-                // `PopLayer` plumbing (multi-tap convolution) in
-                // current emitters, so this arm rarely fires; leave
-                // it skipped.
-            }
-            DisplayCommand::PathShadow {
-                path_id,
-                transform,
-                shadow,
-            } => {
-                // Approximate Gaussian blur with a multi-stamp
-                // expanding-fill stack: paint the offset path
-                // multiple times at decreasing alpha and increasing
-                // outset, blended with `Plus` (additive) so the
-                // overlap accumulates a soft falloff. Not equal to
-                // a true Gaussian — but visibly soft, no offscreen
-                // buffer required, and stays inside vello's
-                // path-only API surface.
-                let scene = scene_stack.last_mut().expect("scene_stack underflow");
-                let Some(path_data) = list.paths.get(*path_id) else {
-                    continue;
-                };
-                let mut shifted = *transform;
-                shifted.0[4] += shadow.offset_x;
-                shifted.0[5] += shadow.offset_y;
-                let path = path_to_bez(path_data, &shifted);
-                let mut shadow_color = shadow.color;
-                shadow_color.a *= shadow.opacity.clamp(0.0, 1.0);
-                stamp_blurred_path(
-                    scene,
+            DisplayCommand::DropShadow { .. } | DisplayCommand::PathShadow { .. } => {
+                // The CPU lane's own shadow: the shape moved, blurred,
+                // choked and grained by the shared mask builder, painted
+                // as an image (a stamped falloff here read softer and
+                // wider than the CPU's Gaussian, and a rect-stamp shadow
+                // was not drawn at all).
+                paint_effect_stamps(
+                    scene_stack.last_mut().expect("scene_stack underflow"),
+                    list,
+                    cmd,
                     page_to_px,
-                    &path,
-                    shadow_color,
-                    shadow.blur_radius,
-                    PenikoBlendMode::new(Mix::Normal, Compose::SrcOver),
+                    px_per_pt,
                 );
             }
             DisplayCommand::InnerShadow { .. }
@@ -1208,6 +1193,18 @@ fn build_scene_with_transform_filtered(
                     page_to_px,
                     px_per_pt,
                 );
+                // …and the run's layer closes here, as the other two
+                // feathers close theirs. Left open, everything after a
+                // gradient feather on the page drew inside its clip
+                // (`gradient-geometry` page 2: the next case's label
+                // gone, its feathered box solid).
+                if feather_layer_open {
+                    scene_stack
+                        .last_mut()
+                        .expect("scene_stack underflow")
+                        .pop_layer();
+                    feather_layer_open = false;
+                }
             }
         }
     }
@@ -1216,12 +1213,22 @@ fn build_scene_with_transform_filtered(
     // shouldn't ever leave them dangling, but be tolerant — drain the
     // layer stack, popping each layer or finalising each pending blur
     // sub-scene against the parent.
+    if feather_layer_open {
+        scene_stack
+            .last_mut()
+            .expect("scene_stack underflow")
+            .pop_layer();
+    }
     while !layer_stack.is_empty() {
         pop_layer_or_blur(&mut scene_stack, &mut layer_stack, page_to_px);
     }
-    scene_stack
+    let mut root = scene_stack
         .pop()
-        .expect("scene_stack should still contain the root scene")
+        .expect("scene_stack should still contain the root scene");
+    if page_layer.is_some() {
+        root.pop_layer();
+    }
+    root
 }
 
 /// Tracks what each entry on the layer LIFO meant at push time so the
@@ -2567,10 +2574,7 @@ fn build_overprint_batch_scene(
         };
         let bez = path_to_bez(path_data, &path.transform);
         if let Some(stroke) = &path.stroke {
-            let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
-                .with_caps(map_cap(stroke.cap))
-                .with_join(map_join(stroke.join))
-                .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+            let ks = kurbo_stroke(stroke);
             scene.stroke(&ks, page_to_px, BrushRef::Solid(opaque_white), None, &bez);
         } else {
             scene.fill(
@@ -2615,115 +2619,6 @@ fn path_to_bez(
         }
     }
     p
-}
-
-/// Multi-stamp soft-edge approximation. Vello (peniko + kurbo) has
-/// no built-in image-space Gaussian blur — true blur would need an
-/// offscreen render target plus a wgpu compute pass. We fake it by
-/// stamping the path multiple times: a solid fill at full alpha,
-/// followed by progressively expanded outset stamps at low alpha
-/// blended additively. The overlap forms a falloff that reads as a
-/// soft edge from a normal viewing distance, even though it isn't
-/// the true Gaussian convolution the CPU rasterizer performs.
-///
-/// `blur_radius` is in page-space pt; if it's sub-pixel small we
-/// skip the stack and emit a single hard fill.
-///
-/// The fast path (blur ≤ 0.5 pt) bypasses any layering; the slow
-/// path opens a single transparency group with `Compose::Plus` so
-/// the stamp stack accumulates additively, then closes it. The
-/// caller's blend mode wraps the whole accumulated group.
-fn stamp_blurred_path(
-    scene: &mut Scene,
-    page_to_px: kurbo::Affine,
-    path: &kurbo::BezPath,
-    color: ComposeColor,
-    blur_radius: f32,
-    outer_blend: PenikoBlendMode,
-) {
-    if color.a <= 0.0 {
-        return;
-    }
-    let blur = blur_radius.max(0.0);
-    if blur <= 0.5 {
-        // Fast path: blur is sub-pixel, just do a hard fill with
-        // the caller's blend mode wrapped in a transient layer if
-        // it's non-default.
-        let pcolor = linear_to_peniko(color);
-        if outer_blend.mix == Mix::Normal && outer_blend.compose == Compose::SrcOver {
-            scene.fill(
-                Fill::NonZero,
-                page_to_px,
-                BrushRef::Solid(pcolor),
-                None,
-                path,
-            );
-        } else {
-            scene.push_layer(Fill::NonZero, outer_blend, 1.0, page_to_px, path);
-            scene.fill(
-                Fill::NonZero,
-                page_to_px,
-                BrushRef::Solid(pcolor),
-                None,
-                path,
-            );
-            scene.pop_layer();
-        }
-        return;
-    }
-
-    // Slow path: build a stack of expanding stamps inside a Plus-
-    // composed layer so they accumulate. Higher stamp counts make
-    // the falloff smoother but cost linearly more vello commands;
-    // 5 stamps + a centre is a defensible compromise between
-    // visual quality and encoder load.
-    //
-    // Each stamp paints the same path with a Stroke whose width
-    // grows with the stamp index, producing a series of concentric
-    // rings around the path's edge. The centre stamp is a solid
-    // fill that lays down the inside; the strokes layer the soft
-    // halo on top. This keeps everything inside vello's path API
-    // (no offscreen targets, no compute) at the cost of fidelity.
-    let bbox = path.bounding_box();
-    let bbox_pad = bbox.inflate(blur as f64 + 1.0, blur as f64 + 1.0);
-    let layer_clip = kurbo::Rect::new(bbox_pad.x0, bbox_pad.y0, bbox_pad.x1, bbox_pad.y1);
-    scene.push_layer(Fill::NonZero, outer_blend, 1.0, page_to_px, &layer_clip);
-
-    let centre_color = linear_to_peniko(color);
-    // Solid centre fill at the caller's full opacity.
-    scene.fill(
-        Fill::NonZero,
-        page_to_px,
-        BrushRef::Solid(centre_color),
-        None,
-        path,
-    );
-
-    // Halo: 5 expanding strokes with diminishing alpha. Stroke
-    // widths grow linearly to the blur radius (×2 since the stroke
-    // straddles the path edge); alpha falls off so the outer-most
-    // stroke is barely visible. The cumulative coverage approximates
-    // the tail of a Gaussian — close enough for a preview.
-    const RINGS: usize = 5;
-    for i in 1..=RINGS {
-        let t = i as f32 / RINGS as f32; // 0.2 .. 1.0
-        let stroke_w = (2.0 * blur * t) as f64;
-        if stroke_w <= 0.0 {
-            continue;
-        }
-        // Roughly Gaussian-tail falloff: alpha ∝ exp(-2 t²).
-        let falloff = (-2.0 * t * t).exp();
-        let mut ring_color = color;
-        ring_color.a *= falloff;
-        if ring_color.a <= 1.0 / 255.0 {
-            continue;
-        }
-        let pc = linear_to_peniko(ring_color);
-        let stroke = KurboStroke::new(stroke_w);
-        scene.stroke(&stroke, page_to_px, BrushRef::Solid(pc), None, path);
-    }
-
-    scene.pop_layer();
 }
 
 /// Owned brush variant to keep both arms of `BrushRef` alive long
@@ -2876,6 +2771,45 @@ fn blend_to_peniko(m: ComposeBlendMode) -> PenikoBlendMode {
         ComposeBlendMode::Luminosity => Mix::Luminosity,
     };
     PenikoBlendMode::new(mix, Compose::SrcOver)
+}
+
+/// The kurbo stroke for a display-list stroke, dash included. The
+/// dash pattern is in the path's own units, as the width is, and is
+/// taken only when tiny-skia would take it (an even count of two or
+/// more non-negative lengths with a positive sum); anything else is
+/// solid there, so it is solid here. Dropping the dash drew every
+/// dashed and dotted stroke solid on this lane.
+///
+/// A dotted stroke is a ZERO-length dash with round caps: tiny-skia
+/// caps a zero-length dash, kurbo's stroker drops it, and the dots
+/// vanished (`strokes-fills` "japanese-dots"). A hair of length keeps
+/// the caps; with butt caps it is a sliver no wider than the hair.
+fn kurbo_stroke(stroke: &paged_compose::Stroke) -> KurboStroke {
+    const DOT_PT: f64 = 1e-3;
+    let ks = KurboStroke::new(stroke.width.max(0.0) as f64)
+        .with_caps(map_cap(stroke.cap))
+        .with_join(map_join(stroke.join))
+        .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
+    let dash = stroke.dash.as_slice();
+    let valid = dash.len() >= 2
+        && dash.len() % 2 == 0
+        && dash.iter().all(|d| d.is_finite() && *d >= 0.0)
+        && dash.iter().sum::<f32>() > 0.0;
+    if valid {
+        ks.with_dashes(
+            0.0,
+            dash.iter().enumerate().map(|(i, d)| {
+                let d = *d as f64;
+                if i % 2 == 0 && d == 0.0 {
+                    DOT_PT
+                } else {
+                    d
+                }
+            }),
+        )
+    } else {
+        ks
+    }
 }
 
 fn map_cap(c: LineCap) -> kurbo::Cap {
@@ -4666,6 +4600,124 @@ mod tests {
         }
         Some((worst, ndiff))
     }
+
+    /// A drop shadow on the GPU is the CPU lane's own, built by the shared
+    /// mask builder: a rect-stamp shadow used to be skipped here, and a
+    /// path shadow stamped softer and wider than the CPU's Gaussian
+    /// (`effects-attrs` mean ΔE 2.26 between the lanes, now 0.16).
+    #[cfg(feature = "cpu")]
+    #[test]
+    fn drop_shadows_match_the_cpu_lane() {
+        use paged_compose::{
+            BlendMode as ComposeBlend, Color as DLColor, DisplayCommand, DropShadow, PathData,
+            PathSegment, Transform,
+        };
+        for path_shadow in [false, true] {
+            let mut list = DisplayList::new();
+            let mut rect = PathData::default();
+            rect.segments.push(PathSegment::MoveTo { x: 0.0, y: 0.0 });
+            rect.segments.push(PathSegment::LineTo { x: 1.0, y: 0.0 });
+            rect.segments.push(PathSegment::LineTo { x: 1.0, y: 1.0 });
+            rect.segments.push(PathSegment::LineTo { x: 0.0, y: 1.0 });
+            rect.segments.push(PathSegment::Close);
+            let path_id = list.paths.push_anon(rect);
+            let shadow = DropShadow {
+                offset_x: 4.0,
+                offset_y: 4.0,
+                blur_radius: if path_shadow { 1.5 } else { 6.0 },
+                color: DLColor::rgba(0.0, 0.0, 0.0, 1.0),
+                opacity: 0.75,
+                blend_mode: ComposeBlend::Normal,
+                spread: 0.2,
+                noise: 0.0,
+            };
+            let transform = Transform([30.0, 0.0, 0.0, 20.0, 20.0, 15.0]);
+            list.commands.push(if path_shadow {
+                DisplayCommand::PathShadow {
+                    path_id,
+                    transform,
+                    shadow,
+                }
+            } else {
+                DisplayCommand::DropShadow {
+                    path_id,
+                    transform,
+                    shadow,
+                }
+            });
+            let Some((worst, ndiff)) = cpu_gpu_delta(&list, &overflow_opts(144.0)) else {
+                return;
+            };
+            let _ = ndiff;
+            assert!(
+                worst <= SHADOW_WORST,
+                "path_shadow={path_shadow}: worst channel delta {worst}"
+            );
+        }
+    }
+
+    /// A dashed stroke leaves its gaps on the GPU as on the CPU. The
+    /// dash used to be dropped here, so every dashed and dotted stroke
+    /// drew solid (`strokes-fills` "canned-dotted": mean ΔE 0.37 between
+    /// the lanes on that page).
+    #[cfg(feature = "cpu")]
+    #[test]
+    fn dashed_strokes_leave_their_gaps() {
+        use paged_compose::{
+            Color as DLColor, DashPattern, DisplayCommand, LineCap, LineJoin, Paint, PathData,
+            PathSegment, Stroke, Transform,
+        };
+        let mut list = DisplayList::new();
+        let mut line = PathData::default();
+        line.segments.push(PathSegment::MoveTo { x: 10.0, y: 30.0 });
+        line.segments.push(PathSegment::LineTo { x: 90.0, y: 30.0 });
+        let path_id = list.paths.push_anon(line);
+        list.commands.push(DisplayCommand::StrokePath {
+            path_id,
+            paint: Paint::Solid(DLColor::rgba(0.0, 0.0, 0.0, 1.0)),
+            stroke: Stroke {
+                width: 4.0,
+                cap: LineCap::Butt,
+                join: LineJoin::Miter,
+                miter_limit: 4.0,
+                dash: DashPattern::from_slice(&[8.0, 8.0]),
+            },
+            transform: Transform::IDENTITY,
+        });
+        let opts = overflow_opts(72.0);
+        let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+        if !gpu_path_ran(&gpu) {
+            return;
+        }
+        // x = 22 pt sits in the first gap (8..16 pt past the start).
+        let (w, _) = opts.pixel_size();
+        let at = |x: usize, y: usize| gpu[(y * w as usize + x) * 4];
+        assert_eq!(at(14, 30), 0, "the first dash is ink");
+        assert_eq!(at(22, 30), 255, "the first gap is paper");
+        let (worst, _) = cpu_gpu_delta(&list, &opts).expect("the GPU lane ran above");
+        assert!(worst <= 8, "worst channel delta {worst}");
+
+        // Dots: a zero-length dash with round caps.
+        if let Some(DisplayCommand::StrokePath { stroke, .. }) = list.commands.last_mut() {
+            stroke.cap = LineCap::Round;
+            stroke.dash = DashPattern::from_slice(&[0.0, 8.0]);
+        }
+        let gpu = VelloRasterizer::new().rasterize(&list, &opts);
+        let at = |x: usize, y: usize| gpu[(y * w as usize + x) * 4];
+        assert_eq!(at(18, 30), 0, "the second dot is ink");
+        assert_eq!(at(14, 30), 255, "between the dots is paper");
+        // The edge of a 2 px dot: the lanes antialias it differently
+        // (measured 56 on Metal), where a missing dot would read 255.
+        let (worst, _) = cpu_gpu_delta(&list, &opts).expect("the GPU lane ran above");
+        assert!(worst <= 64, "dots: worst channel delta {worst}");
+    }
+
+    /// The worst channel delta a shadow may show between the lanes: the
+    /// two rasterise the stamp's coverage on different pixel grids
+    /// (measured at 144 dpi: 18 for the rect stamp, 9 for the path one;
+    /// before the shared builder the rect stamp was missing outright).
+    #[cfg(feature = "cpu")]
+    const SHADOW_WORST: u8 = 24;
 
     /// A blend group's extent is its `bounds` rect, in PAGE space, and
     /// both back ends must cut there.

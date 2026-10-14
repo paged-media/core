@@ -7,8 +7,9 @@ name: gpu
 # adapter via `init_gpu()`; with lavapipe installed and VK_ICD_FILENAMES
 # pointed at it, that adapter request succeeds and the pixel-level Vello
 # assertions actually run. Without it (or on a stock runner) those same
-# tests skip silently — so this lane only adds coverage, never flakes the
-# default pipeline.
+# tests skip silently, so the lane FAILS when vulkaninfo finds no
+# lavapipe device: from early October until 2026-10-14 Mesa's renamed
+# ICD left it with no adapter and every Vello test passed by skipping.
 #
 # PROMOTION STEP 1 (fidelity-governance second half; audit 17082026
 # §1.10): `continue-on-error` is REMOVED, so a failure now shows as a
@@ -28,6 +29,10 @@ on:
     paths:
       - 'crates/paged-gpu/**'
       - 'crates/paged-compose/**'
+      # The parity step below renders the generated corpus, so what
+      # builds the display list and what the fixtures are reach it too.
+      - 'crates/paged-renderer/**'
+      - 'corpus/generated/**'
       - '.github/workflows/gpu.yml'
   workflow_dispatch:
 
@@ -53,10 +58,11 @@ jobs:
     # branch-protection-required yet; see the header (audit 17082026
     # §1.10).
     env:
-      # Force wgpu/Vulkan onto Mesa's lavapipe software ICD. Both env
-      # names are honoured by the loader across versions; set both.
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      # The lavapipe ICD path is found after the install (see "point the
+      # Vulkan loader at lavapipe"): Mesa renamed it from
+      # lvp_icd.x86_64.json to lvp_icd.json, the loader found no driver,
+      # and every Vello test skipped for want of an adapter while the
+      # lane stayed green.
       # Surface adapter-selection detail in wgpu logs if a test fails.
       RUST_LOG: wgpu=warn,vello=warn
     steps:
@@ -86,16 +92,35 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-tools libvulkan1
 
+      - name: point the Vulkan loader at lavapipe
+        # Force wgpu/Vulkan onto Mesa's lavapipe software ICD, whatever
+        # this Mesa calls the file. Both env names are honoured by the
+        # loader across versions; set both.
+        run: |
+          set -euo pipefail
+          icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1 || true)"
+          if [ -z "$icd" ]; then
+            ls -la /usr/share/vulkan/icd.d/ || true
+            echo "::error::no lavapipe ICD under /usr/share/vulkan/icd.d"
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+
       - name: sanity — lavapipe is the active Vulkan device
+        # Hard: without a device every Vello test returns early on an
+        # empty buffer and passes, so a lane with no adapter is a lane
+        # that tests nothing.
         run: |
           set -euo pipefail
           echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
-          ls -la /usr/share/vulkan/icd.d/ || true
           # `vulkaninfo --summary` prints the device name; assert llvmpipe.
           if vulkaninfo --summary 2>/dev/null | grep -i 'llvmpipe\|lavapipe'; then
             echo "lavapipe present — the Vello GPU tests will exercise the real path."
           else
-            echo "::warning::lavapipe not detected by vulkaninfo; GPU tests may skip (still advisory)."
+            vulkaninfo --summary 2>&1 | tail -20 || true
+            echo "::error::lavapipe not detected by vulkaninfo; the Vello tests would skip."
+            exit 1
           fi
 
       - name: install cargo-nextest
@@ -110,6 +135,42 @@ jobs:
         # upload below hands to cockpit as the `core/vello-lavapipe` lane:
         # before it, the only GPU evidence was this job's colour.
         run: cargo nextest run -p paged-gpu --features vello-backend --profile ci --no-fail-fast
+
+      - name: CPU ↔ Vello parity over the generated corpus
+        id: parity
+        # P-0: the unit tests above check single commands; this renders
+        # every page of every generated fixture through BOTH backends and
+        # diffs them against the budgets in
+        # corpus/generated/parity-thresholds.json. Before it the GPU lane
+        # the editor and viewer draw with skipped shadows, drew dashes
+        # solid and blended against the paper, and no check noticed.
+        #
+        # Hard: the budgets were measured on Metal, and the first run on
+        # lavapipe with a real device (2026-10-14) put all 77 fixtures
+        # inside them too.
+        timeout-minutes: 45
+        env:
+          IDML_PARITY_OUT: /tmp/idml-parity
+        run: |
+          set -euo pipefail
+          bash scripts/regen-fixtures.sh
+          cargo build --release -p paged-renderer --features gpu --bin paged-inspect
+          cargo build --release -p paged-fidelity --bin paged-diff
+          ./corpus/generated/parity-diff.sh
+
+      - name: upload parity report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vello-parity
+          # parity.json + per-fixture pages.json, and heatmaps for any
+          # page over budget.
+          path: |
+            /tmp/idml-parity/parity.json
+            /tmp/idml-parity/*/pages.json
+            /tmp/idml-parity/*/heat-*.png
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: upload JUnit artifact
         if: ${{ !cancelled() }}
@@ -137,6 +198,12 @@ jobs:
             fi
             echo ""
             echo "Promotion step 2 — marking this check required — is a repo-settings flip after the observation week (W0.7)."
+            echo ""
+            if [ "${{ steps.parity.outcome }}" = "success" ]; then
+              echo "✅ CPU ↔ Vello parity: every generated fixture within its budget."
+            else
+              echo "❌ CPU ↔ Vello parity: a fixture is over its budget; see the vello-parity artifact's parity.json and heatmaps."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           # Also emit a workflow annotation so it shows on the checks tab.
           if [ "${{ steps.gpu_tests.outcome }}" != "success" ]; then

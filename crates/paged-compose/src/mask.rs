@@ -211,6 +211,33 @@ impl MaskRaster {
     }
 
     /// Scale every value by `k` (0..=1), i.e. the effect's opacity.
+    /// R-11 — a shadow's `Spread` and `Noise` on its blurred alpha, as the
+    /// CPU rasteriser shapes them: a choke `α' = min(1, α / (1 − spread))`
+    /// and hashed grain, one grain per ~0.5 pt.
+    pub fn shape_shadow(&mut self, spread: f32, noise: f32) {
+        let spread = spread.clamp(0.0, 0.99);
+        let noise = noise.clamp(0.0, 1.0);
+        if spread <= 0.0 && noise <= 0.0 {
+            return;
+        }
+        let w = self.grid.width_px as usize;
+        let gain = 1.0 / (1.0 - spread);
+        let cell = (self.grid.scale * 0.5).max(1.0);
+        for (i, v) in self.data.iter_mut().enumerate() {
+            if *v == 0 {
+                continue;
+            }
+            let mut factor = gain;
+            if noise > 0.0 {
+                let (x, y) = ((i % w) as f32 / cell, (i / w) as f32 / cell);
+                let k = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663);
+                let h = (k.wrapping_mul(2_654_435_761) >> 16) as f32 / 65_535.0;
+                factor *= 1.0 - noise * h;
+            }
+            *v = (*v as f32 * factor).round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
     pub fn scale(&mut self, k: f32) {
         let k = k.clamp(0.0, 1.0);
         for v in self.data.iter_mut() {
@@ -1201,8 +1228,49 @@ pub fn effect_command_stamps(
         C::InnerGlow { params, .. } => inner_glow_stamps(path, transform, params, dpi),
         C::Satin { params, .. } => satin_stamps(path, transform, params, dpi),
         C::BevelEmboss { params, .. } => bevel_emboss_stamps(path, transform, params, dpi),
+        C::DropShadow { shadow, .. } => drop_shadow_stamps(path, transform, shadow, false, dpi),
+        C::PathShadow { shadow, .. } => drop_shadow_stamps(path, transform, shadow, true, dpi),
         _ => Vec::new(),
     }
+}
+
+/// A drop shadow, as the CPU rasteriser draws it: the shape's coverage
+/// moved by the offset, blurred, its opacity applied, then choked by
+/// `Spread` and grained by `Noise`. A rect-stamp shadow blurs with
+/// σ = Size / 2 ([`outer_sigma_pt`]); a path shadow (glyphs, strokes)
+/// keeps its own wider σ = 3.5 × Size, measured on the glyph shadows of
+/// the manual sample. The stamp itself is drawn `Normal`: an emitter
+/// brackets a shadow whose blend mode matters in a group of that mode.
+pub fn drop_shadow_stamps(
+    path: &PathData,
+    transform: &Transform,
+    shadow: &crate::DropShadow,
+    path_shadow: bool,
+    dpi: f32,
+) -> Vec<EffectStamp> {
+    let sigma = if path_shadow {
+        shadow.blur_radius.max(0.0) * 3.5
+    } else {
+        outer_sigma_pt(shadow.blur_radius)
+    };
+    let pad = 3.0 * sigma + shadow.offset_x.abs().max(shadow.offset_y.abs()) + 1.0;
+    let Some(grid) = Grid::for_path(path, transform, pad, dpi) else {
+        return Vec::new();
+    };
+    let mut mask = MaskRaster::interior(grid, path, transform, (shadow.offset_x, shadow.offset_y));
+    mask.scale(shadow.opacity.clamp(0.0, 1.0));
+    // Under half a pixel the CPU lane fills the hard edge and leaves the
+    // alpha alone; so does this one.
+    if sigma * grid.scale > 0.5 {
+        mask.blur(sigma);
+        mask.shape_shadow(shadow.spread, shadow.noise);
+    }
+    vec![EffectStamp {
+        mask,
+        color: shadow.color,
+        blend_mode: crate::BlendMode::Normal,
+        clip_to_path: false,
+    }]
 }
 
 /// Sample an alpha stop list at `t` (0..=1), linearly between stops.

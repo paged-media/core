@@ -155,9 +155,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   either lane.
 - **The command line sends 39 of the 70 message kinds.** The rest are listed with a reason
   each in `crates/paged-cli/tests/cli_surface.rs`; half of them (15 of 31) need a pointer or a caret.
-- **The Vello path is not at parity with the CPU path.** Ink separations and coverage are
-  CPU only; the `DropShadow` command is skipped and a path shadow is approximated by
-  stamped fills (`crates/paged-gpu/src/vello_rs.rs:1086-1125`).
+- **The Vello path is held to the CPU path, with known gaps.** `corpus/generated/parity-diff.sh`
+  renders every generated fixture through both and budgets each in
+  `corpus/generated/parity-thresholds.json` ([ADR 146](adr/146-the-gpu-lane-is-held-to-the-cpu-lane.md)).
+  Ink separations and coverage are CPU only. A knockout group, and a non-isolated group below
+  100 % opacity whose members use blend modes, are drawn as isolated groups. The blur of a
+  `PushLayer` is a multi-tap approximation of the CPU's Gaussian.
 - **The viewer reads IDML parts only.** `ViewerSession::load` calls the IDML importer and
   does not read the native model part of a `.paged` container. It has no write surface.
 - **A `.paged` save carries the document twice**: the IDML parts and the model part, which

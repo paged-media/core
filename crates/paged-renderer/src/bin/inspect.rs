@@ -245,6 +245,20 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let gpu_backend = matches!(args.backend.as_str(), "vello" | "gpu");
+    if gpu_backend && !(args.trace_icc || args.trace_routing) {
+        // The Vello lane reports an adapter or render failure only
+        // through `tracing`; without a subscriber it vanished and the
+        // page came back blank.
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .with_target(true)
+            .without_time()
+            .init();
+    }
     if args.trace_icc || args.trace_routing {
         let mut targets: Vec<&str> = Vec::new();
         if args.trace_icc {
@@ -1570,6 +1584,16 @@ fn rasterize_vello(
     use paged_gpu::PathRasterizer;
     let (w, h) = opts.pixel_size();
     let buf = paged_gpu::vello_rs::VelloRasterizer::new().rasterize(list, opts);
+    // A page Vello drew is opaque: the paper is its clear colour. All
+    // zeros is the rasterizer's failure value (no adapter, or a render
+    // that failed), and saving it would measure a blank page.
+    if buf.iter().all(|b| *b == 0) {
+        eprintln!(
+            "vello: the GPU lane rendered nothing (no adapter, or the render failed; \
+             the warning above says which)"
+        );
+        std::process::exit(3);
+    }
     image::RgbaImage::from_raw(w, h, buf).unwrap_or_else(|| image::RgbaImage::new(w, h))
 }
 
