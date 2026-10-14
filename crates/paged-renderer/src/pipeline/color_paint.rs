@@ -1067,38 +1067,29 @@ pub(crate) fn stroke_for(
         }
     }
     let suffix = name.strip_prefix("StrokeStyle/$ID/").unwrap_or(name);
-    // IDML's "Canned" prefix denotes built-in user-facing stroke
-    // styles InDesign ships in the Stroke panel — InDesign serialises
-    // them as `StrokeStyle/$ID/Canned <Name>` references. Map the
-    // common ones to the same pattern table the bare names use so
-    // real IDMLs render with the right dash/dot style without each
-    // sample needing to declare a custom <StrokeStyle>.
-    let normalised = suffix.strip_prefix("Canned ").unwrap_or(suffix);
-    let is_dotted = matches!(
-        normalised,
-        "Dotted" | "Dotted2" | "Dotted4" | "Dotted8" | "Japanese Dots"
-    );
-    let pattern: Option<&[f32]> = match normalised {
-        "Solid" | "" => None,
-        "Dashed" => Some(&[3.0, 2.0]),
-        "Dashed3-2" => Some(&[3.0, 2.0]),
-        "Dashed4-4" => Some(&[4.0, 4.0]),
-        "Dashed5-5" => Some(&[5.0, 5.0]),
-        "Dotted" => Some(&[0.0, 2.0]),
-        "Dotted2" => Some(&[0.0, 2.0]),
-        "Dotted4" => Some(&[0.0, 4.0]),
-        "Dotted8" => Some(&[0.0, 8.0]),
-        // InDesign's "Japanese Dots" is denser than the standard
-        // Dotted (smaller gap, same on-zero-length).
-        "Japanese Dots" => Some(&[0.0, 1.5]),
-        // Built-in Striped ("Thick - Thin", "Triple", …) and "Wavy"
-        // names land here → no dash → a solid stroke of the declared
-        // width. True multi-line / sine rendering needs a new rasterizer
-        // capability (deferred; see the internal renderer gap list).
-        _ => None,
+    // InDesign's built-in dashes and dots, by the names its Graphic.xml
+    // declares (`BUILTIN_STROKE_STYLES` in paged-gen), measured on
+    // InDesign 20.0.1 (`stroke-styles`, ADR 148): `Dashed` is 12 pt on,
+    // 12 pt off whatever the weight; the canned ones are multiples of
+    // the weight. A name InDesign does not know draws solid there
+    // (`strokes-fills` "Dotted"), so it does here. The pattern is the
+    // NOMINAL one: `paged_compose::dash_fit` fits it to each side.
+    let (pattern, absolute): (Option<&[f32]>, bool) = match suffix {
+        "Dashed" => (Some(&[12.0, 12.0]), true),
+        "Canned Dashed 3x2" => (Some(&[3.0, 2.0]), false),
+        "Canned Dashed 4x4" => (Some(&[4.0, 4.0]), false),
+        "Canned Dotted" => (Some(&[0.0, 3.0]), false),
+        "Japanese Dots" => (Some(&[0.0, 2.0]), false),
+        // Solid, the striped built-ins, Wavy (drawn by `emit_styled_stroke`)
+        // and the hashes and diamonds, which are not modelled yet.
+        _ => (None, false),
     };
+    let is_dotted = pattern.is_some_and(|p| p.first() == Some(&0.0));
     if let Some(p) = pattern {
-        let scaled: Vec<f32> = p.iter().map(|v| v * w).collect();
+        let scaled: Vec<f32> = p
+            .iter()
+            .map(|v| if absolute { *v } else { v * w })
+            .collect();
         s.dash = paged_compose::DashPattern::from_slice(&scaled);
         // Dotted patterns force round caps when the IDML didn't carry
         // an explicit `EndCap`, otherwise the zero-length on-segment

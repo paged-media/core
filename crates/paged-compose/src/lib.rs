@@ -20,6 +20,7 @@
 //! so it can also be used as a stable intermediate representation for
 //! tooling.
 
+pub mod dash_fit;
 pub mod display_list;
 pub mod extent;
 pub mod glyph;

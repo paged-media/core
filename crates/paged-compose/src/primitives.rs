@@ -95,12 +95,7 @@ pub fn emit_stroke_rect_transformed(
 ) {
     let (path_id, _) = list.paths.intern(UNIT_RECT_KEY, unit_rect());
     let transform = Transform::for_rect_in(rect, outer);
-    list.push(DisplayCommand::StrokePath {
-        path_id,
-        paint,
-        stroke,
-        transform,
-    });
+    crate::dash_fit::push_stroke(list, path_id, stroke, paint, transform);
 }
 
 /// Cache key for the unit ellipse — a four-cubic Bézier approximation
@@ -173,12 +168,7 @@ pub fn emit_stroke_ellipse_transformed(
 ) {
     let (path_id, _) = list.paths.intern(UNIT_ELLIPSE_KEY, unit_ellipse());
     let transform = Transform::for_rect_in(rect, outer);
-    list.push(DisplayCommand::StrokePath {
-        path_id,
-        paint,
-        stroke,
-        transform,
-    });
+    crate::dash_fit::push_stroke(list, path_id, stroke, paint, transform);
 }
 
 /// Emit a drop-shadow stamp for an axis-aligned rectangle. Shares

@@ -72,6 +72,7 @@ pub mod span_columns;
 pub mod split_boundaries;
 pub mod start_paragraph;
 pub mod stroke_inset;
+pub mod stroke_styles;
 pub mod strokes_fills;
 pub mod styles_cascade;
 pub mod swatches;
@@ -184,6 +185,7 @@ pub const SAMPLES: &[&str] = &[
     "baseline-grid",
     "baseline-grid-margin",
     "object-style-options",
+    "stroke-styles",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -251,6 +253,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "showcase-base" => showcase_base::build(),
         "annual-base" => annual_base::build(),
         "line-ends" => line_ends::build(),
+        "stroke-styles" => stroke_styles::build(),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -296,7 +299,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            78,
+            79,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
