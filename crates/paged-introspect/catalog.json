@@ -6147,7 +6147,14 @@
       },
       "default": 100.0,
       "access": "readWrite",
-      "bindable": true
+      "bindable": true,
+      "idml": [
+        {
+          "element": "Cell",
+          "attribute": "FillTint",
+          "kind": "attr"
+        }
+      ]
     },
     {
       "addressKind": "cell",
@@ -10509,6 +10516,37 @@
         {
           "element": "CellStyle",
           "attribute": "FillColor",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "cell"
+      ],
+      "path": "cellFillTint",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 100.0
+      },
+      "default": 100.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "CellStyle",
+          "attribute": "FillTint",
           "kind": "attr"
         }
       ]

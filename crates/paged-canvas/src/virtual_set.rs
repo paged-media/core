@@ -1594,6 +1594,7 @@ impl CanvasModel {
                     P::CellFillColor => color(&d.fill_color),
                     P::CellVerticalJustification => text(&d.vertical_justification),
                     P::CellStyleRotationAngle => len(d.rotation_angle),
+                    P::CellFillTint => len(d.fill_tint),
                     P::CellTopEdgeStrokeColor => color(&d.top_edge_stroke_color),
                     P::CellTopEdgeStrokeWeight => len(d.top_edge_stroke_weight),
                     P::CellBottomEdgeStrokeColor => color(&d.bottom_edge_stroke_color),

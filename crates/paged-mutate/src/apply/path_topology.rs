@@ -1894,15 +1894,12 @@ pub(super) fn apply_cell_property(
             cell.fill_color = new;
             Value::ColorRef(prev)
         }
-        // v1: IDML has no standalone per-cell fill-tint attribute;
-        // the parse side doesn't model one. We accept the path for the
-        // wire surface but route it through the cell-style cascade —
-        // there's nothing to store, so the write is a typed no-op that
-        // still round-trips (inverse restores the same absent value).
-        // Honest scope: a real fill-tint needs a parse field; deferred.
+        // The `<Cell FillTint>`; `None` falls back to the cell style's.
         PropertyPath::CellFillTint => {
-            let _ = expect_length(path, value)?;
-            Value::Length(None)
+            let new = expect_length(path, value)?;
+            let prev = cell.fill_tint;
+            cell.fill_tint = new;
+            Value::Length(prev)
         }
         PropertyPath::CellInsetTop => {
             let new = expect_length(path, value)?.unwrap_or(0.0);

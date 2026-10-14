@@ -813,9 +813,17 @@ pub(super) fn emit_table_into_chain(
                 .as_deref()
                 .filter(|c| !is_none_swatch_id(c))
                 .or(resolved_cell.fill_color.as_deref());
-            if let Some(fill) =
-                cell_fill_id.and_then(|id| color_id_to_paint(id, em.palette, em.color_ctx))
-            {
+            // Its tint the same way: the cell's own, else its style's.
+            let cell_fill_tint = cell.fill_tint.or(resolved_cell.fill_tint);
+            if let Some(fill) = cell_fill_id.and_then(|id| {
+                color_id_to_paint(id, em.palette, em.color_ctx).map(|p| {
+                    apply_fill_tint_ctx(
+                        p,
+                        object_tint(em.palette, Some(id), cell_fill_tint),
+                        &em.color_ctx,
+                    )
+                })
+            }) {
                 emit_rect(
                     Rect {
                         x: cell_x_pt,
@@ -858,7 +866,8 @@ pub(super) fn emit_table_into_chain(
                 (
                     cell_top_color,
                     cell_top_weight,
-                    cell.top_edge_stroke_tint,
+                    cell.top_edge_stroke_tint
+                        .or(resolved_cell.top_edge_stroke_tint),
                     edge_type(
                         &cell.top_edge_stroke_type,
                         &resolved_cell.top_edge_stroke_type,
@@ -870,7 +879,8 @@ pub(super) fn emit_table_into_chain(
                 (
                     cell_bot_color,
                     cell_bot_weight,
-                    cell.bottom_edge_stroke_tint,
+                    cell.bottom_edge_stroke_tint
+                        .or(resolved_cell.bottom_edge_stroke_tint),
                     edge_type(
                         &cell.bottom_edge_stroke_type,
                         &resolved_cell.bottom_edge_stroke_type,
@@ -924,7 +934,8 @@ pub(super) fn emit_table_into_chain(
                 (
                     cell_left_color,
                     cell_left_weight,
-                    cell.left_edge_stroke_tint,
+                    cell.left_edge_stroke_tint
+                        .or(resolved_cell.left_edge_stroke_tint),
                     edge_type(
                         &cell.left_edge_stroke_type,
                         &resolved_cell.left_edge_stroke_type,
@@ -936,7 +947,8 @@ pub(super) fn emit_table_into_chain(
                 (
                     cell_right_color,
                     cell_right_weight,
-                    cell.right_edge_stroke_tint,
+                    cell.right_edge_stroke_tint
+                        .or(resolved_cell.right_edge_stroke_tint),
                     edge_type(
                         &cell.right_edge_stroke_type,
                         &resolved_cell.right_edge_stroke_type,

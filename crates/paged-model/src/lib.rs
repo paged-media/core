@@ -4596,6 +4596,19 @@ pub struct CellStyleDef {
     pub first_baseline_offset: Option<String>,
     #[serde(default)]
     pub minimum_first_baseline_offset: Option<f32>,
+    /// `FillTint` (0–100) of the style's fill; see
+    /// [`TableCell::fill_tint`].
+    #[serde(default)]
+    pub fill_tint: Option<f32>,
+    /// `TopEdgeStrokeTint` … `RightEdgeStrokeTint` (0–100).
+    #[serde(default)]
+    pub top_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub bottom_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub left_edge_stroke_tint: Option<f32>,
+    #[serde(default)]
+    pub right_edge_stroke_tint: Option<f32>,
 }
 /// `<TableStyle>` — table-level defaults that flow through to
 /// cells. Carries the region → CellStyle map (Header / Body /
@@ -4709,6 +4722,11 @@ pub struct ResolvedCell {
     pub right_edge_stroke_type: Option<String>,
     pub first_baseline_offset: Option<String>,
     pub minimum_first_baseline_offset: Option<f32>,
+    pub fill_tint: Option<f32>,
+    pub top_edge_stroke_tint: Option<f32>,
+    pub bottom_edge_stroke_tint: Option<f32>,
+    pub left_edge_stroke_tint: Option<f32>,
+    pub right_edge_stroke_tint: Option<f32>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
@@ -5605,6 +5623,11 @@ impl ResolvedTable {
 }
 impl ResolvedCell {
     pub fn merge_below(&mut self, def: &CellStyleDef) {
+        self.fill_tint = self.fill_tint.or(def.fill_tint);
+        self.top_edge_stroke_tint = self.top_edge_stroke_tint.or(def.top_edge_stroke_tint);
+        self.bottom_edge_stroke_tint = self.bottom_edge_stroke_tint.or(def.bottom_edge_stroke_tint);
+        self.left_edge_stroke_tint = self.left_edge_stroke_tint.or(def.left_edge_stroke_tint);
+        self.right_edge_stroke_tint = self.right_edge_stroke_tint.or(def.right_edge_stroke_tint);
         if self.first_baseline_offset.is_none() {
             self.first_baseline_offset = def.first_baseline_offset.clone();
         }
@@ -6768,6 +6791,11 @@ pub struct TableCell {
     /// AppliedTableStyle. `None` ⇒ inherit from the resolved cell
     /// style.
     pub fill_color: Option<String>,
+    /// `FillTint` (0–100) on the `<Cell>`: the tint of its fill, whichever
+    /// level the fill colour comes from. `None` ⇒ the cell style's, else
+    /// 100.
+    #[serde(default)]
+    pub fill_tint: Option<f32>,
     /// `FirstBaselineOffset` enum (Ascent / Cap / Leading / Emboxed /
     /// FixedHeight / etc). Drives where the first line of cell text
     /// drops from the cell's top edge. Parsed for completeness; the
