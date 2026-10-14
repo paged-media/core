@@ -15,6 +15,12 @@
       "rationale": "Dense small text: glyph-edge antialiasing differs between the lanes (analytic coverage vs area coverage), balanced in sign, p99 ~45 levels, summed over every edge pixel. Same glyph paths, same positions."
     },
     {
+      "name": "text-wrap-sides",
+      "worst_mean_de": 0.47,
+      "measured": 0.39,
+      "rationale": "Dense small text: glyph-edge antialiasing (see text-wrap). Measured on lavapipe (CI, 2026-10-14), worst page 14; sized at worst x 1.20."
+    },
+    {
       "name": "reflow",
       "worst_mean_de": 0.41,
       "measured": 0.342,
