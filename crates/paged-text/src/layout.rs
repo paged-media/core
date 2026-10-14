@@ -320,6 +320,7 @@ pub fn layout_paragraph<S: TextShaper>(
             text.as_bytes(),
             false,
             options.compose.single_line.is_some(),
+            false,
         );
         lines.push(LaidOutLine {
             byte_range: line.byte_range.clone(),
@@ -416,6 +417,10 @@ pub fn position_line(
 /// For `Justify`, `last_line` carries how the paragraph sets the line
 /// when it is its last ([`LayoutOptions::last_line_alignment`]); `None`
 /// stretches it like any other.
+///
+/// `tabs_set`: the line's tabs already stand at their stops
+/// ([`LayoutOptions::tabs`]), so a flush-right or centred line moves only
+/// the text after its last tab (`shift_ragged`).
 #[allow(clippy::too_many_arguments)]
 fn apply_alignment(
     glyphs: &mut [PositionedGlyph],
@@ -426,6 +431,7 @@ fn apply_alignment(
     paragraph_bytes: &[u8],
     squeeze_ragged: bool,
     squeeze_justified: bool,
+    tabs_set: bool,
 ) {
     if glyphs.is_empty() || column_width <= 0 {
         return;
@@ -454,25 +460,48 @@ fn apply_alignment(
                 spread_letters(glyphs, extra);
             }
         }
-        (Alignment::Justify, Some(last)) => shift_ragged(glyphs, extra, last),
+        (Alignment::Justify, Some(last)) => {
+            shift_ragged(glyphs, extra, last, paragraph_bytes, tabs_set)
+        }
         (Alignment::Justify, None) => {
             if extra > 0 {
                 spread_spaces(glyphs, extra, paragraph_bytes);
             }
         }
-        (ragged, _) => shift_ragged(glyphs, extra, ragged),
+        (ragged, _) => shift_ragged(glyphs, extra, ragged, paragraph_bytes, tabs_set),
     }
 }
 
 /// Place a line that does not fill its measure: flush left, flush right
 /// (`extra` to the right) or centred (half of it).
-fn shift_ragged(glyphs: &mut [PositionedGlyph], extra: i32, alignment: Alignment) {
+///
+/// With its tabs set at their stops (`tabs_set`), only the text after the
+/// line's last tab moves; what comes before stays where its tabs put it.
+/// InDesign 20.0.1 (`tools/indesign-export/footnote-paragraphs-probe`,
+/// `right` and `center`: "1", a tab, then text): the number stays at the
+/// line's start and the text after the tab ends at the measure, or is
+/// centred between its stop and the measure's end.
+fn shift_ragged(
+    glyphs: &mut [PositionedGlyph],
+    extra: i32,
+    alignment: Alignment,
+    paragraph_bytes: &[u8],
+    tabs_set: bool,
+) {
     let shift = match alignment {
         Alignment::Left | Alignment::Justify => return,
         Alignment::Right => extra,
         Alignment::Center => extra / 2,
     };
-    for g in glyphs.iter_mut() {
+    let first = if tabs_set {
+        glyphs
+            .iter()
+            .rposition(|g| paragraph_bytes.get(g.cluster as usize) == Some(&b'\t'))
+            .map_or(0, |t| t + 1)
+    } else {
+        0
+    };
+    for g in glyphs[first..].iter_mut() {
         g.x += shift;
     }
 }
@@ -801,38 +830,40 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // `DesiredLetterSpacing` is a percentage of the run's own space
         // width (InDesign 20.0.1: 50 at 20 pt Open Sans adds 2.598 pt, half
         // its 5.195 pt space), added like tracking.
-        if options.compose.letter_spacing_pct != 0.0 {
+        let letter_spacing = if options.compose.letter_spacing_pct != 0.0 {
             let space = shape_run(r.face, " ", r.point_size).total_advance;
-            let extra = (space as f32 * options.compose.letter_spacing_pct / 100.0).round() as i32;
-            if extra != 0 {
-                for g in s.glyphs.iter_mut() {
-                    g.x_advance += extra;
-                }
-                s.total_advance = s.glyphs.iter().map(|g| g.x_advance).sum();
-            }
-        }
+            space as f64 * options.compose.letter_spacing_pct as f64 / 100.0
+        } else {
+            0.0
+        };
         // HorizontalScale folds into the per-glyph x_advance so the
         // breaker sees the requested width directly (P-08). The
         // glyph-emit affine also needs a matching x-scale so painted
-        // glyphs land where the breaker placed them.
+        // glyphs land where the breaker placed them. The letter spacing
+        // scales with the glyph (InDesign: 10 % at 90 % glyph scaling adds
+        // 0.2335 pt after every 10 pt Open Sans glyph, 10 % of the scaled
+        // space). Each advance is rounded against the run's exact pen:
+        // rounded glyph by glyph, the spacing and the scale each gained up
+        // to 1/128 pt a glyph, 0.5 pt over a 340 pt line
+        // (tools/indesign-export/footnote-paragraphs-probe, `spacing`).
         let hs_pct = r.horizontal_scale_pct;
-        if (hs_pct - 100.0).abs() > 0.05 {
-            let factor = hs_pct / 100.0;
-            let mut total: i32 = 0;
-            for g in s.glyphs.iter_mut() {
-                let scaled = (g.x_advance as f32 * factor).round() as i32;
-                g.x_advance = scaled;
-                let scaled_off = (g.x_offset as f32 * factor).round() as i32;
-                g.x_offset = scaled_off;
-                total = total.saturating_add(scaled);
-            }
-            s.total_advance = total;
-        }
         let factor = if (hs_pct - 100.0).abs() > 0.05 {
             hs_pct / 100.0
         } else {
             1.0
         };
+        if letter_spacing != 0.0 || factor != 1.0 {
+            let mut exact = 0.0_f64;
+            let mut placed = 0_i32;
+            for g in s.glyphs.iter_mut() {
+                exact += (g.x_advance as f64 + letter_spacing) * factor as f64;
+                let next = exact.round() as i32;
+                g.x_advance = next - placed;
+                placed = next;
+                g.x_offset = (g.x_offset as f32 * factor).round() as i32;
+            }
+            s.total_advance = placed;
+        }
         run_spacing.push(
             s.glyphs
                 .iter()
@@ -1433,6 +1464,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             bytes,
             opts.minimum_raggedness,
             single_line.is_some() || !opts.minimum_raggedness,
+            options.tabs.is_some(),
         );
         // A line sits ITS OWN leading below the line before it (the
         // first one at `first_baseline`): the largest leading among its

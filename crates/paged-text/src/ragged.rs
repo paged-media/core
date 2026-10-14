@@ -77,8 +77,10 @@ const SQUEEZE_WEIGHT: f64 = 10_000.0;
 /// fixtures narrow it to 6 to 8: the `tints` labels hyphenate "Ma-genta" and
 /// "Yel-low" in their one-line frames as InDesign does up to 8 (not at
 /// 10), and `text-letterspacing` keeps "Trebek" whole as InDesign does from
-/// 6 (not at 4).
-const HYPHEN_WEIGHT: f64 = 7.0;
+/// 6 (not at 4). The `footnotes` fixture's long third note narrows it to
+/// 7.46 to 8: InDesign sets it with no hyphen, where two would save 746 pt²
+/// of slack.
+const HYPHEN_WEIGHT: f64 = 7.75;
 
 /// How far (1/64 pt) InDesign lets a plain frame's ragged line overrun its
 /// measure to keep its last word, `word` wide after `before` of the line

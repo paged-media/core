@@ -27,6 +27,48 @@ pub(super) fn desired_glyph_scale(resolved: &paged_scene::ResolvedParagraphAttrs
     resolved.desired_glyph_scaling.unwrap_or(100.0).max(0.0) / 100.0
 }
 
+/// The paragraph's leading, onto `lopts`. Explicit `Leading` on the
+/// first run mirrors IDML semantics: every line uses it regardless of
+/// the largest glyph size on the line (no override: auto leading). Runs
+/// that ask for DIFFERENT leadings each keep their own, and a line takes
+/// the largest among its characters (`paged_text::layout::line_leading`).
+/// `styled_runs` are the runs as shaped: `head_run` of them (a list
+/// marker shaped as its own run) lead `resolved_runs`, and their glyphs
+/// never count (`auto_leading_from_byte`).
+pub(super) fn apply_leadings(
+    lopts: &mut paged_text::LayoutOptions<'_>,
+    resolved_runs: &[paged_scene::ResolvedRunAttrs],
+    styled_runs: &[paged_text::StyledRun<'_>],
+    head_run: usize,
+) {
+    if let Some(leading_pt) = resolved_runs.first().and_then(|r| r.leading) {
+        if leading_pt > 0.0 {
+            lopts.leading_override =
+                Some((leading_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32);
+            lopts.leading_override_exact =
+                Some(leading_pt as f64 * paged_text::shape::ADVANCE_PRECISION as f64);
+        }
+    }
+    let explicit = |r: &paged_scene::ResolvedRunAttrs| {
+        r.leading
+            .filter(|l| *l > 0.0)
+            .map(|l| (l * paged_text::shape::ADVANCE_PRECISION).round() as i32)
+    };
+    let leadings: Vec<Option<i32>> = resolved_runs.iter().map(explicit).collect();
+    if leadings.windows(2).any(|w| w[0] != w[1]) {
+        let mut at = 0u32;
+        let mut out = Vec::with_capacity(styled_runs.len());
+        for (k, run) in styled_runs.iter().enumerate() {
+            let leading = k
+                .checked_sub(head_run)
+                .and_then(|i| leadings.get(i).copied().flatten());
+            out.push((at, leading));
+            at += run.text.len() as u32;
+        }
+        lopts.run_leadings = out;
+    }
+}
+
 /// Apply IDML paragraph-style attributes that drive the line breaker
 /// onto a fresh `LayoutOptions`. Hyphenation defaults to *on* (IDML's
 /// own default) when the cascade leaves the field unset; explicit

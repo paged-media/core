@@ -336,8 +336,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   strikethru, baseline_shift_pt, horizontal_scale_pct,
 ///   vertical_scale_pct, skew_deg, fallback-face count (not contents —
 ///   see module docs), and every OTF shaping-feature toggle.
-/// - LayoutOptions: alignment, line_height (NOT first_baseline: the
-///   cached layout is translated to it),
+/// - LayoutOptions: alignment, line_height and its exact value (NOT
+///   first_baseline: the cached layout is translated to it),
 ///   leading_override, auto_leading_from_byte, justify_last_line,
 ///   last_line_alignment, the tab layout (stops, default grid, line
 ///   starts), and the inline objects' advances.
@@ -345,7 +345,8 @@ pub fn layout_runs_cached(runs: &[StyledRun], options: &LayoutOptions) -> LaidOu
 ///   stretch_ratio, shrink_ratio, desired_space_ratio,
 ///   hyphenator language id, hyphen_penalty, kinsoku_enforce,
 ///   minimum_raggedness, visible_lines, joined_lines, the hyphenation
-///   limits, and the Single-line Composer's settings (`single_line`).
+///   limits, the Single-line Composer's settings (`single_line`), the
+///   letter spacing, the mojikumi switch and the fit tolerance.
 ///
 /// **Caching contract assumption.** `font_id` is treated as a stable
 /// per-font identifier within a render. If the caller maps different
@@ -417,6 +418,7 @@ pub fn layout_runs_key(runs: &[StyledRun], options: &LayoutOptions) -> [u8; 32] 
 fn fold_layout_options(h: &mut LayoutKeyHasher, options: &LayoutOptions) {
     h.sep();
     h.add_i32(options.line_height);
+    h.add_u64(options.line_height_exact.map_or(u64::MAX, |e| e.to_bits()));
     // `first_baseline` is not an input: `layout_runs_cached` lays out at 0
     // and translates.
     h.add_optional_i32(options.leading_override);
@@ -531,6 +533,11 @@ fn fold_compose_options(h: &mut LayoutKeyHasher, options: &ComposeOptions) {
         }
         None => h.add_bool(false),
     }
+    // Each moves glyphs or breaks, so two paragraphs differing only in one
+    // must not share an entry: they used to, letter spacing among them.
+    h.add_f32(options.letter_spacing_pct);
+    h.add_bool(options.mojikumi_half_width);
+    h.add_i32(options.fit_tolerance);
 }
 
 fn alignment_tag(a: Alignment) -> u32 {
@@ -771,6 +778,28 @@ mod tests {
                 base_key, key,
                 "two runs differing only in {field} must hash to distinct \
                  layout-cache keys (else the cache aliases them)",
+            );
+        }
+
+        // The options `layout_runs` reads that the key once left out.
+        let mut letter_spaced = opts.clone();
+        letter_spaced.compose.letter_spacing_pct = 10.0;
+        let mut mojikumi = opts.clone();
+        mojikumi.compose.mojikumi_half_width = true;
+        let mut tolerant = opts.clone();
+        tolerant.compose.fit_tolerance = 64;
+        let mut exact = opts.clone();
+        exact.line_height_exact = Some(1000.5);
+        for (field, o) in [
+            ("letter_spacing_pct", letter_spaced),
+            ("mojikumi_half_width", mojikumi),
+            ("fit_tolerance", tolerant),
+            ("line_height_exact", exact),
+        ] {
+            assert_ne!(
+                base_key,
+                layout_runs_key(std::slice::from_ref(&base), &o),
+                "two layouts differing only in {field} must not share a cache entry",
             );
         }
     }

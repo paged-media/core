@@ -54,8 +54,17 @@ pub(super) const MAX_FOOTNOTE_RESERVE_PASSES: usize = 3;
 /// printing the note's number) laid out into the column width through
 /// the SAME multi-font `layout_runs` path as body text.
 pub(super) struct ComposedFootnote {
-    /// One laid-out paragraph per source footnote paragraph.
+    /// One laid-out paragraph per paragraph of the note: per piece of
+    /// one, where a paragraph mark or a forced line break splits it.
     paragraphs: Vec<paged_text::LaidOutParagraph>,
+    /// Per paragraph, each line's leading (pt): how far its baseline sits
+    /// below the line before it. An empty paragraph has no line but one
+    /// leading, the room its line takes.
+    leadings: Vec<Vec<f32>>,
+    /// Per paragraph, the room above its first line on top of the
+    /// leading: the paragraph before's `SpaceAfter` plus its own
+    /// `SpaceBefore`; none for the note's first paragraph.
+    space_above: Vec<f32>,
     /// Each paragraph's shaped text (the number printed in place), which
     /// its lines' byte ranges index.
     texts: Vec<String>,
@@ -76,30 +85,23 @@ pub(super) struct ComposedFootnote {
     run_text_lens_per_para: Vec<Vec<usize>>,
 }
 
-/// W1.8 — vertical line advance for a footnote line, mirroring the
-/// auto-leading body text uses (`point_size × 1.2`). Computed from the
-/// dominant point size on the line so a footnote that mixes sizes still
-/// leaves room for its tallest glyphs.
-pub(super) fn footnote_line_height_pt(line: &paged_text::layout::LaidOutLine) -> f32 {
-    let max_size = line
-        .glyphs
-        .iter()
-        .map(|g| g.point_size)
-        .fold(0.0_f32, f32::max);
-    let size = if max_size > 0.0 {
-        max_size
-    } else {
-        FOOTNOTE_POINT_SIZE
-    };
-    size * 1.2
-}
-
 /// W1.8 — compose one footnote's body into laid-out paragraphs through
 /// the styled-run path. Each source run resolves its own
 /// `PointSize` / `FontStyle` (bold/italic via the `wght` axis) /
 /// `FillColor` / tracking / baseline-shift exactly like body text, so a
 /// footnote with mixed styling renders faithfully instead of flattening
 /// to a single face + size.
+///
+/// Each paragraph is set as body text sets one: its alignment, indents,
+/// leading, tab stops, word and letter spacing, glyph scaling and
+/// hyphenation, and a paragraph mark (`<Br/>`) in its range starts a
+/// paragraph of its own. Its `SpaceBefore` and `SpaceAfter` count only
+/// between the note's own paragraphs: InDesign sets two one-paragraph
+/// notes that both ask for 12 pt before and 9 pt after one leading
+/// apart, and does not move the area's top for the first's space
+/// before, but sets the two paragraphs of one such note 12 + 9 pt more
+/// than a leading apart (InDesign 20.0.1,
+/// `tools/indesign-export/footnote-paragraphs-probe`).
 ///
 /// `column_width_pt` is the host frame's content width. Returns `None`
 /// when no run resolves to any font (nothing to shape) — the caller skips
@@ -108,6 +110,8 @@ pub(super) fn compose_footnote_paragraphs(
     fn_: &EmittedFootnote,
     document: &Document,
     font_table: &FontTable,
+    hyphenators: &paged_text::Hyphenators,
+    binding: BindingEdge,
     column_width_pt: f32,
     default_size: f32,
 ) -> Option<ComposedFootnote> {
@@ -122,164 +126,269 @@ pub(super) fn compose_footnote_paragraphs(
     // `footnotes` fixture, whose notes carry no `ACE 4`, shows none.
     let label = document.designmap.footnote_options.label(fn_.number);
     let mut paragraphs: Vec<paged_text::LaidOutParagraph> = Vec::new();
+    let mut leadings: Vec<Vec<f32>> = Vec::new();
+    let mut space_above: Vec<f32> = Vec::new();
     let mut texts: Vec<String> = Vec::new();
     let mut numbers = Vec::new();
     let mut font_outline_bytes: HashMap<u32, Bytes> = HashMap::new();
     let mut resolved_runs_per_para: Vec<Vec<paged_scene::ResolvedRunAttrs>> = Vec::new();
     let mut run_text_lens_per_para: Vec<Vec<usize>> = Vec::new();
+    // The paragraph before's `SpaceAfter`, counted when another follows.
+    let mut space_after_pt = 0.0f32;
+    let to_64 = |pt: f32| (pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
 
-    for para in &fn_.paragraphs {
-        // A footnote paragraph takes its nested styles as a body one does.
-        let para = &*super::with_nested_styles(document, para);
-        // Resolve every run's attrs against the footnote paragraph's
-        // own style cascade — the footnote body parses into the same
-        // Paragraph/CharacterRun shape as a top-level story, so the
-        // standard resolver applies directly.
-        let resolved_runs: Vec<paged_scene::ResolvedRunAttrs> = para
-            .runs
-            .iter()
-            .map(|r| document.resolved_run_attrs(para, r))
-            .collect();
-        let resolved_fonts = match font_table.resolve_paragraph_bytes(&resolved_runs) {
-            Some(b) => b,
-            None => continue,
-        };
-        let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
-            resolved_fonts.into_iter().unzip();
-        let wghts: Vec<f32> = resolved_runs
-            .iter()
-            .map(|r| wght_for_font_style(r.font_style.as_deref()))
-            .collect();
+    for source in &fn_.paragraphs {
+        // A footnote paragraph takes its nested styles as a body one does,
+        // over the whole paragraph before it is split.
+        let source = &*super::with_nested_styles(document, source);
+        for segment in super::geom::split_paragraph_into_segments(source) {
+            let para = &segment.paragraph;
+            let resolved_paragraph = SegmentState {
+                opens_paragraph: segment.opens_paragraph,
+                closes_paragraph: segment.closes_paragraph,
+                ..SegmentState::default()
+            }
+            .mask(document.resolved_paragraph_attrs(para));
+            // Resolve every run's attrs against the footnote paragraph's
+            // own style cascade — the footnote body parses into the same
+            // Paragraph/CharacterRun shape as a top-level story, so the
+            // standard resolver applies directly.
+            let resolved_runs: Vec<paged_scene::ResolvedRunAttrs> = para
+                .runs
+                .iter()
+                .map(|r| document.resolved_run_attrs(para, r))
+                .collect();
+            let resolved_fonts = match font_table.resolve_paragraph_bytes(&resolved_runs) {
+                Some(b) => b,
+                None => continue,
+            };
+            let (bytes_pool, substituted_flags): (Vec<Bytes>, Vec<bool>) =
+                resolved_fonts.into_iter().unzip();
+            let wghts: Vec<f32> = resolved_runs
+                .iter()
+                .map(|r| wght_for_font_style(r.font_style.as_deref()))
+                .collect();
 
-        // Build one shaping Face per (bytes, wght). Built on the fly
-        // here (rather than via the per-render face cache) — footnote
-        // pools are small, so the extra zero-copy Face construction is
-        // negligible and keeps this path independent of the cache's
-        // harvest pass (which never sees footnote stories).
-        let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
-        let mut owned_faces: Vec<Option<paged_text::Face>> = Vec::with_capacity(bytes_pool.len());
-        for (i, b) in bytes_pool.iter().enumerate() {
-            let face = paged_text::Face::from_slice(b.as_ref(), 0).map(|mut rf| {
-                let has_wght = ttf_parser::Face::parse(b.as_ref(), 0)
-                    .ok()
-                    .map(|of| of.variation_axes().into_iter().any(|a| a.tag == wght_tag))
-                    .unwrap_or(false);
-                if has_wght {
-                    rf.set_variations(&[paged_text::Variation {
-                        tag: wght_tag,
-                        value: wghts[i],
-                    }]);
-                }
-                rf
-            });
-            owned_faces.push(face);
-        }
-        if owned_faces.iter().any(|f| f.is_none()) {
-            continue;
-        }
+            // Build one shaping Face per (bytes, wght). Built on the fly
+            // here (rather than via the per-render face cache) — footnote
+            // pools are small, so the extra zero-copy Face construction is
+            // negligible and keeps this path independent of the cache's
+            // harvest pass (which never sees footnote stories).
+            let wght_tag = ttf_parser::Tag::from_bytes(b"wght");
+            let mut owned_faces: Vec<Option<paged_text::Face>> =
+                Vec::with_capacity(bytes_pool.len());
+            for (i, b) in bytes_pool.iter().enumerate() {
+                let face = paged_text::Face::from_slice(b.as_ref(), 0).map(|mut rf| {
+                    let has_wght = ttf_parser::Face::parse(b.as_ref(), 0)
+                        .ok()
+                        .map(|of| of.variation_axes().into_iter().any(|a| a.tag == wght_tag))
+                        .unwrap_or(false);
+                    if has_wght {
+                        rf.set_variations(&[paged_text::Variation {
+                            tag: wght_tag,
+                            value: wghts[i],
+                        }]);
+                    }
+                    rf
+                });
+                owned_faces.push(face);
+            }
+            if owned_faces.iter().any(|f| f.is_none()) {
+                continue;
+            }
 
-        // font_id mixes in the wght so the glyph-outline cache doesn't
-        // conflate two weights of one variable font.
-        let font_ids: Vec<u32> = bytes_pool
-            .iter()
-            .zip(wghts.iter())
-            .map(|(b, w)| font_id(b) ^ w.to_bits())
-            .collect();
-        for (fid, b) in font_ids.iter().zip(bytes_pool.iter()) {
-            font_outline_bytes.entry(*fid).or_insert_with(|| b.clone());
-        }
+            // font_id mixes in the wght so the glyph-outline cache doesn't
+            // conflate two weights of one variable font.
+            let font_ids: Vec<u32> = bytes_pool
+                .iter()
+                .zip(wghts.iter())
+                .map(|(b, w)| font_id(b) ^ w.to_bits())
+                .collect();
+            for (fid, b) in font_ids.iter().zip(bytes_pool.iter()) {
+                font_outline_bytes.entry(*fid).or_insert_with(|| b.clone());
+            }
 
-        // Owned shaped texts, the number in its run's formatting. Owned
-        // so the `&str` views in `StyledRun` outlive the layout call.
-        let mut number_spans = Vec::new();
-        let mut at = 0usize;
-        let run_texts: Vec<String> = para
-            .runs
-            .iter()
-            .map(|run| {
-                let mut text = String::with_capacity(run.text.len());
-                for ch in run.text.chars() {
-                    if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
-                        let b = at + text.len();
-                        if !label.is_empty() {
-                            number_spans.push((
-                                b..b + label.len(),
-                                super::GeneratedKind::FootnoteNumber,
-                                None,
-                            ));
+            // Owned shaped texts, the number in its run's formatting. Owned
+            // so the `&str` views in `StyledRun` outlive the layout call.
+            let mut number_spans = Vec::new();
+            let mut at = 0usize;
+            let run_texts: Vec<String> = para
+                .runs
+                .iter()
+                .map(|run| {
+                    let mut text = String::with_capacity(run.text.len());
+                    for ch in run.text.chars() {
+                        if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
+                            let b = at + text.len();
+                            if !label.is_empty() {
+                                number_spans.push((
+                                    b..b + label.len(),
+                                    super::GeneratedKind::FootnoteNumber,
+                                    None,
+                                ));
+                            }
+                            text.push_str(&label);
+                        } else {
+                            text.push(ch);
                         }
-                        text.push_str(&label);
-                    } else {
-                        text.push(ch);
+                    }
+                    at += text.len();
+                    text
+                })
+                .collect();
+            let run_text_lens: Vec<usize> = run_texts.iter().map(|t| t.len()).collect();
+            let text = run_texts.concat();
+
+            let glyph_scale = desired_glyph_scale(&resolved_paragraph);
+            let styled_runs: Vec<paged_text::StyledRun> = para
+                .runs
+                .iter()
+                .enumerate()
+                .map(|(i, _run)| {
+                    let base_size = resolved_runs[i].point_size.unwrap_or(default_size);
+                    let (point_size, baseline_shift_pt) = position_adjusted_metrics(
+                        base_size,
+                        resolved_runs[i].baseline_shift,
+                        resolved_runs[i].position.as_deref(),
+                    );
+                    paged_text::StyledRun {
+                        text: run_texts[i].as_str(),
+                        face: owned_faces[i].as_ref().unwrap(),
+                        point_size,
+                        tracking: resolved_runs[i].tracking,
+                        font_id: font_ids[i],
+                        underline: resolved_runs[i].underline.unwrap_or(false),
+                        strikethru: resolved_runs[i].strikethru.unwrap_or(false),
+                        substituted: substituted_flags[i],
+                        baseline_shift_pt,
+                        horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0)
+                            * glyph_scale,
+                        vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
+                        skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
+                        fallback_faces: &[],
+                        shaping_features: shaping_features_from(
+                            resolved_runs[i].ligatures_on,
+                            resolved_runs[i].kerning_method.as_deref(),
+                            &resolved_runs[i].otf,
+                            resolved_runs[i].capitalization.as_deref(),
+                            resolved_runs[i].position.as_deref(),
+                        ),
+                    }
+                })
+                .collect();
+            if styled_runs.is_empty() {
+                continue;
+            }
+
+            // The paragraph's settings, as body text takes them. Indents
+            // narrow the measure, a first-line indent line 0's; the lines
+            // move right by them after layout.
+            let paragraph_size = styled_runs[0].point_size;
+            let left_indent_pt = resolved_paragraph.left_indent.unwrap_or(0.0).max(0.0);
+            let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
+            let first_line_indent_pt = resolved_paragraph.first_line_indent.unwrap_or(0.0);
+            let measure_pt = (column_width_pt - left_indent_pt - right_indent_pt).max(1.0);
+            let mut lopts = paged_text::LayoutOptions::new(measure_pt, paragraph_size);
+            (lopts.alignment, lopts.last_line_alignment) =
+                map_justification(resolved_paragraph.justification, binding);
+            lopts.justify_last_line = !segment.closes_paragraph;
+            // The run's language names the dictionary, as in body text
+            // (`StoryEmitter::hyphenator_for`).
+            let language = resolved_runs
+                .iter()
+                .find_map(|r| r.applied_language.as_deref())
+                .or(resolved_paragraph.applied_language.as_deref());
+            apply_paragraph_compose_options(
+                &mut lopts,
+                hyphenators.resolve(language),
+                &resolved_paragraph,
+            );
+            let justified = lopts.alignment == paged_text::Alignment::Justify;
+            lopts.compose.fit_tolerance = fit_tolerance_64(paragraph_size, justified);
+            if !justified {
+                lopts.compose.minimum_raggedness = true;
+                lopts.compose.overrun_size = Some(paragraph_size);
+            }
+            apply_leadings(&mut lopts, &resolved_runs, &styled_runs, 0);
+            let first_64 = to_64(first_line_indent_pt);
+            if first_64 != 0 {
+                let floor_64 = paged_text::shape::ADVANCE_PRECISION as i32;
+                let w = lopts.compose.column_width;
+                lopts.compose.column_widths = Some(vec![(w - first_64).max(floor_64), w]);
+            }
+            let left_64 = to_64(left_indent_pt);
+            let tab_stops =
+                paragraph_tab_stops(&resolved_paragraph, left_indent_pt, first_line_indent_pt);
+            // Tabs are set while breaking, so a line is measured at the
+            // width its tabs take; a flush-right or centred line then
+            // moves only its text after the last tab (`apply_alignment`).
+            let has_tab = text.contains('\t');
+            if has_tab {
+                lopts.tabs = Some(paged_text::layout::TabLayout {
+                    stops: tab_stops.clone(),
+                    default_stop_pt: 36.0,
+                    line_starts_64: vec![left_64 + first_64, left_64],
+                });
+            }
+            let mut laid = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
+            for (i, line) in laid.lines.iter_mut().enumerate() {
+                let dx = left_64 + if i == 0 { first_64 } else { 0 };
+                if dx != 0 {
+                    for g in &mut line.glyphs {
+                        g.x += dx;
                     }
                 }
-                at += text.len();
-                text
-            })
-            .collect();
-        let run_text_lens: Vec<usize> = run_texts.iter().map(|t| t.len()).collect();
-
-        let styled_runs: Vec<paged_text::StyledRun> = para
-            .runs
-            .iter()
-            .enumerate()
-            .map(|(i, _run)| {
-                let base_size = resolved_runs[i].point_size.unwrap_or(default_size);
-                let (point_size, baseline_shift_pt) = position_adjusted_metrics(
-                    base_size,
-                    resolved_runs[i].baseline_shift,
-                    resolved_runs[i].position.as_deref(),
-                );
-                paged_text::StyledRun {
-                    text: run_texts[i].as_str(),
-                    face: owned_faces[i].as_ref().unwrap(),
-                    point_size,
-                    tracking: resolved_runs[i].tracking,
-                    font_id: font_ids[i],
-                    underline: resolved_runs[i].underline.unwrap_or(false),
-                    strikethru: resolved_runs[i].strikethru.unwrap_or(false),
-                    substituted: substituted_flags[i],
-                    baseline_shift_pt,
-                    horizontal_scale_pct: resolved_runs[i].horizontal_scale.unwrap_or(100.0),
-                    vertical_scale_pct: resolved_runs[i].vertical_scale.unwrap_or(100.0),
-                    skew_deg: resolved_runs[i].skew.unwrap_or(0.0),
-                    fallback_faces: &[],
-                    shaping_features: shaping_features_from(
-                        resolved_runs[i].ligatures_on,
-                        resolved_runs[i].kerning_method.as_deref(),
-                        &resolved_runs[i].otf,
-                        resolved_runs[i].capitalization.as_deref(),
-                        resolved_runs[i].position.as_deref(),
-                    ),
+            }
+            if has_tab {
+                let leader_ctx = tab_stops
+                    .iter()
+                    .any(|t| t.leader.is_some())
+                    .then(|| paged_text::layout::LeaderContext::new(&styled_runs));
+                for line in laid.lines.iter_mut() {
+                    paged_text::layout::apply_tab_stops_with_leaders(
+                        line,
+                        &text,
+                        &tab_stops,
+                        36.0,
+                        leader_ctx.as_ref(),
+                    );
                 }
-            })
-            .collect();
-        if styled_runs.is_empty() {
-            continue;
-        }
-
-        let mut lopts = paged_text::LayoutOptions::new(column_width_pt, default_size);
-        lopts.alignment = paged_text::Alignment::Left;
-        // The separator after the number is a tab in InDesign's notes: it
-        // advances to the next default stop, every 36 pt from the column's
-        // edge (the probe's notes: number at 0, text at 36).
-        if run_texts.iter().any(|t| t.contains('\t')) {
-            lopts.tabs = Some(paged_text::layout::TabLayout {
-                stops: Vec::new(),
-                default_stop_pt: 36.0,
-                line_starts_64: vec![0],
+            }
+            let line_leadings: Vec<f32> = if laid.lines.is_empty() {
+                // An empty paragraph still takes its line.
+                vec![lopts
+                    .leading_override_exact
+                    .map_or(paragraph_size * 1.2, |l| {
+                        (l / paged_text::shape::ADVANCE_PRECISION as f64) as f32
+                    })]
+            } else {
+                laid.lines
+                    .iter()
+                    .map(|line| {
+                        paged_text::layout::line_leading_exact(&line.glyphs, &lopts)
+                            .map_or(paragraph_size * 1.2, |l| {
+                                (l / paged_text::shape::ADVANCE_PRECISION as f64) as f32
+                            })
+                    })
+                    .collect()
+            };
+            // `styled_runs` (which borrows `resolved_runs`, `owned_faces`,
+            // `run_texts`) is no longer needed after layout; drop it so
+            // `resolved_runs` can move into the returned struct.
+            drop(styled_runs);
+            space_above.push(if paragraphs.is_empty() {
+                0.0
+            } else {
+                space_after_pt + resolved_paragraph.space_before.unwrap_or(0.0).max(0.0)
             });
+            space_after_pt = resolved_paragraph.space_after.unwrap_or(0.0).max(0.0);
+            texts.push(text);
+            numbers.push(number_spans);
+            paragraphs.push(laid);
+            leadings.push(line_leadings);
+            resolved_runs_per_para.push(resolved_runs);
+            run_text_lens_per_para.push(run_text_lens);
         }
-        let laid = paged_text::cache::layout_runs_cached(&styled_runs, &lopts);
-        // `styled_runs` (which borrows `resolved_runs`, `owned_faces`,
-        // `run_texts`) is no longer needed after layout; drop it so
-        // `resolved_runs` can move into the returned struct.
-        drop(styled_runs);
-        texts.push(run_texts.concat());
-        numbers.push(number_spans);
-        paragraphs.push(laid);
-        resolved_runs_per_para.push(resolved_runs);
-        run_text_lens_per_para.push(run_text_lens);
     }
 
     if paragraphs.is_empty() {
@@ -287,6 +396,8 @@ pub(super) fn compose_footnote_paragraphs(
     }
     Some(ComposedFootnote {
         paragraphs,
+        leadings,
+        space_above,
         texts,
         numbers,
         font_outline_bytes,
@@ -298,15 +409,18 @@ pub(super) fn compose_footnote_paragraphs(
 /// The baselines of a frame's footnote area, top to bottom, measured
 /// from the area's top: `(note, paragraph, line, baseline)`. Asked of
 /// InDesign 20.0.1 (`tools/indesign-export/footnote-pool-probe.jsx` over
-/// the `footnotes` fixture):
+/// the `footnotes` fixture, and `footnote-paragraphs-probe`):
 ///
 /// * a note's first line sits its first-baseline offset below the
 ///   previous note's last baseline plus `SpaceBetween` (the area's top for
 ///   the first note). The offset is InDesign's default, the line's
 ///   leading; `CAP_HEIGHT` and the other choices are not read yet;
-/// * every further line sits one leading below the one before;
+/// * every further line sits its own leading below the one before, a
+///   paragraph's first line its space above too;
 /// * the separator rule takes no room: neither its offset nor its weight
 ///   moves a line.
+///
+/// An empty paragraph's line holds no glyph but has its baseline.
 fn footnote_area_baselines(
     composed: &[ComposedFootnote],
     metrics: &FootnoteMetrics,
@@ -317,9 +431,10 @@ fn footnote_area_baselines(
         if fi > 0 {
             y += metrics.space_between_pt;
         }
-        for (p_idx, laid) in c.paragraphs.iter().enumerate() {
-            for (l_idx, line) in laid.lines.iter().enumerate() {
-                y += footnote_line_height_pt(line);
+        for (p_idx, leadings) in c.leadings.iter().enumerate() {
+            y += c.space_above[p_idx];
+            for (l_idx, leading) in leadings.iter().enumerate() {
+                y += leading;
                 out.push((fi, p_idx, l_idx, y));
             }
         }
@@ -336,6 +451,8 @@ pub(super) fn footnote_pool_height_pt(
     group: &[&EmittedFootnote],
     document: &Document,
     font_table: &FontTable,
+    hyphenators: &paged_text::Hyphenators,
+    binding: BindingEdge,
     column_width_pt: f32,
     metrics: &FootnoteMetrics,
 ) -> f32 {
@@ -349,6 +466,8 @@ pub(super) fn footnote_pool_height_pt(
                 fn_,
                 document,
                 font_table,
+                hyphenators,
+                binding,
                 column_width_pt,
                 metrics.default_size,
             )
@@ -451,12 +570,14 @@ pub(super) fn resolve_footnote_metrics(
 /// frame that hosts it. Returns an empty map when the document carries
 /// no font bytes (footnotes can't be measured or drawn without a face).
 /// Only `page_indices` are measured; a pool depends on its own page alone.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn measure_footnote_pools(
     pages: &[BuiltPage],
     page_indices: &[usize],
     options: &PipelineOptions,
     document: &Document,
     font_table: &FontTable,
+    hyphenators: &paged_text::Hyphenators,
     palette: &Graphic,
     color_ctx: ColorCtx<'_>,
 ) -> std::collections::HashMap<(usize, i32, i32, i32, i32), f32> {
@@ -488,9 +609,15 @@ pub(super) fn measure_footnote_pools(
                 color_ctx,
                 FOOTNOTE_POINT_SIZE,
             );
-            let h =
-                footnote_pool_height_pt(&group, document, font_table, column_width_pt, &metrics)
-                    + metrics.spacer_pt;
+            let h = footnote_pool_height_pt(
+                &group,
+                document,
+                font_table,
+                hyphenators,
+                page.binding_edge(),
+                column_width_pt,
+                &metrics,
+            ) + metrics.spacer_pt;
             if h > 0.0 {
                 out.insert((page_idx, key.0, key.1, key.2, key.3), h);
             }
@@ -633,10 +760,12 @@ pub(super) fn rollback_body_story(pages: &mut [BuiltPage], snap: &[BodyStoryPage
 /// restructure of the StoryEmitter-to-pool boundary. Until then a too-tall
 /// footnote overruns the body (overlay) and we fire
 /// `DiagnosticCode::FootnoteOverflow` (below) so it is never silent.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_footnote_pools(
     pages: &mut [BuiltPage],
     skip: &[bool],
     font_table: &FontTable,
+    hyphenators: &paged_text::Hyphenators,
     options: &PipelineOptions,
     document: &Document,
     palette: &Graphic,
@@ -682,6 +811,7 @@ pub(super) fn emit_footnote_pools(
                 .or_default()
                 .push(fn_);
         }
+        let binding = page.binding_edge();
         for (_key, group) in by_frame {
             let rect = group[0].host_frame_rect_pt;
             let column_width_pt = rect.w;
@@ -705,6 +835,8 @@ pub(super) fn emit_footnote_pools(
                         fn_,
                         document,
                         font_table,
+                        hyphenators,
+                        binding,
                         column_width_pt,
                         metrics.default_size,
                     )

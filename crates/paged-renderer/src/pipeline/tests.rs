@@ -4176,6 +4176,7 @@ fn footnote_pools_measured_per_page_equal_the_whole_document() {
             &options,
             &doc,
             &font_table,
+            &paged_text::Hyphenators::new(),
             &doc.palette,
             ColorCtx::default(),
         )
@@ -4224,6 +4225,7 @@ fn footnote_pool_reserves_space_below_body_text() {
         &options,
         &doc,
         &font_table,
+        &paged_text::Hyphenators::new(),
         &doc.palette,
         ColorCtx::default(),
     );
