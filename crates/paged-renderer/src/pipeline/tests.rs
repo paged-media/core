@@ -3422,13 +3422,17 @@ fn c62_end_cap_reaches_the_stroke_on_every_path_kind() {
         ),
         vec![LineCap::Round]
     );
-    assert_eq!(
-        caps(
-            r#"<Oval Self="ov" ItemTransform="1 0 0 1 0 0" GeometricBounds="20 20 180 180" FillColor="Swatch/None" StrokeColor="Color/Black" StrokeWeight="3" StrokeType="StrokeStyle/$ID/Dashed" EndCap="RoundEndCap"/>"#
-                .to_string()
-        ),
-        vec![LineCap::Round]
+    // A dashed outline is drawn as its fitted pieces (corners and side
+    // dashes, `paged_compose::dash_fit`); the cap shapes every one.
+    let oval = caps(
+        r#"<Oval Self="ov" ItemTransform="1 0 0 1 0 0" GeometricBounds="20 20 180 180" FillColor="Swatch/None" StrokeColor="Color/Black" StrokeWeight="3" StrokeType="StrokeStyle/$ID/Dashed" EndCap="RoundEndCap"/>"#
+            .to_string(),
     );
+    assert!(
+        !oval.is_empty() && oval.iter().all(|c| *c == LineCap::Round),
+        "{oval:?}"
+    );
+    assert_eq!(oval.len(), 2, "corners and dashes");
 }
 
 #[test]

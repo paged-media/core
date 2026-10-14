@@ -73,12 +73,7 @@ pub(crate) fn emit_stroked(
     stroke_path: Option<PathId>,
 ) {
     if let Some(path_id) = stroke_path {
-        page.list.commands.push(DisplayCommand::StrokePath {
-            path_id,
-            paint,
-            stroke,
-            transform: outer,
-        });
+        paged_compose::dash_fit::push_stroke(&mut page.list, path_id, stroke, paint, outer);
         return;
     }
     match geom {

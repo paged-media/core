@@ -639,12 +639,7 @@ fn emit_line_body(
         );
         let band_source = (line.effects.is_some()).then(|| path.clone());
         let (path_id, _) = page.list.paths.intern(cache_key, path);
-        page.list.push(paged_compose::DisplayCommand::StrokePath {
-            path_id,
-            paint: stroke_paint,
-            stroke,
-            transform: outer,
-        });
+        paged_compose::dash_fit::push_stroke(&mut page.list, path_id, stroke, stroke_paint, outer);
         if let Some(centreline) = band_source {
             crate::module::line_effects_module(
                 page,
@@ -708,7 +703,14 @@ fn emit_line_body(
         Transform::IDENTITY,
         true,
     );
-    emit_line(sx, sy, ex, ey, stroke, stroke_paint, &mut page.list);
+    let diagonal_id = page.list.paths.push_anon(diagonal.clone());
+    paged_compose::dash_fit::push_stroke(
+        &mut page.list,
+        diagonal_id,
+        stroke,
+        stroke_paint,
+        Transform::IDENTITY,
+    );
     crate::module::line_effects_module(
         page,
         palette,

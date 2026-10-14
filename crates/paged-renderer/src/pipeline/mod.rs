@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use paged_compose::{
-    emit_ellipse, emit_glyph_slice, emit_glyph_slice_stroke, emit_line, emit_paragraph, emit_rect,
+    emit_ellipse, emit_glyph_slice, emit_glyph_slice_stroke, emit_paragraph, emit_rect,
     emit_stroke_rect, emit_stroke_rect_transformed, Color, DisplayList, DropShadow, GlyphOutliner,
     Paint, PathData, PathSegment, Rect, Stroke, Transform, TtfOutliner,
 };
