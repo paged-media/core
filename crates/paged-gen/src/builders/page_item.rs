@@ -600,6 +600,26 @@ pub struct TextFramePref {
     /// text across the columns instead of filling the first to the
     /// bottom. `None` ⇒ omit (InDesign's default, false).
     pub vertical_balance_columns: Option<bool>,
+    /// The frame's own baseline grid, written as InDesign does: a
+    /// `<BaselineFrameGridOption>` SIBLING of `<TextFramePreference>`
+    /// under the frame, not a child of it. `None` ⇒ omit (the document
+    /// grid applies).
+    pub baseline_frame_grid: Option<BaselineFrameGrid>,
+}
+
+/// `<BaselineFrameGridOption>` payload — a text frame's custom baseline
+/// grid, in InDesign's attribute names.
+#[derive(Clone, Copy)]
+pub struct BaselineFrameGrid {
+    /// `UseCustomBaselineFrameGrid`.
+    pub use_custom: bool,
+    /// `StartingOffsetForBaselineFrameGrid` (pt).
+    pub starting_offset: f32,
+    /// `BaselineFrameGridRelativeOption` — `TopOfPage`, `TopOfMargin`,
+    /// `TopOfFrame` or `TopOfInset`.
+    pub relative_option: &'static str,
+    /// `BaselineFrameGridIncrement` (pt).
+    pub increment: f32,
 }
 
 /// `<TextWrapPreference>` payload emitted as a child of a page item.
@@ -933,7 +953,11 @@ impl Rect {
             attrs.push(("AppliedObjectStyle", "ObjectStyle/$ID/[None]".to_string()));
         }
         attrs.push(("Visible", "true".to_string()));
-        attrs.push(("Name", "$ID/".to_string()));
+        // The unnamed default, unless the sample names the item itself
+        // (InDesign refuses an element that carries an attribute twice).
+        if !self.extra_attrs.iter().any(|(k, _)| k == "Name") {
+            attrs.push(("Name", "$ID/".to_string()));
+        }
         attrs.push(("ItemTransform", format_matrix(&self.item_transform)));
         push_color_attr(&mut attrs, "FillColor", &self.fill_color);
         attrs.push((
@@ -1159,6 +1183,22 @@ impl Rect {
                     b.end("Properties");
                     b.end("TextFramePreference");
                 }
+            }
+            if let Some(grid) = tfp.baseline_frame_grid {
+                let offset = format_f32(grid.starting_offset);
+                let increment = format_f32(grid.increment);
+                b.empty(
+                    "BaselineFrameGridOption",
+                    &[
+                        (
+                            "UseCustomBaselineFrameGrid",
+                            if grid.use_custom { "true" } else { "false" },
+                        ),
+                        ("StartingOffsetForBaselineFrameGrid", offset.as_str()),
+                        ("BaselineFrameGridRelativeOption", grid.relative_option),
+                        ("BaselineFrameGridIncrement", increment.as_str()),
+                    ],
+                );
             }
         }
         // `<TextWrapPreference>` — sibling of Properties / Image. The

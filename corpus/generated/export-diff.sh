@@ -56,6 +56,14 @@ max_mean_for() {
     # unshifted and carry the same ink (19.71 vs 19.44 grey on page 6); poppler's
     # hinted stems are the difference. 1.670 measured; worst * 1.20.
     text-wrap) echo 2.0 ;;
+    # Hinted text and flat CMYK tints (2026-10-14): twelve frames of 8 pt
+    # text, each on a 15 % yellow tint, with 45 % cyan boxes. Placement
+    # agrees (the only one-sided pixels are the anti-aliased column at a
+    # frame's fractional left edge, x = 312.276 pt); the differences are
+    # poppler's hinted 8 pt stems and the cyan converted through its
+    # profile (126,211,247 rendered, 143,217,247 exported). 1.644 measured;
+    # worst * 1.20.
+    object-style-options) echo 1.98 ;;
     *) echo "$MAX_MEAN_DE" ;;
   esac
 }

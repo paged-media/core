@@ -4924,6 +4924,23 @@ impl<'a> StoryEmitter<'a> {
         self.para_line = self.para_line.saturating_add(1);
     }
 
+    /// How far (1/64 pt) a line aligned to the baseline grid moves down
+    /// from `baseline_64` in the current frame (ADR 140).
+    fn grid_snap_64(&self, pages: &[BuiltPage], baseline_64: i32) -> i32 {
+        let frame = self.chain[self.frame_idx];
+        let page = &pages[self.chain_pages[self.frame_idx]];
+        super::baseline_grid::frame_grid(self.document, frame, page)
+            .map_or(0, |grid| grid.snap_64(baseline_64))
+    }
+
+    /// [`Self::grid_snap_64`] for an exact baseline (1/64 pt, unrounded).
+    fn grid_snap_exact(&self, pages: &[BuiltPage], baseline: f64) -> f64 {
+        let frame = self.chain[self.frame_idx];
+        let page = &pages[self.chain_pages[self.frame_idx]];
+        super::baseline_grid::frame_grid(self.document, frame, page)
+            .map_or(0.0, |grid| grid.snap_exact(baseline))
+    }
+
     pub(super) fn apply_vertical_justification(&self, pages: &mut [BuiltPage]) {
         for (i, frame) in self.chain.iter().enumerate() {
             let Some((start, end)) = self.frame_cmd_ranges[i] else {
@@ -5640,6 +5657,11 @@ pub(super) fn emit_paragraph_into_chain(
         super::conditions::without_hidden_runs(paragraph, declared)
     };
     let paragraph = shown.as_ref().unwrap_or(paragraph);
+    // An anchored object takes the options it leaves out from its object
+    // style (ADR 143): read them over it once, before anything below asks
+    // where an object sits.
+    let styled = anchored::with_style_anchoring(paragraph, &em.document.styles);
+    let paragraph = styled.as_ref().unwrap_or(paragraph);
     // A footnote is set at the foot of the frame holding its REFERENCE's
     // line (InDesign, thoughts ADR 034 R1), so its notes wait here until
     // the line holding each one's reference is placed
@@ -5850,6 +5872,12 @@ fn emit_paragraph_lines(
             em.y_exact() + space_before_64 as f64 - prev_lh + line_height_exact + line_height_exact,
         );
         em.set_prev_line_height(line_height_exact);
+        // An empty line aligned to the baseline grid stands on it like any
+        // other (`baseline-grid` case 10, ADR 140).
+        if super::baseline_grid::line_aligns(&resolved_paragraph, em.segment.opens_paragraph) {
+            let d = em.grid_snap_exact(pages, em.y_exact() - line_height_exact);
+            em.set_y_exact(em.y_exact() + d);
+        }
         // The blank line is a line: the caret can stand on it, a click
         // on it lands in it, and a selection across it shows it. Its one
         // cluster is a zero-width stop at the line's left edge.
@@ -7576,6 +7604,24 @@ fn emit_paragraph_lines(
                 g.y += chain_shift_64;
             }
         }
+        // Align to baseline grid (ADR 140): the line stands on the first
+        // grid line at or below where its leading put it, and the lines
+        // after it are placed from there — so the shift carries forward
+        // like a frame advance's.
+        let grid_aligned = super::baseline_grid::line_aligns(
+            &resolved_paragraph,
+            em.segment.opens_paragraph && current_line_idx == 0,
+        );
+        if grid_aligned {
+            let d = em.grid_snap_64(pages, line.baseline_y);
+            if d != 0 {
+                chain_shift_64 += d;
+                line.baseline_y += d;
+                for g in &mut line.glyphs {
+                    g.y += d;
+                }
+            }
+        }
         // A line advances by its leading: the explicit one (a run's, or
         // its style's, cascaded) when there is one, else auto leading
         // from the largest glyph. The composer already pitched the
@@ -7694,6 +7740,10 @@ fn emit_paragraph_lines(
                     line_h,
                     Some((new_baseline, top_64)),
                 );
+            }
+            // …and on the continuation frame's grid.
+            if grid_aligned {
+                new_baseline += em.grid_snap_64(pages, new_baseline);
             }
             let dy = new_baseline - prev_baseline;
             chain_shift_64 += dy;
