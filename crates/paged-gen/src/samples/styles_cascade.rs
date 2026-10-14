@@ -257,11 +257,19 @@ fn otf_run(b: &mut XmlBuilder, text: &str, feature: (&str, bool)) {
         "CharacterStyleRange",
         &[
             ("AppliedCharacterStyle", NO_CHAR_STYLE),
-            ("AppliedFont", "Inter"),
             ("PointSize", "32"),
+            ("FontStyle", "Regular"),
             (attr_name, value),
         ],
     );
+    // A typed `<Properties>` child, where InDesign reads it: as an
+    // attribute InDesign ignored the font and printed the page in the
+    // paragraph style's Open Sans.
+    b.start("Properties", &[]);
+    b.start("AppliedFont", &[("type", "string")]);
+    b.text("Inter");
+    b.end("AppliedFont");
+    b.end("Properties");
     b.start("Content", &[]);
     b.text(text);
     b.end("Content");
