@@ -471,6 +471,7 @@ pub fn build() -> Sample {
                 color_space: None,
                 inline_bytes: None,
                 clipping_path: None,
+                pdf: None,
             }),
             text_wrap: None,
             anchored_setting: None,

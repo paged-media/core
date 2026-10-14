@@ -282,6 +282,7 @@ pub fn build() -> Sample {
         // Present but undecodable → reaches the exporter, decode fails.
         inline_bytes: Some(CORRUPT_IMAGE_BYTES.to_vec()),
         clipping_path: None,
+        pdf: None,
     };
     let image_rect = Rect {
         self_id: rect_id,
