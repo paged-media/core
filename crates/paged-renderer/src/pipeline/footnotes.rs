@@ -939,11 +939,11 @@ pub(super) fn emit_footnote_pools(
                         && options
                             .break_page_range
                             .as_ref()
-                            .map_or(true, |r| r.contains(&(page_idx as u32)))
+                            .is_none_or(|r| r.contains(&(page_idx as u32)))
                         && options
                             .break_story_filter
                             .as_deref()
-                            .map_or(true, |want| want == host)
+                            .is_none_or(|want| want == host)
                     {
                         let text = &c.texts[p_idx];
                         for (line_idx, (line, &baseline)) in

@@ -265,7 +265,7 @@ pub(crate) fn min_ragged_breaks<T>(
                 let next = (line + 1).min(horizon);
                 let node = (base + cost, from, w);
                 let slot = &mut dp[c][next];
-                if slot.map_or(true, |old| node.0 < old.0) {
+                if slot.is_none_or(|old| node.0 < old.0) {
                     *slot = Some(node);
                 }
                 if forced(j) || tightest > m {

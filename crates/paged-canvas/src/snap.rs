@@ -182,7 +182,7 @@ pub(crate) fn compute_snap_adjustment_with(
         if let Some((adj, target)) = snap_axis_match(&cand_x, &targets_x, tolerance) {
             if best_x
                 .as_ref()
-                .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                .is_none_or(|b| adj.abs() < b.adjustment.abs())
             {
                 best_x = Some(SnapMatch {
                     adjustment: adj,
@@ -194,7 +194,7 @@ pub(crate) fn compute_snap_adjustment_with(
         if let Some((adj, target)) = snap_axis_match(&cand_y, &targets_y, tolerance) {
             if best_y
                 .as_ref()
-                .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                .is_none_or(|b| adj.abs() < b.adjustment.abs())
             {
                 best_y = Some(SnapMatch {
                     adjustment: adj,
@@ -341,7 +341,7 @@ pub(crate) fn compute_resize_snap(
             if let Some((adj, target)) = snap_axis_match(&cand_x, &targets, tolerance) {
                 if best_x
                     .as_ref()
-                    .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                    .is_none_or(|b| adj.abs() < b.adjustment.abs())
                 {
                     best_x = Some(SnapMatch {
                         adjustment: adj,
@@ -356,7 +356,7 @@ pub(crate) fn compute_resize_snap(
             if let Some((adj, target)) = snap_axis_match(&cand_y, &targets, tolerance) {
                 if best_y
                     .as_ref()
-                    .map_or(true, |b| adj.abs() < b.adjustment.abs())
+                    .is_none_or(|b| adj.abs() < b.adjustment.abs())
                 {
                     best_y = Some(SnapMatch {
                         adjustment: adj,

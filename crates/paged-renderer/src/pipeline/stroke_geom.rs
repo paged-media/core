@@ -268,7 +268,7 @@ fn simplify_collinear(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
         // `map_or(true, …)` (not `is_none_or`, which is 1.82+; MSRV 1.80).
         if dedup
             .last()
-            .map_or(true, |&q: &(f32, f32)| (p.0 - q.0).hypot(p.1 - q.1) > 1e-4)
+            .is_none_or(|&q: &(f32, f32)| (p.0 - q.0).hypot(p.1 - q.1) > 1e-4)
         {
             dedup.push(p);
         }

@@ -133,7 +133,7 @@ fn top_margin(document: &Document, page: &BuiltPage) -> f32 {
 
 fn translation_only(m: Option<[f32; 6]>) -> bool {
     const EPS: f32 = 1e-4;
-    m.map_or(true, |m| {
+    m.is_none_or(|m| {
         (m[0] - 1.0).abs() < EPS && m[1].abs() < EPS && m[2].abs() < EPS && (m[3] - 1.0).abs() < EPS
     })
 }

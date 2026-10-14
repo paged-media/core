@@ -713,7 +713,7 @@ fn nearest_line(lines: &[AxisLine], value: f32, tolerance: f32) -> Option<&AxisL
     let mut best: Option<(&AxisLine, f32)> = None;
     for l in lines {
         let d = (l.position - value).abs();
-        if d <= tolerance && best.map_or(true, |(_, bd)| d < bd) {
+        if d <= tolerance && best.is_none_or(|(_, bd)| d < bd) {
             best = Some((l, d));
         }
     }
@@ -751,7 +751,7 @@ pub(crate) fn resolve(
     let mut best: Option<(SnapPointHit, f32)> = None;
     let mut consider = |hit: SnapPointHit| {
         let d = (hit.at[0] - p[0]).hypot(hit.at[1] - p[1]);
-        if d <= tolerance && best.as_ref().map_or(true, |(_, bd)| d < *bd) {
+        if d <= tolerance && best.as_ref().is_none_or(|(_, bd)| d < *bd) {
             best = Some((hit, d));
         }
     };
@@ -896,8 +896,7 @@ pub(crate) fn resolve(
             ) else {
                 continue;
             };
-            if hit.distance <= tolerance && bs.as_ref().map_or(true, |(_, _, d)| hit.distance < *d)
-            {
+            if hit.distance <= tolerance && bs.as_ref().is_none_or(|(_, _, d)| hit.distance < *d) {
                 bs = Some((
                     SnapSegmentHit {
                         element: el.id.clone(),
