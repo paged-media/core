@@ -438,3 +438,28 @@ fn a_turned_nested_group_reopens_where_it_was_drawn() {
         near_within(leaf(&back, id), before, 0.01, id);
     }
 }
+
+/// Groups that came FROM the IDML, turned in the editor, save their own
+/// transforms back and reopen where they were drawn.
+#[test]
+fn a_turned_source_group_reopens_where_it_was_drawn() {
+    let mut m = nested();
+    let go_new = rot(90.0, 100.0, 100.0);
+    set_group(&mut m, "go", go_new);
+    let gi_drawn = geometry(&m, "gi").item_transform.unwrap();
+    let leaves: Vec<M> = ["lo", "li"].iter().map(|id| leaf(&m, id)).collect();
+
+    let bytes = m.export_idml().expect("export");
+    let back = CanvasModel::load("reopened", &bytes, CanvasOptions::default()).expect("reopen");
+    near_within(stored(&back, "go").unwrap(), go_new, 0.01, "go stored");
+    near_within(stored(&back, "gi").unwrap(), gi_raw(), 0.01, "gi stored");
+    near_within(
+        geometry(&back, "gi").item_transform.unwrap(),
+        gi_drawn,
+        0.01,
+        "gi box after reopening",
+    );
+    for (id, before) in ["lo", "li"].iter().zip(leaves) {
+        near_within(leaf(&back, id), before, 0.01, id);
+    }
+}
