@@ -4533,6 +4533,14 @@ pub struct CellStyleDef {
     pub left_edge_stroke_type: Option<String>,
     #[serde(default)]
     pub right_edge_stroke_type: Option<String>,
+    /// `FirstBaselineOffset` / `MinimumFirstBaselineOffset`, which
+    /// InDesign keeps on the cell style rather than repeating them on each
+    /// `<Cell>` (`table-cell-baseline` page 2). See
+    /// [`TableCell::first_baseline_offset`].
+    #[serde(default)]
+    pub first_baseline_offset: Option<String>,
+    #[serde(default)]
+    pub minimum_first_baseline_offset: Option<f32>,
 }
 /// `<TableStyle>` — table-level defaults that flow through to
 /// cells. Carries the region → CellStyle map (Header / Body /
@@ -4644,6 +4652,8 @@ pub struct ResolvedCell {
     pub bottom_edge_stroke_type: Option<String>,
     pub left_edge_stroke_type: Option<String>,
     pub right_edge_stroke_type: Option<String>,
+    pub first_baseline_offset: Option<String>,
+    pub minimum_first_baseline_offset: Option<f32>,
 }
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterStyleDef {
@@ -5540,6 +5550,12 @@ impl ResolvedTable {
 }
 impl ResolvedCell {
     pub fn merge_below(&mut self, def: &CellStyleDef) {
+        if self.first_baseline_offset.is_none() {
+            self.first_baseline_offset = def.first_baseline_offset.clone();
+        }
+        self.minimum_first_baseline_offset = self
+            .minimum_first_baseline_offset
+            .or(def.minimum_first_baseline_offset);
         if self.fill_color.is_none() {
             self.fill_color = def.fill_color.clone();
         }

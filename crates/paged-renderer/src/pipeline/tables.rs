@@ -195,7 +195,12 @@ pub(super) fn emit_table_into_chain(
             .unwrap_or_default();
         let insets = effective_cell_insets(cell, &resolved_cell);
         let inner_w = (col_x[last_c] - col_x[cu] - insets.left - insets.right).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
+        let block = plan_cell_block(
+            em,
+            &cell.paragraphs,
+            inner_w,
+            CellFirstBaseline::of(cell, &resolved_cell),
+        );
         cell_blocks.insert((c, r), (block, insets));
     }
     for r in 0..total_rows {
@@ -1932,7 +1937,18 @@ fn emit_nested_table_inline(
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
+        let style = cell
+            .applied_cell_style
+            .as_deref()
+            .filter(|id| !is_none_style_id(id))
+            .map(|id| em.document.styles.resolve_cell(id))
+            .unwrap_or_default();
+        let block = plan_cell_block(
+            em,
+            &cell.paragraphs,
+            inner_w,
+            CellFirstBaseline::of(cell, &style),
+        );
         let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
@@ -2091,7 +2107,18 @@ fn measure_nested_table_height(
             continue;
         }
         let inner_w = (col_widths[cu] - cell.text_left_inset - cell.text_right_inset).max(0.0);
-        let block = plan_cell_block(em, &cell.paragraphs, inner_w, CellFirstBaseline::of(cell));
+        let style = cell
+            .applied_cell_style
+            .as_deref()
+            .filter(|id| !is_none_style_id(id))
+            .map(|id| em.document.styles.resolve_cell(id))
+            .unwrap_or_default();
+        let block = plan_cell_block(
+            em,
+            &cell.paragraphs,
+            inner_w,
+            CellFirstBaseline::of(cell, &style),
+        );
         let insets = cell.text_top_inset + cell.text_bottom_inset;
         let clamp = table.rows.get(ru).map_or(f32::INFINITY, row_cap_pt);
         let required = block.fitted(clamp - insets).0 + insets;
@@ -2165,13 +2192,9 @@ struct CellBlock<'t> {
 }
 
 /// How a cell places its first baseline: `FirstBaselineOffset` and
-/// `MinimumFirstBaselineOffset` as the `<Cell>` spells them.
-///
-/// A cell style's own values are not reached yet: the IDML reader does
-/// not take `FirstBaselineOffset` off a `<CellStyle>`, and InDesign's
-/// export leaves it there rather than on each cell (measured
-/// 2026-10-12, `table-cell-baseline` page 1), so a styled cell sets its
-/// first line by `AscentOffset` here.
+/// `MinimumFirstBaselineOffset` as the `<Cell>` spells them, else as its
+/// cell style does — InDesign's export leaves them on the style rather
+/// than on each cell (measured 2026-10-12, `table-cell-baseline` page 2).
 #[derive(Clone, Copy, Default)]
 pub(super) struct CellFirstBaseline {
     policy: Option<paged_model::FirstBaselineOffset>,
@@ -2179,13 +2202,16 @@ pub(super) struct CellFirstBaseline {
 }
 
 impl CellFirstBaseline {
-    pub(super) fn of(cell: &paged_model::TableCell) -> Self {
+    pub(super) fn of(cell: &paged_model::TableCell, style: &paged_model::ResolvedCell) -> Self {
         Self {
             policy: cell
                 .first_baseline_offset
                 .as_deref()
+                .or(style.first_baseline_offset.as_deref())
                 .and_then(paged_model::FirstBaselineOffset::from_idml),
-            minimum: cell.minimum_first_baseline_offset,
+            minimum: cell
+                .minimum_first_baseline_offset
+                .or(style.minimum_first_baseline_offset),
         }
     }
 }
