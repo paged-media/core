@@ -7,8 +7,9 @@ name: gpu
 # adapter via `init_gpu()`; with lavapipe installed and VK_ICD_FILENAMES
 # pointed at it, that adapter request succeeds and the pixel-level Vello
 # assertions actually run. Without it (or on a stock runner) those same
-# tests skip silently — so this lane only adds coverage, never flakes the
-# default pipeline.
+# tests skip silently, so the lane FAILS when vulkaninfo finds no
+# lavapipe device: from early October until 2026-10-14 Mesa's renamed
+# ICD left it with no adapter and every Vello test passed by skipping.
 #
 # PROMOTION STEP 1 (fidelity-governance second half; audit 17082026
 # §1.10): `continue-on-error` is REMOVED, so a failure now shows as a
@@ -57,10 +58,11 @@ jobs:
     # branch-protection-required yet; see the header (audit 17082026
     # §1.10).
     env:
-      # Force wgpu/Vulkan onto Mesa's lavapipe software ICD. Both env
-      # names are honoured by the loader across versions; set both.
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      # The lavapipe ICD path is found after the install (see "point the
+      # Vulkan loader at lavapipe"): Mesa renamed it from
+      # lvp_icd.x86_64.json to lvp_icd.json, the loader found no driver,
+      # and every Vello test skipped for want of an adapter while the
+      # lane stayed green.
       # Surface adapter-selection detail in wgpu logs if a test fails.
       RUST_LOG: wgpu=warn,vello=warn
     steps:
@@ -90,16 +92,35 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             mesa-vulkan-drivers vulkan-tools libvulkan1
 
+      - name: point the Vulkan loader at lavapipe
+        # Force wgpu/Vulkan onto Mesa's lavapipe software ICD, whatever
+        # this Mesa calls the file. Both env names are honoured by the
+        # loader across versions; set both.
+        run: |
+          set -euo pipefail
+          icd="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1 || true)"
+          if [ -z "$icd" ]; then
+            ls -la /usr/share/vulkan/icd.d/ || true
+            echo "::error::no lavapipe ICD under /usr/share/vulkan/icd.d"
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+
       - name: sanity — lavapipe is the active Vulkan device
+        # Hard: without a device every Vello test returns early on an
+        # empty buffer and passes, so a lane with no adapter is a lane
+        # that tests nothing.
         run: |
           set -euo pipefail
           echo "VK_ICD_FILENAMES=$VK_ICD_FILENAMES"
-          ls -la /usr/share/vulkan/icd.d/ || true
           # `vulkaninfo --summary` prints the device name; assert llvmpipe.
           if vulkaninfo --summary 2>/dev/null | grep -i 'llvmpipe\|lavapipe'; then
             echo "lavapipe present — the Vello GPU tests will exercise the real path."
           else
-            echo "::warning::lavapipe not detected by vulkaninfo; GPU tests may skip (still advisory)."
+            vulkaninfo --summary 2>&1 | tail -20 || true
+            echo "::error::lavapipe not detected by vulkaninfo; the Vello tests would skip."
+            exit 1
           fi
 
       - name: install cargo-nextest
