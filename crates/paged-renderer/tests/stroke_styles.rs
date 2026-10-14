@@ -110,6 +110,52 @@ fn stroke_paths(cmds: &[DisplayCommand]) -> Vec<&DisplayCommand> {
         .collect()
 }
 
+/// The lengths of the straight dashes a fitted stroke drew: every
+/// two-point contour of every stroke on the page. A dashed frame is laid
+/// out the way InDesign lays it out (`paged_compose::dash_fit`): corner
+/// pieces, then the dashes inside the sides, as solid page-space strokes.
+fn dash_lengths(bytes: &[u8]) -> Vec<f32> {
+    let document = idml_import::import_idml_doc(bytes).unwrap();
+    let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
+    let page = &built.pages[0];
+    let mut out = Vec::new();
+    for c in &page.list.commands {
+        let DisplayCommand::StrokePath {
+            path_id, stroke, ..
+        } = c
+        else {
+            continue;
+        };
+        assert!(stroke.dash.is_solid(), "a fitted stroke carries no dash");
+        let path = page.list.paths.get(*path_id).unwrap();
+        let mut start = None;
+        let mut points = 0;
+        let mut last = (0.0f32, 0.0f32);
+        let mut close = |start: Option<(f32, f32)>, points: usize, last: (f32, f32)| {
+            if let (Some(s), 2) = (start, points) {
+                out.push((last.0 - s.0).hypot(last.1 - s.1));
+            }
+        };
+        for seg in &path.segments {
+            match *seg {
+                PathSegment::MoveTo { x, y } => {
+                    close(start, points, last);
+                    start = Some((x, y));
+                    points = 1;
+                    last = (x, y);
+                }
+                PathSegment::LineTo { x, y } => {
+                    points += 1;
+                    last = (x, y);
+                }
+                _ => points = 99,
+            }
+        }
+        close(start, points, last);
+    }
+    out
+}
+
 /// Bounds of the first `StrokePath` in *page* coords: the path's anchor
 /// points pushed through the command's transform. For the flat-rect emit
 /// the path is the interned unit rect and the rectangle geometry +
@@ -240,25 +286,24 @@ fn gap_color_dash_emits_under_stroke_plus_dash() {
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let strokes = stroke_paths(&page.list.commands);
-    // Two StrokePaths: the gap-colour under-stroke (solid, full weight)
-    // emitted first, then the dashed black stroke.
-    assert_eq!(
-        strokes.len(),
-        2,
+    // The gap-colour under-stroke (solid, full weight) first, then the
+    // dashes, fitted into corner pieces and side dashes.
+    assert!(
+        strokes.len() >= 2,
         "gap under-stroke + dash; got {:?}",
         page.list.commands
     );
-    let (under, top) = match (strokes[0], strokes[1]) {
-        (
-            DisplayCommand::StrokePath { stroke: u, .. },
-            DisplayCommand::StrokePath { stroke: t, .. },
-        ) => (u, t),
-        _ => unreachable!(),
+    let DisplayCommand::StrokePath { stroke: under, .. } = strokes[0] else {
+        unreachable!()
     };
-    // Under-stroke is solid full-weight; top stroke carries the dash.
     assert!(under.dash.is_solid(), "under-stroke is solid");
     assert!((under.width - 8.0).abs() < 1e-3, "under-stroke full weight");
-    assert!(!top.dash.is_solid(), "top stroke is dashed");
+    // [8 6] on 100 and 200 pt sides: 7 and 14 periods.
+    let lengths = dash_lengths(&bytes);
+    assert!(
+        !lengths.is_empty() && lengths.iter().all(|l| (7.0..9.0).contains(l)),
+        "the dashes paint over it: {lengths:?}"
+    );
 }
 
 /// Punch-list: the gap-colour pass must apply the style def's `GapTint`,
@@ -333,9 +378,8 @@ fn frame_gap_color_overrides_style_def_gap_color() {
     let built = pipeline::build_document(&document, &PipelineOptions::default()).unwrap();
     let page = &built.pages[0];
     let strokes = stroke_paths(&page.list.commands);
-    assert_eq!(
-        strokes.len(),
-        2,
+    assert!(
+        strokes.len() >= 2,
         "gap under-stroke + dash; got {:?}",
         page.list.commands
     );
@@ -398,18 +442,13 @@ fn frame_dash_array_override_paints_and_wins_over_style_pattern() {
            StrokeDashAndGap="11 4""#,
         style,
     );
-    let cmds = built_commands(&bytes);
-    let strokes = stroke_paths(&cmds);
-    assert_eq!(strokes.len(), 1, "one dashed StrokePath; got {cmds:?}");
-    let dash = match strokes[0] {
-        DisplayCommand::StrokePath { stroke, .. } => stroke.dash,
-        _ => unreachable!(),
-    };
-    assert!(!dash.is_solid(), "instance dash must paint");
-    assert_eq!(
-        dash.as_slice(),
-        &[11.0, 4.0],
-        "frame StrokeDashAndGap must win over the style def's [3 2]"
+    // Fitted to the 100 and 200 pt sides, [11 4] gives dashes of 10.6
+    // and 11.2 pt; the style's [3 2] would give 3 pt ones.
+    let lengths = dash_lengths(&bytes);
+    assert!(!lengths.is_empty(), "instance dash must paint");
+    assert!(
+        lengths.iter().all(|l| (10.0..12.0).contains(l)),
+        "frame StrokeDashAndGap must win over the style def's [3 2]: {lengths:?}"
     );
 }
 
@@ -425,15 +464,13 @@ fn empty_frame_dash_array_falls_back_to_style_pattern() {
         r#"StrokeColor="Color/Black" StrokeWeight="6" StrokeType="StrokeStyle/StyleDash""#,
         style,
     );
-    let cmds = built_commands(&bytes);
-    let dash = stroke_paths(&cmds)
-        .iter()
-        .find_map(|c| match c {
-            DisplayCommand::StrokePath { stroke, .. } => Some(stroke.dash),
-            _ => None,
-        })
-        .expect("a dashed StrokePath");
-    assert_eq!(dash.as_slice(), &[3.0, 2.0], "falls back to style [3 2]");
+    // [3 2] fits 20 and 40 whole periods into the 100 and 200 pt sides.
+    let lengths = dash_lengths(&bytes);
+    assert!(!lengths.is_empty());
+    assert!(
+        lengths.iter().all(|l| (l - 3.0).abs() < 1e-3),
+        "falls back to style [3 2]: {lengths:?}"
+    );
 }
 
 #[test]
