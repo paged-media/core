@@ -851,15 +851,24 @@ impl ClippingType {
     }
 }
 
-/// Q-16: per-corner override for `Rectangle::corners`. IDML lists
-/// these on `<Rectangle>` as `TopLeftCornerOption` / `TopLeftCornerRadius`
-/// and the other three corners. When both fields are `None` the
-/// renderer falls back to the legacy single `corner_option` /
-/// `corner_radius` pair (which itself defaults to "no rounding").
+/// Q-16: one corner of `Rectangle::corners` (and of the other kinds and
+/// object styles). IDML lists these as `TopLeftCornerOption` /
+/// `TopLeftCornerRadius` and the other three corners; InDesign draws a
+/// corner from these alone, never from the all-corner `CornerOption` /
+/// `CornerRadius` pair (ADR 149). An option with no radius is 12 pt.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CornerSpec {
     pub option: Option<CornerOption>,
     pub radius: Option<f32>,
+}
+
+impl CornerSpec {
+    /// Whether none of four corners states an option or a radius.
+    pub fn all_unset(corners: &[CornerSpec; 4]) -> bool {
+        corners
+            .iter()
+            .all(|c| c.option.is_none() && c.radius.is_none())
+    }
 }
 
 /// IDML `CornerOption` enum (per-corner or document-default). The
@@ -4955,15 +4964,21 @@ pub struct ObjectStyleDef {
     pub stroke_color: Option<String>,
     pub stroke_tint: Option<f32>,
     pub stroke_weight: Option<f32>,
-    /// `CornerRadius` in pt. Only honoured when `CornerOption` is one
-    /// of the rounding variants (`Rounded`, `InverseRounded`, `Inset`,
-    /// `Bevel`, `Fancy`). `None` ⇒ inherit from BasedOn.
+    /// `CornerRadius` in pt, the all-corner pair InDesign writes beside
+    /// the four per-corner attributes. It shapes nothing: InDesign reads a
+    /// style's corners from [`Self::corners`] only (ADR 149). Kept so it
+    /// round-trips. `None` ⇒ inherit from BasedOn.
     pub corner_radius: Option<f32>,
-    /// `CornerOption` value (`None | Rounded | InverseRounded | Inset
-    /// | Bevel | Fancy`). The renderer maps `Rounded` to a rounded-
-    /// rect path; the decorative variants currently fall back to
-    /// `Rounded` until per-shape parsers land.
+    /// `CornerOption`, the other half of that pair (InDesign's tokens:
+    /// `None`, `RoundedCorner`, … `FancyCorner`). Kept, not drawn.
     pub corner_option: Option<String>,
+    /// `TopLeftCornerOption` … `BottomRightCornerRadius`, `[top_left,
+    /// top_right, bottom_right, bottom_left]`: the corners an item of the
+    /// style takes when it states none of its own. Each option and radius
+    /// cascades through BasedOn on its own; an option with no radius
+    /// anywhere is 12 pt, InDesign's default (ADR 149).
+    #[serde(default, skip_serializing_if = "CornerSpec::all_unset")]
+    pub corners: [CornerSpec; 4],
     /// The option categories the style governs (`Enable*`). A category
     /// switched off is not part of the style: its values, though written,
     /// reach no item. See [`ObjectStyleCategories`] for an absent flag.
@@ -5107,6 +5122,9 @@ pub struct ResolvedObject {
     pub stroke_weight: Option<f32>,
     pub corner_radius: Option<f32>,
     pub corner_option: Option<String>,
+    /// The style's four per-corner specs, cascaded slot by slot: the
+    /// corners an item of the style draws (ADR 149).
+    pub corners: [CornerSpec; 4],
     /// The text-frame options the applied style supplies: its own
     /// `<TextFramePreference>`, for the categories it switches on.
     pub text_frame: TextFrameOptions,
@@ -6135,6 +6153,10 @@ impl ResolvedObject {
             self.corner_radius = self.corner_radius.or(def.corner_radius);
             if self.corner_option.is_none() {
                 self.corner_option = def.corner_option.clone();
+            }
+            for (slot, below) in self.corners.iter_mut().zip(def.corners) {
+                slot.option = slot.option.or(below.option);
+                slot.radius = slot.radius.or(below.radius);
             }
         }
     }

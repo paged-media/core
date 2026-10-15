@@ -155,3 +155,11 @@ take the InDesign GUI for a few seconds and share the lock
   line), `BelowLeft`, the seven `RubyAlignment`s, `AlignKentenLeft`, and a
   custom mark's character and font. Read from InDesign's PDF; answers in
   `ruby-kenten-options-probe.json`.
+- `object-style-corners-probe`: which of an object style's corner
+  attributes InDesign reads. Like an item's, only the four per-corner
+  ones: a style with just `CornerOption` / `CornerRadius` gives square
+  corners, the per-corner attributes win where the two disagree, and an
+  option with no radius is 12 pt whatever `CornerRadius` says. InDesign
+  authors and exports the style; the script rewrites its corners into
+  variants and InDesign reads each back through its DOM. Answers in
+  `object-style-corners-probe.json`.

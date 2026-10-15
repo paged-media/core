@@ -39,6 +39,7 @@ in the census does). It reads only the four.
   no option.
 - **The object-style cascade fills the per-corner specs** of a rectangle that states none of
   its own corners, from the style's corner pair (which `objectStyleCornerOption` writes).
+  Superseded 2026-10-15: from the style's own per-corner specs (see the amendment below).
 - `corners` and `paste-into` write InDesign's tokens and all four per-corner attributes, as
   InDesign does, and their references are re-exported.
 
@@ -49,3 +50,32 @@ in the census does). It reads only the four.
   now clips its children to a rounded container in both: 0.042.
 - A document that spells corners only in the item-level pair, or in bare names, draws square
   corners, as it does in InDesign.
+
+## Amendment 2026-10-15 — an object style's corners are read per corner too
+
+The decision above took a style's corners from its item-level pair, which was not asked of
+InDesign. `object-style-corners-probe` asked it: InDesign authored a style with four rounded
+20 pt corners on a rectangle and exported it, the probe rewrote the style's corner attributes
+(the rectangle's own removed, so it takes the style's) and InDesign read each variant back
+through its DOM (`tools/indesign-export/object-style-corners-probe.json`):
+
+| The style states | The style and its rectangle read |
+|---|---|
+| the pair alone (`RoundedCorner` 20) | `NONE` 12 on every corner |
+| the four per-corner attributes alone | `ROUNDED_CORNER` 20 |
+| both, disagreeing (pair `InsetCorner` 30) | `ROUNDED_CORNER` 20, the per-corner ones |
+| per-corner options without radii, `CornerRadius="30"` | `ROUNDED_CORNER` 12 |
+
+A style reads its corners as an item does: from the four per-corner attributes, with 12 pt for
+an option that has no radius. So:
+
+- `ObjectStyleDef` and `ResolvedObject` carry the four `corners`; each option and radius
+  cascades through `BasedOn` on its own, inside the stroke-and-corner category.
+- The cascade fills a rectangle that states none of its own corners from those four. A style
+  that spells its corners only in the pair gives square corners, as in InDesign.
+- `objectStyleCornerOption` / `objectStyleCornerRadius` set the pair and all four corners, so a
+  style rounded in Paged opens rounded in InDesign. Undo replays the prior pair onto all four,
+  exact whenever the two agreed.
+- plugin-publish reads the per-corner attributes of an `<ObjectStyle>`, writes them for a new
+  style, and now patches an edited source `<ObjectStyle>` on save (fill, stroke and corners),
+  which until now passed through unchanged, so such an edit was lost.

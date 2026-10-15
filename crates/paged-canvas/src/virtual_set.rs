@@ -1158,6 +1158,44 @@ impl CanvasModel {
                         }
                         _ => {}
                     }
+                    // ADR 162 — the document's footnote options.
+                    let fo = &scene.designmap.footnote_options;
+                    let text = |v: &Option<String>| Value::Text(v.clone().unwrap_or_default());
+                    match p {
+                        PropertyPath::DocumentFootnoteNumberingStyle => {
+                            return Ok(text(&fo.numbering_style));
+                        }
+                        PropertyPath::DocumentFootnoteStartAt => {
+                            return Ok(Value::Length(fo.start_at.map(|n| n as f32)));
+                        }
+                        PropertyPath::DocumentFootnoteRestartNumbering => {
+                            return Ok(text(&fo.restart_numbering));
+                        }
+                        PropertyPath::DocumentFootnotePrefix => return Ok(text(&fo.prefix)),
+                        PropertyPath::DocumentFootnoteSuffix => return Ok(text(&fo.suffix)),
+                        PropertyPath::DocumentFootnoteShowPrefixSuffix => {
+                            return Ok(text(&fo.show_prefix_suffix));
+                        }
+                        PropertyPath::DocumentFootnoteEnableStraddling => {
+                            return Ok(Value::Bool(fo.enable_straddling.unwrap_or(false)));
+                        }
+                        PropertyPath::DocumentFootnoteNoSplitting => {
+                            return Ok(Value::Bool(fo.no_splitting.unwrap_or(false)));
+                        }
+                        PropertyPath::DocumentFootnoteSpaceBetween => {
+                            return Ok(Value::Length(fo.space_between));
+                        }
+                        PropertyPath::DocumentFootnoteSpacer => {
+                            return Ok(Value::Length(fo.spacer));
+                        }
+                        PropertyPath::DocumentFootnoteRuleOn => {
+                            return Ok(Value::Bool(fo.rule_on_effective()));
+                        }
+                        PropertyPath::DocumentFootnoteContinuingRuleOn => {
+                            return Ok(Value::Bool(fo.continuing_rule.on.unwrap_or(true)));
+                        }
+                        _ => {}
+                    }
                     let d = &scene.designmap.document_preference;
                     let n = match p {
                         PropertyPath::DocumentBleedTop => d.bleed_top,
