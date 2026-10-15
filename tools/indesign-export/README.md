@@ -150,3 +150,11 @@ take the InDesign GUI for a few seconds and share the lock
   below the top of its ideographic character face); its em box stands one
   em above its `BASE` ideographic baseline, or, with no `BASE`, is centred
   on its 永. Answers in `cjk-first-baseline-probe.json`.
+- `scale-frame-probe`: which axes a handle scale works along. One selected
+  item, a frame or a group, has its own box, turned with it, and scales
+  along its own axes, so a rotated one stays a rectangle at its angle.
+  Several selected items have a box aligned to the pasteboard, even when
+  they share a rotation, and scale as one unit, which shears the rotated
+  ones. Read from where the Rotate 90° menu action turns a selection (about
+  the reference point on its box) and from groups; answers in
+  `scale-frame-probe.json`.
