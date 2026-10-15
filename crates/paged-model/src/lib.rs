@@ -7489,6 +7489,23 @@ pub struct MarkSettings {
     /// `RubyFont` / `RubyFontStyle` (unset: the base's face).
     pub ruby_font: Option<String>,
     pub ruby_font_style: Option<String>,
+    /// `RubyParentSpacing`: how a base narrower than its ruby is spaced
+    /// out — `RubyParent121Aki` (the default), `RubyParentNoAdjustment`,
+    /// `RubyParentBothSides`, `RubyParentEqualAki`, `RubyParentFullJustify`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruby_parent_spacing: Option<String>,
+    /// `RubyParentOverhangAmount`: how far such ruby may overhang the
+    /// characters beside its base — `RubyOverhangOneRuby` (the default),
+    /// `RubyOverhangHalfRuby`, `RubyOverhangOneChar`,
+    /// `RubyOverhangHalfChar`, `RubyOverhangNoLimit` or `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruby_overhang_amount: Option<String>,
+    /// `RubyAutoScaling`: narrow such ruby to fit, down to
+    /// `RubyParentScalingPercent` (%, InDesign's default 66).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruby_auto_scaling: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruby_parent_scaling_percent: Option<f32>,
     /// `KentenXScale` / `KentenYScale` (%).
     pub kenten_x_scale: Option<f32>,
     pub kenten_y_scale: Option<f32>,
@@ -7522,6 +7539,10 @@ impl MarkSettings {
             ruby_alignment,
             ruby_font,
             ruby_font_style,
+            ruby_parent_spacing,
+            ruby_overhang_amount,
+            ruby_auto_scaling,
+            ruby_parent_scaling_percent,
             kenten_x_scale,
             kenten_y_scale,
             kenten_placement,
@@ -7539,6 +7560,10 @@ impl MarkSettings {
         fill(&mut self.ruby_alignment, ruby_alignment);
         fill(&mut self.ruby_font, ruby_font);
         fill(&mut self.ruby_font_style, ruby_font_style);
+        fill(&mut self.ruby_parent_spacing, ruby_parent_spacing);
+        fill(&mut self.ruby_overhang_amount, ruby_overhang_amount);
+        fill(&mut self.ruby_auto_scaling, ruby_auto_scaling);
+        fill(&mut self.ruby_parent_scaling_percent, ruby_parent_scaling_percent);
         fill(&mut self.kenten_x_scale, kenten_x_scale);
         fill(&mut self.kenten_y_scale, kenten_y_scale);
         fill(&mut self.kenten_placement, kenten_placement);
