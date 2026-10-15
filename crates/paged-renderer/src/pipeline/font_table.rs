@@ -420,7 +420,7 @@ impl FontTable {
             // changes no outline. Testing for the axis rather than for
             // a MOVED axis would keep the embed path shut for nearly
             // every document.
-            let at_default = wght_axis.map_or(true, |a| (a.def_value - wght).abs() < 0.01);
+            let at_default = wght_axis.is_none_or(|a| (a.def_value - wght).abs() < 0.01);
             // The same mixing `build_engine` does when it builds
             // `font_ids`, recorded so it can be undone.
             outline_to_bytes.insert(font_id ^ wght_bits, at_default.then_some(font_id));

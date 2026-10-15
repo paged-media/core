@@ -278,6 +278,7 @@ pub fn build() -> Sample {
                 None
             },
             clipping_path: None,
+            pdf: None,
         };
 
         let rect = Rect {

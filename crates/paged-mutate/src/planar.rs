@@ -381,8 +381,8 @@ pub fn face_at_point(
     let mut components: Vec<Component> = split_components(&loops)
         .into_iter()
         .filter(|(_, _, _, inside)| match inside {
-            Some(p) => !signature_at(&flo, Coord2(p.0 as f64, p.1 as f64))
-                .is_some_and(|sig| sig != signature),
+            Some(p) => signature_at(&flo, Coord2(p.0 as f64, p.1 as f64))
+                .is_none_or(|sig| sig == signature),
             None => true,
         })
         .collect();
@@ -778,7 +778,7 @@ fn split_components(loops: &[SimpleBezierPath]) -> Vec<Component> {
     }
     let mut out = Vec::new();
     for k in 0..usable.len() {
-        if depth[k] % 2 != 0 {
+        if !depth[k].is_multiple_of(2) {
             continue;
         }
         // Holes of component k: loops whose deepest container is k.

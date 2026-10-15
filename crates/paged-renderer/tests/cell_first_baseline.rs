@@ -110,7 +110,7 @@ fn assert_cells_as_indesign(page: usize) {
                 continue;
             }
             let got = grid[row][col];
-            if got.map_or(true, |g| (g - want).abs() > TOL) {
+            if got.is_none_or(|g| (g - want).abs() > TOL) {
                 let what = match (row, col) {
                     (0, _) => "header".to_string(),
                     (r, 0) => format!("label {r}"),

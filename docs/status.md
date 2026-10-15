@@ -188,6 +188,13 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   shape; the composer cannot leave a row empty in mid-frame, which that needs
   ([ADR 151](adr/151-which-side-text-wraps-to.md)). A contour from an image uses the frame's path,
   and an object style's `IgnoreWrap` is not read.
+- **A placed PDF is drawn from its own operations, with gaps.** Paths, clips, groups, images
+  and glyph outlines reach the display list
+  ([ADR 154](adr/154-a-placed-pdf-is-drawn-from-its-own-operations.md)). Colours come through
+  the interpreter's RGB conversion, not the document's CMYK profile. Even-odd fills and clips
+  are filled non-zero, patterns and shadings paint mid-grey, and a group's soft mask is ignored.
+  Stencil images and Type 3 glyphs are skipped. The first page is drawn whatever `PageNumber`
+  says. EPS draws nothing.
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
 - **An edit made while a script waits splits the script's undo step.** The fold merges only

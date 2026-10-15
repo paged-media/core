@@ -258,9 +258,9 @@ fn table(page: usize, source: Source) -> Table {
         cells.extend((0..POLICIES.len()).map(|i| data_cell(i, column, source)));
     }
     let mut row_heights = vec![HEADER_ROW_H];
-    row_heights.extend(std::iter::repeat(BODY_ROW_H).take(POLICIES.len()));
+    row_heights.extend(std::iter::repeat_n(BODY_ROW_H, POLICIES.len()));
     let mut column_widths = vec![LABEL_COLUMN_W];
-    column_widths.extend(std::iter::repeat(DATA_COLUMN_W).take(COLUMNS.len()));
+    column_widths.extend(std::iter::repeat_n(DATA_COLUMN_W, COLUMNS.len()));
     Table {
         self_id: self_id(SAMPLE, "Table", page as u32),
         header_row_count: 0,

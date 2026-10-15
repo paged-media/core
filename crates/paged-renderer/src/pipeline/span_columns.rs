@@ -304,7 +304,7 @@ impl<'a> Planner<'a> {
     fn kind_here(&self, p: usize) -> Kind {
         let n = self.frames.get(self.frame).map_or(1, |f| f.columns.len());
         match self.paras[p].kind {
-            Kind::Span(k) if n >= 2 && k.map_or(true, |k| k >= 2) => Kind::Span(k),
+            Kind::Span(k) if n >= 2 && k.is_none_or(|k| k >= 2) => Kind::Span(k),
             Kind::Split { k, .. } if k >= 2 => self.paras[p].kind,
             _ => Kind::Single,
         }

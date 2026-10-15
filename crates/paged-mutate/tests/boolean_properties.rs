@@ -111,7 +111,7 @@ fn convex(r: &mut Lcg) -> Shape {
 }
 
 fn shape(r: &mut Lcg) -> Shape {
-    if r.next() % 2 == 0 {
+    if r.next().is_multiple_of(2) {
         rect(r)
     } else {
         convex(r)

@@ -37,7 +37,7 @@ exclude = ["spikes/blitz-wasm"]
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.92"
 license = "MPL-2.0 OR LicenseRef-PMEL"
 publish = false
 
