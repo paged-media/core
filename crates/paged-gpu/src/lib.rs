@@ -105,7 +105,7 @@ pub use separations::{
     InkChannel, InkCoverageReport, InkPlate, PlateCoverage, Separation, TAC_BUCKETS, TAC_BUCKET_PCT,
 };
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]
-pub use surface::{SurfaceError, SurfacePresenter, Viewport};
+pub use surface::{PendingReadback, SurfaceError, SurfacePresenter, Viewport};
 // Re-export vello::Scene so consumers (paged-canvas-wasm) don't need
 // vello as a direct dependency to hold cached scenes.
 #[cfg(all(feature = "vello-backend", target_arch = "wasm32"))]

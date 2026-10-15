@@ -80,9 +80,11 @@ fi
 # runner then hosts it under Node (default) or a browser.
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="wasm-bindgen-test-runner"
 
-echo "test-wasm: cargo test --target $TARGET -p $CRATE --test wasm"
+echo "test-wasm: cargo test --target $TARGET -p $CRATE --features gpu --test wasm"
 # `--test wasm` scopes to the wasm_bindgen_test lane (tests/wasm.rs); the
-# native dispatch suite is covered by plain `cargo test`.
-cargo test --target "$TARGET" -p "$CRATE" --test wasm "$@"
+# native dispatch suite is covered by plain `cargo test`. `--features gpu`
+# is the build the editor ships (publish-wasm.yml), and the only one with
+# `initGpu` / `renderPageVelloPng`, whose re-entrancy the lane checks.
+cargo test --target "$TARGET" -p "$CRATE" --features gpu --test wasm "$@"
 
 echo "test-wasm: PASS — paged-canvas-wasm wasm_bindgen_test lane green."
