@@ -88,6 +88,8 @@ is not written yet.
 | [157](157-every-page-numbering-style.md) | Every page-numbering style InDesign offers, formatted as InDesign formats it | Accepted 2026-10-15 |
 | [158](158-how-indesign-numbers-a-multi-level-list.md) | How InDesign numbers a multi-level list | Accepted 2026-10-15 |
 | [159](159-what-a-committed-change-reports.md) | What a committed change reports, and where a page sits | Accepted 2026-10-15 |
+| [160](160-footnotes-in-columns.md) | Footnotes in a frame with columns: under each column, or across the frame | Accepted 2026-10-15 |
+| [161](161-a-note-too-tall-for-its-frame.md) | A note too tall for its frame: continued in the next, or its reference moved on | Accepted 2026-10-15 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

@@ -123,7 +123,7 @@ pub fn story_id(sample: &str, name: &str) -> String {
     self_id(sample, &format!("Story{name}"), 0)
 }
 
-fn start_range(b: &mut XmlBuilder, extra: &[(&str, &str)], size: &str) {
+pub(crate) fn start_range(b: &mut XmlBuilder, extra: &[(&str, &str)], size: &str) {
     let mut attrs = vec![
         (
             "AppliedCharacterStyle",
@@ -142,7 +142,7 @@ fn start_range(b: &mut XmlBuilder, extra: &[(&str, &str)], size: &str) {
     b.end("Properties");
 }
 
-fn content(b: &mut XmlBuilder, text: &str) {
+pub(crate) fn content(b: &mut XmlBuilder, text: &str) {
     b.start("Content", &[]);
     b.text(text);
     b.end("Content");
@@ -150,7 +150,7 @@ fn content(b: &mut XmlBuilder, text: &str) {
 
 /// A `<Footnote>` as InDesign writes one: its number (`<?ACE 4?>`) and the
 /// separator open the note's text.
-fn footnote(b: &mut XmlBuilder, id: String, text: &str) {
+pub(crate) fn footnote(b: &mut XmlBuilder, id: String, text: &str) {
     b.start("Footnote", &[("Self", id.as_str())]);
     b.start(
         "ParagraphStyleRange",

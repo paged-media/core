@@ -1373,6 +1373,10 @@ pub struct TextFrame {
     /// only when the rules are switched on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_rule: Option<ColumnRule>,
+    /// The frame's own footnote layout (`FootnotesEnableOverrides` and
+    /// its companions on `<TextFramePreference>`, ADR 160).
+    #[serde(default, skip_serializing_if = "FrameFootnotes::is_unset")]
+    pub footnotes: FrameFootnotes,
     /// `ItemLayer` reference. Renderer skips items whose layer is
     /// hidden or non-printable.
     pub item_layer: Option<String>,
@@ -1567,6 +1571,7 @@ impl TextFrame {
             text_wrap: None,
             ignore_wrap: None,
             column_rule: None,
+            footnotes: FrameFootnotes::default(),
             item_layer: None,
             is_anchored: false,
             opacity: None,
@@ -4286,6 +4291,108 @@ pub struct FootnoteOptions {
     /// `DontRestart`. See [`FootnoteRestart`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_numbering: Option<String>,
+    /// `EnableStraddling` — the notes of a frame with columns span its
+    /// columns instead of standing under each (ADR 160). `None`: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_straddling: Option<bool>,
+    /// `NoSplitting` — a note too tall for the room under its reference
+    /// takes its reference line to the next column or frame instead of
+    /// continuing there (ADR 161). `None`: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_splitting: Option<bool>,
+    /// The rule above a note continued from an earlier column or frame
+    /// (`ContinuingRule*`, ADR 161).
+    #[serde(default, skip_serializing_if = "ContinuingRule::is_unset")]
+    pub continuing_rule: ContinuingRule,
+}
+
+/// `<FootnoteOption ContinuingRule*>`: the rule InDesign draws above a
+/// note continued from an earlier column or frame, in place of the
+/// separator rule (asked of InDesign 20.0.1, `footnote-split`, ADR 161).
+/// Each field is `None` when the document does not say; InDesign's
+/// defaults are on, 1 pt, 288 pt wide, black, no offset or indent.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ContinuingRule {
+    pub on: Option<bool>,
+    pub line_weight: Option<f32>,
+    pub width: Option<f32>,
+    pub offset: Option<f32>,
+    pub left_indent: Option<f32>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+}
+
+impl ContinuingRule {
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ContinuingRule::default()
+    }
+}
+
+/// A text frame's own footnote layout, from `<TextFramePreference>`
+/// (asked of InDesign 20.0.1, `footnote-columns` / `footnote-straddle`,
+/// ADR 160). It applies only with `FootnotesEnableOverrides="true"`; it
+/// then replaces the document's `EnableStraddling`, `SpaceBetween` and
+/// `Spacer`, and what it does not state takes InDesign's frame defaults
+/// (no spanning, 6 pt between notes, 12 pt minimum spacing), not the
+/// document's.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct FrameFootnotes {
+    /// `FootnotesEnableOverrides`.
+    pub enable_overrides: Option<bool>,
+    /// `FootnotesSpanAcrossColumns`.
+    pub span_across_columns: Option<bool>,
+    /// `FootnotesSpaceBetween` (pt).
+    pub space_between: Option<f32>,
+    /// `FootnotesMinimumSpacing` (pt): the least space above the first
+    /// note.
+    pub minimum_spacing: Option<f32>,
+}
+
+impl FrameFootnotes {
+    /// InDesign's frame default for `FootnotesSpaceBetween`.
+    pub const DEFAULT_SPACE_BETWEEN: f32 = 6.0;
+    /// InDesign's frame default for `FootnotesMinimumSpacing`.
+    pub const DEFAULT_MINIMUM_SPACING: f32 = 12.0;
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == FrameFootnotes::default()
+    }
+
+    /// The frame overrides the document's footnote layout.
+    pub fn overrides(&self) -> bool {
+        self.enable_overrides == Some(true)
+    }
+
+    /// Whether the frame's notes span its columns, given the document's
+    /// `EnableStraddling`.
+    pub fn spans(&self, document: &FootnoteOptions) -> bool {
+        if self.overrides() {
+            self.span_across_columns.unwrap_or(false)
+        } else {
+            document.enable_straddling.unwrap_or(false)
+        }
+    }
+
+    /// The space between notes, given the document's.
+    pub fn space_between(&self, document_pt: f32) -> f32 {
+        if self.overrides() {
+            self.space_between.unwrap_or(Self::DEFAULT_SPACE_BETWEEN)
+        } else {
+            document_pt
+        }
+    }
+
+    /// The least space above the first note, given the document's.
+    pub fn minimum_spacing(&self, document_pt: f32) -> f32 {
+        if self.overrides() {
+            self.minimum_spacing
+                .unwrap_or(Self::DEFAULT_MINIMUM_SPACING)
+        } else {
+            document_pt
+        }
+    }
 }
 
 /// Where footnote numbering starts again (`RestartNumbering`). InDesign

@@ -1471,6 +1471,7 @@ pub(crate) fn new_text_frame(
         text_wrap: None,
         ignore_wrap: None,
         column_rule: None,
+        footnotes: Default::default(),
         item_layer: None,
         is_anchored: false,
         opacity: None,
