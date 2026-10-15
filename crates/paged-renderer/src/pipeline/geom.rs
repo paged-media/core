@@ -986,6 +986,7 @@ fn continuation(paragraph: &paged_model::Paragraph) -> paged_model::Paragraph {
         numbering_expression: paragraph.numbering_expression.clone(),
         numbering_start_at: paragraph.numbering_start_at,
         numbering_continue: paragraph.numbering_continue,
+        list_level: paragraph.list_level,
         bullets_character_style: paragraph.bullets_character_style.clone(),
         bullets_and_numbering_digits_character_style: paragraph
             .bullets_and_numbering_digits_character_style
@@ -1082,6 +1083,7 @@ pub(super) fn split_paragraph_into_segments(
         numbering_expression: paragraph.numbering_expression.clone(),
         numbering_start_at: paragraph.numbering_start_at,
         numbering_continue: paragraph.numbering_continue,
+        list_level: paragraph.list_level,
         bullets_character_style: paragraph.bullets_character_style.clone(),
         bullets_and_numbering_digits_character_style: paragraph
             .bullets_and_numbering_digits_character_style
@@ -1365,6 +1367,7 @@ pub(super) fn split_paragraph_into_segments(
                 numbering_expression: paragraph.numbering_expression.clone(),
                 numbering_start_at: paragraph.numbering_start_at,
                 numbering_continue: paragraph.numbering_continue,
+                list_level: paragraph.list_level,
                 bullets_character_style: paragraph.bullets_character_style.clone(),
                 bullets_and_numbering_digits_character_style: paragraph
                     .bullets_and_numbering_digits_character_style

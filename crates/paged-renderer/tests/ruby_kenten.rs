@@ -97,11 +97,12 @@ fn build(family: &str, runs: &[(&str, &str)]) -> paged_renderer::BuiltPage {
         .remove(0)
 }
 
-/// What the page draws: glyphs as `(size, x, y)` and marks as
-/// `(size, centre x, centre y)`, in drawing order.
+/// What the page draws: glyphs as `(size, x, y, vertical size)` and
+/// marks as `(width, centre x, centre y, height)`, in drawing order (a
+/// glyph's size is its horizontal one, its scale folded in).
 struct Drawn {
-    glyphs: Vec<(f32, f32, f32)>,
-    marks: Vec<(f32, f32, f32)>,
+    glyphs: Vec<(f32, f32, f32, f32)>,
+    marks: Vec<(f32, f32, f32, f32)>,
 }
 
 fn drawn(page: &paged_renderer::BuiltPage, upem: f32) -> Drawn {
@@ -118,9 +119,9 @@ fn drawn(page: &paged_renderer::BuiltPage, upem: f32) -> Drawn {
             continue;
         }
         if dd < 0.0 {
-            d.glyphs.push((a * upem, tx, ty));
+            d.glyphs.push((a * upem, tx, ty, -dd * upem));
         } else {
-            d.marks.push((a, tx, ty));
+            d.marks.push((a, tx, ty, dd));
         }
     }
     d
@@ -289,4 +290,214 @@ fn a_latin_face_centres_its_em_box_on_half_its_cap_height() {
         27.854,
         "ruby baseline above the base's",
     );
+}
+
+/// One frame of Noto Sans JP 30 pt: "漢字漢字" then 漢字 with group ruby
+/// かんじ and `ruby_attrs` — InDesign's probe frame, its ruby over x 180
+/// to 240.
+fn ruby_frame(ruby_attrs: &str) -> Drawn {
+    let attrs = format!(r#"RubyFlag="1" RubyType="GroupRuby" RubyString="かんじ" {ruby_attrs}"#);
+    let page = build("Noto Sans JP", &[("", KANJI), (&attrs, "漢字")]);
+    drawn(&page, 1000.0)
+}
+
+/// The ruby glyphs (`size` wide) as `(x, height above the base's
+/// baseline)`.
+fn ruby_of(d: &Drawn, size: f32) -> Vec<(f32, f32)> {
+    let baseline = d.at_size(30.0)[0].1;
+    d.at_size(size)
+        .into_iter()
+        .map(|(x, y)| (x, baseline - y))
+        .collect()
+}
+
+fn assert_ruby_at(got: &[(f32, f32)], xs: &[f32], up: f32, what: &str) {
+    assert_eq!(got.len(), xs.len(), "{what}: {got:?}");
+    for (&(x, y), &want) in got.iter().zip(xs) {
+        assert_near(x, want, what);
+        assert_near(y, up, what);
+    }
+}
+
+#[test]
+fn ruby_takes_its_size_scale_offsets_and_position() {
+    // InDesign 20.0.1 (ruby-kenten-probe), かんじ over 漢字 at x 180.
+    // RubyFontSize 12: 36 pt of ruby spread 1:2:1, its em box on the
+    // base's: 0.88 × 30 + 0.12 × 12 = 27.84 pt up.
+    assert_ruby_at(
+        &ruby_of(&ruby_frame(r#"RubyFontSize="12""#), 12.0),
+        &[184.0, 204.0, 224.0],
+        27.84,
+        "RubyFontSize 12",
+    );
+    // RubyXScale 50: half-width glyphs, spread from their scaled width.
+    assert_ruby_at(
+        &ruby_of(&ruby_frame(r#"RubyXScale="50""#), 7.5),
+        &[186.25, 206.25, 226.25],
+        28.2,
+        "RubyXScale 50",
+    );
+    // RubyYScale 200: twice as tall, grown up from the same baseline.
+    let tall = ruby_frame(r#"RubyYScale="200""#);
+    assert!(tall
+        .glyphs
+        .iter()
+        .any(|g| (g.0 - 15.0).abs() < 0.01 && (g.3 - 30.0).abs() < 0.01));
+    assert_ruby_at(
+        &ruby_of(&tall, 15.0),
+        &[182.5, 202.5, 222.5],
+        28.2,
+        "RubyYScale 200",
+    );
+    // RubyXOffset / RubyYOffset: right and up.
+    assert_ruby_at(
+        &ruby_of(&ruby_frame(r#"RubyXOffset="5""#), 15.0),
+        &[187.5, 207.5, 227.5],
+        28.2,
+        "RubyXOffset 5",
+    );
+    assert_ruby_at(
+        &ruby_of(&ruby_frame(r#"RubyYOffset="5""#), 15.0),
+        &[182.5, 202.5, 222.5],
+        33.2,
+        "RubyYOffset 5",
+    );
+    // BelowLeft: the ruby's em box hangs from the base's, 16.8 pt down;
+    // its offset still moves it up.
+    assert_ruby_at(
+        &ruby_of(&ruby_frame(r#"RubyPosition="BelowLeft""#), 15.0),
+        &[182.5, 202.5, 222.5],
+        -16.8,
+        "BelowLeft",
+    );
+    assert_ruby_at(
+        &ruby_of(
+            &ruby_frame(r#"RubyPosition="BelowLeft" RubyYOffset="5""#),
+            15.0,
+        ),
+        &[182.5, 202.5, 222.5],
+        -11.8,
+        "BelowLeft, RubyYOffset 5",
+    );
+}
+
+#[test]
+fn ruby_spreads_by_its_alignment() {
+    // 15 pt to spare over 漢字 (x 180 to 240).
+    for (alignment, xs) in [
+        ("RubyLeft", [180.0, 195.0, 210.0]),
+        ("RubyCenter", [187.5, 202.5, 217.5]),
+        ("RubyRight", [195.0, 210.0, 225.0]),
+        ("RubyFullJustify", [180.0, 202.5, 225.0]),
+        ("RubyEqualAki", [183.75, 202.5, 221.25]),
+        ("Ruby1Aki", [187.5, 202.5, 217.5]),
+    ] {
+        let d = ruby_frame(&format!(r#"RubyAlignment="{alignment}""#));
+        assert_ruby_at(&ruby_of(&d, 15.0), &xs, 28.2, alignment);
+    }
+    // 75 pt to spare over four characters (x 90 to 210), where JIS, 1-aki
+    // and equal aki part ways.
+    for (alignment, xs) in [
+        ("RubyJIS", [102.5, 142.5, 182.5]),
+        ("Ruby1Aki", [105.0, 142.5, 180.0]),
+        ("RubyEqualAki", [108.75, 142.5, 176.25]),
+        ("RubyFullJustify", [90.0, 142.5, 195.0]),
+    ] {
+        let attrs = format!(
+            r#"RubyFlag="1" RubyType="GroupRuby" RubyString="かんじ" RubyAlignment="{alignment}""#
+        );
+        let page = build(
+            "Noto Sans JP",
+            &[("", "漢"), (&attrs, "字漢字漢"), ("", "字")],
+        );
+        let d = drawn(&page, 1000.0);
+        assert_ruby_at(&ruby_of(&d, 15.0), &xs, 28.2, alignment);
+    }
+}
+
+/// One frame of Noto Sans JP 30 pt with sesame kenten and `attrs` on
+/// its first two characters (x 60 to 120): the marks' `(width, centre x,
+/// centre height above the baseline, height)`.
+fn kenten_frame(attrs: &str) -> Vec<(f32, f32, f32, f32)> {
+    let kenten = format!(r#"KentenKind="KentenSesameDot" {attrs}"#);
+    let d = drawn(
+        &build("Noto Sans JP", &[(&kenten, "漢字"), ("", KANJI)]),
+        1000.0,
+    );
+    let baseline = d.at_size(30.0)[0].1;
+    d.marks
+        .iter()
+        .map(|m| (m.0, m.1, baseline - m.2, m.3))
+        .collect()
+}
+
+#[test]
+fn kenten_take_their_size_scale_placement_position_and_alignment() {
+    // InDesign 20.0.1 (ruby-kenten-probe): a mark's em box on the base's,
+    // its centre half the mark above that (33.9 pt at 15 pt).
+    let cases: [(&str, f32, f32, [f32; 2], f32); 7] = [
+        // attrs, width, height, centres x, centre height
+        (r#"KentenFontSize="12""#, 12.0, 12.0, [75.0, 105.0], 32.4),
+        (r#"KentenXScale="50""#, 7.5, 15.0, [75.0, 105.0], 33.9),
+        // A vertical scale grows the mark up from its baseline.
+        (r#"KentenYScale="200""#, 15.0, 30.0, [75.0, 105.0], 39.6),
+        (r#"KentenPlacement="5""#, 15.0, 15.0, [75.0, 105.0], 38.9),
+        // Below: hanging from the base's em box, 16.8 pt down to its
+        // baseline; KentenPlacement moves it up there too.
+        (
+            r#"KentenPosition="BelowLeft""#,
+            15.0,
+            15.0,
+            [75.0, 105.0],
+            -11.1,
+        ),
+        (
+            r#"KentenPosition="BelowLeft" KentenPlacement="5""#,
+            15.0,
+            15.0,
+            [75.0, 105.0],
+            -6.1,
+        ),
+        // AlignKentenLeft: the mark's em box on the character's left.
+        (
+            r#"KentenAlignment="AlignKentenLeft""#,
+            15.0,
+            15.0,
+            [67.5, 97.5],
+            33.9,
+        ),
+    ];
+    for (attrs, width, height, xs, up) in cases {
+        let marks = kenten_frame(attrs);
+        assert_eq!(marks.len(), 2, "{attrs}: {marks:?}");
+        for (m, x) in marks.iter().zip(xs) {
+            assert_near(m.0, width, attrs);
+            assert_near(m.3, height, attrs);
+            assert_near(m.1, x, attrs);
+            assert_near(m.2, up, attrs);
+        }
+    }
+}
+
+#[test]
+fn a_custom_kenten_prints_its_character_on_the_em_box() {
+    // KentenKind="Custom": the character, half size, in the base's face,
+    // its em box on the base's (InDesign: Kozuka's ★ 28.2 pt up, its
+    // advance centred on the character).
+    let page = build(
+        "Noto Sans JP",
+        &[
+            (r#"KentenKind="Custom" KentenCustomCharacter="★""#, "漢字"),
+            ("", KANJI),
+        ],
+    );
+    let d = drawn(&page, 1000.0);
+    let baseline = d.at_size(30.0)[0].1;
+    let marks = d.at_size(15.0);
+    assert_eq!(marks.len(), 2, "{marks:?}");
+    for (x, y) in marks {
+        assert_near(baseline - y, 28.2, "custom kenten baseline");
+        assert!((60.0..120.0).contains(&x), "over its character: {x}");
+    }
+    assert!(d.marks.is_empty(), "no drawn mark for a custom kind");
 }

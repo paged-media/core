@@ -345,6 +345,87 @@ impl SpanColumns {
     }
 }
 
+/// A numbered paragraph's place in a multi-level list (`NumberingLevel`,
+/// `NumberingApplyRestartPolicy`, `<NumberingRestartPolicies>`; L-07,
+/// ADR 158). Each field is `None` when the paragraph (or style) does not
+/// say, and cascades like the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ListLevel {
+    /// `NumberingLevel`, 1 to 9; `None` is 1.
+    pub level: Option<u32>,
+    /// `NumberingApplyRestartPolicy`; `None` is true.
+    pub apply_restart: Option<bool>,
+    /// `<NumberingRestartPolicies>`; `None` restarts after any previous
+    /// level.
+    pub restart_policy: Option<RestartPolicy>,
+}
+
+impl ListLevel {
+    /// Fill every unset field from `outer`.
+    pub fn inherit(&mut self, outer: &ListLevel) {
+        self.level = self.level.or(outer.level);
+        self.apply_restart = self.apply_restart.or(outer.apply_restart);
+        self.restart_policy = self.restart_policy.or(outer.restart_policy);
+    }
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ListLevel::default()
+    }
+}
+
+/// `<NumberingRestartPolicies RestartPolicy LowerLevel UpperLevel>`: which
+/// higher levels start a level's count again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestartPolicy {
+    pub kind: RestartPolicyKind,
+    /// `LowerLevel` — the level `SpecificPreviousLevel` names, or the
+    /// first of `RangeOfPreviousLevels`.
+    pub lower: u32,
+    /// `UpperLevel` — the last level of `RangeOfPreviousLevels`.
+    pub upper: u32,
+}
+
+/// `RestartPolicy` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestartPolicyKind {
+    AnyPreviousLevel,
+    SpecificPreviousLevel,
+    RangeOfPreviousLevels,
+}
+
+impl RestartPolicyKind {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "AnyPreviousLevel" => Self::AnyPreviousLevel,
+            "SpecificPreviousLevel" => Self::SpecificPreviousLevel,
+            "RangeOfPreviousLevels" => Self::RangeOfPreviousLevels,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::AnyPreviousLevel => "AnyPreviousLevel",
+            Self::SpecificPreviousLevel => "SpecificPreviousLevel",
+            Self::RangeOfPreviousLevels => "RangeOfPreviousLevels",
+        }
+    }
+}
+
+impl RestartPolicy {
+    /// The higher levels whose paragraphs start `level`'s count again
+    /// when one came after the last paragraph at `level`.
+    pub fn restarting_levels(&self, level: u32) -> std::ops::RangeInclusive<u32> {
+        let below = level.saturating_sub(1);
+        match self.kind {
+            RestartPolicyKind::AnyPreviousLevel => 1..=below,
+            RestartPolicyKind::SpecificPreviousLevel => self.lower..=self.lower.min(below),
+            RestartPolicyKind::RangeOfPreviousLevels => self.lower..=self.upper.min(below),
+        }
+    }
+}
+
 /// How a paragraph sets its lines beyond justification: auto leading,
 /// a lone word on a justified line, the last line's right indent and
 /// balanced ragged lines (`AutoLeading`, `SingleWordJustification`,
@@ -5152,11 +5233,15 @@ pub struct CharacterStyleDef {
     /// `KentenKind` — emphasis-mark glyph. See
     /// [`CharacterRun::kenten_kind`].
     pub kenten_kind: Option<String>,
-    /// `KentenCharacter` — custom emphasis-mark codepoint when
-    /// `kenten_kind == "Custom"`.
+    /// `KentenCustomCharacter` — the character a `Custom` kenten kind
+    /// prints.
     pub kenten_character: Option<String>,
-    /// `KentenFontSize` — emphasis-mark size as a % of base size.
+    /// `KentenFontSize` — the emphasis marks' size in points; `-1`
+    /// (InDesign's default) is half the base's size.
     pub kenten_font_size: Option<f32>,
+    /// The rest of the ruby and kenten settings ([`MarkSettings`]).
+    #[serde(default)]
+    pub marks: MarkSettings,
     /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard +
     /// contextual OpenType ligatures (`liga`, `clig`). Default (when
     /// None and bottom of cascade) is `true`, matching InDesign's
@@ -5355,6 +5440,9 @@ pub struct ParagraphStyleDef {
     /// Anything else passes through unchanged. `None` falls back
     /// to the IDML default `^#.^t` (e.g. `"1.\t"`).
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` — explicit integer the paragraph's
     /// counter starts at. Overrides any continued count from a
     /// previous paragraph. `None` means "no explicit start"; the
@@ -5706,10 +5794,12 @@ pub struct ResolvedCharacter {
     pub ruby_string: Option<String>,
     /// Cascaded `KentenKind`.
     pub kenten_kind: Option<String>,
-    /// Cascaded `KentenCharacter`.
+    /// Cascaded `KentenCustomCharacter`.
     pub kenten_character: Option<String>,
     /// Cascaded `KentenFontSize`.
     pub kenten_font_size: Option<f32>,
+    /// Cascaded ruby and kenten settings.
+    pub marks: MarkSettings,
     /// Phase 4 typography — cascaded `Ligatures` flag. See
     /// [`CharacterStyleDef::ligatures_on`].
     pub ligatures_on: Option<bool>,
@@ -5772,6 +5862,8 @@ pub struct ResolvedParagraph {
     /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens
     /// plus literal characters). `None` ⇒ renderer default `^#.^t`.
     pub numbering_expression: Option<String>,
+    /// [`ListLevel`], cascaded.
+    pub list_level: ListLevel,
     /// `NumberingStartAt` explicit start integer. See
     /// `ParagraphStyleDef::numbering_start_at`.
     pub numbering_start_at: Option<i32>,
@@ -6105,6 +6197,7 @@ impl ResolvedCharacter {
             self.kenten_character = def.kenten_character.clone();
         }
         self.kenten_font_size = self.kenten_font_size.or(def.kenten_font_size);
+        self.marks.fill_from(&def.marks);
         self.ligatures_on = self.ligatures_on.or(def.ligatures_on);
         if self.kerning_method.is_none() {
             self.kerning_method = def.kerning_method.clone();
@@ -6180,6 +6273,7 @@ impl ResolvedParagraph {
         if self.numbering_expression.is_none() {
             self.numbering_expression = def.numbering_expression.clone();
         }
+        self.list_level.inherit(&def.list_level);
         self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
         if self.applied_numbering_list.is_none() {
@@ -6439,6 +6533,9 @@ pub struct Paragraph {
     /// `None` ⇒ inherit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` local override. InDesign applies it only where
     /// the list starts or `NumberingContinue` is false; mid-list it is
     /// ignored. `None` ⇒ inherit.
@@ -7240,6 +7337,89 @@ impl TableCell {
         Some((c.parse().ok()?, r.parse().ok()?))
     }
 }
+/// Ruby and emphasis-mark (kenten) settings beyond their flag, kind,
+/// text and kenten size, as InDesign spells them on a
+/// `<CharacterStyleRange>` or a `<CharacterStyle>`. Every field is a
+/// cascade slot: `None` inherits, and at the bottom InDesign's defaults
+/// apply (`pipeline::ruby` in paged-renderer says which).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarkSettings {
+    /// `RubyFontSize` (pt); `-1` is half the base's size.
+    pub ruby_font_size: Option<f32>,
+    /// `RubyXScale` / `RubyYScale` (%).
+    pub ruby_x_scale: Option<f32>,
+    pub ruby_y_scale: Option<f32>,
+    /// `RubyXOffset` / `RubyYOffset` (pt): right and up.
+    pub ruby_x_offset: Option<f32>,
+    pub ruby_y_offset: Option<f32>,
+    /// `RubyPosition`: `AboveRight` or `BelowLeft`.
+    pub ruby_position: Option<String>,
+    /// `RubyAlignment`: `RubyJIS`, `RubyLeft`, `RubyCenter`, `RubyRight`,
+    /// `RubyFullJustify`, `RubyEqualAki` or `Ruby1Aki`.
+    pub ruby_alignment: Option<String>,
+    /// `RubyFont` / `RubyFontStyle` (unset: the base's face).
+    pub ruby_font: Option<String>,
+    pub ruby_font_style: Option<String>,
+    /// `KentenXScale` / `KentenYScale` (%).
+    pub kenten_x_scale: Option<f32>,
+    pub kenten_y_scale: Option<f32>,
+    /// `KentenPlacement` (pt): up.
+    pub kenten_placement: Option<f32>,
+    /// `KentenPosition`: `AboveRight` or `BelowLeft`.
+    pub kenten_position: Option<String>,
+    /// `KentenAlignment`: `AlignKentenCenter` or `AlignKentenLeft`.
+    pub kenten_alignment: Option<String>,
+    /// `KentenFont` / `KentenFontStyle`: the face a `Custom` mark prints
+    /// in (unset: the base's).
+    pub kenten_font: Option<String>,
+    pub kenten_font_style: Option<String>,
+}
+
+impl MarkSettings {
+    /// Take every setting this one leaves unset from `below`.
+    pub fn fill_from(&mut self, below: &MarkSettings) {
+        fn fill<T: Clone>(slot: &mut Option<T>, below: &Option<T>) {
+            if slot.is_none() {
+                slot.clone_from(below);
+            }
+        }
+        let MarkSettings {
+            ruby_font_size,
+            ruby_x_scale,
+            ruby_y_scale,
+            ruby_x_offset,
+            ruby_y_offset,
+            ruby_position,
+            ruby_alignment,
+            ruby_font,
+            ruby_font_style,
+            kenten_x_scale,
+            kenten_y_scale,
+            kenten_placement,
+            kenten_position,
+            kenten_alignment,
+            kenten_font,
+            kenten_font_style,
+        } = below;
+        fill(&mut self.ruby_font_size, ruby_font_size);
+        fill(&mut self.ruby_x_scale, ruby_x_scale);
+        fill(&mut self.ruby_y_scale, ruby_y_scale);
+        fill(&mut self.ruby_x_offset, ruby_x_offset);
+        fill(&mut self.ruby_y_offset, ruby_y_offset);
+        fill(&mut self.ruby_position, ruby_position);
+        fill(&mut self.ruby_alignment, ruby_alignment);
+        fill(&mut self.ruby_font, ruby_font);
+        fill(&mut self.ruby_font_style, ruby_font_style);
+        fill(&mut self.kenten_x_scale, kenten_x_scale);
+        fill(&mut self.kenten_y_scale, kenten_y_scale);
+        fill(&mut self.kenten_placement, kenten_placement);
+        fill(&mut self.kenten_position, kenten_position);
+        fill(&mut self.kenten_alignment, kenten_alignment);
+        fill(&mut self.kenten_font, kenten_font);
+        fill(&mut self.kenten_font_style, kenten_font_style);
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
@@ -7304,22 +7484,24 @@ pub struct CharacterRun {
     /// modelled here (we treat absence == Auto).
     pub leading: Option<f32>,
     /// `RubyFlag` — when `true`, this run carries ruby annotation
-    /// (small phonetic-guide text) above / beside the base run. The
-    /// parser captures the flag; full ruby layout (positioning the
-    /// annotation text, sizing it as a fraction of the base, etc.)
-    /// is queued. See docs/plan.md Tier 4 — CJK Stage 4.
+    /// (small phonetic-guide text) above / beside the base run, which
+    /// the renderer sets under a Japanese composer (`pipeline::ruby`).
     pub ruby_flag: Option<bool>,
-    /// `RubyType` — `PerCharacter` / `GroupRuby`. Parser-only today.
+    /// `RubyType` — `PerCharacterRuby` / `GroupRuby`.
     pub ruby_type: Option<String>,
     /// `RubyString` — the ruby annotation text itself.
     pub ruby_string: Option<String>,
-    /// `KentenKind` — the emphasis-mark glyph for this run.
-    /// Parser-only — emphasis-mark rendering is queued (Tier 4 Stage 4).
+    /// `KentenKind` — the emphasis-mark kind for this run
+    /// (`KentenSesameDot`, …, `Custom`).
     pub kenten_kind: Option<String>,
-    /// `KentenCharacter` — codepoint to stamp when `kenten_kind == "Custom"`.
+    /// `KentenCustomCharacter` — the character a `Custom` kind prints.
     pub kenten_character: Option<String>,
-    /// `KentenFontSize` — emphasis-mark glyph size as a percentage.
+    /// `KentenFontSize` — the emphasis marks' size in points; `-1`
+    /// (InDesign's default) is half the base's size.
     pub kenten_font_size: Option<f32>,
+    /// The rest of the ruby and kenten settings ([`MarkSettings`]).
+    #[serde(default)]
+    pub marks: MarkSettings,
     /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
     /// inherit from the applied character / paragraph style cascade.
     /// Drives the renderer's Stage 3 darken composite when true.

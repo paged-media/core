@@ -60,6 +60,7 @@ pub mod navigation;
 pub mod nested_groups;
 pub mod nested_styles;
 pub mod numbering;
+pub mod numbering_multilevel;
 pub mod object_style_frames;
 pub mod object_style_options;
 pub mod opentype;
@@ -199,6 +200,7 @@ pub const SAMPLES: &[&str] = &[
     "column-rules",
     "footnote-numbering",
     "footnote-restart",
+    "numbering-multilevel",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -273,6 +275,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "column-rules" => column_rules::build(),
         "footnote-numbering" => footnote_numbering::build(&footnote_numbering::NUMBERING),
         "footnote-restart" => footnote_numbering::build(&footnote_numbering::RESTART),
+        "numbering-multilevel" => numbering_multilevel::build(),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -319,7 +322,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            86,
+            87,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

@@ -807,6 +807,18 @@ pub enum PropertyPath {
     /// of a write over an unset slot is `Text("")`, not `Bool(true)`.
     /// Reflow-affecting.
     ParagraphNumberingContinue,
+    /// `NumberingLevel` — the paragraph's level in a multi-level list, 1
+    /// to 9 (ADR 158). `Value::Length(Some(n))` carrying a whole number
+    /// (the integer-as-Length convention); `Length(None)` clears the
+    /// override (inherit; absent everywhere is level 1). Anything else
+    /// is refused (`TypeMismatch`), never clamped. Reflow-affecting.
+    ParagraphNumberingLevel,
+    /// `NumberingApplyRestartPolicy` — whether the level's count starts
+    /// again after a higher level (ADR 158). `Value::Bool` sets the
+    /// override; `Value::Text("")` clears it (inherit; absent everywhere
+    /// is `true`), so undo restores an unset slot exactly.
+    /// Reflow-affecting.
+    ParagraphNumberingApplyRestartPolicy,
     /// `BulletsCharacterStyle` — the bullet marker's character style, a
     /// `CharacterStyle/<id>` self id. `Value::Text`, stored verbatim
     /// (an id that names no style is stored, like
@@ -1642,6 +1654,10 @@ impl PropertyPath {
             PropertyPath::ParagraphNumberingExpression => "paragraph.numberingExpression",
             PropertyPath::ParagraphNumberingStartAt => "paragraph.numberingStartAt",
             PropertyPath::ParagraphNumberingContinue => "paragraph.numberingContinue",
+            PropertyPath::ParagraphNumberingLevel => "paragraph.numberingLevel",
+            PropertyPath::ParagraphNumberingApplyRestartPolicy => {
+                "paragraph.numberingApplyRestartPolicy"
+            }
             PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
             PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
             PropertyPath::ParagraphComposer => "paragraph.composer",

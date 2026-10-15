@@ -885,6 +885,9 @@ property_paths! {
         ParagraphNumberingExpression => "paragraphNumberingExpression" : text().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingExpression), child(ParagraphStyleRange | ParagraphStyle, NumberingExpression)]),
         ParagraphNumberingStartAt => "paragraphNumberingStartAt" : count().min(0.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingStartAt)]),
         ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true).tristate().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingContinue)]),
+        // ADR 158 — a paragraph's level in a multi-level list.
+        ParagraphNumberingLevel => "paragraphNumberingLevel" : count().range(1.0, 9.0).default_num(1.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingLevel)]),
+        ParagraphNumberingApplyRestartPolicy => "paragraphNumberingApplyRestartPolicy" : bool_().default_bool(true).tristate().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingApplyRestartPolicy)]),
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle" : reference(RefKind::CharacterStyle).idml(idml![child(ParagraphStyleRange | ParagraphStyle, BulletsCharacterStyle), attr(ParagraphStyle, BulletsCharacterStyle)]),
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle" : reference(RefKind::CharacterStyle).idml(idml![child(ParagraphStyleRange | ParagraphStyle, NumberingCharacterStyle), attr(ParagraphStyle, BulletsAndNumberingDigitsCharacterStyle)]),
         // ADR 131/132 — the IDML `Name` of a page item; also the `name`
@@ -1310,7 +1313,10 @@ mod tests {
         // 234 -> 239: ADR 153 — a paragraph's line setting (auto leading,
         // single-word justification, the last line's indent, balanced
         // ragged lines) and a run's no-break.
-        assert_eq!(cat.settable_paths.len(), 239, "settable path count drifted");
+        //
+        // 239 -> 241: ADR 158 — a paragraph's level in a multi-level list
+        // and whether its restart policy applies.
+        assert_eq!(cat.settable_paths.len(), 241, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

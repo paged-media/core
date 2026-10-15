@@ -205,6 +205,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
   vertical justification, an object style's rules are not read, span and split regions draw
   none, and no property path writes them.
+- **Multi-level lists within one story, levels set by paragraph or style.** Levels 1 to 9
+  number, restart and print `^1` … `^9` as InDesign does
+  ([ADR 158](adr/158-how-indesign-numbers-a-multi-level-list.md)), and
+  `paragraphNumberingLevel` / `paragraphNumberingApplyRestartPolicy` set them. A level above 1
+  does not continue across stories or documents, the restart policy is read and written but no
+  path sets it, and `editNumberingList` takes no per-level fields.
 - **A footnote reference that overflows into a new restart scope keeps its composed number.**
   Notes are numbered through each story, restarted by page, spread or section, with their prefix
   and suffix, as InDesign numbers them ([ADR 156](adr/156-how-indesign-numbers-footnotes.md)). A

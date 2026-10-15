@@ -2003,7 +2003,29 @@ fn paragraph_style_entries(
         ),
     ]);
     pairs.extend(line_setting_entries(&d.line_setting));
+    pairs.extend(list_level_entries(&d.list_level));
     into_entries(pairs)
+}
+
+/// The list-level paths (ADR 158), read off a paragraph's or a paragraph
+/// style's own [`paged_model::ListLevel`]: the level as `Length(None)` and
+/// the restart flag as `Text("")` when the level does not say.
+fn list_level_entries(
+    ll: &paged_model::ListLevel,
+) -> [(paged_mutate::PropertyPath, paged_mutate::Value); 2] {
+    use paged_mutate::{PropertyPath as P, Value as V};
+    [
+        (
+            P::ParagraphNumberingLevel,
+            V::Length(ll.level.map(|n| n as f32)),
+        ),
+        (
+            P::ParagraphNumberingApplyRestartPolicy,
+            ll.apply_restart
+                .map(V::Bool)
+                .unwrap_or(V::Text(String::new())),
+        ),
+    ]
 }
 
 /// The line-setting paths (ADR 153), read off a paragraph's or a
@@ -7709,6 +7731,7 @@ impl CanvasModel {
         let mut start_paragraphs: Vec<Option<paged_model::StartParagraph>> = Vec::new();
         let mut span_columns: Vec<paged_model::SpanColumns> = Vec::new();
         let mut line_settings: Vec<paged_model::LineSetting> = Vec::new();
+        let mut list_levels: Vec<paged_model::ListLevel> = Vec::new();
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
@@ -7788,6 +7811,7 @@ impl CanvasModel {
                 start_paragraphs.push(para.start_paragraph);
                 span_columns.push(para.span_columns);
                 line_settings.push(para.line_setting);
+                list_levels.push(para.list_level);
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
@@ -8176,6 +8200,23 @@ impl CanvasModel {
                     &line_settings.iter().map(|l| l.balance).collect::<Vec<_>>(),
                 )
                 .map(|o| Value::Text(o.map(|b| b.as_idml().to_string()).unwrap_or_default())),
+            },
+            // ADR 158 — the list level, read off each paragraph's own
+            // fields (`Length(None)` / `Text("")` ⇒ inherit).
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingLevel,
+                value: collapse_uniform(&list_levels.iter().map(|l| l.level).collect::<Vec<_>>())
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingApplyRestartPolicy,
+                value: collapse_uniform(
+                    &list_levels
+                        .iter()
+                        .map(|l| l.apply_restart)
+                        .collect::<Vec<_>>(),
+                )
+                .map(|o| o.map(Value::Bool).unwrap_or(Value::Text(String::new()))),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphRuleAbove,
