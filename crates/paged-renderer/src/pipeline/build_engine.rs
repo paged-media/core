@@ -3181,15 +3181,9 @@ pub(super) fn build_document_inner(
         // footnote is still deferred (reported via FootnoteOverflow).
         let pre_reset = snapshot_body_story_reset(&pages);
         let pre_total_stats = total_stats;
-        // Map each chain frame to the (page, rect) key it captures
-        // footnotes under, so a measured pool routes back to the frame
-        // whose text area must shrink.
-        let frame_host_keys: Vec<(usize, i32, i32, i32, i32)> = chain_for_post
-            .iter()
-            .zip(chain_pages_for_post.iter())
-            .map(|(f, &p)| footnote_host_key_for_frame(f, p, &pages))
-            .collect();
         let mut reserved_64: Vec<i32> = vec![0; chain_for_post.len()];
+        // The room a frame keeps for a reference line it moved on (ADR 161).
+        let mut held_64: Vec<i32> = vec![0; chain_for_post.len()];
         let mut chain_page_set: Vec<usize> = chain_pages_for_post.clone();
         chain_page_set.sort_unstable();
         chain_page_set.dedup();
@@ -3510,17 +3504,15 @@ pub(super) fn build_document_inner(
             // ADR 028 — the breaks the next pass must force; equal to
             // `forced_breaks` when this pass satisfied every keep option.
             let next_forced = emitter.keep_breaks();
-            let reserve_caps = emitter.footnote_reserve_caps();
             let keeps_changed = next_forced != forced_breaks;
             forced_breaks = next_forced;
 
-            // Measure each frame's footnote pool and fold it into the
-            // reservation. Vertical-writing stories lay the pool out in
-            // horizontal page space too, so the measure is valid there;
-            // we skip the reserve loop only when no footnotes captured.
-            // Only the chain's own pages can hold a pool that routes back
-            // to one of its frames (the pools are keyed by page), so the
-            // measure walks those pages, not the document.
+            // Plan where the story's notes go and fold the room each frame
+            // gives them into the reservation (ADR 161). Vertical-writing
+            // stories lay the area out in horizontal page space too, so
+            // the plan is valid there; we skip the reserve loop only when
+            // no footnotes were captured. Only the chain's own pages can
+            // hold an area of its frames, so the plan walks those.
             if !footnotes_settled {
                 let any_footnotes = chain_page_set
                     .iter()
@@ -3528,9 +3520,11 @@ pub(super) fn build_document_inner(
                 if !any_footnotes {
                     footnotes_settled = true;
                 } else {
-                    let pool_heights = measure_footnote_pools(
+                    let flow = plan_footnote_flow(
                         &pages,
-                        &chain_page_set,
+                        &chain_for_post,
+                        &chain_pages_for_post,
+                        &parsed.self_id,
                         options,
                         document,
                         font_table,
@@ -3538,17 +3532,15 @@ pub(super) fn build_document_inner(
                         palette,
                         color_ctx,
                     );
-                    let mut next_reserved = vec![0i32; reserved_64.len()];
-                    for (frame_idx, key) in frame_host_keys.iter().enumerate() {
-                        if let Some(h_pt) = pool_heights.get(key) {
-                            let pool_64 =
-                                (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
-                            next_reserved[frame_idx] = match reserve_caps.get(frame_idx) {
-                                Some(Some(cap_64)) => pool_64.min(*cap_64),
-                                _ => pool_64,
-                            };
-                        }
+                    for (held, &h) in held_64.iter_mut().zip(&flow.hold_64) {
+                        *held = (*held).max(h);
                     }
+                    let next_reserved: Vec<i32> = flow
+                        .reserve_64
+                        .iter()
+                        .zip(&held_64)
+                        .map(|(&r, &h)| r.max(h))
+                        .collect();
                     if next_reserved == reserved_64 || p + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
                         // Fixpoint, or the bail cap — accept the reservation.
                         // The pool emit post-pass paints below the reserved band.
@@ -3570,6 +3562,26 @@ pub(super) fn build_document_inner(
             if footnotes_settled && p + 1 >= pass_cap {
                 break;
             }
+        }
+        // The settled layout's notes: a note split between two areas keeps
+        // its first lines and continues at the head of the next (ADR 161).
+        if chain_page_set
+            .iter()
+            .any(|&p| pages[p].footnotes.len() > pre_snapshot[p].6)
+        {
+            let flow = plan_footnote_flow(
+                &pages,
+                &chain_for_post,
+                &chain_pages_for_post,
+                &parsed.self_id,
+                options,
+                document,
+                font_table,
+                &hyphenators,
+                palette,
+                color_ctx,
+            );
+            apply_footnote_flow(&flow, &mut pages, &chain_for_post, document);
         }
         // Keep the settled breaks for the next build's seed. A story that
         // reads variables or carries footnotes is never seeded, so it is
@@ -4199,20 +4211,20 @@ pub(super) fn capture_footnotes(
     let Some(&page) = em.chain_pages.get(em.frame_idx) else {
         return;
     };
-    // The host frame's page-local content rect: where the pool is drawn.
+    // The host frame's page-local content rect, and the rect its notes
+    // are set in: the same, or the whole frame's when they span its
+    // columns (ADR 160).
     let frame = em.chain[em.frame_idx];
-    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-    let (ox, oy) = pages[page].spread_origin;
-    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-    let host_frame_rect_pt = Rect {
-        x: sx - ox + insets[1],
-        y: sy - oy + insets[0],
-        w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
-        h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
-    };
-    if let Some(slot) = em.footnote_ref_baseline_64.get_mut(em.frame_idx) {
-        *slot = (*slot).max(ref_baseline_64);
-    }
+    let (_, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (_, oy) = pages[page].spread_origin;
+    let host_frame_rect_pt = frame_content_rect(frame, pages[page].spread_origin);
+    let pool_rect_pt = footnote_pool_rect(
+        &em.chain,
+        em.frame_idx,
+        pages[page].spread_origin,
+        em.document,
+    );
+    let frame_footnotes = frame.footnotes;
     let ref_baseline_pt = sy - oy + ref_baseline_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
     // Every note captured here stands on one page: its restart scope is
     // settled once.
@@ -4227,6 +4239,11 @@ pub(super) fn capture_footnotes(
             footnote_self_id: note.self_id,
             paragraphs: note.paragraphs,
             host_frame_rect_pt,
+            pool_rect_pt,
+            frame_footnotes,
+            first_line: 0,
+            end_line: None,
+            continued: false,
             ref_baseline_pt,
         });
     }
@@ -4540,11 +4557,6 @@ pub(super) struct StoryEmitter<'a> {
     /// whichever `RestartNumbering` restarts at (`None` before the first
     /// note, and always for `DontRestart`).
     pub(super) footnote_scope: Option<usize>,
-    /// Per chain frame (1/64 pt): the lowest baseline of a line that
-    /// carried a captured footnote reference this pass. The frame's pool
-    /// reservation is capped above it, so a note never pushes its own
-    /// reference out of the frame (InDesign oversets the note instead).
-    pub(super) footnote_ref_baseline_64: Vec<i32>,
     /// Track 2: per-line records collected when
     /// `options.collect_breaks` is set. Drained by `take_breaks` once
     /// the story finishes emitting.
@@ -4827,7 +4839,6 @@ impl<'a> StoryEmitter<'a> {
             in_segments: false,
             footnote_counter: 0,
             footnote_scope: None,
-            footnote_ref_baseline_64: vec![0; len],
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
@@ -5023,24 +5034,6 @@ impl<'a> StoryEmitter<'a> {
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
     /// options to hold (`forced` itself when every rule held).
-    /// The most each chain frame's footnote pool may reserve (1/64 pt):
-    /// the room below the lowest line that carried one of its references.
-    /// `None` for a frame that holds no reference.
-    pub(super) fn footnote_reserve_caps(&self) -> Vec<Option<i32>> {
-        self.chain
-            .iter()
-            .zip(&self.footnote_ref_baseline_64)
-            .map(|(frame, &baseline_64)| {
-                (baseline_64 > 0).then(|| {
-                    let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
-                        * paged_text::shape::ADVANCE_PRECISION)
-                        .round() as i32;
-                    (frame_height_64 - baseline_64).max(0)
-                })
-            })
-            .collect()
-    }
-
     pub(super) fn keep_breaks(&self) -> super::keeps::ForcedBreaks {
         super::keeps::keep_breaks(
             &self.placements,

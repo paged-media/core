@@ -26,8 +26,10 @@ pub mod corners;
 pub mod docx_pagination;
 pub mod effects;
 pub mod effects_attrs;
+pub mod footnote_columns;
 pub mod footnote_numbering;
 pub mod footnote_references;
+pub mod footnote_split;
 pub mod footnotes;
 pub mod forced_line_break;
 pub mod geometry;
@@ -201,6 +203,10 @@ pub const SAMPLES: &[&str] = &[
     "footnote-numbering",
     "footnote-restart",
     "numbering-multilevel",
+    "footnote-columns",
+    "footnote-straddle",
+    "footnote-split",
+    "footnote-nosplit",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -276,6 +282,10 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "footnote-numbering" => footnote_numbering::build(&footnote_numbering::NUMBERING),
         "footnote-restart" => footnote_numbering::build(&footnote_numbering::RESTART),
         "numbering-multilevel" => numbering_multilevel::build(),
+        "footnote-columns" => footnote_columns::build(&footnote_columns::COLUMNS),
+        "footnote-straddle" => footnote_columns::build(&footnote_columns::STRADDLE),
+        "footnote-split" => footnote_split::build(&footnote_split::SPLIT),
+        "footnote-nosplit" => footnote_split::build(&footnote_split::NOSPLIT),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -322,7 +332,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            87,
+            91,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );
