@@ -4741,6 +4741,10 @@ pub struct OtfFeatures {
     /// `OTFHistorical="true"` — `hist` (historical forms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub historical: Option<bool>,
+    /// `OTFProportionalMetrics="true"` — `palt`, a CJK face's proportional
+    /// widths (which Metrics kerning sets anyway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proportional_metrics: Option<bool>,
 }
 impl OtfFeatures {
     /// True when no toggle is set at this level.
@@ -4767,6 +4771,7 @@ impl OtfFeatures {
         self.stylistic_sets = self.stylistic_sets.or(below.stylistic_sets);
         self.stylistic_alternate = self.stylistic_alternate.or(below.stylistic_alternate);
         self.historical = self.historical.or(below.historical);
+        self.proportional_metrics = self.proportional_metrics.or(below.proportional_metrics);
     }
 }
 
