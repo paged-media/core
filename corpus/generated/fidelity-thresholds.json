@@ -839,6 +839,16 @@
       "rationale": "Added 2026-10-14 (ADR 148, R-14): InDesign's built-in dashed, dotted and hashed stroke styles, asked of InDesign 20.0.1 and read from its PDF (tools/indesign-export/pdf-strokes.py). Nine rows (Dashed, Canned Dashed 3x2, Canned Dashed 4x4, Canned Dotted, Japanese Dots, Left / Right Slant Hash, Straight Hash, White Diamond) x three shapes (120 x 60 at 2 pt, 137 x 61 at 5 pt, an open 150 pt line at 4 pt). Rows 1-5 are fitted side by side as InDesign does and measure 0.00-0.95 per cell. Rows 6-9 (hashes and diamonds) are not modelled and draw solid where InDesign draws hairline marks (cells 5-31): the page measures mean 1.246 / p99 81.67 / ssim 0.9711 / ink 29.93; sized at worst * 1.20 and ssim - 0.005. Tighten when the hashes land. TIGHTENED 2026-10-14 (ADR 150): the hashes and diamonds are laid out as marks along the whole contour as InDesign lays them out (straight hashes square across, slant hashes with each end at its own place along the path, diamonds fitted to the weight): the page measures mean 0.241 / p99 8.98 / ssim 0.9933 / ink 7.167, the rest being hairline antialiasing. Re-sized at worst * 1.20 and ssim - 0.005."
     },
     {
+      "name": "placed-pdf",
+      "text_gate": false,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.133,
+      "max_p99_de": 2.69,
+      "min_ssim": 0.9938,
+      "max_ink_mean_de": 1.99,
+      "rationale": "Added 2026-10-14 (A-20, ADR 154): a placed PDF drawn from its own drawing operations, asked of InDesign 20.0.1. One 200 x 120 pt page of vector art (DeviceCMYK and DeviceRGB fills, a dashed stroke, a curve, a clipped square, a 50 % fill-opacity panel; placed-pdf-Links/make-placed-art.py) placed four times: at 100 %, at 50 %, in a frame rotated 30 degrees, and cropped by a smaller frame with the art offset. The page measures mean 0.111 / p99 2.236 / ssim 0.99886 / ink 1.658, the rest being edge antialiasing; sized at worst x 1.20 and ssim - 0.005."
+    },
+    {
       "name": "column-rules",
       "text_gate": "lines",
       "max_pages_with_pdf": 1,

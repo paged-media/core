@@ -610,6 +610,7 @@ fn add_case(pb: &mut PageBuild, ids: &mut Ids, c: &Case) {
                     color_space: Some("$ID/RGB"),
                     inline_bytes: Some(quadrant_png()),
                     clipping_path: None,
+                    pdf: None,
                 });
                 if !c.content_on_frame {
                     let (content, frame): (Vec<_>, Vec<_>) = c

@@ -189,7 +189,7 @@ pub(crate) fn justified_breaks<T>(items: &[Item<T>], lengths: &[i32]) -> Vec<Bre
                 let next = (line + 1).min(horizon);
                 let k = idx(c, next, fit, hyph);
                 let node = (base + d, prev_state, r, w);
-                if dp[k].map_or(true, |old| node.0 < old.0) {
+                if dp[k].is_none_or(|old| node.0 < old.0) {
                     dp[k] = Some(node);
                 }
                 if forced(j) || r < -MAX_SHRINK {
@@ -215,7 +215,7 @@ pub(crate) fn justified_breaks<T>(items: &[Item<T>], lengths: &[i32]) -> Vec<Bre
             for h in [false, true] {
                 let k = idx(last_c, l, f, h);
                 if let Some((cost, ..)) = dp[k] {
-                    if best.map_or(true, |(_, b)| cost < b) {
+                    if best.is_none_or(|(_, b)| cost < b) {
                         best = Some((k, cost));
                     }
                 }

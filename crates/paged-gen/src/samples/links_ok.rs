@@ -192,6 +192,7 @@ pub fn build() -> Sample {
             color_space: Some(v.color_space),
             inline_bytes: Some(GREEN_2X2_PNG.to_vec()),
             clipping_path: None,
+            pdf: None,
         };
 
         let rect = Rect {

@@ -191,7 +191,7 @@ pub fn paragraph_text(k: usize) -> String {
     const WORDS: [&str; 8] = [
         "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight",
     ];
-    let side = if k % 2 == 0 { "left" } else { "right" };
+    let side = if k.is_multiple_of(2) { "left" } else { "right" };
     format!("{} {side}", WORDS[k % WORDS.len()])
 }
 

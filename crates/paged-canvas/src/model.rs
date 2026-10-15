@@ -8879,7 +8879,7 @@ impl CanvasModel {
                 && default_styles.as_ref().is_some_and(|face| {
                     asked
                         .get(family)
-                        .map_or(true, |all| all.iter().all(|s| face.supplies(s.as_deref())))
+                        .is_none_or(|all| all.iter().all(|s| face.supplies(s.as_deref())))
                 })
         };
         counts
@@ -11317,7 +11317,7 @@ impl CanvasModel {
                 ));
             }
         }
-        if rects.len() % 4 != 0 {
+        if !rects.len().is_multiple_of(4) {
             return fail(format!(
                 "{} rect values is not a multiple of 4",
                 rects.len()

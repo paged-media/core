@@ -44,7 +44,7 @@ pub(super) fn run_prints(applied: &[String], declared: &BTreeMap<String, Conditi
     applied.is_empty()
         || applied
             .iter()
-            .any(|id| declared.get(id).map_or(true, |c| c.visible.unwrap_or(true)))
+            .any(|id| declared.get(id).is_none_or(|c| c.visible.unwrap_or(true)))
 }
 
 /// Which side of a range boundary an attachment at that offset belongs
@@ -118,7 +118,7 @@ pub(super) fn without_hidden_runs(
             .map(|(&(s, e), _)| e.min(at).saturating_sub(s))
             .sum()
     };
-    let kept = |at: u32, side: Side| host_run(&spans, at, side).map_or(true, |i| !hidden[i]);
+    let kept = |at: u32, side: Side| host_run(&spans, at, side).is_none_or(|i| !hidden[i]);
 
     let mut out = Paragraph {
         runs: paragraph

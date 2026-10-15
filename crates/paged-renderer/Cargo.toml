@@ -70,6 +70,11 @@ ttf-parser = "0.25"
 # A line's drop shadow is cast by its stroke OUTLINE: kurbo strokes the
 # centreline into the band the shadow stamps (same version paged-mutate uses).
 kurbo = "0.11.3"
+# A placed PDF (or Illustrator `.ai`) is interpreted into the display
+# list (ADR 154). hayro speaks kurbo 0.13; ours stays on 0.11. Its
+# embedded base-14 fonts and CMaps are native-only (below).
+hayro-interpret = { version = "0.8", default-features = false }
+kurbo13 = { package = "kurbo", version = "0.13" }
 serde = { workspace = true }
 serde_json = "1"
 tsify-next = { workspace = true }
@@ -88,6 +93,13 @@ resvg = { version = "0.45", default-features = false, features = ["text"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# A native build keeps hayro's base-14 fonts and predefined CMaps, so a
+# placed PDF that names Helvetica without embedding it still sets its text.
+# The browser builds leave them out: they weigh 0.52 MB brotli in the SDK
+# wasm, as much again as the interpreter itself (ADR 154).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hayro-interpret = { version = "0.8", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 
 [dev-dependencies]
 paged-fidelity = { path = "../paged-fidelity" }

@@ -3607,8 +3607,7 @@ pub(super) fn build_document_inner(
             let wrote = pages[page_idx].list.commands.len() > snap.1
                 || pages[page_idx].story_layout.len() > snap.5
                 || pages[page_idx].footnotes.len() > snap.6;
-            let in_range =
-                fresh_range.map_or(true, |(from, to)| page_idx >= from && page_idx <= to);
+            let in_range = fresh_range.is_none_or(|(from, to)| page_idx >= from && page_idx <= to);
             if wrote && in_range {
                 fresh[page_idx] = true;
             }
@@ -4161,7 +4160,7 @@ pub(super) fn capture_footnotes(
     let take = em
         .pending_footnotes
         .iter()
-        .take_while(|(byte, _)| up_to.map_or(true, |end| *byte <= end))
+        .take_while(|(byte, _)| up_to.is_none_or(|end| *byte <= end))
         .count();
     if take == 0 {
         return;

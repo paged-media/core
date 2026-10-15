@@ -272,6 +272,7 @@ pub fn build() -> Sample {
                 color_space: Some("$ID/RGB"),
                 inline_bytes: Some(CLIP_FIXTURE_PNG.to_vec()),
                 clipping_path: Some(variant.clip),
+                pdf: None,
             }),
             text_wrap: None,
             anchored_setting: None,

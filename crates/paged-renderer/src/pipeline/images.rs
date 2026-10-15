@@ -231,7 +231,7 @@ pub(super) fn emit_rectangle_image(
             outer,
             img_rect,
             composed,
-            id,
+            &id,
             extra_clip,
         );
     } else {
@@ -277,7 +277,14 @@ pub(super) fn emit_rectangle_image(
                 paged_compose::emit_drop_shadow_rect_transformed(r, outer, shadow, &mut page.list)
             });
         }
-        paged_compose::emit_image_at(r, outer, id, &mut page.list);
+        match &id {
+            Placed::Raster(image) => paged_compose::emit_image_at(r, outer, *image, &mut page.list),
+            Placed::Pdf(bytes) => {
+                let t = Transform::for_rect_in(r, outer)
+                    .compose(&Transform::scale(1.0 / img_w, 1.0 / img_h));
+                let _ = super::placed_pdf::draw_placed_pdf(bytes, 0, t, &mut page.list);
+            }
+        }
     }
 }
 
@@ -466,7 +473,7 @@ pub(super) fn emit_polygon_image(
             clip_transform,
             img_rect,
             image_transform,
-            id,
+            &id,
             extra_clip,
         );
     } else {
@@ -488,7 +495,7 @@ pub(super) fn emit_polygon_image(
             clip_transform,
             unit,
             image_transform,
-            id,
+            &id,
             None,
         );
     }
@@ -599,7 +606,7 @@ pub(super) fn emit_oval_image(
             clip_transform,
             img_rect,
             image_transform,
-            id,
+            &id,
             extra_clip,
         );
     } else {
@@ -621,7 +628,7 @@ pub(super) fn emit_oval_image(
             clip_transform,
             unit,
             image_transform,
-            id,
+            &id,
             None,
         );
     }
@@ -641,7 +648,7 @@ fn emit_clipped_image(
     clip_outer: Transform,
     image_rect: paged_compose::Rect,
     image_transform: Transform,
-    image_id: paged_compose::ImageId,
+    placed: &Placed,
     extra_clip: Option<(paged_compose::PathId, Transform)>,
 ) {
     use paged_compose::PathSegment;
@@ -665,7 +672,7 @@ fn emit_clipped_image(
         clip_transform,
         image_rect,
         image_transform,
-        image_id,
+        placed,
         extra_clip,
     );
 }
@@ -686,7 +693,7 @@ fn emit_image_under_clip(
     clip_transform: Transform,
     image_rect: paged_compose::Rect,
     image_transform: Transform,
-    image_id: paged_compose::ImageId,
+    placed: &Placed,
     extra_clip: Option<(paged_compose::PathId, Transform)>,
 ) {
     use paged_compose::DisplayCommand;
@@ -697,11 +704,16 @@ fn emit_image_under_clip(
     if let Some((path_id, transform)) = extra_clip {
         list.push(DisplayCommand::PushClip { path_id, transform });
     }
-    let img_transform = Transform::for_rect_in(image_rect, image_transform);
-    list.push(DisplayCommand::Image {
-        image_id,
-        transform: img_transform,
-    });
+    match placed {
+        Placed::Raster(image_id) => list.push(DisplayCommand::Image {
+            image_id: *image_id,
+            transform: Transform::for_rect_in(image_rect, image_transform),
+        }),
+        // The page's points ride the placement as an image's pixels do.
+        Placed::Pdf(bytes) => {
+            let _ = super::placed_pdf::draw_placed_pdf(bytes, 0, image_transform, list);
+        }
+    }
     if extra_clip.is_some() {
         list.push(DisplayCommand::PopClip(Transform::IDENTITY));
     }
@@ -724,9 +736,31 @@ fn emit_image_under_clip(
 /// missing-image placeholder is worse than emitting the frame's
 /// intrinsic FillColor (Q-14).
 enum ImageResolution {
-    Resolved(paged_compose::ImageId, f32, f32),
+    Resolved(Placed, f32, f32),
     DecodeFailed,
     LinkMissing,
+}
+
+/// What a frame places: a raster in the list's image pool, or a PDF page
+/// drawn from its own operations (ADR 154).
+#[derive(Clone)]
+enum Placed {
+    Raster(paged_compose::ImageId),
+    Pdf(std::sync::Arc<[u8]>),
+}
+
+/// A placed PDF (an Illustrator `.ai` is one) resolved to its page box,
+/// or `None` for bytes that are not one.
+fn placed_pdf(bytes: &[u8]) -> Option<ImageResolution> {
+    if !super::placed_pdf::is_pdf(bytes) {
+        return None;
+    }
+    Some(match super::placed_pdf::page_size(bytes, 0) {
+        Some((w, h)) if w > 0.0 && h > 0.0 => {
+            ImageResolution::Resolved(Placed::Pdf(std::sync::Arc::from(bytes)), w, h)
+        }
+        _ => ImageResolution::DecodeFailed,
+    })
 }
 
 fn resolve_image_id(
@@ -749,6 +783,9 @@ fn resolve_image_id(
                     tracing::warn!(uri, "image resolver returned no bytes; skipping");
                     return ImageResolution::LinkMissing;
                 };
+                if let Some(pdf) = placed_pdf(bytes.as_ref()) {
+                    return pdf;
+                }
                 let Some(d) = decode_image_bytes(bytes.as_ref()) else {
                     tracing::warn!(uri, "image decode failed; skipping");
                     return ImageResolution::DecodeFailed;
@@ -768,7 +805,7 @@ fn resolve_image_id(
     if img_w <= 0.0 || img_h <= 0.0 {
         return ImageResolution::DecodeFailed;
     }
-    ImageResolution::Resolved(id, img_w, img_h)
+    ImageResolution::Resolved(Placed::Raster(id), img_w, img_h)
 }
 
 /// Q-03: route inline base64 image bytes (the `<Contents>` payload
@@ -811,6 +848,9 @@ fn resolve_inline_image_bytes(
             let decoded = if let Some(d) = decoded_cache.get(&key) {
                 d.clone()
             } else {
+                if let Some(pdf) = placed_pdf(bytes) {
+                    return pdf;
+                }
                 let Some(d) = decode_image_bytes(bytes) else {
                     tracing::warn!(len = bytes.len(), "inline image decode failed; skipping");
                     return ImageResolution::DecodeFailed;
@@ -830,7 +870,7 @@ fn resolve_inline_image_bytes(
     if img_w <= 0.0 || img_h <= 0.0 {
         return ImageResolution::DecodeFailed;
     }
-    ImageResolution::Resolved(id, img_w, img_h)
+    ImageResolution::Resolved(Placed::Raster(id), img_w, img_h)
 }
 
 // ── W1.21: image clipping paths ──────────────────────────────────────

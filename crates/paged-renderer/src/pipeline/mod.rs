@@ -57,6 +57,7 @@ mod image_convert;
 mod image_decode;
 mod images;
 mod keeps;
+mod placed_pdf;
 mod resume;
 mod ruby;
 /// C-26 — the inline-image cache key is shared with `paged-canvas`'s

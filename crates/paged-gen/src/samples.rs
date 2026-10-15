@@ -64,6 +64,7 @@ pub mod object_style_options;
 pub mod opentype;
 pub mod paragraph_attrs;
 pub mod paste_into;
+pub mod placed_pdf;
 pub mod preflight;
 pub mod rect_shadows;
 pub mod reflow;
@@ -193,6 +194,7 @@ pub const SAMPLES: &[&str] = &[
     "object-style-options",
     "stroke-styles",
     "paragraph-attrs",
+    "placed-pdf",
     "column-rules",
 ];
 
@@ -264,6 +266,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "line-ends" => line_ends::build(),
         "stroke-styles" => stroke_styles::build(),
         "paragraph-attrs" => paragraph_attrs::build(),
+        "placed-pdf" => placed_pdf::build(),
         "column-rules" => column_rules::build(),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
@@ -311,7 +314,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            83,
+            84,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

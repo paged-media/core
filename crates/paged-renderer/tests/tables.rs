@@ -922,7 +922,7 @@ fn min_glyph_tx(cmds: &[DisplayCommand], line_ty: Option<f32>) -> f32 {
             DisplayCommand::FillPath { transform, .. } => Some((transform.0[4], transform.0[5])),
             _ => None,
         })
-        .filter(|(_, ty)| line_ty.map_or(true, |l| (ty - l).abs() < 1.0))
+        .filter(|(_, ty)| line_ty.is_none_or(|l| (ty - l).abs() < 1.0))
         .map(|(tx, _)| tx)
         .fold(f32::INFINITY, f32::min)
 }

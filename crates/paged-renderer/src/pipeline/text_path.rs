@@ -911,11 +911,11 @@ pub(super) fn emit_text_path_into(
         && options
             .break_page_range
             .as_ref()
-            .map_or(true, |r| r.contains(&(page_idx as u32)))
+            .is_none_or(|r| r.contains(&(page_idx as u32)))
         && options
             .break_story_filter
             .as_deref()
-            .map_or(true, |want| want == text_path.parent_story);
+            .is_none_or(|want| want == text_path.parent_story);
     if wanted && set_end > 0 {
         breaks.push(BreakRecord {
             story_id: text_path.parent_story.clone(),

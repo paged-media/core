@@ -807,6 +807,22 @@ pub struct PlacedImage {
     /// W1.21: `<ClippingPathSettings>` nested in the `<Image>`. `None`
     /// ⇒ no detached clip (the frame outline is the only crop).
     pub clipping_path: Option<ClipPathSpec>,
+    /// `Some`: the placed file is a PDF (or an Illustrator `.ai`), written
+    /// as InDesign writes one — a `<PDF>` with `<GraphicBounds>` (the
+    /// page's crop box, `image_w_pt × image_h_pt`), a `<PDFAttribute>` and
+    /// the link on its `<Link>` child — instead of an `<Image>`.
+    pub pdf: Option<PdfPlacement>,
+}
+
+/// `<PDFAttribute>` of a placed PDF.
+#[derive(Clone, Copy)]
+pub struct PdfPlacement {
+    /// `PageNumber`, 1-based.
+    pub page: u32,
+    /// `PDFCrop`: `CropContent`, `CropArt`, `CropPDF`, `CropTrim`,
+    /// `CropBleed`, `CropMedia`, `CropContentAllLayers`,
+    /// `CropContentVisibleLayers`.
+    pub crop: &'static str,
 }
 
 /// IDML `<BlendingSetting>` — `Opacity` is 0..=100, `BlendMode` is
@@ -1094,6 +1110,7 @@ impl Rect {
             b.end("TransparencySetting");
         }
         if let Some(img) = &self.placed_image {
+            let mut return_after_pdf = false;
             // `<FrameFittingOption>` is a direct child of the
             // Rectangle (not inside Properties) — matches what
             // InDesign emits and what the paged-parse Rectangle
@@ -1144,33 +1161,72 @@ impl Rect {
                 ppi_str = format!("({} {})", format_f32(px), format_f32(py));
                 img_attrs.push(("EffectivePpi", ppi_str.as_str()));
             }
-            b.start("Image", &img_attrs);
-            b.start("Properties", &[]);
-            write_path_geometry(b, img.image_w_pt, img.image_h_pt);
-            // Inline-embedded image bytes: a base64 `<Contents>` CDATA
-            // payload sibling of the PathGeometry. The parser captures
-            // this into `image_bytes`, so the renderer resolves it
-            // without an external file — the frame renders "ok" rather
-            // than the missing-image placeholder.
-            if let Some(bytes) = &img.inline_bytes {
-                use base64::Engine;
-                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                b.start("Contents", &[]);
-                b.cdata(&encoded);
-                b.end("Contents");
+            if let Some(pdf) = img.pdf {
+                let (w, h) = (format_f32(img.image_w_pt), format_f32(img.image_h_pt));
+                let page = pdf.page.to_string();
+                b.start(
+                    "PDF",
+                    &[
+                        ("Self", img.image_self_id.as_str()),
+                        ("ItemTransform", img_xform.as_str()),
+                    ],
+                );
+                b.start("Properties", &[]);
+                b.empty(
+                    "GraphicBounds",
+                    &[("Left", "0"), ("Top", "0"), ("Right", &w), ("Bottom", &h)],
+                );
+                b.end("Properties");
+                b.empty(
+                    "PDFAttribute",
+                    &[
+                        ("PageNumber", page.as_str()),
+                        ("PDFCrop", pdf.crop),
+                        ("TransparentBackground", "true"),
+                    ],
+                );
+                b.empty(
+                    "Link",
+                    &[
+                        ("LinkResourceURI", img.link_resource_uri.as_str()),
+                        (
+                            "LinkResourceFormat",
+                            "$ID/Adobe Portable Document Format (PDF)",
+                        ),
+                    ],
+                );
+                b.end("PDF");
+                return_after_pdf = true;
             }
-            b.end("Properties");
-            // W1.21: `<ClippingPathSettings>` is a sibling of
-            // `<Properties>` / `<Link>` inside the `<Image>`. The parser
-            // keys it onto the host frame's pending clip.
-            if let Some(clip) = &img.clipping_path {
-                clip.write(b);
+            if !return_after_pdf {
+                b.start("Image", &img_attrs);
+                b.start("Properties", &[]);
+                write_path_geometry(b, img.image_w_pt, img.image_h_pt);
+                // Inline-embedded image bytes: a base64 `<Contents>` CDATA
+                // payload sibling of the PathGeometry. The parser captures
+                // this into `image_bytes`, so the renderer resolves it
+                // without an external file — the frame renders "ok" rather
+                // than the missing-image placeholder.
+                if let Some(bytes) = &img.inline_bytes {
+                    use base64::Engine;
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    b.start("Contents", &[]);
+                    b.cdata(&encoded);
+                    b.end("Contents");
+                }
+                b.end("Properties");
+                // W1.21: `<ClippingPathSettings>` is a sibling of
+                // `<Properties>` / `<Link>` inside the `<Image>`. The parser
+                // keys it onto the host frame's pending clip.
+                if let Some(clip) = &img.clipping_path {
+                    clip.write(b);
+                }
+                b.empty(
+                    "Link",
+                    &[("LinkResourceURI", img.link_resource_uri.as_str())],
+                );
+                b.end("Image");
             }
-            b.empty(
-                "Link",
-                &[("LinkResourceURI", img.link_resource_uri.as_str())],
-            );
-            b.end("Image");
         }
         // `<TextFramePreference>` — sibling of Properties. Carries the
         // AutoSizing attributes; the parser reads them onto the open
