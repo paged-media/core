@@ -47,7 +47,7 @@ pub(crate) fn resolve_applied_style(
 /// Fold cascaded values from `style` into `frame` for any field the
 /// frame itself didn't carry.
 ///
-/// `corner_radius` / `corner_option` cascade on `Geometry::Rect` only —
+/// The style's four corners cascade on `Geometry::Rect` only —
 /// deliberately NARROWER than the kinds that now carry the fields
 /// (B-23 added Polygon, C-18 added TextFrame; `Oval` / `GraphicLine` /
 /// `Group` carry them without rendering at all). A polygon or text frame
@@ -56,10 +56,9 @@ pub(crate) fn resolve_applied_style(
 /// Evidence for leaving it there rather than widening on symmetry: no
 /// document in the 61-file real-export corpus depends on the cascade —
 /// every `<ObjectStyle>` and the `<PageItemDefault>` in all 61 files
-/// spells all five corner options `None`, and IDML gates the whole
-/// block behind an `EnableStrokeAndCornerOptions` flag this model does
-/// not carry. Widening would be inventing inheritance nothing measured
-/// asks for. Named residual, not an oversight.
+/// spells all five corner options `None`. Widening would be inventing
+/// inheritance nothing measured asks for. Named residual, not an
+/// oversight.
 pub(crate) fn object_style_cascade<'a>(frame: &mut ResolvedFrame<'a>, style: &'a ResolvedObject) {
     if frame.fill_color.is_none() {
         frame.fill_color = style.fill_color.as_deref();
@@ -79,25 +78,14 @@ pub(crate) fn object_style_cascade<'a>(frame: &mut ResolvedFrame<'a>, style: &'a
     // matching today by leaving the resolved-frame default in
     // place is functionally equivalent.
 
-    // The style's corner pair fills a frame that states none of its four
-    // corners: InDesign reads a frame's corners from the four per-corner
-    // attributes only (ADR 149), and the style's `CornerOption` is the
-    // one the editor's `objectStyleCornerOption` writes.
+    // A frame that states none of its four corners takes its style's four.
+    // InDesign reads a style's corners, like a frame's, from the per-corner
+    // attributes only: a style with just the `CornerOption` pair draws
+    // square, and where the two disagree the per-corner ones win
+    // (object-style-corners-probe, ADR 149).
     if matches!(frame.geometry, Geometry::Rect { .. })
-        && frame
-            .corners
-            .iter()
-            .all(|c| c.option.is_none() && c.radius.is_none())
+        && paged_model::CornerSpec::all_unset(&frame.corners)
     {
-        if let Some(option) = style
-            .corner_option
-            .as_deref()
-            .and_then(paged_model::CornerOption::from_idml)
-        {
-            frame.corners = [paged_model::CornerSpec {
-                option: Some(option),
-                radius: style.corner_radius,
-            }; 4];
-        }
+        frame.corners = style.corners;
     }
 }

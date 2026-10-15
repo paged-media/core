@@ -2550,8 +2550,28 @@ fn set_object_style_field(
         PropertyPath::FrameStrokeColor => style_color(path, value, &mut def.stroke_color),
         PropertyPath::FrameStrokeWeight => style_length(path, value, &mut def.stroke_weight),
         PropertyPath::ObjectStyleStrokeTint => style_length(path, value, &mut def.stroke_tint),
-        PropertyPath::ObjectStyleCornerRadius => style_length(path, value, &mut def.corner_radius),
-        PropertyPath::ObjectStyleCornerOption => style_text(path, value, &mut def.corner_option),
+        // The all-corner setters set the four corners too: InDesign draws a
+        // style's corners from its per-corner attributes alone and writes the
+        // pair beside them (ADR 149). Undo replays the prior pair onto all
+        // four, exact whenever the two agreed, as InDesign writes them.
+        PropertyPath::ObjectStyleCornerRadius => {
+            let prior = style_length(path, value, &mut def.corner_radius)?;
+            for corner in &mut def.corners {
+                corner.radius = def.corner_radius;
+            }
+            Ok(prior)
+        }
+        PropertyPath::ObjectStyleCornerOption => {
+            let prior = style_text(path, value, &mut def.corner_option)?;
+            let option = def
+                .corner_option
+                .as_deref()
+                .and_then(paged_model::CornerOption::from_idml);
+            for corner in &mut def.corners {
+                corner.option = option;
+            }
+            Ok(prior)
+        }
         _ => Err(OperationError::UnsupportedProperty {
             node: style_node_marker(style_id),
             path,
