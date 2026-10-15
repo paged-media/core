@@ -2348,6 +2348,26 @@ pub(super) fn apply_set_property(
             // repaints: the whole document.
             (Value::Length(prev), InvalidationHint::default())
         }
+        // ---- L-01 — the document's footnote options (ADR 162) -------
+        (
+            NodeId::Document(_),
+            PropertyPath::DocumentFootnoteNumberingStyle
+            | PropertyPath::DocumentFootnoteStartAt
+            | PropertyPath::DocumentFootnoteRestartNumbering
+            | PropertyPath::DocumentFootnotePrefix
+            | PropertyPath::DocumentFootnoteSuffix
+            | PropertyPath::DocumentFootnoteShowPrefixSuffix
+            | PropertyPath::DocumentFootnoteEnableStraddling
+            | PropertyPath::DocumentFootnoteNoSplitting
+            | PropertyPath::DocumentFootnoteSpaceBetween
+            | PropertyPath::DocumentFootnoteSpacer
+            | PropertyPath::DocumentFootnoteRuleOn
+            | PropertyPath::DocumentFootnoteContinuingRuleOn,
+        ) => {
+            let prev = set_footnote_option(&mut doc.designmap.footnote_options, node, path, value)?;
+            // Every story's notes renumber and reflow: the whole document.
+            (prev, InvalidationHint::default())
+        }
         // ---- SDK Phase 5 (v1 sweep) — frame fitting (Rectangle) ----
         // The placed-image crop set + fitting-type enum live in
         // `Rectangle::frame_fitting: Option<FrameFittingOption>`.
@@ -3439,4 +3459,138 @@ fn drop_empty_target(slot: &mut Option<paged_model::TargetTransparency>) {
     {
         *slot = None;
     }
+}
+
+/// One of the document's footnote options (ADR 162), returning the prior
+/// value in the form the path takes, so the inverse round-trips. An
+/// enumeration or a number InDesign cannot state is refused with the slot
+/// untouched. Writing an option marks the `<FootnoteOption>` present.
+fn set_footnote_option(
+    fo: &mut paged_model::FootnoteOptions,
+    node: &NodeId,
+    path: PropertyPath,
+    value: &Value,
+) -> Result<Value, OperationError> {
+    let refuse = |reason: String| OperationError::InvalidValue {
+        node: node.clone(),
+        path,
+        reason,
+    };
+    let enum_text = |allowed: &[&str]| -> Result<Option<String>, OperationError> {
+        let t = expect_text(path, value)?;
+        if t.is_empty() {
+            return Ok(None);
+        }
+        if allowed.contains(&t.as_str()) {
+            Ok(Some(t))
+        } else {
+            Err(refuse(format!("{t:?} is not one of {allowed:?}")))
+        }
+    };
+    let text_or_none = || -> Result<Option<String>, OperationError> {
+        let t = expect_text(path, value)?;
+        Ok((!t.is_empty()).then_some(t))
+    };
+    let length = || -> Result<Option<f32>, OperationError> {
+        let v = expect_length(path, value)?;
+        if let Some(n) = v.filter(|n| *n < 0.0 || !n.is_finite()) {
+            return Err(refuse(format!("{n} is not a length >= 0")));
+        }
+        Ok(v)
+    };
+    let text = |v: &Option<String>| Value::Text(v.clone().unwrap_or_default());
+    let prev = match path {
+        PropertyPath::DocumentFootnoteNumberingStyle => {
+            let t = expect_text(path, value)?;
+            let next = if t.is_empty() {
+                None
+            } else if t == "Asterisks" || paged_model::NumberingStyle::from_idml(&t).as_idml() == t
+            {
+                Some(t)
+            } else {
+                return Err(refuse(format!("{t:?} is not a footnote numbering style")));
+            };
+            let prev = text(&fo.numbering_style);
+            fo.numbering_style = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteStartAt => {
+            let next = match expect_length(path, value)? {
+                None => None,
+                Some(n)
+                    if n.is_finite() && n >= 1.0 && n.fract() == 0.0 && n <= u32::MAX as f32 =>
+                {
+                    Some(n as u32)
+                }
+                Some(n) => return Err(refuse(format!("{n} is not a whole number >= 1"))),
+            };
+            let prev = Value::Length(fo.start_at.map(|n| n as f32));
+            fo.start_at = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteRestartNumbering => {
+            let next = enum_text(&[
+                "DontRestart",
+                "PageRestart",
+                "SpreadRestart",
+                "SectionRestart",
+            ])?;
+            let prev = text(&fo.restart_numbering);
+            fo.restart_numbering = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteShowPrefixSuffix => {
+            let next = enum_text(&[
+                "NoPrefixSuffix",
+                "PrefixSuffixReference",
+                "PrefixSuffixText",
+                "PrefixSuffixBoth",
+            ])?;
+            let prev = text(&fo.show_prefix_suffix);
+            fo.show_prefix_suffix = next;
+            prev
+        }
+        PropertyPath::DocumentFootnotePrefix => {
+            let next = text_or_none()?;
+            let prev = text(&fo.prefix);
+            fo.prefix = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteSuffix => {
+            let next = text_or_none()?;
+            let prev = text(&fo.suffix);
+            fo.suffix = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteSpaceBetween => {
+            let next = length()?;
+            let prev = Value::Length(fo.space_between);
+            fo.space_between = next;
+            prev
+        }
+        PropertyPath::DocumentFootnoteSpacer => {
+            let next = length()?;
+            let prev = Value::Length(fo.spacer);
+            fo.spacer = next;
+            prev
+        }
+        _ => {
+            // The booleans: InDesign's default is stored as "unset", so an
+            // undo that writes it back restores the slot exactly.
+            let new_val = expect_bool(path, value)?;
+            let (slot, default) = match path {
+                PropertyPath::DocumentFootnoteEnableStraddling => {
+                    (&mut fo.enable_straddling, false)
+                }
+                PropertyPath::DocumentFootnoteNoSplitting => (&mut fo.no_splitting, false),
+                PropertyPath::DocumentFootnoteRuleOn => (&mut fo.rule_on, true),
+                _ => (&mut fo.continuing_rule.on, true),
+            };
+            let prev = slot.unwrap_or(default);
+            *slot = (new_val != default).then_some(new_val);
+            Value::Bool(prev)
+        }
+    };
+    fo.present = true;
+    Ok(prev)
 }

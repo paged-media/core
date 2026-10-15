@@ -8536,6 +8536,320 @@
       ]
     },
     {
+      "addressKind": "doc",
+      "path": "documentFootnoteNumberingStyle",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Arabic",
+          "UpperRoman",
+          "LowerRoman",
+          "UpperLetters",
+          "LowerLetters",
+          "Asterisks",
+          "Kanji",
+          "ArabicAlifBaTah",
+          "ArabicAbjad",
+          "HebrewBiblical",
+          "HebrewNonStandard",
+          "SingleLeadingZeros",
+          "DoubleLeadingZeros",
+          "TripleLeadingZeros"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Arabic",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "FootnoteNumberingStyle",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteStartAt",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "StartAt",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteRestartNumbering",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "DontRestart",
+          "PageRestart",
+          "SpreadRestart",
+          "SectionRestart"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "DontRestart",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "RestartNumbering",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnotePrefix",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Prefix",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSuffix",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Suffix",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteShowPrefixSuffix",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoPrefixSuffix",
+          "PrefixSuffixReference",
+          "PrefixSuffixText",
+          "PrefixSuffixBoth"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoPrefixSuffix",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "ShowPrefixSuffix",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteEnableStraddling",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "EnableStraddling",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteNoSplitting",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "NoSplitting",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSpaceBetween",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "SpaceBetween",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSpacer",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Spacer",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteRuleOn",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "RuleOn",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteContinuingRuleOn",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "ContinuingRuleOn",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
       "addressKind": "textVariable",
       "path": "textVariableName",
       "type": {
