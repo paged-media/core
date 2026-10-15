@@ -1702,11 +1702,5 @@ pub fn path_address_kind(path: PropertyPath) -> Option<&'static str> {
 }
 
 fn numbering_style_idml(s: paged_model::NumberingStyle) -> &'static str {
-    match s {
-        paged_model::NumberingStyle::Arabic => "Arabic",
-        paged_model::NumberingStyle::UpperRoman => "UpperRoman",
-        paged_model::NumberingStyle::LowerRoman => "LowerRoman",
-        paged_model::NumberingStyle::UpperAlpha => "UpperLetters",
-        paged_model::NumberingStyle::LowerAlpha => "LowerLetters",
-    }
+    s.as_idml()
 }

@@ -705,12 +705,22 @@ pub const ANCHORED_POSITIONS: &[&str] = &["InlinePosition", "AboveLine", "Anchor
 pub const SWATCH_SPACES: &[&str] = &["CMYK", "RGB", "LAB", "Gray"];
 pub const SWATCH_MODELS: &[&str] = &["Process", "Spot"];
 pub const GRADIENT_KINDS: &[&str] = &["Linear", "Radial"];
+/// Every `PageNumberStyle` InDesign 20.0.1 (Roman edition) offers, in
+/// its DOM's order (core ADR 157).
 pub const PAGE_NUMBER_STYLES: &[&str] = &[
-    "Arabic",
     "UpperRoman",
     "LowerRoman",
     "UpperLetters",
     "LowerLetters",
+    "Arabic",
+    "Kanji",
+    "ArabicAlifBaTah",
+    "ArabicAbjad",
+    "HebrewBiblical",
+    "HebrewNonStandard",
+    "SingleLeadingZeros",
+    "DoubleLeadingZeros",
+    "TripleLeadingZeros",
 ];
 pub const TEXT_VARIABLE_TYPES: &[&str] = &[
     "CustomTextType",

@@ -319,6 +319,14 @@ fn explicit_number_style(format: Option<&str>) -> Option<NumberingStyle> {
 /// `<ChapterNumberFormat>` spells its style by example (`1, 2, 3, 4...`,
 /// `I, II, III, IV...`, `a, b, c, d...`).
 fn chapter_format_style(format: &str) -> NumberingStyle {
+    // `01, 02, 03...` and its wider siblings: Arabic padded to the
+    // example's width.
+    match format.trim_start().split(',').next().unwrap_or("") {
+        "01" => return NumberingStyle::SingleLeadingZeros,
+        "001" => return NumberingStyle::DoubleLeadingZeros,
+        "0001" => return NumberingStyle::TripleLeadingZeros,
+        _ => {}
+    }
     match format.trim_start().chars().next() {
         Some('I') => NumberingStyle::UpperRoman,
         Some('i') => NumberingStyle::LowerRoman,

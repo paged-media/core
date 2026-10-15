@@ -3398,7 +3398,11 @@ fn srgb_to_linear(c: f32) -> f32 {
 // parser). Page-number formatting + the `from_idml`/`as_str` token maps are
 // runtime render vocabulary, so they live with the model.
 // ---------------------------------------------------------------------------
-/// Page-numbering style for a `<Section>` (`PageNumberStyle`).
+/// Page-numbering style for a `<Section>` (`PageNumberStyle`), and the
+/// styles footnote and chapter numbers take. Every value InDesign 20.0.1
+/// (Roman edition) offers, each formatted as it formats it — asked of
+/// InDesign through its DOM for 191 numbers
+/// (`tools/indesign-export/numbering-styles-probe.json`, ADR 157).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NumberingStyle {
     Arabic,
@@ -3406,18 +3410,61 @@ pub enum NumberingStyle {
     LowerRoman,
     UpperAlpha,
     LowerAlpha,
+    /// Kanji digits, one per decimal digit (`二〇二六`).
+    Kanji,
+    /// The Arabic alphabet in its alif-ba-ta order; past 28 a letter
+    /// repeats, joined by ZERO WIDTH NON-JOINER.
+    ArabicAlifBaTah,
+    /// The Arabic alphabet in its abjad order, past 28 repeated likewise.
+    ArabicAbjad,
+    /// Hebrew numerals (טו and טז for 15 and 16, thousands prefixed).
+    HebrewBiblical,
+    /// The Hebrew alphabet with ת for every 22; above 395, א.
+    HebrewNonStandard,
+    /// `01`, `001` and `0001`: Arabic padded to 2, 3 or 4 digits.
+    SingleLeadingZeros,
+    DoubleLeadingZeros,
+    TripleLeadingZeros,
 }
 
 impl NumberingStyle {
-    /// Map an IDML `PageNumberStyle` value. Unknown / unsupported
-    /// styles (Kanji, Katakana, …) fall back to Arabic.
+    /// Map an IDML `PageNumberStyle` value. An unknown style (an edition
+    /// this one does not offer: full-width, Hindi, Thai) falls back to
+    /// Arabic.
     pub fn from_idml(s: &str) -> Self {
         match s {
             "UpperRoman" => NumberingStyle::UpperRoman,
             "LowerRoman" => NumberingStyle::LowerRoman,
             "UpperLetters" => NumberingStyle::UpperAlpha,
             "LowerLetters" => NumberingStyle::LowerAlpha,
+            "Kanji" => NumberingStyle::Kanji,
+            "ArabicAlifBaTah" => NumberingStyle::ArabicAlifBaTah,
+            "ArabicAbjad" => NumberingStyle::ArabicAbjad,
+            "HebrewBiblical" => NumberingStyle::HebrewBiblical,
+            "HebrewNonStandard" => NumberingStyle::HebrewNonStandard,
+            "SingleLeadingZeros" => NumberingStyle::SingleLeadingZeros,
+            "DoubleLeadingZeros" => NumberingStyle::DoubleLeadingZeros,
+            "TripleLeadingZeros" => NumberingStyle::TripleLeadingZeros,
             _ => NumberingStyle::Arabic,
+        }
+    }
+
+    /// The IDML spelling, as InDesign writes it in `PageNumberStyle`.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            NumberingStyle::Arabic => "Arabic",
+            NumberingStyle::UpperRoman => "UpperRoman",
+            NumberingStyle::LowerRoman => "LowerRoman",
+            NumberingStyle::UpperAlpha => "UpperLetters",
+            NumberingStyle::LowerAlpha => "LowerLetters",
+            NumberingStyle::Kanji => "Kanji",
+            NumberingStyle::ArabicAlifBaTah => "ArabicAlifBaTah",
+            NumberingStyle::ArabicAbjad => "ArabicAbjad",
+            NumberingStyle::HebrewBiblical => "HebrewBiblical",
+            NumberingStyle::HebrewNonStandard => "HebrewNonStandard",
+            NumberingStyle::SingleLeadingZeros => "SingleLeadingZeros",
+            NumberingStyle::DoubleLeadingZeros => "DoubleLeadingZeros",
+            NumberingStyle::TripleLeadingZeros => "TripleLeadingZeros",
         }
     }
 
@@ -3431,33 +3478,124 @@ impl NumberingStyle {
             NumberingStyle::LowerRoman => "lowerRoman",
             NumberingStyle::UpperAlpha => "upperAlpha",
             NumberingStyle::LowerAlpha => "lowerAlpha",
+            NumberingStyle::Kanji => "kanji",
+            NumberingStyle::ArabicAlifBaTah => "arabicAlifBaTah",
+            NumberingStyle::ArabicAbjad => "arabicAbjad",
+            NumberingStyle::HebrewBiblical => "hebrewBiblical",
+            NumberingStyle::HebrewNonStandard => "hebrewNonStandard",
+            NumberingStyle::SingleLeadingZeros => "singleLeadingZeros",
+            NumberingStyle::DoubleLeadingZeros => "doubleLeadingZeros",
+            NumberingStyle::TripleLeadingZeros => "tripleLeadingZeros",
         }
     }
 
-    /// Format a 1-based page number in this style. `0` (or anything
-    /// the roman/alpha encoders can't represent) renders as the bare
-    /// Arabic digits so the label is never empty.
+    /// Format a 1-based number in this style, as InDesign does. `0`
+    /// (which InDesign does not allow) renders as the bare Arabic digits
+    /// so the label is never empty.
     pub fn format(self, n: u32) -> String {
+        if n == 0 {
+            return n.to_string();
+        }
         match self {
             NumberingStyle::Arabic => n.to_string(),
-            NumberingStyle::UpperRoman => to_roman(n).unwrap_or_else(|| n.to_string()),
-            NumberingStyle::LowerRoman => to_roman(n)
-                .map(|r| r.to_lowercase())
-                .unwrap_or_else(|| n.to_string()),
-            NumberingStyle::UpperAlpha => to_alpha(n).unwrap_or_else(|| n.to_string()),
-            NumberingStyle::LowerAlpha => to_alpha(n)
-                .map(|a| a.to_lowercase())
-                .unwrap_or_else(|| n.to_string()),
+            NumberingStyle::UpperRoman => to_roman(n),
+            NumberingStyle::LowerRoman => to_roman(n).to_lowercase(),
+            NumberingStyle::UpperAlpha => to_alpha(n),
+            NumberingStyle::LowerAlpha => to_alpha(n).to_lowercase(),
+            NumberingStyle::Kanji => n
+                .to_string()
+                .chars()
+                .map(|d| KANJI_DIGITS[d.to_digit(10).unwrap_or(0) as usize])
+                .collect(),
+            NumberingStyle::ArabicAlifBaTah => repeated_letter(&ALIF_BA_TAH, n),
+            NumberingStyle::ArabicAbjad => repeated_letter(&ABJAD, n),
+            NumberingStyle::HebrewBiblical => hebrew_numeral(n),
+            NumberingStyle::HebrewNonStandard => hebrew_letters(n),
+            NumberingStyle::SingleLeadingZeros => format!("{n:02}"),
+            NumberingStyle::DoubleLeadingZeros => format!("{n:03}"),
+            NumberingStyle::TripleLeadingZeros => format!("{n:04}"),
         }
     }
 }
 
-/// Classic additive Roman numerals (1..=3999). Returns `None` outside
-/// that range so callers fall back to Arabic.
-fn to_roman(mut n: u32) -> Option<String> {
-    if n == 0 || n > 3999 {
-        return None;
+const KANJI_DIGITS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/// The Arabic letters in InDesign's alif-ba-ta order.
+const ALIF_BA_TAH: [char; 28] = [
+    'أ', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ',
+    'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي',
+];
+
+/// The Arabic letters in InDesign's abjad order (غ before ظ at the end).
+const ABJAD: [char; 28] = [
+    'أ', 'ب', 'ج', 'د', 'ه', 'و', 'ز', 'ح', 'ط', 'ي', 'ك', 'ل', 'م', 'ن', 'س', 'ع', 'ف', 'ص', 'ق',
+    'ر', 'ش', 'ت', 'ث', 'خ', 'ذ', 'ض', 'غ', 'ظ',
+];
+
+/// The 22 Hebrew letters, without final forms.
+const HEBREW: [char; 22] = [
+    'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק',
+    'ר', 'ש', 'ת',
+];
+
+/// The `(n-1) % len`-th letter, written `(n-1) / len + 1` times and
+/// joined by ZERO WIDTH NON-JOINER (InDesign: 29 → أ‌أ).
+fn repeated_letter(letters: &[char; 28], n: u32) -> String {
+    let i = (n - 1) as usize;
+    let letter = letters[i % letters.len()].to_string();
+    vec![letter; i / letters.len() + 1].join("\u{200C}")
+}
+
+/// Hebrew numerals: hundreds as ת (400) repeated plus ק / ר / ש, tens
+/// and units as letters, 15 and 16 as טו and טז; thousands are the
+/// numeral of `n / 1000` written before the rest (9999 → טתתקצט, 10000 →
+/// י). No geresh.
+fn hebrew_numeral(n: u32) -> String {
+    if n >= 1000 {
+        let rest = n % 1000;
+        let mut out = hebrew_numeral(n / 1000);
+        if rest > 0 {
+            out.push_str(&hebrew_numeral(rest));
+        }
+        return out;
     }
+    let mut out = String::new();
+    let hundreds = n / 100;
+    out.extend(std::iter::repeat_n('ת', (hundreds / 4) as usize));
+    if !hundreds.is_multiple_of(4) {
+        out.push(['ק', 'ר', 'ש'][(hundreds % 4 - 1) as usize]);
+    }
+    match n % 100 {
+        15 => out.push_str("טו"),
+        16 => out.push_str("טז"),
+        r => {
+            if r >= 10 {
+                out.push(['י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'][(r / 10 - 1) as usize]);
+            }
+            if r % 10 > 0 {
+                out.push(HEBREW[(r % 10 - 1) as usize]);
+            }
+        }
+    }
+    out
+}
+
+/// The Hebrew alphabet, ת standing for every 22 before the last letter
+/// (23 → תא, 44 → תת). InDesign prints א for anything above 395.
+fn hebrew_letters(n: u32) -> String {
+    if n > 395 {
+        return "א".to_string();
+    }
+    let i = (n - 1) as usize;
+    let mut out: String = std::iter::repeat_n('ת', i / HEBREW.len()).collect();
+    out.push(HEBREW[i % HEBREW.len()]);
+    out
+}
+
+/// Roman numerals as InDesign writes them: up to 4999 with as many M as
+/// thousands (4000 → MMMM), above it the thousands in Roman followed by
+/// M (5001 → VMI, 10000 → XM).
+fn to_roman(n: u32) -> String {
     const TABLE: [(u32, &str); 13] = [
         (1000, "M"),
         (900, "CM"),
@@ -3473,22 +3611,25 @@ fn to_roman(mut n: u32) -> Option<String> {
         (4, "IV"),
         (1, "I"),
     ];
-    let mut out = String::new();
+    let thousands = n / 1000;
+    let mut out = if thousands < 5 {
+        "M".repeat(thousands as usize)
+    } else {
+        to_roman(thousands) + "M"
+    };
+    let mut rest = n % 1000;
     for (value, sym) in TABLE {
-        while n >= value {
+        while rest >= value {
             out.push_str(sym);
-            n -= value;
+            rest -= value;
         }
     }
-    Some(out)
+    out
 }
 
-/// Spreadsheet-style alphabetic numbering: 1→A, 26→Z, 27→AA, 28→AB.
-/// `None` for 0.
-fn to_alpha(mut n: u32) -> Option<String> {
-    if n == 0 {
-        return None;
-    }
+/// Spreadsheet-style alphabetic numbering: 1→A, 26→Z, 27→AA, 28→AB
+/// (InDesign: 199 → GQ, 703 → AAA).
+fn to_alpha(mut n: u32) -> String {
     let mut out = Vec::new();
     while n > 0 {
         let rem = ((n - 1) % 26) as u8;
@@ -3496,7 +3637,7 @@ fn to_alpha(mut n: u32) -> Option<String> {
         n = (n - 1) / 26;
     }
     out.reverse();
-    Some(String::from_utf8(out).expect("ascii"))
+    String::from_utf8(out).expect("ascii")
 }
 
 /// IDML `<Section>` definition.
@@ -4149,12 +4290,9 @@ impl FootnoteOptions {
     pub fn label(&self, ordinal: u32) -> String {
         let n = self.start_at.unwrap_or(1).max(1) + ordinal.saturating_sub(1);
         let style = match self.numbering_style.as_deref() {
-            Some("UpperRoman") => NumberingStyle::UpperRoman,
-            Some("LowerRoman") => NumberingStyle::LowerRoman,
-            Some("UpperLetters") => NumberingStyle::UpperAlpha,
-            Some("LowerLetters") => NumberingStyle::LowerAlpha,
             Some("Asterisks") => return "*".repeat(n as usize),
-            _ => NumberingStyle::Arabic,
+            Some(s) => NumberingStyle::from_idml(s),
+            None => NumberingStyle::Arabic,
         };
         style.format(n)
     }
@@ -8147,5 +8285,49 @@ mod anchor_offset_tests {
             "2",
             "a style the engine does not spell prints Arabic"
         );
+    }
+}
+
+#[cfg(test)]
+mod numbering_style_tests {
+    use super::NumberingStyle;
+
+    /// `UPPER_ROMAN` (InDesign's DOM enumeration) → `UpperRoman` (its
+    /// IDML spelling).
+    fn idml_name(dom: &str) -> String {
+        dom.split('_')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_string() + &c.as_str().to_lowercase())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Every number InDesign 20.0.1 was asked to label, in every style it
+    /// offers, formats as it labelled it (ADR 157).
+    #[test]
+    fn every_style_formats_as_indesign_labels_it() {
+        let probe: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tools/indesign-export/numbering-styles-probe.json"
+        ))
+        .expect("probe json");
+        let pages = probe["pages"].as_array().expect("pages");
+        assert!(pages.len() > 150, "{}", pages.len());
+        let mut misses = Vec::new();
+        for page in pages {
+            let dom = page["style"].as_str().expect("style");
+            let n = page["start"].as_u64().expect("start") as u32;
+            let label = page["label"].as_str().expect("label");
+            let idml = idml_name(dom);
+            let style = NumberingStyle::from_idml(&idml);
+            assert_eq!(style.as_idml(), idml, "{dom} has its own style");
+            let got = style.format(n);
+            if got != label {
+                misses.push(format!("{dom} {n}: {got:?} != {label:?}"));
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
     }
 }
