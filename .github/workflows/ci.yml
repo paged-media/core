@@ -159,8 +159,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ needs.toolchain.outputs.channel }}
+          components: clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # The wasm shells, paged-sdk's session and paged-gpu's Vello surface
+      # are `#[cfg(target_arch = "wasm32")]`, so the native clippy in
+      # `check` never sees them and their lints piled up unseen. Lint them
+      # on their own target here, in the same target dir and cache as the
+      # test lane. `gpu` is the build the packages ship (publish-wasm.yml);
+      # without it paged-sdk compiles to a stub.
+      - name: clippy (wasm32)
+        run: >-
+          cargo clippy --target wasm32-unknown-unknown --all-targets
+          -p paged-canvas-wasm -p paged-gpu -p paged-sdk -p paged-introspect-wasm
+          --features paged-canvas-wasm/gpu,paged-sdk/gpu
+          -- -D warnings
       # scripts/test-wasm.sh runs the wasm-bindgen tests node-hosted, so it
       # needs wasm-bindgen-test-runner (shipped by wasm-bindgen-cli, pinned
       # to the lockfile version) + node on PATH. Without these the lane
