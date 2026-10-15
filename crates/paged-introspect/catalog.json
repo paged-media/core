@@ -12586,11 +12586,19 @@
       "type": {
         "kind": "enum",
         "members": [
-          "Arabic",
           "UpperRoman",
           "LowerRoman",
           "UpperLetters",
-          "LowerLetters"
+          "LowerLetters",
+          "Arabic",
+          "Kanji",
+          "ArabicAlifBaTah",
+          "ArabicAbjad",
+          "HebrewBiblical",
+          "HebrewNonStandard",
+          "SingleLeadingZeros",
+          "DoubleLeadingZeros",
+          "TripleLeadingZeros"
         ],
         "open": true
       },

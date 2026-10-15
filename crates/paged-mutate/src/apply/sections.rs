@@ -27,14 +27,7 @@ use crate::operation::{AppliedOperation, InvalidationHint, NodeId, Operation};
 /// `NumberingStyle::from_idml`. (`NumberingStyle::as_str` yields the
 /// editor's lower-camel wire name, which `from_idml` does NOT accept.)
 pub(super) fn numbering_style_to_idml(s: paged_model::NumberingStyle) -> &'static str {
-    use paged_model::NumberingStyle::*;
-    match s {
-        Arabic => "Arabic",
-        UpperRoman => "UpperRoman",
-        LowerRoman => "LowerRoman",
-        UpperAlpha => "UpperLetters",
-        LowerAlpha => "LowerLetters",
-    }
+    s.as_idml()
 }
 
 /// Re-derive the baked `Page@Name` labels that a section edit

@@ -205,6 +205,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   reference is labelled when its paragraph is composed, so one whose line then moves to a page
   that restarts the numbering keeps the earlier number. End-of-story placement, no-splitting,
   straddling and the continuing rule are not read.
+- **Page numbers in the Roman edition's thirteen styles only.** Sections, chapters and footnotes
+  format numbers in every style InDesign 20.0.1's Roman edition offers, as it labels them
+  ([ADR 157](adr/157-every-page-numbering-style.md)). Styles only other editions offer
+  (full-width, Hindi, Thai, Farsi) fall back to Arabic, and no rendered fixture covers the
+  Hebrew and Arabic styles: the corpus ships no face with those scripts.
 - **An unresolved table of contents built at render numbers its entries from each story's head
   frame.** A story with no text bound to a TOC style (on its `<Story>` or its frame) is filled from
   the TOC style while the page is built, before layout says where a heading lands. The canvas's
