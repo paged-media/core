@@ -4480,6 +4480,8 @@ pub(super) struct StoryEmitter<'a> {
     /// unless the paragraph carries `NumberingContinue="true"` or
     /// `NumberingStartAt`.
     pub(super) prev_was_numbered: bool,
+    /// The levels of a multi-level list above level 1 (L-07, ADR 158).
+    pub(super) list_levels: super::numbering::ListLevels,
     /// W1.22 (engine gap 22) — document-level numbering ledger keyed
     /// by `<NumberingList>` self id, shared across every story's
     /// emitter so a list with `ContinueNumbersAcrossStories="true"`
@@ -4814,6 +4816,7 @@ impl<'a> StoryEmitter<'a> {
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             prev_was_numbered: false,
+            list_levels: Default::default(),
             cross_story_numbering: None,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
@@ -6469,11 +6472,12 @@ fn emit_paragraph_lines(
         .segment
         .opens_paragraph
         .then(|| {
-            list_prefix(
+            list_prefix_with_levels(
                 &resolved_paragraph,
                 &mut em.numbered_counter,
                 &mut em.prev_was_numbered,
                 cross_story_seed,
+                &mut em.list_levels,
             )
         })
         .flatten()

@@ -345,6 +345,87 @@ impl SpanColumns {
     }
 }
 
+/// A numbered paragraph's place in a multi-level list (`NumberingLevel`,
+/// `NumberingApplyRestartPolicy`, `<NumberingRestartPolicies>`; L-07,
+/// ADR 158). Each field is `None` when the paragraph (or style) does not
+/// say, and cascades like the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ListLevel {
+    /// `NumberingLevel`, 1 to 9; `None` is 1.
+    pub level: Option<u32>,
+    /// `NumberingApplyRestartPolicy`; `None` is true.
+    pub apply_restart: Option<bool>,
+    /// `<NumberingRestartPolicies>`; `None` restarts after any previous
+    /// level.
+    pub restart_policy: Option<RestartPolicy>,
+}
+
+impl ListLevel {
+    /// Fill every unset field from `outer`.
+    pub fn inherit(&mut self, outer: &ListLevel) {
+        self.level = self.level.or(outer.level);
+        self.apply_restart = self.apply_restart.or(outer.apply_restart);
+        self.restart_policy = self.restart_policy.or(outer.restart_policy);
+    }
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ListLevel::default()
+    }
+}
+
+/// `<NumberingRestartPolicies RestartPolicy LowerLevel UpperLevel>`: which
+/// higher levels start a level's count again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestartPolicy {
+    pub kind: RestartPolicyKind,
+    /// `LowerLevel` — the level `SpecificPreviousLevel` names, or the
+    /// first of `RangeOfPreviousLevels`.
+    pub lower: u32,
+    /// `UpperLevel` — the last level of `RangeOfPreviousLevels`.
+    pub upper: u32,
+}
+
+/// `RestartPolicy` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestartPolicyKind {
+    AnyPreviousLevel,
+    SpecificPreviousLevel,
+    RangeOfPreviousLevels,
+}
+
+impl RestartPolicyKind {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "AnyPreviousLevel" => Self::AnyPreviousLevel,
+            "SpecificPreviousLevel" => Self::SpecificPreviousLevel,
+            "RangeOfPreviousLevels" => Self::RangeOfPreviousLevels,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::AnyPreviousLevel => "AnyPreviousLevel",
+            Self::SpecificPreviousLevel => "SpecificPreviousLevel",
+            Self::RangeOfPreviousLevels => "RangeOfPreviousLevels",
+        }
+    }
+}
+
+impl RestartPolicy {
+    /// The higher levels whose paragraphs start `level`'s count again
+    /// when one came after the last paragraph at `level`.
+    pub fn restarting_levels(&self, level: u32) -> std::ops::RangeInclusive<u32> {
+        let below = level.saturating_sub(1);
+        match self.kind {
+            RestartPolicyKind::AnyPreviousLevel => 1..=below,
+            RestartPolicyKind::SpecificPreviousLevel => self.lower..=self.lower.min(below),
+            RestartPolicyKind::RangeOfPreviousLevels => self.lower..=self.upper.min(below),
+        }
+    }
+}
+
 /// How a paragraph sets its lines beyond justification: auto leading,
 /// a lone word on a justified line, the last line's right indent and
 /// balanced ragged lines (`AutoLeading`, `SingleWordJustification`,
@@ -5355,6 +5436,9 @@ pub struct ParagraphStyleDef {
     /// Anything else passes through unchanged. `None` falls back
     /// to the IDML default `^#.^t` (e.g. `"1.\t"`).
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` — explicit integer the paragraph's
     /// counter starts at. Overrides any continued count from a
     /// previous paragraph. `None` means "no explicit start"; the
@@ -5772,6 +5856,8 @@ pub struct ResolvedParagraph {
     /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens
     /// plus literal characters). `None` ⇒ renderer default `^#.^t`.
     pub numbering_expression: Option<String>,
+    /// [`ListLevel`], cascaded.
+    pub list_level: ListLevel,
     /// `NumberingStartAt` explicit start integer. See
     /// `ParagraphStyleDef::numbering_start_at`.
     pub numbering_start_at: Option<i32>,
@@ -6180,6 +6266,7 @@ impl ResolvedParagraph {
         if self.numbering_expression.is_none() {
             self.numbering_expression = def.numbering_expression.clone();
         }
+        self.list_level.inherit(&def.list_level);
         self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
         if self.applied_numbering_list.is_none() {
@@ -6439,6 +6526,9 @@ pub struct Paragraph {
     /// `None` ⇒ inherit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` local override. InDesign applies it only where
     /// the list starts or `NumberingContinue` is false; mid-list it is
     /// ignored. `None` ⇒ inherit.

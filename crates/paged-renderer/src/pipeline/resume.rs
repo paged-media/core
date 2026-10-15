@@ -70,6 +70,7 @@ pub(super) struct ParaMark {
     prev_line_height_exact: Option<f64>,
     numbered_counter: u32,
     prev_was_numbered: bool,
+    list_levels: super::numbering::ListLevels,
     last_placed_frame: Option<usize>,
     overset_reported: bool,
     force_overset: bool,
@@ -103,6 +104,7 @@ impl ParaMark {
                 == other.prev_line_height_exact.map(f64::to_bits)
             && self.numbered_counter == other.numbered_counter
             && self.prev_was_numbered == other.prev_was_numbered
+            && self.list_levels == other.list_levels
             && self.last_placed_frame == other.last_placed_frame
             && self.overset_reported == other.overset_reported
             && self.force_overset == other.force_overset
@@ -192,6 +194,7 @@ pub(super) fn mark(
         prev_line_height_exact: em.prev_line_height_exact(),
         numbered_counter: em.numbered_counter,
         prev_was_numbered: em.prev_was_numbered,
+        list_levels: em.list_levels.clone(),
         last_placed_frame: em.last_placed_frame,
         overset_reported: em.overset_reported,
         force_overset: em.force_overset,
@@ -436,6 +439,7 @@ pub(super) fn splice_prefix(
     em.prev_line_height_exact = m.prev_line_height_exact;
     em.numbered_counter = m.numbered_counter;
     em.prev_was_numbered = m.prev_was_numbered;
+    em.list_levels = m.list_levels.clone();
     em.last_placed_frame = m.last_placed_frame;
     em.overset_reported = m.overset_reported;
     em.force_overset = m.force_overset;
@@ -555,6 +559,7 @@ pub(super) fn try_stop(
     em.prev_line_height_exact = end.prev_line_height_exact;
     em.numbered_counter = end.numbered_counter;
     em.prev_was_numbered = end.prev_was_numbered;
+    em.list_levels = end.list_levels.clone();
     em.last_placed_frame = end.last_placed_frame;
     em.overset_reported = end.overset_reported;
     em.force_overset = end.force_overset;

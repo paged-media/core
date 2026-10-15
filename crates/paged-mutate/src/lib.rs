@@ -5233,6 +5233,54 @@ mod tests {
         .is_ok());
     }
 
+    /// ADR 158 — the list-level paths set the paragraph's own
+    /// `ListLevel`, undo restores the unset slots exactly, and a level
+    /// outside 1 to 9 (or not whole) is refused with the slot untouched.
+    #[test]
+    fn list_level_paths_round_trip() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let level = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphNumberingLevel,
+                Value::Length(Some(3.0)),
+            ))
+            .expect("level")
+            .inverse;
+        let restart = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphNumberingApplyRestartPolicy,
+                Value::Bool(false),
+            ))
+            .expect("restart")
+            .inverse;
+        let ll = project.document().stories[0].story.paragraphs[0].list_level;
+        assert_eq!((ll.level, ll.apply_restart), (Some(3), Some(false)));
+        for bad in [0.0, 10.0, 2.5] {
+            let err = project
+                .apply(story_range_op(
+                    PropertyPath::ParagraphNumberingLevel,
+                    Value::Length(Some(bad)),
+                ))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "{err:?}"
+            );
+        }
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0]
+                .list_level
+                .level,
+            Some(3),
+            "a refused write leaves the slot"
+        );
+        crate::apply(project.document_mut(), &restart).expect("undo restart");
+        crate::apply(project.document_mut(), &level).expect("undo level");
+        assert!(project.document().stories[0].story.paragraphs[0]
+            .list_level
+            .is_unset());
+    }
+
     /// ADR 153 — the line-setting paths set the paragraph's own
     /// `LineSetting`, undo restores it, and an unknown enum string is
     /// refused with the slot untouched; `characterNoBreak` sets the run.

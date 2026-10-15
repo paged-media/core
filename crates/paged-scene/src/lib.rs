@@ -1228,6 +1228,7 @@ impl ResolvedParagraphAttrs {
                 .bullets_and_numbering_digits_character_style
                 .clone(),
             numbering_expression: paragraph.numbering_expression.clone(),
+            list_level: paragraph.list_level,
             numbering_start_at: paragraph.numbering_start_at,
             numbering_continue: paragraph.numbering_continue,
             // W1.22 — instance override wins over the cascade.
@@ -1334,6 +1335,7 @@ impl ResolvedParagraphAttrs {
         if self.numbering_expression.is_none() {
             self.numbering_expression = p.numbering_expression.clone();
         }
+        self.list_level.inherit(&p.list_level);
         self.numbering_start_at = self.numbering_start_at.or(p.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(p.numbering_continue);
         if self.applied_numbering_list.is_none() {
@@ -1664,6 +1666,8 @@ pub struct ResolvedParagraphAttrs {
     /// literal characters). `None` ⇒ renderer applies the IDML
     /// default `^#.^t`.
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07), cascaded.
+    pub list_level: paged_model::ListLevel,
     /// `NumberingStartAt` explicit integer override; the renderer
     /// resets the story-level counter to this value on paragraph
     /// entry. `None` ⇒ inherit (auto-increment off prior state).
