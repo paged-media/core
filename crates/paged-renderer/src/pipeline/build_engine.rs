@@ -8613,7 +8613,7 @@ fn emit_paragraph_lines(
                         .iter()
                         .position(|f| *f == font_id)
                         .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
-                        .map_or(0.88, |f| super::ruby::em_box(f).top)
+                        .map_or(0.88, |f| super::font_table::em_box(f).top)
                 },
                 |cluster| picker.pick(cluster),
                 origin,
