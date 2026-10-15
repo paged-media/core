@@ -123,6 +123,9 @@ One target, a frame or a group, scales along its own axes, so a rotated one
 stays a rectangle at its angle and a side handle changes only the dimension
 along its axis. Several targets scale as one unit along the page axes, even
 when they share a rotation, so a non-uniform scale shears the rotated ones.
+ScaleContent treats the placed image as one item: it scales along the image's
+own axes (the frame's transform composed with the image's), about the pivot
+the anchor names (the opposite content handle) or the frame's centre.
 
 ### 3.4 Ephemeral overlay → preview rendering
 

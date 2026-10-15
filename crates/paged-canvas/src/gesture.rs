@@ -194,7 +194,12 @@ pub enum GestureType {
     /// The frame itself stays still.
     RotateContent,
     /// Phase G — scale the placed image inside its frame about the
-    /// frame's centroid. Edits `image_item_transform`'s 2×2 + tx/ty.
+    /// anchor's pivot (the opposite content handle a handle drag names;
+    /// the frame's centroid when it names none). Like one selected item
+    /// under [`GestureType::Scale`], the image scales along its own axes
+    /// (the frame's transform composed with its own), so it stays a
+    /// rectangle at its angle. Edits `image_item_transform`; the frame
+    /// stays still.
     ScaleContent,
     /// Phase H — drag a single Bezier control point on a `Polygon`'s
     /// path. The address picks which anchor + which role (anchor,
@@ -1393,26 +1398,30 @@ fn compute_node_mutation_in_spread(
             }
         }
         GestureType::ScaleContent => {
-            // Phase G — scale the placed image about the frame's
-            // centroid in frame-inner space. Scale factors derived
-            // from (anchor → current) relative to world pivot —
-            // invariant across the world↔inner frame change since
-            // we only need their ratios.
-            let pivot_world = session.pivot_spread.unwrap_or((0.0, 0.0));
-            let anchor_world = session.anchor_spread.unwrap_or(pivot_world);
-            let pivot_local = (
-                (snap.bounds.left + snap.bounds.right) * 0.5,
-                (snap.bounds.top + snap.bounds.bottom) * 0.5,
-            );
-            let (sx, sy) =
-                compute_scale_factors(anchor_world, delta, pivot_world, session.modifiers);
-            let next = scale_matrix_about_pivot_local(
+            // The placed image is one item: it scales along its OWN axes
+            // (the frame's transform composed with its own, so an image
+            // turned inside a turned frame stays a rectangle), about the
+            // session's pivot — the opposite content handle a handle drag
+            // names, or the frame's centre (the default). The result goes
+            // back into the frame's inner space.
+            let pivot = session.pivot_spread.unwrap_or((0.0, 0.0));
+            let anchor = session.anchor_spread.unwrap_or(pivot);
+            let frame = snap.item_transform.unwrap_or(IDENTITY);
+            let Some(frame_inverse) = paged_mutate::path_math::affine_inverse(frame) else {
+                return NodeMutation::ImageTransform(snap.image_item_transform);
+            };
+            let placed = paged_mutate::path_math::affine_multiply(
+                frame,
                 snap.image_item_transform.unwrap_or(IDENTITY),
-                sx,
-                sy,
-                pivot_local,
             );
-            NodeMutation::ImageTransform(Some(next))
+            let [a, b, c, d, _, _] = placed;
+            let det = a * d - b * c;
+            let axes = (det.is_finite() && det.abs() > 1e-6).then_some([a, b, c, d]);
+            let scaled = scale_about_pivot(placed, anchor, delta, pivot, axes, session.modifiers);
+            NodeMutation::ImageTransform(Some(paged_mutate::path_math::affine_multiply(
+                frame_inverse,
+                scaled,
+            )))
         }
     }
 }
@@ -1632,58 +1641,6 @@ fn rotate_matrix_about_pivot_local(m: [f32; 6], theta: f32, pivot: (f32, f32)) -
     let new_tx = c * tx - s * ty + (1.0 - c) * pivot.0 + s * pivot.1;
     let new_ty = s * tx + c * ty - s * pivot.0 + (1.0 - c) * pivot.1;
     [new_a, new_b, new_c, new_d, new_tx, new_ty]
-}
-
-/// Phase G — compute per-axis scale factors from (anchor, delta)
-/// relative to a world pivot. Matches Phase D's scale_about_pivot
-/// behavior but exposed separately for callers that need just the
-/// factors (e.g. ScaleContent uses these factors with a different
-/// pivot frame).
-fn compute_scale_factors(
-    anchor: (f32, f32),
-    delta: (f32, f32),
-    pivot: (f32, f32),
-    modifiers: GestureModifiers,
-) -> (f32, f32) {
-    let anchor_dx = anchor.0 - pivot.0;
-    let anchor_dy = anchor.1 - pivot.1;
-    let current = (anchor.0 + delta.0, anchor.1 + delta.1);
-    let current_dx = current.0 - pivot.0;
-    let current_dy = current.1 - pivot.1;
-    let sx = if anchor_dx.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dx / anchor_dx
-    };
-    let sy = if anchor_dy.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dy / anchor_dy
-    };
-    if modifiers.shift {
-        let dom = if (sx.abs() - 1.0).abs() > (sy.abs() - 1.0).abs() {
-            sx
-        } else {
-            sy
-        };
-        (dom, dom)
-    } else {
-        (sx, sy)
-    }
-}
-
-/// Phase G — scale `m` about a pivot expressed in `m`'s output
-/// coord frame. Mirrors `rotate_matrix_about_pivot_local`.
-fn scale_matrix_about_pivot_local(m: [f32; 6], sx: f32, sy: f32, pivot: (f32, f32)) -> [f32; 6] {
-    let [a, b, c, d, tx, ty] = m;
-    [
-        sx * a,
-        sy * b,
-        sx * c,
-        sy * d,
-        sx * tx + (1.0 - sx) * pivot.0,
-        sy * ty + (1.0 - sy) * pivot.1,
-    ]
 }
 
 /// The axes a single `Scale` target works along: the linear part of its
@@ -2713,34 +2670,28 @@ mod tests {
     }
 
     #[test]
-    fn scale_content_pivot_is_fixed_under_scale() {
-        // Scaling about a pivot leaves the pivot point itself put.
-        let m = IDENTITY;
-        let pivot = (30.0, 30.0);
-        let out = scale_matrix_about_pivot_local(m, 2.0, 3.0, pivot);
-        let [a, bb, c, d, tx, ty] = out;
-        let px = a * pivot.0 + c * pivot.1 + tx;
-        let py = bb * pivot.0 + d * pivot.1 + ty;
-        assert!((px - pivot.0).abs() < 1e-3, "px={px}");
-        assert!((py - pivot.1).abs() < 1e-3, "py={py}");
-    }
-
-    #[test]
     fn scale_factors_ratio_from_anchor_and_delta() {
-        // Anchor 100 right of pivot; drag +50 → sx = 1.5. Anchor 50
-        // below pivot; no y delta → sy = 1.0.
-        let (sx, sy) = compute_scale_factors((100.0, 50.0), (50.0, 0.0), (0.0, 0.0), NONE);
-        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
-        assert!((sy - 1.0).abs() < 1e-3, "sy={sy}");
+        // Anchor 100 right of the pivot, dragged +50 → sx = 1.5; 50 below
+        // it with no y delta → sy = 1.0.
+        let out = scale_about_pivot(IDENTITY, (100.0, 50.0), (50.0, 0.0), (0.0, 0.0), None, NONE);
+        assert!((out[0] - 1.5).abs() < 1e-3, "sx={}", out[0]);
+        assert!((out[3] - 1.0).abs() < 1e-3, "sy={}", out[3]);
     }
 
     #[test]
     fn scale_factors_shift_locks_to_dominant_axis() {
         // sx = 1.5 (|Δ|=0.5), sy = 1.2 (|Δ|=0.2): Shift picks the
         // dominant (sx) for both axes — uniform scale.
-        let (sx, sy) = compute_scale_factors((100.0, 100.0), (50.0, 20.0), (0.0, 0.0), SHIFT);
-        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
-        assert!((sy - 1.5).abs() < 1e-3, "sy={sy}");
+        let out = scale_about_pivot(
+            IDENTITY,
+            (100.0, 100.0),
+            (50.0, 20.0),
+            (0.0, 0.0),
+            None,
+            SHIFT,
+        );
+        assert!((out[0] - 1.5).abs() < 1e-3, "sx={}", out[0]);
+        assert!((out[3] - 1.5).abs() < 1e-3, "sy={}", out[3]);
     }
 
     #[test]
