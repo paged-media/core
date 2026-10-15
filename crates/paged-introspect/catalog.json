@@ -1512,6 +1512,8 @@
     "paragraphNumberingExpression",
     "paragraphNumberingStartAt",
     "paragraphNumberingContinue",
+    "paragraphNumberingLevel",
+    "paragraphNumberingApplyRestartPolicy",
     "paragraphBulletsCharacterStyle",
     "paragraphNumberingCharacterStyle",
     "itemName",
@@ -7743,6 +7745,49 @@
     },
     {
       "addressKind": "storyRange",
+      "path": "paragraphNumberingLevel",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 9.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "NumberingLevel",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingApplyRestartPolicy",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": true,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "NumberingApplyRestartPolicy",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
       "path": "paragraphBulletsCharacterStyle",
       "type": {
         "kind": "ref",
@@ -9720,6 +9765,63 @@
         {
           "element": "ParagraphStyle",
           "attribute": "NumberingContinue",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingLevel",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 9.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "NumberingLevel",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingApplyRestartPolicy",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": true,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "NumberingApplyRestartPolicy",
           "kind": "attr"
         }
       ]

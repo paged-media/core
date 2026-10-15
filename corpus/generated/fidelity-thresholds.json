@@ -877,6 +877,16 @@
       "min_ssim": 0.9933,
       "max_ink_mean_de": 9.86,
       "rationale": "Added 2026-10-15 (L-01c, ADR 156): see footnote-numbering. Two A4 pages of Inter 10 pt with one note per paragraph: story A threaded from page 1's top frame to page 2's (its third paragraph starts the next frame), story B below it on page 1, story C below it on page 2, the designmap listing them C, B, A. InDesign numbers the notes of each STORY through the story (A 1-4 across both pages, B and C from 1 again), restarting at each page, spread or section when RestartNumbering says so. This variant: PageRestart, LowerRoman, Prefix ( and Suffix ) in the reference only (PrefixSuffixReference); story A's page-2 notes restart at i. Pages measure mean 0.051 / 0.058, ssim >= 0.99840, ink <= 8.21; sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on."
+    },
+    {
+      "name": "numbering-multilevel",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.025,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9948,
+      "max_ink_mean_de": 2.65,
+      "rationale": "Added 2026-10-15 (L-07, ADR 158): how InDesign numbers a multi-level list, asked of InDesign 20.0.1. One A4 page of Inter 11 pt, sixteen paragraphs on one list through four styles: L1 (level 1, ^1.^t), L2 (level 2, a b c, ^1.^2.^t, restart after any previous level), L3 (level 3, i ii iii, ^1.^2.^3.^t, likewise) and L2Keep (level 2, 1 2 3, ^1-^2^t, NumberingApplyRestartPolicy false). InDesign restarts a level only when a higher level came after the level's own last paragraph, never resets lower levels from above (the point under chapter two prints 2.c.i.), prints ^n in the format of the paragraph that last set level n, and lets the no-restart level go on counting (3-2, 3-3, 4-4, then 4.e.). Page measures mean 0.0205, p99 0, ssim 0.99986, ink 2.21; sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on: the numbers are the point."
     }
   ]
 }
