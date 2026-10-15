@@ -17,8 +17,10 @@
 Prints one JSON object per `Tj` / `TJ` / `'` / `"`: the font's base name,
 its size as drawn (the `Tf` size through the text and graphics matrices,
 horizontally and vertically), the origin of its first glyph in page space
-(pt, y DOWN from the page's top, as InDesign's rulers measure), and the
-string's raw codes. Answers what the scripting DOM cannot: where and how
+(pt, y DOWN from the page's top, as InDesign's rulers measure), the
+string's raw codes, and the character and word spacing in force (`Tc`,
+`Tw`, text-space units: times the drawn size, the room InDesign sets
+between characters, as it spreads ruby and kenten). Answers what the scripting DOM cannot: where and how
 big InDesign sets the text it generates itself, such as ruby and emphasis
 marks. Standard library only, over `pdf-strokes.py`'s stream reading.
 """
@@ -58,7 +60,7 @@ def shows(content, names, page_height):
     ctm = [1, 0, 0, 1, 0, 0]
     stack = []
     tm = tlm = [1, 0, 0, 1, 0, 0]
-    font, size, leading, rise, hscale = None, 0.0, 0.0, 0.0, 100.0
+    font, size, leading, rise, hscale, tc, tw = None, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0
     operands = []
     for tok in TOKEN.findall(content):
         if re.fullmatch(rb"[-+]?\d*\.?\d+", tok) or tok.startswith((b"[", b"/", b"(", b"<")):
@@ -86,6 +88,10 @@ def shows(content, names, page_height):
             leading = nums[-1]
         elif op == "Ts" and nums:
             rise = nums[-1]
+        elif op == "Tc" and nums:
+            tc = nums[-1]
+        elif op == "Tw" and nums:
+            tw = nums[-1]
         elif op == "Tz" and nums:
             hscale = nums[-1]
         elif op == "Tm" and len(nums) >= 6:
@@ -108,7 +114,7 @@ def shows(content, names, page_height):
                 "font": names.get(font, font), "size_x": round((m[0] ** 2 + m[1] ** 2) ** 0.5, 3),
                 "size_y": round((m[2] ** 2 + m[3] ** 2) ** 0.5, 3),
                 "x": round(m[4], 3), "y": round(page_height - m[5], 3),
-                "codes": codes.decode("latin-1"),
+                "codes": codes.decode("latin-1"), "tc": tc, "tw": tw,
             }
         operands = []
 
