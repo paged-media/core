@@ -425,23 +425,64 @@ pub(super) fn compose_footnote_paragraphs(
 /// An empty paragraph's line holds no glyph but has its baseline.
 fn footnote_area_baselines(
     composed: &[ComposedFootnote],
+    windows: &[(u32, Option<u32>)],
     metrics: &FootnoteMetrics,
 ) -> Vec<(usize, usize, usize, f32)> {
     let mut out = Vec::new();
     let mut y = 0.0f32;
+    let mut any = false;
     for (fi, c) in composed.iter().enumerate() {
-        if fi > 0 {
-            y += metrics.space_between_pt;
-        }
+        let (from, to) = windows.get(fi).copied().unwrap_or((0, None));
+        let mut started = false;
+        let mut line = 0u32;
         for (p_idx, leadings) in c.leadings.iter().enumerate() {
-            y += c.space_above[p_idx];
             for (l_idx, leading) in leadings.iter().enumerate() {
-                y += leading;
-                out.push((fi, p_idx, l_idx, y));
+                let shown = line >= from && to.is_none_or(|t| line < t);
+                if shown {
+                    if !started {
+                        // A note's lines follow the note before by
+                        // `SpaceBetween`.
+                        if any {
+                            y += metrics.space_between_pt;
+                        }
+                        started = true;
+                    }
+                    // A paragraph's space above counts at its first line;
+                    // a continued note resumes mid-paragraph without it.
+                    if l_idx == 0 {
+                        y += c.space_above[p_idx];
+                    }
+                    y += leading;
+                    out.push((fi, p_idx, l_idx, y));
+                }
+                line += 1;
             }
         }
+        any |= started;
     }
     out
+}
+
+impl ComposedFootnote {
+    /// How far each of the note's lines, counted over all its
+    /// paragraphs, moves the area down: its leading, and at a paragraph's
+    /// first line the space above it.
+    fn line_advances(&self) -> Vec<f32> {
+        let mut out = Vec::new();
+        for (p_idx, leadings) in self.leadings.iter().enumerate() {
+            for (l_idx, leading) in leadings.iter().enumerate() {
+                out.push(
+                    leading
+                        + if l_idx == 0 {
+                            self.space_above[p_idx]
+                        } else {
+                            0.0
+                        },
+                );
+            }
+        }
+        out
+    }
 }
 
 /// W1.8 — the height (pt) of one frame's footnote area, laid out exactly
@@ -449,6 +490,7 @@ fn footnote_area_baselines(
 /// baseline, which InDesign sets on the frame's foot
 /// ([`footnote_area_baselines`]). This, plus `Spacer`, is the band the
 /// body text must vacate.
+#[cfg(test)]
 pub(super) fn footnote_pool_height_pt(
     group: &[&EmittedFootnote],
     document: &Document,
@@ -475,7 +517,9 @@ pub(super) fn footnote_pool_height_pt(
             )
         })
         .collect();
-    footnote_area_baselines(&composed, metrics)
+    let windows: Vec<(u32, Option<u32>)> =
+        group.iter().map(|f| (f.first_line, f.end_line)).collect();
+    footnote_area_baselines(&composed, &windows, metrics)
         .last()
         .map_or(0.0, |&(.., y)| y)
 }
@@ -495,6 +539,9 @@ pub(super) struct FootnoteMetrics {
     default_size: f32,
     /// Resolved separator-rule spec (`None` when the rule is off).
     rule: Option<FootnoteRuleSpec>,
+    /// The rule above an area headed by a continued note, in place of
+    /// the separator rule (`None` when off; ADR 161).
+    continuing_rule: Option<FootnoteRuleSpec>,
 }
 
 /// W1.8 — resolved separator-rule geometry/paint, ready to stroke.
@@ -564,11 +611,46 @@ pub(super) fn resolve_footnote_metrics(
         None
     };
 
+    // The continuing rule: InDesign's defaults are on, 1 pt, 288 pt wide,
+    // black, no offset or indent (`footnote-split`, ADR 161).
+    let cr = &fo.continuing_rule;
+    let continuing_rule = cr.on.unwrap_or(true).then(|| {
+        let weight_pt = cr.line_weight.unwrap_or(1.0).max(0.0);
+        let left_indent_pt = cr.left_indent.unwrap_or(0.0).max(0.0);
+        let width_pt = cr
+            .width
+            .unwrap_or(288.0)
+            .max(0.0)
+            .min((column_width_pt - left_indent_pt).max(0.0));
+        let base_paint = cr
+            .color
+            .as_deref()
+            .and_then(|id| color_id_to_paint(id, palette, color_ctx))
+            .unwrap_or(Paint::Solid(Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0,
+            }));
+        let paint = apply_fill_tint_ctx(
+            base_paint,
+            object_tint(palette, cr.color.as_deref(), cr.tint),
+            &color_ctx,
+        );
+        FootnoteRuleSpec {
+            weight_pt,
+            left_indent_pt,
+            width_pt,
+            offset_pt: cr.offset.unwrap_or(0.0),
+            paint,
+        }
+    });
     FootnoteMetrics {
         space_between_pt,
         spacer_pt,
         default_size,
         rule,
+        continuing_rule,
     }
 }
 
@@ -579,6 +661,7 @@ pub(super) fn resolve_footnote_metrics(
 /// no font bytes (footnotes can't be measured or drawn without a face).
 /// Only `page_indices` are measured; a pool depends on its own page alone.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn measure_footnote_pools(
     pages: &[BuiltPage],
     page_indices: &[usize],
@@ -695,23 +778,6 @@ pub(super) fn footnote_pool_rect(
         w: x1 - x0,
         h: y1 - y0,
     }
-}
-
-/// W1.7 — the page index and quantised pool key chain frame `idx`
-/// captures footnotes under ([`footnote_pool_rect`]). Lets the
-/// reservation pass map a measured pool back to every chain frame whose
-/// text area must shrink: each column of a spanning frame reserves the
-/// whole area.
-pub(super) fn footnote_host_key_for_frame(
-    chain: &[&TextFrame],
-    idx: usize,
-    page_idx: usize,
-    pages: &[BuiltPage],
-    document: &Document,
-) -> (usize, i32, i32, i32, i32) {
-    let rect = footnote_pool_rect(chain, idx, pages[page_idx].spread_origin, document);
-    let k = footnote_frame_key(&rect);
-    (page_idx, k.0, k.1, k.2, k.3)
 }
 
 /// W1.7 — per-page display-list + capture lengths plus stats, snapshot
@@ -878,7 +944,7 @@ pub(super) fn emit_footnote_pools(
             // Compose each footnote through the styled-run path (per-run
             // size / weight / colour). Skipping any that resolve to no
             // font, exactly as the measure pass does.
-            let composed: Vec<ComposedFootnote> = group
+            let (group, composed): (Vec<&EmittedFootnote>, Vec<ComposedFootnote>) = group
                 .iter()
                 .filter_map(|fn_| {
                     compose_footnote_paragraphs(
@@ -890,11 +956,14 @@ pub(super) fn emit_footnote_pools(
                         column_width_pt,
                         metrics.default_size,
                     )
+                    .map(|c| (*fn_, c))
                 })
-                .collect();
+                .unzip();
             if composed.is_empty() {
                 continue;
             }
+            let windows: Vec<(u32, Option<u32>)> =
+                group.iter().map(|f| (f.first_line, f.end_line)).collect();
             // The area sits on the frame's foot: its last baseline on the
             // content bottom. When it is taller than the room under its
             // references, InDesign keeps as many of its lines as fit and
@@ -903,7 +972,10 @@ pub(super) fn emit_footnote_pools(
             // InDesign 20.0.1, `footnote-pool-probe`: `Spacer` 0, 4 and 12
             // keep three, two and two lines of the `footnotes` fixture's
             // too-tall third note, its last line on the frame's foot).
-            let baselines = footnote_area_baselines(&composed, &metrics);
+            let baselines = footnote_area_baselines(&composed, &windows, &metrics);
+            if baselines.is_empty() {
+                continue;
+            }
             let frame_bottom_pt = rect.y + rect.h;
             let floor_pt = group
                 .iter()
@@ -917,14 +989,14 @@ pub(super) fn emit_footnote_pools(
             let area_top_pt = frame_bottom_pt - baselines[kept - 1].3;
 
             // A cut area loses lines: report it so callers know the render
-            // is lossy. Continuing them in the next frame is the
-            // documented deferral (see the note on `EmittedFootnote`).
+            // is lossy. A note the flow plan split already ends where it
+            // continues (ADR 161); what is cut here has nowhere to go.
             if kept < baselines.len() {
                 page.diagnostics.push(
                     Diagnostic::new(
                         DiagnosticCode::FootnoteOverflow,
-                        "footnote area is taller than the room below its references; its last \
-                         lines are overset (cross-frame footnote splitting is not yet implemented)",
+                        "footnote area is taller than the room below its references and has no \
+                         next column or frame to continue in; its last lines are overset",
                     )
                     .with_page(page_idx)
                     .with_story(group[0].host_story_id.clone()),
@@ -934,7 +1006,14 @@ pub(super) fn emit_footnote_pools(
             // The separator rule, centred its offset above the area's top
             // (InDesign 20.0.1: offset 2, weight 1 strokes 236.4–237.4 pt
             // over an area starting at 238.9 pt).
-            if let Some(spec) = metrics.rule.as_ref() {
+            // An area headed by a continued note draws the continuing rule
+            // instead (`footnote-split`, ADR 161).
+            let rule = if group[0].continued {
+                metrics.continuing_rule.as_ref()
+            } else {
+                metrics.rule.as_ref()
+            };
+            if let Some(spec) = rule {
                 let rule_y_pt = area_top_pt - spec.offset_pt;
                 let x0 = rect.x + spec.left_indent_pt;
                 let x1 = x0 + spec.width_pt;
@@ -965,14 +1044,15 @@ pub(super) fn emit_footnote_pools(
                     })
                     .collect();
                 for (p_idx, laid) in c.paragraphs.iter().enumerate() {
-                    let line_baselines: Vec<f32> = kept
+                    let shown: Vec<(usize, f32)> = kept
                         .iter()
                         .filter(|&&(f, p, ..)| f == fi && p == p_idx)
-                        .map(|&(.., y)| area_top_pt + y)
+                        .map(|&(_, _, l, y)| (l, area_top_pt + y))
                         .collect();
-                    if line_baselines.is_empty() {
+                    let Some(&(first_line, _)) = shown.first() else {
                         continue;
-                    }
+                    };
+                    let line_baselines: Vec<f32> = shown.iter().map(|&(_, y)| y).collect();
                     let picker = build_footnote_paint_picker(
                         &c.resolved_runs_per_para[p_idx],
                         &c.run_text_lens_per_para[p_idx],
@@ -994,8 +1074,12 @@ pub(super) fn emit_footnote_pools(
                             .is_none_or(|want| want == host)
                     {
                         let text = &c.texts[p_idx];
-                        for (line_idx, (line, &baseline)) in
-                            laid.lines.iter().zip(&line_baselines).enumerate()
+                        for ((line_idx, line), &baseline) in laid
+                            .lines
+                            .iter()
+                            .enumerate()
+                            .skip(first_line)
+                            .zip(&line_baselines)
                         {
                             let range = line.byte_range.start.min(text.len())
                                 ..line.byte_range.end.min(text.len());
@@ -1020,6 +1104,7 @@ pub(super) fn emit_footnote_pools(
                     }
                     emit_footnote_paragraph(
                         laid,
+                        first_line,
                         &ttf_faces,
                         font_table,
                         &picker,
@@ -1042,6 +1127,7 @@ pub(super) fn emit_footnote_pools(
 /// overset and not drawn.
 pub(super) fn emit_footnote_paragraph(
     laid: &paged_text::LaidOutParagraph,
+    first_line: usize,
     ttf_faces: &HashMap<u32, ttf_parser::Face>,
     // Only to unmix a glyph's outline id back into a `FontRef` — see
     // `FontTable::font_ref`. Without it a footnote's text is the one
@@ -1052,7 +1138,7 @@ pub(super) fn emit_footnote_paragraph(
     baselines_pt: &[f32],
     list: &mut DisplayList,
 ) {
-    for (line, &baseline_pt) in laid.lines.iter().zip(baselines_pt) {
+    for (line, &baseline_pt) in laid.lines.iter().skip(first_line).zip(baselines_pt) {
         // The glyphs are positioned from the paragraph's top; move that
         // top so this line's baseline lands where the area puts it.
         let frame_origin_pt = (
@@ -1092,5 +1178,236 @@ pub(super) fn emit_footnote_paragraph(
             }
             start = end;
         }
+    }
+}
+
+/// Where a story's notes go on its frame chain, and the room each chain
+/// frame gives them (ADR 161). Asked of InDesign 20.0.1, `footnote-split`
+/// and `footnote-nosplit`:
+///
+/// * a frame's notes stand at its foot in reference order, and each must
+///   fit below its own reference line (plus `Spacer`); body text stops
+///   above them;
+/// * at the first note that does not fit, the frame ends at that note's
+///   reference line. The note keeps the whole lines that fit there and
+///   continues at the head of the next column's or frame's area, before
+///   that area's own notes;
+/// * with `NoSplitting`, the reference line moves to the next column or
+///   frame instead, unless it is its column's first line.
+pub(super) struct FootnoteFlow {
+    /// Per chain frame, the room its notes take (1/64 pt).
+    pub reserve_64: Vec<i32>,
+    /// Per chain frame, the room that keeps a reference line it moved on
+    /// out of it (1/64 pt; 0 when it moved none). Once the line has
+    /// gone, the frame holds no note to reserve for, so the caller keeps
+    /// this room from pass to pass, or the line would come back.
+    pub hold_64: Vec<i32>,
+    /// The notes split between two areas.
+    pub splits: Vec<FootnoteSplit>,
+}
+
+/// A note that keeps `kept` of its lines in its own area and continues
+/// in the area of chain frame `to` on page `to_page`.
+pub(super) struct FootnoteSplit {
+    page: usize,
+    index: usize,
+    kept: u32,
+    to: usize,
+    to_page: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_footnote_flow(
+    pages: &[BuiltPage],
+    chain: &[&TextFrame],
+    chain_pages: &[usize],
+    story_id: &str,
+    options: &PipelineOptions,
+    document: &Document,
+    font_table: &FontTable,
+    hyphenators: &paged_text::Hyphenators,
+    palette: &Graphic,
+    color_ctx: ColorCtx<'_>,
+) -> FootnoteFlow {
+    let mut flow = FootnoteFlow {
+        reserve_64: vec![0; chain.len()],
+        hold_64: vec![0; chain.len()],
+        splits: Vec::new(),
+    };
+    if options.font.is_none() && !font_table.has_any_face() {
+        return flow;
+    }
+    // The chain's areas in chain order: the columns of a frame whose
+    // notes span share one.
+    struct Area {
+        page: usize,
+        key: (i32, i32, i32, i32),
+        rect: paged_compose::Rect,
+        frames: Vec<usize>,
+        layout: paged_model::FrameFootnotes,
+    }
+    let mut areas: Vec<Area> = Vec::new();
+    for (i, &page) in chain_pages.iter().enumerate().take(chain.len()) {
+        let Some(p) = pages.get(page) else {
+            continue;
+        };
+        let rect = footnote_pool_rect(chain, i, p.spread_origin, document);
+        let key = footnote_frame_key(&rect);
+        match areas.iter_mut().find(|a| a.page == page && a.key == key) {
+            Some(a) => a.frames.push(i),
+            None => areas.push(Area {
+                page,
+                key,
+                rect,
+                frames: vec![i],
+                layout: chain[i].footnotes,
+            }),
+        }
+    }
+    let no_splitting = document.designmap.footnote_options.no_splitting == Some(true);
+    // The lines a split note carries into the next area, and where it is.
+    let mut carry: Vec<f32> = Vec::new();
+    let mut pending: Option<(usize, usize, u32)> = None;
+    for area in &areas {
+        let page = &pages[area.page];
+        if let Some((from_page, index, kept)) = pending.take() {
+            flow.splits.push(FootnoteSplit {
+                page: from_page,
+                index,
+                kept,
+                to: area.frames[0],
+                to_page: area.page,
+            });
+        }
+        let metrics = resolve_footnote_metrics(
+            document,
+            &area.layout,
+            area.rect.w,
+            palette,
+            color_ctx,
+            FOOTNOTE_POINT_SIZE,
+        );
+        let mut notes: Vec<(usize, &EmittedFootnote)> = page
+            .footnotes
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| {
+                f.host_story_id == story_id && footnote_frame_key(&f.pool_rect_pt) == area.key
+            })
+            .collect();
+        notes.sort_by_key(|(_, f)| f.number);
+        let bottom = area.rect.y + area.rect.h;
+        // Continued lines head the area.
+        let mut total: f32 = carry.iter().sum();
+        let mut any = !carry.is_empty();
+        carry.clear();
+        let mut room: Option<f32> = None;
+        let mut moved = false;
+        for &(index, note) in &notes {
+            let Some(c) = compose_footnote_paragraphs(
+                note,
+                document,
+                font_table,
+                hyphenators,
+                page.binding_edge(),
+                area.rect.w,
+                metrics.default_size,
+            ) else {
+                continue;
+            };
+            let advances = c.line_advances();
+            let between = if any { metrics.space_between_pt } else { 0.0 };
+            let floor = note.ref_baseline_pt + metrics.spacer_pt;
+            let whole = total + between + advances.iter().sum::<f32>();
+            if bottom - whole >= floor - 0.01 {
+                total = whole;
+                any = true;
+                continue;
+            }
+            // The first note that does not fit: the lines that do.
+            let mut kept = 0usize;
+            let mut t = total + between;
+            while kept < advances.len() && bottom - (t + advances[kept]) >= floor - 0.01 {
+                t += advances[kept];
+                kept += 1;
+            }
+            // Whether a line of the story stands above the reference line
+            // in its column: a column's first line cannot move on.
+            let column = note.host_frame_rect_pt;
+            let opens_column = !page.story_layout.iter().any(|l| {
+                l.story_id == story_id
+                    && l.cell.is_none()
+                    && l.baseline_y_pt < note.ref_baseline_pt - 0.5
+                    && l.baseline_y_pt > column.y
+                    && l.clusters
+                        .first()
+                        .is_some_and(|c| c.x_pt >= column.x - 0.5 && c.x_pt <= column.x + column.w)
+            });
+            if (no_splitting || kept == 0) && !opens_column {
+                // The reference line moves on: the text area ends just
+                // above its baseline.
+                room = Some(
+                    bottom - note.ref_baseline_pt + 1.0 / paged_text::shape::ADVANCE_PRECISION,
+                );
+                moved = true;
+            } else {
+                // The text ends at the reference line; the rest of the
+                // note continues in the next area.
+                room = Some(bottom - note.ref_baseline_pt);
+                if kept < advances.len() {
+                    carry = advances[kept..].to_vec();
+                    pending = Some((area.page, index, kept as u32));
+                }
+            }
+            break;
+        }
+        let room_pt = room.unwrap_or(if any { total + metrics.spacer_pt } else { 0.0 });
+        let room_64 = (room_pt.max(0.0) * paged_text::shape::ADVANCE_PRECISION).round() as i32;
+        for &f in &area.frames {
+            flow.reserve_64[f] = room_64;
+            if moved {
+                flow.hold_64[f] = room_64;
+            }
+        }
+    }
+    flow
+}
+
+/// Apply a settled [`FootnoteFlow`]: each split note keeps its first
+/// `kept` lines, and a continued copy of it heads the next area.
+pub(super) fn apply_footnote_flow(
+    flow: &FootnoteFlow,
+    pages: &mut [BuiltPage],
+    chain: &[&TextFrame],
+    document: &Document,
+) {
+    for s in &flow.splits {
+        let Some(note) = pages
+            .get(s.page)
+            .and_then(|p| p.footnotes.get(s.index))
+            .cloned()
+        else {
+            continue;
+        };
+        if let Some(n) = pages[s.page].footnotes.get_mut(s.index) {
+            n.end_line = Some(s.kept);
+        }
+        let Some(frame) = chain.get(s.to) else {
+            continue;
+        };
+        let origin = pages[s.to_page].spread_origin;
+        let host = frame_content_rect(frame, origin);
+        let pool = footnote_pool_rect(chain, s.to, origin, document);
+        pages[s.to_page].footnotes.push(EmittedFootnote {
+            host_frame_rect_pt: host,
+            pool_rect_pt: pool,
+            frame_footnotes: frame.footnotes,
+            first_line: s.kept,
+            end_line: None,
+            continued: true,
+            // It heads the area: no reference of its own holds it down.
+            ref_baseline_pt: pool.y,
+            ..note
+        });
     }
 }

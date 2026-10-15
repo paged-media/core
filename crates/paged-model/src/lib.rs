@@ -4295,6 +4295,38 @@ pub struct FootnoteOptions {
     /// columns instead of standing under each (ADR 160). `None`: false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_straddling: Option<bool>,
+    /// `NoSplitting` — a note too tall for the room under its reference
+    /// takes its reference line to the next column or frame instead of
+    /// continuing there (ADR 161). `None`: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_splitting: Option<bool>,
+    /// The rule above a note continued from an earlier column or frame
+    /// (`ContinuingRule*`, ADR 161).
+    #[serde(default, skip_serializing_if = "ContinuingRule::is_unset")]
+    pub continuing_rule: ContinuingRule,
+}
+
+/// `<FootnoteOption ContinuingRule*>`: the rule InDesign draws above a
+/// note continued from an earlier column or frame, in place of the
+/// separator rule (asked of InDesign 20.0.1, `footnote-split`, ADR 161).
+/// Each field is `None` when the document does not say; InDesign's
+/// defaults are on, 1 pt, 288 pt wide, black, no offset or indent.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ContinuingRule {
+    pub on: Option<bool>,
+    pub line_weight: Option<f32>,
+    pub width: Option<f32>,
+    pub offset: Option<f32>,
+    pub left_indent: Option<f32>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+}
+
+impl ContinuingRule {
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ContinuingRule::default()
+    }
 }
 
 /// A text frame's own footnote layout, from `<TextFramePreference>`
