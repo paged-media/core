@@ -199,12 +199,27 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
   vertical justification, an object style's rules are not read, span and split regions draw
   none, and no property path writes them.
+- **Multi-level lists within one story, levels set by paragraph or style.** Levels 1 to 9
+  number, restart and print `^1` … `^9` as InDesign does
+  ([ADR 158](adr/158-how-indesign-numbers-a-multi-level-list.md)), and
+  `paragraphNumberingLevel` / `paragraphNumberingApplyRestartPolicy` set them. A level above 1
+  does not continue across stories or documents, the restart policy is read and written but no
+  path sets it, and `editNumberingList` takes no per-level fields.
 - **A footnote reference that overflows into a new restart scope keeps its composed number.**
   Notes are numbered through each story, restarted by page, spread or section, with their prefix
   and suffix, as InDesign numbers them ([ADR 156](adr/156-how-indesign-numbers-footnotes.md)). A
   reference is labelled when its paragraph is composed, so one whose line then moves to a page
-  that restarts the numbering keeps the earlier number. End-of-story placement, no-splitting,
-  straddling and the continuing rule are not read.
+  that restarts the numbering keeps the earlier number. Notes stand under each column or span
+  the frame as InDesign sets them ([ADR 160](adr/160-footnotes-in-columns.md)); a note too
+  tall for the room under its reference continues in the next column or frame under the
+  continuing rule, or moves its reference line on with `NoSplitting`
+  ([ADR 161](adr/161-a-note-too-tall-for-its-frame.md)). End-of-story placement is not read, and
+  an overset area does not grow its frame.
+- **Page numbers in the Roman edition's thirteen styles only.** Sections, chapters and footnotes
+  format numbers in every style InDesign 20.0.1's Roman edition offers, as it labels them
+  ([ADR 157](adr/157-every-page-numbering-style.md)). Styles only other editions offer
+  (full-width, Hindi, Thai, Farsi) fall back to Arabic, and no rendered fixture covers the
+  Hebrew and Arabic styles: the corpus ships no face with those scripts.
 - **An unresolved table of contents built at render numbers its entries from each story's head
   frame.** A story with no text bound to a TOC style (on its `<Story>` or its frame) is filled from
   the TOC style while the page is built, before layout says where a heading lands. The canvas's

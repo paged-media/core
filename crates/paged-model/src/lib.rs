@@ -345,6 +345,87 @@ impl SpanColumns {
     }
 }
 
+/// A numbered paragraph's place in a multi-level list (`NumberingLevel`,
+/// `NumberingApplyRestartPolicy`, `<NumberingRestartPolicies>`; L-07,
+/// ADR 158). Each field is `None` when the paragraph (or style) does not
+/// say, and cascades like the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ListLevel {
+    /// `NumberingLevel`, 1 to 9; `None` is 1.
+    pub level: Option<u32>,
+    /// `NumberingApplyRestartPolicy`; `None` is true.
+    pub apply_restart: Option<bool>,
+    /// `<NumberingRestartPolicies>`; `None` restarts after any previous
+    /// level.
+    pub restart_policy: Option<RestartPolicy>,
+}
+
+impl ListLevel {
+    /// Fill every unset field from `outer`.
+    pub fn inherit(&mut self, outer: &ListLevel) {
+        self.level = self.level.or(outer.level);
+        self.apply_restart = self.apply_restart.or(outer.apply_restart);
+        self.restart_policy = self.restart_policy.or(outer.restart_policy);
+    }
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ListLevel::default()
+    }
+}
+
+/// `<NumberingRestartPolicies RestartPolicy LowerLevel UpperLevel>`: which
+/// higher levels start a level's count again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestartPolicy {
+    pub kind: RestartPolicyKind,
+    /// `LowerLevel` — the level `SpecificPreviousLevel` names, or the
+    /// first of `RangeOfPreviousLevels`.
+    pub lower: u32,
+    /// `UpperLevel` — the last level of `RangeOfPreviousLevels`.
+    pub upper: u32,
+}
+
+/// `RestartPolicy` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestartPolicyKind {
+    AnyPreviousLevel,
+    SpecificPreviousLevel,
+    RangeOfPreviousLevels,
+}
+
+impl RestartPolicyKind {
+    pub fn from_idml(s: &str) -> Option<Self> {
+        Some(match s {
+            "AnyPreviousLevel" => Self::AnyPreviousLevel,
+            "SpecificPreviousLevel" => Self::SpecificPreviousLevel,
+            "RangeOfPreviousLevels" => Self::RangeOfPreviousLevels,
+            _ => return None,
+        })
+    }
+
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            Self::AnyPreviousLevel => "AnyPreviousLevel",
+            Self::SpecificPreviousLevel => "SpecificPreviousLevel",
+            Self::RangeOfPreviousLevels => "RangeOfPreviousLevels",
+        }
+    }
+}
+
+impl RestartPolicy {
+    /// The higher levels whose paragraphs start `level`'s count again
+    /// when one came after the last paragraph at `level`.
+    pub fn restarting_levels(&self, level: u32) -> std::ops::RangeInclusive<u32> {
+        let below = level.saturating_sub(1);
+        match self.kind {
+            RestartPolicyKind::AnyPreviousLevel => 1..=below,
+            RestartPolicyKind::SpecificPreviousLevel => self.lower..=self.lower.min(below),
+            RestartPolicyKind::RangeOfPreviousLevels => self.lower..=self.upper.min(below),
+        }
+    }
+}
+
 /// How a paragraph sets its lines beyond justification: auto leading,
 /// a lone word on a justified line, the last line's right indent and
 /// balanced ragged lines (`AutoLeading`, `SingleWordJustification`,
@@ -1292,6 +1373,10 @@ pub struct TextFrame {
     /// only when the rules are switched on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_rule: Option<ColumnRule>,
+    /// The frame's own footnote layout (`FootnotesEnableOverrides` and
+    /// its companions on `<TextFramePreference>`, ADR 160).
+    #[serde(default, skip_serializing_if = "FrameFootnotes::is_unset")]
+    pub footnotes: FrameFootnotes,
     /// `ItemLayer` reference. Renderer skips items whose layer is
     /// hidden or non-printable.
     pub item_layer: Option<String>,
@@ -1486,6 +1571,7 @@ impl TextFrame {
             text_wrap: None,
             ignore_wrap: None,
             column_rule: None,
+            footnotes: FrameFootnotes::default(),
             item_layer: None,
             is_anchored: false,
             opacity: None,
@@ -3398,7 +3484,11 @@ fn srgb_to_linear(c: f32) -> f32 {
 // parser). Page-number formatting + the `from_idml`/`as_str` token maps are
 // runtime render vocabulary, so they live with the model.
 // ---------------------------------------------------------------------------
-/// Page-numbering style for a `<Section>` (`PageNumberStyle`).
+/// Page-numbering style for a `<Section>` (`PageNumberStyle`), and the
+/// styles footnote and chapter numbers take. Every value InDesign 20.0.1
+/// (Roman edition) offers, each formatted as it formats it — asked of
+/// InDesign through its DOM for 191 numbers
+/// (`tools/indesign-export/numbering-styles-probe.json`, ADR 157).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NumberingStyle {
     Arabic,
@@ -3406,18 +3496,61 @@ pub enum NumberingStyle {
     LowerRoman,
     UpperAlpha,
     LowerAlpha,
+    /// Kanji digits, one per decimal digit (`二〇二六`).
+    Kanji,
+    /// The Arabic alphabet in its alif-ba-ta order; past 28 a letter
+    /// repeats, joined by ZERO WIDTH NON-JOINER.
+    ArabicAlifBaTah,
+    /// The Arabic alphabet in its abjad order, past 28 repeated likewise.
+    ArabicAbjad,
+    /// Hebrew numerals (טו and טז for 15 and 16, thousands prefixed).
+    HebrewBiblical,
+    /// The Hebrew alphabet with ת for every 22; above 395, א.
+    HebrewNonStandard,
+    /// `01`, `001` and `0001`: Arabic padded to 2, 3 or 4 digits.
+    SingleLeadingZeros,
+    DoubleLeadingZeros,
+    TripleLeadingZeros,
 }
 
 impl NumberingStyle {
-    /// Map an IDML `PageNumberStyle` value. Unknown / unsupported
-    /// styles (Kanji, Katakana, …) fall back to Arabic.
+    /// Map an IDML `PageNumberStyle` value. An unknown style (an edition
+    /// this one does not offer: full-width, Hindi, Thai) falls back to
+    /// Arabic.
     pub fn from_idml(s: &str) -> Self {
         match s {
             "UpperRoman" => NumberingStyle::UpperRoman,
             "LowerRoman" => NumberingStyle::LowerRoman,
             "UpperLetters" => NumberingStyle::UpperAlpha,
             "LowerLetters" => NumberingStyle::LowerAlpha,
+            "Kanji" => NumberingStyle::Kanji,
+            "ArabicAlifBaTah" => NumberingStyle::ArabicAlifBaTah,
+            "ArabicAbjad" => NumberingStyle::ArabicAbjad,
+            "HebrewBiblical" => NumberingStyle::HebrewBiblical,
+            "HebrewNonStandard" => NumberingStyle::HebrewNonStandard,
+            "SingleLeadingZeros" => NumberingStyle::SingleLeadingZeros,
+            "DoubleLeadingZeros" => NumberingStyle::DoubleLeadingZeros,
+            "TripleLeadingZeros" => NumberingStyle::TripleLeadingZeros,
             _ => NumberingStyle::Arabic,
+        }
+    }
+
+    /// The IDML spelling, as InDesign writes it in `PageNumberStyle`.
+    pub fn as_idml(self) -> &'static str {
+        match self {
+            NumberingStyle::Arabic => "Arabic",
+            NumberingStyle::UpperRoman => "UpperRoman",
+            NumberingStyle::LowerRoman => "LowerRoman",
+            NumberingStyle::UpperAlpha => "UpperLetters",
+            NumberingStyle::LowerAlpha => "LowerLetters",
+            NumberingStyle::Kanji => "Kanji",
+            NumberingStyle::ArabicAlifBaTah => "ArabicAlifBaTah",
+            NumberingStyle::ArabicAbjad => "ArabicAbjad",
+            NumberingStyle::HebrewBiblical => "HebrewBiblical",
+            NumberingStyle::HebrewNonStandard => "HebrewNonStandard",
+            NumberingStyle::SingleLeadingZeros => "SingleLeadingZeros",
+            NumberingStyle::DoubleLeadingZeros => "DoubleLeadingZeros",
+            NumberingStyle::TripleLeadingZeros => "TripleLeadingZeros",
         }
     }
 
@@ -3431,33 +3564,124 @@ impl NumberingStyle {
             NumberingStyle::LowerRoman => "lowerRoman",
             NumberingStyle::UpperAlpha => "upperAlpha",
             NumberingStyle::LowerAlpha => "lowerAlpha",
+            NumberingStyle::Kanji => "kanji",
+            NumberingStyle::ArabicAlifBaTah => "arabicAlifBaTah",
+            NumberingStyle::ArabicAbjad => "arabicAbjad",
+            NumberingStyle::HebrewBiblical => "hebrewBiblical",
+            NumberingStyle::HebrewNonStandard => "hebrewNonStandard",
+            NumberingStyle::SingleLeadingZeros => "singleLeadingZeros",
+            NumberingStyle::DoubleLeadingZeros => "doubleLeadingZeros",
+            NumberingStyle::TripleLeadingZeros => "tripleLeadingZeros",
         }
     }
 
-    /// Format a 1-based page number in this style. `0` (or anything
-    /// the roman/alpha encoders can't represent) renders as the bare
-    /// Arabic digits so the label is never empty.
+    /// Format a 1-based number in this style, as InDesign does. `0`
+    /// (which InDesign does not allow) renders as the bare Arabic digits
+    /// so the label is never empty.
     pub fn format(self, n: u32) -> String {
+        if n == 0 {
+            return n.to_string();
+        }
         match self {
             NumberingStyle::Arabic => n.to_string(),
-            NumberingStyle::UpperRoman => to_roman(n).unwrap_or_else(|| n.to_string()),
-            NumberingStyle::LowerRoman => to_roman(n)
-                .map(|r| r.to_lowercase())
-                .unwrap_or_else(|| n.to_string()),
-            NumberingStyle::UpperAlpha => to_alpha(n).unwrap_or_else(|| n.to_string()),
-            NumberingStyle::LowerAlpha => to_alpha(n)
-                .map(|a| a.to_lowercase())
-                .unwrap_or_else(|| n.to_string()),
+            NumberingStyle::UpperRoman => to_roman(n),
+            NumberingStyle::LowerRoman => to_roman(n).to_lowercase(),
+            NumberingStyle::UpperAlpha => to_alpha(n),
+            NumberingStyle::LowerAlpha => to_alpha(n).to_lowercase(),
+            NumberingStyle::Kanji => n
+                .to_string()
+                .chars()
+                .map(|d| KANJI_DIGITS[d.to_digit(10).unwrap_or(0) as usize])
+                .collect(),
+            NumberingStyle::ArabicAlifBaTah => repeated_letter(&ALIF_BA_TAH, n),
+            NumberingStyle::ArabicAbjad => repeated_letter(&ABJAD, n),
+            NumberingStyle::HebrewBiblical => hebrew_numeral(n),
+            NumberingStyle::HebrewNonStandard => hebrew_letters(n),
+            NumberingStyle::SingleLeadingZeros => format!("{n:02}"),
+            NumberingStyle::DoubleLeadingZeros => format!("{n:03}"),
+            NumberingStyle::TripleLeadingZeros => format!("{n:04}"),
         }
     }
 }
 
-/// Classic additive Roman numerals (1..=3999). Returns `None` outside
-/// that range so callers fall back to Arabic.
-fn to_roman(mut n: u32) -> Option<String> {
-    if n == 0 || n > 3999 {
-        return None;
+const KANJI_DIGITS: [char; 10] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/// The Arabic letters in InDesign's alif-ba-ta order.
+const ALIF_BA_TAH: [char; 28] = [
+    'أ', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ',
+    'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي',
+];
+
+/// The Arabic letters in InDesign's abjad order (غ before ظ at the end).
+const ABJAD: [char; 28] = [
+    'أ', 'ب', 'ج', 'د', 'ه', 'و', 'ز', 'ح', 'ط', 'ي', 'ك', 'ل', 'م', 'ن', 'س', 'ع', 'ف', 'ص', 'ق',
+    'ر', 'ش', 'ت', 'ث', 'خ', 'ذ', 'ض', 'غ', 'ظ',
+];
+
+/// The 22 Hebrew letters, without final forms.
+const HEBREW: [char; 22] = [
+    'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק',
+    'ר', 'ש', 'ת',
+];
+
+/// The `(n-1) % len`-th letter, written `(n-1) / len + 1` times and
+/// joined by ZERO WIDTH NON-JOINER (InDesign: 29 → أ‌أ).
+fn repeated_letter(letters: &[char; 28], n: u32) -> String {
+    let i = (n - 1) as usize;
+    let letter = letters[i % letters.len()].to_string();
+    vec![letter; i / letters.len() + 1].join("\u{200C}")
+}
+
+/// Hebrew numerals: hundreds as ת (400) repeated plus ק / ר / ש, tens
+/// and units as letters, 15 and 16 as טו and טז; thousands are the
+/// numeral of `n / 1000` written before the rest (9999 → טתתקצט, 10000 →
+/// י). No geresh.
+fn hebrew_numeral(n: u32) -> String {
+    if n >= 1000 {
+        let rest = n % 1000;
+        let mut out = hebrew_numeral(n / 1000);
+        if rest > 0 {
+            out.push_str(&hebrew_numeral(rest));
+        }
+        return out;
     }
+    let mut out = String::new();
+    let hundreds = n / 100;
+    out.extend(std::iter::repeat_n('ת', (hundreds / 4) as usize));
+    if !hundreds.is_multiple_of(4) {
+        out.push(['ק', 'ר', 'ש'][(hundreds % 4 - 1) as usize]);
+    }
+    match n % 100 {
+        15 => out.push_str("טו"),
+        16 => out.push_str("טז"),
+        r => {
+            if r >= 10 {
+                out.push(['י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'][(r / 10 - 1) as usize]);
+            }
+            if r % 10 > 0 {
+                out.push(HEBREW[(r % 10 - 1) as usize]);
+            }
+        }
+    }
+    out
+}
+
+/// The Hebrew alphabet, ת standing for every 22 before the last letter
+/// (23 → תא, 44 → תת). InDesign prints א for anything above 395.
+fn hebrew_letters(n: u32) -> String {
+    if n > 395 {
+        return "א".to_string();
+    }
+    let i = (n - 1) as usize;
+    let mut out: String = std::iter::repeat_n('ת', i / HEBREW.len()).collect();
+    out.push(HEBREW[i % HEBREW.len()]);
+    out
+}
+
+/// Roman numerals as InDesign writes them: up to 4999 with as many M as
+/// thousands (4000 → MMMM), above it the thousands in Roman followed by
+/// M (5001 → VMI, 10000 → XM).
+fn to_roman(n: u32) -> String {
     const TABLE: [(u32, &str); 13] = [
         (1000, "M"),
         (900, "CM"),
@@ -3473,22 +3697,25 @@ fn to_roman(mut n: u32) -> Option<String> {
         (4, "IV"),
         (1, "I"),
     ];
-    let mut out = String::new();
+    let thousands = n / 1000;
+    let mut out = if thousands < 5 {
+        "M".repeat(thousands as usize)
+    } else {
+        to_roman(thousands) + "M"
+    };
+    let mut rest = n % 1000;
     for (value, sym) in TABLE {
-        while n >= value {
+        while rest >= value {
             out.push_str(sym);
-            n -= value;
+            rest -= value;
         }
     }
-    Some(out)
+    out
 }
 
-/// Spreadsheet-style alphabetic numbering: 1→A, 26→Z, 27→AA, 28→AB.
-/// `None` for 0.
-fn to_alpha(mut n: u32) -> Option<String> {
-    if n == 0 {
-        return None;
-    }
+/// Spreadsheet-style alphabetic numbering: 1→A, 26→Z, 27→AA, 28→AB
+/// (InDesign: 199 → GQ, 703 → AAA).
+fn to_alpha(mut n: u32) -> String {
     let mut out = Vec::new();
     while n > 0 {
         let rem = ((n - 1) % 26) as u8;
@@ -3496,7 +3723,7 @@ fn to_alpha(mut n: u32) -> Option<String> {
         n = (n - 1) / 26;
     }
     out.reverse();
-    Some(String::from_utf8(out).expect("ascii"))
+    String::from_utf8(out).expect("ascii")
 }
 
 /// IDML `<Section>` definition.
@@ -4064,6 +4291,108 @@ pub struct FootnoteOptions {
     /// `DontRestart`. See [`FootnoteRestart`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub restart_numbering: Option<String>,
+    /// `EnableStraddling` — the notes of a frame with columns span its
+    /// columns instead of standing under each (ADR 160). `None`: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_straddling: Option<bool>,
+    /// `NoSplitting` — a note too tall for the room under its reference
+    /// takes its reference line to the next column or frame instead of
+    /// continuing there (ADR 161). `None`: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_splitting: Option<bool>,
+    /// The rule above a note continued from an earlier column or frame
+    /// (`ContinuingRule*`, ADR 161).
+    #[serde(default, skip_serializing_if = "ContinuingRule::is_unset")]
+    pub continuing_rule: ContinuingRule,
+}
+
+/// `<FootnoteOption ContinuingRule*>`: the rule InDesign draws above a
+/// note continued from an earlier column or frame, in place of the
+/// separator rule (asked of InDesign 20.0.1, `footnote-split`, ADR 161).
+/// Each field is `None` when the document does not say; InDesign's
+/// defaults are on, 1 pt, 288 pt wide, black, no offset or indent.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ContinuingRule {
+    pub on: Option<bool>,
+    pub line_weight: Option<f32>,
+    pub width: Option<f32>,
+    pub offset: Option<f32>,
+    pub left_indent: Option<f32>,
+    pub color: Option<String>,
+    pub tint: Option<f32>,
+}
+
+impl ContinuingRule {
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == ContinuingRule::default()
+    }
+}
+
+/// A text frame's own footnote layout, from `<TextFramePreference>`
+/// (asked of InDesign 20.0.1, `footnote-columns` / `footnote-straddle`,
+/// ADR 160). It applies only with `FootnotesEnableOverrides="true"`; it
+/// then replaces the document's `EnableStraddling`, `SpaceBetween` and
+/// `Spacer`, and what it does not state takes InDesign's frame defaults
+/// (no spanning, 6 pt between notes, 12 pt minimum spacing), not the
+/// document's.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct FrameFootnotes {
+    /// `FootnotesEnableOverrides`.
+    pub enable_overrides: Option<bool>,
+    /// `FootnotesSpanAcrossColumns`.
+    pub span_across_columns: Option<bool>,
+    /// `FootnotesSpaceBetween` (pt).
+    pub space_between: Option<f32>,
+    /// `FootnotesMinimumSpacing` (pt): the least space above the first
+    /// note.
+    pub minimum_spacing: Option<f32>,
+}
+
+impl FrameFootnotes {
+    /// InDesign's frame default for `FootnotesSpaceBetween`.
+    pub const DEFAULT_SPACE_BETWEEN: f32 = 6.0;
+    /// InDesign's frame default for `FootnotesMinimumSpacing`.
+    pub const DEFAULT_MINIMUM_SPACING: f32 = 12.0;
+
+    /// True when no field is set.
+    pub fn is_unset(&self) -> bool {
+        *self == FrameFootnotes::default()
+    }
+
+    /// The frame overrides the document's footnote layout.
+    pub fn overrides(&self) -> bool {
+        self.enable_overrides == Some(true)
+    }
+
+    /// Whether the frame's notes span its columns, given the document's
+    /// `EnableStraddling`.
+    pub fn spans(&self, document: &FootnoteOptions) -> bool {
+        if self.overrides() {
+            self.span_across_columns.unwrap_or(false)
+        } else {
+            document.enable_straddling.unwrap_or(false)
+        }
+    }
+
+    /// The space between notes, given the document's.
+    pub fn space_between(&self, document_pt: f32) -> f32 {
+        if self.overrides() {
+            self.space_between.unwrap_or(Self::DEFAULT_SPACE_BETWEEN)
+        } else {
+            document_pt
+        }
+    }
+
+    /// The least space above the first note, given the document's.
+    pub fn minimum_spacing(&self, document_pt: f32) -> f32 {
+        if self.overrides() {
+            self.minimum_spacing
+                .unwrap_or(Self::DEFAULT_MINIMUM_SPACING)
+        } else {
+            document_pt
+        }
+    }
 }
 
 /// Where footnote numbering starts again (`RestartNumbering`). InDesign
@@ -4149,12 +4478,9 @@ impl FootnoteOptions {
     pub fn label(&self, ordinal: u32) -> String {
         let n = self.start_at.unwrap_or(1).max(1) + ordinal.saturating_sub(1);
         let style = match self.numbering_style.as_deref() {
-            Some("UpperRoman") => NumberingStyle::UpperRoman,
-            Some("LowerRoman") => NumberingStyle::LowerRoman,
-            Some("UpperLetters") => NumberingStyle::UpperAlpha,
-            Some("LowerLetters") => NumberingStyle::LowerAlpha,
             Some("Asterisks") => return "*".repeat(n as usize),
-            _ => NumberingStyle::Arabic,
+            Some(s) => NumberingStyle::from_idml(s),
+            None => NumberingStyle::Arabic,
         };
         style.format(n)
     }
@@ -5014,11 +5340,15 @@ pub struct CharacterStyleDef {
     /// `KentenKind` — emphasis-mark glyph. See
     /// [`CharacterRun::kenten_kind`].
     pub kenten_kind: Option<String>,
-    /// `KentenCharacter` — custom emphasis-mark codepoint when
-    /// `kenten_kind == "Custom"`.
+    /// `KentenCustomCharacter` — the character a `Custom` kenten kind
+    /// prints.
     pub kenten_character: Option<String>,
-    /// `KentenFontSize` — emphasis-mark size as a % of base size.
+    /// `KentenFontSize` — the emphasis marks' size in points; `-1`
+    /// (InDesign's default) is half the base's size.
     pub kenten_font_size: Option<f32>,
+    /// The rest of the ruby and kenten settings ([`MarkSettings`]).
+    #[serde(default)]
+    pub marks: MarkSettings,
     /// Phase 4 typography — IDML `Ligatures="true|false"`. Standard +
     /// contextual OpenType ligatures (`liga`, `clig`). Default (when
     /// None and bottom of cascade) is `true`, matching InDesign's
@@ -5217,6 +5547,9 @@ pub struct ParagraphStyleDef {
     /// Anything else passes through unchanged. `None` falls back
     /// to the IDML default `^#.^t` (e.g. `"1.\t"`).
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` — explicit integer the paragraph's
     /// counter starts at. Overrides any continued count from a
     /// previous paragraph. `None` means "no explicit start"; the
@@ -5568,10 +5901,12 @@ pub struct ResolvedCharacter {
     pub ruby_string: Option<String>,
     /// Cascaded `KentenKind`.
     pub kenten_kind: Option<String>,
-    /// Cascaded `KentenCharacter`.
+    /// Cascaded `KentenCustomCharacter`.
     pub kenten_character: Option<String>,
     /// Cascaded `KentenFontSize`.
     pub kenten_font_size: Option<f32>,
+    /// Cascaded ruby and kenten settings.
+    pub marks: MarkSettings,
     /// Phase 4 typography — cascaded `Ligatures` flag. See
     /// [`CharacterStyleDef::ligatures_on`].
     pub ligatures_on: Option<bool>,
@@ -5634,6 +5969,8 @@ pub struct ResolvedParagraph {
     /// `NumberingExpression` template (`^#`, `^.`, `^t` tokens
     /// plus literal characters). `None` ⇒ renderer default `^#.^t`.
     pub numbering_expression: Option<String>,
+    /// [`ListLevel`], cascaded.
+    pub list_level: ListLevel,
     /// `NumberingStartAt` explicit start integer. See
     /// `ParagraphStyleDef::numbering_start_at`.
     pub numbering_start_at: Option<i32>,
@@ -5967,6 +6304,7 @@ impl ResolvedCharacter {
             self.kenten_character = def.kenten_character.clone();
         }
         self.kenten_font_size = self.kenten_font_size.or(def.kenten_font_size);
+        self.marks.fill_from(&def.marks);
         self.ligatures_on = self.ligatures_on.or(def.ligatures_on);
         if self.kerning_method.is_none() {
             self.kerning_method = def.kerning_method.clone();
@@ -6042,6 +6380,7 @@ impl ResolvedParagraph {
         if self.numbering_expression.is_none() {
             self.numbering_expression = def.numbering_expression.clone();
         }
+        self.list_level.inherit(&def.list_level);
         self.numbering_start_at = self.numbering_start_at.or(def.numbering_start_at);
         self.numbering_continue = self.numbering_continue.or(def.numbering_continue);
         if self.applied_numbering_list.is_none() {
@@ -6301,6 +6640,9 @@ pub struct Paragraph {
     /// `None` ⇒ inherit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub numbering_expression: Option<String>,
+    /// The paragraph's level in a multi-level list (L-07).
+    #[serde(default, skip_serializing_if = "ListLevel::is_unset")]
+    pub list_level: ListLevel,
     /// `NumberingStartAt` local override. InDesign applies it only where
     /// the list starts or `NumberingContinue` is false; mid-list it is
     /// ignored. `None` ⇒ inherit.
@@ -7102,6 +7444,89 @@ impl TableCell {
         Some((c.parse().ok()?, r.parse().ok()?))
     }
 }
+/// Ruby and emphasis-mark (kenten) settings beyond their flag, kind,
+/// text and kenten size, as InDesign spells them on a
+/// `<CharacterStyleRange>` or a `<CharacterStyle>`. Every field is a
+/// cascade slot: `None` inherits, and at the bottom InDesign's defaults
+/// apply (`pipeline::ruby` in paged-renderer says which).
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarkSettings {
+    /// `RubyFontSize` (pt); `-1` is half the base's size.
+    pub ruby_font_size: Option<f32>,
+    /// `RubyXScale` / `RubyYScale` (%).
+    pub ruby_x_scale: Option<f32>,
+    pub ruby_y_scale: Option<f32>,
+    /// `RubyXOffset` / `RubyYOffset` (pt): right and up.
+    pub ruby_x_offset: Option<f32>,
+    pub ruby_y_offset: Option<f32>,
+    /// `RubyPosition`: `AboveRight` or `BelowLeft`.
+    pub ruby_position: Option<String>,
+    /// `RubyAlignment`: `RubyJIS`, `RubyLeft`, `RubyCenter`, `RubyRight`,
+    /// `RubyFullJustify`, `RubyEqualAki` or `Ruby1Aki`.
+    pub ruby_alignment: Option<String>,
+    /// `RubyFont` / `RubyFontStyle` (unset: the base's face).
+    pub ruby_font: Option<String>,
+    pub ruby_font_style: Option<String>,
+    /// `KentenXScale` / `KentenYScale` (%).
+    pub kenten_x_scale: Option<f32>,
+    pub kenten_y_scale: Option<f32>,
+    /// `KentenPlacement` (pt): up.
+    pub kenten_placement: Option<f32>,
+    /// `KentenPosition`: `AboveRight` or `BelowLeft`.
+    pub kenten_position: Option<String>,
+    /// `KentenAlignment`: `AlignKentenCenter` or `AlignKentenLeft`.
+    pub kenten_alignment: Option<String>,
+    /// `KentenFont` / `KentenFontStyle`: the face a `Custom` mark prints
+    /// in (unset: the base's).
+    pub kenten_font: Option<String>,
+    pub kenten_font_style: Option<String>,
+}
+
+impl MarkSettings {
+    /// Take every setting this one leaves unset from `below`.
+    pub fn fill_from(&mut self, below: &MarkSettings) {
+        fn fill<T: Clone>(slot: &mut Option<T>, below: &Option<T>) {
+            if slot.is_none() {
+                slot.clone_from(below);
+            }
+        }
+        let MarkSettings {
+            ruby_font_size,
+            ruby_x_scale,
+            ruby_y_scale,
+            ruby_x_offset,
+            ruby_y_offset,
+            ruby_position,
+            ruby_alignment,
+            ruby_font,
+            ruby_font_style,
+            kenten_x_scale,
+            kenten_y_scale,
+            kenten_placement,
+            kenten_position,
+            kenten_alignment,
+            kenten_font,
+            kenten_font_style,
+        } = below;
+        fill(&mut self.ruby_font_size, ruby_font_size);
+        fill(&mut self.ruby_x_scale, ruby_x_scale);
+        fill(&mut self.ruby_y_scale, ruby_y_scale);
+        fill(&mut self.ruby_x_offset, ruby_x_offset);
+        fill(&mut self.ruby_y_offset, ruby_y_offset);
+        fill(&mut self.ruby_position, ruby_position);
+        fill(&mut self.ruby_alignment, ruby_alignment);
+        fill(&mut self.ruby_font, ruby_font);
+        fill(&mut self.ruby_font_style, ruby_font_style);
+        fill(&mut self.kenten_x_scale, kenten_x_scale);
+        fill(&mut self.kenten_y_scale, kenten_y_scale);
+        fill(&mut self.kenten_placement, kenten_placement);
+        fill(&mut self.kenten_position, kenten_position);
+        fill(&mut self.kenten_alignment, kenten_alignment);
+        fill(&mut self.kenten_font, kenten_font);
+        fill(&mut self.kenten_font_style, kenten_font_style);
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CharacterRun {
     pub character_style: Option<String>,
@@ -7166,22 +7591,24 @@ pub struct CharacterRun {
     /// modelled here (we treat absence == Auto).
     pub leading: Option<f32>,
     /// `RubyFlag` — when `true`, this run carries ruby annotation
-    /// (small phonetic-guide text) above / beside the base run. The
-    /// parser captures the flag; full ruby layout (positioning the
-    /// annotation text, sizing it as a fraction of the base, etc.)
-    /// is queued. See docs/plan.md Tier 4 — CJK Stage 4.
+    /// (small phonetic-guide text) above / beside the base run, which
+    /// the renderer sets under a Japanese composer (`pipeline::ruby`).
     pub ruby_flag: Option<bool>,
-    /// `RubyType` — `PerCharacter` / `GroupRuby`. Parser-only today.
+    /// `RubyType` — `PerCharacterRuby` / `GroupRuby`.
     pub ruby_type: Option<String>,
     /// `RubyString` — the ruby annotation text itself.
     pub ruby_string: Option<String>,
-    /// `KentenKind` — the emphasis-mark glyph for this run.
-    /// Parser-only — emphasis-mark rendering is queued (Tier 4 Stage 4).
+    /// `KentenKind` — the emphasis-mark kind for this run
+    /// (`KentenSesameDot`, …, `Custom`).
     pub kenten_kind: Option<String>,
-    /// `KentenCharacter` — codepoint to stamp when `kenten_kind == "Custom"`.
+    /// `KentenCustomCharacter` — the character a `Custom` kind prints.
     pub kenten_character: Option<String>,
-    /// `KentenFontSize` — emphasis-mark glyph size as a percentage.
+    /// `KentenFontSize` — the emphasis marks' size in points; `-1`
+    /// (InDesign's default) is half the base's size.
     pub kenten_font_size: Option<f32>,
+    /// The rest of the ruby and kenten settings ([`MarkSettings`]).
+    #[serde(default)]
+    pub marks: MarkSettings,
     /// `OverprintFill="true"` on the `<CharacterStyleRange>`. None ⇒
     /// inherit from the applied character / paragraph style cascade.
     /// Drives the renderer's Stage 3 darken composite when true.
@@ -8147,5 +8574,49 @@ mod anchor_offset_tests {
             "2",
             "a style the engine does not spell prints Arabic"
         );
+    }
+}
+
+#[cfg(test)]
+mod numbering_style_tests {
+    use super::NumberingStyle;
+
+    /// `UPPER_ROMAN` (InDesign's DOM enumeration) → `UpperRoman` (its
+    /// IDML spelling).
+    fn idml_name(dom: &str) -> String {
+        dom.split('_')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_string() + &c.as_str().to_lowercase())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Every number InDesign 20.0.1 was asked to label, in every style it
+    /// offers, formats as it labelled it (ADR 157).
+    #[test]
+    fn every_style_formats_as_indesign_labels_it() {
+        let probe: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tools/indesign-export/numbering-styles-probe.json"
+        ))
+        .expect("probe json");
+        let pages = probe["pages"].as_array().expect("pages");
+        assert!(pages.len() > 150, "{}", pages.len());
+        let mut misses = Vec::new();
+        for page in pages {
+            let dom = page["style"].as_str().expect("style");
+            let n = page["start"].as_u64().expect("start") as u32;
+            let label = page["label"].as_str().expect("label");
+            let idml = idml_name(dom);
+            let style = NumberingStyle::from_idml(&idml);
+            assert_eq!(style.as_idml(), idml, "{dom} has its own style");
+            let got = style.format(n);
+            if got != label {
+                misses.push(format!("{dom} {n}: {got:?} != {label:?}"));
+            }
+        }
+        assert!(misses.is_empty(), "{misses:#?}");
     }
 }

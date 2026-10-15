@@ -159,3 +159,8 @@ take the InDesign GUI for a few seconds and share the lock
   the reference point on its box) and from groups. A placed image selected
   on its own sits at its frame's angle plus its own (30° + 15° = 45°) and
   scales along those axes. Answers in `scale-frame-probe.json`.
+- `ruby-kenten-options-probe`: what each ruby and kenten setting does —
+  size, horizontal and vertical scale, offsets (up, above or below the
+  line), `BelowLeft`, the seven `RubyAlignment`s, `AlignKentenLeft`, and a
+  custom mark's character and font. Read from InDesign's PDF; answers in
+  `ruby-kenten-options-probe.json`.

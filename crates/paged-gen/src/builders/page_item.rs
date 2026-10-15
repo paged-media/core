@@ -611,6 +611,10 @@ pub struct TextFramePref {
     /// Column rules between the frame's columns, in InDesign's
     /// `ColumnRule*` attributes. `None` ⇒ omit (no rules).
     pub column_rule: Option<ColumnRulePref>,
+    /// The frame's own footnote layout: `Some(span)` writes
+    /// `FootnotesEnableOverrides="true"` and `FootnotesSpanAcrossColumns`.
+    /// `None` ⇒ omit (the document's `FootnoteOption` applies).
+    pub footnotes_span_across_columns: Option<bool>,
 }
 
 /// A text frame's column rules (`ColumnRuleOverride="true"` and its
@@ -1260,6 +1264,13 @@ impl Rect {
             }
             if let Some(iw) = tfp.ignore_wrap {
                 tfa.push(("IgnoreWrap", if iw { "true" } else { "false" }));
+            }
+            if let Some(span) = tfp.footnotes_span_across_columns {
+                tfa.push(("FootnotesEnableOverrides", "true"));
+                tfa.push((
+                    "FootnotesSpanAcrossColumns",
+                    if span { "true" } else { "false" },
+                ));
             }
             let rule_numbers: Vec<String>;
             if let Some(cr) = tfp.column_rule {

@@ -497,14 +497,15 @@ fn paged_inspect_story_range_returns_character_entries() {
     // applied-style paths + W0.2 paragraph formatting paths (13) +
     // ADR 028 keep / start paths (4) + span / split columns paths (6)
     // + list-marker override paths (6) + the composer (1) + the line
-    // setting (4) and no-break (1) of ADR 153 = 59 entries.
-    assert!(entries_line.contains("59"), "got: {entries_line}");
+    // setting (4) and no-break (1) of ADR 153 + the list level (2) of
+    // ADR 158 = 61 entries.
+    assert!(entries_line.contains("61"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 59, "got: {:?}", path_lines);
+    assert_eq!(path_lines.len(), 61, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
@@ -559,6 +560,8 @@ fn paged_inspect_story_range_returns_character_entries() {
         "paragraphSingleWordJustification",
         "paragraphLastLineIndent",
         "paragraphBalanceRaggedLines",
+        "paragraphNumberingLevel",
+        "paragraphNumberingApplyRestartPolicy",
         "paragraphRuleAbove",
         "paragraphRuleBelow",
         "paragraphTabStops",

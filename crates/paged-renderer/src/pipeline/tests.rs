@@ -303,6 +303,76 @@ fn attrs(
     }
 }
 
+/// A paragraph on the `numbering-multilevel` list: its level, format,
+/// expression and whether its restart policy applies.
+fn level_attrs(
+    level: u32,
+    format: &str,
+    expr: &str,
+    restart: bool,
+) -> paged_scene::ResolvedParagraphAttrs {
+    paged_scene::ResolvedParagraphAttrs {
+        bullets_list_type: Some("NumberedList".to_string()),
+        numbering_format: Some(format.to_string()),
+        numbering_expression: Some(expr.to_string()),
+        numbering_continue: Some(true),
+        list_level: paged_model::ListLevel {
+            level: Some(level),
+            apply_restart: Some(restart),
+            restart_policy: (level > 1).then_some(paged_model::RestartPolicy {
+                kind: paged_model::RestartPolicyKind::AnyPreviousLevel,
+                lower: 0,
+                upper: 0,
+            }),
+        },
+        ..Default::default()
+    }
+}
+
+/// `numbering-multilevel`, as InDesign 20.0.1 numbered it (L-07,
+/// ADR 158): a level starts again only when a higher level came after
+/// its own last paragraph, a higher level never resets the lower ones
+/// (the point under chapter two prints the old section's `c`), `^n`
+/// prints level n in the format of its last paragraph, and a level whose
+/// restart policy is off goes on counting.
+#[test]
+fn multilevel_list_numbers_as_indesign_does() {
+    let l1 = level_attrs(1, "1, 2, 3, 4...", "^1.^t", true);
+    let l2 = level_attrs(2, "a, b, c, d...", "^1.^2.^t", true);
+    let l3 = level_attrs(3, "i, ii, iii, iv...", "^1.^2.^3.^t", true);
+    let keep = level_attrs(2, "1, 2, 3, 4...", "^1-^2^t", false);
+    let paragraphs = [
+        (&l1, "1."),
+        (&l2, "1.a."),
+        (&l2, "1.b."),
+        (&l3, "1.b.i."),
+        (&l3, "1.b.ii."),
+        (&l2, "1.c."),
+        (&l3, "1.c.i."),
+        (&l1, "2."),
+        (&l3, "2.c.i."),
+        (&l2, "2.a."),
+        (&l1, "3."),
+        (&keep, "3-2"),
+        (&keep, "3-3"),
+        (&l1, "4."),
+        (&keep, "4-4"),
+        (&l2, "4.e."),
+    ];
+    let (mut counter, mut prev, mut levels) = (0, false, numbering::ListLevels::default());
+    let got: Vec<String> = paragraphs
+        .iter()
+        .map(|(attrs, _)| {
+            list_prefix_with_levels(attrs, &mut counter, &mut prev, None, &mut levels)
+                .unwrap()
+                .trim_end_matches('\t')
+                .to_string()
+        })
+        .collect();
+    let want: Vec<&str> = paragraphs.iter().map(|(_, n)| *n).collect();
+    assert_eq!(got, want);
+}
+
 #[test]
 fn list_prefix_builds_bullet_plus_separator() {
     let mut counter = 0;

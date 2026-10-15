@@ -45,11 +45,88 @@
 /// continue-across-stories list applies). `NumberingContinue="false"`
 /// still wins over the seed — an explicit restart is honoured even for
 /// a continued list.
+#[cfg(test)]
 pub(super) fn list_prefix(
     p: &paged_scene::ResolvedParagraphAttrs,
     counter: &mut u32,
     prev_was_numbered: &mut bool,
     cross_story_seed: Option<u32>,
+) -> Option<String> {
+    list_prefix_with_levels(
+        p,
+        counter,
+        prev_was_numbered,
+        cross_story_seed,
+        &mut ListLevels::default(),
+    )
+}
+
+/// The counts of a multi-level list through one story (L-07, ADR 158):
+/// per level, its number, the format of the paragraph that last set it,
+/// and when that paragraph came.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ListLevels {
+    numbers: [u32; 10],
+    formats: [Option<String>; 10],
+    /// The order (from 1) of each level's last numbered paragraph; 0 for
+    /// a level not numbered yet.
+    last: [u64; 10],
+    seq: u64,
+}
+
+impl ListLevels {
+    /// Number a paragraph at `level` (2 to 9) as InDesign does
+    /// (`numbering-multilevel`): the level's count starts again at
+    /// `start` when it has none yet, or when its restart policy is on and
+    /// a paragraph at one of the levels the policy names came after the
+    /// level's last; otherwise it goes on by one. A higher level does
+    /// not reset the lower ones: a level-3 point under a new chapter with
+    /// no section yet prints the old section's letter.
+    fn number(
+        &mut self,
+        level: usize,
+        start: u32,
+        restart: Option<paged_model::RestartPolicy>,
+    ) -> u32 {
+        let last = self.last[level];
+        let restarts = last == 0
+            || restart.is_some_and(|policy| {
+                policy
+                    .restarting_levels(level as u32)
+                    .any(|k| self.last.get(k as usize).is_some_and(|&t| t > last))
+            });
+        self.numbers[level] = if restarts {
+            start
+        } else {
+            self.numbers[level] + 1
+        };
+        self.numbers[level]
+    }
+
+    /// Record level `level`'s paragraph: its number and format.
+    fn note(&mut self, level: usize, number: u32, format: Option<&str>) {
+        self.seq += 1;
+        self.numbers[level] = number;
+        self.formats[level] = format.map(str::to_string);
+        self.last[level] = self.seq;
+    }
+
+    /// `^k`: level `k`'s number in the format of the paragraph that last
+    /// set it.
+    fn formatted(&self, k: usize) -> String {
+        format_number(self.numbers[k], self.formats[k].as_deref())
+    }
+}
+
+/// [`list_prefix`] with the story's multi-level counts: a paragraph's
+/// `NumberingLevel` above 1 numbers on its own level, and the expression's
+/// `^1` … `^9` print each level's number.
+pub(super) fn list_prefix_with_levels(
+    p: &paged_scene::ResolvedParagraphAttrs,
+    counter: &mut u32,
+    prev_was_numbered: &mut bool,
+    cross_story_seed: Option<u32>,
+    levels: &mut ListLevels,
 ) -> Option<String> {
     match p.bullets_list_type.as_deref() {
         Some("BulletList") => {
@@ -94,6 +171,28 @@ pub(super) fn list_prefix(
             // except that `NumberingContinue="true"` resumes a count a
             // non-list paragraph interrupted, and a ContinueNumbersAcrossStories
             // list (W1.22) resumes the document-level ledger.
+            let level = p.list_level.level.unwrap_or(1).clamp(1, 9) as usize;
+            if level > 1 {
+                let start = p.numbering_start_at.unwrap_or(1).max(1) as u32;
+                let restart = (p.list_level.apply_restart != Some(false)).then(|| {
+                    p.list_level
+                        .restart_policy
+                        .unwrap_or(paged_model::RestartPolicy {
+                            kind: paged_model::RestartPolicyKind::AnyPreviousLevel,
+                            lower: 0,
+                            upper: 0,
+                        })
+                });
+                let n = levels.number(level, start, restart);
+                levels.note(level, n, p.numbering_format.as_deref());
+                *prev_was_numbered = true;
+                let expr = p.numbering_expression.as_deref().unwrap_or("^#.^t");
+                return Some(substitute_numbering_expression_levels(
+                    expr,
+                    &levels.formatted(level),
+                    levels,
+                ));
+            }
             let restart_at = || (p.numbering_start_at.unwrap_or(1) - 1).max(0) as u32;
             if p.numbering_continue == Some(false) {
                 *counter = restart_at();
@@ -107,13 +206,16 @@ pub(super) fn list_prefix(
             }
             *counter = counter.checked_add(1).unwrap_or(1);
             *prev_was_numbered = true;
+            levels.note(1, *counter, p.numbering_format.as_deref());
             let formatted = format_number(*counter, p.numbering_format.as_deref());
             // IDML default expression is `^#.^t` — `<n>` + period +
             // tab. The tab snaps via `apply_tab_stops` to the first
             // stop past the number: an explicit one, the hanging left
             // indent, else the 36 pt default grid.
             let expr = p.numbering_expression.as_deref().unwrap_or("^#.^t");
-            Some(substitute_numbering_expression(expr, &formatted))
+            Some(substitute_numbering_expression_levels(
+                expr, &formatted, levels,
+            ))
         }
         _ => {
             // NoList / absent. Like BulletList, don't reset the
@@ -178,7 +280,18 @@ pub(super) fn marker_run_attrs(
 /// IDML escapes a literal caret as `^^` (a doubled caret); decode
 /// that so styles that want a literal `^` in their template don't
 /// accidentally trigger token replacement.
+#[cfg(test)]
 pub(super) fn substitute_numbering_expression(expr: &str, formatted_counter: &str) -> String {
+    substitute_numbering_expression_levels(expr, formatted_counter, &ListLevels::default())
+}
+
+/// [`substitute_numbering_expression`], with `^1` … `^9` printing each
+/// level's number in the format of the paragraph that last set it.
+fn substitute_numbering_expression_levels(
+    expr: &str,
+    formatted_counter: &str,
+    levels: &ListLevels,
+) -> String {
     let mut out = String::with_capacity(expr.len() + formatted_counter.len());
     let mut chars = expr.chars().peekable();
     while let Some(c) = chars.next() {
@@ -199,6 +312,10 @@ pub(super) fn substitute_numbering_expression(expr: &str, formatted_counter: &st
                 Some('^') => {
                     chars.next();
                     out.push('^');
+                }
+                Some(d @ '1'..='9') => {
+                    chars.next();
+                    out.push_str(&levels.formatted(d as usize - '0' as usize));
                 }
                 _ => out.push(c),
             }

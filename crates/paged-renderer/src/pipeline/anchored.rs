@@ -1223,6 +1223,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         text_wrap: None,
         ignore_wrap: None,
         column_rule: None,
+        footnotes: Default::default(),
         item_layer: None,
         is_anchored: true,
         opacity: None,

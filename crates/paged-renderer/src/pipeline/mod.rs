@@ -140,7 +140,9 @@ use image_decode::decode_image_bytes_with_target_max;
 use metrics::map_tab_alignment;
 pub use metrics::*;
 pub use nested_styles::*;
-use numbering::{bullet_marker_character_style, list_prefix, marker_run_attrs};
+#[cfg(test)]
+use numbering::list_prefix;
+use numbering::{bullet_marker_character_style, list_prefix_with_levels, marker_run_attrs};
 #[cfg(test)]
 use numbering::{format_number, substitute_numbering_expression};
 pub use resume::{EditSpan, StoryResume, StoryResumeStore};
@@ -828,6 +830,21 @@ pub struct EmittedFootnote {
     /// capture time. The footnote-pool emit pass uses this to know
     /// where to lay out the body text at the bottom of the frame.
     pub host_frame_rect_pt: Rect,
+    /// Page-local pt rect the note's area is set in: the host column's
+    /// content rect, or the whole frame's when its notes span its
+    /// columns (ADR 160). Notes sharing it share one area.
+    pub pool_rect_pt: Rect,
+    /// The host frame's own footnote layout (ADR 160).
+    pub frame_footnotes: paged_model::FrameFootnotes,
+    /// The note's lines this area sets, counted over all its paragraphs:
+    /// from `first_line`, up to `end_line` (`None`: to its last). A note
+    /// too tall for the room under its reference keeps the lines that fit
+    /// and continues in the next column or frame's area (ADR 161).
+    pub first_line: u32,
+    pub end_line: Option<u32>,
+    /// The entry continues a note from an earlier column or frame: it
+    /// heads its area, under the continuing rule (ADR 161).
+    pub continued: bool,
     /// Page-local baseline of the line holding the note's reference: the
     /// pool never rises above it (see `emit_footnote_pools`).
     pub ref_baseline_pt: f32,

@@ -85,6 +85,10 @@ is not written yet.
 | [154](154-a-placed-pdf-is-drawn-from-its-own-operations.md) | A placed PDF is drawn from its own drawing operations | Accepted 2026-10-14 |
 | [155](155-column-rules.md) | Column rules: where InDesign draws the rule between two columns | Accepted 2026-10-14 |
 | [156](156-how-indesign-numbers-footnotes.md) | How InDesign numbers footnotes: per story, restarted by page, spread or section | Accepted 2026-10-15 |
+| [157](157-every-page-numbering-style.md) | Every page-numbering style InDesign offers, formatted as InDesign formats it | Accepted 2026-10-15 |
+| [158](158-how-indesign-numbers-a-multi-level-list.md) | How InDesign numbers a multi-level list | Accepted 2026-10-15 |
+| [160](160-footnotes-in-columns.md) | Footnotes in a frame with columns: under each column, or across the frame | Accepted 2026-10-15 |
+| [161](161-a-note-too-tall-for-its-frame.md) | A note too tall for its frame: continued in the next, or its reference moved on | Accepted 2026-10-15 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
