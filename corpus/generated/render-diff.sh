@@ -1,3 +1,4 @@
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 #!/usr/bin/env bash
 # corpus/generated/render-diff.sh — the fidelity ENGINE.
 #
@@ -236,7 +237,7 @@ shopt -s nullglob
 
 if [ "$HAVE_PDF" -eq 1 ]; then
     echo "==> per-page ΔE diff"
-    DIFF="$ROOT/target/release/paged-diff"
+    DIFF="$TARGET/release/paged-diff"
     [ -x "$DIFF" ] || (cd "$ROOT" && cargo build -q --release -p paged-fidelity --bin paged-diff)
 
     echo "[" > "$REPORT"

@@ -34,6 +34,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 GENERATED_DIR="$ROOT/corpus/generated"
 THRESHOLDS="$GENERATED_DIR/fidelity-thresholds.json"
 ENGINE="$ROOT/corpus/generated/render-diff.sh"
@@ -96,7 +97,7 @@ for fixture in "${FIXTURES[@]}"; do
 
     echo
     echo "==> [$fixture] regenerate IDML"
-    "$ROOT/target/release/paged-gen" emit --sample "$fixture" --out "$GENERATED_DIR" >/dev/null
+    "$TARGET/release/paged-gen" emit --sample "$fixture" --out "$GENERATED_DIR" >/dev/null
 
     fixture_out="$GATE_OUT/$fixture"
     mkdir -p "$fixture_out"

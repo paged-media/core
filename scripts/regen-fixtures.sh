@@ -21,5 +21,5 @@
 set -euo pipefail
 
 cargo build --release --bin paged-gen
-./target/release/paged-gen emit-all >/dev/null
+"${CARGO_TARGET_DIR:-target}/release/paged-gen" emit-all >/dev/null
 echo "regen-fixtures: emitted every paged-gen sample into corpus/generated/"

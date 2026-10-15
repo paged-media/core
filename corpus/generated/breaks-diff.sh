@@ -23,8 +23,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-GEN="$ROOT/target/release/paged-gen"
-INSPECT="$ROOT/target/release/paged-inspect"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
+GEN="$TARGET/release/paged-gen"
+INSPECT="$TARGET/release/paged-inspect"
 SNAPSHOT="$ROOT/corpus/generated/text-letterspacing.breaks.jsonl"
 IDML="$ROOT/corpus/generated/text-letterspacing.idml"
 OUT="${IDML_BREAKS_DIFF_OUT:-/tmp/text-letterspacing.cand.jsonl}"
