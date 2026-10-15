@@ -1112,6 +1112,58 @@ pub struct MarginPreference {
     pub column_gutter: f32,
 }
 
+/// A text frame's column rules, as `<TextFramePreference>` spells them
+/// (`ColumnRule*`, ADR 155). InDesign draws one rule in each gutter, at
+/// the gutter's centre moved by `offset`, from the text area's top
+/// (moved down by `top_inset`) to the bottom of the frame's deepest line
+/// (moved up by `bottom_inset`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ColumnRule {
+    /// `ColumnRuleStrokeWidth` (pt).
+    pub stroke_width: f32,
+    /// `ColumnRuleStrokeType`, a stroke style reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_type: Option<String>,
+    /// `ColumnRuleStrokeColor`, a swatch reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_color: Option<String>,
+    /// `ColumnRuleStrokeTint` (%); `None` is 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_tint: Option<f32>,
+    /// `ColumnRuleOverprintOverride`.
+    #[serde(default)]
+    pub overprint: bool,
+    /// `ColumnRuleTopInset` (pt).
+    #[serde(default)]
+    pub top_inset: f32,
+    /// `ColumnRuleBottomInset` (pt).
+    #[serde(default)]
+    pub bottom_inset: f32,
+    /// `ColumnRuleInsetChainOverride`: the two insets are linked.
+    #[serde(default)]
+    pub inset_chain: bool,
+    /// `ColumnRuleOffset` (pt), the rule's horizontal offset.
+    #[serde(default)]
+    pub offset: f32,
+}
+
+impl Default for ColumnRule {
+    /// InDesign's own: a 1 pt solid black rule, no insets, no offset.
+    fn default() -> Self {
+        ColumnRule {
+            stroke_width: 1.0,
+            stroke_type: None,
+            stroke_color: None,
+            stroke_tint: None,
+            overprint: false,
+            top_inset: 0.0,
+            bottom_inset: 0.0,
+            inset_chain: true,
+            offset: 0.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextFrame {
     pub self_id: Option<String>,
@@ -1235,6 +1287,11 @@ pub struct TextFrame {
     /// every text wrap. `None` ⇒ false.
     #[serde(default)]
     pub ignore_wrap: Option<bool>,
+    /// Column rules between the frame's columns (`ColumnRuleOverride`
+    /// and its companions on `<TextFramePreference>`, ADR 155). `Some`
+    /// only when the rules are switched on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_rule: Option<ColumnRule>,
     /// `ItemLayer` reference. Renderer skips items whose layer is
     /// hidden or non-printable.
     pub item_layer: Option<String>,
@@ -1428,6 +1485,7 @@ impl TextFrame {
             applied_object_style: None,
             text_wrap: None,
             ignore_wrap: None,
+            column_rule: None,
             item_layer: None,
             is_anchored: false,
             opacity: None,

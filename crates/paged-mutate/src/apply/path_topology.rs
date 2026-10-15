@@ -1470,6 +1470,7 @@ pub(crate) fn new_text_frame(
         applied_object_style: None,
         text_wrap: None,
         ignore_wrap: None,
+        column_rule: None,
         item_layer: None,
         is_anchored: false,
         opacity: None,

@@ -19,6 +19,7 @@ pub mod anchored;
 pub mod annual_base;
 pub mod baseline_grid;
 pub mod blank_paragraphs;
+pub mod column_rules;
 pub mod composer;
 pub mod conditions;
 pub mod corners;
@@ -192,6 +193,7 @@ pub const SAMPLES: &[&str] = &[
     "object-style-options",
     "stroke-styles",
     "paragraph-attrs",
+    "column-rules",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -262,6 +264,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "line-ends" => line_ends::build(),
         "stroke-styles" => stroke_styles::build(),
         "paragraph-attrs" => paragraph_attrs::build(),
+        "column-rules" => column_rules::build(),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -308,7 +311,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            82,
+            83,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

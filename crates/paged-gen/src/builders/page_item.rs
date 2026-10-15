@@ -608,6 +608,31 @@ pub struct TextFramePref {
     /// `IgnoreWrap` — the frame's text ignores every text wrap. `None` ⇒
     /// omit (false).
     pub ignore_wrap: Option<bool>,
+    /// Column rules between the frame's columns, in InDesign's
+    /// `ColumnRule*` attributes. `None` ⇒ omit (no rules).
+    pub column_rule: Option<ColumnRulePref>,
+}
+
+/// A text frame's column rules (`ColumnRuleOverride="true"` and its
+/// companions on `<TextFramePreference>`).
+#[derive(Clone, Copy)]
+pub struct ColumnRulePref {
+    /// `ColumnRuleStrokeWidth` (pt).
+    pub stroke_width: f32,
+    /// `ColumnRuleStrokeType`, a stroke style `Self`.
+    pub stroke_type: &'static str,
+    /// `ColumnRuleStrokeColor`, a swatch `Self`.
+    pub stroke_color: &'static str,
+    /// `ColumnRuleStrokeTint` (%).
+    pub stroke_tint: f32,
+    /// `ColumnRuleTopInset` (pt).
+    pub top_inset: f32,
+    /// `ColumnRuleBottomInset` (pt).
+    pub bottom_inset: f32,
+    /// `ColumnRuleInsetChainOverride`: the two insets are linked.
+    pub inset_chain: bool,
+    /// `ColumnRuleOffset` (pt), the rule's horizontal offset.
+    pub offset: f32,
 }
 
 /// `<BaselineFrameGridOption>` payload — a text frame's custom baseline
@@ -1179,6 +1204,32 @@ impl Rect {
             }
             if let Some(iw) = tfp.ignore_wrap {
                 tfa.push(("IgnoreWrap", if iw { "true" } else { "false" }));
+            }
+            let rule_numbers: Vec<String>;
+            if let Some(cr) = tfp.column_rule {
+                rule_numbers = [
+                    cr.stroke_width,
+                    cr.stroke_tint,
+                    cr.top_inset,
+                    cr.bottom_inset,
+                    cr.offset,
+                ]
+                .iter()
+                .map(|v| format_f32(*v))
+                .collect();
+                tfa.push(("ColumnRuleOverride", "true"));
+                tfa.push(("ColumnRuleStrokeWidth", rule_numbers[0].as_str()));
+                tfa.push(("ColumnRuleStrokeType", cr.stroke_type));
+                tfa.push(("ColumnRuleStrokeColor", cr.stroke_color));
+                tfa.push(("ColumnRuleStrokeTint", rule_numbers[1].as_str()));
+                tfa.push(("ColumnRuleOverprintOverride", "false"));
+                tfa.push(("ColumnRuleTopInset", rule_numbers[2].as_str()));
+                tfa.push(("ColumnRuleBottomInset", rule_numbers[3].as_str()));
+                tfa.push((
+                    "ColumnRuleInsetChainOverride",
+                    if cr.inset_chain { "true" } else { "false" },
+                ));
+                tfa.push(("ColumnRuleOffset", rule_numbers[4].as_str()));
             }
             // The insets are a typed `<InsetSpacing>` child of
             // `<Properties>`, never an attribute. Measured on InDesign

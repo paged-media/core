@@ -1222,6 +1222,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         applied_object_style: af.applied_object_style.clone(),
         text_wrap: None,
         ignore_wrap: None,
+        column_rule: None,
         item_layer: None,
         is_anchored: true,
         opacity: None,
@@ -1295,6 +1296,7 @@ pub(super) fn emit_anchored_textframe_story<'a>(
         sub.emit_paragraph(paragraph, pages, &mut sub_stats);
     }
     sub.apply_vertical_justification(pages);
+    sub.apply_column_rules(pages);
     sub.apply_blend_groups(pages);
 }
 

@@ -188,6 +188,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   shape; the composer cannot leave a row empty in mid-frame, which that needs
   ([ADR 151](adr/151-which-side-text-wraps-to.md)). A contour from an image uses the frame's path,
   and an object style's `IgnoreWrap` is not read.
+- **Column rules: no vertical justification, object styles or spans.** A frame's rules stand
+  and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
+  vertical justification, an object style's rules are not read, span and split regions draw
+  none, and no property path writes them.
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
 - **An edit made while a script waits splits the script's undo step.** The fold merges only
