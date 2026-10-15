@@ -415,13 +415,15 @@ fn a_corner_handle_on_a_rotated_group_keeps_the_opposite_corner() {
     let before = HandleBox::of(&m, group("g30"));
     let axes = before.axes();
     let (se, nw) = (before.handle("se"), before.handle("nw"));
-    // 160 × 140 → 200 × 175: ×1.25 on both axes.
-    let delta = along(axes, 40.0, 35.0);
+    // 160 × 140 → 200 × 210: ×1.25 along the group's x, ×1.5 along its
+    // y. (A uniform scale is the same in every frame, so it would not
+    // tell the group's axes from the page's.)
+    let delta = along(axes, 40.0, 70.0);
     scale_drag(&mut m, vec![group("g30")], se, nw, delta, PLAIN);
     let after = HandleBox::of(&m, group("g30"));
     let got = after.measure();
     close(got.w, 200.0, 1e-2, "group width");
-    close(got.h, 175.0, 1e-2, "group height");
+    close(got.h, 210.0, 1e-2, "group height");
     close(got.top_edge, -30.0, 1e-2, "rotation unchanged");
     close(got.corner, 90.0, 1e-2, "still a rectangle");
     close_pt(after.handle("nw"), nw, "the opposite corner stays put");
@@ -430,7 +432,7 @@ fn a_corner_handle_on_a_rotated_group_keeps_the_opposite_corner() {
         add(se, delta),
         "the corner follows the pointer",
     );
-    for (id, w, h) in [("ga", 200.0, 75.0), ("gb", 100.0, 50.0)] {
+    for (id, w, h) in [("ga", 200.0, 90.0), ("gb", 100.0, 60.0)] {
         let leaf = HandleBox::of(&m, rect(id)).measure();
         close(leaf.w, w, 1e-2, &format!("{id} width"));
         close(leaf.h, h, 1e-2, &format!("{id} height"));
