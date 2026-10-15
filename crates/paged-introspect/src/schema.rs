@@ -722,6 +722,36 @@ pub const PAGE_NUMBER_STYLES: &[&str] = &[
     "DoubleLeadingZeros",
     "TripleLeadingZeros",
 ];
+/// A footnote's numbering style: every page-number style, and asterisks
+/// (ADR 162).
+pub const FOOTNOTE_NUMBERING_STYLES: &[&str] = &[
+    "Arabic",
+    "UpperRoman",
+    "LowerRoman",
+    "UpperLetters",
+    "LowerLetters",
+    "Asterisks",
+    "Kanji",
+    "ArabicAlifBaTah",
+    "ArabicAbjad",
+    "HebrewBiblical",
+    "HebrewNonStandard",
+    "SingleLeadingZeros",
+    "DoubleLeadingZeros",
+    "TripleLeadingZeros",
+];
+pub const FOOTNOTE_RESTARTS: &[&str] = &[
+    "DontRestart",
+    "PageRestart",
+    "SpreadRestart",
+    "SectionRestart",
+];
+pub const FOOTNOTE_SHOW_PREFIX_SUFFIX: &[&str] = &[
+    "NoPrefixSuffix",
+    "PrefixSuffixReference",
+    "PrefixSuffixText",
+    "PrefixSuffixBoth",
+];
 pub const TEXT_VARIABLE_TYPES: &[&str] = &[
     "CustomTextType",
     "FileNameType",
