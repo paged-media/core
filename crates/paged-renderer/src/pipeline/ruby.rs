@@ -58,17 +58,89 @@ pub(super) struct RubyGroup {
     /// Space set on each side of every base character when the ruby is
     /// wider (1/64 pt); 0 when it fits over the base.
     pub share_64: i32,
+    /// The ruby's size (pt) and its horizontal and vertical scale.
+    pub size: f32,
+    pub x_scale: f32,
+    pub y_scale: f32,
+    /// `RubyXOffset` / `RubyYOffset` (pt): right and up.
+    pub offset: (f32, f32),
+    /// `RubyPosition="BelowLeft"`: under the base.
+    pub below: bool,
+    pub alignment: RubyAlignment,
+}
+
+/// How ruby narrower than its base spreads over it (`RubyAlignment`).
+/// InDesign 20.0.1, かんじ (45 pt) over 60 and 120 pt of base
+/// (`tools/indesign-export/ruby-kenten-probe`):
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RubyAlignment {
+    /// `RubyJIS`, the default: one share of the spare room before the
+    /// first character, two between each two, one after the last.
+    Jis,
+    /// `RubyLeft` / `RubyCenter` / `RubyRight`: set solid, flush left,
+    /// centred or flush right.
+    Left,
+    Center,
+    Right,
+    /// `RubyFullJustify`: the room between the characters only, the ends
+    /// flush (a single character centred).
+    FullJustify,
+    /// `RubyEqualAki`: equal shares at both ends and between.
+    EqualAki,
+    /// `Ruby1Aki`: one ruby em at each end, or half the room when there
+    /// is less, the rest between the characters.
+    OneAki,
+}
+
+impl RubyAlignment {
+    fn from_idml(s: Option<&str>) -> Self {
+        match s {
+            Some("RubyLeft") => Self::Left,
+            Some("RubyCenter") => Self::Center,
+            Some("RubyRight") => Self::Right,
+            Some("RubyFullJustify") => Self::FullJustify,
+            Some("RubyEqualAki") => Self::EqualAki,
+            Some("Ruby1Aki") => Self::OneAki,
+            _ => Self::Jis,
+        }
+    }
+
+    /// Where the ruby's first character starts after `left`, and the room
+    /// between each two, for `spare` room over the base (1/64 pt), `n`
+    /// characters and a ruby em of `em` (1/64 pt).
+    fn spread(self, spare: i32, n: i32, em: i32) -> (i32, i32) {
+        if spare <= 0 {
+            return (0, 0);
+        }
+        let between = |room: i32| if n > 1 { room / (n - 1) } else { 0 };
+        match self {
+            Self::Jis => (spare / (2 * n), spare / n),
+            Self::Left => (0, 0),
+            Self::Center => (spare / 2, 0),
+            Self::Right => (spare, 0),
+            Self::FullJustify if n > 1 => (0, between(spare)),
+            Self::FullJustify => (spare / 2, 0),
+            Self::EqualAki => (spare / (n + 1), spare / (n + 1)),
+            Self::OneAki if n > 1 => {
+                let end = em.min(spare / 2);
+                (end, between(spare - 2 * end))
+            }
+            Self::OneAki => (spare / 2, 0),
+        }
+    }
 }
 
 /// The paragraph's ruby: one group per annotated base (a whole run for
 /// group ruby, one character per part for per-character ruby), each
 /// measured against its base. `runs` are the styled runs as shaped and
 /// `resolved` their attributes, `head_run` of them (a list marker shaped
-/// on its own) ahead of `resolved`.
-pub(super) fn ruby_groups(
+/// on its own) ahead of `resolved`; `ruby_face` gives a styled run's
+/// `RubyFont` where it names one at hand (the base's face otherwise).
+pub(super) fn ruby_groups<'f>(
     runs: &[paged_text::StyledRun],
     resolved: &[paged_scene::ResolvedRunAttrs],
     head_run: usize,
+    ruby_face: impl Fn(usize) -> Option<&'f paged_text::Face<'f>>,
 ) -> Vec<RubyGroup> {
     let mut out = Vec::new();
     let mut at = 0u32;
@@ -110,13 +182,20 @@ pub(super) fn ruby_groups(
             }
         }
         let scale = run.horizontal_scale_pct / 100.0;
+        let marks = &attrs.marks;
+        let pct = |v: Option<f32>| v.filter(|p| *p > 0.0).map_or(1.0, |p| p / 100.0);
+        let size = marks
+            .ruby_font_size
+            .filter(|s| *s > 0.0)
+            .unwrap_or(run.point_size * 0.5);
+        let (x_scale, y_scale) = (pct(marks.ruby_x_scale), pct(marks.ruby_y_scale));
         for (base, base_chars, text) in pieces {
             let base_text = &run.text[(base.start - start) as usize..(base.end - start) as usize];
             let base_w = paged_text::shape_run(run.face, base_text, run.point_size).total_advance
                 as f32
                 * scale;
-            let ruby_w =
-                paged_text::shape_run(run.face, &text, run.point_size * 0.5).total_advance as f32;
+            let face = ruby_face(k).unwrap_or(run.face);
+            let ruby_w = paged_text::shape_run(face, &text, size).total_advance as f32 * x_scale;
             let spare = ruby_w - base_w;
             let share_64 = if spare > 0.0 {
                 (spare / (2 * base_chars) as f32).round() as i32
@@ -128,20 +207,38 @@ pub(super) fn ruby_groups(
                 run: k,
                 text,
                 share_64,
+                size,
+                x_scale,
+                y_scale,
+                offset: (
+                    marks.ruby_x_offset.unwrap_or(0.0),
+                    marks.ruby_y_offset.unwrap_or(0.0),
+                ),
+                below: marks.ruby_position.as_deref() == Some("BelowLeft"),
+                alignment: RubyAlignment::from_idml(marks.ruby_alignment.as_deref()),
             });
         }
     }
     out
 }
 
-/// Draw the ruby of `groups` whose base lies on `line`. `face_of` gives a
-/// styled run's outline face and the font it draws with; `paint_for` the
-/// paint of a base character (ruby takes its base's colour).
+/// The face a ruby or a custom kenten mark prints in: its shaping face,
+/// its outline face and the font it draws with.
+pub(super) type MarkFace<'f> = (
+    &'f paged_text::Face<'f>,
+    &'f ttf_parser::Face<'f>,
+    paged_compose::FontRef,
+);
+
+/// Draw the ruby of `groups` whose base lies on `line`. `em_of` gives the
+/// em box of the font a base glyph is drawn in, `face_of` the face a
+/// styled run's ruby prints in, `paint_for` the paint of a base character
+/// (ruby takes its base's colour).
 pub(super) fn emit_ruby_for_line<'f>(
     line: &paged_text::layout::LaidOutLine,
     groups: &[RubyGroup],
-    runs: &[paged_text::StyledRun],
-    face_of: impl Fn(usize) -> Option<(&'f ttf_parser::Face<'f>, paged_compose::FontRef)>,
+    em_of: impl Fn(u32) -> super::font_table::EmBox,
+    face_of: impl Fn(usize) -> Option<MarkFace<'f>>,
     paint_for: impl Fn(u32) -> Paint,
     frame_origin_pt: (f32, f32),
     list: &mut DisplayList,
@@ -155,59 +252,70 @@ pub(super) fn emit_ruby_for_line<'f>(
         let (Some(first), Some(last)) = (base.first(), base.last()) else {
             continue;
         };
-        let Some((outline, font)) = face_of(group.run) else {
+        let Some((shaping, outline, font)) = face_of(group.run) else {
             continue;
         };
-        let run = &runs[group.run];
         let base_pt = first.point_size.max(1.0);
-        let ruby_pt = base_pt * 0.5;
-        let shaped = paged_text::shape_run(run.face, &group.text, ruby_pt);
+        let ruby_pt = group.size;
+        let shaped = paged_text::shape_run(shaping, &group.text, ruby_pt);
         if shaped.glyphs.is_empty() {
             continue;
         }
+        let sx = group.x_scale;
+        let scaled = |v: i32| (v as f32 * sx).round() as i32;
         // The base's slot, its spacing included.
         let left = first.x - group.share_64;
         let right = last.x - group.share_64 + last.x_advance;
-        // 1:2:1 over a wider base; from the slot's start when the base
-        // was spaced out to the ruby (or the ruby still overruns it).
+        // Spread over a wider base by the alignment; from the slot's
+        // start when the base was spaced out to the ruby (or the ruby
+        // still overruns it).
         let clusters = 1 + shaped
             .glyphs
             .windows(2)
             .filter(|w| w[1].cluster != w[0].cluster)
             .count() as i32;
-        let spare = right - left - shaped.total_advance;
-        let share = if spare > 0 { spare / (2 * clusters) } else { 0 };
-        let mut pen = left + share;
+        let width: i32 = shaped.glyphs.iter().map(|g| scaled(g.x_advance)).sum();
+        let em_64 = (ruby_pt * sx * ADVANCE_PRECISION).round() as i32;
+        let (lead, between) = group
+            .alignment
+            .spread(right - left - width, clusters, em_64);
+        let mut pen = left + lead + (group.offset.0 * ADVANCE_PRECISION).round() as i32;
         let mut positioned = Vec::with_capacity(shaped.glyphs.len());
         for (i, g) in shaped.glyphs.iter().enumerate() {
             if i > 0 && g.cluster != shaped.glyphs[i - 1].cluster {
-                pen += 2 * share;
+                pen += between;
             }
             positioned.push(paged_text::PositionedGlyph {
                 glyph_id: g.glyph_id,
                 cluster: first.cluster,
-                x: pen + g.x_offset,
+                x: pen + scaled(g.x_offset),
                 y: g.y_offset,
-                x_advance: g.x_advance,
+                x_advance: scaled(g.x_advance),
                 font_id: font.outline,
                 point_size: ruby_pt,
                 underline: false,
                 strikethru: false,
                 substituted: false,
-                x_scale: 1.0,
-                y_scale: 1.0,
+                x_scale: sx,
+                y_scale: group.y_scale,
                 skew_deg: 0.0,
                 ch: group
                     .text
                     .get(g.cluster as usize..)
                     .and_then(|s| s.chars().next()),
             });
-            pen += g.x_advance;
+            pen += scaled(g.x_advance);
         }
-        // The ruby's em box stands on the base's.
-        let em = em_box(outline);
+        // The ruby's em box stands on the base's, or hangs from it below;
+        // the offset moves it up either way, and a vertical scale grows
+        // it from its baseline.
+        let (base, em) = (em_of(first.font_id), em_box(outline));
         let baseline_pt = first.y as f32 / ADVANCE_PRECISION;
-        let ruby_baseline = baseline_pt - em.top * base_pt - em.bottom * ruby_pt;
+        let ruby_baseline = if group.below {
+            baseline_pt + base.bottom * base_pt + em.top * ruby_pt
+        } else {
+            baseline_pt - base.top * base_pt - em.bottom * ruby_pt
+        } - group.offset.1;
         let paint = paint_for(first.cluster);
         emit_glyph_slice(
             &positioned,
@@ -391,14 +499,49 @@ fn sesame(p: &mut PathData, scale: f32, reverse: bool) {
     p.segments.push(PathSegment::Close);
 }
 
+/// One character's emphasis mark and where it goes (`KentenKind` and the
+/// other `Kenten*` settings). InDesign 20.0.1
+/// (`tools/indesign-export/ruby-kenten-probe`): `KentenFontSize` and the
+/// scales keep a mark centred on its character (`AlignKentenLeft` puts
+/// its em box on the character's left edge); a vertical scale grows it
+/// up from its baseline; `KentenPlacement` moves it up, above or below
+/// the line; `BelowLeft` hangs its em box from the base's.
+pub(super) struct KentenMark {
+    pub shape: MarkShape,
+    /// The mark's size (pt) and its horizontal and vertical scale.
+    pub size: f32,
+    pub x_scale: f32,
+    pub y_scale: f32,
+    /// `KentenPlacement` (pt): up.
+    pub placement: f32,
+    /// `KentenPosition="BelowLeft"`: under the base.
+    pub below: bool,
+    /// `KentenAlignment="AlignKentenLeft"`.
+    pub left: bool,
+    /// The styled run the character belongs to: its face prints a
+    /// `Custom` mark.
+    pub run: usize,
+}
+
+/// What a mark prints: one of the drawn kinds, or a `Custom` kind's
+/// character in its `KentenFont` (the base's face where it names none),
+/// centred on its advance, its em box on the base's (InDesign: Minion
+/// Pro's "A" over Kozuka Mincho, 29.025 pt up at 30 pt).
+pub(super) enum MarkShape {
+    Drawn(Kenten),
+    Character(char),
+}
+
 /// Draw the emphasis marks over `line`'s characters, one a character.
-/// `mark_of` gives a glyph's mark and its size (pt), `em_top_of` the
-/// em-box top (ems above the baseline) of the font a glyph is drawn in,
-/// `paint_for` the colour of a character (a mark takes its text's).
-pub(super) fn emit_kenten_for_line(
+/// `mark_of` gives a glyph's mark, `em_of` the em box of the font a glyph
+/// is drawn in, `face_of` the face a styled run's custom mark prints in
+/// (its `KentenFont`, else the base's) and `paint_for` the colour of a
+/// character (a mark takes its text's).
+pub(super) fn emit_kenten_for_line<'f>(
     line: &paged_text::layout::LaidOutLine,
-    mark_of: impl Fn(&paged_text::PositionedGlyph) -> Option<(Kenten, f32)>,
-    em_top_of: impl Fn(u32) -> f32,
+    mark_of: impl Fn(&paged_text::PositionedGlyph) -> Option<KentenMark>,
+    em_of: impl Fn(u32) -> super::font_table::EmBox,
+    face_of: impl Fn(usize) -> Option<MarkFace<'f>>,
     paint_for: impl Fn(u32) -> Paint,
     frame_origin_pt: (f32, f32),
     list: &mut DisplayList,
@@ -408,19 +551,102 @@ pub(super) fn emit_kenten_for_line(
         if last_cluster.replace(g.cluster) == Some(g.cluster) {
             continue;
         }
-        let Some((kind, size)) = mark_of(g) else {
+        let Some(mark) = mark_of(g) else {
             continue;
         };
-        // Centred on the character; its em box on the base's.
-        let cx = frame_origin_pt.0 + (g.x as f32 + g.x_advance as f32 * 0.5) / ADVANCE_PRECISION;
-        let cy = frame_origin_pt.1 + g.y as f32 / ADVANCE_PRECISION
-            - em_top_of(g.font_id) * g.point_size
-            - size * 0.5;
-        let (path_id, _) = list.paths.intern(kind.key(), kind.path());
-        list.push(DisplayCommand::FillPath {
-            path_id,
-            paint: paint_for(g.cluster),
-            transform: Transform([size, 0.0, 0.0, size, cx, cy]),
-        });
+        let base = em_of(g.font_id);
+        let baseline = g.y as f32 / ADVANCE_PRECISION;
+        // The mark's em box stands on the base's, or hangs from it below.
+        let (on_top, hang_below) = (
+            baseline - base.top * g.point_size - mark.placement,
+            baseline + base.bottom * g.point_size - mark.placement,
+        );
+        let char_left = g.x as f32 / ADVANCE_PRECISION;
+        let char_centre = char_left + g.x_advance as f32 * 0.5 / ADVANCE_PRECISION;
+        let width = mark.size * mark.x_scale;
+        let paint = paint_for(g.cluster);
+        match mark.shape {
+            MarkShape::Drawn(kind) => {
+                // A drawn mark has KentenGeneric's em box: 0.12 em below
+                // its baseline, its centre 0.38 em above.
+                let mark_baseline = if mark.below {
+                    hang_below + 0.88 * mark.size
+                } else {
+                    on_top - 0.12 * mark.size
+                };
+                let cx = if mark.left {
+                    char_left + width * 0.5
+                } else {
+                    char_centre
+                };
+                let cy = mark_baseline - 0.38 * mark.size * mark.y_scale;
+                let (path_id, _) = list.paths.intern(kind.key(), kind.path());
+                list.push(DisplayCommand::FillPath {
+                    path_id,
+                    paint,
+                    transform: Transform([
+                        width,
+                        0.0,
+                        0.0,
+                        mark.size * mark.y_scale,
+                        frame_origin_pt.0 + cx,
+                        frame_origin_pt.1 + cy,
+                    ]),
+                });
+            }
+            MarkShape::Character(ch) => {
+                let Some((shaping, outline, font)) = face_of(mark.run) else {
+                    continue;
+                };
+                let mut buf = [0u8; 4];
+                let shaped = paged_text::shape_run(shaping, ch.encode_utf8(&mut buf), mark.size);
+                let advance = shaped.total_advance as f32 / ADVANCE_PRECISION * mark.x_scale;
+                let em = em_box(outline);
+                let mark_baseline = if mark.below {
+                    hang_below + em.top * mark.size
+                } else {
+                    on_top - em.bottom * mark.size
+                };
+                let x0 = if mark.left {
+                    char_left
+                } else {
+                    char_centre - advance * 0.5
+                };
+                let mut pen = 0i32;
+                let glyphs: Vec<paged_text::PositionedGlyph> = shaped
+                    .glyphs
+                    .iter()
+                    .map(|sg| {
+                        let x = pen + (sg.x_offset as f32 * mark.x_scale).round() as i32;
+                        pen += (sg.x_advance as f32 * mark.x_scale).round() as i32;
+                        paged_text::PositionedGlyph {
+                            glyph_id: sg.glyph_id,
+                            cluster: g.cluster,
+                            x,
+                            y: sg.y_offset,
+                            x_advance: (sg.x_advance as f32 * mark.x_scale).round() as i32,
+                            font_id: font.outline,
+                            point_size: mark.size,
+                            underline: false,
+                            strikethru: false,
+                            substituted: false,
+                            x_scale: mark.x_scale,
+                            y_scale: mark.y_scale,
+                            skew_deg: 0.0,
+                            ch: Some(ch),
+                        }
+                    })
+                    .collect();
+                emit_glyph_slice(
+                    &glyphs,
+                    font,
+                    mark.size,
+                    |_| paint,
+                    (frame_origin_pt.0 + x0, frame_origin_pt.1 + mark_baseline),
+                    &TtfOutliner::new(outline),
+                    list,
+                );
+            }
+        }
     }
 }

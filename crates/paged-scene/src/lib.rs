@@ -995,6 +995,7 @@ impl ResolvedRunAttrs {
             kenten_kind: run.kenten_kind.clone(),
             kenten_character: run.kenten_character.clone(),
             kenten_font_size: run.kenten_font_size,
+            marks: run.marks.clone(),
             overprint_fill: run.overprint_fill,
             overprint_stroke: run.overprint_stroke,
             ligatures_on: run.ligatures_on,
@@ -1045,6 +1046,7 @@ impl ResolvedRunAttrs {
             kenten_kind,
             kenten_character,
             kenten_font_size,
+            marks,
             overprint_fill,
             overprint_stroke,
             ligatures_on,
@@ -1081,6 +1083,7 @@ impl ResolvedRunAttrs {
         fill(&mut self.kenten_kind, kenten_kind);
         fill(&mut self.kenten_character, kenten_character);
         fill(&mut self.kenten_font_size, kenten_font_size);
+        self.marks.fill_from(marks);
         fill(&mut self.overprint_fill, overprint_fill);
         fill(&mut self.overprint_stroke, overprint_stroke);
         fill(&mut self.ligatures_on, ligatures_on);
@@ -1134,6 +1137,7 @@ impl ResolvedRunAttrs {
             self.kenten_character = c.kenten_character.clone();
         }
         self.kenten_font_size = self.kenten_font_size.or(c.kenten_font_size);
+        self.marks.fill_from(&c.marks);
         self.overprint_fill = self.overprint_fill.or(c.overprint_fill);
         self.overprint_stroke = self.overprint_stroke.or(c.overprint_stroke);
         self.ligatures_on = self.ligatures_on.or(c.ligatures_on);
@@ -1594,6 +1598,8 @@ pub struct ResolvedRunAttrs {
     pub kenten_character: Option<String>,
     /// Cascaded `KentenFontSize` — % of base size.
     pub kenten_font_size: Option<f32>,
+    /// Cascaded ruby and kenten settings beyond the fields above.
+    pub marks: paged_model::MarkSettings,
     /// Cascaded `OverprintFill` flag — `true` means this run's fill
     /// should composite with darken (per-channel `min(top, bottom)`)
     /// instead of knocking out the underlying ink. The renderer's
