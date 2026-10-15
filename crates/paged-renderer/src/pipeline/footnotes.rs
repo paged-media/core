@@ -512,14 +512,20 @@ pub(super) struct FootnoteRuleSpec {
 /// column wide, no extra spacing).
 pub(super) fn resolve_footnote_metrics(
     document: &Document,
+    frame: &paged_model::FrameFootnotes,
     column_width_pt: f32,
     palette: &Graphic,
     color_ctx: ColorCtx<'_>,
     default_size: f32,
 ) -> FootnoteMetrics {
     let fo = &document.designmap.footnote_options;
-    let space_between_pt = fo.space_between.unwrap_or(0.0).max(0.0);
-    let spacer_pt = fo.spacer.unwrap_or(0.0).max(0.0);
+    // A frame that overrides the document's footnote layout brings its
+    // own spacing, InDesign's frame defaults where it states none
+    // (`footnote-columns`: 6 pt between notes, ADR 160).
+    let space_between_pt = frame
+        .space_between(fo.space_between.unwrap_or(0.0))
+        .max(0.0);
+    let spacer_pt = frame.minimum_spacing(fo.spacer.unwrap_or(0.0)).max(0.0);
 
     let rule = if fo.rule_on_effective() {
         // Defaults mirror InDesign's new-document footnote rule: 0.5pt
@@ -598,14 +604,15 @@ pub(super) fn measure_footnote_pools(
             Default::default();
         for fn_ in &page.footnotes {
             by_frame
-                .entry(footnote_frame_key(&fn_.host_frame_rect_pt))
+                .entry(footnote_frame_key(&fn_.pool_rect_pt))
                 .or_default()
                 .push(fn_);
         }
         for (key, group) in by_frame {
-            let column_width_pt = group[0].host_frame_rect_pt.w;
+            let column_width_pt = group[0].pool_rect_pt.w;
             let metrics = resolve_footnote_metrics(
                 document,
+                &group[0].frame_footnotes,
                 column_width_pt,
                 palette,
                 color_ctx,
@@ -640,29 +647,69 @@ pub(super) fn footnote_frame_key(rect: &paged_compose::Rect) -> (i32, i32, i32, 
     )
 }
 
-/// W1.7 — the page index and quantised content-rect key a chain frame
-/// would capture footnotes under, computed with the EXACT formula
-/// [`emit_paragraph_into_chain`] uses (`frame_spread_top_left` minus the
-/// page origin, plus L/T insets; width/height minus L+R / T+B insets).
-/// Lets the reservation pass map a measured pool back to the chain
-/// frame whose text area must shrink. Returns `None` for a frame whose
-/// `self_id` doesn't resolve to a page.
-pub(super) fn footnote_host_key_for_frame(
+/// A chain frame's page-local content rect: `frame_spread_top_left`
+/// minus the page origin, plus the left and top insets; width and height
+/// less both insets of each pair. The capture and the reservation pass
+/// both go through it, so they agree on which pool a frame hosts.
+pub(super) fn frame_content_rect(
     frame: &TextFrame,
-    page_idx: usize,
-    pages: &[BuiltPage],
-) -> (usize, i32, i32, i32, i32) {
+    spread_origin: (f32, f32),
+) -> paged_compose::Rect {
     let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-    let (ox, oy) = pages[page_idx].spread_origin;
+    let (ox, oy) = spread_origin;
     let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-    let frame_w = frame.bounds.width();
-    let frame_h = frame.bounds.height();
-    let rect = paged_compose::Rect {
+    paged_compose::Rect {
         x: sx - ox + insets[1],
         y: sy - oy + insets[0],
-        w: (frame_w - insets[1] - insets[3]).max(0.0),
-        h: (frame_h - insets[0] - insets[2]).max(0.0),
-    };
+        w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
+        h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
+    }
+}
+
+/// Where chain frame `idx`'s notes are set (ADR 160): its own content
+/// rect, or, when its frame spans its notes across columns, the union of
+/// the content rects of every column of that frame. A frame's columns
+/// are its chain entries sharing its `Self` (`expand_column_chain`).
+pub(super) fn footnote_pool_rect(
+    chain: &[&TextFrame],
+    idx: usize,
+    spread_origin: (f32, f32),
+    document: &Document,
+) -> paged_compose::Rect {
+    let frame = chain[idx];
+    let own = frame_content_rect(frame, spread_origin);
+    if !frame.footnotes.spans(&document.designmap.footnote_options) {
+        return own;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (own.x, own.y, own.x + own.w, own.y + own.h);
+    for column in chain.iter().filter(|f| f.self_id == frame.self_id) {
+        let r = frame_content_rect(column, spread_origin);
+        x0 = x0.min(r.x);
+        y0 = y0.min(r.y);
+        x1 = x1.max(r.x + r.w);
+        y1 = y1.max(r.y + r.h);
+    }
+    paged_compose::Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    }
+}
+
+/// W1.7 — the page index and quantised pool key chain frame `idx`
+/// captures footnotes under ([`footnote_pool_rect`]). Lets the
+/// reservation pass map a measured pool back to every chain frame whose
+/// text area must shrink: each column of a spanning frame reserves the
+/// whole area.
+pub(super) fn footnote_host_key_for_frame(
+    chain: &[&TextFrame],
+    idx: usize,
+    page_idx: usize,
+    pages: &[BuiltPage],
+    document: &Document,
+) -> (usize, i32, i32, i32, i32) {
+    let rect = footnote_pool_rect(chain, idx, pages[page_idx].spread_origin, document);
     let k = footnote_frame_key(&rect);
     (page_idx, k.0, k.1, k.2, k.3)
 }
@@ -809,19 +856,20 @@ pub(super) fn emit_footnote_pools(
             Default::default();
         for fn_ in &pool {
             by_frame
-                .entry(footnote_frame_key(&fn_.host_frame_rect_pt))
+                .entry(footnote_frame_key(&fn_.pool_rect_pt))
                 .or_default()
                 .push(fn_);
         }
         let binding = page.binding_edge();
         for (_key, group) in by_frame {
-            let rect = group[0].host_frame_rect_pt;
+            let rect = group[0].pool_rect_pt;
             let column_width_pt = rect.w;
             if column_width_pt <= 0.0 {
                 continue;
             }
             let metrics = resolve_footnote_metrics(
                 document,
+                &group[0].frame_footnotes,
                 column_width_pt,
                 palette,
                 color_ctx,

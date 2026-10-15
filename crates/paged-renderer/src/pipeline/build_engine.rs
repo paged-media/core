@@ -3184,10 +3184,10 @@ pub(super) fn build_document_inner(
         // Map each chain frame to the (page, rect) key it captures
         // footnotes under, so a measured pool routes back to the frame
         // whose text area must shrink.
-        let frame_host_keys: Vec<(usize, i32, i32, i32, i32)> = chain_for_post
+        let frame_host_keys: Vec<(usize, i32, i32, i32, i32)> = chain_pages_for_post
             .iter()
-            .zip(chain_pages_for_post.iter())
-            .map(|(f, &p)| footnote_host_key_for_frame(f, p, &pages))
+            .enumerate()
+            .map(|(i, &p)| footnote_host_key_for_frame(&chain_for_post, i, p, &pages, document))
             .collect();
         let mut reserved_64: Vec<i32> = vec![0; chain_for_post.len()];
         let mut chain_page_set: Vec<usize> = chain_pages_for_post.clone();
@@ -4199,17 +4199,20 @@ pub(super) fn capture_footnotes(
     let Some(&page) = em.chain_pages.get(em.frame_idx) else {
         return;
     };
-    // The host frame's page-local content rect: where the pool is drawn.
+    // The host frame's page-local content rect, and the rect its notes
+    // are set in: the same, or the whole frame's when they span its
+    // columns (ADR 160).
     let frame = em.chain[em.frame_idx];
-    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-    let (ox, oy) = pages[page].spread_origin;
-    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-    let host_frame_rect_pt = Rect {
-        x: sx - ox + insets[1],
-        y: sy - oy + insets[0],
-        w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
-        h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
-    };
+    let (_, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (_, oy) = pages[page].spread_origin;
+    let host_frame_rect_pt = frame_content_rect(frame, pages[page].spread_origin);
+    let pool_rect_pt = footnote_pool_rect(
+        &em.chain,
+        em.frame_idx,
+        pages[page].spread_origin,
+        em.document,
+    );
+    let frame_footnotes = frame.footnotes;
     if let Some(slot) = em.footnote_ref_baseline_64.get_mut(em.frame_idx) {
         *slot = (*slot).max(ref_baseline_64);
     }
@@ -4227,6 +4230,8 @@ pub(super) fn capture_footnotes(
             footnote_self_id: note.self_id,
             paragraphs: note.paragraphs,
             host_frame_rect_pt,
+            pool_rect_pt,
+            frame_footnotes,
             ref_baseline_pt,
         });
     }

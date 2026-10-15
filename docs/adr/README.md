@@ -87,6 +87,7 @@ is not written yet.
 | [156](156-how-indesign-numbers-footnotes.md) | How InDesign numbers footnotes: per story, restarted by page, spread or section | Accepted 2026-10-15 |
 | [157](157-every-page-numbering-style.md) | Every page-numbering style InDesign offers, formatted as InDesign formats it | Accepted 2026-10-15 |
 | [158](158-how-indesign-numbers-a-multi-level-list.md) | How InDesign numbers a multi-level list | Accepted 2026-10-15 |
+| [160](160-footnotes-in-columns.md) | Footnotes in a frame with columns: under each column, or across the frame | Accepted 2026-10-15 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
