@@ -86,6 +86,7 @@ is not written yet.
 | [155](155-column-rules.md) | Column rules: where InDesign draws the rule between two columns | Accepted 2026-10-14 |
 | [156](156-how-indesign-numbers-footnotes.md) | How InDesign numbers footnotes: per story, restarted by page, spread or section | Accepted 2026-10-15 |
 | [157](157-every-page-numbering-style.md) | Every page-numbering style InDesign offers, formatted as InDesign formats it | Accepted 2026-10-15 |
+| [159](159-what-a-committed-change-reports.md) | What a committed change reports, and where a page sits | Accepted 2026-10-15 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

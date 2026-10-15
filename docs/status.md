@@ -23,6 +23,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   text still change, and unlocking it is an ordinary property write. Deleting a container deletes
   what is pasted into it, and a group goes with its last member. One undo restores either
   ([ADR 133](adr/133-locks-and-deletes-follow-indesign.md)).
+- **What a committed change reports.** A frame resized by its handles reports the content-box
+  reflow its `resizeFrame` would (`GestureCommitted.reflow`); a script reports how many writes it
+  committed and the pages they changed (`ScriptResult.writes` / `page_ids`); a page reports its
+  origin in its spread and its spread (`PageSummary.page_origin` / `spread_id`); a table reports
+  its header and footer bands (`tableHeaderRowCount` / `tableFooterRowCount`, read-only)
+  ([ADR 159](adr/159-what-a-committed-change-reports.md), `v0.71.12`, additive on protocol 71).
 - **Interaction.** Hit testing, element and text selection, caret and selection geometry,
   gestures (rotate, scale and shear
   about a given point) and snapping, as message kinds. Snapping is one engine resolver
@@ -236,8 +242,9 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
 
 ## Releases
 
-Protocol 71 shipped as `v0.71.0` through `v0.71.6` (npm `latest` 0.71.6). The release order
-when core and the IDML adapter pin each other is in
+Protocol 71 shipped as `v0.71.0` through `v0.71.12`; the fields of
+[ADR 159](adr/159-what-a-committed-change-reports.md) are additive and arrive in `v0.71.12`.
+The release order when core and the IDML adapter pin each other is in
 [`reference/protocol-governance.md`](reference/protocol-governance.md).
 
 ## Not built

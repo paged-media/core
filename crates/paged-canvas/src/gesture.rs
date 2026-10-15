@@ -720,7 +720,18 @@ impl CanvasModel {
                 applied_seq,
                 page_ids,
                 applied: empty,
+                reflow: None,
             });
+        };
+        // v0.71.12 — a resize of ONE frame by its handles is `resizeFrame` by
+        // another door, so it reports the reflow that mutation reports
+        // (`MutationApplied.reflow`), read back from the committed scene by
+        // the same lookup. A resize of several frames is a batch, which
+        // reports none as a mutation either; every other gesture changes
+        // display geometry only.
+        let resized_frame = match (session.gesture, session.snapshots.as_slice()) {
+            (GestureType::Resize { .. }, [only]) => Some(only.id.raw_id().to_string()),
+            _ => None,
         };
         // Step 1: revert the scene to the snapshot. The previewed
         // mutations no longer exist as far as `paged_mutate::apply` is
@@ -770,8 +781,17 @@ impl CanvasModel {
         };
         // Step 3: apply through the canonical bridge so the log entry
         // is `LoggedMutation::Frame(AppliedOperation)`.
-        self.apply_operation(op)
-            .map_err(|e| GestureError::Mutate(format!("{e:?}")))
+        let mut outcome = self
+            .apply_operation(op)
+            .map_err(|e| GestureError::Mutate(format!("{e:?}")))?;
+        outcome.reflow = resized_frame.and_then(|frame_id| {
+            self.frame_content_box(&frame_id)
+                .map(|content_box| crate::channel::FrameReflowInfo {
+                    frame_id,
+                    content_box,
+                })
+        });
+        Ok(outcome)
     }
 
     /// Track K — resolve which spread the gesture's pointer is

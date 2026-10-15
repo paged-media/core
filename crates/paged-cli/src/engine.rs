@@ -122,14 +122,16 @@ impl Session {
         })?;
         // `expect_reply!` is defined below in this file, so name it
         // through the crate root rather than textual scope.
-        let (output, error, budget_kind) = crate::expect_reply!(
+        let (output, error, budget_kind, writes, page_ids) = crate::expect_reply!(
             reply,
             WorkerToMainKind::ScriptResult {
                 output,
                 error,
                 budget_kind,
+                writes,
+                page_ids,
                 ..
-            } => (output, error, budget_kind),
+            } => (output, error, budget_kind, writes, page_ids),
             "run script"
         )
         .map_err(|e: anyhow::Error| e)?;
@@ -146,6 +148,8 @@ impl Session {
                     Wire::WallClock => Src::WallClock,
                 }
             }),
+            writes,
+            page_ids,
         })
     }
 

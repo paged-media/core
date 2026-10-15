@@ -647,6 +647,10 @@ pub struct FrameMutationOutcome {
     pub applied_seq: u64,
     pub page_ids: Vec<PageId>,
     pub applied: paged_mutate::AppliedOperation,
+    /// v0.71.12 — the content-box reflow a gesture commit reports
+    /// (`GestureCommitted.reflow`): set by `commit_gesture` for a resize
+    /// of one frame, `None` from every other path.
+    pub reflow: Option<crate::channel::FrameReflowInfo>,
 }
 
 /// What `CanvasModel::undo` / `redo` return.
@@ -1763,6 +1767,10 @@ pub struct CanvasModel {
     last_dirty_pages: Vec<usize>,
     /// Whether `last_dirty_pages` was narrowed below every page.
     last_dirty_narrowed: bool,
+    /// v0.71.12 — while armed ([`Self::begin_page_change_tracking`]), the union
+    /// of every build's dirty pages since: what a script run reports as
+    /// `ScriptResult.page_ids`.
+    page_changes: Option<std::collections::BTreeSet<PageId>>,
 }
 
 /// ADR 027 plan step 7 — how far the pages a build reports as
@@ -2424,6 +2432,7 @@ impl CanvasModel {
             pending_dirty_scope: DirtyScope::Unset,
             last_dirty_pages: Vec::new(),
             last_dirty_narrowed: false,
+            page_changes: None,
         })
     }
 
@@ -5248,6 +5257,7 @@ impl CanvasModel {
             applied_seq,
             page_ids,
             applied,
+            reflow: None,
         })
     }
 
@@ -8246,6 +8256,15 @@ impl CanvasModel {
                 path: PropertyPath::TableColumnCount,
                 value: Some(Value::Length(Some(table.column_count as f32))),
             },
+            // v0.71.12 — the header and footer bands inside that total.
+            PropertyEntry {
+                path: PropertyPath::TableHeaderRowCount,
+                value: Some(Value::Length(Some(table.header_row_count as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::TableFooterRowCount,
+                value: Some(Value::Length(Some(table.footer_row_count as f32))),
+            },
         ];
         Some(ElementProperties {
             id: id.clone(),
@@ -8626,13 +8645,23 @@ impl CanvasModel {
         // v70 — page self id → the spread whose labels hold its metadata.
         let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
             std::collections::HashMap::new();
+        // v0.71.12 — page self id → its spread's id, spelled as `spreads()`
+        // spells it (the `Self` id, the file name when there is none).
+        let mut spread_id_of: std::collections::HashMap<&str, String> =
+            std::collections::HashMap::new();
         for parsed in &scene.spreads {
             for (pid, m) in &parsed.spread.page_margins {
                 margins.insert(pid.as_str(), m);
             }
+            let spread_id = parsed
+                .spread
+                .self_id
+                .clone()
+                .unwrap_or_else(|| parsed.src.clone());
             for pg in &parsed.spread.pages {
                 if let Some(id) = pg.self_id.as_deref() {
                     spread_of.insert(id, &parsed.spread);
+                    spread_id_of.insert(id, spread_id.clone());
                 }
             }
         }
@@ -8661,6 +8690,9 @@ impl CanvasModel {
                         .get(p.id.as_str())
                         .map(|sp| tree_plugin_metadata(sp, p.id.as_str()))
                         .unwrap_or_default(),
+                    // The build's origin, as item geometry reports it.
+                    page_origin: Some([p.spread_origin.0, p.spread_origin.1]),
+                    spread_id: spread_id_of.get(p.id.as_str()).cloned(),
                 }
             })
             .collect()
@@ -11057,6 +11089,13 @@ impl CanvasModel {
         };
         self.last_dirty_narrowed = narrowed.is_some();
         self.last_dirty_pages = narrowed.unwrap_or_else(|| (0..built.pages.len()).collect());
+        if let Some(changes) = self.page_changes.as_mut() {
+            changes.extend(
+                self.last_dirty_pages
+                    .iter()
+                    .filter_map(|&i| built.pages.get(i).map(|p| p.id.clone())),
+            );
+        }
         self.built = built;
         self.pending_keep_hints.clear();
         self.pending_edit_spans.clear();
@@ -11584,6 +11623,33 @@ impl CanvasModel {
         self.last_dirty_pages
             .iter()
             .filter_map(|&i| self.built.pages.get(i).map(|p| p.id.clone()))
+            .collect()
+    }
+
+    /// v0.71.12 — start collecting the pages every build from now on changes
+    /// (the union of [`Self::dirty_page_ids`] across them), replacing any
+    /// collection in progress. [`Self::end_page_change_tracking`] stops it.
+    /// A script run brackets each of its segments with the pair, so the
+    /// pages it reports are those its own writes changed.
+    pub fn begin_page_change_tracking(&mut self) {
+        self.page_changes = Some(std::collections::BTreeSet::new());
+    }
+
+    /// v0.71.12 — stop collecting and return the pages the builds since
+    /// [`Self::begin_page_change_tracking`] changed (empty when it was not
+    /// armed). A page deleted since is still named; see
+    /// [`Self::in_document_order`].
+    pub fn end_page_change_tracking(&mut self) -> std::collections::BTreeSet<PageId> {
+        self.page_changes.take().unwrap_or_default()
+    }
+
+    /// v0.71.12 — the pages of `ids` the document still has, in document order.
+    pub fn in_document_order(&self, ids: &std::collections::BTreeSet<PageId>) -> Vec<PageId> {
+        self.built
+            .pages
+            .iter()
+            .filter(|p| ids.contains(&p.id))
+            .map(|p| p.id.clone())
             .collect()
     }
 
