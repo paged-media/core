@@ -54,7 +54,9 @@ fn attr(m: M) -> String {
 /// `r30` alone: 160 × 60 at 30°. `g30`: a group turned 30° holding `ga`
 /// (160 × 60) and `gb` (80 × 40), both unrotated inside it. `m30` /
 /// `n30` / `m60`: loose rectangles for the multi-selections, 160 × 60 at
-/// 30°, 160 × 60 at 30°, 80 × 40 at 60° — the probe's shapes.
+/// 30°, 160 × 60 at 30°, 80 × 40 at 60° — the probe's shapes. `c30`: a
+/// 200 × 100 frame at 30° holding a 160 × 60 image, unrotated inside it.
+/// `c45`: the same frame with its image turned a further 15° inside it.
 fn model() -> CanvasModel {
     let body = format!(
         r#"<Rectangle Self="r30" GeometricBounds="0 0 60 160" ItemTransform="{r30}" FillColor="Color/Black"/>
@@ -64,12 +66,27 @@ fn model() -> CanvasModel {
 </Group>
 <Rectangle Self="m30" GeometricBounds="0 0 60 160" ItemTransform="{m30}" FillColor="Color/Black"/>
 <Rectangle Self="n30" GeometricBounds="0 0 60 160" ItemTransform="{n30}" FillColor="Color/Black"/>
-<Rectangle Self="m60" GeometricBounds="0 0 40 80" ItemTransform="{m60}" FillColor="Color/Black"/>"#,
+<Rectangle Self="m60" GeometricBounds="0 0 40 80" ItemTransform="{m60}" FillColor="Color/Black"/>
+<Rectangle Self="c30" GeometricBounds="0 0 100 200" ItemTransform="{c30}">
+  <Image Self="c30i" ItemTransform="1 0 0 1 20 20">
+    <Properties><GraphicBounds Left="0" Top="0" Right="160" Bottom="60"/></Properties>
+    <Link Self="c30l" LinkResourceURI="file:///placeholder.png"/>
+  </Image>
+</Rectangle>
+<Rectangle Self="c45" GeometricBounds="0 0 100 200" ItemTransform="{c45}">
+  <Image Self="c45i" ItemTransform="{c45i}">
+    <Properties><GraphicBounds Left="0" Top="0" Right="160" Bottom="60"/></Properties>
+    <Link Self="c45l" LinkResourceURI="file:///placeholder.png"/>
+  </Image>
+</Rectangle>"#,
         r30 = attr(rot(30.0, 200.0, 300.0)),
         g30 = attr(rot(30.0, 150.0, 600.0)),
         m30 = attr(rot(30.0, 600.0, 300.0)),
         n30 = attr(rot(30.0, 650.0, 500.0)),
         m60 = attr(rot(60.0, 700.0, 700.0)),
+        c30 = attr(rot(30.0, 250.0, 850.0)),
+        c45 = attr(rot(30.0, 700.0, 950.0)),
+        c45i = attr(rot(15.0, 30.0, 40.0)),
     );
     let spread = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -240,18 +257,36 @@ fn scale_drag(
     delta: Pt,
     modifiers: GestureModifiers,
 ) {
+    drag(
+        model,
+        targets,
+        GestureType::Scale,
+        grabbed,
+        Some(pivot),
+        delta,
+        modifiers,
+    );
+}
+
+fn drag(
+    model: &mut CanvasModel,
+    targets: Vec<ElementId>,
+    gesture: GestureType,
+    grabbed: Pt,
+    pivot: Option<Pt>,
+    delta: Pt,
+    modifiers: GestureModifiers,
+) {
     let anchor = GestureAnchor {
         page_id: PageId("p1".into()),
         point_in_page: grabbed,
-        pivot_in_page: Some(pivot),
+        pivot_in_page: pivot,
     };
     let h = model
-        .begin_gesture(targets, GestureType::Scale, Some(anchor))
-        .expect("begin scale");
-    model
-        .update_gesture(h, delta, modifiers)
-        .expect("update scale");
-    model.commit_gesture(h).expect("commit scale");
+        .begin_gesture(targets, gesture, Some(anchor))
+        .expect("begin");
+    model.update_gesture(h, delta, modifiers).expect("update");
+    model.commit_gesture(h).expect("commit");
 }
 
 const PLAIN: GestureModifiers = GestureModifiers {
@@ -523,5 +558,217 @@ fn a_multi_selection_sharing_one_rotation_still_scales_on_the_page_axes() {
         close(got.h, 68.74, 1e-2, &format!("{id} height"));
         close(got.top_edge, -21.05, 1e-2, &format!("{id} top edge"));
         close(got.corner, 70.16, 1e-2, &format!("{id} corner"));
+    }
+}
+
+// ---- the image inside a rotated frame (ScaleContent) ---------------------
+
+fn mul(a: M, b: M) -> M {
+    [
+        a[0] * b[0] + a[2] * b[1],
+        a[1] * b[0] + a[3] * b[1],
+        a[0] * b[2] + a[2] * b[3],
+        a[1] * b[2] + a[3] * b[3],
+        a[0] * b[4] + a[2] * b[5] + a[4],
+        a[1] * b[4] + a[3] * b[5] + a[5],
+    ]
+}
+
+/// The frame's own transform and the image's (frame-inner) transform.
+fn frame_and_image(model: &CanvasModel, id: &str) -> (M, M) {
+    let r = model
+        .scene()
+        .spreads
+        .iter()
+        .flat_map(|s| s.spread.rectangles.iter())
+        .find(|r| r.self_id.as_deref() == Some(id))
+        .unwrap_or_else(|| panic!("rectangle {id}"));
+    const I: M = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    (
+        r.item_transform.unwrap_or(I),
+        r.image_item_transform.unwrap_or(I),
+    )
+}
+
+/// The placed image's own box, where its content handles sit: its
+/// 160 × 60 graphic bounds through the frame's transform and its own.
+fn content_box(model: &CanvasModel, id: &str) -> HandleBox {
+    let (frame, image) = frame_and_image(model, id);
+    HandleBox {
+        bounds: [0.0, 0.0, 60.0, 160.0],
+        m: mul(frame, image),
+    }
+}
+
+/// Drag a content handle of the image in `id` (anchor `grabbed`, pivot
+/// the opposite handle) and check that only the image moved.
+fn content_drag(model: &mut CanvasModel, id: &str, grabbed: Pt, pivot: Pt, delta: Pt) {
+    let frame_before = HandleBox::of(model, rect(id));
+    drag(
+        model,
+        vec![rect(id)],
+        GestureType::ScaleContent,
+        grabbed,
+        Some(pivot),
+        delta,
+        PLAIN,
+    );
+    let frame_after = HandleBox::of(model, rect(id));
+    assert_eq!(
+        frame_after.bounds, frame_before.bounds,
+        "the frame's bounds"
+    );
+    assert_eq!(frame_after.m, frame_before.m, "the frame's transform");
+}
+
+#[test]
+fn a_content_side_handle_in_a_rotated_frame_scales_the_image_along_its_own_axis() {
+    let mut m = model();
+    let before = content_box(&m, "c30");
+    close(
+        before.measure().top_edge,
+        -30.0,
+        1e-2,
+        "the image turns with its frame",
+    );
+    let axes = before.axes();
+    let (east, west) = (before.handle("e"), before.handle("w"));
+    content_drag(&mut m, "c30", east, west, along(axes, 40.0, 7.0));
+    let after = content_box(&m, "c30");
+    let got = after.measure();
+    close(got.w, 200.0, 1e-2, "image width along its own axis");
+    close(got.h, 60.0, 1e-2, "image height untouched by a side handle");
+    close(got.top_edge, -30.0, 1e-2, "image rotation unchanged");
+    close(got.corner, 90.0, 1e-2, "the image is still a rectangle");
+    close_pt(
+        after.handle("w"),
+        west,
+        "the opposite content handle stays put",
+    );
+    close_pt(
+        after.handle("e"),
+        add(east, along(axes, 40.0, 0.0)),
+        "the handle follows the pointer along the axis",
+    );
+}
+
+#[test]
+fn a_content_corner_handle_in_a_rotated_frame_scales_both_image_axes() {
+    let mut m = model();
+    let before = content_box(&m, "c30");
+    let axes = before.axes();
+    let (se, nw) = (before.handle("se"), before.handle("nw"));
+    let delta = along(axes, 40.0, 30.0);
+    content_drag(&mut m, "c30", se, nw, delta);
+    let after = content_box(&m, "c30");
+    let got = after.measure();
+    close(got.w, 200.0, 1e-2, "image width");
+    close(got.h, 90.0, 1e-2, "image height");
+    close(got.top_edge, -30.0, 1e-2, "image rotation unchanged");
+    close(got.corner, 90.0, 1e-2, "the image is still a rectangle");
+    close_pt(after.handle("nw"), nw, "the opposite corner stays put");
+    close_pt(
+        after.handle("se"),
+        add(se, delta),
+        "the corner follows the pointer",
+    );
+}
+
+/// The image turned 15° inside a 30° frame sits at 45°: its handles scale
+/// it along those axes, not the frame's.
+#[test]
+fn a_content_handle_on_an_image_turned_inside_its_frame_keeps_it_a_rectangle() {
+    let mut m = model();
+    let before = content_box(&m, "c45");
+    close(
+        before.measure().top_edge,
+        -45.0,
+        1e-2,
+        "frame 30° + image 15°",
+    );
+    let axes = before.axes();
+    let (se, nw) = (before.handle("se"), before.handle("nw"));
+    let delta = along(axes, 40.0, 30.0);
+    content_drag(&mut m, "c45", se, nw, delta);
+    let after = content_box(&m, "c45");
+    let got = after.measure();
+    close(got.w, 200.0, 1e-2, "image width");
+    close(got.h, 90.0, 1e-2, "image height");
+    close(got.top_edge, -45.0, 1e-2, "image rotation unchanged");
+    close(got.corner, 90.0, 1e-2, "the image is still a rectangle");
+    close_pt(after.handle("nw"), nw, "the opposite corner stays put");
+    close_pt(
+        after.handle("se"),
+        add(se, delta),
+        "the corner follows the pointer",
+    );
+}
+
+/// The content grabber's Cmd+Alt drag names no pivot: the image scales
+/// about the frame's centre, still along the image's own axes.
+#[test]
+fn a_content_scale_about_the_frame_centre_follows_the_images_axes() {
+    let mut m = model();
+    let before = content_box(&m, "c45");
+    let frame = HandleBox::of(&m, rect("c45"));
+    let centre = map(
+        frame.m,
+        (
+            (frame.bounds[1] + frame.bounds[3]) / 2.0,
+            (frame.bounds[0] + frame.bounds[2]) / 2.0,
+        ),
+    );
+    let axes = before.axes();
+    let (_, image_before) = frame_and_image(&m, "c45");
+    // 100 pt out from the centre along the image's x axis, dragged 50
+    // further along it: ×1.5 along that axis only.
+    let grabbed = add(centre, along(axes, 100.0, 0.0));
+    drag(
+        &mut m,
+        vec![rect("c45")],
+        GestureType::ScaleContent,
+        grabbed,
+        None,
+        along(axes, 50.0, 0.0),
+        PLAIN,
+    );
+    let after = content_box(&m, "c45");
+    let got = after.measure();
+    close(got.w, 240.0, 1e-2, "image width");
+    close(got.h, 60.0, 1e-2, "image height");
+    close(got.top_edge, -45.0, 1e-2, "image rotation unchanged");
+    close(got.corner, 90.0, 1e-2, "the image is still a rectangle");
+    // The frame's centre is the fixed point.
+    let (frame_m, image_m) = frame_and_image(&m, "c45");
+    let inv_point = |mm: M, p: Pt| {
+        let det = mm[0] * mm[3] - mm[1] * mm[2];
+        let (x, y) = (p.0 - mm[4], p.1 - mm[5]);
+        ((mm[3] * x - mm[2] * y) / det, (mm[0] * y - mm[1] * x) / det)
+    };
+    let in_image = inv_point(mul(frame_m, image_before), centre);
+    close_pt(
+        map(mul(frame_m, image_m), in_image),
+        centre,
+        "the frame's centre stays put",
+    );
+}
+
+#[test]
+fn a_content_scale_in_a_rotated_frame_undoes_exactly() {
+    let mut m = model();
+    let (_, image_before) = frame_and_image(&m, "c45");
+    let before = content_box(&m, "c45");
+    let axes = before.axes();
+    content_drag(
+        &mut m,
+        "c45",
+        before.handle("se"),
+        before.handle("nw"),
+        along(axes, 40.0, 30.0),
+    );
+    m.undo().expect("undo");
+    let (_, image_back) = frame_and_image(&m, "c45");
+    for (a, b) in image_back.iter().zip(image_before) {
+        assert!((a - b).abs() < 1e-4, "{image_back:?} vs {image_before:?}");
     }
 }
