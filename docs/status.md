@@ -199,6 +199,12 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
   vertical justification, an object style's rules are not read, span and split regions draw
   none, and no property path writes them.
+- **A footnote reference that overflows into a new restart scope keeps its composed number.**
+  Notes are numbered through each story, restarted by page, spread or section, with their prefix
+  and suffix, as InDesign numbers them ([ADR 156](adr/156-how-indesign-numbers-footnotes.md)). A
+  reference is labelled when its paragraph is composed, so one whose line then moves to a page
+  that restarts the numbering keeps the earlier number. End-of-story placement, no-splitting,
+  straddling and the continuing rule are not read.
 - **An unresolved table of contents built at render numbers its entries from each story's head
   frame.** A story with no text bound to a TOC style (on its `<Story>` or its frame) is filled from
   the TOC style while the page is built, before layout says where a heading lands. The canvas's

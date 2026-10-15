@@ -608,6 +608,7 @@ fn footnote_option() -> FootnoteOptionDef {
         separator_text: Some(" ".to_string()),
         spacer: Some(13.0),
         space_between: Some(6.5),
+        ..Default::default()
     }
 }
 

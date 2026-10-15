@@ -916,6 +916,7 @@ pub(super) fn build_document_inner(
             page_numbering
                 .section_of
                 .push(section_walk.active_section());
+            page_numbering.spread_of.push(spread_idx);
             let page_id = p
                 .self_id
                 .clone()
@@ -997,6 +998,7 @@ pub(super) fn build_document_inner(
         page_labels.push("1".to_string());
         page_numbering.numbers.push(1);
         page_numbering.section_of.push(None);
+        page_numbering.spread_of.push(0);
     }
 
     // W1.4 — total body-page count, frozen here (pages are all created
@@ -1037,6 +1039,7 @@ pub(super) fn build_document_inner(
         page_labels.hash(&mut h);
         page_numbering.numbers.hash(&mut h);
         page_numbering.section_of.hash(&mut h);
+        page_numbering.spread_of.hash(&mut h);
         total_page_count.hash(&mut h);
         h.finish()
     };
@@ -4023,6 +4026,26 @@ pub(super) fn substitute_generated_markers(
         }
     };
     let options = &em.document.designmap.footnote_options;
+    // A note restarts its numbering on the page its reference lands on.
+    // Composed before it is placed, a paragraph's references are labelled
+    // for the page its start rule sends it to (`StartParagraph`); a line
+    // that later overflows into a new restart scope keeps the label it
+    // was composed with (status.md).
+    let note_page = if em.para_line == 0 && em.start_rule != paged_model::StartParagraph::Anywhere {
+        let frames: Vec<Option<&str>> = em.chain.iter().map(|f| f.self_id.as_deref()).collect();
+        match super::keeps::start_target(
+            em.start_rule,
+            em.frame_idx,
+            em.last_placed_frame,
+            &frames,
+            &em.chain_pages,
+        ) {
+            super::keeps::StartMove::To(j) => em.chain_pages.get(j).copied().unwrap_or(cur_idx),
+            _ => cur_idx,
+        }
+    } else {
+        cur_idx
+    };
     let mut reference = 0u32;
     for (i, run) in paragraph.runs.iter().enumerate() {
         if !run.text.chars().any(paged_model::is_generated_marker) {
@@ -4033,7 +4056,7 @@ pub(super) fn substitute_generated_markers(
             let (printed, kind) = if ch == paged_model::FOOTNOTE_REFERENCE_MARKER {
                 let waiting = (reference as usize) < em.pending_footnotes.len();
                 let label = if waiting {
-                    options.label(em.footnote_counter + 1 + reference)
+                    options.reference_label(em.footnote_ordinal_at(note_page) + 1 + reference)
                 } else {
                     String::new()
                 };
@@ -4191,6 +4214,10 @@ pub(super) fn capture_footnotes(
         *slot = (*slot).max(ref_baseline_64);
     }
     let ref_baseline_pt = sy - oy + ref_baseline_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
+    // Every note captured here stands on one page: its restart scope is
+    // settled once.
+    em.footnote_counter = em.footnote_ordinal_at(page);
+    em.footnote_scope = em.footnote_scope_of(page);
     for (_, note) in em.pending_footnotes.drain(..take) {
         em.footnote_counter += 1;
         pages[page].footnotes.push(EmittedFootnote {
@@ -4217,6 +4244,44 @@ pub(super) fn capture_footnotes(
 ///    emission so the post-story vertical-justification shift can
 ///    target this story's commands without touching frame outlines.
 impl<'a> StoryEmitter<'a> {
+    /// The scope a note on `page` is numbered in under the document's
+    /// `RestartNumbering`: its page, spread or section; `None` when
+    /// numbering runs through the story (`DontRestart`).
+    pub(super) fn footnote_scope_of(&self, page: usize) -> Option<usize> {
+        use paged_model::FootnoteRestart as R;
+        match self.document.designmap.footnote_options.restart() {
+            R::DontRestart => None,
+            R::PageRestart => Some(page),
+            R::SpreadRestart => Some(
+                self.page_numbering
+                    .spread_of
+                    .get(page)
+                    .copied()
+                    .unwrap_or(page),
+            ),
+            R::SectionRestart => Some(
+                self.page_numbering
+                    .section_of
+                    .get(page)
+                    .copied()
+                    .flatten()
+                    .map_or(usize::MAX, |s| s),
+            ),
+        }
+    }
+
+    /// How many notes of this story come before one placed on `page`:
+    /// the story's count so far, or none when `page` opens a new restart
+    /// scope. InDesign numbers notes through each story, restarting at
+    /// every page, spread or section as `RestartNumbering` says
+    /// (`footnote-numbering`, `footnote-restart`).
+    pub(super) fn footnote_ordinal_at(&self, page: usize) -> u32 {
+        match self.footnote_scope_of(page) {
+            Some(scope) if self.footnote_scope != Some(scope) => 0,
+            _ => self.footnote_counter,
+        }
+    }
+
     /// The cursor exactly, in 1/64 pt (see [`Self::y_cursor_exact`]).
     pub(super) fn y_exact(&self) -> f64 {
         self.y_cursor_exact
@@ -4469,6 +4534,10 @@ pub(super) struct StoryEmitter<'a> {
     /// one more. InDesign numbers footnotes through the story by default
     /// (`restartNumbering = DONT_RESTART`, measured, ADR 034 case 7).
     pub(super) footnote_counter: u32,
+    /// Where the last note was numbered: its page, spread or section,
+    /// whichever `RestartNumbering` restarts at (`None` before the first
+    /// note, and always for `DontRestart`).
+    pub(super) footnote_scope: Option<usize>,
     /// Per chain frame (1/64 pt): the lowest baseline of a line that
     /// carried a captured footnote reference this pass. The frame's pool
     /// reservation is capped above it, so a note never pushes its own
@@ -4754,6 +4823,7 @@ impl<'a> StoryEmitter<'a> {
             pending_footnotes: Vec::new(),
             in_segments: false,
             footnote_counter: 0,
+            footnote_scope: None,
             footnote_ref_baseline_64: vec![0; len],
             breaks: Vec::new(),
             current_story_id: String::new(),
