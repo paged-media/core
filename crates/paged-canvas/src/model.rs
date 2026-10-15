@@ -2208,6 +2208,11 @@ impl CanvasModel {
                     // still carry through.
                     Some(mut doc) => {
                         adopt_style_leading(&mut doc, &container);
+                        // The IDML parts beside the model keep each next /
+                        // previous page number in a range of its own; cut
+                        // the model's runs the same way, or the next export
+                        // patching those parts writes such a run twice.
+                        idml_export::cut_page_number_runs(&mut doc);
                         (doc, Some(container))
                     }
                     None => (

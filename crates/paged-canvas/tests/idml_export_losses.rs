@@ -363,3 +363,174 @@ fn an_orphan_story_reaches_no_part_and_one_loud_ledger_line() {
         "{losses:#?}"
     );
 }
+
+fn story_part(package: &[u8], story: &str) -> String {
+    let mut zip = zip::ZipArchive::new(Cursor::new(package)).unwrap();
+    let mut e = zip
+        .by_name(&format!("Stories/Story_{}.xml", story.replace('/', "_")))
+        .unwrap();
+    let mut s = String::new();
+    std::io::Read::read_to_string(&mut e, &mut s).unwrap();
+    s
+}
+
+fn minted_frame(model: &mut CanvasModel) -> String {
+    let out = model
+        .apply_mutation(&Mutation::InsertTextFrame {
+            page_id: PageId("p1".into()),
+            bounds: (420.0, 320.0, 560.0, 560.0),
+        })
+        .expect("frame");
+    match out.created_id {
+        Some(ElementId::TextFrame(id)) => minted_story_of(model, &id),
+        other => panic!("expected a text frame, got {other:?}"),
+    }
+}
+
+fn insert_table(model: &mut CanvasModel, story: &str) -> String {
+    let out = model
+        .apply_mutation(&Mutation::InsertTable {
+            story_id: story.into(),
+            rows: 3,
+            cols: 2,
+            header_rows: 0,
+            footer_rows: 0,
+            column_widths: vec![60.0, 60.0],
+            row_heights: vec![20.0, 20.0, 20.0],
+        })
+        .expect("table");
+    match out.created_id {
+        Some(ElementId::Table { table_id, .. }) => table_id,
+        other => panic!("expected a table, got {other:?}"),
+    }
+}
+
+/// A jump line: "Continued on page" + the NEXT page number, then the
+/// current one. The next page number is `<?ACE 18?>` in a range of its
+/// own naming `PageNumberType="NextPageNumber"` (InDesign 20.0.1); a bare
+/// one reads back as the current page number.
+#[test]
+fn a_next_page_number_inserted_through_the_engine_exports_without_loss() {
+    use paged_mutate::operation::FieldKind;
+    let mut model = CanvasModel::load("doc", &fixture(), CanvasOptions::default()).expect("load");
+    let story = minted_frame(&mut model);
+    model
+        .apply_mutation(&Mutation::InsertText {
+            story_id: story.clone(),
+            offset: 0,
+            text: "Continued on page ; this is page .".into(),
+            cell: None,
+        })
+        .expect("text");
+    for (offset, field) in [(33, FieldKind::PageNumber), (18, FieldKind::NextPageNumber)] {
+        model
+            .apply_mutation(&Mutation::InsertField {
+                story_id: story.clone(),
+                offset,
+                field,
+                content_offset: None,
+            })
+            .expect("field");
+    }
+    let losses = model.idml_export_losses();
+    assert!(losses.is_empty(), "{losses:#?}");
+    let part = story_part(&model.export_idml().unwrap(), &story);
+    assert!(
+        part.contains(r#"PageNumberType="NextPageNumber"><Content><?ACE 18?></Content>"#),
+        "{part}"
+    );
+
+    // The same after a `.paged` round trip, which reloads the native model
+    // and exports over the part the save wrote.
+    let reopened = CanvasModel::load(
+        "doc",
+        &model.export_paged(PROTOCOL).unwrap(),
+        CanvasOptions::default(),
+    )
+    .expect("reopen");
+    let losses = reopened.idml_export_losses();
+    assert!(losses.is_empty(), "{losses:#?}");
+}
+
+const PROTOCOL: u32 = paged_canvas::channel::PROTOCOL_VERSION.0;
+
+/// Reopen from `.paged`, delete the story's table, insert a different
+/// one: the export holds the new table, not the deleted one. (The same
+/// replace before any reopen always exported right.)
+#[test]
+fn a_table_replaced_after_a_paged_reopen_exports_without_loss() {
+    let mut model = CanvasModel::load("doc", &fixture(), CanvasOptions::default()).expect("load");
+    let story = minted_frame(&mut model);
+    let old = insert_table(&mut model, &story);
+    let paged = model.export_paged(PROTOCOL).expect("save");
+
+    let mut model = CanvasModel::load("doc", &paged, CanvasOptions::default()).expect("reopen");
+    model
+        .apply_mutation(&Mutation::Batch {
+            ops: vec![
+                Mutation::DeleteTable {
+                    story_id: story.clone(),
+                    table_id: old.clone(),
+                },
+                Mutation::InsertTable {
+                    story_id: story.clone(),
+                    rows: 3,
+                    cols: 2,
+                    header_rows: 0,
+                    footer_rows: 0,
+                    column_widths: vec![60.0, 60.0],
+                    row_heights: vec![20.0, 20.0, 20.0],
+                },
+            ],
+        })
+        .expect("replace");
+    let new = model
+        .scene()
+        .stories
+        .iter()
+        .find(|s| s.self_id == story)
+        .and_then(|s| s.story.paragraphs.iter().find_map(|p| p.table.as_ref()))
+        .and_then(|t| t.self_id.clone())
+        .expect("the new table");
+    assert_ne!(old, new, "a different table");
+
+    let losses = model.idml_export_losses();
+    assert!(losses.is_empty(), "{losses:#?}");
+    let part = story_part(&model.export_idml().unwrap(), &story);
+    assert!(part.contains(&format!(r#"<Table Self="{new}""#)), "{part}");
+    assert!(!part.contains(&format!(r#"<Table Self="{old}""#)), "{part}");
+}
+
+/// Reopen from `.paged`, pour text into a cell of the engine's table (a
+/// plugin refreshing a placed table does this): the export carries the
+/// text. The model's cells have no `Self` of their own, so none of them
+/// met a cell of the saved part, and every cell exported what the save
+/// held — with no loss reported, the table's id and shape being right.
+#[test]
+fn cell_text_poured_after_a_paged_reopen_exports_without_loss() {
+    let mut model = CanvasModel::load("doc", &fixture(), CanvasOptions::default()).expect("load");
+    let story = minted_frame(&mut model);
+    let table = insert_table(&mut model, &story);
+    let paged = model.export_paged(PROTOCOL).expect("save");
+
+    let mut model = CanvasModel::load("doc", &paged, CanvasOptions::default()).expect("reopen");
+    model
+        .apply_mutation(&Mutation::InsertText {
+            story_id: story.clone(),
+            offset: 0,
+            text: "Opening balance".into(),
+            cell: Some(paged_canvas::TextCellAddr {
+                table_id: table.clone(),
+                row: 1,
+                col: 1,
+            }),
+        })
+        .expect("cell text");
+    let losses = model.idml_export_losses();
+    assert!(losses.is_empty(), "{losses:#?}");
+    let part = story_part(&model.export_idml().unwrap(), &story);
+    assert!(
+        part.contains("<Content>Opening balance</Content>"),
+        "{part}"
+    );
+}
