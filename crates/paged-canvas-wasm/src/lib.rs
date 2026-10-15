@@ -564,9 +564,8 @@ mod wasm {
         /// `width` / `height` are device-pixel dimensions; the JS
         /// caller passes `canvas.width` and `canvas.height` which it
         /// has already sized to `cssWidth * dpr`.
-        ///
-        /// The returned promise does not hold the worker: other calls are
-        /// served while the browser answers (see [`GpuSlot`]).
+        // The returned promise does not hold the worker: other calls are
+        // served while the browser answers (see `GpuSlot`).
         #[cfg(feature = "gpu")]
         #[wasm_bindgen(js_name = initGpu, unchecked_return_type = "Promise<boolean>")]
         pub fn init_gpu(
@@ -709,10 +708,9 @@ mod wasm {
         /// `BACKEND=gpu` to test the production hot path; the CPU
         /// path (`renderTilePng`) stays as the deterministic
         /// fallback used in CI.
-        ///
-        /// The scene is built and submitted synchronously; the returned
-        /// promise then waits on the GPU readback alone, holding neither
-        /// the worker nor the presenter (see [`GpuSlot`]).
+        // The scene is built and submitted synchronously; the returned
+        // promise then waits on the GPU readback alone, holding neither
+        // the worker nor the presenter (see `GpuSlot`).
         #[cfg(feature = "gpu")]
         #[wasm_bindgen(
             js_name = renderPageVelloPng,

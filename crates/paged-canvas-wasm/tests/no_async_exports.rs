@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! No method `CanvasWorker` exports to JS may be an `async fn`.
+//! No method `CanvasWorker` exports to JS may be an `async fn` taking `self`.
 //!
 //! wasm-bindgen takes an async method's `&self` / `&mut self` borrow inside
 //! the future it hands to `future_to_promise`: on the first poll, held until
@@ -24,24 +24,17 @@
 //! browser instead does its work on the worker synchronously and returns a
 //! `js_sys::Promise` whose future owns no borrow of it; `future_to_promise`
 //! requires a `'static` future, so the compiler then rules the borrow out.
+//! (An `async fn` without a receiver borrows nothing and is fine.)
 //!
 //! The behavioural half is `tests/wasm.rs`
 //! (`init_gpu_leaves_the_worker_callable_while_the_adapter_is_pending`); this
 //! guard is native, so it runs in every `cargo test` and covers the methods
-//! a Node host cannot drive (a readback needs a real GPU device).
+//! a Node host cannot drive (a readback needs a real GPU device). paged-sdk's
+//! `ViewerSession` has the same guard.
 
 #[test]
 fn no_exported_worker_method_is_async() {
-    let shell = include_str!("../src/lib.rs");
-    let offenders: Vec<String> = shell
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| {
-            let code = line.trim_start();
-            !code.starts_with("//") && code.contains("async fn")
-        })
-        .map(|(i, line)| format!("src/lib.rs:{}: {}", i + 1, line.trim()))
-        .collect();
+    let offenders = async_fns_taking_self(include_str!("../src/lib.rs"));
     assert!(
         offenders.is_empty(),
         "an async method on the wasm shell holds the worker's borrow across \
@@ -49,4 +42,29 @@ fn no_exported_worker_method_is_async() {
          instead:\n{}",
         offenders.join("\n")
     );
+}
+
+/// Every `async fn` in `src` whose signature takes `self`, as
+/// `src/lib.rs:<line>: <first line>`. Comment lines are skipped; a signature
+/// runs from `async fn` to the `{` (or `;`) that ends it.
+fn async_fns_taking_self(src: &str) -> Vec<String> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut offenders = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with("//") || !code.contains("async fn") {
+            continue;
+        }
+        let mut signature = String::new();
+        for next in &lines[i..] {
+            signature.push_str(next);
+            if next.contains('{') || next.contains(';') {
+                break;
+            }
+        }
+        if signature.contains("self") {
+            offenders.push(format!("src/lib.rs:{}: {}", i + 1, code));
+        }
+    }
+    offenders
 }
