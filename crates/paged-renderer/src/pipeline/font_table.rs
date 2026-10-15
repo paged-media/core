@@ -176,15 +176,20 @@ pub(super) struct FontMetrics {
     pub(super) cap_height: Option<f32>,
     /// `OS/2.sxHeight`, fraction of em.
     pub(super) x_height: Option<f32>,
-    /// `hhea.ascender`, fraction of em. Always present.
+    /// The face's ascent as InDesign takes it, fraction of em: its
+    /// `hhea.ascender`, or a CJK face's own measure (`cjk_ascent_descent`).
+    /// Always present.
     pub(super) ascender: f32,
-    /// `hhea.descender`, fraction of em, stored as a POSITIVE distance
+    /// The matching descent, fraction of em, stored as a POSITIVE distance
     /// below the baseline (ttf-parser returns a negative value; we flip
     /// the sign at parse time). Used by the anchored `TopOfLeading`
     /// vertical reference point to split a line's leading into its
     /// above- and below-baseline portions in the font's own
     /// ascent:descent proportion (InDesign's leading model).
     pub(super) descender: f32,
+    /// The top of a CJK face's em box, fraction of em above the baseline
+    /// (`ideographic_em_top`); `None`: centred on half the cap height.
+    pub(super) em_top: Option<f32>,
 }
 
 impl FontTable {
@@ -479,6 +484,7 @@ impl FontTable {
                     x_height: None,
                     ascender: ov.ascender,
                     descender: 0.0,
+                    em_top: None,
                 });
             family_metrics.insert(
                 family.clone(),
@@ -489,6 +495,8 @@ impl FontTable {
                     // Descender isn't an override axis (it only feeds the
                     // anchored leading split); inherit the substitute's.
                     descender: substitute.descender,
+                    // A pinned cap height places the em box itself.
+                    em_top: substitute.em_top.filter(|_| ov.cap_height.is_none()),
                 },
             );
         }
@@ -678,20 +686,133 @@ impl FontTable {
     }
 }
 
+/// Where a face's em box lies, in ems: `top` above the baseline, `bottom`
+/// below it (`top + bottom == 1`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct EmBox {
+    pub top: f32,
+    pub bottom: f32,
+}
+
+/// The face's em box: one em tall, its top `ideographic_em_top`, or, for
+/// a face with neither, centred on half its cap height (`ruby`'s notes;
+/// `FirstBaselineOffset::EmBoxHeight`).
+pub(super) fn em_box(face: &ttf_parser::Face) -> EmBox {
+    let upem = f32::from(face.units_per_em()).max(1.0);
+    let top = ideographic_em_top(face)
+        .or_else(|| {
+            face.capital_height()
+                .filter(|&c| c > 0)
+                .map(|cap| 0.5 + f32::from(cap) / upem / 2.0)
+        })
+        // No cap height to centre on: a CJK font's conventional box.
+        .unwrap_or(0.88);
+    EmBox {
+        top,
+        bottom: 1.0 - top,
+    }
+}
+
+/// The top of a CJK face's em box, ems above the baseline: one em above
+/// its `BASE` table's ideographic baseline (`ideo`), or, with no `BASE`,
+/// one em centred on its 永 (U+6C38). InDesign 20.0.1
+/// (`tools/indesign-export/cjk-first-baseline-probe`, Em Box Height first
+/// baseline): Kozuka, Hiragino, Adobe Song and Noto Sans JP at 0.88,
+/// Apple SD Gothic Neo at 0.8; Songti SC 0.7985, AppleMyungjo 0.8452 and
+/// Arial Unicode MS 0.8865, each its 永's centre plus half an em. `None`
+/// for a face with neither (a Latin face).
+pub(super) fn ideographic_em_top(face: &ttf_parser::Face) -> Option<f32> {
+    let upem = f32::from(face.units_per_em()).max(1.0);
+    if let Some(ideo) = base_horizontal(face, b"ideo") {
+        return Some(1.0 + f32::from(ideo) / upem);
+    }
+    let ei = face.glyph_bounding_box(face.glyph_index('\u{6C38}')?)?;
+    Some(0.5 + (f32::from(ei.y_max) + f32::from(ei.y_min)) / 2.0 / upem)
+}
+
+/// A horizontal baseline of the face's `BASE` table (`ideo`, `icft`, …),
+/// in font units: the first script that states it (they agree in
+/// practice).
+pub(super) fn base_horizontal(face: &ttf_parser::Face, tag: &[u8; 4]) -> Option<i16> {
+    let data = face
+        .raw_face()
+        .table(ttf_parser::Tag::from_bytes(b"BASE"))?;
+    let u16_at = |at: usize| {
+        data.get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+    };
+    let axis = usize::from(u16_at(4)?);
+    if axis == 0 {
+        return None;
+    }
+    let tag_list = axis + usize::from(u16_at(axis)?);
+    let script_list = axis + usize::from(u16_at(axis + 2)?);
+    let tags = usize::from(u16_at(tag_list)?);
+    let ideo = (0..tags)
+        .find(|&i| data.get(tag_list + 2 + 4 * i..tag_list + 6 + 4 * i) == Some(tag.as_slice()))?;
+    let scripts = usize::from(u16_at(script_list)?);
+    (0..scripts).find_map(|i| {
+        let script = script_list + usize::from(u16_at(script_list + 2 + 6 * i + 4)?);
+        let values = usize::from(u16_at(script)?);
+        if values == 0 {
+            return None;
+        }
+        let values = script + values;
+        if ideo >= usize::from(u16_at(values + 2)?) {
+            return None;
+        }
+        let coord = values + usize::from(u16_at(values + 4 + 2 * ideo)?);
+        u16_at(coord + 2).map(|v| v as i16)
+    })
+}
+
 pub(super) fn parse_font_metrics(bytes: &[u8]) -> Option<FontMetrics> {
     let face = ttf_parser::Face::parse(bytes, 0).ok()?;
     let upem = face.units_per_em() as f32;
     if upem <= 0.0 {
         return None;
     }
+    // `hhea.descender` is negative (below the baseline); store the
+    // magnitude so the leading-split math reads naturally.
+    let (ascender, descender) = cjk_ascent_descent(&face).unwrap_or((
+        face.ascender() as f32 / upem,
+        (face.descender() as f32 / upem).abs(),
+    ));
     Some(FontMetrics {
         cap_height: face.capital_height().map(|v| v as f32 / upem),
         x_height: face.x_height().map(|v| v as f32 / upem),
-        ascender: face.ascender() as f32 / upem,
-        // `hhea.descender` is negative (below the baseline); store the
-        // magnitude so the leading-split math reads naturally.
-        descender: (face.descender() as f32 / upem).abs(),
+        ascender,
+        descender,
+        em_top: ideographic_em_top(&face),
     })
+}
+
+/// A CJK face's ascent and descent as InDesign takes them (fractions of
+/// em), where its `hhea` says something else; `None` for any other face,
+/// whose `hhea` InDesign uses as it stands. Asked of InDesign 20.0.1
+/// (`tools/indesign-export/cjk-first-baseline-probe`: the first baseline
+/// of a 30 pt frame, `Ascent` offset, and the ascent and descent it
+/// reports):
+///
+/// * the top of the face's `d` and the bottom of its `p`, whatever its
+///   `hhea` (Kozuka Mincho Pr6N 0.772 / 0.257 against `hhea` 0.88 / 0.12;
+///   Kozuka Gothic, Hiragino Mincho, Adobe Song, Apple SD Gothic Neo,
+///   Songti SC, AppleMyungjo and Arial Unicode MS alike), where Minion Pro
+///   and Open Sans keep their `hhea`;
+/// * a variable face (Noto Sans JP, the one measured): one em below the
+///   top of its ideographic character face (`BASE` `icft`), 0.827 / 0.173.
+///
+/// A face is CJK when it maps 一 (U+4E00).
+fn cjk_ascent_descent(face: &ttf_parser::Face) -> Option<(f32, f32)> {
+    face.glyph_index('\u{4E00}')?;
+    let upem = f32::from(face.units_per_em());
+    if face.is_variable() {
+        let top = f32::from(base_horizontal(face, b"icft")?) / upem;
+        return Some((top, 1.0 - top));
+    }
+    let d = face.glyph_bounding_box(face.glyph_index('d')?)?;
+    let p = face.glyph_bounding_box(face.glyph_index('p')?)?;
+    Some((f32::from(d.y_max) / upem, -f32::from(p.y_min) / upem))
 }
 
 /// The font id of a face buffer: `fnv_1a_u32` of its bytes, computed once

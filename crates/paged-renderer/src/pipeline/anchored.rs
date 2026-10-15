@@ -1496,6 +1496,7 @@ mod tests {
             x_height: Some(0.520),
             ascender: 0.800,
             descender: 0.200,
+            em_top: None,
         }
     }
 
@@ -1552,6 +1553,7 @@ mod tests {
             x_height: None,
             ascender: 0.750,
             descender: 0.250,
+            em_top: None,
         };
         let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
         assert!(
@@ -1591,6 +1593,7 @@ mod tests {
             x_height: Some(0.5),
             ascender: 0.0,
             descender: 0.0,
+            em_top: None,
         };
         let lm = LineRefMetrics::resolve(BASELINE_Y, PT, LEADING, Some(&m));
         assert!(lm.top_of_leading_y.is_finite());

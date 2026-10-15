@@ -144,3 +144,9 @@ take the InDesign GUI for a few seconds and share the lock
   ruby spread 1:2:1 over a wider base and a narrower base spaced out to
   its ruby, per-character ruby split at spaces. Read from InDesign's PDF
   with `pdf-text.py`; answers in `ruby-kenten-probe.json`.
+- `cjk-first-baseline-probe`: where a frame of CJK text sets its first
+  baseline. A CJK face's ascent is the top of its `d` and its descent the
+  bottom of its `p`, not its `hhea` (a variable one, Noto Sans JP: one em
+  below the top of its ideographic character face); its em box stands one
+  em above its `BASE` ideographic baseline, or, with no `BASE`, is centred
+  on its 永. Answers in `cjk-first-baseline-probe.json`.

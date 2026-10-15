@@ -21,9 +21,9 @@
 //!   -1, "auto"), ruby in the base's own face;
 //! * both sit on the base's em box: the mark's em box stands on the
 //!   base's (Kozuka: ruby and kenten baselines 28.2 pt above a 30 pt
-//!   base, 0.88 × 30 + 0.12 × 15). A face's em box is its `BASE` table's
-//!   ideographic baseline (`ideo`) and one em above it, or, without one,
-//!   one em centred on half the cap height (Open Sans 0.857 / 0.143 em,
+//!   base, 0.88 × 30 + 0.12 × 15). A face's em box is `font_table`'s
+//!   `em_box`: a CJK face's from its `BASE` table or its 永, any other one
+//!   em centred on half the cap height (Open Sans 0.857 / 0.143 em,
 //!   Courier New 0.786 / 0.214 em, both measured);
 //! * a kenten mark is centred on its character;
 //! * ruby narrower than its base spreads over it 1:2:1 (`RubyJIS`): one
@@ -46,75 +46,7 @@ use paged_compose::{
 };
 use paged_text::shape::ADVANCE_PRECISION;
 
-/// Where a face's em box lies, in ems: `top` above the baseline, `bottom`
-/// below it (`top + bottom == 1`).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct EmBox {
-    pub top: f32,
-    pub bottom: f32,
-}
-
-/// The face's em box (see the module notes).
-pub(super) fn em_box(face: &ttf_parser::Face) -> EmBox {
-    let upem = f32::from(face.units_per_em()).max(1.0);
-    if let Some(ideo) = base_ideographic(face) {
-        let bottom = -f32::from(ideo) / upem;
-        return EmBox {
-            top: 1.0 - bottom,
-            bottom,
-        };
-    }
-    match face.capital_height().filter(|&c| c > 0) {
-        Some(cap) => {
-            let half = f32::from(cap) / upem / 2.0;
-            EmBox {
-                top: 0.5 + half,
-                bottom: 0.5 - half,
-            }
-        }
-        // No cap height to centre on: a CJK font's conventional box.
-        None => EmBox {
-            top: 0.88,
-            bottom: 0.12,
-        },
-    }
-}
-
-/// The horizontal `ideo` baseline of the face's `BASE` table, in font
-/// units: the first script that states it (they agree in practice).
-fn base_ideographic(face: &ttf_parser::Face) -> Option<i16> {
-    let data = face
-        .raw_face()
-        .table(ttf_parser::Tag::from_bytes(b"BASE"))?;
-    let u16_at = |at: usize| {
-        data.get(at..at + 2)
-            .map(|b| u16::from_be_bytes([b[0], b[1]]))
-    };
-    let axis = usize::from(u16_at(4)?);
-    if axis == 0 {
-        return None;
-    }
-    let tag_list = axis + usize::from(u16_at(axis)?);
-    let script_list = axis + usize::from(u16_at(axis + 2)?);
-    let tags = usize::from(u16_at(tag_list)?);
-    let ideo = (0..tags).find(|&i| {
-        data.get(tag_list + 2 + 4 * i..tag_list + 6 + 4 * i) == Some(b"ideo".as_slice())
-    })?;
-    let scripts = usize::from(u16_at(script_list)?);
-    (0..scripts).find_map(|i| {
-        let script = script_list + usize::from(u16_at(script_list + 2 + 6 * i + 4)?);
-        let values = usize::from(u16_at(script)?);
-        if values == 0 {
-            return None;
-        }
-        let values = script + values;
-        if ideo >= usize::from(u16_at(values + 2)?) {
-            return None;
-        }
-        let coord = values + usize::from(u16_at(values + 4 + 2 * ideo)?);
-        u16_at(coord + 2).map(|v| v as i16)
-    })
-}
+use super::font_table::em_box;
 
 /// One ruby annotation: the base characters it stands over and its text.
 pub(super) struct RubyGroup {
