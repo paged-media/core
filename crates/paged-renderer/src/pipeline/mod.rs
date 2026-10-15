@@ -1034,6 +1034,28 @@ impl BuiltDocument {
         self.pages.iter().map(|p| &p.id)
     }
 
+    /// Where each body paragraph was laid out: per story, paragraph
+    /// index → the 0-based page its first line stands on (L-06). Table
+    /// cells' lines are not body paragraphs and are left out. Feeds
+    /// `Document::resolve_toc_on` / `resolve_index_on`, so a heading or an
+    /// index marker in a story threaded across pages takes the page it is
+    /// on rather than its story's head frame's.
+    pub fn paragraph_pages(&self) -> paged_scene::ParagraphPages {
+        let mut out = paged_scene::ParagraphPages::new();
+        for (page_idx, page) in self.pages.iter().enumerate() {
+            for line in &page.story_layout {
+                if line.cell.is_some() {
+                    continue;
+                }
+                out.entry(line.story_id.clone())
+                    .or_default()
+                    .entry(line.paragraph_idx as usize)
+                    .or_insert(page_idx);
+            }
+        }
+        out
+    }
+
     /// Lines belonging to `story_id`, gathered from every page that
     /// hosts part of the story (chained text spans pages). Sorted by
     /// `(paragraph_idx, line_idx)` so the canvas can walk the story

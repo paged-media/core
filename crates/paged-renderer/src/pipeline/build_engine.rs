@@ -3114,7 +3114,15 @@ pub(super) fn build_document_inner(
         let toc_paragraphs: Option<Vec<paged_model::Paragraph>> = chain
             .first()
             .filter(|_| !story_has_text)
-            .and_then(|f| f.applied_toc_style.as_deref())
+            // InDesign binds a TOC on its `<Story>`; the frame's attribute
+            // is the engine's older spelling.
+            .and_then(|f| {
+                parsed
+                    .story
+                    .applied_toc_style
+                    .as_deref()
+                    .or(f.applied_toc_style.as_deref())
+            })
             .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
             .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
         let chain_pages = chain_pages_pre.clone();
