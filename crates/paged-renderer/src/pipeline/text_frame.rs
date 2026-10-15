@@ -1224,12 +1224,18 @@ pub(super) fn first_baseline_offset_64(
         // and Lora 20 pt (cap 700/1000) 17.0 pt below the top, in a
         // frame and in a cell alike (`table-cell-baseline`); the point
         // size this used to take is the em box's height, not its top.
-        Some(F::EmBoxHeight) => em_fraction_to_64(
-            0.5 + 0.5
-                * metrics
-                    .and_then(|m| m.cap_height)
-                    .unwrap_or(CAP_HEIGHT_FALLBACK),
-        ),
+        // A CJK face has its em box where `ideographic_em_top` puts it:
+        // on its ideographic baseline, or centred on its 永 (Apple SD
+        // Gothic Neo 0.8 em, where half its cap height would give 0.85;
+        // `cjk-first-baseline-probe`).
+        Some(F::EmBoxHeight) => {
+            em_fraction_to_64(metrics.and_then(|m| m.em_top).unwrap_or_else(|| {
+                0.5 + 0.5
+                    * metrics
+                        .and_then(|m| m.cap_height)
+                        .unwrap_or(CAP_HEIGHT_FALLBACK)
+            }))
+        }
         // LeadingOffset: the first line's LEADING, never less than
         // MinimumFirstBaselineOffset. Measured against InDesign 2025 (the
         // `reflow` fixture, 2026-10-01): 12 pt leading puts the first

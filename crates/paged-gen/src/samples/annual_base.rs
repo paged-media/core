@@ -608,6 +608,7 @@ fn footnote_option() -> FootnoteOptionDef {
         separator_text: Some(" ".to_string()),
         spacer: Some(13.0),
         space_between: Some(6.5),
+        ..Default::default()
     }
 }
 
@@ -1465,9 +1466,9 @@ fn write_footnote_exhibit_story(story_id: &str, body: &str, notes: &[(&str, &str
 /// A vertical-writing exhibit: `<StoryPreference StoryOrientation="Vertical">`
 /// with real Japanese set in Noto Sans JP — story direction is content
 /// state no mutation writes, so the scripts chapter's vertical pages
-/// read from here. One run carries GroupRuby, one a kenten mark (both
-/// render at their recorded MVP limits — the chapter's margin notes say
-/// so).
+/// read from here. One run carries GroupRuby, one a kenten mark: under
+/// the body style's composer neither prints, in InDesign as in the engine
+/// (only the Japanese composers set them; `cjk-composer-probe`).
 fn write_vertical_exhibit_story(
     story_id: &str,
     lead: &str,

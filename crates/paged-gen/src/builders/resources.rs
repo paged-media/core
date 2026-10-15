@@ -1131,6 +1131,19 @@ pub struct FootnoteOptionDef {
     pub separator_text: Option<String>,
     pub spacer: Option<f32>,
     pub space_between: Option<f32>,
+    /// `StartAt`.
+    pub start_at: Option<u32>,
+    /// `Prefix` / `Suffix` around a note's number.
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
+    /// Typed `<Properties>` children, InDesign's spelling:
+    /// `FootnoteNumberingStyle` (`Arabic`, `LowerRoman`, …),
+    /// `RestartNumbering` (`DontRestart`, `PageRestart`, `SpreadRestart`,
+    /// `SectionRestart`), `ShowPrefixSuffix` (`NoPrefixSuffix`,
+    /// `PrefixSuffixReference`, `PrefixSuffixText`, `PrefixSuffixBoth`).
+    pub numbering_style: Option<&'static str>,
+    pub restart_numbering: Option<&'static str>,
+    pub show_prefix_suffix: Option<&'static str>,
 }
 
 /// [`preferences_xml`] plus the document's `<FootnoteOption>`, which
@@ -1206,17 +1219,40 @@ fn write_footnote_option(b: &mut XmlBuilder, fo: &FootnoteOptionDef) {
         // `preferences_xml_with_footnote_option`).
         attrs.push(("RuleColor", v.to_string()));
     }
-    let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    match fo.rule_color.as_deref() {
-        Some(color) => {
-            b.start("FootnoteOption", &attr_refs);
-            b.start("Properties", &[]);
-            b.start("RuleColor", &[("type", "object")]);
-            b.text(color);
-            b.end("RuleColor");
-            b.end("Properties");
-            b.end("FootnoteOption");
-        }
-        None => b.empty("FootnoteOption", &attr_refs),
+    if let Some(v) = fo.start_at {
+        attrs.push(("StartAt", v.to_string()));
     }
+    if let Some(v) = fo.prefix.as_deref() {
+        attrs.push(("Prefix", v.to_string()));
+    }
+    if let Some(v) = fo.suffix.as_deref() {
+        attrs.push(("Suffix", v.to_string()));
+    }
+    let attr_refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let enums: Vec<(&str, &str)> = [
+        ("FootnoteNumberingStyle", fo.numbering_style),
+        ("RestartNumbering", fo.restart_numbering),
+        ("ShowPrefixSuffix", fo.show_prefix_suffix),
+    ]
+    .into_iter()
+    .filter_map(|(k, v)| v.map(|v| (k, v)))
+    .collect();
+    if fo.rule_color.is_none() && enums.is_empty() {
+        b.empty("FootnoteOption", &attr_refs);
+        return;
+    }
+    b.start("FootnoteOption", &attr_refs);
+    b.start("Properties", &[]);
+    for (k, v) in enums {
+        b.start(k, &[("type", "enumeration")]);
+        b.text(v);
+        b.end(k);
+    }
+    if let Some(color) = fo.rule_color.as_deref() {
+        b.start("RuleColor", &[("type", "object")]);
+        b.text(color);
+        b.end("RuleColor");
+    }
+    b.end("Properties");
+    b.end("FootnoteOption");
 }

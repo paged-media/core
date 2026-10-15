@@ -4048,6 +4048,34 @@ pub struct FootnoteOptions {
     /// as a typed `<Properties>` child). `None`: Arabic.
     #[serde(default)]
     pub numbering_style: Option<String>,
+    /// `Prefix` / `Suffix` — text around a note's number, shown where
+    /// [`Self::show_prefix_suffix`] says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suffix: Option<String>,
+    /// `ShowPrefixSuffix` — `NoPrefixSuffix`, `PrefixSuffixReference`,
+    /// `PrefixSuffixText` or `PrefixSuffixBoth` (a typed `<Properties>`
+    /// child). `None`: `NoPrefixSuffix`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_prefix_suffix: Option<String>,
+    /// `RestartNumbering` — `DontRestart`, `PageRestart`, `SpreadRestart`
+    /// or `SectionRestart` (a typed `<Properties>` child). `None`:
+    /// `DontRestart`. See [`FootnoteRestart`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_numbering: Option<String>,
+}
+
+/// Where footnote numbering starts again (`RestartNumbering`). InDesign
+/// numbers the notes of each story through the story; a restart starts
+/// them again at each page, spread or section the story reaches
+/// (asked of InDesign 20.0.1, `footnote-numbering`, `footnote-restart`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FootnoteRestart {
+    DontRestart,
+    PageRestart,
+    SpreadRestart,
+    SectionRestart,
 }
 
 impl FootnoteOptions {
@@ -4071,6 +4099,53 @@ impl FootnoteOptions {
     /// number opening the note both print it (asked of InDesign 20.0.1:
     /// `StartAt` 5 prints `5`, lower roman prints `i`). A style the engine
     /// does not spell prints Arabic.
+    /// The document's [`FootnoteRestart`]; an unknown value is
+    /// `DontRestart`.
+    pub fn restart(&self) -> FootnoteRestart {
+        match self.restart_numbering.as_deref() {
+            Some("PageRestart") => FootnoteRestart::PageRestart,
+            Some("SpreadRestart") => FootnoteRestart::SpreadRestart,
+            Some("SectionRestart") => FootnoteRestart::SectionRestart,
+            _ => FootnoteRestart::DontRestart,
+        }
+    }
+
+    /// What the reference in the text prints for the `ordinal`-th note:
+    /// its [`Self::label`], inside the prefix and suffix when
+    /// `ShowPrefixSuffix` names the reference (`PrefixSuffixReference`,
+    /// `PrefixSuffixBoth`).
+    pub fn reference_label(&self, ordinal: u32) -> String {
+        let shown = matches!(
+            self.show_prefix_suffix.as_deref(),
+            Some("PrefixSuffixReference" | "PrefixSuffixBoth")
+        );
+        self.wrapped(ordinal, shown)
+    }
+
+    /// What the note's own text prints for its number: its
+    /// [`Self::label`], inside the prefix and suffix when
+    /// `ShowPrefixSuffix` names the text (`PrefixSuffixText`,
+    /// `PrefixSuffixBoth`).
+    pub fn text_label(&self, ordinal: u32) -> String {
+        let shown = matches!(
+            self.show_prefix_suffix.as_deref(),
+            Some("PrefixSuffixText" | "PrefixSuffixBoth")
+        );
+        self.wrapped(ordinal, shown)
+    }
+
+    fn wrapped(&self, ordinal: u32, shown: bool) -> String {
+        let label = self.label(ordinal);
+        if !shown {
+            return label;
+        }
+        format!(
+            "{}{label}{}",
+            self.prefix.as_deref().unwrap_or(""),
+            self.suffix.as_deref().unwrap_or("")
+        )
+    }
+
     pub fn label(&self, ordinal: u32) -> String {
         let n = self.start_at.unwrap_or(1).max(1) + ordinal.saturating_sub(1);
         let style = match self.numbering_style.as_deref() {
