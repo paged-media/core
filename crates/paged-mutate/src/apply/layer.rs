@@ -2287,6 +2287,12 @@ pub(super) fn set_paragraph_style_field(
                 .expect("a line-setting path")?
                 .0,
         ),
+        PropertyPath::ParagraphNumberingLevel
+        | PropertyPath::ParagraphNumberingApplyRestartPolicy => Ok(
+            super::paragraph::set_list_level_field(path, value, &mut def.list_level)
+                .expect("a list-level path")?
+                .0,
+        ),
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount
         | PropertyPath::ParagraphSpanColumnMinSpaceBefore

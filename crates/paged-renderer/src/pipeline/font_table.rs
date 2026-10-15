@@ -245,6 +245,17 @@ impl FontTable {
             keys: &mut std::collections::BTreeSet<FontKey>,
         ) {
             for resolved in shaped_run_attrs(document, paragraph) {
+                // The faces its ruby and a custom kenten mark print in
+                // (`RubyFont`, `KentenFont`) are asked for too.
+                let m = &resolved.marks;
+                for (family, style) in [
+                    (&m.ruby_font, &m.ruby_font_style),
+                    (&m.kenten_font, &m.kenten_font_style),
+                ] {
+                    if let Some(family) = family {
+                        keys.insert((family.clone(), style.clone()));
+                    }
+                }
                 if let Some(family) = resolved.font {
                     keys.insert((family, resolved.font_style));
                 }

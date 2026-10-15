@@ -619,6 +619,52 @@ pub(super) fn set_para_tristate_bool_field(
     Ok((encode(prev), encode(next)))
 }
 
+/// Set a list level (`NumberingLevel`) from a `Value::Length` carrying a
+/// whole number from 1 to 9; `Length(None)` clears the override. Any
+/// other value is refused with the slot untouched (InDesign offers nine
+/// levels). The prior comes back as `Value::Length`, which this setter
+/// accepts, so the inverse round-trips.
+pub(super) fn set_para_list_level_field(
+    path: PropertyPath,
+    value: &Value,
+    slot: &mut Option<u32>,
+) -> Result<(Value, Value), OperationError> {
+    let next = match value {
+        Value::Length(None) => None,
+        Value::Length(Some(n)) if (1.0..=9.0).contains(n) && n.fract() == 0.0 => Some(*n as u32),
+        _ => {
+            return Err(OperationError::TypeMismatch {
+                path,
+                expected: "Length: a whole number from 1 to 9, or None".to_string(),
+            })
+        }
+    };
+    let prev = *slot;
+    *slot = next;
+    Ok((
+        Value::Length(prev.map(|n| n as f32)),
+        Value::Length(next.map(|n| n as f32)),
+    ))
+}
+
+/// The list-level paths (ADR 158) on a paragraph's or a paragraph
+/// style's [`paged_model::ListLevel`]; `None` for any other path.
+pub(super) fn set_list_level_field(
+    path: PropertyPath,
+    value: &Value,
+    ll: &mut paged_model::ListLevel,
+) -> Option<Result<(Value, Value), OperationError>> {
+    Some(match path {
+        PropertyPath::ParagraphNumberingLevel => {
+            set_para_list_level_field(path, value, &mut ll.level)
+        }
+        PropertyPath::ParagraphNumberingApplyRestartPolicy => {
+            set_para_tristate_bool_field(path, value, &mut ll.apply_restart)
+        }
+        _ => return None,
+    })
+}
+
 /// The six list-marker attributes a paragraph and a paragraph style
 /// share, borrowed from either.
 pub(super) struct ListMarkerSlots<'a> {
@@ -941,6 +987,10 @@ pub(super) fn apply_paragraph_field(
         | PropertyPath::ParagraphBalanceRaggedLines => {
             set_line_setting_field(path, value, &mut para.line_setting)
                 .expect("a line-setting path")
+        }
+        PropertyPath::ParagraphNumberingLevel
+        | PropertyPath::ParagraphNumberingApplyRestartPolicy => {
+            set_list_level_field(path, value, &mut para.list_level).expect("a list-level path")
         }
         PropertyPath::ParagraphSpanColumnType
         | PropertyPath::ParagraphSpanSplitColumnCount

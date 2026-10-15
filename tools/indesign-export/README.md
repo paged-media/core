@@ -150,3 +150,8 @@ take the InDesign GUI for a few seconds and share the lock
   below the top of its ideographic character face); its em box stands one
   em above its `BASE` ideographic baseline, or, with no `BASE`, is centred
   on its 永. Answers in `cjk-first-baseline-probe.json`.
+- `ruby-kenten-options-probe`: what each ruby and kenten setting does —
+  size, horizontal and vertical scale, offsets (up, above or below the
+  line), `BelowLeft`, the seven `RubyAlignment`s, `AlignKentenLeft`, and a
+  custom mark's character and font. Read from InDesign's PDF; answers in
+  `ruby-kenten-options-probe.json`.

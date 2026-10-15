@@ -4480,6 +4480,8 @@ pub(super) struct StoryEmitter<'a> {
     /// unless the paragraph carries `NumberingContinue="true"` or
     /// `NumberingStartAt`.
     pub(super) prev_was_numbered: bool,
+    /// The levels of a multi-level list above level 1 (L-07, ADR 158).
+    pub(super) list_levels: super::numbering::ListLevels,
     /// W1.22 (engine gap 22) — document-level numbering ledger keyed
     /// by `<NumberingList>` self id, shared across every story's
     /// emitter so a list with `ContinueNumbersAcrossStories="true"`
@@ -4814,6 +4816,7 @@ impl<'a> StoryEmitter<'a> {
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             prev_was_numbered: false,
+            list_levels: Default::default(),
             cross_story_numbering: None,
             optical_margin_alignment: false,
             optical_margin_size_pt: 0.0,
@@ -6469,11 +6472,12 @@ fn emit_paragraph_lines(
         .segment
         .opens_paragraph
         .then(|| {
-            list_prefix(
+            list_prefix_with_levels(
                 &resolved_paragraph,
                 &mut em.numbered_counter,
                 &mut em.prev_was_numbered,
                 cross_story_seed,
+                &mut em.list_levels,
             )
         })
         .flatten()
@@ -7330,8 +7334,63 @@ fn emit_paragraph_lines(
         .composer
         .as_ref()
         .is_some_and(paged_model::Composer::is_japanese);
+    // The faces ruby and a custom kenten mark print in, where a run names
+    // its own (`RubyFont`, `KentenFont`) and the font table holds it; the
+    // base's otherwise.
+    let mark_face_bytes: Vec<[Option<Bytes>; 2]> = if japanese {
+        resolved_runs
+            .iter()
+            .map(|r| {
+                let named = |family: &Option<String>, style: &Option<String>| {
+                    let (bytes, substituted) = em
+                        .font_table
+                        .bytes_for(family.as_deref(), style.as_deref())?;
+                    (!substituted).then_some(bytes)
+                };
+                let m = &r.marks;
+                [
+                    m.ruby_font
+                        .as_ref()
+                        .and(named(&m.ruby_font, &m.ruby_font_style)),
+                    m.kenten_font
+                        .as_ref()
+                        .and(named(&m.kenten_font, &m.kenten_font_style)),
+                ]
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mark_faces: Vec<[Option<(paged_text::Face, ttf_parser::Face, u32)>; 2]> = mark_face_bytes
+        .iter()
+        .map(|pair| {
+            [0, 1].map(|i| {
+                let b = pair[i].as_ref()?;
+                Some((
+                    paged_text::Face::from_slice(b, 0)?,
+                    ttf_parser::Face::parse(b, 0).ok()?,
+                    font_id(b) ^ 400f32.to_bits(),
+                ))
+            })
+        })
+        .collect();
+    // A styled run's ruby (`which` 0) or custom kenten (1) face.
+    let mark_face = |k: usize, which: usize| -> Option<super::ruby::MarkFace> {
+        let i = k.checked_sub(head_run).unwrap_or(marker_slot);
+        if let Some((shaping, outline, id)) = mark_faces.get(i).and_then(|p| p[which].as_ref()) {
+            return Some((shaping, outline, em.font_table.font_ref(*id)));
+        }
+        let outline = outline_faces.get(*unique_idx.get(i)?)?.as_ref()?;
+        Some((
+            styled_runs_ref.get(k)?.face,
+            outline,
+            em.font_table.font_ref(font_ids[i]),
+        ))
+    };
     let ruby = if japanese {
-        super::ruby::ruby_groups(styled_runs_ref, &resolved_runs, head_run)
+        super::ruby::ruby_groups(styled_runs_ref, &resolved_runs, head_run, |k| {
+            mark_face(k, 0).map(|(shaping, ..)| shaping)
+        })
     } else {
         Vec::new()
     };
@@ -8587,10 +8646,18 @@ fn emit_paragraph_lines(
         // Kenten and ruby (`ruby`), under the Japanese composers only.
         if japanese {
             let origin = (sx - ox, sy - oy);
-            let face_of = |k: usize| {
-                let i = k.checked_sub(head_run).unwrap_or(marker_slot);
-                let face = outline_faces.get(*unique_idx.get(i)?)?.as_ref()?;
-                Some((face, em.font_table.font_ref(font_ids[i])))
+            let em_of = |font_id: u32| {
+                font_ids
+                    .iter()
+                    .position(|f| *f == font_id)
+                    .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
+                    .map_or(
+                        super::font_table::EmBox {
+                            top: 0.88,
+                            bottom: 0.12,
+                        },
+                        super::font_table::em_box,
+                    )
             };
             let run_of = |cluster: u32| {
                 styled_starts
@@ -8600,21 +8667,35 @@ fn emit_paragraph_lines(
             super::ruby::emit_kenten_for_line(
                 &line,
                 |g| {
-                    let r = resolved_runs.get(run_of(g.cluster).checked_sub(head_run)?)?;
-                    let kind = super::ruby::Kenten::from_idml(r.kenten_kind.as_deref()?)?;
-                    let size = r
-                        .kenten_font_size
-                        .filter(|s| *s > 0.0)
-                        .unwrap_or(g.point_size * 0.5);
-                    Some((kind, size))
+                    use super::ruby::{Kenten, KentenMark, MarkShape};
+                    let run = run_of(g.cluster);
+                    let r = resolved_runs.get(run.checked_sub(head_run)?)?;
+                    let kind = r.kenten_kind.as_deref()?;
+                    let shape = match Kenten::from_idml(kind) {
+                        Some(k) => MarkShape::Drawn(k),
+                        None if kind == "Custom" => {
+                            MarkShape::Character(r.kenten_character.as_deref()?.chars().next()?)
+                        }
+                        None => return None,
+                    };
+                    let m = &r.marks;
+                    let pct = |v: Option<f32>| v.filter(|p| *p > 0.0).map_or(1.0, |p| p / 100.0);
+                    Some(KentenMark {
+                        shape,
+                        size: r
+                            .kenten_font_size
+                            .filter(|s| *s > 0.0)
+                            .unwrap_or(g.point_size * 0.5),
+                        x_scale: pct(m.kenten_x_scale),
+                        y_scale: pct(m.kenten_y_scale),
+                        placement: m.kenten_placement.unwrap_or(0.0),
+                        below: m.kenten_position.as_deref() == Some("BelowLeft"),
+                        left: m.kenten_alignment.as_deref() == Some("AlignKentenLeft"),
+                        run,
+                    })
                 },
-                |font_id| {
-                    font_ids
-                        .iter()
-                        .position(|f| *f == font_id)
-                        .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
-                        .map_or(0.88, |f| super::font_table::em_box(f).top)
-                },
+                em_of,
+                |k| mark_face(k, 1),
                 |cluster| picker.pick(cluster),
                 origin,
                 &mut pages[target_page].list,
@@ -8622,8 +8703,8 @@ fn emit_paragraph_lines(
             super::ruby::emit_ruby_for_line(
                 &line,
                 &ruby,
-                styled_runs_ref,
-                face_of,
+                em_of,
+                |k| mark_face(k, 0),
                 |cluster| picker.pick(cluster),
                 origin,
                 &mut pages[target_page].list,

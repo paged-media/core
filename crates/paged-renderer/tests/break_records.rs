@@ -64,6 +64,31 @@ fn spans(r: &BreakRecord) -> Vec<(GeneratedKind, &str)> {
         .collect()
 }
 
+/// A multi-level list numbers as InDesign 20.0.1 numbered
+/// `numbering-multilevel` (L-07, ADR 158), through the import of
+/// `NumberingLevel`, `NumberingApplyRestartPolicy` and
+/// `<NumberingRestartPolicies>` and the renderer's level counts.
+#[test]
+fn a_multilevel_list_prints_indesigns_numbers() {
+    let b = breaks(paged_gen::samples::numbering_multilevel::build());
+    let markers: Vec<&str> = b
+        .iter()
+        .filter_map(|r| {
+            r.generated
+                .first()
+                .map(|g| &r.source_text[g.start as usize..g.end as usize])
+        })
+        .map(|m| m.trim_end_matches('\t'))
+        .collect();
+    assert_eq!(
+        markers,
+        [
+            "1.", "1.a.", "1.b.", "1.b.i.", "1.b.ii.", "1.c.", "1.c.i.", "2.", "2.c.i.", "2.a.",
+            "3.", "3-2", "3-3", "4.", "4-4", "4.e.",
+        ]
+    );
+}
+
 /// The marker is the number or bullet with the text after it, whatever
 /// `BulletsTextAfter` is (`list-overrides`): nothing, a tab, `>`.
 #[test]

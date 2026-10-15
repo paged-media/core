@@ -197,6 +197,9 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         "paragraphLastLineIndent",
         "paragraphBalanceRaggedLines",
         "characterNoBreak",
+        // A paragraph's level in a multi-level list (ADR 158).
+        "paragraphNumberingLevel",
+        "paragraphNumberingApplyRestartPolicy",
         // The seventh frame effect, whose six siblings were advertised
         // and which was not, for no recorded reason.
         "frameGradientFeather",
@@ -212,7 +215,8 @@ fn the_promoted_paths_are_in_the_published_catalog() {
         // 234: ADR 135 added the transparency targets, group isolate and
         // knockout, and the drop shadow's attributes.
         // 239: ADR 153 added the line setting and no-break.
-        239,
+        // 241: ADR 158 added the list level and its restart flag.
+        241,
         "the advertised roster changed; move the count with the decision"
     );
 }

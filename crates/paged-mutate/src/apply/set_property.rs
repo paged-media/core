@@ -2665,6 +2665,8 @@ pub(super) fn apply_set_property(
             | PropertyPath::ParagraphNumberingExpression
             | PropertyPath::ParagraphNumberingStartAt
             | PropertyPath::ParagraphNumberingContinue
+            | PropertyPath::ParagraphNumberingLevel
+            | PropertyPath::ParagraphNumberingApplyRestartPolicy
             | PropertyPath::ParagraphBulletsCharacterStyle
             | PropertyPath::ParagraphNumberingCharacterStyle
             | PropertyPath::ParagraphComposer
