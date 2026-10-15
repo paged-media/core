@@ -857,6 +857,26 @@
       "min_ssim": 0.991,
       "max_ink_mean_de": 4.09,
       "rationale": "Added 2026-10-14 (A-19, ADR 155): the rules InDesign draws between a text frame's columns, asked of InDesign 20.0.1 and read from its PDF's stroke operators. Nine 168 x 180 pt frames of Open Sans 8/10: the default 1 pt rule; three columns at 0.5 pt, tint 50; a 2 pt Dashed rule; top / bottom insets 12 / 24; a 4 pt offset; insets of -8; a frame inset of 10; three lines of text only; one column. Each rule stands at its gutter's centre plus the offset and runs from the text area's top plus the top inset to the deepest line's baseline plus its descent minus the bottom inset; every extent matches InDesign's to the pixel. The page measures mean 0.331 / p99 7.28 / ssim 0.99606 / ink 3.41 (0.521 / 8.63 / 0.979 / 6.29 without the rules), the rest being glyph edges and pdftoppm's hairline snapping of the 0.5 pt rules; sized at worst x 1.20 and ssim - 0.005."
+    },
+    {
+      "name": "footnote-numbering",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.061,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9938,
+      "max_ink_mean_de": 8.33,
+      "rationale": "Added 2026-10-15 (L-01c, ADR 156): how InDesign numbers footnotes, asked of InDesign 20.0.1. Two A4 pages of Inter 10 pt with one note per paragraph: story A threaded from page 1's top frame to page 2's (its third paragraph starts the next frame), story B below it on page 1, story C below it on page 2, the designmap listing them C, B, A. InDesign numbers the notes of each STORY through the story (A 1-4 across both pages, B and C from 1 again), restarting at each page, spread or section when RestartNumbering says so. This variant: DontRestart, Prefix [ and Suffix ] shown in the reference and the note (PrefixSuffixBoth). Pages measure mean 0.035 / 0.051, ssim >= 0.99890, ink <= 6.94 (main's engine, which knew neither prefix nor suffix: 0.062 / 0.078); sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on: the numbers are the point."
+    },
+    {
+      "name": "footnote-restart",
+      "text_gate": true,
+      "max_pages_with_pdf": 2,
+      "max_mean_de": 0.07,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9933,
+      "max_ink_mean_de": 9.86,
+      "rationale": "Added 2026-10-15 (L-01c, ADR 156): see footnote-numbering. Two A4 pages of Inter 10 pt with one note per paragraph: story A threaded from page 1's top frame to page 2's (its third paragraph starts the next frame), story B below it on page 1, story C below it on page 2, the designmap listing them C, B, A. InDesign numbers the notes of each STORY through the story (A 1-4 across both pages, B and C from 1 again), restarting at each page, spread or section when RestartNumbering says so. This variant: PageRestart, LowerRoman, Prefix ( and Suffix ) in the reference only (PrefixSuffixReference); story A's page-2 notes restart at i. Pages measure mean 0.051 / 0.058, ssim >= 0.99840, ink <= 8.21; sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on."
     }
   ]
 }

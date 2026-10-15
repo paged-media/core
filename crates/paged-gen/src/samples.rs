@@ -26,6 +26,7 @@ pub mod corners;
 pub mod docx_pagination;
 pub mod effects;
 pub mod effects_attrs;
+pub mod footnote_numbering;
 pub mod footnote_references;
 pub mod footnotes;
 pub mod forced_line_break;
@@ -196,6 +197,8 @@ pub const SAMPLES: &[&str] = &[
     "paragraph-attrs",
     "placed-pdf",
     "column-rules",
+    "footnote-numbering",
+    "footnote-restart",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -268,6 +271,8 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "paragraph-attrs" => paragraph_attrs::build(),
         "placed-pdf" => placed_pdf::build(),
         "column-rules" => column_rules::build(),
+        "footnote-numbering" => footnote_numbering::build(&footnote_numbering::NUMBERING),
+        "footnote-restart" => footnote_numbering::build(&footnote_numbering::RESTART),
         "line-shadows" => line_shadows::build(),
         "rect-shadows" => rect_shadows::build(),
         "gradient-geometry" => gradient_geometry::build(),
@@ -314,7 +319,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            84,
+            86,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

@@ -124,7 +124,7 @@ pub(super) fn compose_footnote_paragraphs(
     // text (asked of InDesign 20.0.1, `footnote-references`). A note
     // whose text holds none prints no number: InDesign's PDF of the
     // `footnotes` fixture, whose notes carry no `ACE 4`, shows none.
-    let label = document.designmap.footnote_options.label(fn_.number);
+    let label = document.designmap.footnote_options.text_label(fn_.number);
     let mut paragraphs: Vec<paged_text::LaidOutParagraph> = Vec::new();
     let mut leadings: Vec<Vec<f32>> = Vec::new();
     let mut space_above: Vec<f32> = Vec::new();

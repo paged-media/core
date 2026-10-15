@@ -84,6 +84,7 @@ is not written yet.
 | [153](153-a-paragraphs-line-setting.md) | A paragraph's line setting: auto leading, a lone word, the last line, balance, no break | Accepted 2026-10-14 |
 | [154](154-a-placed-pdf-is-drawn-from-its-own-operations.md) | A placed PDF is drawn from its own drawing operations | Accepted 2026-10-14 |
 | [155](155-column-rules.md) | Column rules: where InDesign draws the rule between two columns | Accepted 2026-10-14 |
+| [156](156-how-indesign-numbers-footnotes.md) | How InDesign numbers footnotes: per story, restarted by page, spread or section | Accepted 2026-10-15 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

@@ -117,6 +117,8 @@ pub(crate) struct PageNumbering {
     pub numbers: Vec<u32>,
     /// Index into `designmap.sections` of each page's section.
     pub section_of: Vec<Option<usize>>,
+    /// The index of each page's spread.
+    pub spread_of: Vec<usize>,
 }
 
 impl PageNumbering {
@@ -499,6 +501,7 @@ mod tests {
         let numbering = PageNumbering {
             numbers: vec![1, 2, 1, 2, 3],
             section_of: vec![Some(0), Some(0), Some(1), Some(1), Some(1)],
+            spread_of: vec![0, 1, 2, 3, 4],
         };
         (labels, numbering)
     }
