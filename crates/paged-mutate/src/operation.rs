@@ -628,6 +628,10 @@ pub enum PropertyPath {
     /// `NodeId::StoryRange`. Same `None`→default undo note as
     /// `CharacterUnderline`.
     CharacterStrikethru,
+    /// `NoBreak` — no line break falls inside the text (ADR 153).
+    /// `Value::Bool`; a prior-`None` undoes to `false` (IDML's default).
+    /// Reflow-affecting.
+    CharacterNoBreak,
     /// W0.1 — ligatures toggle (`Ligatures`, the `ligatures_on`
     /// field). `Value::Bool`. Reflow-affecting (toggling ligature
     /// substitution changes glyph runs and advances). Addressed
@@ -825,6 +829,27 @@ pub enum PropertyPath {
     /// third-party composer it READ verbatim, but nothing may author one.
     /// Reflow-affecting.
     ParagraphComposer,
+    /// `AutoLeading` — auto leading as a per cent of a line's largest
+    /// size (ADR 153). `Value::Length(Some(pct))`; `Length(None)` clears
+    /// the override (inherit; absent everywhere is InDesign's 120).
+    /// Reflow-affecting.
+    ParagraphAutoLeading,
+    /// `SingleWordJustification` — how a justified line holding one word
+    /// is set (ADR 153). `Value::Text` carrying the IDML string
+    /// (`FullyJustified` / `LeftAlign` / `CenterAlign` / `RightAlign`);
+    /// the empty string clears the override (inherit; absent everywhere
+    /// is `FullyJustified`). An unknown string is refused with a
+    /// `TypeMismatch`, never stored. Reflow-affecting.
+    ParagraphSingleWordJustification,
+    /// `LastLineIndent` (pt) — the last line's right indent (ADR 153).
+    /// `Value::Length`, `None` clears. Reflow-affecting.
+    ParagraphLastLineIndent,
+    /// `<BalanceRaggedLines>` — balanced ragged lines (ADR 153).
+    /// `Value::Text` carrying the IDML string (`NoBalancing` /
+    /// `FullyBalanced` / `PyramidShape` / `VeeShape`); the empty string
+    /// clears the override. An unknown string is refused with a
+    /// `TypeMismatch`. Reflow-affecting.
+    ParagraphBalanceRaggedLines,
 
     // ---- W0.3 — text-frame prefs --------------------------------
     /// W0.3 — `<TextFramePreference TextColumnCount="...">`. The run
@@ -1576,6 +1601,7 @@ impl PropertyPath {
             PropertyPath::CharacterSkew => "character.skew",
             PropertyPath::CharacterUnderline => "character.underline",
             PropertyPath::CharacterStrikethru => "character.strikethru",
+            PropertyPath::CharacterNoBreak => "character.noBreak",
             PropertyPath::CharacterLigatures => "character.ligatures",
             PropertyPath::CharacterOtfFeatures => "character.otfFeatures",
             PropertyPath::ParagraphLeftIndent => "paragraph.leftIndent",
@@ -1609,6 +1635,10 @@ impl PropertyPath {
             PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
             PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
             PropertyPath::ParagraphComposer => "paragraph.composer",
+            PropertyPath::ParagraphAutoLeading => "paragraph.autoLeading",
+            PropertyPath::ParagraphSingleWordJustification => "paragraph.singleWordJustification",
+            PropertyPath::ParagraphLastLineIndent => "paragraph.lastLineIndent",
+            PropertyPath::ParagraphBalanceRaggedLines => "paragraph.balanceRaggedLines",
             // W0.3 — text-frame prefs.
             PropertyPath::TextFrameColumnCount => "textFrame.columnCount",
             PropertyPath::TextFrameColumnGutter => "textFrame.columnGutter",

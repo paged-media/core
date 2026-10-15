@@ -71,6 +71,25 @@ Five paragraph attributes that change where lines break and how they sit were no
   paragraph's tail overset.
 - **Not yet modelled:**
   - `PyramidShape` and `VeeShape` balance; `NoBreak` on a paragraph style.
-  - The five attributes are read and rendered, not yet settable through property paths or
-    written for a paragraph the engine rewrites. Source paragraphs keep their attributes on
-    save.
+
+## Editable and saved (2026-10-14)
+
+- **Saved.** The IDML export writes all five back in InDesign's spellings (plugin-publish 788cff5):
+  - the three attributes with a range's or a paragraph style's other attributes;
+  - `NoBreak` with a run's or a character style's;
+  - `<BalanceRaggedLines>` as the `<Properties>` child.
+- **Editable.** Five property paths set them, at paragraph and paragraph-style level, and
+  `characterNoBreak` at run and character-style level:
+
+  | Path | Wire | Notes |
+  |---|---|---|
+  | `paragraphAutoLeading` | `Length`, per cent | 0–500, default 120 |
+  | `paragraphSingleWordJustification` | `Text`, IDML enum | `""` clears |
+  | `paragraphLastLineIndent` | `Length`, pt | |
+  | `paragraphBalanceRaggedLines` | `Text`, IDML enum | `""` clears |
+  | `characterNoBreak` | `Bool` | |
+
+  - An unknown enum string is refused and the slot is left untouched.
+  - Each path has its catalog row with the IDML mapping. Settable paths: 234 → 239.
+  - `tests/line_setting_paths.rs` writes each attribute onto the fixture's bare twin over the wire
+    and gets the set twin's lines.

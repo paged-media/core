@@ -1481,6 +1481,7 @@
     "characterSkew",
     "characterUnderline",
     "characterStrikethru",
+    "characterNoBreak",
     "characterLigatures",
     "characterOtfFeatures",
     "paragraphLeftIndent",
@@ -1514,7 +1515,11 @@
     "paragraphBulletsCharacterStyle",
     "paragraphNumberingCharacterStyle",
     "itemName",
-    "paragraphComposer"
+    "paragraphComposer",
+    "paragraphAutoLeading",
+    "paragraphSingleWordJustification",
+    "paragraphLastLineIndent",
+    "paragraphBalanceRaggedLines"
   ],
   "constraints": [
     "Scripts run in Boa (pure ECMAScript), NOT Node: no require/import, fetch, fs, setTimeout, or network. Use only paged.* and console.*.",
@@ -7102,6 +7107,25 @@
     },
     {
       "addressKind": "storyRange",
+      "path": "characterNoBreak",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "CharacterStyleRange",
+          "attribute": "NoBreak",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
       "path": "characterLigatures",
       "type": {
         "kind": "bool"
@@ -7820,6 +7844,100 @@
           "element": "ParagraphStyleRange",
           "attribute": "Composer",
           "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphAutoLeading",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 500.0
+      },
+      "default": 120.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "AutoLeading",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphSingleWordJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "FullyJustified",
+          "LeftAlign",
+          "CenterAlign",
+          "RightAlign"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "FullyJustified",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "SingleWordJustification",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphLastLineIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "LastLineIndent",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphBalanceRaggedLines",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoBalancing",
+          "FullyBalanced",
+          "PyramidShape",
+          "VeeShape"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoBalancing",
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "BalanceRaggedLines",
+          "kind": "properties-child"
         }
       ]
     },
@@ -9908,6 +10026,128 @@
     {
       "addressKind": "style",
       "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphAutoLeading",
+      "type": {
+        "kind": "number",
+        "unit": "percent"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0,
+        "max": 500.0
+      },
+      "default": 120.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "AutoLeading",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphSingleWordJustification",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "FullyJustified",
+          "LeftAlign",
+          "CenterAlign",
+          "RightAlign"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "FullyJustified",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "SingleWordJustification",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphLastLineIndent",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "LastLineIndent",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphBalanceRaggedLines",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoBalancing",
+          "FullyBalanced",
+          "PyramidShape",
+          "VeeShape"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoBalancing",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "BalanceRaggedLines",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
         "character"
       ],
       "path": "characterFontSize",
@@ -10284,6 +10524,32 @@
         {
           "element": "CharacterStyle",
           "attribute": "KerningMethod",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "character"
+      ],
+      "path": "characterNoBreak",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "CharacterStyle",
+          "attribute": "NoBreak",
           "kind": "attr"
         }
       ]

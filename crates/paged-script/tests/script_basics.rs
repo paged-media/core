@@ -496,14 +496,15 @@ fn paged_inspect_story_range_returns_character_entries() {
     // (spaceBefore/spaceAfter/firstLineIndent/justification) + 2
     // applied-style paths + W0.2 paragraph formatting paths (13) +
     // ADR 028 keep / start paths (4) + span / split columns paths (6)
-    // + list-marker override paths (6) + the composer (1) = 54 entries.
-    assert!(entries_line.contains("54"), "got: {entries_line}");
+    // + list-marker override paths (6) + the composer (1) + the line
+    // setting (4) and no-break (1) of ADR 153 = 59 entries.
+    assert!(entries_line.contains("59"), "got: {entries_line}");
     let path_lines: Vec<&String> = result
         .output
         .iter()
         .filter(|l| l.starts_with("[log] path"))
         .collect();
-    assert_eq!(path_lines.len(), 54, "got: {:?}", path_lines);
+    assert_eq!(path_lines.len(), 59, "got: {:?}", path_lines);
     for needle in [
         "characterFontSize",
         "characterLeading",
@@ -523,6 +524,7 @@ fn paged_inspect_story_range_returns_character_entries() {
         "characterSkew",
         "characterUnderline",
         "characterStrikethru",
+        "characterNoBreak",
         "characterLigatures",
         "paragraphSpaceBefore",
         "paragraphSpaceAfter",
@@ -553,6 +555,10 @@ fn paged_inspect_story_range_returns_character_entries() {
         "paragraphBulletsCharacterStyle",
         "paragraphNumberingCharacterStyle",
         "paragraphComposer",
+        "paragraphAutoLeading",
+        "paragraphSingleWordJustification",
+        "paragraphLastLineIndent",
+        "paragraphBalanceRaggedLines",
         "paragraphRuleAbove",
         "paragraphRuleBelow",
         "paragraphTabStops",
