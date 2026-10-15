@@ -21,6 +21,18 @@
       "rationale": "Dense small text: nine frames of 8 pt on 10 pt, glyph-edge antialiasing (see text-wrap). The rules themselves carry 1.8 % of the page's difference (pixel columns at each rule, Metal 0.373). Measured on lavapipe (CI, 2026-10-15); sized at worst x 1.20."
     },
     {
+      "name": "footnote-split",
+      "worst_mean_de": 0.31,
+      "measured": 0.26,
+      "rationale": "Dense small text: a page of 10 pt body and 8 pt notes (ADR 161), glyph-edge antialiasing (see column-rules). Measured on lavapipe (CI, 2026-10-15); sized at worst x 1.20."
+    },
+    {
+      "name": "footnote-nosplit",
+      "worst_mean_de": 0.31,
+      "measured": 0.258,
+      "rationale": "Dense small text: a page of 10 pt body and 8 pt notes (ADR 161), glyph-edge antialiasing (see column-rules). Measured on lavapipe (CI, 2026-10-15); sized at worst x 1.20."
+    },
+    {
       "name": "text-wrap-sides",
       "worst_mean_de": 0.47,
       "measured": 0.39,
