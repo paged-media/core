@@ -205,6 +205,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   reference is labelled when its paragraph is composed, so one whose line then moves to a page
   that restarts the numbering keeps the earlier number. End-of-story placement, no-splitting,
   straddling and the continuing rule are not read.
+- **An unresolved table of contents built at render numbers its entries from each story's head
+  frame.** A story with no text bound to a TOC style (on its `<Story>` or its frame) is filled from
+  the TOC style while the page is built, before layout says where a heading lands. The canvas's
+  TOC list and `Document::resolve_toc_on` / `resolve_index_on` take the page a paragraph was laid
+  out on.
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
 - **An edit made while a script waits splits the script's undo step.** The fold merges only
