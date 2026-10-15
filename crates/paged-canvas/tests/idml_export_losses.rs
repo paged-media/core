@@ -534,3 +534,224 @@ fn cell_text_poured_after_a_paged_reopen_exports_without_loss() {
         "{part}"
     );
 }
+
+/// One story in InDesign's shape for paragraphs of different styles — a
+/// `<ParagraphStyleRange>` each, an empty one holding only its mark, the
+/// last empty one a bare `<CharacterStyleRange/>`: Heading (empty) ·
+/// Body "One" · Quote (empty) · Body "Three" · Body "Four" · Heading
+/// (empty).
+fn paragraphs_fixture() -> Vec<u8> {
+    const STORY: &str = r#"<ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Heading"><CharacterStyleRange><Br/></CharacterStyleRange></ParagraphStyleRange><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange><Content>One</Content><Br/></CharacterStyleRange></ParagraphStyleRange><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Quote"><CharacterStyleRange><Br/></CharacterStyleRange></ParagraphStyleRange><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange><Content>Three</Content><Br/></CharacterStyleRange></ParagraphStyleRange><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Body"><CharacterStyleRange PointSize="14"><Content>Four</Content><Br/></CharacterStyleRange></ParagraphStyleRange><ParagraphStyleRange AppliedParagraphStyle="ParagraphStyle/Heading"><CharacterStyleRange/></ParagraphStyleRange>"#;
+    let mut buf = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("mimetype", stored).unwrap();
+        zip.write_all(b"application/vnd.adobe.indesign-idml-package")
+            .unwrap();
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let story = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Story xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="20.0"><Story Self="story1">{STORY}</Story></idPkg:Story>"#
+        );
+        let parts: [(&str, &str); 4] = [
+            (
+                "designmap.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Document DOMVersion="20.0" Self="d1" xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging">
+<Layer Self="ub6" Name="Layer 1" Visible="true" Locked="false" Printable="true"/>
+<idPkg:Spread src="Spreads/Spread_s1.xml"/>
+<idPkg:Story src="Stories/Story_story1.xml"/>
+</Document>"#,
+            ),
+            (
+                "Resources/Styles.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Styles xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="20.0">
+<RootCharacterStyleGroup Self="u9d"><CharacterStyle Self="CharacterStyle/$ID/[No character style]" Name="$ID/[No character style]"/></RootCharacterStyleGroup>
+<RootParagraphStyleGroup Self="u9e"><ParagraphStyle Self="ParagraphStyle/$ID/[No paragraph style]" Name="$ID/[No paragraph style]"/><ParagraphStyle Self="ParagraphStyle/Body" Name="Body"/><ParagraphStyle Self="ParagraphStyle/Heading" Name="Heading"/><ParagraphStyle Self="ParagraphStyle/Quote" Name="Quote"/></RootParagraphStyleGroup>
+</idPkg:Styles>"#,
+            ),
+            (
+                "Spreads/Spread_s1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<idPkg:Spread xmlns:idPkg="http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging" DOMVersion="20.0">
+<Spread Self="s1" PageCount="1">
+<Page Self="p1" Name="1" GeometricBounds="0 0 792 612" ItemTransform="1 0 0 1 0 0"/>
+<TextFrame Self="tf1" ParentStory="story1" GeometricBounds="100 100 400 400" ItemTransform="1 0 0 1 0 0"/>
+</Spread></idPkg:Spread>"#,
+            ),
+            ("Stories/Story_story1.xml", &story),
+        ];
+        for (name, body) in parts {
+            zip.start_file(name, deflated).unwrap();
+            zip.write_all(body.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    buf
+}
+
+/// `(style, text)` per paragraph of a story.
+fn paragraph_shape(paragraphs: &[paged_model::Paragraph]) -> Vec<(String, String)> {
+    paragraphs
+        .iter()
+        .map(|p| {
+            (
+                p.paragraph_style
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim_start_matches("ParagraphStyle/")
+                    .to_string(),
+                p.runs.iter().map(|r| r.text.as_str()).collect(),
+            )
+        })
+        .collect()
+}
+
+/// The everyday edits to a story the part already holds, each through the
+/// engine, straight from the IDML and after a `.paged` round trip: typing
+/// into an empty paragraph (first, between two — in its own style — and
+/// last), a new paragraph typed between two, Enter in the middle of a
+/// run, two paragraphs joined by deleting the mark. Text typed into an
+/// empty paragraph was dropped (no range of it resolved to the new run),
+/// and a paragraph the engine added shifted every source paragraph after
+/// it onto the wrong model paragraph.
+#[test]
+fn everyday_paragraph_edits_to_a_source_story_export_without_loss() {
+    let insert = |offset: u32, text: &str| Mutation::InsertText {
+        story_id: "story1".into(),
+        offset,
+        text: text.into(),
+        cell: None,
+    };
+    // Offsets: Heading "" 0 · One 1..4 · Quote "" 5 · Three 6..11 ·
+    // Four 12..16 · Heading "" 17 (one per paragraph boundary).
+    // (what, the engine's ops, the story after: (style, text) per paragraph)
+    type Edit = (
+        &'static str,
+        Vec<Mutation>,
+        Vec<(&'static str, &'static str)>,
+    );
+    let edits: Vec<Edit> = vec![
+        (
+            "typed into the empty first paragraph",
+            vec![insert(0, "Start")],
+            vec![
+                ("Heading", "Start"),
+                ("Body", "One"),
+                ("Quote", ""),
+                ("Body", "Three"),
+                ("Body", "Four"),
+                ("Heading", ""),
+            ],
+        ),
+        (
+            "typed into the empty Quote between two",
+            vec![insert(5, "Middle")],
+            vec![
+                ("Heading", ""),
+                ("Body", "One"),
+                ("Quote", "Middle"),
+                ("Body", "Three"),
+                ("Body", "Four"),
+                ("Heading", ""),
+            ],
+        ),
+        (
+            "typed into the empty last paragraph",
+            vec![insert(17, "End")],
+            vec![
+                ("Heading", ""),
+                ("Body", "One"),
+                ("Quote", ""),
+                ("Body", "Three"),
+                ("Body", "Four"),
+                ("Heading", "End"),
+            ],
+        ),
+        (
+            "a paragraph typed after One",
+            vec![insert(4, "\nInserted")],
+            vec![
+                ("Heading", ""),
+                ("Body", "One"),
+                ("Body", "Inserted"),
+                ("Quote", ""),
+                ("Body", "Three"),
+                ("Body", "Four"),
+                ("Heading", ""),
+            ],
+        ),
+        (
+            "Enter in the middle of Four",
+            vec![insert(14, "\n")],
+            vec![
+                ("Heading", ""),
+                ("Body", "One"),
+                ("Quote", ""),
+                ("Body", "Three"),
+                ("Body", "Fo"),
+                ("Body", "ur"),
+                ("Heading", ""),
+            ],
+        ),
+        (
+            "Three and Four joined",
+            vec![Mutation::DeleteRange {
+                story_id: "story1".into(),
+                start: 11,
+                end: 12,
+                cell: None,
+            }],
+            vec![
+                ("Heading", ""),
+                ("Body", "One"),
+                ("Quote", ""),
+                ("Body", "ThreeFour"),
+                ("Heading", ""),
+            ],
+        ),
+    ];
+    for via_paged in [false, true] {
+        for (label, ops, want) in &edits {
+            let mut model =
+                CanvasModel::load("doc", &paragraphs_fixture(), CanvasOptions::default())
+                    .expect("load");
+            if via_paged {
+                let paged = model.export_paged(PROTOCOL).expect("save");
+                model = CanvasModel::load("doc", &paged, CanvasOptions::default()).expect("reopen");
+            }
+            for op in ops {
+                model.apply_mutation(op).expect(label);
+            }
+            let want: Vec<(String, String)> = want
+                .iter()
+                .map(|(s, t)| (s.to_string(), t.to_string()))
+                .collect();
+            let label = format!(
+                "{label}{}",
+                if via_paged {
+                    " (after a .paged reopen)"
+                } else {
+                    ""
+                }
+            );
+            assert_eq!(
+                paragraph_shape(&model.scene().stories[0].story.paragraphs),
+                want,
+                "{label}: the engine's own account"
+            );
+            let losses = model.idml_export_losses();
+            assert!(losses.is_empty(), "{label}: {losses:#?}");
+            let twin = idml_import::import_idml_doc(&model.export_idml().unwrap()).unwrap();
+            assert_eq!(
+                paragraph_shape(&twin.stories[0].story.paragraphs),
+                want,
+                "{label}: the export, read back"
+            );
+        }
+    }
+}
