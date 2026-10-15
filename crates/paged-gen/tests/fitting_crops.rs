@@ -91,12 +91,12 @@ fn generated_crops_read_back_as_given() {
         .map(|f| [f.left_crop, f.top_crop, f.right_crop, f.bottom_crop].map(|v| v.unwrap_or(0.0)))
         .collect();
     assert!(
-        read.iter().any(|c| *c == [-24.0, 0.0, -24.0, 0.0]),
+        read.contains(&[-24.0, 0.0, -24.0, 0.0]),
         "the cover's model crops: {read:?}"
     );
     let centred = (200.0 - 128.0) * 0.5;
     assert!(
-        read.iter().any(|c| *c == [centred; 4]),
+        read.contains(&[centred; 4]),
         "CenterContent's model crops: {read:?}"
     );
 }
