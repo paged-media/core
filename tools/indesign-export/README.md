@@ -156,5 +156,6 @@ take the InDesign GUI for a few seconds and share the lock
   Several selected items have a box aligned to the pasteboard, even when
   they share a rotation, and scale as one unit, which shears the rotated
   ones. Read from where the Rotate 90° menu action turns a selection (about
-  the reference point on its box) and from groups; answers in
-  `scale-frame-probe.json`.
+  the reference point on its box) and from groups. A placed image selected
+  on its own sits at its frame's angle plus its own (30° + 15° = 45°) and
+  scales along those axes. Answers in `scale-frame-probe.json`.

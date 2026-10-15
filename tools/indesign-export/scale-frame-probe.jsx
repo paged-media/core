@@ -27,17 +27,23 @@
 // 2. The orientation of a GROUP made of the same items.
 // 3. What a non-uniform scale along a group's own axes does to its
 //    members: whether they stay rectangles (no shear) at their angle.
+// 4. The same for a group that is itself rotated.
+// 5. The box of a placed image selected on its own (the content), in a
+//    rotated frame and turned further inside it, by the same pivot test,
+//    and a scale of the image along its own axes.
 //
 // Works on a fresh, unsaved document (with a window: the menu action
 // needs one) and closes it without saving. Every case is one line,
 // `<case>: <readback>`.
 (function () {
     var OUT = $.global.PROBE_OUT;
+    var IMAGE = $.global.PROBE_IMAGE;
     var lines = [];
     function q(s) { s = String(s); return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\r\n]/g, " ") + '"'; }
     function r2(v) { return Math.round(v * 100) / 100; }
     function pt(p) { return "(" + r2(p[0]) + "," + r2(p[1]) + ")"; }
     function put(label, value) { lines.push(q(label) + ":" + q(value)); }
+    function skipped() { return "SKIPPED: the menu action is not enabled (InDesign modalState=" + app.modalState + ")"; }
 
     var PB = CoordinateSpaces.PASTEBOARD_COORDINATES;
     var INNER = CoordinateSpaces.INNER_COORDINATES;
@@ -133,8 +139,11 @@
         rot90 = findRot90();
         put("0 rotate action", rot90 ? rot90.id + "=" + rot90.name : "NOT FOUND");
 
+        // null when InDesign will not run the action (an open dialog
+        // disables menu actions); the case is then recorded as skipped.
         function turnSelection(items, ref) {
             app.select(items);
+            if (!rot90.enabled) return null;
             doc.layoutWindows[0].transformReferencePoint = ref;
             var a = corner(items[0], AnchorPoint.TOP_LEFT_ANCHOR);
             var b = corner(items[items.length - 1], AnchorPoint.BOTTOM_RIGHT_ANCHOR);
@@ -151,6 +160,7 @@
             var aabbTL = unionTopLeft(items, 0);
             var ownTL = unionTopLeft(items, -common);
             var turn = turnSelection(items, AnchorPoint.TOP_LEFT_ANCHOR);
+            if (!turn) { put(label, skipped()); return; }
             put(label, "turned " + r2(turn.deg) + "deg about " + pt(turn.p) +
                 " | axis-aligned box top-left " + pt(aabbTL) +
                 " | box turned with the items (" + common + "deg) top-left " + pt(ownTL));
@@ -218,7 +228,7 @@
             var ownTL3 = corner(g3, AnchorPoint.TOP_LEFT_ANCHOR);
             var aabbTL3 = unionTopLeft([g3], 0);
             var turn3 = turnSelection([g3], AnchorPoint.TOP_LEFT_ANCHOR);
-            put("4b selection box of the turned group", "turned " + r2(turn3.deg) + "deg about " + pt(turn3.p) +
+            if (!turn3) put("4b selection box of the turned group", skipped()); else put("4b selection box of the turned group", "turned " + r2(turn3.deg) + "deg about " + pt(turn3.p) +
                 " | axis-aligned box top-left " + pt(aabbTL3) +
                 " | the group's own box top-left " + pt(ownTL3));
             g3 = rotatedGroup();
@@ -231,6 +241,58 @@
         put("4c group 150% x in its own frame", "group " + box(g3));
         put("4c after: member 1", box(m3[0]));
         put("4c after: member 2", box(m3[1]));
+
+        // A 160 x 60 px picture (72 ppi: 160 x 60 pt) placed in a 200 x 100
+        // frame, moved 20 pt in from its corner, optionally turned inside
+        // the frame, then the frame turned 30deg with its content.
+        step = "5 placed image";
+        function placedImage(imageDeg) {
+            clear();
+            var r = page.rectangles.add({ geometricBounds: [100, 100, 200, 300], strokeWeight: 0 });
+            r.place(File(IMAGE));
+            var img = r.allGraphics[0];
+            img.move(undefined, [20, 20]);
+            if (imageDeg) {
+                img.transform(PB, AnchorPoint.CENTER_ANCHOR,
+                    app.transformationMatrices.add({ counterclockwiseRotationAngle: imageDeg }));
+            }
+            r.transform(PB, AnchorPoint.CENTER_ANCHOR,
+                app.transformationMatrices.add({ counterclockwiseRotationAngle: 30 }));
+            return r;
+        }
+        function contentCase(label, imageDeg) {
+            var r = placedImage(imageDeg);
+            var img = r.allGraphics[0];
+            put(label + ": frame", box(r));
+            put(label + ": image", box(img));
+            if (rot90) {
+                var ownTL = corner(img, AnchorPoint.TOP_LEFT_ANCHOR);
+                var aabbTL = unionTopLeft([img], 0);
+                var frameTL = corner(r, AnchorPoint.TOP_LEFT_ANCHOR);
+                var turn = turnSelection([img], AnchorPoint.TOP_LEFT_ANCHOR);
+                if (!turn) put(label + ": selection box of the image", skipped()); else put(label + ": selection box of the image", "turned " + r2(turn.deg) + "deg about " + pt(turn.p) +
+                    " | axis-aligned box top-left " + pt(aabbTL) +
+                    " | the image's own box top-left " + pt(ownTL) +
+                    " | the frame's top-left " + pt(frameTL));
+                r = placedImage(imageDeg);
+                img = r.allGraphics[0];
+            }
+            // Scale the image 150% x along its own axes about its left side,
+            // then 150% x 125% about its top-left corner.
+            img.transform(INNER, AnchorPoint.LEFT_CENTER_ANCHOR,
+                app.transformationMatrices.add({ horizontalScaleFactor: 1.5 }));
+            put(label + ": image 150% x in its own frame", box(img));
+            img.transform(INNER, AnchorPoint.TOP_LEFT_ANCHOR,
+                app.transformationMatrices.add({ verticalScaleFactor: 1.25 }));
+            put(label + ": then 125% y", box(img));
+            put(label + ": frame after", box(r));
+        }
+        if (IMAGE) {
+            contentCase("5a image unturned in a 30deg frame", 0);
+            contentCase("5b image turned 15deg in a 30deg frame", 15);
+        } else {
+            put("5 placed image", "SKIPPED: no PROBE_IMAGE");
+        }
     } catch (e) {
         put("setup failed after " + step, "ERROR " + e.number + " " + e.message + " line " + e.line);
     } finally {

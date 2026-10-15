@@ -562,6 +562,10 @@ fn a_multi_selection_sharing_one_rotation_still_scales_on_the_page_axes() {
 }
 
 // ---- the image inside a rotated frame (ScaleContent) ---------------------
+//
+// The placed image is one item with its own box: in a 30° frame it sits at
+// 30°, turned 15° inside it at 45°, and a scale along its own axes keeps it
+// a rectangle while the frame stays put (InDesign probe cases 5a, 5b).
 
 fn mul(a: M, b: M) -> M {
     [
