@@ -300,10 +300,11 @@ pub fn resolve(scene: &Document, built: &BuiltDocument, opts: &ResolveOptions) -
 
     // TOC entries from any <TOCStyle> definitions.
     let mut toc: Vec<TocEntry> = Vec::new();
+    let laid_out = built.paragraph_pages();
     for toc_style in scene.styles.toc_styles.values() {
-        for entry in scene.resolve_toc(toc_style) {
-            // body_page_index from resolve_toc is 0-based; the canvas
-            // exposes 1-based numbers everywhere else.
+        for entry in scene.resolve_toc_on(toc_style, &laid_out) {
+            // The page the heading was laid out on (L-06), 0-based; the
+            // canvas exposes 1-based numbers everywhere else.
             toc.push(TocEntry {
                 level: entry.level as u8,
                 text: entry.text,

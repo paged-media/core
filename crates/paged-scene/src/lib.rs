@@ -666,11 +666,22 @@ impl Document {
     /// chain head — the conservative choice. Frames with no host
     /// (orphan stories) drop the marker silently.
     pub fn resolve_index(&self) -> Vec<IndexEntry> {
+        self.resolve_index_on(&ParagraphPages::new())
+    }
+
+    /// [`Self::resolve_index`] with each marker's page taken from where
+    /// a build laid its paragraph out (`laid_out`, L-06), so a marker in
+    /// a story threaded across pages lands on the page its paragraph
+    /// stands on. A paragraph `laid_out` does not name (overset, or no
+    /// build at hand) keeps its story's head-frame page.
+    pub fn resolve_index_on(&self, laid_out: &ParagraphPages) -> Vec<IndexEntry> {
         let mut by_topic: BTreeMap<String, IndexEntry> = BTreeMap::new();
         let body_page_index = self.body_page_index_map();
         for parsed in &self.stories {
-            let host_page = body_page_index.get(&parsed.self_id).copied();
-            for paragraph in &parsed.story.paragraphs {
+            let head_page = body_page_index.get(&parsed.self_id).copied();
+            let story_pages = laid_out.get(&parsed.self_id);
+            for (i, paragraph) in parsed.story.paragraphs.iter().enumerate() {
+                let host_page = story_pages.and_then(|m| m.get(&i).copied()).or(head_page);
                 Self::collect_index_markers_from_paragraph(paragraph, host_page, &mut by_topic);
                 // Markers can also appear inside table cells.
                 if let Some(table) = paragraph.table.as_ref() {
@@ -745,10 +756,24 @@ impl Document {
     /// host frame for the paragraph (orphan story) — the renderer
     /// should suppress the page number for that row.
     pub fn resolve_toc(&self, toc_style: &TOCStyleDef) -> Vec<TOCEntry> {
+        self.resolve_toc_on(toc_style, &ParagraphPages::new())
+    }
+
+    /// [`Self::resolve_toc`] with each entry's page taken from where a
+    /// build laid its paragraph out (`laid_out`, L-06): a heading in a
+    /// story threaded across pages gets the page it stands on, not the
+    /// head frame's. A paragraph `laid_out` does not name keeps its
+    /// story's head-frame page.
+    pub fn resolve_toc_on(
+        &self,
+        toc_style: &TOCStyleDef,
+        laid_out: &ParagraphPages,
+    ) -> Vec<TOCEntry> {
         let mut out: Vec<TOCEntry> = Vec::new();
         let body_page_index = self.body_page_index_map();
         for parsed in &self.stories {
-            for paragraph in &parsed.story.paragraphs {
+            let story_pages = laid_out.get(&parsed.self_id);
+            for (i, paragraph) in parsed.story.paragraphs.iter().enumerate() {
                 let Some(applied) = paragraph.paragraph_style.as_deref() else {
                     continue;
                 };
@@ -763,7 +788,9 @@ impl Document {
                 if text.is_empty() {
                     continue;
                 }
-                let page_number = body_page_index.get(&parsed.self_id).copied();
+                let page_number = story_pages
+                    .and_then(|m| m.get(&i).copied())
+                    .or_else(|| body_page_index.get(&parsed.self_id).copied());
                 out.push(TOCEntry {
                     level: entry_def.level.unwrap_or(1),
                     text,
@@ -908,6 +935,11 @@ pub struct TOCEntry {
     /// should drop the separator + number for these rows.
     pub page_number_visible: bool,
 }
+
+/// Where a build laid out each body paragraph: per story id, paragraph
+/// index → the 0-based body page its first line stands on (L-06). The
+/// renderer's `BuiltDocument::paragraph_pages` produces it.
+pub type ParagraphPages = HashMap<String, HashMap<usize, usize>>;
 
 /// Phase 5 — one resolved row of a generated index.
 ///
@@ -2146,6 +2178,53 @@ mod tests {
         assert_eq!(entries[3].text, "Results");
         assert_eq!(entries[3].level, 1);
         assert_eq!(entries[3].page_number, Some(2));
+    }
+
+    /// L-06 — a laid-out page wins over the story's head frame's page;
+    /// a paragraph the layout does not name keeps the head frame's.
+    #[test]
+    fn resolve_toc_on_takes_the_laid_out_page() {
+        let bytes = pack_toc_idml(&[
+            ("intro", "ParagraphStyle/Heading1", "Intro"),
+            ("intro", "ParagraphStyle/Body", "Skip me"),
+            ("intro", "ParagraphStyle/Heading2", "Background"),
+            ("mid", "ParagraphStyle/Heading2", "Setup"),
+        ]);
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+        let toc = toc_style_with_two_entries();
+        let mut laid_out = ParagraphPages::new();
+        laid_out
+            .entry("intro".to_string())
+            .or_default()
+            .extend([(0, 0), (2, 3)]);
+        let entries = doc.resolve_toc_on(&toc, &laid_out);
+        let pages: Vec<_> = entries
+            .iter()
+            .map(|e| (e.text.as_str(), e.page_number))
+            .collect();
+        assert_eq!(
+            pages,
+            vec![
+                ("Intro", Some(0)),
+                ("Background", Some(3)),
+                ("Setup", Some(1))
+            ]
+        );
+    }
+
+    /// L-06 — an index marker takes its paragraph's laid-out page.
+    #[test]
+    fn resolve_index_on_takes_the_laid_out_page() {
+        let xml = pack_index_idml(&[("apple-1", "Apple", 0), ("banana", "Banana", 2)]);
+        let doc = idml_import::import_idml_doc(&xml).expect("open IDML");
+        let mut laid_out = ParagraphPages::new();
+        laid_out
+            .entry("banana".to_string())
+            .or_default()
+            .insert(0, 4);
+        let entries = doc.resolve_index_on(&laid_out);
+        assert_eq!(entries[0].pages, vec![0]);
+        assert_eq!(entries[1].pages, vec![4]);
     }
 
     #[test]
