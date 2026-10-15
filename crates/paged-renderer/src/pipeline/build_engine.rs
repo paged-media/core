@@ -444,6 +444,16 @@ pub(super) fn frame_column_geometry(f: &TextFrame) -> paged_flow::RegionGeometry
     }
 }
 
+/// The centres of an unexpanded columnar frame's gutters, frame-inner x.
+pub(super) fn frame_gutter_centres(f: &TextFrame) -> Vec<f32> {
+    let left = f.bounds.left + f.inset_spacing.map_or(0.0, |i| i[1]);
+    frame_column_geometry(f)
+        .column_boxes()
+        .windows(2)
+        .map(|w| left + (w[0].x_pt + w[0].width_pt + w[1].x_pt) * 0.5)
+        .collect()
+}
+
 fn expand_column_chain(
     chain: &[&TextFrame],
     balance: Option<&ColumnBalance<'_>>,
@@ -2593,6 +2603,7 @@ pub(super) fn build_document_inner(
             emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
         }
         emitter.apply_vertical_justification(&mut pages);
+        emitter.apply_column_rules(&mut pages);
         emitter.apply_polygon_clip(&mut pages);
         emitter.apply_container_clip(&mut pages, &container_clips);
         emitter.apply_blend_groups(&mut pages);
@@ -3444,6 +3455,7 @@ pub(super) fn build_document_inner(
                 .map(|&p| pages[p].list.commands.len())
                 .collect();
             emitter.apply_vertical_justification(&mut pages);
+            emitter.apply_column_rules(&mut pages);
             emitter.apply_polygon_clip(&mut pages);
             emitter.apply_container_clip(&mut pages, &container_clips);
             emitter.apply_blend_groups(&mut pages);
@@ -4357,6 +4369,10 @@ pub(super) struct StoryEmitter<'a> {
     pub(super) prev_line_height_exact: Option<f64>,
     pub(super) frame_cmd_ranges: Vec<Option<(usize, usize)>>,
     pub(super) frame_max_baseline_64: Vec<i32>,
+    /// The descent (1/64 pt) of the line at `frame_max_baseline_64`:
+    /// its faces' hhea descenders at their sizes, the deepest. Where a
+    /// column rule ends (ADR 155).
+    pub(super) frame_max_descent_64: Vec<i32>,
     /// W1.7 footnote space reservation — per chain-frame height (in
     /// 1/64 pt) to hold back from the bottom of the frame's text area
     /// for the footnote pool. Body text overflows to the next frame
@@ -4716,6 +4732,7 @@ impl<'a> StoryEmitter<'a> {
             last_placed_frame: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            frame_max_descent_64: vec![0; len],
             reserved_footnote_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
@@ -5147,6 +5164,159 @@ impl<'a> StoryEmitter<'a> {
                     *end += count;
                 }
             }
+        }
+    }
+
+    /// ADR 155 — the rules between a frame's columns, spliced at the
+    /// start of the frame's command range: above its fill and stroke,
+    /// under its text. InDesign 20.0.1 (`column-rules`): one rule per
+    /// gutter, at the gutter's centre moved by `ColumnRuleOffset`, from
+    /// the text area's top moved down by the top inset to the bottom of
+    /// the frame's deepest line (its baseline plus its faces' descent)
+    /// moved up by the bottom inset; butt caps, a dash fitted like any
+    /// open path's. A frame with one column, or no text, draws none.
+    pub(super) fn apply_column_rules(&mut self, pages: &mut [BuiltPage]) {
+        // A columnar frame reaches the emitter as one chain entry per
+        // column (`expand_column_chain`): clones sharing the frame's
+        // `Self`, each with its column's box. A gutter is the gap
+        // between two neighbouring boxes.
+        struct Rules {
+            first: usize,
+            gutters: Vec<f32>,
+            text_bottom_64: i32,
+        }
+        let mut per_page: HashMap<usize, Vec<Rules>> = HashMap::new();
+        let mut i = 0;
+        while i < self.chain.len() {
+            let f = self.chain[i];
+            let mut j = i + 1;
+            while f.self_id.is_some()
+                && j < self.chain.len()
+                && self.chain[j].self_id == f.self_id
+                && self.chain_pages[j] == self.chain_pages[i]
+            {
+                j += 1;
+            }
+            let group = i..j;
+            i = j;
+            if f.column_rule.is_none() {
+                continue;
+            }
+            let gutters: Vec<f32> = if group.len() >= 2 {
+                group
+                    .clone()
+                    .skip(1)
+                    .map(|k| (self.chain[k - 1].bounds.right + self.chain[k].bounds.left) * 0.5)
+                    .collect()
+            } else {
+                frame_gutter_centres(f)
+            };
+            let with_text: Vec<usize> = group
+                .clone()
+                .filter(|k| self.frame_cmd_ranges[*k].is_some())
+                .collect();
+            let Some(&first) = with_text
+                .iter()
+                .min_by_key(|k| self.frame_cmd_ranges[**k].map(|r| r.0))
+            else {
+                continue;
+            };
+            if gutters.is_empty() {
+                continue;
+            }
+            let text_bottom_64 = with_text
+                .iter()
+                .map(|k| self.frame_max_baseline_64[*k] + self.frame_max_descent_64[*k])
+                .max()
+                .unwrap_or(0);
+            per_page
+                .entry(self.chain_pages[first])
+                .or_default()
+                .push(Rules {
+                    first,
+                    gutters,
+                    text_bottom_64,
+                });
+        }
+        for (page_idx, mut groups) in per_page {
+            // Splice the latest range first, so an earlier start stays put.
+            groups.sort_by_key(|g| std::cmp::Reverse(self.frame_cmd_ranges[g.first].map(|r| r.0)));
+            for g in groups {
+                let Some((start, end)) = self.frame_cmd_ranges[g.first] else {
+                    continue;
+                };
+                let page = &mut pages[page_idx];
+                let before = page.list.commands.len();
+                self.push_column_rules(page, self.chain[g.first], &g.gutters, g.text_bottom_64);
+                let added: Vec<paged_compose::DisplayCommand> =
+                    page.list.commands.drain(before..).collect();
+                let n = added.len();
+                for (k, cmd) in added.into_iter().enumerate() {
+                    page.list.insert_command(start + k, cmd);
+                }
+                self.frame_cmd_ranges[g.first] = Some((start, end + n));
+                self.shift_ranges_for_insert(page_idx, start, n, g.first);
+            }
+        }
+    }
+
+    /// Push the rules of the frame `column` belongs to, one at each of
+    /// `gutters` (frame-inner x), at the end of `page`'s list.
+    fn push_column_rules(
+        &self,
+        page: &mut BuiltPage,
+        column: &TextFrame,
+        gutters: &[f32],
+        text_bottom_64: i32,
+    ) {
+        let Some(rule) = column.column_rule.as_ref() else {
+            return;
+        };
+        let inset_top = column.inset_spacing.map_or(0.0, |i| i[0]);
+        let top = column.bounds.top + inset_top + rule.top_inset;
+        let bottom = column.bounds.top
+            + text_bottom_64 as f32 / paged_text::shape::ADVANCE_PRECISION
+            - rule.bottom_inset;
+        if bottom <= top {
+            return;
+        }
+        let color = rule.stroke_color.as_deref().unwrap_or("Color/Black");
+        let Some(base) = color_id_to_paint(color, self.palette, self.color_ctx) else {
+            return;
+        };
+        let paint = apply_fill_tint_ctx(
+            base,
+            object_tint(self.palette, Some(color), rule.stroke_tint),
+            &self.color_ctx,
+        );
+        let stroke = stroke_for(
+            rule.stroke_type.as_deref(),
+            rule.stroke_width.max(0.0),
+            None,
+            None,
+            None,
+            Some(&self.document.styles.stroke_styles),
+            &[],
+        );
+        let (ox, oy) = page.spread_origin;
+        let transform = Transform::translate(-ox, -oy).compose(&Transform(
+            column
+                .item_transform
+                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+        ));
+        let before = page.list.commands.len();
+        for &gutter in gutters {
+            let x = gutter + rule.offset;
+            let path_id = page.list.paths.push_anon(PathData {
+                segments: vec![
+                    PathSegment::MoveTo { x, y: top },
+                    PathSegment::LineTo { x, y: bottom },
+                ],
+            });
+            paged_compose::dash_fit::push_stroke(&mut page.list, path_id, stroke, paint, transform);
+        }
+        if rule.overprint {
+            rewrite_tail_for_overprint(page, before, false, true);
         }
     }
 
@@ -8430,7 +8600,25 @@ fn emit_paragraph_lines(
             Some((f, s, _)) => active_seg = Some((f, s, after_cmds)),
             None => active_seg = Some((frame_idx, before_cmds, after_cmds)),
         }
-        if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
+        if line.baseline_y >= em.frame_max_baseline_64[frame_idx] {
+            let descent_64 = line
+                .glyphs
+                .iter()
+                .filter_map(|g| {
+                    // Glyph font ids mix the wght bits in; metrics are
+                    // keyed by the plain byte hash.
+                    let i = font_ids.iter().position(|f| *f == g.font_id)?;
+                    let m = em.font_table.metrics_for(bytes_font_ids[i])?;
+                    Some(m.descender * g.point_size * paged_text::shape::ADVANCE_PRECISION)
+                })
+                .fold(0.0_f32, f32::max)
+                .round() as i32;
+            if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
+                em.frame_max_descent_64[frame_idx] = descent_64;
+            } else {
+                em.frame_max_descent_64[frame_idx] =
+                    em.frame_max_descent_64[frame_idx].max(descent_64);
+            }
             em.frame_max_baseline_64[frame_idx] = line.baseline_y;
         }
 

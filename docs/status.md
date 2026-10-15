@@ -195,6 +195,10 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   are filled non-zero, patterns and shadings paint mid-grey, and a group's soft mask is ignored.
   Stencil images and Type 3 glyphs are skipped. The first page is drawn whatever `PageNumber`
   says. EPS draws nothing.
+- **Column rules: no vertical justification, object styles or spans.** A frame's rules stand
+  and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
+  vertical justification, an object style's rules are not read, span and split regions draw
+  none, and no property path writes them.
 - **A host that does not send `HostObjectsResult.committed`** gets its plugin write as an
   undo step of its own, separate from the script's core writes.
 - **An edit made while a script waits splits the script's undo step.** The fold merges only

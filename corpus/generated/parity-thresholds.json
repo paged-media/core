@@ -15,6 +15,12 @@
       "rationale": "Dense small text: glyph-edge antialiasing differs between the lanes (analytic coverage vs area coverage), balanced in sign, p99 ~45 levels, summed over every edge pixel. Same glyph paths, same positions."
     },
     {
+      "name": "column-rules",
+      "worst_mean_de": 0.49,
+      "measured": 0.404,
+      "rationale": "Dense small text: nine frames of 8 pt on 10 pt, glyph-edge antialiasing (see text-wrap). The rules themselves carry 1.8 % of the page's difference (pixel columns at each rule, Metal 0.373). Measured on lavapipe (CI, 2026-10-15); sized at worst x 1.20."
+    },
+    {
       "name": "text-wrap-sides",
       "worst_mean_de": 0.47,
       "measured": 0.39,

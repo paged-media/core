@@ -847,6 +847,16 @@
       "min_ssim": 0.9938,
       "max_ink_mean_de": 1.99,
       "rationale": "Added 2026-10-14 (A-20, ADR 154): a placed PDF drawn from its own drawing operations, asked of InDesign 20.0.1. One 200 x 120 pt page of vector art (DeviceCMYK and DeviceRGB fills, a dashed stroke, a curve, a clipped square, a 50 % fill-opacity panel; placed-pdf-Links/make-placed-art.py) placed four times: at 100 %, at 50 %, in a frame rotated 30 degrees, and cropped by a smaller frame with the art offset. The page measures mean 0.111 / p99 2.236 / ssim 0.99886 / ink 1.658, the rest being edge antialiasing; sized at worst x 1.20 and ssim - 0.005."
+    },
+    {
+      "name": "column-rules",
+      "text_gate": "lines",
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.397,
+      "max_p99_de": 8.73,
+      "min_ssim": 0.991,
+      "max_ink_mean_de": 4.09,
+      "rationale": "Added 2026-10-14 (A-19, ADR 155): the rules InDesign draws between a text frame's columns, asked of InDesign 20.0.1 and read from its PDF's stroke operators. Nine 168 x 180 pt frames of Open Sans 8/10: the default 1 pt rule; three columns at 0.5 pt, tint 50; a 2 pt Dashed rule; top / bottom insets 12 / 24; a 4 pt offset; insets of -8; a frame inset of 10; three lines of text only; one column. Each rule stands at its gutter's centre plus the offset and runs from the text area's top plus the top inset to the deepest line's baseline plus its descent minus the bottom inset; every extent matches InDesign's to the pixel. The page measures mean 0.331 / p99 7.28 / ssim 0.99606 / ink 3.41 (0.521 / 8.63 / 0.979 / 6.29 without the rules), the rest being glyph edges and pdftoppm's hairline snapping of the 0.5 pt rules; sized at worst x 1.20 and ssim - 0.005."
     }
   ]
 }

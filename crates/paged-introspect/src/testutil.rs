@@ -58,6 +58,7 @@ pub fn empty_text_frame(self_id: &str, bounds: Bounds) -> TextFrame {
         applied_object_style: None,
         text_wrap: None,
         ignore_wrap: None,
+        column_rule: None,
         item_layer: None,
         is_anchored: false,
         opacity: None,

@@ -64,6 +64,15 @@ max_mean_for() {
     # profile (126,211,247 rendered, 143,217,247 exported). 1.644 measured;
     # worst * 1.20.
     object-style-options) echo 1.98 ;;
+    # Hinted text, densest yet (2026-10-15, ADR 155): nine frames of 8 pt
+    # on 10 pt, about 330 lines set in the lane's fallback face. The same
+    # IDML through main's engine, which drew no column rules, measures
+    # 2.698 / 0.8085, so the rules add 0.014. The exported baselines are
+    # the renderer's (pdftotext: "Column" box 70.656..80.336 pt); aligning
+    # the two rasters by one whole pixel cuts their mean pixel difference
+    # from 8.57 to 3.02, which is poppler's hinted 8 pt glyphs snapping to
+    # whole pixels at 144 dpi. 2.713 measured; worst * 1.20.
+    column-rules) echo 3.26 ;;
     *) echo "$MAX_MEAN_DE" ;;
   esac
 }
@@ -115,6 +124,8 @@ min_ssim_for() {
     list-overrides) echo 0.900 ;;
     list-marker-styles) echo 0.899 ;;
     reflow) echo 0.907 ;;
+    # Hinted 8 pt text, see max_mean_for: 0.8073 measured; worst - 0.005.
+    column-rules) echo 0.802 ;;
     *) echo "$MIN_SSIM" ;;
   esac
 }
