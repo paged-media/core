@@ -34,4 +34,4 @@ bytes = { workspace = true }
 # catalog_apply_parity.rs opens real corpus fixtures to probe every
 # advertised (element, settable_path) pair against paged-mutate's apply.
 # Same git pin as paged-scene/paged-mutate (the cross-repo rev dance).
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "bd46a2de247ad5086f8c9cd51ef042731b8eaaef" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "516fab728e459ef91ad4f7e39c5b4c7cef1821aa" }
