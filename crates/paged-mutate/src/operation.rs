@@ -1299,6 +1299,16 @@ pub enum PropertyPath {
     /// `Value::Length(Some(count))`. Addressed against a
     /// `NodeId::Table`. Read-only (see the section comment).
     TableColumnCount,
+    /// v0.71.13 (read-only) — the table's header band: how many of its first
+    /// rows are header rows (IDML `HeaderRowCount`).
+    /// `Value::Length(Some(count))`, against a `NodeId::Table`. The band
+    /// changes through `InsertHeaderRow` / `RemoveHeaderRow`.
+    TableHeaderRowCount,
+    /// v0.71.13 (read-only) — the table's footer band: how many of its last
+    /// rows are footer rows (IDML `FooterRowCount`).
+    /// `Value::Length(Some(count))`, against a `NodeId::Table`. The band
+    /// changes through `InsertFooterRow` / `RemoveFooterRow`.
+    TableFooterRowCount,
 
     /// Plugin-metadata carrier (decision 9 facility) — one
     /// `Properties/Label` `KeyValuePair` on a leaf page item, in the
@@ -1815,6 +1825,8 @@ impl PropertyPath {
             // Aftercare-A — table dimensions (read-only).
             PropertyPath::TableRowCount => "table.rowCount",
             PropertyPath::TableColumnCount => "table.columnCount",
+            PropertyPath::TableHeaderRowCount => "table.headerRowCount",
+            PropertyPath::TableFooterRowCount => "table.footerRowCount",
             PropertyPath::PluginMetadata => "plugin.metadata",
             PropertyPath::AnchoredPosition => "anchored.position",
             PropertyPath::AnchorPoint => "anchored.anchorPoint",

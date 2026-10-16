@@ -1437,6 +1437,8 @@ impl WorkerCore {
                         error: Some("no document loaded".to_string()),
                         budget_kind: None,
                         stats: None,
+                        writes: None,
+                        page_ids: None,
                     });
                 };
                 // B-09 / W-08 — the worker's injected wall clock
@@ -1469,9 +1471,11 @@ impl WorkerCore {
                 self.next_script_session = self.next_script_session.wrapping_add(1).max(1);
                 let step =
                     paged_script::start_script(model, &source, effective, clock, host_objects, id);
-                // A script may touch any page or story (or none); paged-script
-                // doesn't report which. Clear the GPU scene cache wholesale so
-                // `present_frame` rebuilds the visible pages — otherwise a
+                // A script may touch any page or story (or none). Its reply
+                // names the pages its own writes changed (v0.71.13), but a host
+                // may have written while it waited. Clear the GPU scene
+                // cache wholesale so `present_frame` rebuilds the visible
+                // pages — otherwise a
                 // `paged.set`/insert mutation lands in the model but the stale
                 // index-keyed Vello scene is reused and the canvas never
                 // repaints. Visible pages rebuild lazily, so the cost is one
@@ -1493,6 +1497,8 @@ impl WorkerCore {
                         )),
                         budget_kind: None,
                         stats: None,
+                        writes: None,
+                        page_ids: None,
                     });
                 };
                 let step = script.resume(model, &answers, &committed, clock);
@@ -1565,6 +1571,9 @@ impl WorkerCore {
                             applied_seq: outcome.applied_seq,
                             page_ids: outcome.page_ids,
                             cache_stats: stats,
+                            // v0.71.13 — a handle resize of one frame reports
+                            // the reflow its `resizeFrame` would.
+                            reflow: outcome.reflow,
                         }
                     }
                     Err(e) => WorkerToMainKind::GestureFailed { error: e.into() },
@@ -1697,6 +1706,9 @@ impl WorkerCore {
                 // The counts after the script: it wrote without the
                 // round trip that refreshes the host's counters.
                 stats: self.model.as_ref().map(|m| m.document_stats()),
+                // v0.71.13 — whether it wrote, and the pages its writes changed.
+                writes: result.writes,
+                page_ids: result.page_ids,
             },
             (paged_script::ScriptStep::Suspended { calls }, Some(session)) => {
                 let id = session.id();
@@ -1711,6 +1723,8 @@ impl WorkerCore {
                 error: Some("script suspended without a session".into()),
                 budget_kind: None,
                 stats: None,
+                writes: None,
+                page_ids: None,
             },
         }
     }

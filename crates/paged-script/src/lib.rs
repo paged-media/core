@@ -205,6 +205,19 @@ pub struct ScriptResult {
     /// the JSON for ordinary results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_kind: Option<ScriptBudgetKind>,
+    /// v0.71.13 — how many writes the run committed to the document itself
+    /// (each a step the engine logged). `0` for a read-only script. The
+    /// writes a host made answering a suspended script are its own
+    /// replies' to report, not counted here. `None` only where no run
+    /// happened. Additive: absent in the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<u32>,
+    /// v0.71.13 — the pages the run's writes changed, in document order, as
+    /// the engine's rebuilds named them (a text edit narrows to its
+    /// story's pages; any other write names every page). Empty when no
+    /// write changed a page. `None` when it cannot say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_ids: Option<Vec<paged_canvas::PageId>>,
 }
 
 // SAFETY pattern: Boa runs host functions synchronously inside the
@@ -435,6 +448,11 @@ pub struct ScriptSession {
     host_commits: Vec<u64>,
     /// `applied_seq` when the running segment began.
     segment_start: u64,
+    /// v0.71.13 — the writes this script's own segments committed, and the
+    /// pages their builds changed (collected per segment, so an edit made
+    /// while the script waited on the host is never counted as its own).
+    writes: u64,
+    changed_pages: std::collections::BTreeSet<paged_canvas::PageId>,
     host_writes: bool,
     rounds: u32,
     // Last: everything above may hold GC handles of this context.
@@ -503,6 +521,7 @@ pub fn start_script(
     session_id: u32,
 ) -> (ScriptStep, Option<ScriptSession>) {
     let undo_mark = model.last_applied_seq();
+    model.begin_page_change_tracking();
     enter_segment(model, &budget, clock);
     host_bridge::open_queue(host_objects);
     let mut ctx = budgeted_context(&budget);
@@ -518,6 +537,8 @@ pub fn start_script(
         own_segments: Vec::new(),
         host_commits: Vec::new(),
         segment_start: undo_mark,
+        writes: 0,
+        changed_pages: std::collections::BTreeSet::new(),
         host_writes: false,
         rounds: 0,
         ctx,
@@ -545,6 +566,7 @@ impl ScriptSession {
         self.host_commits
             .extend(committed.iter().copied().filter(|&s| s > self.undo_mark));
         self.segment_start = model.last_applied_seq();
+        model.begin_page_change_tracking();
         enter_segment(model, &self.budget, clock);
         host_bridge::open_queue(true);
         for (i, queued) in std::mem::take(&mut self.pending).into_iter().enumerate() {
@@ -565,6 +587,8 @@ impl ScriptSession {
         // resumed; `finish` writes nothing): what it logged is its own.
         self.own_segments
             .push((self.segment_start, model.last_applied_seq()));
+        self.writes += model.last_applied_seq().saturating_sub(self.segment_start);
+        self.changed_pages.extend(model.end_page_change_tracking());
         // A script that threw does not flush what it queued: its host
         // writes never leave, as a synchronous script's later writes
         // never run.
@@ -637,6 +661,8 @@ impl ScriptSession {
             output,
             error,
             budget_kind,
+            writes: Some(u32::try_from(self.writes).unwrap_or(u32::MAX)),
+            page_ids: Some(model.in_document_order(&self.changed_pages)),
         }
     }
 }

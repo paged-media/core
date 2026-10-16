@@ -31,7 +31,9 @@
 //! document defaults, colour settings, ink settings) without widening it.
 
 use base64::Engine as _;
-use paged_introspect::catalog::{addressed_on, lookup_path, schema, wire_name, ADDRESSED_PATHS};
+use paged_introspect::catalog::{
+    addressed_on, lookup_path, schema, wire_name, ADDRESSED_PATHS, ALL_PATHS,
+};
 use paged_introspect::schema::{validate, PropertySchema};
 use paged_introspect::virtual_paths::{lookup_virtual, segment, style_paths};
 use paged_mutate::{NodeId, Operation, PathPointRole, PropertyPath, StyleCollection, Value};
@@ -1475,13 +1477,24 @@ impl CanvasModel {
                         ))
                     };
                 }
-                Ok(match lookup_path(path) {
+                // The counts are read-only, so unadvertised: resolve the
+                // name against every path, not only the settable ones —
+                // `lookup_path` alone answered "no such path" for them.
+                let p = lookup_path(path)
+                    .or_else(|| ALL_PATHS.iter().copied().find(|p| wire_name(*p) == path));
+                Ok(match p {
                     Some(PropertyPath::AppliedTableStyle) => text(&t.applied_table_style),
                     Some(PropertyPath::TableRowCount) => Value::Length(Some(
                         (t.header_row_count + t.body_row_count + t.footer_row_count) as f32,
                     )),
                     Some(PropertyPath::TableColumnCount) => {
                         Value::Length(Some(t.column_count as f32))
+                    }
+                    Some(PropertyPath::TableHeaderRowCount) => {
+                        Value::Length(Some(t.header_row_count as f32))
+                    }
+                    Some(PropertyPath::TableFooterRowCount) => {
+                        Value::Length(Some(t.footer_row_count as f32))
                     }
                     _ => return Err(unknown()),
                 })
