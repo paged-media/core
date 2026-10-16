@@ -118,6 +118,15 @@ follows the same pattern when those node kinds graduate from
 | Scale about pivot | `SetProperty{FrameTransform}` (or `FrameBounds` for "resize" semantics) |
 | Multi-select any of the above | `Operation::Batch{ ops }` (one per node) |
 
+Scale's axes follow InDesign (`tools/indesign-export/scale-frame-probe.jsx`).
+One target, a frame or a group, scales along its own axes, so a rotated one
+stays a rectangle at its angle and a side handle changes only the dimension
+along its axis. Several targets scale as one unit along the page axes, even
+when they share a rotation, so a non-uniform scale shears the rotated ones.
+ScaleContent treats the placed image as one item: it scales along the image's
+own axes (the frame's transform composed with the image's), about the pivot
+the anchor names (the opposite content handle) or the frame's centre.
+
 ### 3.4 Ephemeral overlay → preview rendering
 
 *Status note (2026-10-02): not built. A gesture preview is written into the scene and followed by a rebuild; the module comment of `crates/paged-canvas/src/gesture.rs` names the overlay as a later step. See [ADR 107](../adr/107-whole-document-build.md).*
