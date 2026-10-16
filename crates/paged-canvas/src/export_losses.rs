@@ -35,8 +35,9 @@
 //!
 //! The comparison is deliberately shallow: presence + the structural
 //! shape a reader would notice (a table's rows×columns, a section's page
-//! start, a condition's visibility). It is a save-time gate, not a
-//! fidelity oracle; pixel parity is the fidelity harness's job.
+//! start, a condition's visibility) + the text (a story's paragraphs, a
+//! table's cells). It is a save-time gate, not a fidelity oracle; pixel
+//! parity is the fidelity harness's job.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -513,11 +514,58 @@ fn diff_stories(scene: &Document, twin: &Document, out: &mut Vec<String>) {
                              — the IDML exporter does not yet patch table structure",
                             id, s.self_id, tr, tc, rows, cols
                         ));
+                    } else if let Some(line) = cell_text_loss(&id, &s.self_id, st, tt) {
+                        out.push(line);
                     }
                 }
             }
         }
     }
+}
+
+/// A table whose id and shape survived but whose cells export text the
+/// model does not hold — the content written is an older one (a part
+/// replayed from a checkpoint, a cell the writer could not match). Cells
+/// are paired by their `col:row` name (by position, column-major, when
+/// the model never named one); a cell's text is its paragraphs' text
+/// with empty paragraphs left out, as for a story.
+fn cell_text_loss(id: &str, story: &str, scene: &Table, twin: &Table) -> Option<String> {
+    let texts = |t: &Table| -> HashMap<(u32, u32), Vec<String>> {
+        let rows = table_shape(t).0.max(1);
+        t.cells
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let at = c.coords().unwrap_or(((i / rows) as u32, (i % rows) as u32));
+                let text = c
+                    .paragraphs
+                    .iter()
+                    .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                (at, text)
+            })
+            .collect()
+    };
+    let (want, got) = (texts(scene), texts(twin));
+    let mut differing: Vec<(u32, u32)> = want
+        .iter()
+        .filter(|(at, text)| got.get(*at).map_or(!text.is_empty(), |g| g != *text))
+        .map(|(at, _)| *at)
+        .collect();
+    differing.sort_unstable();
+    let first = *differing.first()?;
+    Some(format!(
+        "table `{}` in story `{}` exports {} cell(s) with text the model does not hold \
+         (cell {}:{} reads {:?}, the model {:?}) — the IDML exporter wrote stale cell content",
+        id,
+        story,
+        differing.len(),
+        first.0,
+        first.1,
+        got.get(&first).map(|t| t.join("\n")).unwrap_or_default(),
+        want.get(&first).map(|t| t.join("\n")).unwrap_or_default(),
+    ))
 }
 
 // ---- page items: placed images + groups -----------------------------------
@@ -687,4 +735,59 @@ pub(crate) fn opacity_mask_losses(scene: &Document) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paged_model::{CharacterRun, TableCell, TableRow};
+
+    fn table(texts: &[&str], named: bool) -> Table {
+        Table {
+            self_id: Some("t1".into()),
+            body_row_count: texts.len() as u32,
+            column_count: 1,
+            rows: texts.iter().map(|_| TableRow::default()).collect(),
+            cells: texts
+                .iter()
+                .enumerate()
+                .map(|(r, text)| TableCell {
+                    name: named.then(|| format!("0:{r}")),
+                    paragraphs: vec![Paragraph {
+                        runs: vec![CharacterRun {
+                            text: text.to_string(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The table's id and shape match; the text in a cell does not. The
+    /// model's cells may be unnamed (paired by position), the export's
+    /// are named.
+    #[test]
+    fn stale_cell_text_is_a_loss() {
+        let scene = table(&["Opening", "1,200", "Closing"], false);
+        let twin = table(&["Opening", "980", ""], true);
+        let line = cell_text_loss("t1", "Story/u849", &scene, &twin).expect("a loss");
+        assert!(
+            line.starts_with(
+                "table `t1` in story `Story/u849` exports 2 cell(s) with text the model does \
+                 not hold (cell 0:1 reads \"980\", the model \"1,200\")"
+            ),
+            "{line}"
+        );
+        assert!(cell_text_loss(
+            "t1",
+            "Story/u849",
+            &scene,
+            &table(&["Opening", "1,200", "Closing"], true)
+        )
+        .is_none());
+    }
 }

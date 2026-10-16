@@ -762,9 +762,11 @@ pub struct PlacedImage {
     /// FillProportionally | FitContent | FitContentToFrame |
     /// CenterContent | ContentAwareFit`.
     pub fitting: &'static str,
-    /// Per-side crops in pt. Positive shrinks the image inward from
-    /// the frame edge; negative grows it outward (used by
-    /// `FillProportionally` to overflow on one axis).
+    /// Per-side crops in the model's convention: frame-space points from
+    /// the frame's edge to the picture's, positive shrinking the picture
+    /// inward, negative growing it outward (`FillProportionally`'s
+    /// overflow). Written in InDesign's convention — see
+    /// [`indesign_crops`].
     pub left_crop: f32,
     pub top_crop: f32,
     pub right_crop: f32,
@@ -1119,10 +1121,7 @@ impl Rect {
             // Rectangle (not inside Properties) — matches what
             // InDesign emits and what the paged-parse Rectangle
             // descendant walker expects.
-            let lc = format_f32(img.left_crop);
-            let tc = format_f32(img.top_crop);
-            let rc = format_f32(img.right_crop);
-            let bc = format_f32(img.bottom_crop);
+            let [lc, tc, rc, bc] = indesign_crops(img).map(format_f32);
             b.empty(
                 "FrameFittingOption",
                 &[
@@ -1535,4 +1534,31 @@ fn write_custom_path_geometry(b: &mut XmlBuilder, subpaths: &[PolygonSubPath]) {
 /// pass through.
 pub const fn identity_transform() -> Matrix {
     IDENTITY
+}
+
+/// A placed picture's `(left, top, right, bottom)` crops as InDesign
+/// spells them in `<FrameFittingOption>`: from the picture's edge to the
+/// frame's, in the picture's own units, positive where the frame cuts
+/// into the picture — the model's frame-space inset with the other sign,
+/// over the scale of the `<Image ItemTransform>` written beside it
+/// (`crop = −model / |scale|`). InDesign's own packages agree with that
+/// reading of their transforms and picture boxes, and the importer
+/// converts back by the same rule (`idml_import::crop_from_idml`).
+///
+/// A transform that rotates or skews the picture, or has no scale on an
+/// axis, has no such rule; the crops are then written as held, which is
+/// what the importer leaves them as too.
+pub(crate) fn indesign_crops(img: &PlacedImage) -> [f32; 4] {
+    let m = img.image_item_transform.unwrap_or(IDENTITY);
+    let crops = [img.left_crop, img.top_crop, img.right_crop, img.bottom_crop];
+    if !(m[1] == 0.0 && m[2] == 0.0 && m[0] != 0.0 && m[3] != 0.0) {
+        return crops;
+    }
+    let (sx, sy) = (m[0].abs(), m[3].abs());
+    [
+        -crops[0] / sx,
+        -crops[1] / sy,
+        -crops[2] / sx,
+        -crops[3] / sy,
+    ]
 }
