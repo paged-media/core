@@ -3114,41 +3114,10 @@ pub(super) fn build_document_inner(
                 )
             })
             .collect();
-        // TOC swap-in: if the head text frame carries
-        // `AppliedTOCStyle="TOCStyle/<id>"`, replace the story's
-        // own paragraphs with the resolver's output for that TOC
-        // style. Real-world unresolved TOC stories carry a single
-        // placeholder paragraph; the frame's `AppliedTOCStyle`
-        // attribute is what binds it to a `<TOCStyle>` in
-        // `Resources/Styles.xml`. After the swap the synthetic
-        // paragraphs go through the standard paragraph-emission
-        // path so they get full shaping, tab handling, applied
-        // paragraph-style cascade resolution, etc.
-        //
-        // Only an UNRESOLVED table of contents is built here: a story with
-        // no text. InDesign prints the text a TOC story holds until the
-        // user chooses Update Table of Contents (docs audit 2026-10, ADR
-        // 120), so a story with stored entries prints them, stale or not;
-        // rebuilding them at render would show entries InDesign does not.
-        let story_has_text = parsed
-            .story
-            .paragraphs
-            .iter()
-            .any(|p| p.runs.iter().any(|r| !r.text.trim().is_empty()));
-        let toc_paragraphs: Option<Vec<paged_model::Paragraph>> = chain
-            .first()
-            .filter(|_| !story_has_text)
-            // InDesign binds a TOC on its `<Story>`; the frame's attribute
-            // is the engine's older spelling.
-            .and_then(|f| {
-                parsed
-                    .story
-                    .applied_toc_style
-                    .as_deref()
-                    .or(f.applied_toc_style.as_deref())
-            })
-            .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
-            .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
+        // A TOC story prints the text it holds, as InDesign prints it until
+        // Update Table of Contents (docs audit 2026-10, ADR 120); an empty
+        // one prints nothing. The entries are written by the
+        // `updateTableOfContents` op over `toc_paragraphs` (ADR 165).
         let chain_pages = chain_pages_pre.clone();
         // Per-chain wrap rects so threaded frames inherit per-line
         // wrap. Each chain index maps to its frame's page's
@@ -3234,12 +3203,11 @@ pub(super) fn build_document_inner(
         // variables (a page count, a running header) can lay out
         // differently before the edit too, and is never seeded.
         let seed_key = (parsed.self_id.clone(), post.is_some());
-        let reads_variables = toc_paragraphs.is_some()
-            || parsed
-                .story
-                .paragraphs
-                .iter()
-                .any(|p| p.runs.iter().any(|r| r.text_variable.is_some()));
+        let reads_variables = parsed
+            .story
+            .paragraphs
+            .iter()
+            .any(|p| p.runs.iter().any(|r| r.text_variable.is_some()));
         let seed_sig = options
             .keep_seeds
             .map(|_| body_story_signature(&chain_for_post, &chain_pages_pre, &wrap_rects_per_page));
@@ -3394,89 +3362,81 @@ pub(super) fn build_document_inner(
             // when StoryDirection="VerticalWritingDirection".
             let pre_story_cmd_counts: Vec<usize> =
                 pages.iter().map(|p| p.list.commands.len()).collect();
-            if let Some(paragraphs) = toc_paragraphs.as_ref() {
-                fresh_range = None;
-                verbatim.clear();
-                for paragraph in paragraphs {
-                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-                }
-            } else {
-                // ADR 027 plan step 6 — a resumable story carries no
-                // footnotes, so every pass is a keeps pass and may resume.
-                let plan = plan_for(&forced_breaks, &pages);
-                marks.clear();
-                verbatim.clear();
-                fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
-                let mut start = 0;
-                if let Some(plan) = plan.as_ref() {
-                    resume::splice_prefix(
-                        &mut emitter,
-                        &mut pages,
-                        &pre_snapshot,
-                        plan,
-                        &mut total_stats,
-                        &mut verbatim,
-                    );
-                    start = plan.first();
-                    marks.extend(plan.prefix_marks().iter().cloned());
-                }
-                let mut relaid: Option<usize> = None;
-                for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
-                    if resumable {
-                        let m = resume::mark(
-                            &emitter,
-                            &pages,
-                            &pre_snapshot,
-                            &total_stats,
-                            &pre_total_stats,
-                        );
-                        if let Some(plan) = plan.as_ref().filter(|pl| pl.past_edit(j)) {
-                            relaid = resume::try_stop(
-                                &mut emitter,
-                                &mut pages,
-                                &pre_snapshot,
-                                plan,
-                                j,
-                                &m,
-                                &mut total_stats,
-                                Some(&mut marks),
-                                &mut verbatim,
-                            );
-                            if relaid.is_some() {
-                                // The record's later pages are this
-                                // build's, unless their lines moved to
-                                // other paragraph indices.
-                                let to = if plan.shifts() { usize::MAX } else { m.page };
-                                fresh_range = Some((plan.resume_page(), to));
-                                break;
-                            }
-                        }
-                        marks.push(m);
-                    }
-                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-                }
-                if resumable && relaid.is_none() {
-                    marks.push(resume::mark(
+            // ADR 027 plan step 6 — a resumable story carries no
+            // footnotes, so every pass is a keeps pass and may resume.
+            let plan = plan_for(&forced_breaks, &pages);
+            marks.clear();
+            verbatim.clear();
+            fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
+            let mut start = 0;
+            if let Some(plan) = plan.as_ref() {
+                resume::splice_prefix(
+                    &mut emitter,
+                    &mut pages,
+                    &pre_snapshot,
+                    plan,
+                    &mut total_stats,
+                    &mut verbatim,
+                );
+                start = plan.first();
+                marks.extend(plan.prefix_marks().iter().cloned());
+            }
+            let mut relaid: Option<usize> = None;
+            for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
+                if resumable {
+                    let m = resume::mark(
                         &emitter,
                         &pages,
                         &pre_snapshot,
                         &total_stats,
                         &pre_total_stats,
-                    ));
-                }
-                total_stats.frames_emitted += match relaid {
-                    Some(frames) => {
-                        total_stats.stories_resumed += 1;
-                        frames
+                    );
+                    if let Some(plan) = plan.as_ref().filter(|pl| pl.past_edit(j)) {
+                        relaid = resume::try_stop(
+                            &mut emitter,
+                            &mut pages,
+                            &pre_snapshot,
+                            plan,
+                            j,
+                            &m,
+                            &mut total_stats,
+                            Some(&mut marks),
+                            &mut verbatim,
+                        );
+                        if relaid.is_some() {
+                            // The record's later pages are this
+                            // build's, unless their lines moved to
+                            // other paragraph indices.
+                            let to = if plan.shifts() { usize::MAX } else { m.page };
+                            fresh_range = Some((plan.resume_page(), to));
+                            break;
+                        }
                     }
-                    None => emitter
-                        .frame_cmd_ranges
-                        .iter()
-                        .skip(plan.as_ref().map_or(0, |pl| pl.resume_frame()))
-                        .filter(|r| r.is_some())
-                        .count(),
-                };
+                    marks.push(m);
+                }
+                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
             }
+            if resumable && relaid.is_none() {
+                marks.push(resume::mark(
+                    &emitter,
+                    &pages,
+                    &pre_snapshot,
+                    &total_stats,
+                    &pre_total_stats,
+                ));
+            }
+            total_stats.frames_emitted += match relaid {
+                Some(frames) => {
+                    total_stats.stories_resumed += 1;
+                    frames
+                }
+                None => emitter
+                    .frame_cmd_ranges
+                    .iter()
+                    .skip(plan.as_ref().map_or(0, |pl| pl.resume_frame()))
+                    .filter(|r| r.is_some())
+                    .count(),
+            };
             let post_pass_counts: Vec<usize> = chain_page_set
                 .iter()
                 .map(|&p| pages[p].list.commands.len())
@@ -5901,59 +5861,106 @@ pub fn build_index_paragraphs(
     out
 }
 
-/// Build the synthetic `Paragraph` sequence for an unresolved TOC
-/// story. Walks `Document::resolve_toc(toc_style)` and turns every
-/// `TOCEntry` into a single `Paragraph` whose:
-///   - `paragraph_style` = entry's `format_style`,
-///   - one run carrying `text` + expanded `separator` + page label.
+/// The paragraphs Update Table of Contents writes into a TOC story, as
+/// InDesign 20.0.1 writes them (`toc-probe`, ADR 165):
 ///
-/// Tabs in `Separator` (IDML serialises a tab as `^t`) expand to a
-/// literal `\t`, which `paged_text::layout::apply_tab_stops` snaps
-/// to the next tab stop (or, when none, to a single tab width).
-/// Page labels come from the per-page `page_labels` slice so
-/// Section overrides (Roman numerals etc.) carry through.
+/// - the style's `Title`, when it has one, in its `TitleStyle`;
+/// - one paragraph per entry in the entry's `FormatStyle`: the heading's
+///   text, the separator and the page number (`AfterEntry`, the default),
+///   the number, the separator and the text (`BeforeEntry`), or the text
+///   alone (`None`);
+/// - the number in the entry's `PageNumberStyle` and the separator in its
+///   `SeparatorStyle`; the text takes no character style.
 ///
-/// Returns an empty vec when the TOC has no resolved entries —
-/// keeps the renderer from emitting any glyphs into the host
-/// frame (matches InDesign, which leaves the frame blank).
-pub(super) fn build_toc_paragraphs(
-    document: &Document,
+/// `entries` come from [`paged_scene::Document::resolve_toc_on`] over the
+/// last layout; `page_labels` are the pages' labels in body order
+/// (section numbering included).
+pub fn toc_paragraphs(
     toc_style: &paged_model::TOCStyleDef,
+    entries: Vec<paged_scene::TOCEntry>,
     page_labels: &[String],
 ) -> Vec<paged_model::Paragraph> {
-    let entries = document.resolve_toc(toc_style);
-    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
+    let run = |text: String, style: Option<String>| paged_model::CharacterRun {
+        text,
+        character_style: style,
+        ..paged_model::CharacterRun::default()
+    };
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len() + 1);
+    if let Some(title) = toc_style.title.as_deref().filter(|t| !t.is_empty()) {
+        out.push(paged_model::Paragraph {
+            paragraph_style: toc_style.title_style.clone(),
+            runs: vec![run(title.to_string(), None)],
+            ..paged_model::Paragraph::default()
+        });
+    }
     for entry in entries {
-        // Expand the IDML tab token. Only `^t` is recognised
-        // today — Adobe's full set (^m em-space, ^>, etc.) is
-        // queued; the corpus only carries `^t` separators.
-        let separator = entry.separator.replace("^t", "\t");
-        // Resolve the page label. `TOCEntry::page_number` is a
-        // 0-based body-page index; `page_labels` is parallel to
-        // the renderer's `pages` slice and already carries the
-        // user-visible label (Section overrides included). When
-        // the resolver returned `None` (orphan story) or the
-        // entry suppressed the page number, skip the separator
-        // + page-number tail.
-        let page_label = entry
+        let separator = expand_toc_specials(&entry.separator);
+        let label = entry
             .page_number
             .filter(|_| entry.page_number_visible)
             .and_then(|i| page_labels.get(i).cloned());
-        let mut text = entry.text;
-        if let Some(label) = page_label {
-            text.push_str(&separator);
-            text.push_str(&label);
+        let mut runs: Vec<paged_model::CharacterRun> = Vec::with_capacity(3);
+        match label {
+            Some(label) if entry.page_number_before => {
+                runs.push(run(label, entry.page_number_style.clone()));
+                runs.push(run(separator, entry.separator_style.clone()));
+                runs.push(run(entry.text, None));
+            }
+            Some(label) => {
+                runs.push(run(entry.text, None));
+                runs.push(run(separator, entry.separator_style.clone()));
+                runs.push(run(label, entry.page_number_style.clone()));
+            }
+            None => runs.push(run(entry.text, None)),
         }
-        let run = paged_model::CharacterRun {
-            text,
-            ..paged_model::CharacterRun::default()
-        };
-        let paragraph = paged_model::Paragraph {
+        // Neighbouring runs of one style are one run, as InDesign writes
+        // them (`Getting Started⇥` is one range when the separator has no
+        // style of its own).
+        let mut merged: Vec<paged_model::CharacterRun> = Vec::with_capacity(runs.len());
+        for r in runs.into_iter().filter(|r| !r.text.is_empty()) {
+            match merged.last_mut() {
+                Some(last) if last.character_style == r.character_style => {
+                    last.text.push_str(&r.text)
+                }
+                _ => merged.push(r),
+            }
+        }
+        out.push(paged_model::Paragraph {
             paragraph_style: entry.format_style,
-            runs: vec![run],
+            runs: merged,
             ..paged_model::Paragraph::default()
+        });
+    }
+    out
+}
+
+/// A TOC separator's metacharacters as the characters they stand for:
+/// `^t` tab, `^m` em space, `^>` en space, `^<` thin space, `^|` hair
+/// space, `^s` no-break space, `^f` flush space; `^y` (right-indent tab)
+/// is set as a tab.
+fn expand_toc_specials(separator: &str) -> String {
+    let mut out = String::with_capacity(separator.len());
+    let mut chars = separator.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '^' {
+            out.push(c);
+            continue;
+        }
+        let expanded = match chars.peek() {
+            Some('t') | Some('y') => '\t',
+            Some('m') => '\u{2003}',
+            Some('>') => '\u{2002}',
+            Some('<') => '\u{2009}',
+            Some('|') => '\u{200A}',
+            Some('s') => '\u{00A0}',
+            Some('f') => '\u{2001}',
+            _ => {
+                out.push('^');
+                continue;
+            }
         };
-        out.push(paragraph);
+        chars.next();
+        out.push(expanded);
     }
     out
 }

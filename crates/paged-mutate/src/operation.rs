@@ -3340,6 +3340,14 @@ pub enum Operation {
         position: usize,
         story_json: String,
     },
+    /// v73 — set story `story_id`'s paragraphs to `paragraphs_json` (a
+    /// JSON `Vec<Paragraph>`), whole: what Update Table of Contents writes
+    /// into a TOC story (ADR 165). Inverse: itself, carrying the
+    /// paragraphs it replaced.
+    ReplaceStoryParagraphs {
+        story_id: String,
+        paragraphs_json: String,
+    },
     /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
     /// immediately after the spread hosting `after_page_id` (or at
     /// the end when `None`). Page size clones the reference page
@@ -4018,6 +4026,30 @@ pub enum Operation {
         #[serde(default)]
         page: Option<String>,
     },
+    /// v73 — insert a footnote (ADR 163): its reference at contiguous
+    /// story char `offset` (a reference marker character) and the note,
+    /// whose text opens with its number and the document's separator,
+    /// then `text`. `footnote_id` is the note's `Self`. `restore` is
+    /// inverse-only: the removed note's paragraphs (JSON), put back as
+    /// they were. Inverse: `RemoveFootnote`.
+    InsertFootnote {
+        story_id: String,
+        offset: u32,
+        /// The paragraph `offset` stands in, when it names one: the end of
+        /// a paragraph and the start of the next share an offset.
+        #[serde(default)]
+        paragraph: Option<u32>,
+        footnote_id: String,
+        text: String,
+        #[serde(default)]
+        restore: Option<String>,
+    },
+    /// v73 — remove a footnote: its reference marker and the note.
+    /// Inverse: `InsertFootnote` carrying the note's paragraphs.
+    RemoveFootnote {
+        story_id: String,
+        footnote_id: String,
+    },
     /// v53 — inverse-only companion to `InsertHyperlink`: clear the
     /// `hyperlink_source == source_id` tag from every run of `story_id` and
     /// drop the `Hyperlink`/`HyperlinkDestination` addressed by
@@ -4034,6 +4066,34 @@ pub enum Operation {
         /// v70 — the page the link went to, so the inverse recreates it.
         #[serde(default)]
         page: Option<String>,
+    },
+    /// v73 — delete hyperlink `hyperlink_id` of any origin (ADR 164):
+    /// every run its source tags stops linking, the record goes, and so
+    /// does its URL or page destination when nothing else points at it.
+    /// Inverse: `RestoreHyperlink`.
+    DeleteHyperlink {
+        hyperlink_id: String,
+    },
+    /// v73 — edit hyperlink `hyperlink_id` (ADR 164): `name` renames it
+    /// (empty clears it); `page` or else `url` sends it somewhere new,
+    /// rewriting its own destination of that kind in place, or moving it to
+    /// a new destination `dest_id` when its destination is shared, a text
+    /// anchor or of the other kind. Inverse: `RestoreHyperlink`.
+    EditHyperlink {
+        hyperlink_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        page: Option<String>,
+        dest_id: String,
+    },
+    /// v73 — inverse-only: put a hyperlink back as captured (`state`, JSON):
+    /// the record where it stood, its destinations as they were, and its
+    /// source tag over the same runs. Inverse: another `RestoreHyperlink`.
+    RestoreHyperlink {
+        state: String,
     },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char

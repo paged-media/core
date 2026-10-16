@@ -1109,6 +1109,59 @@ pub enum Mutation {
         #[serde(default)]
         page: Option<PageId>,
     },
+    /// v73 — insert a footnote (ADR 163): its reference at story char
+    /// `offset` (contiguous char offsets, the `InsertHyperlink` address
+    /// space) and the note, whose text is its number, the document's
+    /// separator, then `text`. The model mints the note's id and reports
+    /// it in the reply. Undoable in one step.
+    InsertFootnote {
+        story_id: String,
+        offset: u32,
+        /// The paragraph `offset` stands in (the end of a paragraph and the
+        /// start of the next share an offset); `offset` is clamped into it.
+        #[serde(default)]
+        paragraph: Option<u32>,
+        #[serde(default)]
+        text: String,
+    },
+    /// v73 — delete a footnote: its reference and the note, by the note's
+    /// id (`Footnote.self_id`). Undoable in one step: undo puts the note
+    /// back as it was, its text and formatting included.
+    DeleteFootnote {
+        story_id: String,
+        footnote_id: String,
+    },
+    /// v73 — delete a hyperlink by its `Hyperlink` `Self` id (ADR 164),
+    /// from any origin: its text stops linking, the link goes, and so does
+    /// its URL or page destination when nothing else points at it. A text
+    /// destination stays (it is an anchor in its story). Undoable in one
+    /// step.
+    DeleteHyperlink {
+        hyperlink_id: String,
+    },
+    /// v73 — edit a hyperlink (ADR 164): `name` renames it (empty clears
+    /// it); `page` (wins) or `url` sends it somewhere new. Its own
+    /// destination of that kind changes in place; a shared one, a text
+    /// anchor or one of the other kind stays, and the link moves to a new
+    /// destination the model mints. Fields left out are unchanged.
+    /// Undoable in one step.
+    EditHyperlink {
+        hyperlink_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        page: Option<PageId>,
+    },
+    /// v73 — Update Table of Contents (ADR 165): rewrite TOC story
+    /// `story_id` (one whose story or frame names a TOC style) from its
+    /// style over the current layout, as InDesign writes it: the title,
+    /// then one paragraph per heading with its page number. Until then the
+    /// story prints the text it holds. Undoable in one step.
+    UpdateTableOfContents {
+        story_id: String,
+    },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
     /// from `RequestDocumentPlaceholders`). `value: null` returns the
@@ -2292,6 +2345,11 @@ mutation_vocabulary! {
     InsertField,
     InsertAnchoredFrame,
     InsertHyperlink,
+    InsertFootnote,
+    DeleteFootnote,
+    DeleteHyperlink,
+    EditHyperlink,
+    UpdateTableOfContents,
     SetFieldValue,
     PlaceImage,
     ReplaceImageBytes,

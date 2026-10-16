@@ -3968,6 +3968,57 @@ pub struct IndexTopic {
     pub sort_order: Option<String>,
 }
 
+/// IDML `<CrossReference>` under a `<Topic>`: an index entry that sends
+/// the reader to another topic ("Fruit. See Apples").
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IndexCrossReference {
+    pub self_id: String,
+    /// The topic the reference stands under.
+    pub topic: String,
+    /// `ReferencedTopic` — the topic it sends the reader to.
+    pub referenced_topic: Option<String>,
+    /// `CrossReferenceType`: `See`, `SeeAlso`, `SeeHerein`,
+    /// `SeeAlsoHerein`, `SeeOrAlsoBracket`, `CustomCrossReference`, ….
+    pub kind: Option<String>,
+    /// `CustomTypeString` — the words of a custom reference.
+    pub custom_type_string: Option<String>,
+}
+
+/// IDML `<IndexOptions>`: how Generate Index writes the index, as
+/// InDesign 20.0.1 spells it (`index-probe`, ADR 166). Every field is the
+/// attribute's raw value; an absent one reads as InDesign's default.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct IndexOptions {
+    /// `Title` (`Index`) and `TitleStyle` (`ParagraphStyle/$ID/Index Title`).
+    pub title: Option<String>,
+    pub title_style: Option<String>,
+    pub replace_existing_index: Option<bool>,
+    pub include_book_documents: Option<bool>,
+    pub include_hidden_entries: Option<bool>,
+    /// `IndexFormat`: `NestedFormat` (default) or `RunInFormat`.
+    pub index_format: Option<String>,
+    pub include_section_headings: Option<bool>,
+    pub include_empty_index_sections: Option<bool>,
+    /// `Level1Style` … `Level4Style`.
+    pub level_styles: [Option<String>; 4],
+    pub section_heading_style: Option<String>,
+    pub page_number_style: Option<String>,
+    pub cross_reference_style: Option<String>,
+    pub cross_reference_topic_style: Option<String>,
+    /// `FollowingTopicSeparator` (two spaces by default).
+    pub following_topic_separator: Option<String>,
+    /// `BetweenEntriesSeparator` (`; `), between run-in entries.
+    pub between_entries_separator: Option<String>,
+    /// `PageRangeSeparator` (`^=`, an en dash).
+    pub page_range_separator: Option<String>,
+    /// `BetweenPageNumbersSeparator` (`, `).
+    pub between_page_numbers_separator: Option<String>,
+    /// `BeforeCrossReferenceSeparator` (`. `).
+    pub before_cross_reference_separator: Option<String>,
+    /// `EntryEndSeparator` (none).
+    pub entry_end_separator: Option<String>,
+}
+
 /// IDML `<TextVariable>` declaration. W1.4: the renderer resolves the
 /// value per `variable_type` at emit time (falling back to each
 /// instance's baked `ResultText` when the type's inputs aren't
@@ -4926,6 +4977,10 @@ pub struct TOCStyleDef {
     pub run_in: Option<bool>,
     /// Ordered list of `<TOCStyleEntry>` children in document order.
     pub entries: Vec<TOCStyleEntryDef>,
+    /// `CreateBookmarks` — Update Table of Contents also writes a PDF
+    /// bookmark per entry (InDesign's default: on).
+    #[serde(default)]
+    pub create_bookmarks: Option<bool>,
 }
 /// `<TOCStyleEntry>` — one row in the TOC style table. IDML serialises
 /// these in document order under the `<TOCStyle>`.
@@ -4950,6 +5005,22 @@ pub struct TOCStyleEntryDef {
     /// page number. IDML serialises tabs as `^t`; the resolver
     /// expands them at use time. Default `^t` when absent.
     pub separator: Option<String>,
+    /// `PageNumberPosition` — where the page number stands, as InDesign
+    /// 20.0.1 writes it: `AfterEntry` (the default), `BeforeEntry` or
+    /// `None` (ADR 165). Wins over `page_number`.
+    #[serde(default)]
+    pub page_number_position: Option<String>,
+    /// `<Properties><PageNumberStyle>` — the character style the page
+    /// number is set in; `None` for `$ID/[Same Style]`.
+    #[serde(default)]
+    pub page_number_style: Option<String>,
+    /// `<Properties><SeparatorStyle>` — the character style the separator
+    /// is set in; `None` for `$ID/[Same Style]`.
+    #[serde(default)]
+    pub separator_style: Option<String>,
+    /// `SortAlphabet` — the level's entries sorted alphabetically.
+    #[serde(default)]
+    pub sort_alphabet: Option<bool>,
 }
 /// `<ObjectStyle>` — the page-item analogue of paragraph/character
 /// styles. Carries fill + stroke defaults that flow into a frame
@@ -8386,6 +8457,19 @@ pub struct DesignMap {
     /// document's index. Flat list (the IDML schema's nested
     /// topics are flattened to one entry per Self for v1).
     pub index_topics: Vec<IndexTopic>,
+    /// The topics' nesting: each subtopic's `Self` → its parent topic's
+    /// (InDesign nests a subtopic's `<Topic>` inside its parent's, up to
+    /// four levels; ADR 166).
+    #[serde(default)]
+    pub index_topic_parents: BTreeMap<String, String>,
+    /// `<CrossReference>` children of the topics: See, See also, …
+    #[serde(default)]
+    pub index_cross_references: Vec<IndexCrossReference>,
+    /// `<IndexOptions>` (`Resources/Preferences.xml`): how Generate Index
+    /// writes the index. `None` when the document carries none, which
+    /// reads as InDesign's defaults.
+    #[serde(default)]
+    pub index_options: Option<IndexOptions>,
     /// `<Section>` definitions, in document order. Each anchors at a
     /// `<Page>` (via `PageStart`) and carries the numbering style /
     /// start value / prefix InDesign uses to label that section's

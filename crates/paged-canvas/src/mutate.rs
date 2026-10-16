@@ -553,6 +553,36 @@ fn split_paragraph_at(paragraphs: &mut Vec<paged_model::Paragraph>, offset: u32)
     paragraphs.insert(paragraph_idx + 1, new_para);
 }
 
+/// Drop the footnotes whose reference stands in characters `[from, to)` of
+/// `para`: a note goes with its reference, as InDesign deletes it with
+/// its reference (ADR 163). A note is matched to its reference marker by
+/// order when the paragraph holds one marker per note (what the renderer
+/// reads), by its anchor otherwise. Call it before the text changes.
+fn drop_notes_in(para: &mut paged_model::Paragraph, from: u32, to: u32) {
+    if para.footnotes.is_empty() {
+        return;
+    }
+    let markers: Vec<u32> = para
+        .runs
+        .iter()
+        .flat_map(|r| r.text.chars())
+        .enumerate()
+        .filter(|(_, c)| *c == paged_model::FOOTNOTE_REFERENCE_MARKER)
+        .map(|(i, _)| i as u32)
+        .collect();
+    let one_each = markers.len() == para.footnotes.len();
+    let mut k = 0usize;
+    para.footnotes.retain(|f| {
+        let at = if one_each {
+            markers[k]
+        } else {
+            f.anchor.unwrap_or(0)
+        };
+        k += 1;
+        !(from..to).contains(&at)
+    });
+}
+
 /// Remove from `para` the footnotes whose reference stands at character
 /// `from` or later, and its table when that is anchored there or later,
 /// returning them with their anchors rebased to `from`: they go with
@@ -765,11 +795,40 @@ fn apply_delete_range(
         }
 
         // Now mutate: trim start_para to its [0..start_local] runs,
-        // then append end_para's tail.
+        // then append end_para's tail. A note goes with its reference
+        // (ADR 163), and what stands after the deletion in end_para —
+        // its notes, its table, its anchored frames — moves with its
+        // text into start_para.
+        let start_char = paragraphs[start_para].char_offset_of_byte(start_local);
+        drop_notes_in(&mut paragraphs[start_para], start_char, u32::MAX);
+        let end_char = paragraphs[end_para].char_offset_of_byte(end_local);
+        drop_notes_in(&mut paragraphs[end_para], 0, end_char);
+        let (moved_frames, moved_offsets) = take_anchors_from(&mut paragraphs[end_para], end_char);
+        let (moved_notes, moved_table) =
+            take_notes_and_table_from(&mut paragraphs[end_para], end_char);
         let end_tail_runs = capture_tail_runs(&paragraphs[end_para], end_local);
         let start_para_ref = &mut paragraphs[start_para];
         truncate_paragraph_to(start_para_ref, start_local);
         start_para_ref.runs.extend(end_tail_runs);
+        start_para_ref
+            .anchored_frame_offsets
+            .resize(start_para_ref.anchored_frames.len(), 0);
+        start_para_ref.anchored_frames.extend(moved_frames);
+        start_para_ref
+            .anchored_frame_offsets
+            .extend(moved_offsets.into_iter().map(|o| o + start_char));
+        start_para_ref
+            .footnotes
+            .extend(moved_notes.into_iter().map(|mut f| {
+                f.anchor = f.anchor.map(|a| a + start_char);
+                f
+            }));
+        if start_para_ref.table.is_none() {
+            if let Some((table, anchor)) = moved_table {
+                start_para_ref.table = Some(table);
+                start_para_ref.table_anchor = Some(anchor + start_char);
+            }
+        }
         // Drop paragraphs (start_para+1 ..= end_para).
         paragraphs.drain((start_para + 1)..=end_para);
     }
@@ -1041,6 +1100,7 @@ fn splice_paragraph(
 ) {
     let from = para.char_offset_of_byte(local_start);
     let to = para.char_offset_of_byte(local_end);
+    drop_notes_in(para, from, to);
     para.shift_anchors(from, -i64::from(to.saturating_sub(from)));
     // Walk runs, splice the bytes in [local_start, local_end).
     let mut acc: usize = 0;

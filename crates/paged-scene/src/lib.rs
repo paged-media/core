@@ -771,16 +771,34 @@ impl Document {
     ) -> Vec<TOCEntry> {
         let mut out: Vec<TOCEntry> = Vec::new();
         let body_page_index = self.body_page_index_map();
+        // The style each entry collects: `IncludeStyle`, or as InDesign
+        // writes it, the paragraph style named by the entry's `Name`.
+        let includes: Vec<Option<String>> = toc_style
+            .entries
+            .iter()
+            .map(|e| {
+                e.include_style.clone().or_else(|| {
+                    e.name
+                        .as_deref()
+                        .filter(|n| !n.is_empty())
+                        .map(|n| format!("ParagraphStyle/{}", n.replace(':', "%3a")))
+                })
+            })
+            .collect();
         for parsed in &self.stories {
+            // A table of contents does not list its own entries.
+            if parsed.story.applied_toc_style.as_deref() == Some(toc_style.self_id.as_str()) {
+                continue;
+            }
             let story_pages = laid_out.get(&parsed.self_id);
             for (i, paragraph) in parsed.story.paragraphs.iter().enumerate() {
                 let Some(applied) = paragraph.paragraph_style.as_deref() else {
                     continue;
                 };
-                let Some(entry_def) = toc_style
-                    .entries
+                let Some(entry_def) = includes
                     .iter()
-                    .find(|e| e.include_style.as_deref() == Some(applied))
+                    .position(|inc| inc.as_deref() == Some(applied))
+                    .map(|k| &toc_style.entries[k])
                 else {
                     continue;
                 };
@@ -791,20 +809,28 @@ impl Document {
                 let page_number = story_pages
                     .and_then(|m| m.get(&i).copied())
                     .or_else(|| body_page_index.get(&parsed.self_id).copied());
+                let position = entry_def.page_number_position.as_deref();
                 out.push(TOCEntry {
                     level: entry_def.level.unwrap_or(1),
                     text,
                     page_number,
                     separator: entry_def
                         .separator
-                        .clone()
+                        .as_deref()
+                        .map(|s| s.strip_prefix("$ID/").unwrap_or(s).to_string())
                         .unwrap_or_else(|| "^t".to_string()),
                     format_style: entry_def.format_style.clone(),
                     include_style: applied.to_string(),
-                    page_number_visible: !matches!(
-                        entry_def.page_number.as_deref(),
-                        Some("Off") | Some("NoPageNumber")
-                    ),
+                    page_number_visible: match position {
+                        Some(p) => p != "None",
+                        None => !matches!(
+                            entry_def.page_number.as_deref(),
+                            Some("Off") | Some("NoPageNumber")
+                        ),
+                    },
+                    page_number_before: position == Some("BeforeEntry"),
+                    page_number_style: same_style_is_none(entry_def.page_number_style.as_deref()),
+                    separator_style: same_style_is_none(entry_def.separator_style.as_deref()),
                 });
             }
         }
@@ -934,6 +960,21 @@ pub struct TOCEntry {
     /// number (`PageNumber="Off"` / `NoPageNumber"`). The renderer
     /// should drop the separator + number for these rows.
     pub page_number_visible: bool,
+    /// The page number stands before the entry, then the separator
+    /// (`PageNumberPosition="BeforeEntry"`), not after it.
+    pub page_number_before: bool,
+    /// The character style the page number is set in, if any.
+    pub page_number_style: Option<String>,
+    /// The character style the separator is set in, if any.
+    pub separator_style: Option<String>,
+}
+
+/// A TOC entry's character-style reference, with InDesign's
+/// `[Same Style]` (no style of its own) as `None`.
+fn same_style_is_none(style: Option<&str>) -> Option<String> {
+    style
+        .filter(|s| !s.is_empty() && !s.ends_with("[Same Style]"))
+        .map(str::to_string)
 }
 
 /// Where a build laid out each body paragraph: per story id, paragraph
@@ -2137,6 +2178,7 @@ mod tests {
                     level: Some(1),
                     page_number: Some("On".to_string()),
                     separator: Some("^t".to_string()),
+                    ..Default::default()
                 },
                 TOCStyleEntryDef {
                     name: Some("H2".to_string()),
@@ -2145,8 +2187,10 @@ mod tests {
                     level: Some(2),
                     page_number: Some("On".to_string()),
                     separator: Some(" -- ".to_string()),
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         }
     }
 
@@ -2188,6 +2232,68 @@ mod tests {
         assert_eq!(entries[3].text, "Results");
         assert_eq!(entries[3].level, 1);
         assert_eq!(entries[3].page_number, Some(2));
+    }
+
+    /// ADR 165 — a TOC style as InDesign 20.0.1 writes it: an entry's
+    /// `Name` names the style it collects, the number stands after the
+    /// entry, before it or nowhere, the separator carries `$ID/`, and
+    /// `[Same Style]` is no character style.
+    #[test]
+    fn resolve_toc_reads_indesigns_entry_spelling() {
+        let bytes = pack_toc_idml(&[
+            ("intro", "ParagraphStyle/Heading1", "Intro"),
+            ("intro", "ParagraphStyle/Heading2", "Background"),
+            ("mid", "ParagraphStyle/Group%3aHeading3", "Aside"),
+        ]);
+        let doc = idml_import::import_idml_doc(&bytes).expect("open IDML");
+        let entry =
+            |name: &str, level, position: &str, separator: &str, number: &str| TOCStyleEntryDef {
+                name: Some(name.to_string()),
+                level: Some(level),
+                page_number_position: Some(position.to_string()),
+                separator: Some(separator.to_string()),
+                page_number_style: Some(number.to_string()),
+                separator_style: Some("$ID/[Same Style]".to_string()),
+                ..Default::default()
+            };
+        let toc = TOCStyleDef {
+            self_id: "TOCStyle/Contents".to_string(),
+            entries: vec![
+                entry("Heading1", 1, "AfterEntry", "$ID/^t", "CharacterStyle/Page"),
+                entry("Heading2", 2, "BeforeEntry", "$ID/ ", "$ID/[Same Style]"),
+                entry("Group:Heading3", 3, "None", "$ID/", "$ID/[Same Style]"),
+            ],
+            ..Default::default()
+        };
+        let entries = doc.resolve_toc(&toc);
+        let got: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.text.as_str(),
+                    e.separator.as_str(),
+                    e.page_number_visible,
+                    e.page_number_before,
+                    e.page_number_style.as_deref(),
+                    e.separator_style.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (
+                    "Intro",
+                    "^t",
+                    true,
+                    false,
+                    Some("CharacterStyle/Page"),
+                    None
+                ),
+                ("Background", " ", true, true, None, None),
+                ("Aside", "", false, false, None, None),
+            ]
+        );
     }
 
     /// L-06 — a laid-out page wins over the story's head frame's page;

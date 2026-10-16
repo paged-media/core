@@ -1559,6 +1559,98 @@ fn text_cases(c: &mut Vec<Case>) {
             page: None,
         }
     }));
+    // v73 (ADR 164) — a link is a region beside the display list (see
+    // `InsertHyperlink`), and deleting one leaves its runs split where the
+    // insert split them: the glyph stream is the one already drawn.
+    c.push(inert(
+        "DeleteHyperlink",
+        "text",
+        "a link is a region, not a mark; the runs it split stay split",
+        |m| {
+            let (story_id, chars) = biggest_story(m);
+            m.apply_mutation(&Mutation::InsertHyperlink {
+                story_id,
+                start: 0,
+                end: chars.min(12),
+                url: "https://paged.media".into(),
+                page: None,
+            })
+            .expect("seed a hyperlink");
+            let hyperlink_id = m
+                .hyperlinks()
+                .last()
+                .expect("the seeded link")
+                .self_id
+                .clone();
+            Mutation::DeleteHyperlink { hyperlink_id }
+        },
+    ));
+    c.push(inert(
+        "EditHyperlink",
+        "text",
+        "where a link goes is not drawn",
+        |m| {
+            let (story_id, chars) = biggest_story(m);
+            m.apply_mutation(&Mutation::InsertHyperlink {
+                story_id,
+                start: 0,
+                end: chars.min(12),
+                url: "https://paged.media".into(),
+                page: None,
+            })
+            .expect("seed a hyperlink");
+            let hyperlink_id = m
+                .hyperlinks()
+                .last()
+                .expect("the seeded link")
+                .self_id
+                .clone();
+            Mutation::EditHyperlink {
+                hyperlink_id,
+                name: Some("Home".into()),
+                url: Some("https://docs.paged.media".into()),
+                page: None,
+            }
+        },
+    ));
+    // v73 (ADR 165) — the TOC story's stale entries give way to the
+    // headings where they now stand.
+    c.push(paints("UpdateTableOfContents", "toc", |_| {
+        Mutation::UpdateTableOfContents {
+            story_id: paged_gen::samples::toc::story_id("Contents"),
+        }
+    }));
+    // v73 (ADR 163) — a footnote: its reference prints in the text, its
+    // note at the frame's foot; deleting one takes both away.
+    c.push(paints("InsertFootnote", "text", |m| {
+        let (story_id, chars) = biggest_story(m);
+        Mutation::InsertFootnote {
+            story_id,
+            offset: chars.min(12),
+            paragraph: None,
+            text: "A note.".into(),
+        }
+    }));
+    c.push(paints("DeleteFootnote", "text", |m| {
+        let (story_id, chars) = biggest_story(m);
+        m.apply_mutation(&Mutation::InsertFootnote {
+            story_id: story_id.clone(),
+            offset: chars.min(12),
+            paragraph: None,
+            text: "A note.".into(),
+        })
+        .expect("seed a footnote");
+        let footnote_id = m
+            .footnotes()
+            .into_iter()
+            .find(|f| f.story_id == story_id)
+            .expect("the seeded note")
+            .self_id;
+        Mutation::DeleteFootnote {
+            story_id,
+            footnote_id,
+        }
+    }));
     c.push(paints("SetFieldValue", "text", |m| {
         let (story_id, _) = biggest_story(m);
         m.apply_mutation(&Mutation::InsertField {
