@@ -90,6 +90,9 @@ is not written yet.
 | [160](160-footnotes-in-columns.md) | Footnotes in a frame with columns: under each column, or across the frame | Accepted 2026-10-15 |
 | [161](161-a-note-too-tall-for-its-frame.md) | A note too tall for its frame: continued in the next, or its reference moved on | Accepted 2026-10-15 |
 | [162](162-the-documents-footnote-options-are-editable.md) | The document's footnote options are editable, and saved as InDesign writes them | Accepted 2026-10-15 |
+| [163](163-footnotes-inserted-and-deleted.md) | Footnotes inserted and deleted, over the wire and through a save | Accepted 2026-10-16 |
+| [164](164-hyperlinks-deleted-and-edited.md) | Hyperlinks deleted and edited, whatever made them | Accepted 2026-10-16 |
+| [165](165-update-table-of-contents.md) | Update Table of Contents, as InDesign writes it | Accepted 2026-10-16 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).
