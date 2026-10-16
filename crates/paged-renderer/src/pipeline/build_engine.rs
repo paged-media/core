@@ -2884,6 +2884,27 @@ pub(super) fn build_document_inner(
                     .unwrap_or(f)
             })
             .collect();
+        // A vertical story is laid out in its frames turned on their side
+        // (InDesign 20.0.1 sets vertical text as horizontal text turned a
+        // quarter clockwise: vertical-text-probe), and the post-pass
+        // turns its lines into columns.
+        let story_vertical = matches!(
+            parsed.story.story_direction,
+            Some(paged_model::StoryDirection::VerticalWritingDirection)
+        );
+        let turned: Vec<TextFrame> = if story_vertical {
+            authored_chain
+                .iter()
+                .map(|f| super::text_frame::turned_for_vertical(f))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let authored_chain: Vec<&TextFrame> = if story_vertical {
+            turned.iter().collect()
+        } else {
+            authored_chain
+        };
         // Multi-column frames become N side-by-side regions here, so
         // everything downstream — chain pages, spread bounds, wrap
         // rects, the emitter's overflow walk — sees columns as the
@@ -3348,6 +3369,7 @@ pub(super) fn build_document_inner(
                 parsed.story.optical_margin_alignment,
                 parsed.story.optical_margin_size,
             )
+            .with_vertical(is_vertical)
             .with_story_id(&parsed.self_id)
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
@@ -4463,6 +4485,12 @@ pub(super) struct StoryEmitter<'a> {
     /// its faces' hhea descenders at their sizes, the deepest. Where a
     /// column rule ends (ADR 155).
     pub(super) frame_max_descent_64: Vec<i32>,
+    /// How far below `frame_max_baseline_64` the text a Japanese composer
+    /// set ends for vertical justification: its em box bottom (1/64 pt;
+    /// 0 under the Paragraph Composer, which ends at the baseline).
+    /// InDesign 20.0.1 centres such a block to the last line's em box
+    /// bottom (vertical-text-probe `vjcenter`).
+    pub(super) frame_max_em_bottom_64: Vec<i32>,
     /// W1.7 footnote space reservation — per chain-frame height (in
     /// 1/64 pt) to hold back from the bottom of the frame's text area
     /// for the footnote pool. Body text overflows to the next frame
@@ -4523,6 +4551,10 @@ pub(super) struct StoryEmitter<'a> {
     /// hang for glyphs smaller than this size; ignored when
     /// `optical_margin_alignment` is false.
     pub(super) optical_margin_size_pt: f32,
+    /// The story is set vertically (`StoryOrientation="Vertical"`): its
+    /// lines are laid out in frames turned on their side and its
+    /// characters that stand upright are shaped top to bottom.
+    pub(super) vertical: bool,
     /// How many anchored-frame story recursions deep this emitter is.
     /// 0 for the top-level body / master pass; 1+ for an emitter
     /// constructed by `emit_anchored_textframe_story`. Bounded at
@@ -4823,6 +4855,7 @@ impl<'a> StoryEmitter<'a> {
             last_placed_frame: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            frame_max_em_bottom_64: vec![0; len],
             frame_max_descent_64: vec![0; len],
             reserved_footnote_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
@@ -4831,6 +4864,7 @@ impl<'a> StoryEmitter<'a> {
             list_levels: Default::default(),
             cross_story_numbering: None,
             optical_margin_alignment: false,
+            vertical: false,
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
             anchored_image_queue: Vec::new(),
@@ -4983,6 +5017,11 @@ impl<'a> StoryEmitter<'a> {
     pub(super) fn with_optical_margin(mut self, alignment: bool, size_pt: f32) -> Self {
         self.optical_margin_alignment = alignment;
         self.optical_margin_size_pt = size_pt;
+        self
+    }
+
+    pub(super) fn with_vertical(mut self, vertical: bool) -> Self {
+        self.vertical = vertical;
         self
     }
 
@@ -5142,7 +5181,7 @@ impl<'a> StoryEmitter<'a> {
             let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
                 * paged_text::shape::ADVANCE_PRECISION)
                 .round() as i32;
-            let used_64 = self.frame_max_baseline_64[i];
+            let used_64 = self.frame_max_baseline_64[i] + self.frame_max_em_bottom_64[i];
             // W1.7 — the footnote pool reserves the bottom of the
             // frame, so vertical justification must distribute slack
             // against the reduced text area. Without this, Center /
@@ -6193,7 +6232,14 @@ fn emit_paragraph_lines(
                 head_metrics,
                 // A `LeadingOffset` frame sets its first baseline one
                 // leading down, empty line or not.
-                Some(line_height_64),
+                Some(
+                    line_height_64
+                        - super::text_frame::japanese_leading_drop_64(
+                            &resolved_paragraph,
+                            head_metrics,
+                            para_pt,
+                        ),
+                ),
             );
         }
         // Adobe places the empty paragraph's virtual baseline at
@@ -6754,6 +6800,7 @@ fn emit_paragraph_lines(
     let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
+    lopts.vertical = em.vertical;
     let binding = em
         .chain_pages
         .get(em.frame_idx)
@@ -6827,7 +6874,14 @@ fn emit_paragraph_lines(
             paragraph_size,
             lopts.first_baseline,
             head_font_metrics,
-            Some(lopts.leading_override.unwrap_or(lopts.line_height)),
+            Some(
+                lopts.leading_override.unwrap_or(lopts.line_height)
+                    - super::text_frame::japanese_leading_drop_64(
+                        &resolved_paragraph,
+                        head_font_metrics,
+                        paragraph_size,
+                    ),
+            ),
         );
     } else {
         let space_before_64 =
@@ -7381,16 +7435,20 @@ fn emit_paragraph_lines(
         ))
     };
     let ruby = if japanese {
-        super::ruby::ruby_groups(styled_runs_ref, &resolved_runs, head_run, |k| {
-            mark_face(k, 0).map(|(shaping, ..)| shaping)
-        })
+        super::ruby::ruby_groups(
+            styled_runs_ref,
+            &resolved_runs,
+            head_run,
+            |k| mark_face(k, 0).map(|(shaping, ..)| shaping),
+            em.vertical,
+        )
     } else {
         Vec::new()
     };
-    lopts.glyph_aki = ruby
+    lopts.ruby_aki = ruby
         .iter()
-        .filter(|g| g.share_64 > 0)
-        .map(|g| (g.base.clone(), g.share_64))
+        .filter(|g| g.fit.is_some())
+        .map(|g| g.aki.clone())
         .collect();
     // Each styled run's first byte, to find a character's run.
     let styled_starts: Vec<u32> = styled_runs_ref
@@ -8121,7 +8179,14 @@ fn emit_paragraph_lines(
                 paragraph_size,
                 (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_font_metrics,
-                Some(line_h),
+                Some(
+                    line_h
+                        - super::text_frame::japanese_leading_drop_64(
+                            &resolved_paragraph,
+                            head_font_metrics,
+                            paragraph_size,
+                        ),
+                ),
             );
             // The frame's first line obeys the first-line object rule.
             if let (Some(objs), Some(on_line)) = (
@@ -8595,13 +8660,36 @@ fn emit_paragraph_lines(
                 continue;
             };
             let outliner = TtfOutliner::new(outline);
+            // A glyph set upright in vertical text is drawn from its
+            // column's centre line: its face's em box centre, up from the
+            // baseline the line is laid out on.
+            let upright_slice;
+            let slice: &[paged_text::PositionedGlyph] =
+                if line.glyphs[start..end].iter().any(|g| g.upright.is_some()) {
+                    let em_box = super::font_table::em_box(outline);
+                    let centre = ((em_box.top - 0.5) * size * paged_text::shape::ADVANCE_PRECISION)
+                        .round() as i32;
+                    upright_slice = line.glyphs[start..end]
+                        .iter()
+                        .map(|g| {
+                            let mut g = *g;
+                            if g.upright.is_some() {
+                                g.y -= centre;
+                            }
+                            g
+                        })
+                        .collect::<Vec<_>>();
+                    &upright_slice
+                } else {
+                    &line.glyphs[start..end]
+                };
             // Frame blend mode is applied at the transparency-group
             // level by `bracket_text_frame_glyph_ranges` after the
             // story pass completes; the glyphs themselves emit at
             // BlendMode::Normal so the group composite is the single
             // place the IDML BlendingSetting takes effect.
             emit_glyph_slice(
-                &line.glyphs[start..end],
+                slice,
                 em.font_table.font_ref(fid),
                 line.glyphs[start].point_size,
                 |cluster| picker.pick(cluster),
@@ -8618,7 +8706,7 @@ fn emit_paragraph_lines(
             // `OutsideAlignment`-style outlines).
             if any_text_stroke {
                 emit_glyph_slice_stroke(
-                    &line.glyphs[start..end],
+                    slice,
                     em.font_table.font_ref(fid),
                     line.glyphs[start].point_size,
                     |cluster| stroke_picker.pick(cluster),
@@ -8691,6 +8779,7 @@ fn emit_paragraph_lines(
                 |k| mark_face(k, 1),
                 |cluster| picker.pick(cluster),
                 origin,
+                em.vertical,
                 &mut pages[target_page].list,
             );
             super::ruby::emit_ruby_for_line(
@@ -8700,6 +8789,7 @@ fn emit_paragraph_lines(
                 |k| mark_face(k, 0),
                 |cluster| picker.pick(cluster),
                 origin,
+                em.vertical,
                 &mut pages[target_page].list,
             );
         }
@@ -8765,11 +8855,28 @@ fn emit_paragraph_lines(
                 })
                 .fold(0.0_f32, f32::max)
                 .round() as i32;
+            let em_bottom_64 = if japanese {
+                line.glyphs
+                    .iter()
+                    .filter_map(|g| {
+                        let i = font_ids.iter().position(|f| *f == g.font_id)?;
+                        let face = outline_faces.get(unique_idx[i])?.as_ref()?;
+                        let em_box = super::font_table::em_box(face);
+                        Some(em_box.bottom * g.point_size * paged_text::shape::ADVANCE_PRECISION)
+                    })
+                    .fold(0.0_f32, f32::max)
+                    .round() as i32
+            } else {
+                0
+            };
             if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
                 em.frame_max_descent_64[frame_idx] = descent_64;
+                em.frame_max_em_bottom_64[frame_idx] = em_bottom_64;
             } else {
                 em.frame_max_descent_64[frame_idx] =
                     em.frame_max_descent_64[frame_idx].max(descent_64);
+                em.frame_max_em_bottom_64[frame_idx] =
+                    em.frame_max_em_bottom_64[frame_idx].max(em_bottom_64);
             }
             em.frame_max_baseline_64[frame_idx] = line.baseline_y;
         }
@@ -8954,6 +9061,7 @@ fn emit_paragraph_lines(
                 // the first run) so a skewed paragraph leans its cap too.
                 skew_deg: resolved_runs.first().and_then(|r| r.skew).unwrap_or(0.0),
                 ch: None,
+                upright: None,
             });
             pen_x += g.x_advance;
         }

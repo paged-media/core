@@ -779,6 +779,23 @@ pub fn compose_paragraph(
             Vec::new()
         };
         match options.hyphenator {
+            // InDesign breaks Japanese and Chinese text between any two
+            // characters, whatever the hyphenation; a kinsoku set only
+            // takes positions away (InDesign 20.0.1 wraps a paragraph
+            // with no kinsoku set and hyphenation on between its kana and
+            // kanji: vertical-text-probe). A Latin stretch inside stays
+            // whole.
+            _ if word_text.chars().any(kinsoku::is_breakable_cjk) => {
+                emit_word_with_kinsoku_breaks(
+                    word_text,
+                    w.start,
+                    measurer,
+                    options.kinsoku_enforce,
+                    &mut items,
+                    &mut meta,
+                    &push,
+                );
+            }
             None if !soft.is_empty() => {
                 emit_segmented_word(
                     word_text,
@@ -814,7 +831,7 @@ pub fn compose_paragraph(
                 // or strand a no-end char at the end of the previous
                 // line; 0 (free break) otherwise.
                 emit_word_with_kinsoku_breaks(
-                    word_text, w.start, measurer, &mut items, &mut meta, &push,
+                    word_text, w.start, measurer, true, &mut items, &mut meta, &push,
                 );
             }
             // Hyphenation suppressed by the zone: emit the word whole
@@ -1087,6 +1104,7 @@ fn emit_word_with_kinsoku_breaks(
     word_text: &str,
     word_start: usize,
     measurer: &dyn AdvanceMeasurer,
+    kinsoku_rules: bool,
     items: &mut Vec<Item<()>>,
     meta: &mut Vec<ItemMeta>,
     push: &impl Fn(&mut Vec<Item<()>>, &mut Vec<ItemMeta>, Item<()>, usize, bool),
@@ -1142,7 +1160,8 @@ fn emit_word_with_kinsoku_breaks(
             if !pair_is_kinsoku_relevant {
                 continue;
             }
-            let forbidden = kinsoku::is_no_start(next_ch) || kinsoku::is_no_end(ch);
+            let forbidden =
+                kinsoku_rules && (kinsoku::is_no_start(next_ch) || kinsoku::is_no_end(ch));
             if forbidden {
                 continue;
             }
@@ -1271,6 +1290,7 @@ impl TextShaper for MonospaceMeasurer {
                     x_advance: advance,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 }
             })
             .collect();
@@ -1842,15 +1862,9 @@ mod tests {
 
     #[test]
     fn kinsoku_disabled_baseline_keeps_cjk_text_on_one_line() {
-        // Sanity: without kinsoku enforcement, a CJK paragraph is one
-        // big "word" with no internal break opportunities, so the
-        // breaker can only put it on one line — and a column wide
-        // enough to hold the whole word produces exactly one line.
-        // (If the column were narrower than the word, paragraph-
-        // breaker would return no breaks at all because no feasible
-        // line fit exists. That's what the "kinsoku enables wrap"
-        // test below demonstrates with the same text + narrower
-        // column.)
+        // A column wide enough for the whole paragraph sets it on one
+        // line, kinsoku or not: the breaks between its characters are
+        // opportunities, never forced.
         let m = MonospaceMeasurer::new(10, 10);
         let text = "本日本日本日本日本日"; // 10 CJK chars × 10 units
         let opts = ComposeOptions {
@@ -1862,7 +1876,7 @@ mod tests {
         assert_eq!(
             lines.len(),
             1,
-            "without kinsoku_enforce, no per-character breaks: {:?}",
+            "a paragraph that fits stays on one line: {:?}",
             lines
         );
     }

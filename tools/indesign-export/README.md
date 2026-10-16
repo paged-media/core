@@ -163,3 +163,25 @@ take the InDesign GUI for a few seconds and share the lock
   authors and exports the style; the script rewrites its corners into
   variants and InDesign reads each back through its DOM. Answers in
   `object-style-corners-probe.json`.
+- `ruby-parent-spacing-probe`: what InDesign does with ruby wider than its
+  base (ADR 164): it overhangs the kana, brackets or Latin beside the base
+  by up to one ruby character a side (`RubyParentOverhangAmount`), never a
+  kanji or past a line's edge, narrows if `RubyAutoScaling` allows, and
+  spaces the base with what is left by `RubyParentSpacing` (1-2-1, both
+  sides, equal aki, full justify, or none: centred). Answers in
+  `ruby-parent-spacing-probe.json`.
+- `kana-spacing-probe`: kana under each kerning method. Metrics sets
+  Kozuka's kana at their proportional widths (`palt`) plus kerning pairs;
+  kerning off, a full em each.
+- `vertical-text-probe`: vertical text (ADR 165). InDesign's scripting has
+  no story orientation, so InDesign builds the frames horizontally, the
+  script turns each story vertical in the IDML, and InDesign opens and
+  exports that. Vertical text is the horizontal layout turned a quarter
+  clockwise: CJK upright in vertical forms (`vpal`, `vkrn` under Metrics),
+  Latin turned, ruby and kenten upright to the right; a paragraph with no
+  kinsoku set breaks before a full stop; punctuation takes no kenten.
+  Answers in `vertical-text-probe.json`.
+- `pdf-glyphs.py`: every glyph a PDF page paints, one JSON object each —
+  its character (from `ToUnicode`), where its outline is drawn from, its
+  size and horizontal scale, its advance, its writing mode (`Identity-V`
+  fonts) and angle. Fonts are resolved per page.

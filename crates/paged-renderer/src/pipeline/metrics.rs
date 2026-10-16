@@ -117,6 +117,15 @@ pub fn shaping_features_from(
         // InDesign 20.0.1 sets All Caps with `case` and `cpsp`, typed
         // capitals with neither (see `ShapingFeatures::all_caps`).
         all_caps: capitalization == Some("AllCaps"),
+        // InDesign's Metrics kerning sets a CJK face's proportional widths
+        // (`ShapingFeatures::proportional_widths`).
+        proportional_widths: otf.proportional_metrics == Some(true)
+            || !matches!(
+                kerning_method.map(|m| m.strip_prefix("$ID/").unwrap_or(m)),
+                Some("None" | "Optical")
+            ),
+        vertical: false,
+        ruby_glyphs: false,
     }
 }
 

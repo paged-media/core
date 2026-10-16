@@ -315,7 +315,15 @@ pub(super) fn apply_paragraph_compose_options<'a>(
     // carries any `KinsokuType` ("WordbreakWithJustification" / "PushIn"
     // / "PushOut" / etc). The composer currently keys on presence only;
     // flavour-specific behaviour is queued under CJK Stage 4.
-    lopts.compose.kinsoku_enforce = resolved.kinsoku_type.is_some();
+    // Kinsoku applies where the paragraph's kinsoku set names a table:
+    // `Nothing`, which InDesign 20.0.1 writes by default (and 538 corpus
+    // styles carry), is none, and InDesign breaks such text before a
+    // full stop (vertical-text-probe `kerningnone`), whatever the
+    // `KinsokuType` it always writes says.
+    lopts.compose.kinsoku_enforce = resolved
+        .kinsoku_set
+        .as_deref()
+        .is_some_and(|set| !matches!(set.trim(), "" | "Nothing" | "$ID/[No Kinsoku]" | "n"));
     // Phase 7 — enable Mojikumi half-width tightening when the
     // cascade resolves a `MojikumiTable` or `MojikumiSet` reference.
     // The MVP applies a uniform "halve CJK punctuation advance"

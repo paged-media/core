@@ -7568,7 +7568,10 @@ impl MarkSettings {
         fill(&mut self.ruby_parent_spacing, ruby_parent_spacing);
         fill(&mut self.ruby_overhang_amount, ruby_overhang_amount);
         fill(&mut self.ruby_auto_scaling, ruby_auto_scaling);
-        fill(&mut self.ruby_parent_scaling_percent, ruby_parent_scaling_percent);
+        fill(
+            &mut self.ruby_parent_scaling_percent,
+            ruby_parent_scaling_percent,
+        );
         fill(&mut self.kenten_x_scale, kenten_x_scale);
         fill(&mut self.kenten_y_scale, kenten_y_scale);
         fill(&mut self.kenten_placement, kenten_placement);

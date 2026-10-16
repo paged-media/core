@@ -158,6 +158,34 @@ pub fn emit_paragraph_blend<O, F>(
 /// Emit `FillPath` commands for a contiguous slice of glyphs that all
 /// share `font` (and therefore one outliner). Multi-font callers
 /// group glyphs by `glyph.font_id` and call this once per group.
+/// A glyph's outline transform: scaled and flipped to y down, sheared by
+/// its skew, at `(gx, gy)`. A glyph set upright in vertical text
+/// (`PositionedGlyph::upright`) is laid out in a line the renderer turns
+/// 90° clockwise into a column; its `(gx, gy)` is its vertical pen on the
+/// column's centre line, and it is drawn turned back a quarter turn,
+/// from the point its upright offset gives, so it stands upright there.
+fn glyph_transform(
+    g: &PositionedGlyph,
+    sx: f32,
+    sy: f32,
+    cterm: f32,
+    gx: f32,
+    gy: f32,
+) -> Transform {
+    match g.upright {
+        // Upright: the turn back, x' = -sy·y and y' = -sx·x, about the
+        // pen moved by the offset turned the same way: once the column
+        // turn maps (x, y) to (-y, x), the outline is plain and scaled,
+        // and drawn from the pen plus (dx, dy).
+        Some(u) => {
+            let dx = u.dx as f32 / ADVANCE_PRECISION;
+            let dy = u.dy as f32 / ADVANCE_PRECISION;
+            Transform([0.0, -sx, -sy, 0.0, gx + dy, gy - dx])
+        }
+        None => Transform([sx, 0.0, cterm, -sy, gx, gy]),
+    }
+}
+
 pub fn emit_glyph_slice<O, F>(
     glyphs: &[PositionedGlyph],
     font: FontRef,
@@ -225,7 +253,7 @@ pub fn emit_glyph_slice_blend<O, F>(
         // the right, so `c = +tan(skew)·sy` (scaled by the y-axis so the
         // lean tracks the glyph's painted height). 0° → 0 → upright.
         let cterm = skew_shear(g.skew_deg, sy);
-        let transform = Transform([sx, 0.0, cterm, -sy, gx, gy]);
+        let transform = glyph_transform(g, sx, sy, cterm, gx, gy);
         // Concept 3 — glyph-run side-channel (collect_glyph_runs
         // builds only): record the parallel text-run entry BEFORE
         // pushing, so command_index points at the outline command.
@@ -307,7 +335,7 @@ pub fn emit_glyph_slice_stroke<O, S>(
         // mirrors the fill path so a skewed run keeps stroke + fill
         // aligned. See `emit_glyph_slice_blend` for the sign rationale.
         let cterm = skew_shear(g.skew_deg, sy);
-        let transform = Transform([sx, 0.0, cterm, -sy, gx, gy]);
+        let transform = glyph_transform(g, sx, sy, cterm, gx, gy);
         // Concept 3 — glyph-run side-channel (stroked text keeps
         // is_stroke so the exporter falls back to the outline: PDF
         // text render mode 1 strokes are a refinement).
@@ -416,7 +444,8 @@ mod tests {
             single_word_alignment: paged_text::Alignment::Justify,
             tabs: None,
             object_advances: Vec::new(),
-            glyph_aki: Vec::new(),
+            ruby_aki: Vec::new(),
+            vertical: false,
         };
         layout_paragraph(text, &shaper, &opts)
     }
@@ -554,6 +583,7 @@ mod tests {
             y_scale,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         };
         let mut list = DisplayList::new();
         for g in [glyph(1.0, 1.0), glyph(1.0, 2.0)] {
@@ -604,6 +634,7 @@ mod tests {
             y_scale,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         };
         let mut list = DisplayList::new();
         for g in [glyph(1.0, 1.0), glyph(2.0, 1.0)] {
@@ -653,6 +684,7 @@ mod tests {
             y_scale: 1.0,
             skew_deg,
             ch: None,
+            upright: None,
         };
         let mut list = DisplayList::new();
         for g in [glyph(0.0), glyph(15.0), glyph(-15.0)] {
@@ -716,6 +748,7 @@ mod tests {
             y_scale: 1.0,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         };
         let mut list = DisplayList::new();
         // y = 0 (baseline) vs y = -64 (lifted one pt above baseline).
@@ -761,6 +794,7 @@ mod tests {
             y_scale: 1.0,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         }];
         let glyphs_b = vec![PositionedGlyph {
             glyph_id: 65,
@@ -777,6 +811,7 @@ mod tests {
             y_scale: 1.0,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         }];
         emit_glyph_slice(
             &glyphs_a,
