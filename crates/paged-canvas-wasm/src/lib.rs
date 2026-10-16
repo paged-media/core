@@ -76,8 +76,11 @@ mod wasm {
         /// per-kind message handling lives on this; the wasm shell only
         /// adds the GPU presenter + scene cache below.
         core: WorkerCore,
+        /// The WebGPU presenter, shared with the `initGpu` future that
+        /// creates it. Every method that touches it borrows it only for
+        /// its own synchronous body; see [`GpuSlot`].
         #[cfg(feature = "gpu")]
-        presenter: Option<paged_gpu::SurfacePresenter>,
+        presenter: GpuSlot,
         /// Per-page Vello scene cache (sub-phase D). LRU-bounded so
         /// a 500-page document doesn't pin every page's scene at
         /// once. Phase F (Phase 1 polish) added the LRU; the
@@ -104,6 +107,22 @@ mod wasm {
 
     #[cfg(feature = "gpu")]
     const DEFAULT_SCENE_CACHE_PAGES: usize = 200;
+
+    /// Where `initGpu` puts the presenter once the browser has answered.
+    ///
+    /// No exported method may be an `async fn`: wasm-bindgen takes the
+    /// method's `&self` / `&mut self` borrow inside the future, on its first
+    /// poll, and holds it until the future settles. Every other call on the
+    /// worker in that window — a render tick, the gesture drain, the
+    /// editor's debounced resolver — then throws "recursive use of an object
+    /// detected which would lead to unsafe aliasing in rust", and the worker
+    /// dies. So the methods that wait on the browser return a
+    /// `js_sys::Promise` whose future owns this `Rc` (or a
+    /// [`paged_gpu::PendingReadback`]) and no borrow of the worker, and the
+    /// `RefCell` is only ever borrowed synchronously.
+    /// (`tests/no_async_exports.rs` keeps it that way.)
+    #[cfg(feature = "gpu")]
+    type GpuSlot = std::rc::Rc<std::cell::RefCell<Option<paged_gpu::SurfacePresenter>>>;
 
     #[cfg(feature = "gpu")]
     impl SceneCache {
@@ -174,7 +193,7 @@ mod wasm {
             Self {
                 core: WorkerCore::new(),
                 #[cfg(feature = "gpu")]
-                presenter: None,
+                presenter: GpuSlot::default(),
                 #[cfg(feature = "gpu")]
                 scene_cache: SceneCache::new(DEFAULT_SCENE_CACHE_PAGES),
             }
@@ -545,24 +564,29 @@ mod wasm {
         /// `width` / `height` are device-pixel dimensions; the JS
         /// caller passes `canvas.width` and `canvas.height` which it
         /// has already sized to `cssWidth * dpr`.
+        // The returned promise does not hold the worker: other calls are
+        // served while the browser answers (see `GpuSlot`).
         #[cfg(feature = "gpu")]
-        #[wasm_bindgen(js_name = initGpu)]
-        pub async fn init_gpu(
-            &mut self,
+        #[wasm_bindgen(js_name = initGpu, unchecked_return_type = "Promise<boolean>")]
+        pub fn init_gpu(
+            &self,
             canvas: web_sys::OffscreenCanvas,
             width: u32,
             height: u32,
-        ) -> Result<bool, JsValue> {
-            match paged_gpu::SurfacePresenter::new_offscreen(canvas, width, height).await {
-                Ok(p) => {
-                    self.presenter = Some(p);
-                    Ok(true)
+        ) -> js_sys::Promise {
+            let slot = self.presenter.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                match paged_gpu::SurfacePresenter::new_offscreen(canvas, width, height).await {
+                    Ok(p) => {
+                        *slot.borrow_mut() = Some(p);
+                        Ok(JsValue::TRUE)
+                    }
+                    Err(e) => {
+                        web_sys::console::warn_1(&format!("initGpu: {e}").into());
+                        Ok(JsValue::FALSE)
+                    }
                 }
-                Err(e) => {
-                    web_sys::console::warn_1(&format!("initGpu: {e}").into());
-                    Ok(false)
-                }
-            }
+            })
         }
 
         /// Resize the GPU surface. Worker calls this from a
@@ -570,7 +594,7 @@ mod wasm {
         #[cfg(feature = "gpu")]
         #[wasm_bindgen(js_name = resizeGpu)]
         pub fn resize_gpu(&mut self, width: u32, height: u32) {
-            if let Some(p) = self.presenter.as_mut() {
+            if let Some(p) = self.presenter.borrow_mut().as_mut() {
                 p.resize(width, height);
             }
         }
@@ -592,7 +616,8 @@ mod wasm {
             ty: f32,
             dpr: f32,
         ) -> Result<bool, JsValue> {
-            let Some(presenter) = self.presenter.as_mut() else {
+            let mut presenter = self.presenter.borrow_mut();
+            let Some(presenter) = presenter.as_mut() else {
                 return Ok(false);
             };
             let Some(model) = self.core.model.as_ref() else {
@@ -673,7 +698,7 @@ mod wasm {
         #[cfg(feature = "gpu")]
         #[wasm_bindgen(js_name = gpuReady)]
         pub fn gpu_ready(&self) -> bool {
-            self.presenter.is_some()
+            self.presenter.borrow().is_some()
         }
 
         /// Sub-phase D — render `page_id` to a PNG via the Vello GPU
@@ -683,40 +708,25 @@ mod wasm {
         /// `BACKEND=gpu` to test the production hot path; the CPU
         /// path (`renderTilePng`) stays as the deterministic
         /// fallback used in CI.
+        // The scene is built and submitted synchronously; the returned
+        // promise then waits on the GPU readback alone, holding neither
+        // the worker nor the presenter (see `GpuSlot`).
         #[cfg(feature = "gpu")]
-        #[wasm_bindgen(js_name = renderPageVelloPng)]
-        pub async fn render_page_vello_png(
-            &mut self,
-            page_id: String,
-            dpi: f32,
-        ) -> Option<Vec<u8>> {
-            let pid = paged_canvas::PageId(page_id);
-            // Build the Vello scene while we still have the model
-            // borrow; immediately drop the borrow so the presenter
-            // can take `&mut self` next.
-            let (scene, width_px, height_px) = {
-                let model = self.core.model.as_ref()?;
-                let page = model.page(&pid)?;
-                let page_scene = paged_gpu::SurfacePresenter::build_page_scene(
-                    &page.list,
-                    page.width_pt,
-                    page.height_pt,
-                );
-                let scale = (dpi / 72.0) as f64;
-                let mut scene = paged_gpu::VelloScene::new();
-                scene.append(
-                    &page_scene,
-                    Some(paged_gpu::vello_kurbo::Affine::scale(scale)),
-                );
-                let width_px = ((page.width_pt * dpi / 72.0).ceil() as u32).max(1);
-                let height_px = ((page.height_pt * dpi / 72.0).ceil() as u32).max(1);
-                (scene, width_px, height_px)
-            };
-            let presenter = self.presenter.as_mut()?;
-            presenter
-                .render_scene_to_png(&scene, width_px, height_px)
-                .await
-                .ok()
+        #[wasm_bindgen(
+            js_name = renderPageVelloPng,
+            unchecked_return_type = "Promise<Uint8Array | undefined>"
+        )]
+        pub fn render_page_vello_png(&self, page_id: String, dpi: f32) -> js_sys::Promise {
+            let pending = self.submit_page_readback(&paged_canvas::PageId(page_id), dpi);
+            wasm_bindgen_futures::future_to_promise(async move {
+                let Some(pending) = pending else {
+                    return Ok(JsValue::UNDEFINED);
+                };
+                Ok(match pending.into_png().await {
+                    Ok(png) => js_sys::Uint8Array::from(png.as_slice()).into(),
+                    Err(_) => JsValue::UNDEFINED,
+                })
+            })
         }
 
         /// Handle one main-thread message. Input is the JSON string
@@ -805,6 +815,35 @@ mod wasm {
 
         #[cfg(not(feature = "gpu"))]
         fn apply_cache_effect(&mut self, _effect: CacheEffect) {}
+
+        /// The synchronous half of `renderPageVelloPng`: build the page's
+        /// scene at `dpi` and submit its readback. `None` when no GPU is
+        /// initialised, the page is unknown, or the submit fails.
+        #[cfg(feature = "gpu")]
+        fn submit_page_readback(
+            &self,
+            pid: &paged_canvas::PageId,
+            dpi: f32,
+        ) -> Option<paged_gpu::PendingReadback> {
+            let mut presenter = self.presenter.borrow_mut();
+            let presenter = presenter.as_mut()?;
+            let model = self.core.model.as_ref()?;
+            let page = model.page(pid)?;
+            let page_scene = paged_gpu::SurfacePresenter::build_page_scene(
+                &page.list,
+                page.width_pt,
+                page.height_pt,
+            );
+            let scale = (dpi / 72.0) as f64;
+            let mut scene = paged_gpu::VelloScene::new();
+            scene.append(
+                &page_scene,
+                Some(paged_gpu::vello_kurbo::Affine::scale(scale)),
+            );
+            let width_px = ((page.width_pt * dpi / 72.0).ceil() as u32).max(1);
+            let height_px = ((page.height_pt * dpi / 72.0).ceil() as u32).max(1);
+            presenter.submit_readback(&scene, width_px, height_px).ok()
+        }
     }
 
     impl Default for CanvasWorker {

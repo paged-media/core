@@ -2965,6 +2965,7 @@ dependencies = [
  "tsify-next",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 

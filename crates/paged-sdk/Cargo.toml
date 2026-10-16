@@ -39,3 +39,8 @@ web-sys = { version = "0.3", features = ["console", "OffscreenCanvas", "HtmlCanv
 console_error_panic_hook = "0.1"
 serde = { workspace = true }
 tsify-next = { workspace = true }
+
+# wasm test lane (tests/wasm.rs) — run headless by scripts/test-wasm.sh with
+# the Node-hosted `wasm-bindgen-test-runner`, like paged-canvas-wasm's.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
