@@ -36,6 +36,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 GENERATED_DIR="$ROOT/corpus/generated"
 FONTS="$ROOT/corpus/fonts"
 THRESHOLDS="$GENERATED_DIR/fidelity-thresholds.json"
@@ -62,8 +63,8 @@ fi
 
 (cd "$ROOT" && cargo build -q --release -p paged-gen --bin paged-gen \
     -p paged-renderer --bin paged-inspect)
-GEN="$ROOT/target/release/paged-gen"
-INSPECT="$ROOT/target/release/paged-inspect"
+GEN="$TARGET/release/paged-gen"
+INSPECT="$TARGET/release/paged-inspect"
 
 mkdir -p "$OUT"
 fail=0
