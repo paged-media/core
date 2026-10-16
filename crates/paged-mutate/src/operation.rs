@@ -1509,6 +1509,38 @@ pub enum PropertyPath {
     /// `<TransparencyPreference GlobalLightAltitude>` (`NodeId::Document`),
     /// degrees; `Length(None)` is InDesign's 30.
     DocumentGlobalLightAltitude,
+    // ---- L-01 — the document's footnote options (ADR 162) ----------
+    /// `<FootnoteOption>` `FootnoteNumberingStyle` (`NodeId::Document`):
+    /// `Value::Text`, an IDML page-number style name or `Asterisks`;
+    /// `""` clears (Arabic). An unknown name is refused.
+    DocumentFootnoteNumberingStyle,
+    /// `StartAt`: `Value::Length(Some(n))`, a whole number >= 1;
+    /// `Length(None)` clears (1).
+    DocumentFootnoteStartAt,
+    /// `RestartNumbering`: `Value::Text` `DontRestart` / `PageRestart` /
+    /// `SpreadRestart` / `SectionRestart`; `""` clears.
+    DocumentFootnoteRestartNumbering,
+    /// `Prefix`: `Value::Text`; `""` clears.
+    DocumentFootnotePrefix,
+    /// `Suffix`: `Value::Text`; `""` clears.
+    DocumentFootnoteSuffix,
+    /// `ShowPrefixSuffix`: `Value::Text` `NoPrefixSuffix` /
+    /// `PrefixSuffixReference` / `PrefixSuffixText` / `PrefixSuffixBoth`;
+    /// `""` clears.
+    DocumentFootnoteShowPrefixSuffix,
+    /// `EnableStraddling`: `Value::Bool` (InDesign's default false).
+    DocumentFootnoteEnableStraddling,
+    /// `NoSplitting`: `Value::Bool` (false).
+    DocumentFootnoteNoSplitting,
+    /// `SpaceBetween` (pt): `Value::Length`, >= 0; `None` clears (0).
+    DocumentFootnoteSpaceBetween,
+    /// `Spacer` (pt), the least space above the first note:
+    /// `Value::Length`, >= 0; `None` clears (0).
+    DocumentFootnoteSpacer,
+    /// `RuleOn`: `Value::Bool` (true).
+    DocumentFootnoteRuleOn,
+    /// `ContinuingRuleOn`: `Value::Bool` (true).
+    DocumentFootnoteContinuingRuleOn,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1866,6 +1898,18 @@ impl PropertyPath {
             PropertyPath::FrameDropShadowUseGlobalLight => "frame.dropShadowUseGlobalLight",
             PropertyPath::DocumentGlobalLightAngle => "document.globalLightAngle",
             PropertyPath::DocumentGlobalLightAltitude => "document.globalLightAltitude",
+            PropertyPath::DocumentFootnoteNumberingStyle => "document.footnoteNumberingStyle",
+            PropertyPath::DocumentFootnoteStartAt => "document.footnoteStartAt",
+            PropertyPath::DocumentFootnoteRestartNumbering => "document.footnoteRestartNumbering",
+            PropertyPath::DocumentFootnotePrefix => "document.footnotePrefix",
+            PropertyPath::DocumentFootnoteSuffix => "document.footnoteSuffix",
+            PropertyPath::DocumentFootnoteShowPrefixSuffix => "document.footnoteShowPrefixSuffix",
+            PropertyPath::DocumentFootnoteEnableStraddling => "document.footnoteEnableStraddling",
+            PropertyPath::DocumentFootnoteNoSplitting => "document.footnoteNoSplitting",
+            PropertyPath::DocumentFootnoteSpaceBetween => "document.footnoteSpaceBetween",
+            PropertyPath::DocumentFootnoteSpacer => "document.footnoteSpacer",
+            PropertyPath::DocumentFootnoteRuleOn => "document.footnoteRuleOn",
+            PropertyPath::DocumentFootnoteContinuingRuleOn => "document.footnoteContinuingRuleOn",
         }
     }
 }
