@@ -1620,6 +1620,12 @@ fn text_cases(c: &mut Vec<Case>) {
             story_id: paged_gen::samples::toc::story_id("Contents"),
         }
     }));
+    // v73 (ADR 168) — the stale index gives way to the generated one.
+    c.push(paints("GenerateIndex", "index", |_| {
+        Mutation::GenerateIndex {
+            story_id: paged_gen::samples::index::story_id("Index"),
+        }
+    }));
     // v73 (ADR 163) — a footnote: its reference prints in the text, its
     // note at the frame's foot; deleting one takes both away.
     c.push(paints("InsertFootnote", "text", |m| {

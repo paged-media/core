@@ -39,6 +39,7 @@ pub mod gradients;
 pub mod hard_hyphen;
 pub mod image_clipping;
 pub mod images;
+pub mod index;
 pub mod inline_objects;
 pub mod justification;
 pub mod justified_breaks;
@@ -209,6 +210,7 @@ pub const SAMPLES: &[&str] = &[
     "footnote-split",
     "footnote-nosplit",
     "toc",
+    "index",
 ];
 
 /// Build a sample by its CLI name, or `None` if the name is unknown.
@@ -293,6 +295,7 @@ pub fn build(name: &str) -> Option<crate::Sample> {
         "gradient-geometry" => gradient_geometry::build(),
         "tints" => tints::build(),
         "toc" => toc::build(),
+        "index" => index::build(),
         "table-cell-baseline" => table_cell_baseline::build(),
         "table-cell-tints" => table_cell_tints::build(),
         "table-inline-text" => table_inline_text::build(),
@@ -335,7 +338,7 @@ mod tests {
     fn the_list_is_not_missing_a_sample() {
         assert_eq!(
             SAMPLES.len(),
-            91,
+            93,
             "sample count changed — add the new name to SAMPLES (and only then \
              update this number), or the editor's CI silently stops emitting it"
         );

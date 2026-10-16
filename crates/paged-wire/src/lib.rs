@@ -1162,6 +1162,16 @@ pub enum Mutation {
     UpdateTableOfContents {
         story_id: String,
     },
+    /// v73 — Generate Index (ADR 168): write the document's index into
+    /// story `story_id` (its text replaced, as InDesign's Replace Existing
+    /// Index does) from its topics and page references over the current
+    /// layout, as InDesign writes one: the title, a heading per letter,
+    /// each topic with its pages and cross-references. Index styles the
+    /// document lacks are created, as InDesign creates them. Undoable in
+    /// one step.
+    GenerateIndex {
+        story_id: String,
+    },
     /// v43 (D-01) — update the cached display value of the placeholder
     /// field containing the story char `offset` (offsets come fresh
     /// from `RequestDocumentPlaceholders`). `value: null` returns the
@@ -2350,6 +2360,7 @@ mutation_vocabulary! {
     DeleteHyperlink,
     EditHyperlink,
     UpdateTableOfContents,
+    GenerateIndex,
     SetFieldValue,
     PlaceImage,
     ReplaceImageBytes,

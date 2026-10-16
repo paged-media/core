@@ -15,7 +15,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 135 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 136 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Locks and deletes follow InDesign.** A locked item, and the content of a locked container,
   is not moved, resized, reshaped, restacked or deleted: the operation is refused with
@@ -60,6 +60,11 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   one: the title, then each heading with its page number after or before it in its own character
   style. TOC styles read in InDesign's spelling ([ADR 165](adr/165-update-table-of-contents.md),
   protocol 73). The hidden links and bookmarks InDesign adds to the entries are not written yet.
+- **Generate Index.** `generateIndex` writes the document's index into a story as InDesign writes
+  one: the title, a heading per letter, each topic with its pages and See references, subtopics at
+  level 2, and creates the index styles a document lacks. Topics, page references and
+  `IndexOptions` read in InDesign's spelling ([ADR 168](adr/168-generate-index.md), protocol 73).
+  Run-in format, page ranges and levels 3 and 4 are not written yet.
 - **One object model.** Every object has an address (`doc`, `page:#2`, `swatch:Color/Red`,
   `style:object/<id>`, `cell:<table>/0,1`, `textVariable:<id>`, …) and selectors find them
   (`page:#3 > frame[name="price"]`, `RequestQuery`, `paged.query`, `paged query`)

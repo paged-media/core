@@ -5769,55 +5769,136 @@ impl<'a> StoryEmitter<'a> {
     }
 }
 
-/// Phase 5 — build a synthetic `Paragraph` sequence for an index
-/// story. Walks `Document::resolve_index()` and emits one paragraph
-/// per topic:
+/// The paragraphs Generate Index writes, as InDesign 20.0.1 writes them
+/// (`index-probe`, ADR 168), from `options` (`<IndexOptions>`, InDesign's
+/// defaults where absent) over `entries`
+/// ([`paged_scene::Document::resolve_index_tree_on`]):
 ///
-///   "Apple\t12, 23, 41"
-///   "Banana\t7"
-///
-/// Each paragraph carries the topic text, a tab separator (the IDML
-/// `^t` convention; renderer's tab-stop pass snaps it to the next
-/// tab stop), then a comma-separated string of page labels resolved
-/// from `page_labels`. Page-label resolution mirrors `build_toc_paragraphs`
-/// so Section overrides (Roman numerals etc.) flow through.
-///
-/// Returns an empty vec when the document has no markers.
-///
-/// Today the renderer doesn't yet trigger this automatically — there's
-/// no frame attribute that says "this is the index host" the way
-/// `AppliedTOCStyle` triggers the TOC swap-in. Callers that want to
-/// emit a generated index point this at a target story and overwrite
-/// its paragraphs.
-pub fn build_index_paragraphs(
-    document: &Document,
+/// - the `Title` (`Index`) in the `TitleStyle`;
+/// - with section headings on (the default), the first letter of each
+///   group of level 1 topics in the section heading style, empty groups
+///   left out (a topic not starting with a letter goes under `Symbols`);
+/// - one paragraph per topic in its level's style: the topic, then its
+///   pages behind the following-topic separator (two spaces), joined by
+///   the between-page-numbers separator (`, `), each in the page number
+///   style; then each cross-reference behind its separator (`. `): the
+///   reference's words (`See`, `See also`, …) in the cross-reference
+///   style, a no-break space, and the topic it names in the
+///   cross-reference topic style; then the entry-end separator.
+pub fn index_paragraphs(
+    options: Option<&paged_model::IndexOptions>,
+    entries: Vec<paged_scene::IndexTreeEntry>,
     page_labels: &[String],
 ) -> Vec<paged_model::Paragraph> {
-    let entries = document.resolve_index();
-    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let mut text = entry.topic.clone();
-        if !entry.pages.is_empty() {
-            // Resolve page indices to labels. Missing labels
-            // (out-of-bounds — shouldn't happen, defensive) skip.
-            let labels: Vec<String> = entry
-                .pages
-                .iter()
-                .filter_map(|i| page_labels.get(*i).cloned())
-                .collect();
-            if !labels.is_empty() {
-                text.push('\t');
-                text.push_str(&labels.join(", "));
+    let default = paged_model::IndexOptions::default();
+    let o = options.unwrap_or(&default);
+    let style = |s: &Option<String>, fallback: &str| -> Option<String> {
+        let s = s.clone().unwrap_or_else(|| fallback.to_string());
+        (!s.ends_with("[No paragraph style]") && !s.ends_with("[No character style]")).then_some(s)
+    };
+    let text = |s: &Option<String>, fallback: &str| -> String {
+        expand_toc_specials(s.as_deref().unwrap_or(fallback))
+    };
+    let run = |text: String, style: Option<String>| paged_model::CharacterRun {
+        text,
+        character_style: style,
+        ..paged_model::CharacterRun::default()
+    };
+    let para = |style: Option<String>, runs: Vec<paged_model::CharacterRun>| {
+        let mut merged: Vec<paged_model::CharacterRun> = Vec::with_capacity(runs.len());
+        for r in runs.into_iter().filter(|r| !r.text.is_empty()) {
+            match merged.last_mut() {
+                Some(last) if last.character_style == r.character_style => {
+                    last.text.push_str(&r.text)
+                }
+                _ => merged.push(r),
             }
         }
-        let run = paged_model::CharacterRun {
-            text,
-            ..paged_model::CharacterRun::default()
-        };
-        out.push(paged_model::Paragraph {
-            runs: vec![run],
+        paged_model::Paragraph {
+            paragraph_style: style,
+            runs: merged,
             ..paged_model::Paragraph::default()
-        });
+        }
+    };
+    let following = text(&o.following_topic_separator, "  ");
+    let between = text(&o.between_page_numbers_separator, ", ");
+    let before_xref = text(&o.before_cross_reference_separator, ". ");
+    let entry_end = text(&o.entry_end_separator, "");
+    let number_style = style(
+        &o.page_number_style,
+        "CharacterStyle/$ID/[No character style]",
+    );
+    let xref_style = style(
+        &o.cross_reference_style,
+        "CharacterStyle/$ID/Index Cross-reference",
+    );
+    let xref_topic_style = style(
+        &o.cross_reference_topic_style,
+        "CharacterStyle/$ID/[No character style]",
+    );
+
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len() + 8);
+    let title = o.title.clone().unwrap_or_else(|| "Index".to_string());
+    if !title.is_empty() {
+        out.push(para(
+            style(&o.title_style, "ParagraphStyle/$ID/Index Title"),
+            vec![run(title, None)],
+        ));
+    }
+    let headings = o.include_section_headings.unwrap_or(true);
+    let mut section: Option<String> = None;
+    for e in entries {
+        if headings && e.level == 1 {
+            let first = e
+                .sort_key
+                .chars()
+                .next()
+                .filter(|c| c.is_alphabetic())
+                .map(|c| c.to_uppercase().collect::<String>())
+                .unwrap_or_else(|| "Symbols".to_string());
+            if section.as_deref() != Some(first.as_str()) {
+                out.push(para(
+                    style(
+                        &o.section_heading_style,
+                        "ParagraphStyle/$ID/Index Section Head",
+                    ),
+                    vec![run(first.clone(), None)],
+                ));
+                section = Some(first);
+            }
+        }
+        let level = (e.level.clamp(1, 4) - 1) as usize;
+        let level_style = style(
+            &o.level_styles[level],
+            &format!("ParagraphStyle/$ID/Index Level {}", level + 1),
+        );
+        let mut runs = vec![run(e.topic, None)];
+        let labels: Vec<String> = e
+            .pages
+            .iter()
+            .filter_map(|p| page_labels.get(*p).cloned())
+            .collect();
+        for (n, label) in labels.into_iter().enumerate() {
+            let sep = if n == 0 { &following } else { &between };
+            runs.push(run(sep.clone(), None));
+            runs.push(run(label, number_style.clone()));
+        }
+        for x in e.cross_references {
+            let words = match x.kind.as_str() {
+                "SeeAlso" => "See also".to_string(),
+                "SeeHerein" => "See herein".to_string(),
+                "SeeAlsoHerein" => "See also herein".to_string(),
+                "SeeOrAlsoBracket" => "See [also]".to_string(),
+                k if k.starts_with("Custom") => x.custom.clone().unwrap_or_default(),
+                _ => "See".to_string(),
+            };
+            runs.push(run(before_xref.clone(), None));
+            runs.push(run(words, xref_style.clone()));
+            runs.push(run("\u{00A0}".to_string(), None));
+            runs.push(run(x.target, xref_topic_style.clone()));
+        }
+        runs.push(run(entry_end.clone(), None));
+        out.push(para(level_style, runs));
     }
     out
 }

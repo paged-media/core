@@ -1030,6 +1030,13 @@
       "summary": "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."
     },
     {
+      "name": "paged.generateIndex",
+      "params": "(storyId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Generate Index: write the document's index into a story (replacing its text) from its topics and page references over the current layout — the title, a heading per letter, each topic with its pages and See references. Index styles the document lacks are created."
+    },
+    {
       "name": "paged.insertFootnote",
       "params": "(storyId, offset, text)",
       "returns": "string|null",
@@ -1579,6 +1586,7 @@
     "deleteHyperlink",
     "editHyperlink",
     "updateTableOfContents",
+    "generateIndex",
     "setFieldValue",
     "placeImage",
     "replaceImageBytes",

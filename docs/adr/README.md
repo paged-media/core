@@ -93,6 +93,7 @@ is not written yet.
 | [163](163-footnotes-inserted-and-deleted.md) | Footnotes inserted and deleted, over the wire and through a save | Accepted 2026-10-16 |
 | [164](164-hyperlinks-deleted-and-edited.md) | Hyperlinks deleted and edited, whatever made them | Accepted 2026-10-16 |
 | [165](165-update-table-of-contents.md) | Update Table of Contents, as InDesign writes it | Accepted 2026-10-16 |
+| [168](168-generate-index.md) | Generate Index, as InDesign writes it | Accepted 2026-10-16 |
 
 Decisions made in other repositories that this engine's code rests on are listed in
 [`../README.md`](../README.md).

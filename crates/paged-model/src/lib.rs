@@ -3985,7 +3985,7 @@ pub struct IndexCrossReference {
 }
 
 /// IDML `<IndexOptions>`: how Generate Index writes the index, as
-/// InDesign 20.0.1 spells it (`index-probe`, ADR 166). Every field is the
+/// InDesign 20.0.1 spells it (`index-probe`, ADR 168). Every field is the
 /// attribute's raw value; an absent one reads as InDesign's default.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct IndexOptions {
@@ -8426,7 +8426,7 @@ pub struct DesignMap {
     pub index_topics: Vec<IndexTopic>,
     /// The topics' nesting: each subtopic's `Self` → its parent topic's
     /// (InDesign nests a subtopic's `<Topic>` inside its parent's, up to
-    /// four levels; ADR 166).
+    /// four levels; ADR 168).
     #[serde(default)]
     pub index_topic_parents: BTreeMap<String, String>,
     /// `<CrossReference>` children of the topics: See, See also, …

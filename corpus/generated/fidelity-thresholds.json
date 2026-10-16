@@ -937,6 +937,16 @@
       "min_ssim": 0.9907,
       "max_ink_mean_de": 14.17,
       "rationale": "Added 2026-10-16 (R-08, L-04, ADR 165): a table of contents that is out of date, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with headings at three levels, and on page 4 a TOC story bound to TOCStyle/Contents (InDesign's spelling) whose stored entries are stale (a renamed heading, a wrong page). InDesign prints the stored entries (Contents / Getting Started 7 / An Old Heading 8), and so does the engine: no entry is rebuilt at render. Page measures mean 0.155, p99 1.20, ssim 0.9957, ink 11.80 (pages 1-2: 16 pt heading glyph edges; every line at InDesign's rows and extents); sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "index",
+      "text_gate": true,
+      "max_pages_with_pdf": 4,
+      "max_mean_de": 0.016,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9949,
+      "max_ink_mean_de": 3.16,
+      "rationale": "Added 2026-10-16 (L-05, ADR 168): an index to generate, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with page references to nested topics in InDesign's spelling (ReferencedTopic, each in a range of its own), and on page 4 a story with a stale index (Index / Apples 9). InDesign prints the stored text, and so does the engine. Page measures mean 0.0131, p99 0, ssim 0.9999, ink 2.63; sized at worst x 1.20 (p99 at its 0.3 floor), ssim - 0.005. Text gate on."
     }
   ]
 }

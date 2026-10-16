@@ -2890,6 +2890,7 @@ impl CanvasModel {
             // Reads the layout, so it lowers here, where a build a batch
             // still owes can be settled first.
             Mutation::UpdateTableOfContents { story_id } => Some(self.lower_update_toc(story_id)?),
+            Mutation::GenerateIndex { story_id } => Some(self.lower_generate_index(story_id)?),
             _ => self.try_translate_frame_mutation_to_operation(mutation, &mut 0),
         };
         if let Some(op) = lowered {
@@ -11087,6 +11088,113 @@ impl CanvasModel {
         self.rebuild_after_mutation()
     }
 
+    /// Settle a build a batch still owes, so an op that reads the layout
+    /// (Update Table of Contents, Generate Index) reads the current one.
+    fn settle_owed_build(&mut self, op: &str) -> Result<(), crate::channel::WorkerError> {
+        if !self.rebuild_owed {
+            return Ok(());
+        }
+        let outer = std::mem::replace(&mut self.rebuild_deferred, false);
+        self.rebuild_owed = false;
+        let rebuilt = self.rebuild_after_mutation();
+        self.rebuild_deferred = outer;
+        rebuilt.map_err(|e| crate::channel::WorkerError::NotImplemented {
+            what: format!("{op}: the layout did not build ({e:?})"),
+        })
+    }
+
+    /// v73 — `GenerateIndex` (ADR 168): story `story_id`'s paragraphs
+    /// become the document's index over the CURRENT layout, and the index
+    /// styles it names that the document lacks are created first, with
+    /// the attributes InDesign 20.0.1 gives them. One batch: one undo.
+    fn lower_generate_index(
+        &mut self,
+        story_id: &str,
+    ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
+        use paged_mutate::Operation;
+        self.settle_owed_build("generateIndex")?;
+        if !self.scene.stories.iter().any(|s| s.self_id == story_id) {
+            return Err(crate::channel::WorkerError::NotImplemented {
+                what: format!("generateIndex: no story {story_id}"),
+            });
+        }
+        let laid_out = self.built.paragraph_pages();
+        let labels: Vec<String> = self.pages().into_iter().map(|p| p.name).collect();
+        let entries = self.scene.resolve_index_tree_on(&laid_out);
+        let options = self.scene.designmap.index_options.clone();
+        let paragraphs =
+            paged_renderer::pipeline::index_paragraphs(options.as_ref(), entries, &labels);
+
+        let mut ops: Vec<Operation> = Vec::new();
+        let mut wanted_paragraph: Vec<&str> = Vec::new();
+        let mut wanted_character: Vec<&str> = Vec::new();
+        for p in &paragraphs {
+            if let Some(s) = p.paragraph_style.as_deref() {
+                if !wanted_paragraph.contains(&s) {
+                    wanted_paragraph.push(s);
+                }
+            }
+            for r in &p.runs {
+                if let Some(s) = r.character_style.as_deref() {
+                    if !wanted_character.contains(&s) {
+                        wanted_character.push(s);
+                    }
+                }
+            }
+        }
+        for id in wanted_paragraph {
+            if self.scene.styles.paragraph_styles.contains_key(id) {
+                continue;
+            }
+            // InDesign bases them on [Basic Paragraph].
+            let basic = "ParagraphStyle/$ID/NormalParagraphStyle";
+            let based_on = if self.scene.styles.paragraph_styles.contains_key(basic) {
+                basic
+            } else {
+                "ParagraphStyle/$ID/[No paragraph style]"
+            };
+            let def = indesign_index_paragraph_style(id, based_on);
+            ops.push(Operation::CreateParagraphStyle {
+                self_id: None,
+                name: None,
+                based_on: None,
+                restore_json: Some(serde_json::to_string(&def).expect("a style serializes")),
+            });
+        }
+        for id in wanted_character {
+            if self.scene.styles.character_styles.contains_key(id) {
+                continue;
+            }
+            let def = paged_model::CharacterStyleDef {
+                self_id: id.to_string(),
+                name: id.strip_prefix("CharacterStyle/").map(str::to_string),
+                based_on: Some("CharacterStyle/$ID/[No character style]".to_string()),
+                // InDesign's own Index Cross-reference: Minion Pro Italic 10.
+                font: (id == "CharacterStyle/$ID/Index Cross-reference")
+                    .then(|| "Minion Pro".to_string()),
+                font_style: (id == "CharacterStyle/$ID/Index Cross-reference")
+                    .then(|| "Italic".to_string()),
+                point_size: (id == "CharacterStyle/$ID/Index Cross-reference").then_some(10.0),
+                ..Default::default()
+            };
+            ops.push(Operation::CreateCharacterStyle {
+                self_id: None,
+                name: None,
+                based_on: None,
+                restore_json: Some(serde_json::to_string(&def).expect("a style serializes")),
+            });
+        }
+        ops.push(Operation::ReplaceStoryParagraphs {
+            story_id: story_id.to_string(),
+            paragraphs_json: serde_json::to_string(&paragraphs).expect("paragraphs serialize"),
+        });
+        Ok(if ops.len() == 1 {
+            ops.pop().expect("one op")
+        } else {
+            Operation::Batch { ops }
+        })
+    }
+
     /// v73 — `UpdateTableOfContents` (ADR 165): TOC story `story_id`'s
     /// new paragraphs, from its TOC style over the CURRENT layout. A build
     /// a batch still owes is settled first, since the entries' pages come
@@ -11096,15 +11204,7 @@ impl CanvasModel {
         story_id: &str,
     ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
         use crate::channel::WorkerError;
-        if self.rebuild_owed {
-            let outer = std::mem::replace(&mut self.rebuild_deferred, false);
-            self.rebuild_owed = false;
-            let rebuilt = self.rebuild_after_mutation();
-            self.rebuild_deferred = outer;
-            rebuilt.map_err(|e| WorkerError::NotImplemented {
-                what: format!("updateTableOfContents: the layout did not build ({e:?})"),
-            })?;
-        }
+        self.settle_owed_build("updateTableOfContents")?;
         let refuse = |what: String| WorkerError::NotImplemented { what };
         let parsed = self
             .scene
@@ -13093,6 +13193,45 @@ fn frame_self_id(spread: &paged_model::Spread, fr: paged_model::FrameRef) -> Opt
         FrameRef::Polygon(i) => spread.polygons.get(i)?.self_id.clone(),
         FrameRef::Group(i) => spread.groups.get(i)?.self_id.clone(),
     }
+}
+
+/// An index paragraph style InDesign 20.0.1 creates when Generate Index
+/// needs it and the document lacks it, with the attributes it gives it
+/// (`index-probe`, ADR 168): the title 30 pt centred with 18 pt after, a
+/// section head with 7.2 pt before and after, a level 10 pt hanging from
+/// a 28 pt indent (level 1 by 28 pt, the others by 21 pt), each based on
+/// `based_on` ([Basic Paragraph] where the document has one). Any other
+/// id is created plain.
+fn indesign_index_paragraph_style(id: &str, based_on: &str) -> paged_model::ParagraphStyleDef {
+    let mut def = paged_model::ParagraphStyleDef {
+        self_id: id.to_string(),
+        name: id.strip_prefix("ParagraphStyle/").map(str::to_string),
+        based_on: Some(based_on.to_string()),
+        ..Default::default()
+    };
+    match id {
+        "ParagraphStyle/$ID/Index Title" => {
+            def.point_size = Some(30.0);
+            def.space_after = Some(18.0);
+            def.justification = Some(paged_model::Justification::CenterAlign);
+        }
+        "ParagraphStyle/$ID/Index Section Head" => {
+            def.space_before = Some(7.2);
+            def.space_after = Some(7.2);
+        }
+        "ParagraphStyle/$ID/Index Level 1" => {
+            def.point_size = Some(10.0);
+            def.left_indent = Some(28.0);
+            def.first_line_indent = Some(-28.0);
+        }
+        _ if id.starts_with("ParagraphStyle/$ID/Index Level ") => {
+            def.point_size = Some(10.0);
+            def.left_indent = Some(28.0);
+            def.first_line_indent = Some(-21.0);
+        }
+        _ => {}
+    }
+    def
 }
 
 #[cfg(test)]

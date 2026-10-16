@@ -124,4 +124,4 @@ Before this, the stale page number `8` outlived the update in the saved file.
   - `NumberedParagraphs` (whether a list number joins the entry);
   - `IncludeBookDocuments`.
 - **Inserting a new TOC** (`insertTableOfContents`) and TOC style editing.
-- **The index** (L-05) and **cross-references** (L-03) take the same route next.
+- **Cross-references** (L-03) take the same route next; the index followed in ADR 168.

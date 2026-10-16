@@ -108,7 +108,7 @@ pub(crate) use blend_shadow::{
     push_blend_group, push_target_group, resolve_frame_shadow, shadow_group_blend, target_opacity,
 };
 use build_engine::*;
-pub use build_engine::{build_index_paragraphs, toc_paragraphs};
+pub use build_engine::{index_paragraphs, toc_paragraphs};
 pub(crate) use color_paint::{apply_fill_tint_ctx, object_tint, stroke_for};
 use color_paint::{build_cmyk_transform, CmykTransformRef};
 use color_paint::{

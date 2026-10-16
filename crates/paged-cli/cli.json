@@ -4143,6 +4143,7 @@
             "deleteHyperlink",
             "editHyperlink",
             "updateTableOfContents",
+            "generateIndex",
             "setFieldValue",
             "placeImage",
             "replaceImageBytes",

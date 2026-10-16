@@ -450,6 +450,8 @@ fn host_functions() -> Vec<HostFn> {
            "Rename a hyperlink or send it to a new URL or page (pageId wins); an empty name clears it."),
         f!("paged.updateTableOfContents", "(storyId)", "bool", "author",
            "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."),
+        f!("paged.generateIndex", "(storyId)", "bool", "author",
+           "Generate Index: write the document's index into a story (replacing its text) from its topics and page references over the current layout — the title, a heading per letter, each topic with its pages and See references. Index styles the document lacks are created."),
         f!("paged.insertFootnote", "(storyId, offset, text)", "string|null", "author",
            "Insert a footnote at a story offset: its reference there, and the note (its number, the separator, then text). Returns the note's id; read the notes with paged.collection(\"footnotes\")."),
         f!("paged.deleteFootnote", "(storyId, footnoteId)", "bool", "author",

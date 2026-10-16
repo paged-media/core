@@ -1246,6 +1246,11 @@ fn install_bridge(ctx: &mut Context) -> JsResult<()> {
             1,
         )
         .function(
+            guarded(paged_generate_index),
+            js_string!("generateIndex"),
+            1,
+        )
+        .function(
             guarded(paged_insert_footnote),
             js_string!("insertFootnote"),
             3,
@@ -3012,6 +3017,17 @@ fn paged_update_table_of_contents(
         .to_string(ctx)?
         .to_std_string_escaped();
     Ok(apply_bool(&Mutation::UpdateTableOfContents { story_id }))
+}
+
+/// `paged.generateIndex(storyId)` — Generate Index
+/// (`Mutation::GenerateIndex`, ADR 168): write the document's index into
+/// a story, replacing its text.
+fn paged_generate_index(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let story_id = args
+        .get_or_undefined(0)
+        .to_string(ctx)?
+        .to_std_string_escaped();
+    Ok(apply_bool(&Mutation::GenerateIndex { story_id }))
 }
 
 /// `paged.insertFootnote(storyId, offset, text)` — insert a footnote at
