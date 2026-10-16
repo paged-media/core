@@ -82,10 +82,17 @@ fn report_unrenderable_content(page: &mut BuiltPage, frame_id: Option<&str>) {
 ///      coords. The image is then *clipped* to the frame's path so
 ///      cropping / partial-frame placements (a thin slice, a square
 ///      crop, etc.) match InDesign.
-///   2. No inner transform (synthetic IDMLs that omit it). Fall
-///      back to the legacy "stretch image to frame bounds — minus
-///      `<FrameFittingOption>` crops" path. No clip is needed
-///      because the image already covers exactly the frame's AABB.
+///   2. No inner transform (synthetic IDMLs that omit it, a picture
+///      placed through the authoring doors). A named fit with no
+///      crops resolves to its transform ([`named_fit_transform`]);
+///      otherwise the picture is stretched over the frame bounds minus
+///      the `<FrameFittingOption>` crops ([`crop_box_transform`]). Both
+///      are transforms and take path 1, clip included: InDesign clips a
+///      placed picture to its frame whatever placed it, and an IDML
+///      export of the frame spells exactly this transform, so the two
+///      must draw the same pixels.
+///   3. A picture with no pixel size (nothing to scale) keeps the
+///      rect placement without a clip.
 ///
 /// `shadow` is the picture's own drop shadow (R-10: the `<Image>`'s
 /// `<TransparencySetting><DropShadowSetting>`, the frame's content
@@ -169,6 +176,7 @@ pub(super) fn emit_rectangle_image(
     if let Some(image_t) = rect
         .image_item_transform
         .or_else(|| named_fit_transform(rect, img_w, img_h))
+        .or_else(|| crop_box_transform(rect, img_w, img_h))
     {
         // Path 1: honour the inner Image[ItemTransform] — or, for a
         // frame that names a fit but carries no transform yet (a
@@ -235,11 +243,9 @@ pub(super) fn emit_rectangle_image(
             extra_clip,
         );
     } else {
-        // Path 2: legacy synthetic-IDML placement. No inner
-        // transform and no named fit (or a fit with explicit crops) ⇒
-        // the image fills the frame's bounds minus the FrameFitting
-        // crops. No clip — the image already occupies exactly the
-        // rect.
+        // Path 3: a picture with no pixel size, which no transform can
+        // scale: the image fills the frame's bounds minus the
+        // FrameFitting crops, as it always did.
         let frame_left = rect.bounds.left;
         let frame_top = rect.bounds.top;
         let frame_w = rect.bounds.width();
@@ -311,6 +317,47 @@ fn named_fit_transform(rect: &Rectangle, img_w: f32, img_h: f32) -> Option<[f32;
         img_w,
         img_h,
     )
+}
+
+/// The inner transform of a Rectangle's picture when it has neither its
+/// own nor a crop-less named fit: stretched over the frame's bounds
+/// minus its `<FrameFittingOption>` crops (a negative crop grows the
+/// box past the frame edge). As a transform it takes the clipped path
+/// like every other placement. The rect-only emission it replaces drew
+/// a negative crop's overhang outside the frame — InDesign clips it —
+/// and set the frame's edge pixels opaque where the clipped emission
+/// covers them partly, so the same frame read back from an IDML export
+/// (which spells this transform, `idml-export`'s `images::placement`)
+/// differed along every fractional edge. The arithmetic matches that
+/// writer's operation for operation, so both produce the same `f32`s.
+/// `None` for a picture with no pixel size.
+fn crop_box_transform(rect: &Rectangle, img_w: f32, img_h: f32) -> Option<[f32; 6]> {
+    if !(img_w > 0.0 && img_h > 0.0) {
+        return None;
+    }
+    let (left_crop, top_crop, right_crop, bottom_crop) = rect
+        .frame_fitting
+        .as_ref()
+        .map(|f| {
+            (
+                f.left_crop.unwrap_or(0.0),
+                f.top_crop.unwrap_or(0.0),
+                f.right_crop.unwrap_or(0.0),
+                f.bottom_crop.unwrap_or(0.0),
+            )
+        })
+        .unwrap_or((0.0, 0.0, 0.0, 0.0));
+    let b = rect.bounds;
+    let box_w = (b.right - b.left - left_crop - right_crop).max(0.0);
+    let box_h = (b.bottom - b.top - top_crop - bottom_crop).max(0.0);
+    Some([
+        box_w / img_w,
+        0.0,
+        0.0,
+        box_h / img_h,
+        b.left + left_crop,
+        b.top + top_crop,
+    ])
 }
 
 /// Polygon-hosted placed image. Mirrors [`emit_rectangle_image`] but

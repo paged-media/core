@@ -23,7 +23,7 @@ default = []
 gpu = ["paged-gpu/vello-backend", "dep:paged-gpu", "dep:wasm-bindgen-futures"]
 
 [dependencies]
-idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "266f0b7a989f216447e95e1779ef8785620e2bcc" }
+idml-import = { git = "https://github.com/paged-media/plugin-publish", rev = "63346fd13766fcc03d4468c027996709c0fd088c" }
 # default-features = false drops `cpu` (= paged-gpu/cpu = tiny-skia).
 # `build_document` is not cpu-gated, so parse + layout still work; only
 # the legacy CPU rasterizer is excluded.
@@ -39,3 +39,8 @@ web-sys = { version = "0.3", features = ["console", "OffscreenCanvas", "HtmlCanv
 console_error_panic_hook = "0.1"
 serde = { workspace = true }
 tsify-next = { workspace = true }
+
+# wasm test lane (tests/wasm.rs) — run headless by scripts/test-wasm.sh with
+# the Node-hosted `wasm-bindgen-test-runner`, like paged-canvas-wasm's.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

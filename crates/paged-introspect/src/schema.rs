@@ -705,12 +705,52 @@ pub const ANCHORED_POSITIONS: &[&str] = &["InlinePosition", "AboveLine", "Anchor
 pub const SWATCH_SPACES: &[&str] = &["CMYK", "RGB", "LAB", "Gray"];
 pub const SWATCH_MODELS: &[&str] = &["Process", "Spot"];
 pub const GRADIENT_KINDS: &[&str] = &["Linear", "Radial"];
+/// Every `PageNumberStyle` InDesign 20.0.1 (Roman edition) offers, in
+/// its DOM's order (core ADR 157).
 pub const PAGE_NUMBER_STYLES: &[&str] = &[
+    "UpperRoman",
+    "LowerRoman",
+    "UpperLetters",
+    "LowerLetters",
+    "Arabic",
+    "Kanji",
+    "ArabicAlifBaTah",
+    "ArabicAbjad",
+    "HebrewBiblical",
+    "HebrewNonStandard",
+    "SingleLeadingZeros",
+    "DoubleLeadingZeros",
+    "TripleLeadingZeros",
+];
+/// A footnote's numbering style: every page-number style, and asterisks
+/// (ADR 162).
+pub const FOOTNOTE_NUMBERING_STYLES: &[&str] = &[
     "Arabic",
     "UpperRoman",
     "LowerRoman",
     "UpperLetters",
     "LowerLetters",
+    "Asterisks",
+    "Kanji",
+    "ArabicAlifBaTah",
+    "ArabicAbjad",
+    "HebrewBiblical",
+    "HebrewNonStandard",
+    "SingleLeadingZeros",
+    "DoubleLeadingZeros",
+    "TripleLeadingZeros",
+];
+pub const FOOTNOTE_RESTARTS: &[&str] = &[
+    "DontRestart",
+    "PageRestart",
+    "SpreadRestart",
+    "SectionRestart",
+];
+pub const FOOTNOTE_SHOW_PREFIX_SUFFIX: &[&str] = &[
+    "NoPrefixSuffix",
+    "PrefixSuffixReference",
+    "PrefixSuffixText",
+    "PrefixSuffixBoth",
 ];
 pub const TEXT_VARIABLE_TYPES: &[&str] = &[
     "CustomTextType",

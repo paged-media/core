@@ -877,6 +877,66 @@
       "min_ssim": 0.9933,
       "max_ink_mean_de": 9.86,
       "rationale": "Added 2026-10-15 (L-01c, ADR 156): see footnote-numbering. Two A4 pages of Inter 10 pt with one note per paragraph: story A threaded from page 1's top frame to page 2's (its third paragraph starts the next frame), story B below it on page 1, story C below it on page 2, the designmap listing them C, B, A. InDesign numbers the notes of each STORY through the story (A 1-4 across both pages, B and C from 1 again), restarting at each page, spread or section when RestartNumbering says so. This variant: PageRestart, LowerRoman, Prefix ( and Suffix ) in the reference only (PrefixSuffixReference); story A's page-2 notes restart at i. Pages measure mean 0.051 / 0.058, ssim >= 0.99840, ink <= 8.21; sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on."
+    },
+    {
+      "name": "numbering-multilevel",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.025,
+      "max_p99_de": 0.3,
+      "min_ssim": 0.9948,
+      "max_ink_mean_de": 2.65,
+      "rationale": "Added 2026-10-15 (L-07, ADR 158): how InDesign numbers a multi-level list, asked of InDesign 20.0.1. One A4 page of Inter 11 pt, sixteen paragraphs on one list through four styles: L1 (level 1, ^1.^t), L2 (level 2, a b c, ^1.^2.^t, restart after any previous level), L3 (level 3, i ii iii, ^1.^2.^3.^t, likewise) and L2Keep (level 2, 1 2 3, ^1-^2^t, NumberingApplyRestartPolicy false). InDesign restarts a level only when a higher level came after the level's own last paragraph, never resets lower levels from above (the point under chapter two prints 2.c.i.), prints ^n in the format of the paragraph that last set level n, and lets the no-restart level go on counting (3-2, 3-3, 4-4, then 4.e.). Page measures mean 0.0205, p99 0, ssim 0.99986, ink 2.21; sized at worst x 1.20, ssim - 0.005, p99 the 0.3 floor. Text gate on: the numbers are the point."
+    },
+    {
+      "name": "footnote-columns",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.17,
+      "max_p99_de": 3.92,
+      "min_ssim": 0.9894,
+      "max_ink_mean_de": 7.79,
+      "rationale": "Added 2026-10-15 (L-01d, ADR 160): where InDesign sets the footnotes of a frame with columns, asked of InDesign 20.0.1. One A4 page of Inter 10 pt, notes 8 pt: frame A (two columns, six paragraphs, the fourth starting the second column) and frame B (two columns, four paragraphs) below it, which overrides the document's footnote layout with FootnotesEnableOverrides. InDesign sets a frame's notes under each column at the column's width, or, when they span, across the whole frame in reference order under one rule; an override with no spacing of its own puts InDesign's frame default of 6 pt between notes. This variant: the document does not span (EnableStraddling false), frame B spans. Page measures mean 0.142, p99 3.26, ssim 0.99445, ink 6.49 (main's engine, which set every frame's notes per column with the document's spacing: 0.486 / 0.970); sized at worst x 1.20, ssim - 0.005. Every note line lies within 0.05 pt of InDesign's; the rest is glyph edges. Text gate on."
+    },
+    {
+      "name": "footnote-straddle",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.184,
+      "max_p99_de": 4.11,
+      "min_ssim": 0.9892,
+      "max_ink_mean_de": 8.4,
+      "rationale": "Added 2026-10-15 (L-01d, ADR 160): where InDesign sets the footnotes of a frame with columns, asked of InDesign 20.0.1. One A4 page of Inter 10 pt, notes 8 pt: frame A (two columns, six paragraphs, the fourth starting the second column) and frame B (two columns, four paragraphs) below it, which overrides the document's footnote layout with FootnotesEnableOverrides. InDesign sets a frame's notes under each column at the column's width, or, when they span, across the whole frame in reference order under one rule; an override with no spacing of its own puts InDesign's frame default of 6 pt between notes. This variant: the document spans (EnableStraddling true), frame B does not. Page measures mean 0.153, p99 3.43, ssim 0.99426, ink 7.00 (main's engine: 0.672 / 0.957); sized at worst x 1.20, ssim - 0.005. Every note line lies within 0.05 pt of InDesign's; the rest is glyph edges. Text gate on."
+    },
+    {
+      "name": "footnote-split",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.342,
+      "max_p99_de": 10.2,
+      "min_ssim": 0.9897,
+      "max_ink_mean_de": 4.84,
+      "rationale": "Added 2026-10-15 (L-01e, ADR 161): what InDesign does with a note too tall for the room under its reference, asked of InDesign 20.0.1. One A4 page, one story threaded through two frames (420 x 260 and 420 x 330 pt), Inter 10 pt with 8 pt notes: the first paragraph runs to near frame 1's foot and carries a fifteen-sentence note (11 lines), the next two carry one-line notes; the continuing rule is on (1 pt, 288 pt). This variant, NoSplitting false: the note keeps the 9 whole lines that fit between its reference line and frame 1's foot (its last line hyphenated, ordi-), the body stops at the reference line, and the note's last 2 lines head frame 2's area under the continuing rule, before notes 2 and 3. Page measures mean 0.285, p99 8.50, ssim 0.99475, ink 4.03 (main's engine, which cut the note to the room and left the next paragraph in frame 1 over it: 1.868 / 0.902); sized at worst x 1.20, ssim - 0.005. Dense 8 and 10 pt text: the rest is glyph edges. Text gate on."
+    },
+    {
+      "name": "footnote-nosplit",
+      "text_gate": true,
+      "max_pages_with_pdf": 1,
+      "max_mean_de": 0.335,
+      "max_p99_de": 9.51,
+      "min_ssim": 0.9915,
+      "max_ink_mean_de": 4.86,
+      "rationale": "Added 2026-10-15 (L-01e, ADR 161): what InDesign does with a note too tall for the room under its reference, asked of InDesign 20.0.1. One A4 page, one story threaded through two frames (420 x 260 and 420 x 330 pt), Inter 10 pt with 8 pt notes: the first paragraph runs to near frame 1's foot and carries a fifteen-sentence note (11 lines), the next two carry one-line notes; the continuing rule is on (1 pt, 288 pt). This variant, NoSplitting true: the reference line (the paragraph's last) moves to frame 2 and the whole note goes with it, frame 1 ending one line early. Page measures mean 0.279, p99 7.92, ssim 0.99658, ink 4.05 (main's engine: 2.818 / 0.819); sized at worst x 1.20, ssim - 0.005. Text gate on."
+    },
+    {
+      "name": "toc",
+      "text_gate": true,
+      "max_pages_with_pdf": 4,
+      "max_mean_de": 0.186,
+      "max_p99_de": 1.44,
+      "min_ssim": 0.9907,
+      "max_ink_mean_de": 14.17,
+      "rationale": "Added 2026-10-16 (R-08, L-04, ADR 165): a table of contents that is out of date, asked of InDesign 20.0.1. Four 400 x 300 pt pages, Inter: a body story threaded over pages 1-3 with headings at three levels, and on page 4 a TOC story bound to TOCStyle/Contents (InDesign's spelling) whose stored entries are stale (a renamed heading, a wrong page). InDesign prints the stored entries (Contents / Getting Started 7 / An Old Heading 8), and so does the engine: no entry is rebuilt at render. Page measures mean 0.155, p99 1.20, ssim 0.9957, ink 11.80 (pages 1-2: 16 pt heading glyph edges; every line at InDesign's rows and extents); sized at worst x 1.20, ssim - 0.005. Text gate on."
     }
   ]
 }

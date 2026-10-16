@@ -150,3 +150,54 @@ take the InDesign GUI for a few seconds and share the lock
   below the top of its ideographic character face); its em box stands one
   em above its `BASE` ideographic baseline, or, with no `BASE`, is centred
   on its 永. Answers in `cjk-first-baseline-probe.json`.
+- `scale-frame-probe`: which axes a handle scale works along. One selected
+  item, a frame or a group, has its own box, turned with it, and scales
+  along its own axes, so a rotated one stays a rectangle at its angle.
+  Several selected items have a box aligned to the pasteboard, even when
+  they share a rotation, and scale as one unit, which shears the rotated
+  ones. Read from where the Rotate 90° menu action turns a selection (about
+  the reference point on its box) and from groups. A placed image selected
+  on its own sits at its frame's angle plus its own (30° + 15° = 45°) and
+  scales along those axes. Answers in `scale-frame-probe.json`.
+- `ruby-kenten-options-probe`: what each ruby and kenten setting does —
+  size, horizontal and vertical scale, offsets (up, above or below the
+  line), `BelowLeft`, the seven `RubyAlignment`s, `AlignKentenLeft`, and a
+  custom mark's character and font. Read from InDesign's PDF; answers in
+  `ruby-kenten-options-probe.json`.
+- `object-style-corners-probe`: which of an object style's corner
+  attributes InDesign reads. Like an item's, only the four per-corner
+  ones: a style with just `CornerOption` / `CornerRadius` gives square
+  corners, the per-corner attributes win where the two disagree, and an
+  option with no radius is 12 pt whatever `CornerRadius` says. InDesign
+  authors and exports the style; the script rewrites its corners into
+  variants and InDesign reads each back through its DOM. Answers in
+  `object-style-corners-probe.json`.
+- `ruby-parent-spacing-probe`: what InDesign does with ruby wider than its
+  base (ADR 166): it overhangs the kana, brackets or Latin beside the base
+  by up to one ruby character a side (`RubyParentOverhangAmount`) and no
+  more than the neighbour's natural width, never a kanji or past a line's
+  edge, narrows if `RubyAutoScaling` allows, and
+  spaces the base with what is left by `RubyParentSpacing` (1-2-1, both
+  sides, equal aki, full justify, or none: centred). Answers in
+  `ruby-parent-spacing-probe.json`.
+- `kana-spacing-probe`: kana under each kerning method. Metrics sets
+  Kozuka's kana at their proportional widths (`palt`) plus kerning pairs;
+  kerning off, a full em each.
+- `kerning-runs-probe`: whether the font's kerning applies across a style
+  run's boundary (ADR 166). Minion Pro 30 pt "AVATAR To Wa" with every
+  other character recoloured or underlined sets exactly as one run; at
+  29 pt, or in Myriad Pro, each boundary sets as kerning off. Answers in
+  `kerning-runs-probe.json`.
+- `vertical-text-probe`: vertical text (ADR 167). InDesign's scripting has
+  no story orientation, so InDesign builds the frames horizontally, the
+  script turns each story vertical in the IDML, and InDesign opens and
+  exports that. Vertical text is the horizontal layout turned a quarter
+  clockwise: CJK upright in vertical forms (`vpal`, `vkrn` under Metrics),
+  Latin turned, ruby and kenten upright to the right; a paragraph with no
+  kinsoku set breaks before a full stop; punctuation takes no kenten; a
+  kenten change between two characters keeps their kerning pair.
+  Answers in `vertical-text-probe.json`.
+- `pdf-glyphs.py`: every glyph a PDF page paints, one JSON object each —
+  its character (from `ToUnicode`), where its outline is drawn from, its
+  size and horizontal scale, its advance, its writing mode (`Identity-V`
+  fonts) and angle. Fonts are resolved per page.

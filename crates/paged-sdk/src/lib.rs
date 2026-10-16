@@ -42,10 +42,13 @@ pub use build::viewer_build;
 
 #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
 mod wasm {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use paged_compose::Color;
     use paged_gpu::vello_kurbo::Affine;
     use paged_gpu::{SurfacePresenter, VelloScene};
-    use paged_renderer::{BuiltDocument, BytesResolver, Document};
+    use paged_renderer::{BuiltDocument, BytesResolver};
     use serde::Serialize;
     use tsify_next::Tsify;
     use wasm_bindgen::prelude::*;
@@ -54,6 +57,25 @@ mod wasm {
     /// same constant the editor canvas uses, so `page_layout()`
     /// offsets and `present()` placement always agree.
     const PAGE_GAP_PT: f32 = 24.0;
+
+    /// Where the WebGPU presenter lives, shared with the futures that
+    /// create it and read back through it.
+    ///
+    /// No exported method may be an `async fn` taking `self`:
+    /// wasm-bindgen takes that borrow inside the future, on its first poll,
+    /// and holds it until the future settles. Every other call on the
+    /// session in that window — a `present` from the next animation frame,
+    /// a `set_page` from input — then throws "recursive use of an object
+    /// detected which would lead to unsafe aliasing in rust". So the
+    /// methods that wait on the browser return a `js_sys::Promise` whose
+    /// future owns this `Rc` and no borrow of the session, and the
+    /// `RefCell` is only ever borrowed synchronously.
+    /// (`tests/no_async_exports.rs` keeps it that way.)
+    type GpuSlot = Rc<RefCell<Option<SurfacePresenter>>>;
+
+    /// A page scene scaled for an off-surface readback, with its pixel
+    /// size — or the error message the readback rejects with.
+    type ReadbackScene = Result<(VelloScene, u32, u32), String>;
 
     #[wasm_bindgen(start)]
     pub fn on_start() {
@@ -147,7 +169,8 @@ mod wasm {
         built: Option<BuiltDocument>,
         /// Created on first `render_to_canvas` (bound to that canvas) or
         /// lazily for headless `render_to_bytes` (1×1 backing canvas).
-        presenter: Option<SurfacePresenter>,
+        /// Borrowed only synchronously; see [`GpuSlot`].
+        presenter: GpuSlot,
         /// Per-(family, style) font payloads accumulated via
         /// `register_font`, consulted at `load` time. The same
         /// `BytesResolver` the engine, `paged-inspect`, and the editor use.
@@ -178,7 +201,7 @@ mod wasm {
             }
             Ok(ViewerSession {
                 built: None,
-                presenter: None,
+                presenter: GpuSlot::default(),
                 fonts: BytesResolver::new(),
                 page: 0,
                 scenes: std::collections::HashMap::new(),
@@ -232,90 +255,55 @@ mod wasm {
         /// Present the current page to a worker-owned `OffscreenCanvas` via
         /// WebGPU. The presenter is created (bound to `canvas`) on the first
         /// call; later calls reuse it and re-present — pass the same canvas.
-        pub async fn render_to_canvas(&mut self, canvas: web_sys::OffscreenCanvas) -> Diagnostics {
-            if self.presenter.is_none() {
-                let w = canvas.width().max(1);
-                let h = canvas.height().max(1);
-                match SurfacePresenter::new_offscreen(canvas, w, h).await {
-                    Ok(p) => self.presenter = Some(p),
-                    Err(e) => {
-                        return Diagnostics::error("gpu_init", &format!("WebGPU init failed: {e}"))
-                    }
-                }
+        // The returned promise holds no borrow of the session while WebGPU
+        // initialises (see `GpuSlot`).
+        #[wasm_bindgen(unchecked_return_type = "Promise<Diagnostics>")]
+        pub fn render_to_canvas(&mut self, canvas: web_sys::OffscreenCanvas) -> js_sys::Promise {
+            if self.presenter.borrow().is_some() {
+                return js_sys::Promise::resolve(&JsValue::from(self.present_current()));
             }
-            self.present_current()
+            let w = canvas.width().max(1);
+            let h = canvas.height().max(1);
+            self.bind_and_present(SurfacePresenter::new_offscreen(canvas, w, h))
         }
 
         /// Main-thread variant of [`Self::render_to_canvas`] for embedders
         /// that render on an `HtmlCanvasElement` instead of a worker
         /// `OffscreenCanvas`.
-        pub async fn render_to_canvas_main(
+        #[wasm_bindgen(unchecked_return_type = "Promise<Diagnostics>")]
+        pub fn render_to_canvas_main(
             &mut self,
             canvas: web_sys::HtmlCanvasElement,
-        ) -> Diagnostics {
-            if self.presenter.is_none() {
-                let w = canvas.width().max(1);
-                let h = canvas.height().max(1);
-                match SurfacePresenter::new(canvas, w, h).await {
-                    Ok(p) => self.presenter = Some(p),
-                    Err(e) => {
-                        return Diagnostics::error("gpu_init", &format!("WebGPU init failed: {e}"))
-                    }
-                }
+        ) -> js_sys::Promise {
+            if self.presenter.borrow().is_some() {
+                return js_sys::Promise::resolve(&JsValue::from(self.present_current()));
             }
-            self.present_current()
+            let w = canvas.width().max(1);
+            let h = canvas.height().max(1);
+            self.bind_and_present(SurfacePresenter::new(canvas, w, h))
         }
 
         /// Headless path: render the current page off-surface and read it
         /// back as RGBA8 (replaces the legacy `render_to_png`). For
         /// screenshots / SSR. `dpi` controls resolution (72 = 1px per pt).
-        pub async fn render_to_bytes(&mut self, dpi: f32) -> Result<RenderedRaster, JsError> {
-            self.ensure_presenter()
-                .await
-                .map_err(|e| JsError::new(&e))?;
-
-            // Build the scaled scene while borrowing `built`, then drop the
-            // borrow before taking `&mut presenter` for the async readback —
-            // the borrow dance `paged-canvas-wasm::render_page_vello_png` uses.
-            let (scene, width_px, height_px) = {
-                let built = self
-                    .built
-                    .as_ref()
-                    .ok_or_else(|| JsError::new("no document loaded"))?;
-                let page = built
-                    .pages
-                    .get(self.page)
-                    .ok_or_else(|| JsError::new("page index out of range"))?;
-                let page_scene =
-                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+        // The scene is built now; the returned promise then waits on the
+        // GPU holding no borrow of the session (see `GpuSlot`).
+        #[wasm_bindgen(unchecked_return_type = "Promise<RenderedRaster>")]
+        pub fn render_to_bytes(&mut self, dpi: f32) -> js_sys::Promise {
+            let scene = self.page_scene(self.page, |page| {
                 let scale = (dpi / 72.0) as f64;
-                let mut scene = VelloScene::new();
-                scene.append(&page_scene, Some(Affine::scale(scale)));
                 let width_px = ((page.width_pt * dpi / 72.0).ceil() as u32).max(1);
                 let height_px = ((page.height_pt * dpi / 72.0).ceil() as u32).max(1);
-                (scene, width_px, height_px)
-            };
-
-            let presenter = self
-                .presenter
-                .as_mut()
-                .ok_or_else(|| JsError::new("GPU not initialised"))?;
-            let rgba = presenter
-                .render_scene_to_rgba(&scene, width_px, height_px)
-                .await
-                .map_err(|e| JsError::new(&format!("readback: {e}")))?;
-            Ok(RenderedRaster {
-                width: width_px,
-                height: height_px,
-                rgba,
-            })
+                (scale, width_px, height_px)
+            });
+            self.read_back(scene)
         }
 
         /// Resize the bound GPU surface. `width`/`height` are CSS pixels;
         /// `device_pixel_ratio` brings them to device pixels. No-op until a
         /// presenter exists.
         pub fn resize(&mut self, width: u32, height: u32, device_pixel_ratio: f32) {
-            if let Some(p) = self.presenter.as_mut() {
+            if let Some(p) = self.presenter.borrow_mut().as_mut() {
                 let w = ((width as f32 * device_pixel_ratio).round() as u32).max(1);
                 let h = ((height as f32 * device_pixel_ratio).round() as u32).max(1);
                 p.resize(w, h);
@@ -369,7 +357,8 @@ mod wasm {
             let Some(built) = self.built.as_ref() else {
                 return Diagnostics::error("no_document", "no document loaded");
             };
-            let Some(presenter) = self.presenter.as_ref() else {
+            let mut presenter = self.presenter.borrow_mut();
+            let Some(presenter) = presenter.as_mut() else {
                 return Diagnostics::error("no_gpu", "GPU not initialised");
             };
 
@@ -419,9 +408,6 @@ mod wasm {
                 })
                 .collect();
 
-            let Some(presenter) = self.presenter.as_mut() else {
-                return Diagnostics::error("no_gpu", "GPU not initialised");
-            };
             let bg = Color::rgba(0.898, 0.905, 0.922, 1.0);
             match presenter.present_scenes(&scene_list, bg) {
                 Ok(()) => Diagnostics::ok(),
@@ -431,110 +417,160 @@ mod wasm {
 
         /// Headless render of ONE page scaled to `target_width_px`
         /// (thumbnails / page strips). Aspect ratio preserved.
-        pub async fn render_page_to_bytes(
+        // The scene is built now; the returned promise then waits on the
+        // GPU holding no borrow of the session (see `GpuSlot`).
+        #[wasm_bindgen(unchecked_return_type = "Promise<RenderedRaster>")]
+        pub fn render_page_to_bytes(
             &mut self,
             index: u32,
             target_width_px: u32,
-        ) -> Result<RenderedRaster, JsError> {
-            self.ensure_presenter()
-                .await
-                .map_err(|e| JsError::new(&e))?;
-
-            let (scene, width_px, height_px) = {
-                let built = self
-                    .built
-                    .as_ref()
-                    .ok_or_else(|| JsError::new("no document loaded"))?;
-                let page = built
-                    .pages
-                    .get(index as usize)
-                    .ok_or_else(|| JsError::new("page index out of range"))?;
-                let page_scene =
-                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+        ) -> js_sys::Promise {
+            let scene = self.page_scene(index as usize, |page| {
                 let width_px = target_width_px.max(1);
                 let scale = f64::from(width_px) / f64::from(page.width_pt.max(1.0));
                 let height_px = ((f64::from(page.height_pt) * scale).ceil() as u32).max(1);
-                let mut scene = VelloScene::new();
-                scene.append(&page_scene, Some(Affine::scale(scale)));
-                (scene, width_px, height_px)
-            };
-
-            let presenter = self
-                .presenter
-                .as_mut()
-                .ok_or_else(|| JsError::new("GPU not initialised"))?;
-            let rgba = presenter
-                .render_scene_to_rgba(&scene, width_px, height_px)
-                .await
-                .map_err(|e| JsError::new(&format!("readback: {e}")))?;
-            Ok(RenderedRaster {
-                width: width_px,
-                height: height_px,
-                rgba,
-            })
+                (scale, width_px, height_px)
+            });
+            self.read_back(scene)
         }
     }
 
     // Non-exported helpers — kept out of the `#[wasm_bindgen]` impl.
     impl ViewerSession {
+        /// The current page's scene, unscaled, with its size in pt — what
+        /// `present_current` fits into the surface.
+        fn current_page(&self) -> Result<(VelloScene, f32, f32), Diagnostics> {
+            let Some(built) = self.built.as_ref() else {
+                return Err(Diagnostics::error("no_document", "no document loaded"));
+            };
+            let Some(page) = built.pages.get(self.page) else {
+                return Err(Diagnostics::error("page_range", "page index out of range"));
+            };
+            let scene =
+                SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+            Ok((scene, page.width_pt, page.height_pt))
+        }
+
         /// Compose the current page's scene fit-and-centred into the bound
-        /// surface and present it. Builds the scene under a short borrow of
-        /// `built`, releases it, then presents with `&mut presenter`.
-        fn present_current(&mut self) -> Diagnostics {
-            let (scene, transform) = {
-                let Some(built) = self.built.as_ref() else {
-                    return Diagnostics::error("no_document", "no document loaded");
-                };
-                let Some(page) = built.pages.get(self.page) else {
-                    return Diagnostics::error("page_range", "page index out of range");
-                };
-                let Some(presenter) = self.presenter.as_ref() else {
-                    return Diagnostics::error("no_gpu", "GPU not initialised");
-                };
-                let scene =
-                    SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
-                // The page scene is in points; fit it to the surface
-                // (device px) with a small margin and centre it.
-                let sw = presenter.width() as f32;
-                let sh = presenter.height() as f32;
-                let pw = page.width_pt.max(1.0);
-                let ph = page.height_pt.max(1.0);
-                let scale = (sw / pw).min(sh / ph) * 0.95;
-                let scale = scale.max(0.0);
-                let tx = (sw - pw * scale) * 0.5;
-                let ty = (sh - ph * scale) * 0.5;
-                (scene, [scale, 0.0, 0.0, scale, tx, ty])
-            };
-
-            let Some(presenter) = self.presenter.as_mut() else {
-                return Diagnostics::error("no_gpu", "GPU not initialised");
-            };
-            // Light-grey surround behind the page (page body + border come
-            // from `build_page_scene`).
-            let bg = Color::rgba(0.898, 0.905, 0.922, 1.0);
-            match presenter.present_scenes(&[(&scene, transform)], bg) {
-                Ok(()) => Diagnostics::ok(),
-                Err(e) => Diagnostics::error("present", &format!("present: {e}")),
+        /// surface and present it.
+        fn present_current(&self) -> Diagnostics {
+            match self.current_page() {
+                Ok(page) => present_fitted(&self.presenter, page),
+                Err(diags) => diags,
             }
         }
 
-        /// Ensure a presenter (hence a wgpu device) exists for headless
-        /// readback. Reuses the on-screen presenter if one is bound; else
-        /// creates a throwaway 1×1 `OffscreenCanvas` purely for its device —
-        /// `render_scene_to_rgba` renders to its own target texture, so the
-        /// backing canvas size is irrelevant.
-        async fn ensure_presenter(&mut self) -> Result<(), String> {
-            if self.presenter.is_some() {
-                return Ok(());
-            }
-            let canvas = web_sys::OffscreenCanvas::new(1, 1)
-                .map_err(|e| format!("OffscreenCanvas::new: {e:?}"))?;
-            let presenter = SurfacePresenter::new_offscreen(canvas, 1, 1)
-                .await
-                .map_err(|e| format!("WebGPU init: {e}"))?;
-            self.presenter = Some(presenter);
-            Ok(())
+        /// Create the presenter `init` resolves to, install it, then present
+        /// the current page — `render_to_canvas*`'s first call. The page is
+        /// taken now; the future owns only the presenter slot.
+        fn bind_and_present(
+            &self,
+            init: impl std::future::Future<Output = Result<SurfacePresenter, paged_gpu::SurfaceError>>
+                + 'static,
+        ) -> js_sys::Promise {
+            let page = self.current_page();
+            let slot = self.presenter.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                let diags = match init.await {
+                    Ok(p) => {
+                        *slot.borrow_mut() = Some(p);
+                        match page {
+                            Ok(page) => present_fitted(&slot, page),
+                            Err(diags) => diags,
+                        }
+                    }
+                    Err(e) => Diagnostics::error("gpu_init", &format!("WebGPU init failed: {e}")),
+                };
+                Ok(diags.into())
+            })
         }
+
+        /// Page `index`'s scene scaled for a readback. `size` maps the page
+        /// to (scale, width px, height px).
+        fn page_scene(
+            &self,
+            index: usize,
+            size: impl FnOnce(&paged_renderer::pipeline::BuiltPage) -> (f64, u32, u32),
+        ) -> ReadbackScene {
+            let built = self.built.as_ref().ok_or("no document loaded")?;
+            let page = built.pages.get(index).ok_or("page index out of range")?;
+            let page_scene =
+                SurfacePresenter::build_page_scene(&page.list, page.width_pt, page.height_pt);
+            let (scale, width_px, height_px) = size(page);
+            let mut scene = VelloScene::new();
+            scene.append(&page_scene, Some(Affine::scale(scale)));
+            Ok((scene, width_px, height_px))
+        }
+
+        /// Read `scene` back as RGBA8. Ensures a presenter first (as the
+        /// readbacks always have), so a GPU-init failure is reported before
+        /// a document one. Every borrow of the slot is synchronous; the
+        /// awaits hold none.
+        fn read_back(&self, scene: ReadbackScene) -> js_sys::Promise {
+            let slot = self.presenter.clone();
+            wasm_bindgen_futures::future_to_promise(async move {
+                let fail = |message: String| JsValue::from(JsError::new(&message));
+                if slot.borrow().is_none() {
+                    let presenter = headless_presenter().await.map_err(fail)?;
+                    // A presenter bound to a canvas meanwhile wins over the
+                    // throwaway 1×1 one.
+                    slot.borrow_mut().get_or_insert(presenter);
+                }
+                let (scene, width, height) = scene.map_err(fail)?;
+                let pending = slot
+                    .borrow_mut()
+                    .as_mut()
+                    .ok_or_else(|| fail("GPU not initialised".to_string()))?
+                    .submit_readback(&scene, width, height)
+                    .map_err(|e| fail(format!("readback: {e}")))?;
+                let rgba = pending
+                    .into_rgba()
+                    .await
+                    .map_err(|e| fail(format!("readback: {e}")))?;
+                Ok(RenderedRaster {
+                    width,
+                    height,
+                    rgba,
+                }
+                .into())
+            })
+        }
+    }
+
+    /// Present `page` (an unscaled scene and its size in pt) fit-and-centred
+    /// into the slot's surface, on a light-grey surround (page body and
+    /// border come from `build_page_scene`).
+    fn present_fitted(slot: &GpuSlot, (scene, pw, ph): (VelloScene, f32, f32)) -> Diagnostics {
+        let mut presenter = slot.borrow_mut();
+        let Some(presenter) = presenter.as_mut() else {
+            return Diagnostics::error("no_gpu", "GPU not initialised");
+        };
+        // The page scene is in points; fit it to the surface (device px)
+        // with a small margin and centre it.
+        let sw = presenter.width() as f32;
+        let sh = presenter.height() as f32;
+        let pw = pw.max(1.0);
+        let ph = ph.max(1.0);
+        let scale = ((sw / pw).min(sh / ph) * 0.95).max(0.0);
+        let tx = (sw - pw * scale) * 0.5;
+        let ty = (sh - ph * scale) * 0.5;
+        let transform = [scale, 0.0, 0.0, scale, tx, ty];
+        let bg = Color::rgba(0.898, 0.905, 0.922, 1.0);
+        match presenter.present_scenes(&[(&scene, transform)], bg) {
+            Ok(()) => Diagnostics::ok(),
+            Err(e) => Diagnostics::error("present", &format!("present: {e}")),
+        }
+    }
+
+    /// A presenter (hence a wgpu device) for headless readback, on a
+    /// throwaway 1×1 `OffscreenCanvas` — `submit_readback` renders to its
+    /// own target texture, so the backing canvas size is irrelevant.
+    async fn headless_presenter() -> Result<SurfacePresenter, String> {
+        let canvas = web_sys::OffscreenCanvas::new(1, 1)
+            .map_err(|e| format!("OffscreenCanvas::new: {e:?}"))?;
+        SurfacePresenter::new_offscreen(canvas, 1, 1)
+            .await
+            .map_err(|e| format!("WebGPU init: {e}"))
     }
 
     /// True when `globalThis.navigator.gpu` is present. Works in both the

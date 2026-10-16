@@ -30,6 +30,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 GENERATED_DIR="$ROOT/corpus/generated"
 OUT="${IDML_EXPORT_DIFF_OUT:-/tmp/paged-export-diff}"
 GATE="${IDML_EXPORT_DIFF_GATE:-hard}"
@@ -161,9 +162,9 @@ cd "$ROOT"
 cargo build -q --release -p paged-export-pdf --features cli --bin paged-export
 cargo build -q --release --bin paged-inspect
 cargo build -q --release -p paged-fidelity --bin paged-diff
-EXPORT="$ROOT/target/release/paged-export"
-INSPECT="$ROOT/target/release/paged-inspect"
-DIFF="$ROOT/target/release/paged-diff"
+EXPORT="$TARGET/release/paged-export"
+INSPECT="$TARGET/release/paged-inspect"
+DIFF="$TARGET/release/paged-diff"
 
 fail=0
 for idml in "${fixtures[@]}"; do

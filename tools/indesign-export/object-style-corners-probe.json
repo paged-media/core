@@ -1,0 +1,296 @@
+{
+  "indesign": "20.0.1.32",
+  "question": "Which of an object style's corner attributes does InDesign read? Each variant rewrites the style 'Corners' and strips the rectangle's own corner attributes; style and rect are what InDesign's DOM reads back, [option, radius] per corner.",
+  "variants": {
+    "1-as-exported": "InDesign's own export: the four per-corner attributes and the pair, all RoundedCorner 20",
+    "2-pair-only": "CornerOption=RoundedCorner CornerRadius=20, no per-corner attributes",
+    "3-per-corner-only": "four per-corner RoundedCorner 20, no pair",
+    "4-disagree": "pair InsetCorner 30, per-corner RoundedCorner 20",
+    "5-neither": "no corner attributes",
+    "6-per-corner-option-only": "CornerRadius=30, per-corner options RoundedCorner without radii"
+  },
+  "authored": [
+    {
+      "name": "authored",
+      "style": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      },
+      "rect": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      }
+    }
+  ],
+  "read": [
+    {
+      "name": "1-as-exported",
+      "style": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      }
+    },
+    {
+      "name": "2-pair-only",
+      "style": {
+        "topLeft": [
+          "NONE",
+          12
+        ],
+        "topRight": [
+          "NONE",
+          12
+        ],
+        "bottomLeft": [
+          "NONE",
+          12
+        ],
+        "bottomRight": [
+          "NONE",
+          12
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "NONE",
+          12
+        ],
+        "topRight": [
+          "NONE",
+          12
+        ],
+        "bottomLeft": [
+          "NONE",
+          12
+        ],
+        "bottomRight": [
+          "NONE",
+          12
+        ]
+      }
+    },
+    {
+      "name": "3-per-corner-only",
+      "style": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      }
+    },
+    {
+      "name": "4-disagree",
+      "style": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          20
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          20
+        ]
+      }
+    },
+    {
+      "name": "5-neither",
+      "style": {
+        "topLeft": [
+          "NONE",
+          12
+        ],
+        "topRight": [
+          "NONE",
+          12
+        ],
+        "bottomLeft": [
+          "NONE",
+          12
+        ],
+        "bottomRight": [
+          "NONE",
+          12
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "NONE",
+          12
+        ],
+        "topRight": [
+          "NONE",
+          12
+        ],
+        "bottomLeft": [
+          "NONE",
+          12
+        ],
+        "bottomRight": [
+          "NONE",
+          12
+        ]
+      }
+    },
+    {
+      "name": "6-per-corner-option-only",
+      "style": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          12
+        ]
+      },
+      "rectStyle": "Corners",
+      "rect": {
+        "topLeft": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "topRight": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "bottomLeft": [
+          "ROUNDED_CORNER",
+          12
+        ],
+        "bottomRight": [
+          "ROUNDED_CORNER",
+          12
+        ]
+      }
+    }
+  ],
+  "errors": []
+}

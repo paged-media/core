@@ -1009,6 +1009,41 @@
       "summary": "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."
     },
     {
+      "name": "paged.deleteHyperlink",
+      "params": "(hyperlinkId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a hyperlink (any origin) by its id from paged.collection(\"hyperlinks\"): its text stops linking, and its URL or page destination goes when nothing else uses it."
+    },
+    {
+      "name": "paged.editHyperlink",
+      "params": "(hyperlinkId, { name?, url?, pageId? })",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Rename a hyperlink or send it to a new URL or page (pageId wins); an empty name clears it."
+    },
+    {
+      "name": "paged.updateTableOfContents",
+      "params": "(storyId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."
+    },
+    {
+      "name": "paged.insertFootnote",
+      "params": "(storyId, offset, text)",
+      "returns": "string|null",
+      "kind": "author",
+      "summary": "Insert a footnote at a story offset: its reference there, and the note (its number, the separator, then text). Returns the note's id; read the notes with paged.collection(\"footnotes\")."
+    },
+    {
+      "name": "paged.deleteFootnote",
+      "params": "(storyId, footnoteId)",
+      "returns": "bool",
+      "kind": "author",
+      "summary": "Delete a footnote: its reference and its note. Undo puts both back as they were."
+    },
+    {
       "name": "paged.layerSetVisible",
       "params": "(layerId, visible)",
       "returns": "bool",
@@ -1512,6 +1547,8 @@
     "paragraphNumberingExpression",
     "paragraphNumberingStartAt",
     "paragraphNumberingContinue",
+    "paragraphNumberingLevel",
+    "paragraphNumberingApplyRestartPolicy",
     "paragraphBulletsCharacterStyle",
     "paragraphNumberingCharacterStyle",
     "itemName",
@@ -1537,6 +1574,11 @@
     "insertField",
     "insertAnchoredFrame",
     "insertHyperlink",
+    "insertFootnote",
+    "deleteFootnote",
+    "deleteHyperlink",
+    "editHyperlink",
+    "updateTableOfContents",
     "setFieldValue",
     "placeImage",
     "replaceImageBytes",
@@ -7743,6 +7785,49 @@
     },
     {
       "addressKind": "storyRange",
+      "path": "paragraphNumberingLevel",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 9.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "NumberingLevel",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
+      "path": "paragraphNumberingApplyRestartPolicy",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": true,
+      "default": true,
+      "access": "readWrite",
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyleRange",
+          "attribute": "NumberingApplyRestartPolicy",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "storyRange",
       "path": "paragraphBulletsCharacterStyle",
       "type": {
         "kind": "ref",
@@ -8486,6 +8571,320 @@
         {
           "element": "TransparencyPreference",
           "attribute": "GlobalLightAltitude",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteNumberingStyle",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "Arabic",
+          "UpperRoman",
+          "LowerRoman",
+          "UpperLetters",
+          "LowerLetters",
+          "Asterisks",
+          "Kanji",
+          "ArabicAlifBaTah",
+          "ArabicAbjad",
+          "HebrewBiblical",
+          "HebrewNonStandard",
+          "SingleLeadingZeros",
+          "DoubleLeadingZeros",
+          "TripleLeadingZeros"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "Arabic",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "FootnoteNumberingStyle",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteStartAt",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "StartAt",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteRestartNumbering",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "DontRestart",
+          "PageRestart",
+          "SpreadRestart",
+          "SectionRestart"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "DontRestart",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "RestartNumbering",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnotePrefix",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Prefix",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSuffix",
+      "type": {
+        "kind": "text"
+      },
+      "wire": "text",
+      "nullable": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Suffix",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteShowPrefixSuffix",
+      "type": {
+        "kind": "enum",
+        "members": [
+          "NoPrefixSuffix",
+          "PrefixSuffixReference",
+          "PrefixSuffixText",
+          "PrefixSuffixBoth"
+        ]
+      },
+      "wire": "text",
+      "nullable": true,
+      "default": "NoPrefixSuffix",
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "ShowPrefixSuffix",
+          "kind": "properties-child"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteEnableStraddling",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "EnableStraddling",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteNoSplitting",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": false,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "NoSplitting",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSpaceBetween",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "SpaceBetween",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteSpacer",
+      "type": {
+        "kind": "length",
+        "unit": "pt"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 0.0
+      },
+      "default": 0.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "Spacer",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteRuleOn",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "RuleOn",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "doc",
+      "path": "documentFootnoteContinuingRuleOn",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": false,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "FootnoteOption",
+          "attribute": "ContinuingRuleOn",
           "kind": "attr"
         }
       ]
@@ -9720,6 +10119,63 @@
         {
           "element": "ParagraphStyle",
           "attribute": "NumberingContinue",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingLevel",
+      "type": {
+        "kind": "number",
+        "unit": "count"
+      },
+      "wire": "length",
+      "nullable": true,
+      "range": {
+        "min": 1.0,
+        "max": 9.0
+      },
+      "default": 1.0,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "NumberingLevel",
+          "kind": "attr"
+        }
+      ]
+    },
+    {
+      "addressKind": "style",
+      "appliesTo": [
+        "paragraph"
+      ],
+      "path": "paragraphNumberingApplyRestartPolicy",
+      "type": {
+        "kind": "bool"
+      },
+      "wire": "bool",
+      "nullable": true,
+      "default": true,
+      "access": "readWrite",
+      "virtual": {
+        "op": "setStyleProperty",
+        "field": "value"
+      },
+      "bindable": true,
+      "idml": [
+        {
+          "element": "ParagraphStyle",
+          "attribute": "NumberingApplyRestartPolicy",
           "kind": "attr"
         }
       ]
@@ -12586,11 +13042,19 @@
       "type": {
         "kind": "enum",
         "members": [
-          "Arabic",
           "UpperRoman",
           "LowerRoman",
           "UpperLetters",
-          "LowerLetters"
+          "LowerLetters",
+          "Arabic",
+          "Kanji",
+          "ArabicAlifBaTah",
+          "ArabicAbjad",
+          "HebrewBiblical",
+          "HebrewNonStandard",
+          "SingleLeadingZeros",
+          "DoubleLeadingZeros",
+          "TripleLeadingZeros"
         ],
         "open": true
       },

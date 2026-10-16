@@ -41,7 +41,7 @@ use super::paragraph::split_run_at;
 /// hyperlink source changes clickability + resolved paint, never line geometry,
 /// so it repaints without re-running layout (mirrors the underline/strikethru
 /// branch in `apply::character`).
-fn frame_style_hint(doc: &Document, story_id: &str) -> InvalidationHint {
+pub(super) fn frame_style_hint(doc: &Document, story_id: &str) -> InvalidationHint {
     match doc
         .frame_for_story
         .get(story_id)
@@ -58,7 +58,7 @@ fn frame_style_hint(doc: &Document, story_id: &str) -> InvalidationHint {
 /// Tag every run of `story` whose `[run_start, run_end)` falls inside
 /// `[start, end)` with `hyperlink_source`, splitting runs at the boundaries.
 /// Contiguous char offsets. Returns the number of runs that ended up tagged.
-fn tag_source_over_range(
+pub(super) fn tag_source_over_range(
     story: &mut paged_model::Story,
     start: u32,
     end: u32,

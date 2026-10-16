@@ -140,6 +140,10 @@ pub(crate) fn apply_inner(
             position,
             story_json,
         } => apply_restore_story(doc, *position, story_json),
+        Operation::ReplaceStoryParagraphs {
+            story_id,
+            paragraphs_json,
+        } => apply_replace_story_paragraphs(doc, story_id, paragraphs_json),
         Operation::InsertPage {
             after_page_id,
             master_id,
@@ -395,6 +399,26 @@ pub(crate) fn apply_inner(
         Operation::RemoveAnchoredFrame { story_id, self_id } => {
             anchored_frame::apply_remove_anchored_frame(doc, story_id, self_id)
         }
+        Operation::InsertFootnote {
+            story_id,
+            offset,
+            paragraph,
+            footnote_id,
+            text,
+            restore,
+        } => footnote::apply_insert_footnote(
+            doc,
+            story_id,
+            *offset,
+            *paragraph,
+            footnote_id,
+            text,
+            restore.as_deref(),
+        ),
+        Operation::RemoveFootnote {
+            story_id,
+            footnote_id,
+        } => footnote::apply_remove_footnote(doc, story_id, footnote_id),
         Operation::InsertHyperlink {
             story_id,
             start,
@@ -435,6 +459,26 @@ pub(crate) fn apply_inner(
             hyperlink_id,
             page.as_deref(),
         ),
+        Operation::DeleteHyperlink { hyperlink_id } => {
+            hyperlink_edit::apply_delete_hyperlink(doc, hyperlink_id)
+        }
+        Operation::EditHyperlink {
+            hyperlink_id,
+            name,
+            url,
+            page,
+            dest_id,
+        } => hyperlink_edit::apply_edit_hyperlink(
+            doc,
+            hyperlink_id,
+            name.as_deref(),
+            url.as_deref(),
+            page.as_deref(),
+            dest_id,
+        ),
+        Operation::RestoreHyperlink { state } => {
+            hyperlink_edit::apply_restore_hyperlink(doc, state)
+        }
         Operation::SetFieldValue {
             story_id,
             offset,
@@ -921,9 +965,11 @@ mod duplicate_nodes;
 pub use duplicate_nodes::{duplicate_demand, duplicate_roots, DuplicateDemand};
 mod duplicate_page;
 mod flow;
+mod footnote;
 mod guides;
 mod helpers;
 mod hyperlink;
+mod hyperlink_edit;
 mod insert_node;
 mod layer;
 mod lock;

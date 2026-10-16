@@ -22,6 +22,9 @@
 //! - The `js_sys::Date` timing path: a `mutationApplied` reply carries a
 //!   real `rebuildMs` instrumentation field produced by `Date::now()`,
 //!   which has no native equivalent.
+//! - Re-entrancy (with `--features gpu`, the shipped build): the worker
+//!   stays callable while `initGpu` waits on the browser, which only the
+//!   exported JS shims' borrow checks can show.
 //!
 //! These compile + run only on `wasm32-unknown-unknown` via
 //! `scripts/test-wasm.sh` (Node-hosted `wasm-bindgen-test-runner`); they
@@ -168,5 +171,130 @@ fn mutate_in_wasm_fills_rebuild_ms_from_js_date() {
     assert!(
         rebuild_ms >= 0.0 && rebuild_ms.is_finite(),
         "rebuildMs = {rebuild_ms}"
+    );
+}
+
+/// A fake WebGPU dedicated-worker scope for Node. wgpu finds
+/// `navigator.gpu` through `globalThis.WorkerGlobalScope` and checks the
+/// canvas context with `instanceof GPUCanvasContext`; `requestAdapter`
+/// stays pending until `release()`, so a test controls exactly how long
+/// `initGpu` is suspended. `restore()` puts the globals back.
+#[cfg(feature = "gpu")]
+const FAKE_WEBGPU_SCOPE: &str = r#"
+    const g = globalThis;
+    const had = { scope: "WorkerGlobalScope" in g, ctx: "GPUCanvasContext" in g };
+    const nav = g.navigator ?? (g.navigator = {});
+    g.WorkerGlobalScope = class WorkerGlobalScope {};
+    g.GPUCanvasContext = class GPUCanvasContext {};
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    Object.defineProperty(nav, "gpu", {
+        configurable: true,
+        value: {
+            requestAdapter: () => gate.then(() => null),
+            getPreferredCanvasFormat: () => "bgra8unorm",
+        },
+    });
+    return {
+        canvas: { width: 1, height: 1, getContext: () => new g.GPUCanvasContext() },
+        release: () => release(),
+        restore: () => {
+            delete nav.gpu;
+            if (!had.scope) delete g.WorkerGlobalScope;
+            if (!had.ctx) delete g.GPUCanvasContext;
+        },
+    };
+"#;
+
+/// Resolve after `ms` on the host's timer queue: a macrotask, the queue
+/// the editor's worker fires its render loop and debounced timers from.
+#[cfg(feature = "gpu")]
+async fn sleep_ms(ms: i32) {
+    use wasm_bindgen::JsCast;
+    let set_timeout: js_sys::Function =
+        js_sys::Reflect::get(&js_sys::global(), &"setTimeout".into())
+            .unwrap()
+            .unchecked_into();
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        set_timeout
+            .call2(&wasm_bindgen::JsValue::NULL, &resolve, &ms.into())
+            .unwrap();
+    });
+    wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+}
+
+/// `initGpu` must not hold the worker while it waits for the browser.
+///
+/// The editor's worker serialises its messages, but its render loop and
+/// its debounced resolver (`runResolveJson`) run from timers. When
+/// `initGpu` was an `async fn(&mut self)`, wasm-bindgen took that borrow on
+/// the future's first poll and kept it until the adapter and device
+/// requests resolved; a timer landing in that window threw "recursive use
+/// of an object detected which would lead to unsafe aliasing in rust" and
+/// killed the worker. The window is as long as the browser takes to answer
+/// `requestAdapter`, which on a loaded machine is hundreds of milliseconds.
+///
+/// The calls go through the JS class (`JsValue::from(worker)`) on purpose:
+/// the borrow check lives in the exported shims, which a direct Rust
+/// method call would bypass.
+#[cfg(feature = "gpu")]
+#[wasm_bindgen_test]
+async fn init_gpu_leaves_the_worker_callable_while_the_adapter_is_pending() {
+    use wasm_bindgen::{JsCast, JsValue};
+
+    let get = |obj: &JsValue, key: &str| js_sys::Reflect::get(obj, &key.into()).unwrap();
+    let env = js_sys::Function::new_no_args(FAKE_WEBGPU_SCOPE)
+        .call0(&JsValue::NULL)
+        .unwrap();
+    let worker = JsValue::from(CanvasWorker::new());
+    let call = |name: &str, args: &js_sys::Array| {
+        get(&worker, name)
+            .unchecked_into::<js_sys::Function>()
+            .apply(&worker, args)
+    };
+
+    let pending: js_sys::Promise = call(
+        "initGpu",
+        &js_sys::Array::of3(&get(&env, "canvas"), &1.into(), &1.into()),
+    )
+    .unwrap()
+    .unchecked_into();
+    // A macrotask later the init future has run and is parked on
+    // `requestAdapter` — the window a render tick or a timer falls into.
+    sleep_ms(10).await;
+
+    let mut refused = Vec::new();
+    for name in ["runResolveJson", "pageCount", "gpuReady", "sceneCacheSize"] {
+        if let Err(e) = call(name, &js_sys::Array::new()) {
+            let message = js_sys::Reflect::get(&e, &"message".into())
+                .ok()
+                .and_then(|m| m.as_string())
+                .unwrap_or_else(|| format!("{e:?}"));
+            refused.push(format!("{name}: {message}"));
+        }
+    }
+
+    // Settle and clean up before asserting, so a failure leaves neither a
+    // parked future nor the fake globals behind for the next test.
+    get(&env, "release")
+        .unchecked_into::<js_sys::Function>()
+        .call0(&JsValue::NULL)
+        .unwrap();
+    let settled = wasm_bindgen_futures::JsFuture::from(pending).await;
+    get(&env, "restore")
+        .unchecked_into::<js_sys::Function>()
+        .call0(&JsValue::NULL)
+        .unwrap();
+
+    assert!(
+        refused.is_empty(),
+        "calls refused while initGpu was pending: {refused:?}"
+    );
+    // No adapter: the presenter is not installed and the worker stays on
+    // the CPU path.
+    assert_eq!(settled.unwrap(), JsValue::FALSE);
+    assert_eq!(
+        call("gpuReady", &js_sys::Array::new()).unwrap(),
+        JsValue::FALSE
     );
 }

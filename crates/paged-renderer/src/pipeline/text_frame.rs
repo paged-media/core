@@ -1264,6 +1264,31 @@ pub(super) fn first_baseline_offset_64(
     }
 }
 
+/// How much higher than one leading down a Japanese composer sets a
+/// `LeadingOffset` frame's first baseline (1/64 pt): it puts the face's em
+/// box bottom, not its baseline, one leading below the frame's top.
+/// InDesign 20.0.1 at 30 pt leading, 20 pt: Kozuka Mincho 27.6 (its em box
+/// bottom 0.12 em down), Minion Pro 26.5 (0.175 em, an em centred on half
+/// its cap height), and 30.0 under the Paragraph Composer
+/// (vertical-text-probe's horizontal control).
+pub(super) fn japanese_leading_drop_64(
+    paragraph: &paged_scene::ResolvedParagraphAttrs,
+    metrics: Option<&FontMetrics>,
+    point_size: f32,
+) -> i32 {
+    if !paragraph
+        .composer
+        .as_ref()
+        .is_some_and(paged_model::Composer::is_japanese)
+    {
+        return 0;
+    }
+    let em_top = metrics
+        .and_then(|m| m.em_top)
+        .unwrap_or_else(|| 0.5 + 0.5 * metrics.and_then(|m| m.cap_height).unwrap_or(0.70));
+    ((1.0 - em_top) * point_size * paged_text::shape::ADVANCE_PRECISION).round() as i32
+}
+
 pub(super) fn first_baseline_for_frame(
     frame: &TextFrame,
     point_size: f32,
@@ -1340,15 +1365,35 @@ pub(super) fn first_baseline_for_frame(
 /// as the rotation pivot (typical CJK doesn't thread vertical
 /// stories across pages anyway).
 ///
-/// Limitations:
-/// - Latin glyphs end up sideways. Upright Latin in CJK vertical
-///   would require per-glyph counter-rotation around each glyph's
-///   centre (`<RotateSingleByteCharacters>` IDML attribute).
-/// - Rotated content overflows the frame's geometric bounds when
-///   the original layout was wider than the frame is tall (the
-///   common case for tall frames flipped from wide layouts).
-/// - Frame-inset axes don't swap (a 12pt TextTopInset stays in y,
-///   not x). The right fix moves to a layout-time axis swap.
+/// The story was laid out in its frames turned on their side
+/// ([`turned_for_vertical`]): `chain` holds those, so a frame's height is
+/// its true width. Latin and digits turn with the line, as InDesign turns
+/// them; characters that stand upright were drawn turned back already
+/// (`PositionedGlyph::upright`).
+/// A frame of a vertical story turned on its side: InDesign 20.0.1 sets
+/// vertical text as horizontal text in this frame, turned a quarter
+/// clockwise about the frame's top-left and moved back into it
+/// (vertical-text-probe). Its width is the frame's height (a line's
+/// length is a column's), its height the frame's width, and its insets
+/// turn with it: the right inset leads (the first column stands against
+/// it), the top one starts each column. Its outline is its box.
+pub(crate) fn turned_for_vertical(frame: &paged_model::TextFrame) -> paged_model::TextFrame {
+    let b = frame.bounds;
+    let mut turned = frame.clone();
+    turned.bounds = paged_model::Bounds {
+        top: b.top,
+        left: b.left,
+        bottom: b.top + b.width(),
+        right: b.left + b.height(),
+    };
+    turned.inset_spacing = frame
+        .inset_spacing
+        .map(|[top, left, bottom, right]| [right, top, left, bottom]);
+    turned.anchors.clear();
+    turned.subpath_starts.clear();
+    turned
+}
+
 pub(super) fn apply_vertical_writing_rotation(
     pages: &mut [BuiltPage],
     pre_counts: &[usize],
@@ -1379,7 +1424,7 @@ pub(super) fn apply_vertical_writing_rotation(
         let (ox, oy) = pages[page_idx].spread_origin;
         let pivot_x = sx - ox;
         let pivot_y = sy - oy;
-        let frame_w = frame.bounds.width();
+        let frame_w = frame.bounds.height();
         pages[page_idx].list.map_transforms(pre..total, |xf| {
             rotate_transform_around(xf, linear, pivot_x, pivot_y);
             // After rotation around the frame's top-left, rotated
@@ -1543,6 +1588,7 @@ pub(super) fn emit_frame_scene_layer(
                     y_scale: 1.0,
                     skew_deg: 0.0,
                     ch: None,
+                    upright: None,
                 });
                 cursor = cursor.saturating_add(g.x_advance);
             }

@@ -807,6 +807,18 @@ pub enum PropertyPath {
     /// of a write over an unset slot is `Text("")`, not `Bool(true)`.
     /// Reflow-affecting.
     ParagraphNumberingContinue,
+    /// `NumberingLevel` — the paragraph's level in a multi-level list, 1
+    /// to 9 (ADR 158). `Value::Length(Some(n))` carrying a whole number
+    /// (the integer-as-Length convention); `Length(None)` clears the
+    /// override (inherit; absent everywhere is level 1). Anything else
+    /// is refused (`TypeMismatch`), never clamped. Reflow-affecting.
+    ParagraphNumberingLevel,
+    /// `NumberingApplyRestartPolicy` — whether the level's count starts
+    /// again after a higher level (ADR 158). `Value::Bool` sets the
+    /// override; `Value::Text("")` clears it (inherit; absent everywhere
+    /// is `true`), so undo restores an unset slot exactly.
+    /// Reflow-affecting.
+    ParagraphNumberingApplyRestartPolicy,
     /// `BulletsCharacterStyle` — the bullet marker's character style, a
     /// `CharacterStyle/<id>` self id. `Value::Text`, stored verbatim
     /// (an id that names no style is stored, like
@@ -1497,6 +1509,38 @@ pub enum PropertyPath {
     /// `<TransparencyPreference GlobalLightAltitude>` (`NodeId::Document`),
     /// degrees; `Length(None)` is InDesign's 30.
     DocumentGlobalLightAltitude,
+    // ---- L-01 — the document's footnote options (ADR 162) ----------
+    /// `<FootnoteOption>` `FootnoteNumberingStyle` (`NodeId::Document`):
+    /// `Value::Text`, an IDML page-number style name or `Asterisks`;
+    /// `""` clears (Arabic). An unknown name is refused.
+    DocumentFootnoteNumberingStyle,
+    /// `StartAt`: `Value::Length(Some(n))`, a whole number >= 1;
+    /// `Length(None)` clears (1).
+    DocumentFootnoteStartAt,
+    /// `RestartNumbering`: `Value::Text` `DontRestart` / `PageRestart` /
+    /// `SpreadRestart` / `SectionRestart`; `""` clears.
+    DocumentFootnoteRestartNumbering,
+    /// `Prefix`: `Value::Text`; `""` clears.
+    DocumentFootnotePrefix,
+    /// `Suffix`: `Value::Text`; `""` clears.
+    DocumentFootnoteSuffix,
+    /// `ShowPrefixSuffix`: `Value::Text` `NoPrefixSuffix` /
+    /// `PrefixSuffixReference` / `PrefixSuffixText` / `PrefixSuffixBoth`;
+    /// `""` clears.
+    DocumentFootnoteShowPrefixSuffix,
+    /// `EnableStraddling`: `Value::Bool` (InDesign's default false).
+    DocumentFootnoteEnableStraddling,
+    /// `NoSplitting`: `Value::Bool` (false).
+    DocumentFootnoteNoSplitting,
+    /// `SpaceBetween` (pt): `Value::Length`, >= 0; `None` clears (0).
+    DocumentFootnoteSpaceBetween,
+    /// `Spacer` (pt), the least space above the first note:
+    /// `Value::Length`, >= 0; `None` clears (0).
+    DocumentFootnoteSpacer,
+    /// `RuleOn`: `Value::Bool` (true).
+    DocumentFootnoteRuleOn,
+    /// `ContinuingRuleOn`: `Value::Bool` (true).
+    DocumentFootnoteContinuingRuleOn,
 }
 
 /// Phase H — which corner of a `PathAnchor` the path-point edit
@@ -1632,6 +1676,10 @@ impl PropertyPath {
             PropertyPath::ParagraphNumberingExpression => "paragraph.numberingExpression",
             PropertyPath::ParagraphNumberingStartAt => "paragraph.numberingStartAt",
             PropertyPath::ParagraphNumberingContinue => "paragraph.numberingContinue",
+            PropertyPath::ParagraphNumberingLevel => "paragraph.numberingLevel",
+            PropertyPath::ParagraphNumberingApplyRestartPolicy => {
+                "paragraph.numberingApplyRestartPolicy"
+            }
             PropertyPath::ParagraphBulletsCharacterStyle => "paragraph.bulletsCharacterStyle",
             PropertyPath::ParagraphNumberingCharacterStyle => "paragraph.numberingCharacterStyle",
             PropertyPath::ParagraphComposer => "paragraph.composer",
@@ -1850,6 +1898,18 @@ impl PropertyPath {
             PropertyPath::FrameDropShadowUseGlobalLight => "frame.dropShadowUseGlobalLight",
             PropertyPath::DocumentGlobalLightAngle => "document.globalLightAngle",
             PropertyPath::DocumentGlobalLightAltitude => "document.globalLightAltitude",
+            PropertyPath::DocumentFootnoteNumberingStyle => "document.footnoteNumberingStyle",
+            PropertyPath::DocumentFootnoteStartAt => "document.footnoteStartAt",
+            PropertyPath::DocumentFootnoteRestartNumbering => "document.footnoteRestartNumbering",
+            PropertyPath::DocumentFootnotePrefix => "document.footnotePrefix",
+            PropertyPath::DocumentFootnoteSuffix => "document.footnoteSuffix",
+            PropertyPath::DocumentFootnoteShowPrefixSuffix => "document.footnoteShowPrefixSuffix",
+            PropertyPath::DocumentFootnoteEnableStraddling => "document.footnoteEnableStraddling",
+            PropertyPath::DocumentFootnoteNoSplitting => "document.footnoteNoSplitting",
+            PropertyPath::DocumentFootnoteSpaceBetween => "document.footnoteSpaceBetween",
+            PropertyPath::DocumentFootnoteSpacer => "document.footnoteSpacer",
+            PropertyPath::DocumentFootnoteRuleOn => "document.footnoteRuleOn",
+            PropertyPath::DocumentFootnoteContinuingRuleOn => "document.footnoteContinuingRuleOn",
         }
     }
 }
@@ -3280,6 +3340,14 @@ pub enum Operation {
         position: usize,
         story_json: String,
     },
+    /// v73 — set story `story_id`'s paragraphs to `paragraphs_json` (a
+    /// JSON `Vec<Paragraph>`), whole: what Update Table of Contents writes
+    /// into a TOC story (ADR 165). Inverse: itself, carrying the
+    /// paragraphs it replaced.
+    ReplaceStoryParagraphs {
+        story_id: String,
+        paragraphs_json: String,
+    },
     /// Editor-ops (Page tool) — insert a new SINGLE-PAGE SPREAD
     /// immediately after the spread hosting `after_page_id` (or at
     /// the end when `None`). Page size clones the reference page
@@ -3958,6 +4026,30 @@ pub enum Operation {
         #[serde(default)]
         page: Option<String>,
     },
+    /// v73 — insert a footnote (ADR 163): its reference at contiguous
+    /// story char `offset` (a reference marker character) and the note,
+    /// whose text opens with its number and the document's separator,
+    /// then `text`. `footnote_id` is the note's `Self`. `restore` is
+    /// inverse-only: the removed note's paragraphs (JSON), put back as
+    /// they were. Inverse: `RemoveFootnote`.
+    InsertFootnote {
+        story_id: String,
+        offset: u32,
+        /// The paragraph `offset` stands in, when it names one: the end of
+        /// a paragraph and the start of the next share an offset.
+        #[serde(default)]
+        paragraph: Option<u32>,
+        footnote_id: String,
+        text: String,
+        #[serde(default)]
+        restore: Option<String>,
+    },
+    /// v73 — remove a footnote: its reference marker and the note.
+    /// Inverse: `InsertFootnote` carrying the note's paragraphs.
+    RemoveFootnote {
+        story_id: String,
+        footnote_id: String,
+    },
     /// v53 — inverse-only companion to `InsertHyperlink`: clear the
     /// `hyperlink_source == source_id` tag from every run of `story_id` and
     /// drop the `Hyperlink`/`HyperlinkDestination` addressed by
@@ -3974,6 +4066,34 @@ pub enum Operation {
         /// v70 — the page the link went to, so the inverse recreates it.
         #[serde(default)]
         page: Option<String>,
+    },
+    /// v73 — delete hyperlink `hyperlink_id` of any origin (ADR 164):
+    /// every run its source tags stops linking, the record goes, and so
+    /// does its URL or page destination when nothing else points at it.
+    /// Inverse: `RestoreHyperlink`.
+    DeleteHyperlink {
+        hyperlink_id: String,
+    },
+    /// v73 — edit hyperlink `hyperlink_id` (ADR 164): `name` renames it
+    /// (empty clears it); `page` or else `url` sends it somewhere new,
+    /// rewriting its own destination of that kind in place, or moving it to
+    /// a new destination `dest_id` when its destination is shared, a text
+    /// anchor or of the other kind. Inverse: `RestoreHyperlink`.
+    EditHyperlink {
+        hyperlink_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        page: Option<String>,
+        dest_id: String,
+    },
+    /// v73 — inverse-only: put a hyperlink back as captured (`state`, JSON):
+    /// the record where it stood, its destinations as they were, and its
+    /// source tag over the same runs. Inverse: another `RestoreHyperlink`.
+    RestoreHyperlink {
+        state: String,
     },
     /// v43 (D-01) — update the cached display value of the
     /// `FieldKind::Placeholder` run containing the story char

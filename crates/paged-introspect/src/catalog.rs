@@ -444,6 +444,16 @@ fn host_functions() -> Vec<HostFn> {
            "Anchor a frame in the text at a story offset; with imageUri the frame is created holding that image."),
         f!("paged.insertHyperlink", "(storyId, start, end, url, pageId?)", "bool", "author",
            "Make a character range a clickable link. Read the result with paged.collection(\"hyperlinks\") — paged.links() is the placed-asset list, not this."),
+        f!("paged.deleteHyperlink", "(hyperlinkId)", "bool", "author",
+           "Delete a hyperlink (any origin) by its id from paged.collection(\"hyperlinks\"): its text stops linking, and its URL or page destination goes when nothing else uses it."),
+        f!("paged.editHyperlink", "(hyperlinkId, { name?, url?, pageId? })", "bool", "author",
+           "Rename a hyperlink or send it to a new URL or page (pageId wins); an empty name clears it."),
+        f!("paged.updateTableOfContents", "(storyId)", "bool", "author",
+           "Update Table of Contents: rewrite a TOC story (one bound to a TOC style) from its style over the current layout — the title, then one paragraph per heading with its page number. Until then it prints the text it holds."),
+        f!("paged.insertFootnote", "(storyId, offset, text)", "string|null", "author",
+           "Insert a footnote at a story offset: its reference there, and the note (its number, the separator, then text). Returns the note's id; read the notes with paged.collection(\"footnotes\")."),
+        f!("paged.deleteFootnote", "(storyId, footnoteId)", "bool", "author",
+           "Delete a footnote: its reference and its note. Undo puts both back as they were."),
         // --- layer attributes ---
         f!("paged.layerSetVisible", "(layerId, visible)", "bool", "write", "Show or hide a layer."),
         f!("paged.layerSetLocked", "(layerId, locked)", "bool", "write", "Lock or unlock a layer."),
@@ -885,6 +895,9 @@ property_paths! {
         ParagraphNumberingExpression => "paragraphNumberingExpression" : text().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingExpression), child(ParagraphStyleRange | ParagraphStyle, NumberingExpression)]),
         ParagraphNumberingStartAt => "paragraphNumberingStartAt" : count().min(0.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingStartAt)]),
         ParagraphNumberingContinue => "paragraphNumberingContinue" : bool_().default_bool(true).tristate().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingContinue)]),
+        // ADR 158 — a paragraph's level in a multi-level list.
+        ParagraphNumberingLevel => "paragraphNumberingLevel" : count().range(1.0, 9.0).default_num(1.0).idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingLevel)]),
+        ParagraphNumberingApplyRestartPolicy => "paragraphNumberingApplyRestartPolicy" : bool_().default_bool(true).tristate().idml(idml![attr(ParagraphStyleRange | ParagraphStyle, NumberingApplyRestartPolicy)]),
         ParagraphBulletsCharacterStyle => "paragraphBulletsCharacterStyle" : reference(RefKind::CharacterStyle).idml(idml![child(ParagraphStyleRange | ParagraphStyle, BulletsCharacterStyle), attr(ParagraphStyle, BulletsCharacterStyle)]),
         ParagraphNumberingCharacterStyle => "paragraphNumberingCharacterStyle" : reference(RefKind::CharacterStyle).idml(idml![child(ParagraphStyleRange | ParagraphStyle, NumberingCharacterStyle), attr(ParagraphStyle, BulletsAndNumberingDigitsCharacterStyle)]),
         // ADR 131/132 — the IDML `Name` of a page item; also the `name`
@@ -926,6 +939,19 @@ property_paths! {
         // R-11 — the document's global light.
         DocumentGlobalLightAngle => "documentGlobalLightAngle" : deg().default_num(120.0).idml(idml![attr(TransparencyPreference, GlobalLightAngle)]), "doc",
         DocumentGlobalLightAltitude => "documentGlobalLightAltitude" : deg().default_num(30.0).idml(idml![attr(TransparencyPreference, GlobalLightAltitude)]), "doc",
+        // ADR 162 — the document's footnote options.
+        DocumentFootnoteNumberingStyle => "documentFootnoteNumberingStyle" : enum_(FOOTNOTE_NUMBERING_STYLES).default_text("Arabic").idml(idml![child(FootnoteOption, FootnoteNumberingStyle)]), "doc",
+        DocumentFootnoteStartAt => "documentFootnoteStartAt" : count().min(1.0).default_num(1.0).idml(idml![attr(FootnoteOption, StartAt)]), "doc",
+        DocumentFootnoteRestartNumbering => "documentFootnoteRestartNumbering" : enum_(FOOTNOTE_RESTARTS).default_text("DontRestart").idml(idml![child(FootnoteOption, RestartNumbering)]), "doc",
+        DocumentFootnotePrefix => "documentFootnotePrefix" : text().idml(idml![attr(FootnoteOption, Prefix)]), "doc",
+        DocumentFootnoteSuffix => "documentFootnoteSuffix" : text().idml(idml![attr(FootnoteOption, Suffix)]), "doc",
+        DocumentFootnoteShowPrefixSuffix => "documentFootnoteShowPrefixSuffix" : enum_(FOOTNOTE_SHOW_PREFIX_SUFFIX).default_text("NoPrefixSuffix").idml(idml![child(FootnoteOption, ShowPrefixSuffix)]), "doc",
+        DocumentFootnoteEnableStraddling => "documentFootnoteEnableStraddling" : bool_().default_bool(false).idml(idml![attr(FootnoteOption, EnableStraddling)]), "doc",
+        DocumentFootnoteNoSplitting => "documentFootnoteNoSplitting" : bool_().default_bool(false).idml(idml![attr(FootnoteOption, NoSplitting)]), "doc",
+        DocumentFootnoteSpaceBetween => "documentFootnoteSpaceBetween" : length_pos().default_num(0.0).idml(idml![attr(FootnoteOption, SpaceBetween)]), "doc",
+        DocumentFootnoteSpacer => "documentFootnoteSpacer" : length_pos().default_num(0.0).idml(idml![attr(FootnoteOption, Spacer)]), "doc",
+        DocumentFootnoteRuleOn => "documentFootnoteRuleOn" : bool_().default_bool(true).idml(idml![attr(FootnoteOption, RuleOn)]), "doc",
+        DocumentFootnoteContinuingRuleOn => "documentFootnoteContinuingRuleOn" : bool_().default_bool(true).idml(idml![attr(FootnoteOption, ContinuingRuleOn)]), "doc",
         TextVariableName => "textVariableName" : text().idml(idml![attr(TextVariable, Name)]), "textVariable",
         TextVariableType => "textVariableType" : enum_open(TEXT_VARIABLE_TYPES).idml(idml![attr(TextVariable, VariableType)]), "textVariable",
         TextVariableContents => "textVariableContents" : text().idml(idml![child(CustomTextVariablePreference, Contents)]), "textVariable",
@@ -1303,7 +1329,10 @@ mod tests {
         // 234 -> 239: ADR 153 — a paragraph's line setting (auto leading,
         // single-word justification, the last line's indent, balanced
         // ragged lines) and a run's no-break.
-        assert_eq!(cat.settable_paths.len(), 239, "settable path count drifted");
+        //
+        // 239 -> 241: ADR 158 — a paragraph's level in a multi-level list
+        // and whether its restart policy applies.
+        assert_eq!(cat.settable_paths.len(), 241, "settable path count drifted");
         assert!(cat.host_functions.len() >= 20);
         assert!(!cat.elements.is_empty(), "elements section is empty");
         // representative + alias mappings

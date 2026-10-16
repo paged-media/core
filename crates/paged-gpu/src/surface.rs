@@ -513,15 +513,50 @@ impl SurfacePresenter {
     /// the presenter — no second borrow on the document model.
     ///
     /// Reuses the presenter's device + queue + renderer; the wgpu
-    /// adapter init isn't paid per call. This is the shared core of
-    /// [`Self::render_scene_to_png`]; the SDK's headless
+    /// adapter init isn't paid per call. The SDK's headless
     /// `render_to_bytes` returns this raw buffer directly (no encode).
+    ///
+    /// The presenter stays borrowed across the await. A caller that must
+    /// keep the presenter free while the GPU works (the canvas worker,
+    /// whose render loop presents between frames) uses
+    /// [`Self::submit_readback`] and awaits the [`PendingReadback`] on its
+    /// own instead.
     pub async fn render_scene_to_rgba(
         &mut self,
         scene: &Scene,
         width_px: u32,
         height_px: u32,
     ) -> Result<Vec<u8>, SurfaceError> {
+        self.submit_readback(scene, width_px, height_px)?
+            .into_rgba()
+            .await
+    }
+
+    /// Off-surface render of a pre-built scene to PNG. Thin wrapper over
+    /// [`Self::submit_readback`] that PNG-encodes the readback.
+    pub async fn render_scene_to_png(
+        &mut self,
+        scene: &Scene,
+        width_px: u32,
+        height_px: u32,
+    ) -> Result<Vec<u8>, SurfaceError> {
+        self.submit_readback(scene, width_px, height_px)?
+            .into_png()
+            .await
+    }
+
+    /// The synchronous half of an off-surface render: encode `scene`,
+    /// submit it, copy the target into a mappable buffer and request the
+    /// map. Nothing here waits on the browser. The returned
+    /// [`PendingReadback`] owns that buffer and borrows nothing, so it
+    /// can be awaited after the presenter (and whatever holds it) has
+    /// been released.
+    pub fn submit_readback(
+        &mut self,
+        scene: &Scene,
+        width_px: u32,
+        height_px: u32,
+    ) -> Result<PendingReadback, SurfaceError> {
         let width_px = width_px.max(1);
         let height_px = height_px.max(1);
 
@@ -601,48 +636,68 @@ impl SurfacePresenter {
         );
         self.queue.submit([encoder.finish()]);
 
-        // Async map: on wasm32 we use a oneshot channel + a poll loop.
-        let slice = readback.slice(..);
+        // Async map: on wasm32 we use a oneshot channel the map callback
+        // fires into.
         let (tx, rx) = futures_channel::oneshot::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
+        readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
         // Trigger the map by polling — on web targets, polling is a
         // no-op (the browser drives the GPU queue), but we still need
-        // to flush our submit and wait for the callback.
+        // to flush our submit before the callback can fire.
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-        rx.await
+
+        Ok(PendingReadback {
+            buffer: readback,
+            mapped: rx,
+            row_bytes,
+            padded_row_bytes,
+            width_px,
+            height_px,
+        })
+    }
+}
+
+/// An off-surface render submitted by [`SurfacePresenter::submit_readback`]
+/// whose buffer is still mapping. It owns the buffer and borrows nothing:
+/// awaiting it holds neither the presenter nor its owner, so the canvas
+/// worker stays callable (render ticks, timers) while the browser works.
+pub struct PendingReadback {
+    buffer: wgpu::Buffer,
+    mapped: futures_channel::oneshot::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    row_bytes: u32,
+    padded_row_bytes: u32,
+    width_px: u32,
+    height_px: u32,
+}
+
+impl PendingReadback {
+    /// Wait for the map and copy the pixels out as tightly-packed RGBA8.
+    pub async fn into_rgba(self) -> Result<Vec<u8>, SurfaceError> {
+        self.mapped
+            .await
             .map_err(|_| SurfaceError::Readback("map callback dropped".into()))?
             .map_err(|e| SurfaceError::Readback(format!("map_async: {e:?}")))?;
 
-        let mut rgba = Vec::with_capacity((row_bytes as usize) * (height_px as usize));
+        let mut rgba = Vec::with_capacity((self.row_bytes as usize) * (self.height_px as usize));
         {
-            let data = slice.get_mapped_range();
-            for row in 0..height_px {
-                let start = (row as usize) * (padded_row_bytes as usize);
-                let end = start + (row_bytes as usize);
+            let data = self.buffer.slice(..).get_mapped_range();
+            for row in 0..self.height_px {
+                let start = (row as usize) * (self.padded_row_bytes as usize);
+                let end = start + (self.row_bytes as usize);
                 rgba.extend_from_slice(&data[start..end]);
             }
         }
-        readback.unmap();
-
+        self.buffer.unmap();
         Ok(rgba)
     }
 
-    /// Off-surface render of a pre-built scene to PNG. Thin wrapper over
-    /// [`Self::render_scene_to_rgba`] that PNG-encodes the readback —
-    /// the fidelity suite (`renderPageVelloPng`) consumes this.
-    pub async fn render_scene_to_png(
-        &mut self,
-        scene: &Scene,
-        width_px: u32,
-        height_px: u32,
-    ) -> Result<Vec<u8>, SurfaceError> {
-        let width_px = width_px.max(1);
-        let height_px = height_px.max(1);
-        let rgba = self
-            .render_scene_to_rgba(scene, width_px, height_px)
-            .await?;
+    /// Wait for the map and PNG-encode the pixels.
+    pub async fn into_png(self) -> Result<Vec<u8>, SurfaceError> {
+        let (width_px, height_px) = (self.width_px, self.height_px);
+        let rgba = self.into_rgba().await?;
         let mut png_bytes = Vec::with_capacity(rgba.len() / 4);
         image::codecs::png::PngEncoder::new(&mut png_bytes)
             .write_image(&rgba, width_px, height_px, image::ExtendedColorType::Rgba8)

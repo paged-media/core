@@ -80,9 +80,17 @@ fi
 # runner then hosts it under Node (default) or a browser.
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="wasm-bindgen-test-runner"
 
-echo "test-wasm: cargo test --target $TARGET -p $CRATE --test wasm"
+echo "test-wasm: cargo test --target $TARGET -p $CRATE --features gpu --test wasm"
 # `--test wasm` scopes to the wasm_bindgen_test lane (tests/wasm.rs); the
-# native dispatch suite is covered by plain `cargo test`.
-cargo test --target "$TARGET" -p "$CRATE" --test wasm "$@"
+# native dispatch suite is covered by plain `cargo test`. `--features gpu`
+# is the build the editor ships (publish-wasm.yml), and the only one with
+# `initGpu` / `renderPageVelloPng`, whose re-entrancy the lane checks.
+cargo test --target "$TARGET" -p "$CRATE" --features gpu --test wasm "$@"
 
-echo "test-wasm: PASS — paged-canvas-wasm wasm_bindgen_test lane green."
+# paged-sdk's `ViewerSession` (the viewer and the docs live preview) has the
+# same lane: only its exported JS class shows whether it stays callable
+# while a render waits on the browser. It exists only with `--features gpu`.
+echo "test-wasm: cargo test --target $TARGET -p paged-sdk --features gpu --test wasm"
+cargo test --target "$TARGET" -p paged-sdk --features gpu --test wasm "$@"
+
+echo "test-wasm: PASS — paged-canvas-wasm + paged-sdk wasm_bindgen_test lanes green."

@@ -2884,6 +2884,27 @@ pub(super) fn build_document_inner(
                     .unwrap_or(f)
             })
             .collect();
+        // A vertical story is laid out in its frames turned on their side
+        // (InDesign 20.0.1 sets vertical text as horizontal text turned a
+        // quarter clockwise: vertical-text-probe), and the post-pass
+        // turns its lines into columns.
+        let story_vertical = matches!(
+            parsed.story.story_direction,
+            Some(paged_model::StoryDirection::VerticalWritingDirection)
+        );
+        let turned: Vec<TextFrame> = if story_vertical {
+            authored_chain
+                .iter()
+                .map(|f| super::text_frame::turned_for_vertical(f))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let authored_chain: Vec<&TextFrame> = if story_vertical {
+            turned.iter().collect()
+        } else {
+            authored_chain
+        };
         // Multi-column frames become N side-by-side regions here, so
         // everything downstream — chain pages, spread bounds, wrap
         // rects, the emitter's overflow walk — sees columns as the
@@ -3093,41 +3114,10 @@ pub(super) fn build_document_inner(
                 )
             })
             .collect();
-        // TOC swap-in: if the head text frame carries
-        // `AppliedTOCStyle="TOCStyle/<id>"`, replace the story's
-        // own paragraphs with the resolver's output for that TOC
-        // style. Real-world unresolved TOC stories carry a single
-        // placeholder paragraph; the frame's `AppliedTOCStyle`
-        // attribute is what binds it to a `<TOCStyle>` in
-        // `Resources/Styles.xml`. After the swap the synthetic
-        // paragraphs go through the standard paragraph-emission
-        // path so they get full shaping, tab handling, applied
-        // paragraph-style cascade resolution, etc.
-        //
-        // Only an UNRESOLVED table of contents is built here: a story with
-        // no text. InDesign prints the text a TOC story holds until the
-        // user chooses Update Table of Contents (docs audit 2026-10, ADR
-        // 120), so a story with stored entries prints them, stale or not;
-        // rebuilding them at render would show entries InDesign does not.
-        let story_has_text = parsed
-            .story
-            .paragraphs
-            .iter()
-            .any(|p| p.runs.iter().any(|r| !r.text.trim().is_empty()));
-        let toc_paragraphs: Option<Vec<paged_model::Paragraph>> = chain
-            .first()
-            .filter(|_| !story_has_text)
-            // InDesign binds a TOC on its `<Story>`; the frame's attribute
-            // is the engine's older spelling.
-            .and_then(|f| {
-                parsed
-                    .story
-                    .applied_toc_style
-                    .as_deref()
-                    .or(f.applied_toc_style.as_deref())
-            })
-            .and_then(|toc_id| document.styles.toc_styles.get(toc_id))
-            .map(|toc| build_toc_paragraphs(document, toc, &page_labels));
+        // A TOC story prints the text it holds, as InDesign prints it until
+        // Update Table of Contents (docs audit 2026-10, ADR 120); an empty
+        // one prints nothing. The entries are written by the
+        // `updateTableOfContents` op over `toc_paragraphs` (ADR 165).
         let chain_pages = chain_pages_pre.clone();
         // Per-chain wrap rects so threaded frames inherit per-line
         // wrap. Each chain index maps to its frame's page's
@@ -3181,15 +3171,9 @@ pub(super) fn build_document_inner(
         // footnote is still deferred (reported via FootnoteOverflow).
         let pre_reset = snapshot_body_story_reset(&pages);
         let pre_total_stats = total_stats;
-        // Map each chain frame to the (page, rect) key it captures
-        // footnotes under, so a measured pool routes back to the frame
-        // whose text area must shrink.
-        let frame_host_keys: Vec<(usize, i32, i32, i32, i32)> = chain_for_post
-            .iter()
-            .zip(chain_pages_for_post.iter())
-            .map(|(f, &p)| footnote_host_key_for_frame(f, p, &pages))
-            .collect();
         let mut reserved_64: Vec<i32> = vec![0; chain_for_post.len()];
+        // The room a frame keeps for a reference line it moved on (ADR 161).
+        let mut held_64: Vec<i32> = vec![0; chain_for_post.len()];
         let mut chain_page_set: Vec<usize> = chain_pages_for_post.clone();
         chain_page_set.sort_unstable();
         chain_page_set.dedup();
@@ -3219,12 +3203,11 @@ pub(super) fn build_document_inner(
         // variables (a page count, a running header) can lay out
         // differently before the edit too, and is never seeded.
         let seed_key = (parsed.self_id.clone(), post.is_some());
-        let reads_variables = toc_paragraphs.is_some()
-            || parsed
-                .story
-                .paragraphs
-                .iter()
-                .any(|p| p.runs.iter().any(|r| r.text_variable.is_some()));
+        let reads_variables = parsed
+            .story
+            .paragraphs
+            .iter()
+            .any(|p| p.runs.iter().any(|r| r.text_variable.is_some()));
         let seed_sig = options
             .keep_seeds
             .map(|_| body_story_signature(&chain_for_post, &chain_pages_pre, &wrap_rects_per_page));
@@ -3354,6 +3337,7 @@ pub(super) fn build_document_inner(
                 parsed.story.optical_margin_alignment,
                 parsed.story.optical_margin_size,
             )
+            .with_vertical(is_vertical)
             .with_story_id(&parsed.self_id)
             .with_page_count(total_page_count)
             .with_page_index_map(&page_index_map)
@@ -3378,89 +3362,81 @@ pub(super) fn build_document_inner(
             // when StoryDirection="VerticalWritingDirection".
             let pre_story_cmd_counts: Vec<usize> =
                 pages.iter().map(|p| p.list.commands.len()).collect();
-            if let Some(paragraphs) = toc_paragraphs.as_ref() {
-                fresh_range = None;
-                verbatim.clear();
-                for paragraph in paragraphs {
-                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-                }
-            } else {
-                // ADR 027 plan step 6 — a resumable story carries no
-                // footnotes, so every pass is a keeps pass and may resume.
-                let plan = plan_for(&forced_breaks, &pages);
-                marks.clear();
-                verbatim.clear();
-                fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
-                let mut start = 0;
-                if let Some(plan) = plan.as_ref() {
-                    resume::splice_prefix(
-                        &mut emitter,
-                        &mut pages,
-                        &pre_snapshot,
-                        plan,
-                        &mut total_stats,
-                        &mut verbatim,
-                    );
-                    start = plan.first();
-                    marks.extend(plan.prefix_marks().iter().cloned());
-                }
-                let mut relaid: Option<usize> = None;
-                for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
-                    if resumable {
-                        let m = resume::mark(
-                            &emitter,
-                            &pages,
-                            &pre_snapshot,
-                            &total_stats,
-                            &pre_total_stats,
-                        );
-                        if let Some(plan) = plan.as_ref().filter(|pl| pl.past_edit(j)) {
-                            relaid = resume::try_stop(
-                                &mut emitter,
-                                &mut pages,
-                                &pre_snapshot,
-                                plan,
-                                j,
-                                &m,
-                                &mut total_stats,
-                                Some(&mut marks),
-                                &mut verbatim,
-                            );
-                            if relaid.is_some() {
-                                // The record's later pages are this
-                                // build's, unless their lines moved to
-                                // other paragraph indices.
-                                let to = if plan.shifts() { usize::MAX } else { m.page };
-                                fresh_range = Some((plan.resume_page(), to));
-                                break;
-                            }
-                        }
-                        marks.push(m);
-                    }
-                    emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
-                }
-                if resumable && relaid.is_none() {
-                    marks.push(resume::mark(
+            // ADR 027 plan step 6 — a resumable story carries no
+            // footnotes, so every pass is a keeps pass and may resume.
+            let plan = plan_for(&forced_breaks, &pages);
+            marks.clear();
+            verbatim.clear();
+            fresh_range = plan.as_ref().map(|pl| (pl.resume_page(), usize::MAX));
+            let mut start = 0;
+            if let Some(plan) = plan.as_ref() {
+                resume::splice_prefix(
+                    &mut emitter,
+                    &mut pages,
+                    &pre_snapshot,
+                    plan,
+                    &mut total_stats,
+                    &mut verbatim,
+                );
+                start = plan.first();
+                marks.extend(plan.prefix_marks().iter().cloned());
+            }
+            let mut relaid: Option<usize> = None;
+            for (j, paragraph) in parsed.story.paragraphs.iter().enumerate().skip(start) {
+                if resumable {
+                    let m = resume::mark(
                         &emitter,
                         &pages,
                         &pre_snapshot,
                         &total_stats,
                         &pre_total_stats,
-                    ));
-                }
-                total_stats.frames_emitted += match relaid {
-                    Some(frames) => {
-                        total_stats.stories_resumed += 1;
-                        frames
+                    );
+                    if let Some(plan) = plan.as_ref().filter(|pl| pl.past_edit(j)) {
+                        relaid = resume::try_stop(
+                            &mut emitter,
+                            &mut pages,
+                            &pre_snapshot,
+                            plan,
+                            j,
+                            &m,
+                            &mut total_stats,
+                            Some(&mut marks),
+                            &mut verbatim,
+                        );
+                        if relaid.is_some() {
+                            // The record's later pages are this
+                            // build's, unless their lines moved to
+                            // other paragraph indices.
+                            let to = if plan.shifts() { usize::MAX } else { m.page };
+                            fresh_range = Some((plan.resume_page(), to));
+                            break;
+                        }
                     }
-                    None => emitter
-                        .frame_cmd_ranges
-                        .iter()
-                        .skip(plan.as_ref().map_or(0, |pl| pl.resume_frame()))
-                        .filter(|r| r.is_some())
-                        .count(),
-                };
+                    marks.push(m);
+                }
+                emitter.emit_paragraph(paragraph, &mut pages, &mut total_stats);
             }
+            if resumable && relaid.is_none() {
+                marks.push(resume::mark(
+                    &emitter,
+                    &pages,
+                    &pre_snapshot,
+                    &total_stats,
+                    &pre_total_stats,
+                ));
+            }
+            total_stats.frames_emitted += match relaid {
+                Some(frames) => {
+                    total_stats.stories_resumed += 1;
+                    frames
+                }
+                None => emitter
+                    .frame_cmd_ranges
+                    .iter()
+                    .skip(plan.as_ref().map_or(0, |pl| pl.resume_frame()))
+                    .filter(|r| r.is_some())
+                    .count(),
+            };
             let post_pass_counts: Vec<usize> = chain_page_set
                 .iter()
                 .map(|&p| pages[p].list.commands.len())
@@ -3510,17 +3486,15 @@ pub(super) fn build_document_inner(
             // ADR 028 — the breaks the next pass must force; equal to
             // `forced_breaks` when this pass satisfied every keep option.
             let next_forced = emitter.keep_breaks();
-            let reserve_caps = emitter.footnote_reserve_caps();
             let keeps_changed = next_forced != forced_breaks;
             forced_breaks = next_forced;
 
-            // Measure each frame's footnote pool and fold it into the
-            // reservation. Vertical-writing stories lay the pool out in
-            // horizontal page space too, so the measure is valid there;
-            // we skip the reserve loop only when no footnotes captured.
-            // Only the chain's own pages can hold a pool that routes back
-            // to one of its frames (the pools are keyed by page), so the
-            // measure walks those pages, not the document.
+            // Plan where the story's notes go and fold the room each frame
+            // gives them into the reservation (ADR 161). Vertical-writing
+            // stories lay the area out in horizontal page space too, so
+            // the plan is valid there; we skip the reserve loop only when
+            // no footnotes were captured. Only the chain's own pages can
+            // hold an area of its frames, so the plan walks those.
             if !footnotes_settled {
                 let any_footnotes = chain_page_set
                     .iter()
@@ -3528,9 +3502,11 @@ pub(super) fn build_document_inner(
                 if !any_footnotes {
                     footnotes_settled = true;
                 } else {
-                    let pool_heights = measure_footnote_pools(
+                    let flow = plan_footnote_flow(
                         &pages,
-                        &chain_page_set,
+                        &chain_for_post,
+                        &chain_pages_for_post,
+                        &parsed.self_id,
                         options,
                         document,
                         font_table,
@@ -3538,17 +3514,15 @@ pub(super) fn build_document_inner(
                         palette,
                         color_ctx,
                     );
-                    let mut next_reserved = vec![0i32; reserved_64.len()];
-                    for (frame_idx, key) in frame_host_keys.iter().enumerate() {
-                        if let Some(h_pt) = pool_heights.get(key) {
-                            let pool_64 =
-                                (*h_pt * paged_text::shape::ADVANCE_PRECISION).round() as i32;
-                            next_reserved[frame_idx] = match reserve_caps.get(frame_idx) {
-                                Some(Some(cap_64)) => pool_64.min(*cap_64),
-                                _ => pool_64,
-                            };
-                        }
+                    for (held, &h) in held_64.iter_mut().zip(&flow.hold_64) {
+                        *held = (*held).max(h);
                     }
+                    let next_reserved: Vec<i32> = flow
+                        .reserve_64
+                        .iter()
+                        .zip(&held_64)
+                        .map(|(&r, &h)| r.max(h))
+                        .collect();
                     if next_reserved == reserved_64 || p + 1 >= MAX_FOOTNOTE_RESERVE_PASSES {
                         // Fixpoint, or the bail cap — accept the reservation.
                         // The pool emit post-pass paints below the reserved band.
@@ -3570,6 +3544,26 @@ pub(super) fn build_document_inner(
             if footnotes_settled && p + 1 >= pass_cap {
                 break;
             }
+        }
+        // The settled layout's notes: a note split between two areas keeps
+        // its first lines and continues at the head of the next (ADR 161).
+        if chain_page_set
+            .iter()
+            .any(|&p| pages[p].footnotes.len() > pre_snapshot[p].6)
+        {
+            let flow = plan_footnote_flow(
+                &pages,
+                &chain_for_post,
+                &chain_pages_for_post,
+                &parsed.self_id,
+                options,
+                document,
+                font_table,
+                &hyphenators,
+                palette,
+                color_ctx,
+            );
+            apply_footnote_flow(&flow, &mut pages, &chain_for_post, document);
         }
         // Keep the settled breaks for the next build's seed. A story that
         // reads variables or carries footnotes is never seeded, so it is
@@ -4199,20 +4193,20 @@ pub(super) fn capture_footnotes(
     let Some(&page) = em.chain_pages.get(em.frame_idx) else {
         return;
     };
-    // The host frame's page-local content rect: where the pool is drawn.
+    // The host frame's page-local content rect, and the rect its notes
+    // are set in: the same, or the whole frame's when they span its
+    // columns (ADR 160).
     let frame = em.chain[em.frame_idx];
-    let (sx, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
-    let (ox, oy) = pages[page].spread_origin;
-    let insets = frame.inset_spacing.unwrap_or([0.0; 4]);
-    let host_frame_rect_pt = Rect {
-        x: sx - ox + insets[1],
-        y: sy - oy + insets[0],
-        w: (frame.bounds.width() - insets[1] - insets[3]).max(0.0),
-        h: (frame.bounds.height() - insets[0] - insets[2]).max(0.0),
-    };
-    if let Some(slot) = em.footnote_ref_baseline_64.get_mut(em.frame_idx) {
-        *slot = (*slot).max(ref_baseline_64);
-    }
+    let (_, sy) = frame_spread_top_left(frame.bounds, frame.item_transform);
+    let (_, oy) = pages[page].spread_origin;
+    let host_frame_rect_pt = frame_content_rect(frame, pages[page].spread_origin);
+    let pool_rect_pt = footnote_pool_rect(
+        &em.chain,
+        em.frame_idx,
+        pages[page].spread_origin,
+        em.document,
+    );
+    let frame_footnotes = frame.footnotes;
     let ref_baseline_pt = sy - oy + ref_baseline_64 as f32 / paged_text::shape::ADVANCE_PRECISION;
     // Every note captured here stands on one page: its restart scope is
     // settled once.
@@ -4227,6 +4221,11 @@ pub(super) fn capture_footnotes(
             footnote_self_id: note.self_id,
             paragraphs: note.paragraphs,
             host_frame_rect_pt,
+            pool_rect_pt,
+            frame_footnotes,
+            first_line: 0,
+            end_line: None,
+            continued: false,
             ref_baseline_pt,
         });
     }
@@ -4446,6 +4445,12 @@ pub(super) struct StoryEmitter<'a> {
     /// its faces' hhea descenders at their sizes, the deepest. Where a
     /// column rule ends (ADR 155).
     pub(super) frame_max_descent_64: Vec<i32>,
+    /// How far below `frame_max_baseline_64` the text a Japanese composer
+    /// set ends for vertical justification: its em box bottom (1/64 pt;
+    /// 0 under the Paragraph Composer, which ends at the baseline).
+    /// InDesign 20.0.1 centres such a block to the last line's em box
+    /// bottom (vertical-text-probe `vjcenter`).
+    pub(super) frame_max_em_bottom_64: Vec<i32>,
     /// W1.7 footnote space reservation — per chain-frame height (in
     /// 1/64 pt) to hold back from the bottom of the frame's text area
     /// for the footnote pool. Body text overflows to the next frame
@@ -4480,6 +4485,8 @@ pub(super) struct StoryEmitter<'a> {
     /// unless the paragraph carries `NumberingContinue="true"` or
     /// `NumberingStartAt`.
     pub(super) prev_was_numbered: bool,
+    /// The levels of a multi-level list above level 1 (L-07, ADR 158).
+    pub(super) list_levels: super::numbering::ListLevels,
     /// W1.22 (engine gap 22) — document-level numbering ledger keyed
     /// by `<NumberingList>` self id, shared across every story's
     /// emitter so a list with `ContinueNumbersAcrossStories="true"`
@@ -4504,6 +4511,10 @@ pub(super) struct StoryEmitter<'a> {
     /// hang for glyphs smaller than this size; ignored when
     /// `optical_margin_alignment` is false.
     pub(super) optical_margin_size_pt: f32,
+    /// The story is set vertically (`StoryOrientation="Vertical"`): its
+    /// lines are laid out in frames turned on their side and its
+    /// characters that stand upright are shaped top to bottom.
+    pub(super) vertical: bool,
     /// How many anchored-frame story recursions deep this emitter is.
     /// 0 for the top-level body / master pass; 1+ for an emitter
     /// constructed by `emit_anchored_textframe_story`. Bounded at
@@ -4538,11 +4549,6 @@ pub(super) struct StoryEmitter<'a> {
     /// whichever `RestartNumbering` restarts at (`None` before the first
     /// note, and always for `DontRestart`).
     pub(super) footnote_scope: Option<usize>,
-    /// Per chain frame (1/64 pt): the lowest baseline of a line that
-    /// carried a captured footnote reference this pass. The frame's pool
-    /// reservation is capped above it, so a note never pushes its own
-    /// reference out of the frame (InDesign oversets the note instead).
-    pub(super) footnote_ref_baseline_64: Vec<i32>,
     /// Track 2: per-line records collected when
     /// `options.collect_breaks` is set. Drained by `take_breaks` once
     /// the story finishes emitting.
@@ -4809,13 +4815,16 @@ impl<'a> StoryEmitter<'a> {
             last_placed_frame: None,
             frame_cmd_ranges: vec![None; len],
             frame_max_baseline_64: vec![0; len],
+            frame_max_em_bottom_64: vec![0; len],
             frame_max_descent_64: vec![0; len],
             reserved_footnote_64: vec![0; len],
             paragraph_cmd_ranges: vec![Vec::new(); len],
             numbered_counter: 0,
             prev_was_numbered: false,
+            list_levels: Default::default(),
             cross_story_numbering: None,
             optical_margin_alignment: false,
+            vertical: false,
             optical_margin_size_pt: 0.0,
             anchored_recursion_depth: 0,
             anchored_image_queue: Vec::new(),
@@ -4824,7 +4833,6 @@ impl<'a> StoryEmitter<'a> {
             in_segments: false,
             footnote_counter: 0,
             footnote_scope: None,
-            footnote_ref_baseline_64: vec![0; len],
             breaks: Vec::new(),
             current_story_id: String::new(),
             paragraph_idx: 0,
@@ -4972,6 +4980,11 @@ impl<'a> StoryEmitter<'a> {
         self
     }
 
+    pub(super) fn with_vertical(mut self, vertical: bool) -> Self {
+        self.vertical = vertical;
+        self
+    }
+
     /// W1.7 — seed the per-frame footnote space reservation (1/64 pt)
     /// before a re-emit. `reserved[i]` is held back from chain frame
     /// `i`'s text bottom so the footnote pool drawn underneath does
@@ -5020,24 +5033,6 @@ impl<'a> StoryEmitter<'a> {
 
     /// ADR 028 — the breaks the NEXT pass must force for this pass's keep
     /// options to hold (`forced` itself when every rule held).
-    /// The most each chain frame's footnote pool may reserve (1/64 pt):
-    /// the room below the lowest line that carried one of its references.
-    /// `None` for a frame that holds no reference.
-    pub(super) fn footnote_reserve_caps(&self) -> Vec<Option<i32>> {
-        self.chain
-            .iter()
-            .zip(&self.footnote_ref_baseline_64)
-            .map(|(frame, &baseline_64)| {
-                (baseline_64 > 0).then(|| {
-                    let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
-                        * paged_text::shape::ADVANCE_PRECISION)
-                        .round() as i32;
-                    (frame_height_64 - baseline_64).max(0)
-                })
-            })
-            .collect()
-    }
-
     pub(super) fn keep_breaks(&self) -> super::keeps::ForcedBreaks {
         super::keeps::keep_breaks(
             &self.placements,
@@ -5146,7 +5141,7 @@ impl<'a> StoryEmitter<'a> {
             let frame_height_64 = ((frame.bounds.height() - inset_bottom(frame))
                 * paged_text::shape::ADVANCE_PRECISION)
                 .round() as i32;
-            let used_64 = self.frame_max_baseline_64[i];
+            let used_64 = self.frame_max_baseline_64[i] + self.frame_max_em_bottom_64[i];
             // W1.7 — the footnote pool reserves the bottom of the
             // frame, so vertical justification must distribute slack
             // against the reduced text area. Without this, Center /
@@ -5866,59 +5861,106 @@ pub fn build_index_paragraphs(
     out
 }
 
-/// Build the synthetic `Paragraph` sequence for an unresolved TOC
-/// story. Walks `Document::resolve_toc(toc_style)` and turns every
-/// `TOCEntry` into a single `Paragraph` whose:
-///   - `paragraph_style` = entry's `format_style`,
-///   - one run carrying `text` + expanded `separator` + page label.
+/// The paragraphs Update Table of Contents writes into a TOC story, as
+/// InDesign 20.0.1 writes them (`toc-probe`, ADR 165):
 ///
-/// Tabs in `Separator` (IDML serialises a tab as `^t`) expand to a
-/// literal `\t`, which `paged_text::layout::apply_tab_stops` snaps
-/// to the next tab stop (or, when none, to a single tab width).
-/// Page labels come from the per-page `page_labels` slice so
-/// Section overrides (Roman numerals etc.) carry through.
+/// - the style's `Title`, when it has one, in its `TitleStyle`;
+/// - one paragraph per entry in the entry's `FormatStyle`: the heading's
+///   text, the separator and the page number (`AfterEntry`, the default),
+///   the number, the separator and the text (`BeforeEntry`), or the text
+///   alone (`None`);
+/// - the number in the entry's `PageNumberStyle` and the separator in its
+///   `SeparatorStyle`; the text takes no character style.
 ///
-/// Returns an empty vec when the TOC has no resolved entries —
-/// keeps the renderer from emitting any glyphs into the host
-/// frame (matches InDesign, which leaves the frame blank).
-pub(super) fn build_toc_paragraphs(
-    document: &Document,
+/// `entries` come from [`paged_scene::Document::resolve_toc_on`] over the
+/// last layout; `page_labels` are the pages' labels in body order
+/// (section numbering included).
+pub fn toc_paragraphs(
     toc_style: &paged_model::TOCStyleDef,
+    entries: Vec<paged_scene::TOCEntry>,
     page_labels: &[String],
 ) -> Vec<paged_model::Paragraph> {
-    let entries = document.resolve_toc(toc_style);
-    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len());
+    let run = |text: String, style: Option<String>| paged_model::CharacterRun {
+        text,
+        character_style: style,
+        ..paged_model::CharacterRun::default()
+    };
+    let mut out: Vec<paged_model::Paragraph> = Vec::with_capacity(entries.len() + 1);
+    if let Some(title) = toc_style.title.as_deref().filter(|t| !t.is_empty()) {
+        out.push(paged_model::Paragraph {
+            paragraph_style: toc_style.title_style.clone(),
+            runs: vec![run(title.to_string(), None)],
+            ..paged_model::Paragraph::default()
+        });
+    }
     for entry in entries {
-        // Expand the IDML tab token. Only `^t` is recognised
-        // today — Adobe's full set (^m em-space, ^>, etc.) is
-        // queued; the corpus only carries `^t` separators.
-        let separator = entry.separator.replace("^t", "\t");
-        // Resolve the page label. `TOCEntry::page_number` is a
-        // 0-based body-page index; `page_labels` is parallel to
-        // the renderer's `pages` slice and already carries the
-        // user-visible label (Section overrides included). When
-        // the resolver returned `None` (orphan story) or the
-        // entry suppressed the page number, skip the separator
-        // + page-number tail.
-        let page_label = entry
+        let separator = expand_toc_specials(&entry.separator);
+        let label = entry
             .page_number
             .filter(|_| entry.page_number_visible)
             .and_then(|i| page_labels.get(i).cloned());
-        let mut text = entry.text;
-        if let Some(label) = page_label {
-            text.push_str(&separator);
-            text.push_str(&label);
+        let mut runs: Vec<paged_model::CharacterRun> = Vec::with_capacity(3);
+        match label {
+            Some(label) if entry.page_number_before => {
+                runs.push(run(label, entry.page_number_style.clone()));
+                runs.push(run(separator, entry.separator_style.clone()));
+                runs.push(run(entry.text, None));
+            }
+            Some(label) => {
+                runs.push(run(entry.text, None));
+                runs.push(run(separator, entry.separator_style.clone()));
+                runs.push(run(label, entry.page_number_style.clone()));
+            }
+            None => runs.push(run(entry.text, None)),
         }
-        let run = paged_model::CharacterRun {
-            text,
-            ..paged_model::CharacterRun::default()
-        };
-        let paragraph = paged_model::Paragraph {
+        // Neighbouring runs of one style are one run, as InDesign writes
+        // them (`Getting Started⇥` is one range when the separator has no
+        // style of its own).
+        let mut merged: Vec<paged_model::CharacterRun> = Vec::with_capacity(runs.len());
+        for r in runs.into_iter().filter(|r| !r.text.is_empty()) {
+            match merged.last_mut() {
+                Some(last) if last.character_style == r.character_style => {
+                    last.text.push_str(&r.text)
+                }
+                _ => merged.push(r),
+            }
+        }
+        out.push(paged_model::Paragraph {
             paragraph_style: entry.format_style,
-            runs: vec![run],
+            runs: merged,
             ..paged_model::Paragraph::default()
+        });
+    }
+    out
+}
+
+/// A TOC separator's metacharacters as the characters they stand for:
+/// `^t` tab, `^m` em space, `^>` en space, `^<` thin space, `^|` hair
+/// space, `^s` no-break space, `^f` flush space; `^y` (right-indent tab)
+/// is set as a tab.
+fn expand_toc_specials(separator: &str) -> String {
+    let mut out = String::with_capacity(separator.len());
+    let mut chars = separator.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '^' {
+            out.push(c);
+            continue;
+        }
+        let expanded = match chars.peek() {
+            Some('t') | Some('y') => '\t',
+            Some('m') => '\u{2003}',
+            Some('>') => '\u{2002}',
+            Some('<') => '\u{2009}',
+            Some('|') => '\u{200A}',
+            Some('s') => '\u{00A0}',
+            Some('f') => '\u{2001}',
+            _ => {
+                out.push('^');
+                continue;
+            }
         };
-        out.push(paragraph);
+        chars.next();
+        out.push(expanded);
     }
     out
 }
@@ -6197,7 +6239,14 @@ fn emit_paragraph_lines(
                 head_metrics,
                 // A `LeadingOffset` frame sets its first baseline one
                 // leading down, empty line or not.
-                Some(line_height_64),
+                Some(
+                    line_height_64
+                        - super::text_frame::japanese_leading_drop_64(
+                            &resolved_paragraph,
+                            head_metrics,
+                            para_pt,
+                        ),
+                ),
             );
         }
         // Adobe places the empty paragraph's virtual baseline at
@@ -6469,11 +6518,12 @@ fn emit_paragraph_lines(
         .segment
         .opens_paragraph
         .then(|| {
-            list_prefix(
+            list_prefix_with_levels(
                 &resolved_paragraph,
                 &mut em.numbered_counter,
                 &mut em.prev_was_numbered,
                 cross_story_seed,
+                &mut em.list_levels,
             )
         })
         .flatten()
@@ -6757,6 +6807,7 @@ fn emit_paragraph_lines(
     let right_indent_pt = resolved_paragraph.right_indent.unwrap_or(0.0).max(0.0);
     let col_pt = (full_col_pt - left_indent_pt - right_indent_pt).max(1.0);
     let mut lopts = paged_text::LayoutOptions::new(col_pt, paragraph_size);
+    lopts.vertical = em.vertical;
     let binding = em
         .chain_pages
         .get(em.frame_idx)
@@ -6830,7 +6881,14 @@ fn emit_paragraph_lines(
             paragraph_size,
             lopts.first_baseline,
             head_font_metrics,
-            Some(lopts.leading_override.unwrap_or(lopts.line_height)),
+            Some(
+                lopts.leading_override.unwrap_or(lopts.line_height)
+                    - super::text_frame::japanese_leading_drop_64(
+                        &resolved_paragraph,
+                        head_font_metrics,
+                        paragraph_size,
+                    ),
+            ),
         );
     } else {
         let space_before_64 =
@@ -7330,15 +7388,74 @@ fn emit_paragraph_lines(
         .composer
         .as_ref()
         .is_some_and(paged_model::Composer::is_japanese);
-    let ruby = if japanese {
-        super::ruby::ruby_groups(styled_runs_ref, &resolved_runs, head_run)
+    // The faces ruby and a custom kenten mark print in, where a run names
+    // its own (`RubyFont`, `KentenFont`) and the font table holds it; the
+    // base's otherwise.
+    let mark_face_bytes: Vec<[Option<Bytes>; 2]> = if japanese {
+        resolved_runs
+            .iter()
+            .map(|r| {
+                let named = |family: &Option<String>, style: &Option<String>| {
+                    let (bytes, substituted) = em
+                        .font_table
+                        .bytes_for(family.as_deref(), style.as_deref())?;
+                    (!substituted).then_some(bytes)
+                };
+                let m = &r.marks;
+                [
+                    m.ruby_font
+                        .as_ref()
+                        .and(named(&m.ruby_font, &m.ruby_font_style)),
+                    m.kenten_font
+                        .as_ref()
+                        .and(named(&m.kenten_font, &m.kenten_font_style)),
+                ]
+            })
+            .collect()
     } else {
         Vec::new()
     };
-    lopts.glyph_aki = ruby
+    let mark_faces: Vec<[Option<(paged_text::Face, ttf_parser::Face, u32)>; 2]> = mark_face_bytes
         .iter()
-        .filter(|g| g.share_64 > 0)
-        .map(|g| (g.base.clone(), g.share_64))
+        .map(|pair| {
+            [0, 1].map(|i| {
+                let b = pair[i].as_ref()?;
+                Some((
+                    paged_text::Face::from_slice(b, 0)?,
+                    ttf_parser::Face::parse(b, 0).ok()?,
+                    font_id(b) ^ 400f32.to_bits(),
+                ))
+            })
+        })
+        .collect();
+    // A styled run's ruby (`which` 0) or custom kenten (1) face.
+    let mark_face = |k: usize, which: usize| -> Option<super::ruby::MarkFace> {
+        let i = k.checked_sub(head_run).unwrap_or(marker_slot);
+        if let Some((shaping, outline, id)) = mark_faces.get(i).and_then(|p| p[which].as_ref()) {
+            return Some((shaping, outline, em.font_table.font_ref(*id)));
+        }
+        let outline = outline_faces.get(*unique_idx.get(i)?)?.as_ref()?;
+        Some((
+            styled_runs_ref.get(k)?.face,
+            outline,
+            em.font_table.font_ref(font_ids[i]),
+        ))
+    };
+    let ruby = if japanese {
+        super::ruby::ruby_groups(
+            styled_runs_ref,
+            &resolved_runs,
+            head_run,
+            |k| mark_face(k, 0).map(|(shaping, ..)| shaping),
+            em.vertical,
+        )
+    } else {
+        Vec::new()
+    };
+    lopts.ruby_aki = ruby
+        .iter()
+        .filter(|g| g.fit.is_some())
+        .map(|g| g.aki.clone())
         .collect();
     // Each styled run's first byte, to find a character's run.
     let styled_starts: Vec<u32> = styled_runs_ref
@@ -8069,7 +8186,14 @@ fn emit_paragraph_lines(
                 paragraph_size,
                 (paragraph_size * 0.8 * paged_text::shape::ADVANCE_PRECISION).round() as i32,
                 head_font_metrics,
-                Some(line_h),
+                Some(
+                    line_h
+                        - super::text_frame::japanese_leading_drop_64(
+                            &resolved_paragraph,
+                            head_font_metrics,
+                            paragraph_size,
+                        ),
+                ),
             );
             // The frame's first line obeys the first-line object rule.
             if let (Some(objs), Some(on_line)) = (
@@ -8543,13 +8667,36 @@ fn emit_paragraph_lines(
                 continue;
             };
             let outliner = TtfOutliner::new(outline);
+            // A glyph set upright in vertical text is drawn from its
+            // column's centre line: its face's em box centre, up from the
+            // baseline the line is laid out on.
+            let upright_slice;
+            let slice: &[paged_text::PositionedGlyph] =
+                if line.glyphs[start..end].iter().any(|g| g.upright.is_some()) {
+                    let em_box = super::font_table::em_box(outline);
+                    let centre = ((em_box.top - 0.5) * size * paged_text::shape::ADVANCE_PRECISION)
+                        .round() as i32;
+                    upright_slice = line.glyphs[start..end]
+                        .iter()
+                        .map(|g| {
+                            let mut g = *g;
+                            if g.upright.is_some() {
+                                g.y -= centre;
+                            }
+                            g
+                        })
+                        .collect::<Vec<_>>();
+                    &upright_slice
+                } else {
+                    &line.glyphs[start..end]
+                };
             // Frame blend mode is applied at the transparency-group
             // level by `bracket_text_frame_glyph_ranges` after the
             // story pass completes; the glyphs themselves emit at
             // BlendMode::Normal so the group composite is the single
             // place the IDML BlendingSetting takes effect.
             emit_glyph_slice(
-                &line.glyphs[start..end],
+                slice,
                 em.font_table.font_ref(fid),
                 line.glyphs[start].point_size,
                 |cluster| picker.pick(cluster),
@@ -8566,7 +8713,7 @@ fn emit_paragraph_lines(
             // `OutsideAlignment`-style outlines).
             if any_text_stroke {
                 emit_glyph_slice_stroke(
-                    &line.glyphs[start..end],
+                    slice,
                     em.font_table.font_ref(fid),
                     line.glyphs[start].point_size,
                     |cluster| stroke_picker.pick(cluster),
@@ -8587,10 +8734,18 @@ fn emit_paragraph_lines(
         // Kenten and ruby (`ruby`), under the Japanese composers only.
         if japanese {
             let origin = (sx - ox, sy - oy);
-            let face_of = |k: usize| {
-                let i = k.checked_sub(head_run).unwrap_or(marker_slot);
-                let face = outline_faces.get(*unique_idx.get(i)?)?.as_ref()?;
-                Some((face, em.font_table.font_ref(font_ids[i])))
+            let em_of = |font_id: u32| {
+                font_ids
+                    .iter()
+                    .position(|f| *f == font_id)
+                    .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
+                    .map_or(
+                        super::font_table::EmBox {
+                            top: 0.88,
+                            bottom: 0.12,
+                        },
+                        super::font_table::em_box,
+                    )
             };
             let run_of = |cluster: u32| {
                 styled_starts
@@ -8600,32 +8755,48 @@ fn emit_paragraph_lines(
             super::ruby::emit_kenten_for_line(
                 &line,
                 |g| {
-                    let r = resolved_runs.get(run_of(g.cluster).checked_sub(head_run)?)?;
-                    let kind = super::ruby::Kenten::from_idml(r.kenten_kind.as_deref()?)?;
-                    let size = r
-                        .kenten_font_size
-                        .filter(|s| *s > 0.0)
-                        .unwrap_or(g.point_size * 0.5);
-                    Some((kind, size))
+                    use super::ruby::{Kenten, KentenMark, MarkShape};
+                    let run = run_of(g.cluster);
+                    let r = resolved_runs.get(run.checked_sub(head_run)?)?;
+                    let kind = r.kenten_kind.as_deref()?;
+                    let shape = match Kenten::from_idml(kind) {
+                        Some(k) => MarkShape::Drawn(k),
+                        None if kind == "Custom" => {
+                            MarkShape::Character(r.kenten_character.as_deref()?.chars().next()?)
+                        }
+                        None => return None,
+                    };
+                    let m = &r.marks;
+                    let pct = |v: Option<f32>| v.filter(|p| *p > 0.0).map_or(1.0, |p| p / 100.0);
+                    Some(KentenMark {
+                        shape,
+                        size: r
+                            .kenten_font_size
+                            .filter(|s| *s > 0.0)
+                            .unwrap_or(g.point_size * 0.5),
+                        x_scale: pct(m.kenten_x_scale),
+                        y_scale: pct(m.kenten_y_scale),
+                        placement: m.kenten_placement.unwrap_or(0.0),
+                        below: m.kenten_position.as_deref() == Some("BelowLeft"),
+                        left: m.kenten_alignment.as_deref() == Some("AlignKentenLeft"),
+                        run,
+                    })
                 },
-                |font_id| {
-                    font_ids
-                        .iter()
-                        .position(|f| *f == font_id)
-                        .and_then(|i| outline_faces.get(unique_idx[i])?.as_ref())
-                        .map_or(0.88, |f| super::font_table::em_box(f).top)
-                },
+                em_of,
+                |k| mark_face(k, 1),
                 |cluster| picker.pick(cluster),
                 origin,
+                em.vertical,
                 &mut pages[target_page].list,
             );
             super::ruby::emit_ruby_for_line(
                 &line,
                 &ruby,
-                styled_runs_ref,
-                face_of,
+                em_of,
+                |k| mark_face(k, 0),
                 |cluster| picker.pick(cluster),
                 origin,
+                em.vertical,
                 &mut pages[target_page].list,
             );
         }
@@ -8691,11 +8862,28 @@ fn emit_paragraph_lines(
                 })
                 .fold(0.0_f32, f32::max)
                 .round() as i32;
+            let em_bottom_64 = if japanese {
+                line.glyphs
+                    .iter()
+                    .filter_map(|g| {
+                        let i = font_ids.iter().position(|f| *f == g.font_id)?;
+                        let face = outline_faces.get(unique_idx[i])?.as_ref()?;
+                        let em_box = super::font_table::em_box(face);
+                        Some(em_box.bottom * g.point_size * paged_text::shape::ADVANCE_PRECISION)
+                    })
+                    .fold(0.0_f32, f32::max)
+                    .round() as i32
+            } else {
+                0
+            };
             if line.baseline_y > em.frame_max_baseline_64[frame_idx] {
                 em.frame_max_descent_64[frame_idx] = descent_64;
+                em.frame_max_em_bottom_64[frame_idx] = em_bottom_64;
             } else {
                 em.frame_max_descent_64[frame_idx] =
                     em.frame_max_descent_64[frame_idx].max(descent_64);
+                em.frame_max_em_bottom_64[frame_idx] =
+                    em.frame_max_em_bottom_64[frame_idx].max(em_bottom_64);
             }
             em.frame_max_baseline_64[frame_idx] = line.baseline_y;
         }
@@ -8880,6 +9068,7 @@ fn emit_paragraph_lines(
                 // the first run) so a skewed paragraph leans its cap too.
                 skew_deg: resolved_runs.first().and_then(|r| r.skew).unwrap_or(0.0),
                 ch: None,
+                upright: None,
             });
             pen_x += g.x_advance;
         }

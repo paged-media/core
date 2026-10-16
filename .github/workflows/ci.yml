@@ -33,6 +33,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+      # The workspace's debug test binaries outgrew the hosted Linux
+      # runner's free disk ("No space left on device" in the test step,
+      # 2026-10-16). The preinstalled SDKs nothing here uses free ~25 GB.
+      - name: free runner disk
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@master
         with:
           # Pinned from rust-toolchain.toml via the toolchain job (B21).
@@ -98,6 +106,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The workspace's debug test binaries outgrew the hosted Linux
+      # runner's free disk ("No space left on device" in the test step,
+      # 2026-10-16). The preinstalled SDKs nothing here uses free ~25 GB.
+      - name: free runner disk
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ needs.toolchain.outputs.channel }}
@@ -159,8 +175,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ needs.toolchain.outputs.channel }}
+          components: clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # The wasm shells, paged-sdk's session and paged-gpu's Vello surface
+      # are `#[cfg(target_arch = "wasm32")]`, so the native clippy in
+      # `check` never sees them and their lints piled up unseen. Lint them
+      # on their own target here, in the same target dir and cache as the
+      # test lane. `gpu` is the build the packages ship (publish-wasm.yml);
+      # without it paged-sdk compiles to a stub.
+      - name: clippy (wasm32)
+        run: >-
+          cargo clippy --target wasm32-unknown-unknown --all-targets
+          -p paged-canvas-wasm -p paged-gpu -p paged-sdk -p paged-introspect-wasm
+          --features paged-canvas-wasm/gpu,paged-sdk/gpu
+          -- -D warnings
       # scripts/test-wasm.sh runs the wasm-bindgen tests node-hosted, so it
       # needs wasm-bindgen-test-runner (shipped by wasm-bindgen-cli, pinned
       # to the lockfile version) + node on PATH. Without these the lane

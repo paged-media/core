@@ -96,6 +96,11 @@ pub struct PositionedGlyph {
     /// scope). Feeds the exporter's `/ToUnicode` CMap; rasterizers
     /// ignore it. `None` for synthetic glyphs.
     pub ch: Option<char>,
+    /// Set upright in vertical text: where its outline is drawn from,
+    /// relative to its vertical pen (see [`crate::shape::Upright`]). The
+    /// renderer turns the story's lines into columns; such a glyph is
+    /// drawn already turned back, so it stands upright in them.
+    pub upright: Option<crate::shape::Upright>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,12 +234,56 @@ pub struct LayoutOptions<'a> {
     /// object takes in its line, where InDesign sets it like a glyph.
     /// Replacement characters past the list keep their shaped advance.
     pub object_advances: Vec<i32>,
-    /// Space set on both sides of each glyph whose source byte lies in a
-    /// range, 1/64 pt: the glyph moves right by it and its advance grows
-    /// by twice it. A ruby wider than its base spaces the base out so,
-    /// 1:2:1 — a share before the first character, two between each two,
-    /// one after the last (InDesign's default `RubyParent121Aki`).
-    pub glyph_aki: Vec<(std::ops::Range<u32>, i32)>,
+    /// Ruby bases spaced out to a ruby wider than they are: the space set
+    /// before and after each base character (see [`RubyAki`]).
+    pub ruby_aki: Vec<RubyAki>,
+    /// The paragraph is set vertically: its characters that stand upright
+    /// are shaped top to bottom ([`crate::shape::shape_run_vertical_at`]),
+    /// and the renderer turns its lines into columns.
+    pub vertical: bool,
+}
+
+/// How a ruby base is spaced out to a ruby wider than it is, as the
+/// renderer worked it out from the ruby's settings (`pipeline::ruby`):
+/// the space before and after each base character, 1/64 pt. InDesign
+/// spaces a base differently where it starts or ends a line, which the
+/// breaker cannot know ahead, so there are four variants — mid-line,
+/// starting a line, ending one, and both ([`ruby_edge`] picks one). The
+/// breaker measures the mid-line one; each line then takes its own.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RubyAki {
+    /// The base characters' bytes in the paragraph's text, in order.
+    pub chars: Vec<std::ops::Range<u32>>,
+    /// `(before, after)` per base character, for the base mid-line, at a
+    /// line's start, at its end, and alone on its line.
+    pub variants: [Vec<(i32, i32)>; 4],
+}
+
+impl RubyAki {
+    fn space_of(&self, variant: usize, byte: u32) -> Option<(i32, i32)> {
+        let i = self.chars.iter().position(|r| r.contains(&byte))?;
+        self.variants[variant].get(i).copied()
+    }
+}
+
+/// Which of [`RubyAki::variants`] a ruby base on a line takes: 1 when its
+/// first character starts the line (`line_start`, the line's first byte
+/// after leading spaces), 2 when its last ends it (`content_end`, past the
+/// line's last byte before trailing spaces and breaks), 3 for both, 0
+/// otherwise.
+pub fn ruby_edge(chars: &[std::ops::Range<u32>], line_start: u32, content_end: u32) -> usize {
+    let starts = chars.first().is_some_and(|r| r.start == line_start);
+    let ends = chars.last().is_some_and(|r| r.end == content_end);
+    usize::from(starts) + 2 * usize::from(ends)
+}
+
+/// Past a line's last byte that is not a space, a tab or a line or
+/// paragraph break.
+pub fn line_content_end(text: &str, range: std::ops::Range<usize>) -> usize {
+    let line = text.get(range.clone()).unwrap_or("");
+    let kept = line
+        .trim_end_matches(|c: char| c.is_ascii_whitespace() || c == '\u{2028}' || c == '\u{2029}');
+    range.start + kept.len()
 }
 
 /// U+FFFC OBJECT REPLACEMENT CHARACTER: the character an inline anchored
@@ -293,7 +342,8 @@ impl LayoutOptions<'_> {
             single_word_alignment: Alignment::Justify,
             tabs: None,
             object_advances: Vec::new(),
-            glyph_aki: Vec::new(),
+            ruby_aki: Vec::new(),
+            vertical: false,
         }
     }
 }
@@ -429,6 +479,7 @@ pub fn position_line(
             x_scale: 1.0,
             y_scale: 1.0,
             skew_deg: 0.0,
+            upright: None,
         });
         pen_x += g.x_advance;
     }
@@ -812,6 +863,48 @@ pub fn apply_mojikumi_half_width(shape: &mut ShapedRun, text: &str) {
     shape.total_advance = total;
 }
 
+/// The font's kerning between the last character of run `a` and the first
+/// of `b` (1/64 pt, unrounded), where the two differ in nothing the shaper
+/// sees: shaped together, the pair sets this much tighter (or looser) than
+/// its two characters shaped apart.
+fn boundary_kern(a: &StyledRun, b: &StyledRun, vertical: bool) -> Option<f64> {
+    if a.font_id != b.font_id
+        || !std::ptr::eq(a.face, b.face)
+        || a.point_size != b.point_size
+        || a.shaping_features != b.shaping_features
+        || a.horizontal_scale_pct != b.horizontal_scale_pct
+    {
+        return None;
+    }
+    let last = a.text.chars().next_back()?;
+    let first = b.text.chars().next()?;
+    if [last, first]
+        .iter()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return None;
+    }
+    let exact = |text: &str| {
+        let mut pen = 0.0;
+        if vertical {
+            crate::shape::shape_run_vertical_at(
+                a.face,
+                text,
+                a.point_size,
+                a.shaping_features,
+                &mut pen,
+            );
+        } else {
+            shape_run_with_features_at(a.face, text, a.point_size, a.shaping_features, &mut pen);
+        }
+        pen
+    };
+    let pair: String = [last, first].iter().collect();
+    let kern =
+        exact(&pair) - exact(last.encode_utf8(&mut [0; 4])) - exact(first.encode_utf8(&mut [0; 4]));
+    (kern.abs() > 1e-3).then_some(kern)
+}
+
 pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
     if runs.is_empty() {
         return LaidOutParagraph { lines: Vec::new() };
@@ -832,12 +925,44 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // rounded against it (`shape_run_with_features_at`), so two adjacent
     // runs that differ in nothing the shaper sees set as one run would.
     let mut pen = 0.0_f64;
-    for r in runs {
+    for (i, r) in runs.iter().enumerate() {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
+        // Two such runs also kern across their boundary as one run would:
+        // InDesign 20.0.1 kerns す。 1.4 pt closer where each character
+        // carries an emphasis mark of its own
+        // (tools/indesign-export/vertical-text-probe, `kenten-shapes`).
+        if let Some(kern) = i
+            .checked_sub(1)
+            .and_then(|p| boundary_kern(&runs[p], r, options.vertical))
+        {
+            if let Some(last) = run_shapes.last_mut() {
+                let factor = r.horizontal_scale_pct as f64 / 100.0;
+                let before = pen.round() as i32;
+                pen += kern;
+                let delta = if (factor - 1.0).abs() > 0.0005 {
+                    (kern * factor).round() as i32
+                } else {
+                    pen.round() as i32 - before
+                };
+                if let Some(g) = last.glyphs.last_mut() {
+                    g.x_advance += delta;
+                    last.total_advance += delta;
+                }
+            }
+        }
         let run_pen = pen;
-        let mut s =
-            shape_run_with_features_at(r.face, r.text, r.point_size, r.shaping_features, &mut pen);
+        let mut s = if options.vertical {
+            crate::shape::shape_run_vertical_at(
+                r.face,
+                r.text,
+                r.point_size,
+                r.shaping_features,
+                &mut pen,
+            )
+        } else {
+            shape_run_with_features_at(r.face, r.text, r.point_size, r.shaping_features, &mut pen)
+        };
         // P-20: per-cluster glyph fallback. When the primary face
         // shapes a cluster to `.notdef` (glyph id 0), retry that
         // cluster's source bytes against each fallback face in turn
@@ -901,17 +1026,17 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 .map(|(g, &n)| g.x_advance - (n as f32 * factor).round() as i32)
                 .collect(),
         );
-        // A ruby base spaced out to its ruby (`LayoutOptions::glyph_aki`).
-        // Not spacing a line's end gives back: a base ending a line keeps
-        // its share after it.
-        if !options.glyph_aki.is_empty() {
+        // A ruby base spaced out to its ruby (`LayoutOptions::ruby_aki`),
+        // mid-line; a line the base starts or ends adjusts it below.
+        if !options.ruby_aki.is_empty() {
             let at = run_starts[run_starts.len() - 1] as u32;
             for g in s.glyphs.iter_mut() {
                 let byte = at + g.cluster;
-                if let Some((_, share)) = options.glyph_aki.iter().find(|(r, _)| r.contains(&byte))
+                if let Some((before, after)) =
+                    options.ruby_aki.iter().find_map(|a| a.space_of(0, byte))
                 {
-                    g.x_offset += share;
-                    g.x_advance += 2 * share;
+                    g.x_offset += before;
+                    g.x_advance += before + after;
                 }
             }
             s.total_advance = s.glyphs.iter().map(|g| g.x_advance).sum();
@@ -975,6 +1100,11 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                     0
                 } else {
                     run_spacing[run_i].get(gi).copied().unwrap_or(0)
+                },
+                upright: if object_advance.is_some() {
+                    None
+                } else {
+                    g.upright
                 },
             });
         }
@@ -1116,7 +1246,34 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         // With hyphenation off (no hyphenator) the word still breaks at
         // its discretionary hyphens, under the same limits and zone —
         // InDesign's rule, see `soft_hyphen_opportunities`.
+        // Japanese and Chinese break between any two characters, one of
+        // them CJK, whatever the hyphenation (InDesign 20.0.1, with no
+        // kinsoku set and hyphenation on: vertical-text-probe); a kinsoku
+        // set takes away the positions before a no-start character and
+        // after a no-end one. Such a word is not hyphenated, and a Latin
+        // stretch in it stays whole.
+        let cjk_breaks: Vec<usize> = {
+            use crate::compose::kinsoku;
+            let word_text = &paragraph_text[w.start..w.end];
+            let chars: Vec<(usize, char)> = word_text.char_indices().collect();
+            if chars.iter().any(|&(_, c)| kinsoku::is_breakable_cjk(c)) {
+                chars
+                    .windows(2)
+                    .filter(|p| {
+                        let (a, b) = (p[0].1, p[1].1);
+                        (kinsoku::is_breakable_cjk(a) || kinsoku::is_breakable_cjk(b))
+                            && !(opts.kinsoku_enforce
+                                && (kinsoku::is_no_start(b) || kinsoku::is_no_end(a)))
+                    })
+                    .map(|p| w.start + p[1].0)
+                    .filter(|&b| !held(b, b))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
         let breaks: Vec<usize> = match single_run {
+            _ if !cjk_breaks.is_empty() => Vec::new(),
             Some(_) => {
                 let word_text = &paragraph_text[w.start..w.end];
                 let is_last_word = i + 1 == words.len();
@@ -1176,6 +1333,22 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             });
             byte_ends.push(*offset);
             is_hyphen.push(!hard);
+            seg_start = *offset;
+        }
+        for offset in &cjk_breaks {
+            items.push(Item::Box {
+                width: sum_advances_in(&flat, seg_start as u32..*offset as u32),
+                data: (),
+            });
+            byte_ends.push(*offset);
+            is_hyphen.push(false);
+            items.push(Item::Glue {
+                width: 0,
+                stretch,
+                shrink: 0,
+            });
+            byte_ends.push(*offset);
+            is_hyphen.push(false);
             seg_start = *offset;
         }
         let final_width = sum_advances_in(&flat, seg_start as u32..w.end as u32);
@@ -1386,10 +1559,23 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
         let mut glyphs: Vec<PositionedGlyph> = Vec::new();
         let mut pen_x: i32 = 0;
         let mut last_run_idx: Option<usize> = None;
+        // A ruby base starting or ending this line is spaced as InDesign
+        // spaces it there, not as the breaker measured it mid-line.
+        let content_end = line_content_end(&paragraph_text, start..end) as u32;
+        let edge_aki: Vec<(&RubyAki, usize)> = options
+            .ruby_aki
+            .iter()
+            .map(|a| (a, ruby_edge(&a.chars, start as u32, content_end)))
+            .filter(|(_, v)| *v != 0)
+            .collect();
         for fg in &flat {
             if fg.cluster < start as u32 || fg.cluster >= end as u32 {
                 continue;
             }
+            let (edge_dx, edge_dw) = edge_aki
+                .iter()
+                .find_map(|(a, v)| Some((a.space_of(*v, fg.cluster)?, a.space_of(0, fg.cluster)?)))
+                .map_or((0, 0), |((b, a), (mb, ma))| (b - mb, b + a - mb - ma));
             let run = &runs[fg.run_idx];
             // IDML BaselineShift is positive-up; layout y grows down,
             // so subtract.
@@ -1397,9 +1583,9 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
             glyphs.push(PositionedGlyph {
                 glyph_id: fg.glyph_id,
                 cluster: fg.cluster,
-                x: pen_x + fg.x_offset,
+                x: pen_x + fg.x_offset + edge_dx,
                 y: baseline + fg.y_offset - baseline_shift_64,
-                x_advance: fg.x_advance,
+                x_advance: fg.x_advance + edge_dw,
                 font_id: run.font_id,
                 point_size: run.point_size,
                 underline: run.underline,
@@ -1412,8 +1598,9 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                 ch: paragraph_text
                     .get(fg.cluster as usize..)
                     .and_then(|s| s.chars().next()),
+                upright: fg.upright,
             });
-            pen_x += fg.x_advance;
+            pen_x += fg.x_advance + edge_dw;
             last_run_idx = Some(fg.run_idx);
         }
         // The line's last character carries no tracking or letter spacing
@@ -1456,6 +1643,7 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
                         x_scale: (r.horizontal_scale_pct / 100.0).max(0.0),
                         y_scale: (r.vertical_scale_pct / 100.0).max(0.0),
                         skew_deg: r.skew_deg,
+                        upright: None,
                     });
                     pen_x += g.x_advance;
                 }
@@ -1757,6 +1945,7 @@ impl TabBreakInput<'_> {
                 x_scale: 1.0,
                 y_scale: 1.0,
                 skew_deg: 0.0,
+                upright: None,
             });
             pen += fg.x_advance;
         }
@@ -2376,6 +2565,7 @@ impl<'a, 'b> LeaderContext<'a, 'b> {
                     x_scale: (run.horizontal_scale_pct / 100.0).max(0.0),
                     y_scale: (run.vertical_scale_pct / 100.0).max(0.0),
                     skew_deg: run.skew_deg,
+                    upright: None,
                 });
                 pen_x += g.x_advance;
             }
@@ -2447,6 +2637,7 @@ struct FlatGlyph {
     /// Tracking and letter spacing inside `x_advance` (1/64 pt): the
     /// space after the glyph, which a line's last character does not get.
     spacing: i32,
+    upright: Option<crate::shape::Upright>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2638,6 +2829,7 @@ mod tests {
                 x_advance: adv,
                 y_offset: 0,
                 x_offset: 0,
+                upright: None,
             })
             .collect();
         ShapedRun {
@@ -2688,8 +2880,57 @@ mod tests {
             single_word_alignment: Alignment::Justify,
             tabs: None,
             object_advances: Vec::new(),
-            glyph_aki: Vec::new(),
+            ruby_aki: Vec::new(),
+            vertical: false,
         }
+    }
+
+    /// Two runs that differ in nothing the shaper sees (here only the
+    /// underline) set exactly as one run would, the font's kerning across
+    /// their boundary included; a run at another size does not kern with
+    /// its neighbour.
+    #[test]
+    fn matching_runs_kern_across_their_boundary() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let face = crate::shape::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let run = |text, point_size, underline| StyledRun {
+            text,
+            face: &face,
+            point_size,
+            tracking: None,
+            font_id: 1,
+            underline,
+            strikethru: false,
+            substituted: false,
+            baseline_shift_pt: 0.0,
+            horizontal_scale_pct: 100.0,
+            vertical_scale_pct: 100.0,
+            skew_deg: 0.0,
+            fallback_faces: &[],
+            shaping_features: crate::shape::ShapingFeatures::default(),
+        };
+        let xs = |runs: &[StyledRun]| -> Vec<i32> {
+            layout_runs(runs, &LayoutOptions::new(400.0, 24.0)).lines[0]
+                .glyphs
+                .iter()
+                .map(|g| g.x)
+                .collect()
+        };
+        let whole = xs(&[run("AVA", 24.0, false)]);
+        assert_eq!(
+            xs(&[run("A", 24.0, false), run("VA", 24.0, true)]),
+            whole,
+            "split between A and V"
+        );
+        // Inter kerns AV: the split without it would set V later.
+        let a = shape_run(&face, "A", 24.0).total_advance;
+        assert!(whole[1] < whole[0] + a, "AV kerned: {whole:?}, A {a}");
+        let mixed = xs(&[run("A", 24.0, false), run("VA", 23.0, false)]);
+        assert_eq!(mixed[1], whole[0] + a, "no kerning across sizes");
     }
 
     #[test]
@@ -2714,6 +2955,7 @@ mod tests {
                 x_advance: 100,
                 x_offset: 5,
                 y_offset: -7,
+                upright: None,
             }],
             total_advance: 100,
         };
@@ -2994,6 +3236,7 @@ mod tests {
             y_scale: 1.0,
             skew_deg: 0.0,
             ch: None,
+            upright: None,
         }
     }
 
@@ -3046,6 +3289,7 @@ mod tests {
                 y_scale: 1.0,
                 skew_deg: 0.0,
                 ch: None,
+                upright: None,
             });
             pen += adv;
         }
@@ -3260,6 +3504,7 @@ mod tests {
                 y_scale: 1.0,
                 skew_deg: 0.0,
                 ch: None,
+                upright: None,
             });
             x += advance;
         }
@@ -3295,6 +3540,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
                 ShapedGlyph {
                     glyph_id: 2,
@@ -3304,6 +3550,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
                 ShapedGlyph {
                     glyph_id: 3,
@@ -3311,6 +3558,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
             ],
             total_advance: 300,
@@ -3334,6 +3582,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
                 ShapedGlyph {
                     glyph_id: 2,
@@ -3341,6 +3590,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
                 ShapedGlyph {
                     glyph_id: 3,
@@ -3348,6 +3598,7 @@ mod tests {
                     x_advance: 100,
                     y_offset: 0,
                     x_offset: 0,
+                    upright: None,
                 },
             ],
             total_advance: 300,

@@ -248,6 +248,7 @@ mod tests {
             text_wrap: None,
             ignore_wrap: None,
             column_rule: None,
+            footnotes: Default::default(),
             item_layer: None,
             is_anchored: false,
             opacity: None,
@@ -3172,6 +3173,177 @@ mod tests {
         assert!(doc.designmap.hyperlink_destinations.is_empty());
     }
 
+    /// The designmap's links and destinations and the story's run tags,
+    /// as one comparable string.
+    fn link_state(doc: &paged_scene::Document) -> String {
+        let runs: Vec<(String, Option<String>)> = doc.stories[0]
+            .story
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.runs)
+            .map(|r| (r.text.clone(), r.hyperlink_source.clone()))
+            .collect();
+        serde_json::to_string(&(
+            &doc.designmap.hyperlinks,
+            &doc.designmap.hyperlink_destinations,
+            runs,
+        ))
+        .unwrap()
+    }
+
+    fn link_u9(project: &mut Project) {
+        project
+            .apply(Operation::InsertHyperlink {
+                story_id: "Story/u1".to_string(),
+                start: 0,
+                end: 5,
+                url: "https://paged.media".to_string(),
+                source_id: "HyperlinkTextSource/u9".to_string(),
+                dest_id: "HyperlinkURLDestination/u9".to_string(),
+                hyperlink_id: "Hyperlink/u9".to_string(),
+                page: None,
+            })
+            .unwrap();
+    }
+
+    /// v73 (ADR 164) — a deleted link takes its own destination with it,
+    /// leaves a shared one and a text anchor, and undo puts back exactly
+    /// what was there.
+    #[test]
+    fn delete_hyperlink_takes_only_its_own_destination_and_undoes_exactly() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        link_u9(&mut project);
+        let before = link_state(project.document());
+        let applied = project
+            .apply(Operation::DeleteHyperlink {
+                hyperlink_id: "Hyperlink/u9".to_string(),
+            })
+            .unwrap();
+        {
+            let doc = project.document();
+            assert!(doc.designmap.hyperlinks.is_empty());
+            assert!(doc.designmap.hyperlink_destinations.is_empty());
+            assert!(doc.stories[0].story.paragraphs[0]
+                .runs
+                .iter()
+                .all(|r| r.hyperlink_source.is_none()));
+        }
+        let undone = crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(link_state(project.document()), before);
+        // The undo's own inverse deletes it again.
+        crate::apply(project.document_mut(), &undone.inverse).unwrap();
+        assert!(project.document().designmap.hyperlinks.is_empty());
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+
+        // A bookmark shares the destination: it stays.
+        project
+            .document_mut()
+            .designmap
+            .bookmarks
+            .push(paged_model::Bookmark {
+                self_id: "Bookmark/b".to_string(),
+                name: Some("b".to_string()),
+                destination: Some("HyperlinkURLDestination/u9".to_string()),
+            });
+        project
+            .apply(Operation::DeleteHyperlink {
+                hyperlink_id: "Hyperlink/u9".to_string(),
+            })
+            .unwrap();
+        assert_eq!(project.document().designmap.hyperlink_destinations.len(), 1);
+
+        // A text destination is an anchor in its story: it stays too.
+        let doc = project.document_mut();
+        doc.designmap
+            .hyperlink_destinations
+            .push(paged_model::HyperlinkDestination {
+                self_id: "HyperlinkTextDestination/t".to_string(),
+                kind: paged_model::HyperlinkDestinationKind::TextAnchor("Story/u1".to_string()),
+            });
+        doc.designmap.hyperlinks.push(paged_model::Hyperlink {
+            self_id: "Hyperlink/t".to_string(),
+            name: None,
+            source: Some("HyperlinkTextSource/t".to_string()),
+            destination: Some("HyperlinkTextDestination/t".to_string()),
+        });
+        project
+            .apply(Operation::DeleteHyperlink {
+                hyperlink_id: "Hyperlink/t".to_string(),
+            })
+            .unwrap();
+        assert!(project
+            .document()
+            .designmap
+            .hyperlink_destinations
+            .iter()
+            .any(|d| d.self_id == "HyperlinkTextDestination/t"));
+        assert!(matches!(
+            project.apply(Operation::DeleteHyperlink {
+                hyperlink_id: "Hyperlink/t".to_string(),
+            }),
+            Err(OperationError::CollectionEntryNotFound { .. })
+        ));
+    }
+
+    /// v73 (ADR 164) — a new URL rewrites the link's own destination in
+    /// place; with the destination shared, the link moves to a new one and
+    /// the shared one stays. Undo restores each exactly.
+    #[test]
+    fn edit_hyperlink_rewrites_its_own_destination_or_moves_off_a_shared_one() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        link_u9(&mut project);
+        let before = link_state(project.document());
+        let edit = |url: &str| Operation::EditHyperlink {
+            hyperlink_id: "Hyperlink/u9".to_string(),
+            name: Some("Docs".to_string()),
+            url: Some(url.to_string()),
+            page: None,
+            dest_id: "HyperlinkURLDestination/n".to_string(),
+        };
+        let applied = project.apply(edit("https://docs.paged.media")).unwrap();
+        {
+            let dm = &project.document().designmap;
+            assert_eq!(dm.hyperlinks[0].name.as_deref(), Some("Docs"));
+            assert_eq!(
+                dm.hyperlinks[0].destination.as_deref(),
+                Some("HyperlinkURLDestination/u9")
+            );
+            assert_eq!(dm.hyperlink_destinations.len(), 1);
+            assert!(matches!(
+                &dm.hyperlink_destinations[0].kind,
+                paged_model::HyperlinkDestinationKind::Url(u) if u == "https://docs.paged.media"
+            ));
+        }
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(link_state(project.document()), before);
+
+        project
+            .document_mut()
+            .designmap
+            .bookmarks
+            .push(paged_model::Bookmark {
+                self_id: "Bookmark/b".to_string(),
+                name: None,
+                destination: Some("HyperlinkURLDestination/u9".to_string()),
+            });
+        let before = link_state(project.document());
+        let applied = project.apply(edit("https://docs.paged.media")).unwrap();
+        {
+            let dm = &project.document().designmap;
+            assert_eq!(
+                dm.hyperlinks[0].destination.as_deref(),
+                Some("HyperlinkURLDestination/n")
+            );
+            assert_eq!(dm.hyperlink_destinations.len(), 2);
+            assert!(matches!(
+                &dm.hyperlink_destinations[0].kind,
+                paged_model::HyperlinkDestinationKind::Url(u) if u == "https://paged.media"
+            ));
+        }
+        crate::apply(project.document_mut(), &applied.inverse).unwrap();
+        assert_eq!(link_state(project.document()), before);
+    }
+
     /// Happy path: a SetProperty against a `StoryRange` covering the
     /// first run [0, 6) sets the new font size and returns an inverse
     /// that restores the prior value.
@@ -5231,6 +5403,54 @@ mod tests {
             &Value::Text("Anything".into())
         )
         .is_ok());
+    }
+
+    /// ADR 158 — the list-level paths set the paragraph's own
+    /// `ListLevel`, undo restores the unset slots exactly, and a level
+    /// outside 1 to 9 (or not whole) is refused with the slot untouched.
+    #[test]
+    fn list_level_paths_round_trip() {
+        let mut project = Project::new(document_with_one_story("Story/u1"));
+        let level = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphNumberingLevel,
+                Value::Length(Some(3.0)),
+            ))
+            .expect("level")
+            .inverse;
+        let restart = project
+            .apply(story_range_op(
+                PropertyPath::ParagraphNumberingApplyRestartPolicy,
+                Value::Bool(false),
+            ))
+            .expect("restart")
+            .inverse;
+        let ll = project.document().stories[0].story.paragraphs[0].list_level;
+        assert_eq!((ll.level, ll.apply_restart), (Some(3), Some(false)));
+        for bad in [0.0, 10.0, 2.5] {
+            let err = project
+                .apply(story_range_op(
+                    PropertyPath::ParagraphNumberingLevel,
+                    Value::Length(Some(bad)),
+                ))
+                .expect_err("refused");
+            assert!(
+                matches!(err, OperationError::TypeMismatch { .. }),
+                "{err:?}"
+            );
+        }
+        assert_eq!(
+            project.document().stories[0].story.paragraphs[0]
+                .list_level
+                .level,
+            Some(3),
+            "a refused write leaves the slot"
+        );
+        crate::apply(project.document_mut(), &restart).expect("undo restart");
+        crate::apply(project.document_mut(), &level).expect("undo level");
+        assert!(project.document().stories[0].story.paragraphs[0]
+            .list_level
+            .is_unset());
     }
 
     /// ADR 153 — the line-setting paths set the paragraph's own

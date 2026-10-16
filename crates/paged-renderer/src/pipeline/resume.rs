@@ -70,11 +70,13 @@ pub(super) struct ParaMark {
     prev_line_height_exact: Option<f64>,
     numbered_counter: u32,
     prev_was_numbered: bool,
+    list_levels: super::numbering::ListLevels,
     last_placed_frame: Option<usize>,
     overset_reported: bool,
     force_overset: bool,
     /// The current frame's deepest baseline so far.
     cur_max_baseline_64: i32,
+    cur_max_em_bottom_64: i32,
     /// The current frame's command range so far, relative to the story's
     /// first command on `page`.
     cur_range: Option<(usize, usize)>,
@@ -103,10 +105,12 @@ impl ParaMark {
                 == other.prev_line_height_exact.map(f64::to_bits)
             && self.numbered_counter == other.numbered_counter
             && self.prev_was_numbered == other.prev_was_numbered
+            && self.list_levels == other.list_levels
             && self.last_placed_frame == other.last_placed_frame
             && self.overset_reported == other.overset_reported
             && self.force_overset == other.force_overset
             && self.cur_max_baseline_64 == other.cur_max_baseline_64
+            && self.cur_max_em_bottom_64 == other.cur_max_em_bottom_64
             && self.cur_range.is_some() == other.cur_range.is_some()
             && self.page == other.page
             && self.paths == other.paths
@@ -131,6 +135,7 @@ pub struct StoryResume {
     /// story's first command on the frame's page.
     frame_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
+    frame_max_em_bottom_64: Vec<i32>,
     placements: Vec<Vec<LinePlace>>,
     keep_specs: Vec<KeepSpec>,
     forced: ForcedBreaks,
@@ -192,11 +197,17 @@ pub(super) fn mark(
         prev_line_height_exact: em.prev_line_height_exact(),
         numbered_counter: em.numbered_counter,
         prev_was_numbered: em.prev_was_numbered,
+        list_levels: em.list_levels.clone(),
         last_placed_frame: em.last_placed_frame,
         overset_reported: em.overset_reported,
         force_overset: em.force_overset,
         cur_max_baseline_64: em
             .frame_max_baseline_64
+            .get(frame_idx)
+            .copied()
+            .unwrap_or(0),
+        cur_max_em_bottom_64: em
+            .frame_max_em_bottom_64
             .get(frame_idx)
             .copied()
             .unwrap_or(0),
@@ -428,6 +439,11 @@ pub(super) fn splice_prefix(
             std::cmp::Ordering::Equal => m.cur_max_baseline_64,
             std::cmp::Ordering::Greater => 0,
         };
+        em.frame_max_em_bottom_64[i] = match i.cmp(&cur) {
+            std::cmp::Ordering::Less => rec.frame_max_em_bottom_64[i],
+            std::cmp::Ordering::Equal => m.cur_max_em_bottom_64,
+            std::cmp::Ordering::Greater => 0,
+        };
     }
     em.frame_idx = m.frame_idx;
     em.y_cursor = m.y_cursor;
@@ -436,6 +452,7 @@ pub(super) fn splice_prefix(
     em.prev_line_height_exact = m.prev_line_height_exact;
     em.numbered_counter = m.numbered_counter;
     em.prev_was_numbered = m.prev_was_numbered;
+    em.list_levels = m.list_levels.clone();
     em.last_placed_frame = m.last_placed_frame;
     em.overset_reported = m.overset_reported;
     em.force_overset = m.force_overset;
@@ -547,6 +564,7 @@ pub(super) fn try_stop(
             (start, (e as i64 + base + shift) as usize)
         });
         em.frame_max_baseline_64[i] = rec.frame_max_baseline_64[i];
+        em.frame_max_em_bottom_64[i] = rec.frame_max_em_bottom_64[i];
     }
     em.frame_idx = end.frame_idx;
     em.y_cursor = end.y_cursor;
@@ -555,6 +573,7 @@ pub(super) fn try_stop(
     em.prev_line_height_exact = end.prev_line_height_exact;
     em.numbered_counter = end.numbered_counter;
     em.prev_was_numbered = end.prev_was_numbered;
+    em.list_levels = end.list_levels.clone();
     em.last_placed_frame = end.last_placed_frame;
     em.overset_reported = end.overset_reported;
     em.force_overset = end.force_overset;
@@ -600,6 +619,7 @@ pub(super) fn try_stop(
 pub(super) struct EmitterEnd {
     frame_ranges: Vec<Option<(usize, usize)>>,
     frame_max_baseline_64: Vec<i32>,
+    frame_max_em_bottom_64: Vec<i32>,
     placements: Vec<Vec<LinePlace>>,
     keep_specs: Vec<KeepSpec>,
 }
@@ -619,6 +639,7 @@ impl EmitterEnd {
                 })
                 .collect(),
             frame_max_baseline_64: em.frame_max_baseline_64.clone(),
+            frame_max_em_bottom_64: em.frame_max_em_bottom_64.clone(),
             placements: em.placements.clone(),
             keep_specs: em.keep_specs.clone(),
         }
@@ -642,6 +663,7 @@ pub(super) fn record(
         marks,
         frame_ranges: end.frame_ranges,
         frame_max_baseline_64: end.frame_max_baseline_64,
+        frame_max_em_bottom_64: end.frame_max_em_bottom_64,
         placements: end.placements,
         keep_specs: end.keep_specs,
         forced,

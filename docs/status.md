@@ -15,7 +15,7 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `NewBlankDocument` and `paged new` make an empty document.
 - **Render.** One display list per page, drawn on the CPU (`paged render`, snapshots) or
   with Vello on WebGPU (`presentFrame` in the editor wasm, `ViewerSession` in the viewer).
-- **Edit.** 130 mutation operations over the wire, batches that are atomic and cost one
+- **Edit.** 135 mutation operations over the wire, batches that are atomic and cost one
   rebuild and one undo step, undo and redo, and engine-minted ids reported in the reply.
 - **Locks and deletes follow InDesign.** A locked item, and the content of a locked container,
   is not moved, resized, reshaped, restacked or deleted: the operation is refused with
@@ -50,6 +50,16 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   `deleteMaster` and `renameMaster` make, remove and name masters. A radial gradient is centred
   at its `GradientFillStart`, and a cell edge draws in its stroke style (a double border as two
   rules) ([ADR 129](adr/129-pages-and-masters-for-presentations.md), protocol 70).
+- **Footnotes and hyperlinks edited over the wire.** `insertFootnote` and `deleteFootnote` add
+  and remove a note and its reference, and a text delete over a reference takes its note
+  ([ADR 163](adr/163-footnotes-inserted-and-deleted.md)). `deleteHyperlink` and `editHyperlink`
+  address any link, an InDesign document's own included, by its id; an edited link keeps its
+  appearance through a save ([ADR 164](adr/164-hyperlinks-deleted-and-edited.md), protocol 73).
+- **Update Table of Contents.** A TOC story prints what it holds, as InDesign does; an empty one
+  prints nothing. `updateTableOfContents` rewrites it over the current layout as InDesign writes
+  one: the title, then each heading with its page number after or before it in its own character
+  style. TOC styles read in InDesign's spelling ([ADR 165](adr/165-update-table-of-contents.md),
+  protocol 73). The hidden links and bookmarks InDesign adds to the entries are not written yet.
 - **One object model.** Every object has an address (`doc`, `page:#2`, `swatch:Color/Red`,
   `style:object/<id>`, `cell:<table>/0,1`, `textVariable:<id>`, …) and selectors find them
   (`page:#3 > frame[name="price"]`, `RequestQuery`, `paged.query`, `paged query`)
@@ -199,12 +209,27 @@ rendered. How the parts fit is in [`architecture.md`](architecture.md).
   and run as InDesign draws them ([ADR 155](adr/155-column-rules.md)). The rule's end ignores
   vertical justification, an object style's rules are not read, span and split regions draw
   none, and no property path writes them.
+- **Multi-level lists within one story, levels set by paragraph or style.** Levels 1 to 9
+  number, restart and print `^1` … `^9` as InDesign does
+  ([ADR 158](adr/158-how-indesign-numbers-a-multi-level-list.md)), and
+  `paragraphNumberingLevel` / `paragraphNumberingApplyRestartPolicy` set them. A level above 1
+  does not continue across stories or documents, the restart policy is read and written but no
+  path sets it, and `editNumberingList` takes no per-level fields.
 - **A footnote reference that overflows into a new restart scope keeps its composed number.**
   Notes are numbered through each story, restarted by page, spread or section, with their prefix
   and suffix, as InDesign numbers them ([ADR 156](adr/156-how-indesign-numbers-footnotes.md)). A
   reference is labelled when its paragraph is composed, so one whose line then moves to a page
-  that restarts the numbering keeps the earlier number. End-of-story placement, no-splitting,
-  straddling and the continuing rule are not read.
+  that restarts the numbering keeps the earlier number. Notes stand under each column or span
+  the frame as InDesign sets them ([ADR 160](adr/160-footnotes-in-columns.md)); a note too
+  tall for the room under its reference continues in the next column or frame under the
+  continuing rule, or moves its reference line on with `NoSplitting`
+  ([ADR 161](adr/161-a-note-too-tall-for-its-frame.md)). End-of-story placement is not read, and
+  an overset area does not grow its frame.
+- **Page numbers in the Roman edition's thirteen styles only.** Sections, chapters and footnotes
+  format numbers in every style InDesign 20.0.1's Roman edition offers, as it labels them
+  ([ADR 157](adr/157-every-page-numbering-style.md)). Styles only other editions offer
+  (full-width, Hindi, Thai, Farsi) fall back to Arabic, and no rendered fixture covers the
+  Hebrew and Arabic styles: the corpus ships no face with those scripts.
 - **An unresolved table of contents built at render numbers its entries from each story's head
   frame.** A story with no text bound to a TOC style (on its `<Story>` or its frame) is filled from
   the TOC style while the page is built, before layout says where a heading lands. The canvas's

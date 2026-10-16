@@ -656,6 +656,8 @@ pub fn style_paths(family: &str) -> &'static [P] {
             P::ParagraphNumberingExpression,
             P::ParagraphNumberingStartAt,
             P::ParagraphNumberingContinue,
+            P::ParagraphNumberingLevel,
+            P::ParagraphNumberingApplyRestartPolicy,
             P::ParagraphBulletsCharacterStyle,
             P::ParagraphNumberingCharacterStyle,
             P::ParagraphBulletCharacter,

@@ -2792,7 +2792,7 @@ fn kurbo_stroke(stroke: &paged_compose::Stroke) -> KurboStroke {
         .with_miter_limit(stroke.miter_limit.max(1.0) as f64);
     let dash = stroke.dash.as_slice();
     let valid = dash.len() >= 2
-        && dash.len() % 2 == 0
+        && dash.len().is_multiple_of(2)
         && dash.iter().all(|d| d.is_finite() && *d >= 0.0)
         && dash.iter().sum::<f32>() > 0.0;
     if valid {

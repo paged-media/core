@@ -1995,7 +1995,29 @@ fn paragraph_style_entries(
         ),
     ]);
     pairs.extend(line_setting_entries(&d.line_setting));
+    pairs.extend(list_level_entries(&d.list_level));
     into_entries(pairs)
+}
+
+/// The list-level paths (ADR 158), read off a paragraph's or a paragraph
+/// style's own [`paged_model::ListLevel`]: the level as `Length(None)` and
+/// the restart flag as `Text("")` when the level does not say.
+fn list_level_entries(
+    ll: &paged_model::ListLevel,
+) -> [(paged_mutate::PropertyPath, paged_mutate::Value); 2] {
+    use paged_mutate::{PropertyPath as P, Value as V};
+    [
+        (
+            P::ParagraphNumberingLevel,
+            V::Length(ll.level.map(|n| n as f32)),
+        ),
+        (
+            P::ParagraphNumberingApplyRestartPolicy,
+            ll.apply_restart
+                .map(V::Bool)
+                .unwrap_or(V::Text(String::new())),
+        ),
+    ]
 }
 
 /// The line-setting paths (ADR 153), read off a paragraph's or a
@@ -2869,7 +2891,13 @@ impl CanvasModel {
         // (carries an inverse `TextOp`), so frame-shape mutations
         // synthesise an empty text op into the response. Future
         // convergence folds both into one shape.
-        if let Some(op) = self.try_translate_frame_mutation_to_operation(mutation, &mut 0) {
+        let lowered = match mutation {
+            // Reads the layout, so it lowers here, where a build a batch
+            // still owes can be settled first.
+            Mutation::UpdateTableOfContents { story_id } => Some(self.lower_update_toc(story_id)?),
+            _ => self.try_translate_frame_mutation_to_operation(mutation, &mut 0),
+        };
+        if let Some(op) = lowered {
             // The handle each `bindCreated` named, read off the translated
             // children BEFORE apply (the ids are already in their specs,
             // and that is the scene translation itself resolved them in).
@@ -4552,6 +4580,49 @@ impl CanvasModel {
                     },
                     hyperlink_id: format!("Hyperlink/{base}"),
                     page: page.as_ref().map(|p| p.0.clone()),
+                })
+            }
+            Mutation::InsertFootnote {
+                story_id,
+                offset,
+                paragraph,
+                text,
+            } => Some(Operation::InsertFootnote {
+                story_id: story_id.clone(),
+                offset: *offset,
+                paragraph: *paragraph,
+                footnote_id: self.mint_page_item_id_with_offset(mint_offset),
+                text: text.clone(),
+                restore: None,
+            }),
+            Mutation::DeleteFootnote {
+                story_id,
+                footnote_id,
+            } => Some(Operation::RemoveFootnote {
+                story_id: story_id.clone(),
+                footnote_id: footnote_id.clone(),
+            }),
+            Mutation::DeleteHyperlink { hyperlink_id } => Some(Operation::DeleteHyperlink {
+                hyperlink_id: hyperlink_id.clone(),
+            }),
+            Mutation::EditHyperlink {
+                hyperlink_id,
+                name,
+                url,
+                page,
+            } => {
+                // Minted whether or not the edit needs a new destination:
+                // the apply decides, and redo must land on the same id.
+                let base = self.mint_page_item_id_with_offset(mint_offset);
+                Some(Operation::EditHyperlink {
+                    hyperlink_id: hyperlink_id.clone(),
+                    name: name.clone(),
+                    url: url.clone(),
+                    page: page.as_ref().map(|p| p.0.clone()),
+                    dest_id: match page {
+                        Some(_) => format!("HyperlinkPageDestination/{base}"),
+                        None => format!("HyperlinkURLDestination/{base}"),
+                    },
                 })
             }
             Mutation::LinkFrames { from, to } => Some(Operation::LinkFrames {
@@ -7704,6 +7775,7 @@ impl CanvasModel {
         let mut start_paragraphs: Vec<Option<paged_model::StartParagraph>> = Vec::new();
         let mut span_columns: Vec<paged_model::SpanColumns> = Vec::new();
         let mut line_settings: Vec<paged_model::LineSetting> = Vec::new();
+        let mut list_levels: Vec<paged_model::ListLevel> = Vec::new();
         let mut list_types: Vec<Option<String>> = Vec::new();
         let mut bullet_characters: Vec<Option<u32>> = Vec::new();
         let mut numbering_formats: Vec<Option<String>> = Vec::new();
@@ -7783,6 +7855,7 @@ impl CanvasModel {
                 start_paragraphs.push(para.start_paragraph);
                 span_columns.push(para.span_columns);
                 line_settings.push(para.line_setting);
+                list_levels.push(para.list_level);
                 list_types.push(para.bullets_list_type.clone());
                 bullet_characters.push(para.bullet_character);
                 numbering_formats.push(para.numbering_format.clone());
@@ -8171,6 +8244,23 @@ impl CanvasModel {
                     &line_settings.iter().map(|l| l.balance).collect::<Vec<_>>(),
                 )
                 .map(|o| Value::Text(o.map(|b| b.as_idml().to_string()).unwrap_or_default())),
+            },
+            // ADR 158 — the list level, read off each paragraph's own
+            // fields (`Length(None)` / `Text("")` ⇒ inherit).
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingLevel,
+                value: collapse_uniform(&list_levels.iter().map(|l| l.level).collect::<Vec<_>>())
+                    .map(|o| Value::Length(o.map(|n| n as f32))),
+            },
+            PropertyEntry {
+                path: PropertyPath::ParagraphNumberingApplyRestartPolicy,
+                value: collapse_uniform(
+                    &list_levels
+                        .iter()
+                        .map(|l| l.apply_restart)
+                        .collect::<Vec<_>>(),
+                )
+                .map(|o| o.map(Value::Bool).unwrap_or(Value::Text(String::new()))),
             },
             PropertyEntry {
                 path: PropertyPath::ParagraphRuleAbove,
@@ -9001,6 +9091,80 @@ impl CanvasModel {
             .collect()
     }
 
+    /// v73 (ADR 163) — every footnote, in story order. Backs
+    /// `documentCollection:footnotes`. A note's reference offset is the
+    /// story char (contiguous) of its marker: the k-th marker of its
+    /// paragraph when the paragraph holds one per note, its anchor
+    /// otherwise; its label and page come from the last layout.
+    pub fn footnotes(&self) -> Vec<crate::channel::FootnoteSummary> {
+        use crate::channel::FootnoteSummary;
+        let mark = paged_model::FOOTNOTE_REFERENCE_MARKER;
+        let options = &self.scene.designmap.footnote_options;
+        let laid_out: HashMap<&str, (u32, u32)> = self
+            .built()
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, p)| {
+                p.footnotes
+                    .iter()
+                    .filter(|f| !f.continued)
+                    .filter_map(move |f| {
+                        Some((f.footnote_self_id.as_deref()?, (pi as u32, f.number)))
+                    })
+            })
+            .collect();
+        let mut out = Vec::new();
+        for story in &self.scene.stories {
+            let mut start = 0u32;
+            for para in &story.story.paragraphs {
+                let markers: Vec<u32> = para
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.text.chars())
+                    .enumerate()
+                    .filter(|(_, c)| *c == mark)
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                let one_each = markers.len() == para.footnotes.len();
+                for (k, note) in para.footnotes.iter().enumerate() {
+                    let Some(self_id) = note.self_id.clone() else {
+                        continue;
+                    };
+                    let local = if one_each {
+                        markers[k]
+                    } else {
+                        note.anchor.unwrap_or(0)
+                    };
+                    let text: String = note
+                        .paragraphs
+                        .iter()
+                        .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let separator = options.separator_text.as_deref().unwrap_or("\t");
+                    let text = text.trim_start_matches(mark);
+                    let text = text.strip_prefix(separator).unwrap_or(text).to_string();
+                    let placed = laid_out.get(self_id.as_str()).copied();
+                    out.push(FootnoteSummary {
+                        story_id: story.self_id.clone(),
+                        offset: start + local,
+                        label: placed.map(|(_, n)| options.reference_label(n)),
+                        page_index: placed.map(|(p, _)| p),
+                        text,
+                        self_id,
+                    });
+                }
+                start += para
+                    .runs
+                    .iter()
+                    .map(|r| r.text.chars().count() as u32)
+                    .sum::<u32>();
+            }
+        }
+        out
+    }
+
     /// SDK Phase 5 (v1 sweep) — list every `<ConditionSet>` defined.
     /// Backs `documentCollection:conditionSets`.
     pub fn condition_sets(&self) -> Vec<crate::channel::ConditionSetSummary> {
@@ -9510,6 +9674,7 @@ impl CanvasModel {
             Bookmarks => serde_json::to_value(self.bookmarks()).unwrap_or_default(),
             CrossReferences => serde_json::to_value(self.cross_references()).unwrap_or_default(),
             IndexTopics => serde_json::to_value(self.index_topics()).unwrap_or_default(),
+            Footnotes => serde_json::to_value(self.footnotes()).unwrap_or_default(),
             Inks => serde_json::to_value(self.inks()).unwrap_or_default(),
             Sections => serde_json::to_value(self.sections()).unwrap_or_default(),
             Stories => serde_json::to_value(self.stories()).unwrap_or_default(),
@@ -10925,6 +11090,64 @@ impl CanvasModel {
             }
         }
         self.rebuild_after_mutation()
+    }
+
+    /// v73 — `UpdateTableOfContents` (ADR 165): TOC story `story_id`'s
+    /// new paragraphs, from its TOC style over the CURRENT layout. A build
+    /// a batch still owes is settled first, since the entries' pages come
+    /// from it.
+    fn lower_update_toc(
+        &mut self,
+        story_id: &str,
+    ) -> Result<paged_mutate::Operation, crate::channel::WorkerError> {
+        use crate::channel::WorkerError;
+        if self.rebuild_owed {
+            let outer = std::mem::replace(&mut self.rebuild_deferred, false);
+            self.rebuild_owed = false;
+            let rebuilt = self.rebuild_after_mutation();
+            self.rebuild_deferred = outer;
+            rebuilt.map_err(|e| WorkerError::NotImplemented {
+                what: format!("updateTableOfContents: the layout did not build ({e:?})"),
+            })?;
+        }
+        let refuse = |what: String| WorkerError::NotImplemented { what };
+        let parsed = self
+            .scene
+            .stories
+            .iter()
+            .find(|s| s.self_id == story_id)
+            .ok_or_else(|| refuse(format!("updateTableOfContents: no story {story_id}")))?;
+        // InDesign binds a TOC on its `<Story>`; the frame's attribute is
+        // the engine's older spelling.
+        let toc_id = parsed
+            .story
+            .applied_toc_style
+            .clone()
+            .or_else(|| {
+                self.scene
+                    .frame_for_story
+                    .get(story_id)
+                    .and_then(|f| f.applied_toc_style.clone())
+            })
+            .ok_or_else(|| {
+                refuse(format!(
+                    "updateTableOfContents: story {story_id} is not a table of contents"
+                ))
+            })?;
+        let toc = self.scene.styles.toc_styles.get(&toc_id).ok_or_else(|| {
+            refuse(format!(
+                "updateTableOfContents: story {story_id} names {toc_id}, which the document lacks"
+            ))
+        })?;
+        let laid_out = self.built.paragraph_pages();
+        let labels: Vec<String> = self.pages().into_iter().map(|p| p.name).collect();
+        let entries = self.scene.resolve_toc_on(toc, &laid_out);
+        let paragraphs = paged_renderer::pipeline::toc_paragraphs(toc, entries, &labels);
+        Ok(paged_mutate::Operation::ReplaceStoryParagraphs {
+            story_id: story_id.to_string(),
+            // Plain data: serializing it cannot fail.
+            paragraphs_json: serde_json::to_string(&paragraphs).expect("paragraphs serialize"),
+        })
     }
 
     pub fn rebuild_after_mutation(&mut self) -> Result<(), crate::channel::LoadError> {

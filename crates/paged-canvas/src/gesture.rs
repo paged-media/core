@@ -167,7 +167,14 @@ pub enum GestureType {
     Resize { handle: ResizeHandle },
     /// Reserved (Phase D). Rotate about a pivot.
     Rotate,
-    /// Phase D — scale about a pivot.
+    /// Phase D — scale about a pivot, by the ratio of the pointer's and
+    /// the anchor's offsets from it. InDesign's rule for the axes
+    /// (`tools/indesign-export/scale-frame-probe.jsx`): ONE target — a
+    /// frame or a group — scales along its own axes, so a rotated one
+    /// stays a rectangle at its angle and a side handle changes only the
+    /// dimension along its axis; SEVERAL targets scale as one unit along
+    /// the page axes, even when they share a rotation, which shears the
+    /// rotated ones exactly as InDesign does.
     Scale,
     /// Editor-ops — horizontal shear about the selection pivot (the
     /// Shear tool). The drag's x-delta, normalised by the grabbed
@@ -187,7 +194,12 @@ pub enum GestureType {
     /// The frame itself stays still.
     RotateContent,
     /// Phase G — scale the placed image inside its frame about the
-    /// frame's centroid. Edits `image_item_transform`'s 2×2 + tx/ty.
+    /// anchor's pivot (the opposite content handle a handle drag names;
+    /// the frame's centroid when it names none). Like one selected item
+    /// under [`GestureType::Scale`], the image scales along its own axes
+    /// (the frame's transform composed with its own), so it stays a
+    /// rectangle at its angle. Edits `image_item_transform`; the frame
+    /// stays still.
     ScaleContent,
     /// Phase H — drag a single Bezier control point on a `Polygon`'s
     /// path. The address picks which anchor + which role (anchor,
@@ -345,6 +357,10 @@ pub(crate) struct GestureSession {
     /// snap pass to convert its CSS-px tolerance to doc-space pt.
     /// `None` defaults to `1.0` (legacy behavior).
     pub camera_scale: Option<f32>,
+    /// The axes a `Scale` works along, as the 2×2 linear part of a
+    /// spread-space transform: a single target's own (see
+    /// [`GestureType::Scale`]). `None` is the page axes.
+    pub(crate) scale_frame: Option<[f32; 4]>,
     /// Every snapshotted GROUP's place, keyed by its `Self` id: the
     /// spread-space frame of its parent group (`None` at top level) and
     /// whether that parent moves in this session too. A group's stored
@@ -466,6 +482,14 @@ impl CanvasModel {
         // v67 — take the snap targets now, before the preview starts
         // rebuilding; `update_gesture` holds this index to the end.
         self.ensure_snap_index(false);
+        // Whether the selection is ONE item, before the expansion below
+        // adds a group's members: one item scales along its own axes.
+        let single_target = match nodes.split_first() {
+            Some((first, rest)) if rest.iter().all(|id| id.raw_id() == first.raw_id()) => {
+                Some(first.raw_id().to_string())
+            }
+            _ => None,
+        };
         // Track L — when a Group element is in the selection,
         // expand it to (Group itself, every member recursively).
         // The Group's own item_transform mutates alongside each
@@ -536,6 +560,13 @@ impl CanvasModel {
             None
         };
         let group_frames = self.group_frames_of(&snapshots);
+        let scale_frame = match (gesture, single_target) {
+            (GestureType::Scale, Some(target)) => snapshots
+                .iter()
+                .find(|s| s.id.raw_id() == target)
+                .and_then(|s| own_axes(s, &group_frames)),
+            _ => None,
+        };
         self.next_gesture_handle += 1;
         let handle = GestureHandle(self.next_gesture_handle);
         self.active_gesture = Some(GestureSession {
@@ -547,6 +578,7 @@ impl CanvasModel {
             anchor_spread,
             pivot_spread,
             camera_scale,
+            scale_frame,
             group_frames,
         });
         Ok(handle)
@@ -1257,6 +1289,7 @@ fn compute_node_mutation_in_spread(
                 anchor,
                 delta,
                 pivot,
+                session.scale_frame,
                 session.modifiers,
             );
             NodeMutation::Transform(Some(new_m))
@@ -1365,26 +1398,30 @@ fn compute_node_mutation_in_spread(
             }
         }
         GestureType::ScaleContent => {
-            // Phase G — scale the placed image about the frame's
-            // centroid in frame-inner space. Scale factors derived
-            // from (anchor → current) relative to world pivot —
-            // invariant across the world↔inner frame change since
-            // we only need their ratios.
-            let pivot_world = session.pivot_spread.unwrap_or((0.0, 0.0));
-            let anchor_world = session.anchor_spread.unwrap_or(pivot_world);
-            let pivot_local = (
-                (snap.bounds.left + snap.bounds.right) * 0.5,
-                (snap.bounds.top + snap.bounds.bottom) * 0.5,
-            );
-            let (sx, sy) =
-                compute_scale_factors(anchor_world, delta, pivot_world, session.modifiers);
-            let next = scale_matrix_about_pivot_local(
+            // The placed image is one item: it scales along its OWN axes
+            // (the frame's transform composed with its own, so an image
+            // turned inside a turned frame stays a rectangle), about the
+            // session's pivot — the opposite content handle a handle drag
+            // names, or the frame's centre (the default). The result goes
+            // back into the frame's inner space.
+            let pivot = session.pivot_spread.unwrap_or((0.0, 0.0));
+            let anchor = session.anchor_spread.unwrap_or(pivot);
+            let frame = snap.item_transform.unwrap_or(IDENTITY);
+            let Some(frame_inverse) = paged_mutate::path_math::affine_inverse(frame) else {
+                return NodeMutation::ImageTransform(snap.image_item_transform);
+            };
+            let placed = paged_mutate::path_math::affine_multiply(
+                frame,
                 snap.image_item_transform.unwrap_or(IDENTITY),
-                sx,
-                sy,
-                pivot_local,
             );
-            NodeMutation::ImageTransform(Some(next))
+            let [a, b, c, d, _, _] = placed;
+            let det = a * d - b * c;
+            let axes = (det.is_finite() && det.abs() > 1e-6).then_some([a, b, c, d]);
+            let scaled = scale_about_pivot(placed, anchor, delta, pivot, axes, session.modifiers);
+            NodeMutation::ImageTransform(Some(paged_mutate::path_math::affine_multiply(
+                frame_inverse,
+                scaled,
+            )))
         }
     }
 }
@@ -1606,85 +1643,56 @@ fn rotate_matrix_about_pivot_local(m: [f32; 6], theta: f32, pivot: (f32, f32)) -
     [new_a, new_b, new_c, new_d, new_tx, new_ty]
 }
 
-/// Phase G — compute per-axis scale factors from (anchor, delta)
-/// relative to a world pivot. Matches Phase D's scale_about_pivot
-/// behavior but exposed separately for callers that need just the
-/// factors (e.g. ScaleContent uses these factors with a different
-/// pivot frame).
-fn compute_scale_factors(
-    anchor: (f32, f32),
-    delta: (f32, f32),
-    pivot: (f32, f32),
-    modifiers: GestureModifiers,
-) -> (f32, f32) {
-    let anchor_dx = anchor.0 - pivot.0;
-    let anchor_dy = anchor.1 - pivot.1;
-    let current = (anchor.0 + delta.0, anchor.1 + delta.1);
-    let current_dx = current.0 - pivot.0;
-    let current_dy = current.1 - pivot.1;
-    let sx = if anchor_dx.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dx / anchor_dx
-    };
-    let sy = if anchor_dy.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dy / anchor_dy
-    };
-    if modifiers.shift {
-        let dom = if (sx.abs() - 1.0).abs() > (sy.abs() - 1.0).abs() {
-            sx
-        } else {
-            sy
-        };
-        (dom, dom)
-    } else {
-        (sx, sy)
-    }
+/// The axes a single `Scale` target works along: the linear part of its
+/// spread-space transform (a group's composed through its parents).
+/// `None` — the page axes — for an untransformed or degenerate one.
+fn own_axes(
+    snap: &NodeSnapshot,
+    group_frames: &std::collections::HashMap<String, GroupFrame>,
+) -> Option<[f32; 4]> {
+    let m = match &snap.node_id {
+        NodeId::Group(id) => paged_mutate::group_frame::compose(
+            group_frames.get(id).and_then(|g| g.parent_frame),
+            snap.item_transform,
+        ),
+        _ => snap.item_transform,
+    }?;
+    let [a, b, c, d, _, _] = m;
+    let det = a * d - b * c;
+    (det.is_finite() && det.abs() > 1e-6).then_some([a, b, c, d])
 }
 
-/// Phase G — scale `m` about a pivot expressed in `m`'s output
-/// coord frame. Mirrors `rotate_matrix_about_pivot_local`.
-fn scale_matrix_about_pivot_local(m: [f32; 6], sx: f32, sy: f32, pivot: (f32, f32)) -> [f32; 6] {
-    let [a, b, c, d, tx, ty] = m;
-    [
-        sx * a,
-        sy * b,
-        sx * c,
-        sy * d,
-        sx * tx + (1.0 - sx) * pivot.0,
-        sy * ty + (1.0 - sy) * pivot.1,
-    ]
-}
-
-/// Scale the matrix `m` about `pivot` by per-axis factors derived
-/// from `(anchor → anchor + delta)` relative to the pivot. With
+/// Scale the matrix `m` about `pivot` along the axes of `frame` (the
+/// page's when `None`), by per-axis factors: the ratio of the pointer's
+/// offset from the pivot (`anchor + delta`) to the anchor's, both read in
+/// that frame. An offset with no component along an axis (a side handle)
+/// leaves that axis alone, whatever the pointer does across it. With
 /// `modifiers.shift` the scale locks to the dominant axis.
 pub(crate) fn scale_about_pivot(
     m: [f32; 6],
     anchor: (f32, f32),
     delta: (f32, f32),
     pivot: (f32, f32),
+    frame: Option<[f32; 4]>,
     modifiers: GestureModifiers,
 ) -> [f32; 6] {
-    let anchor_dx = anchor.0 - pivot.0;
-    let anchor_dy = anchor.1 - pivot.1;
-    let current = (anchor.0 + delta.0, anchor.1 + delta.1);
-    let current_dx = current.0 - pivot.0;
-    let current_dy = current.1 - pivot.1;
-    // Avoid div-by-zero when the anchor was at the pivot (the user
-    // somehow grabbed dead-centre). Treat as identity scale.
-    let sx = if anchor_dx.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dx / anchor_dx
+    let [fa, fb, fc, fd] = frame.unwrap_or([1.0, 0.0, 0.0, 1.0]);
+    let det = fa * fd - fb * fc;
+    let into_frame = |(x, y): (f32, f32)| ((fd * x - fc * y) / det, (fa * y - fb * x) / det);
+    let held = into_frame((anchor.0 - pivot.0, anchor.1 - pivot.1));
+    let now = into_frame((anchor.0 + delta.0 - pivot.0, anchor.1 + delta.1 - pivot.1));
+    // Relative, not absolute: in a turned frame a side handle's offset
+    // carries rounding noise across the axis, and a ratio of two noises
+    // is not a scale.
+    let reach = held.0.hypot(held.1);
+    let ratio = |now: f32, held: f32| {
+        if held.abs() <= 1e-3 * reach {
+            1.0
+        } else {
+            now / held
+        }
     };
-    let sy = if anchor_dy.abs() < 1e-6 {
-        1.0
-    } else {
-        current_dy / anchor_dy
-    };
+    let (sx, sy) = (ratio(now.0, held.0), ratio(now.1, held.1));
     let (sx, sy) = if modifiers.shift {
         // Lock aspect → drive both axes by the dominant scale.
         let dom = if (sx.abs() - 1.0).abs() > (sy.abs() - 1.0).abs() {
@@ -1696,14 +1704,21 @@ pub(crate) fn scale_about_pivot(
     } else {
         (sx, sy)
     };
+    // K = F · diag(sx, sy) · F⁻¹, the scale in spread space; the identity
+    // frame reduces it to diag(sx, sy).
+    let k00 = (fa * sx * fd - fc * sy * fb) / det;
+    let k01 = fa * fc * (sy - sx) / det;
+    let k10 = fb * fd * (sx - sy) / det;
+    let k11 = (fd * sy * fa - fb * sx * fc) / det;
     let [a, b, c, d, tx, ty] = m;
+    let (ox, oy) = (tx - pivot.0, ty - pivot.1);
     [
-        sx * a,
-        sy * b,
-        sx * c,
-        sy * d,
-        sx * tx + (1.0 - sx) * pivot.0,
-        sy * ty + (1.0 - sy) * pivot.1,
+        k00 * a + k01 * b,
+        k10 * a + k11 * b,
+        k00 * c + k01 * d,
+        k10 * c + k11 * d,
+        k00 * ox + k01 * oy + pivot.0,
+        k10 * ox + k11 * oy + pivot.1,
     ]
 }
 
@@ -2199,6 +2214,7 @@ pub(crate) fn compute_new_bounds(
         anchor_spread: None,
         pivot_spread: None,
         camera_scale: None,
+        scale_frame: None,
         group_frames: std::collections::HashMap::new(),
     };
     match compute_node_mutation(&snap, &session, delta) {
@@ -2654,34 +2670,67 @@ mod tests {
     }
 
     #[test]
-    fn scale_content_pivot_is_fixed_under_scale() {
-        // Scaling about a pivot leaves the pivot point itself put.
-        let m = IDENTITY;
-        let pivot = (30.0, 30.0);
-        let out = scale_matrix_about_pivot_local(m, 2.0, 3.0, pivot);
-        let [a, bb, c, d, tx, ty] = out;
-        let px = a * pivot.0 + c * pivot.1 + tx;
-        let py = bb * pivot.0 + d * pivot.1 + ty;
-        assert!((px - pivot.0).abs() < 1e-3, "px={px}");
-        assert!((py - pivot.1).abs() < 1e-3, "py={py}");
-    }
-
-    #[test]
     fn scale_factors_ratio_from_anchor_and_delta() {
-        // Anchor 100 right of pivot; drag +50 → sx = 1.5. Anchor 50
-        // below pivot; no y delta → sy = 1.0.
-        let (sx, sy) = compute_scale_factors((100.0, 50.0), (50.0, 0.0), (0.0, 0.0), NONE);
-        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
-        assert!((sy - 1.0).abs() < 1e-3, "sy={sy}");
+        // Anchor 100 right of the pivot, dragged +50 → sx = 1.5; 50 below
+        // it with no y delta → sy = 1.0.
+        let out = scale_about_pivot(IDENTITY, (100.0, 50.0), (50.0, 0.0), (0.0, 0.0), None, NONE);
+        assert!((out[0] - 1.5).abs() < 1e-3, "sx={}", out[0]);
+        assert!((out[3] - 1.0).abs() < 1e-3, "sy={}", out[3]);
     }
 
     #[test]
     fn scale_factors_shift_locks_to_dominant_axis() {
         // sx = 1.5 (|Δ|=0.5), sy = 1.2 (|Δ|=0.2): Shift picks the
         // dominant (sx) for both axes — uniform scale.
-        let (sx, sy) = compute_scale_factors((100.0, 100.0), (50.0, 20.0), (0.0, 0.0), SHIFT);
-        assert!((sx - 1.5).abs() < 1e-3, "sx={sx}");
-        assert!((sy - 1.5).abs() < 1e-3, "sy={sy}");
+        let out = scale_about_pivot(
+            IDENTITY,
+            (100.0, 100.0),
+            (50.0, 20.0),
+            (0.0, 0.0),
+            None,
+            SHIFT,
+        );
+        assert!((out[0] - 1.5).abs() < 1e-3, "sx={}", out[0]);
+        assert!((out[3] - 1.5).abs() < 1e-3, "sy={}", out[3]);
+    }
+
+    #[test]
+    fn scale_in_the_page_frame_is_a_diagonal_scale_about_the_pivot() {
+        // Anchor 100 right of and 50 below the pivot, dragged +50, +25:
+        // ×1.5 on both page axes, the pivot fixed.
+        let m = [1.0, 0.0, 0.0, 1.0, 10.0, 20.0];
+        let pivot = (40.0, 60.0);
+        let out = scale_about_pivot(m, (140.0, 110.0), (50.0, 25.0), pivot, None, NONE);
+        let expect = [
+            1.5,
+            0.0,
+            0.0,
+            1.5,
+            1.5 * 10.0 - 0.5 * 40.0,
+            1.5 * 20.0 - 0.5 * 60.0,
+        ];
+        for (a, e) in out.iter().zip(expect) {
+            assert!((a - e).abs() < 1e-4, "{out:?} vs {expect:?}");
+        }
+    }
+
+    #[test]
+    fn scale_in_a_turned_frame_stays_a_rotation_times_a_diagonal() {
+        // A 30° frame; the anchor 100 along its x axis from the pivot,
+        // dragged 50 further along it and 20 across it: ×1.5 along the
+        // frame's x, ×1 along its y (a side handle ignores the wobble).
+        let (s, c) = 30.0_f32.to_radians().sin_cos();
+        let m = [c, -s, s, c, 100.0, 200.0];
+        let pivot = (100.0, 200.0);
+        let x = (c, -s);
+        let y = (s, c);
+        let anchor = (pivot.0 + 100.0 * x.0, pivot.1 + 100.0 * x.1);
+        let delta = (50.0 * x.0 + 20.0 * y.0, 50.0 * x.1 + 20.0 * y.1);
+        let out = scale_about_pivot(m, anchor, delta, pivot, Some([c, -s, s, c]), NONE);
+        let expect = [1.5 * c, -1.5 * s, s, c, 100.0, 200.0];
+        for (a, e) in out.iter().zip(expect) {
+            assert!((a - e).abs() < 1e-4, "{out:?} vs {expect:?}");
+        }
     }
 
     /// Build an image-frame snapshot + a content-gesture session, run
@@ -2705,6 +2754,7 @@ mod tests {
             anchor_spread: Some((100.0, 50.0)),
             pivot_spread: Some((50.0, 50.0)),
             camera_scale: None,
+            scale_frame: None,
             group_frames: std::collections::HashMap::new(),
         };
         compute_node_mutation(&snap, &session, (0.0, 50.0))

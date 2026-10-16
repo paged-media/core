@@ -95,7 +95,7 @@ formatted in one mechanical pass; the workaround is retired.
   back the editor; `paged-canvas-wasm` / `paged-introspect-wasm` are the
   wasm-bindgen surfaces it consumes.
 - `crates/paged-wire/` — the wire VOCABULARY: the identities (`PageId`,
-  `ElementId`, `TextCellAddr`, `ByteBuf`) and the 130 `Mutation` ops, in one
+  `ElementId`, `TextCellAddr`, `ByteBuf`) and the 135 `Mutation` ops, in one
   place so the CLI, the wasm wire, the Boa bridge, the plugin host and the
   editor speak one spelling. **Two halves, and the split is load-bearing:**
   the operations need `paged-mutate` for their payload types, the identities
