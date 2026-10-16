@@ -47,8 +47,13 @@ fn build(
     let runs: String = runs
         .iter()
         .map(|(attrs, text)| {
+            let kerning = if attrs.contains("KerningMethod") {
+                ""
+            } else {
+                r#"KerningMethod="$ID/None""#
+            };
             format!(
-                r#"<CharacterStyleRange AppliedFont="Noto Sans JP" FontStyle="Regular" PointSize="20" KerningMethod="$ID/None" {attrs}><Content>{text}</Content></CharacterStyleRange>"#
+                r#"<CharacterStyleRange AppliedFont="Noto Sans JP" FontStyle="Regular" PointSize="20" {kerning} {attrs}><Content>{text}</Content></CharacterStyleRange>"#
             )
         })
         .collect();
@@ -280,6 +285,48 @@ fn kenten_stand_upright_on_their_characters() {
     for (i, m) in marks.iter().enumerate() {
         near(m.x, 405.0, "beside the column's em box");
         near(m.y, 110.0 + 20.0 * i as f32, "centred on its character");
+    }
+}
+
+/// Each character carrying an emphasis mark of its own, a style run each,
+/// sets as one run would, the font's kerning down the column included
+/// (InDesign 20.0.1 kerned す。 1.4 pt closer in `kenten-shapes`).
+#[test]
+fn marks_of_their_own_keep_the_kerning_down_the_column() {
+    let text = "縦書きの文章です。";
+    let metrics = r#"KerningMethod="$ID/Metrics""#;
+    let kinds = [
+        "KentenSesameDot",
+        "KentenWhiteSesameDot",
+        "KentenFisheye",
+        "KentenBlackCircle",
+        "KentenSmallBlackCircle",
+        "KentenBullseye",
+        "KentenBlackTriangle",
+        "KentenWhiteTriangle",
+        "KentenWhiteCircle",
+    ];
+    let whole = format!(r#"{metrics} KentenKind="KentenSesameDot""#);
+    let one = build(true, "", "", &[(&whole, text)]);
+    let runs: Vec<(String, String)> = text
+        .chars()
+        .zip(kinds)
+        .map(|(c, k)| (format!(r#"{metrics} KentenKind="{k}""#), c.to_string()))
+        .collect();
+    let runs: Vec<(&str, &str)> = runs.iter().map(|(a, t)| (a.as_str(), t.as_str())).collect();
+    let split = build(true, "", "", &runs);
+    let ys = |page: &paged_renderer::BuiltPage| -> Vec<f32> {
+        drawn(page)
+            .iter()
+            .filter(|d| !d.turned() && (d.size() - 20.0).abs() < 0.01)
+            .map(|d| d.y)
+            .collect()
+    };
+    let (one, split) = (ys(&one), ys(&split));
+    assert_eq!(one.len(), 9, "{one:?}");
+    assert_eq!(split.len(), 9, "{split:?}");
+    for (a, b) in one.iter().zip(&split) {
+        near(*b, *a, "split into runs");
     }
 }
 

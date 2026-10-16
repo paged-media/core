@@ -863,6 +863,48 @@ pub fn apply_mojikumi_half_width(shape: &mut ShapedRun, text: &str) {
     shape.total_advance = total;
 }
 
+/// The font's kerning between the last character of run `a` and the first
+/// of `b` (1/64 pt, unrounded), where the two differ in nothing the shaper
+/// sees: shaped together, the pair sets this much tighter (or looser) than
+/// its two characters shaped apart.
+fn boundary_kern(a: &StyledRun, b: &StyledRun, vertical: bool) -> Option<f64> {
+    if a.font_id != b.font_id
+        || !std::ptr::eq(a.face, b.face)
+        || a.point_size != b.point_size
+        || a.shaping_features != b.shaping_features
+        || a.horizontal_scale_pct != b.horizontal_scale_pct
+    {
+        return None;
+    }
+    let last = a.text.chars().next_back()?;
+    let first = b.text.chars().next()?;
+    if [last, first]
+        .iter()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return None;
+    }
+    let exact = |text: &str| {
+        let mut pen = 0.0;
+        if vertical {
+            crate::shape::shape_run_vertical_at(
+                a.face,
+                text,
+                a.point_size,
+                a.shaping_features,
+                &mut pen,
+            );
+        } else {
+            shape_run_with_features_at(a.face, text, a.point_size, a.shaping_features, &mut pen);
+        }
+        pen
+    };
+    let pair: String = [last, first].iter().collect();
+    let kern =
+        exact(&pair) - exact(last.encode_utf8(&mut [0; 4])) - exact(first.encode_utf8(&mut [0; 4]));
+    (kern.abs() > 1e-3).then_some(kern)
+}
+
 pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagraph {
     if runs.is_empty() {
         return LaidOutParagraph { lines: Vec::new() };
@@ -883,9 +925,32 @@ pub fn layout_runs(runs: &[StyledRun], options: &LayoutOptions) -> LaidOutParagr
     // rounded against it (`shape_run_with_features_at`), so two adjacent
     // runs that differ in nothing the shaper sees set as one run would.
     let mut pen = 0.0_f64;
-    for r in runs {
+    for (i, r) in runs.iter().enumerate() {
         run_starts.push(paragraph_text.len());
         paragraph_text.push_str(r.text);
+        // Two such runs also kern across their boundary as one run would:
+        // InDesign 20.0.1 kerns す。 1.4 pt closer where each character
+        // carries an emphasis mark of its own
+        // (tools/indesign-export/vertical-text-probe, `kenten-shapes`).
+        if let Some(kern) = i
+            .checked_sub(1)
+            .and_then(|p| boundary_kern(&runs[p], r, options.vertical))
+        {
+            if let Some(last) = run_shapes.last_mut() {
+                let factor = r.horizontal_scale_pct as f64 / 100.0;
+                let before = pen.round() as i32;
+                pen += kern;
+                let delta = if (factor - 1.0).abs() > 0.0005 {
+                    (kern * factor).round() as i32
+                } else {
+                    pen.round() as i32 - before
+                };
+                if let Some(g) = last.glyphs.last_mut() {
+                    g.x_advance += delta;
+                    last.total_advance += delta;
+                }
+            }
+        }
         let run_pen = pen;
         let mut s = if options.vertical {
             crate::shape::shape_run_vertical_at(
@@ -2818,6 +2883,54 @@ mod tests {
             ruby_aki: Vec::new(),
             vertical: false,
         }
+    }
+
+    /// Two runs that differ in nothing the shaper sees (here only the
+    /// underline) set exactly as one run would, the font's kerning across
+    /// their boundary included; a run at another size does not kern with
+    /// its neighbour.
+    #[test]
+    fn matching_runs_kern_across_their_boundary() {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../corpus/fonts/Inter.ttf"),
+        )
+        .expect("Inter.ttf fixture");
+        let face = crate::shape::Face::from_slice(&bytes, 0).expect("parse Inter");
+        let run = |text, point_size, underline| StyledRun {
+            text,
+            face: &face,
+            point_size,
+            tracking: None,
+            font_id: 1,
+            underline,
+            strikethru: false,
+            substituted: false,
+            baseline_shift_pt: 0.0,
+            horizontal_scale_pct: 100.0,
+            vertical_scale_pct: 100.0,
+            skew_deg: 0.0,
+            fallback_faces: &[],
+            shaping_features: crate::shape::ShapingFeatures::default(),
+        };
+        let xs = |runs: &[StyledRun]| -> Vec<i32> {
+            layout_runs(runs, &LayoutOptions::new(400.0, 24.0)).lines[0]
+                .glyphs
+                .iter()
+                .map(|g| g.x)
+                .collect()
+        };
+        let whole = xs(&[run("AVA", 24.0, false)]);
+        assert_eq!(
+            xs(&[run("A", 24.0, false), run("VA", 24.0, true)]),
+            whole,
+            "split between A and V"
+        );
+        // Inter kerns AV: the split without it would set V later.
+        let a = shape_run(&face, "A", 24.0).total_advance;
+        assert!(whole[1] < whole[0] + a, "AV kerned: {whole:?}, A {a}");
+        let mixed = xs(&[run("A", 24.0, false), run("VA", 23.0, false)]);
+        assert_eq!(mixed[1], whole[0] + a, "no kerning across sizes");
     }
 
     #[test]

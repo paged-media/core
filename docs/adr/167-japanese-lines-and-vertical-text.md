@@ -67,13 +67,12 @@ kerning, ruby, kenten, and horizontal controls). Read with `pdf-glyphs.py`:
 ## Result
 
 Every glyph of every vertical case against InDesign's PDF within 0.02 pt — columns, upright and
-turned glyphs, ruby and kenten — but two: the kinsoku cases this InDesign cannot measure (dropped
-from the probe), and a line whose kenten change from character to character (its kerning pairs
-cross style runs, ADR 166 "Not yet").
+turned glyphs, ruby and kenten, and a line whose kenten change from character to character, once
+runs kern across their boundary (ADR 166) — the kinsoku cases this InDesign cannot measure
+dropped from the probe.
 
 ## Not yet
 
 - Tate-chu-yoko, rotated Roman, and per-character rotation (`CharacterRotation`).
 - A vertical frame that is not a rectangle, wraps around other items, anchored objects, tables and
   footnotes in vertical text; underlines down a column.
-- Kerning pairs across style runs.

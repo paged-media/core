@@ -1539,26 +1539,29 @@ fn text_cases(c: &mut Vec<Case>) {
             image_uri: None,
         }
     }));
-    // Written expecting INERT — a link is a REGION, not a mark: it
-    // restyles no glyph, and the display list carries no link command
-    // (the clickable area rides `collect_link_regions` onto `BuiltPage`,
-    // beside the display list rather than inside it). The digest moves
-    // anyway, and for a reason worth recording: tagging `[start, end)`
-    // SPLITS the run at the link boundary, so what was one shaped run
-    // becomes two and the glyph stream changes even though the same
-    // characters are drawn. That is a real display-list change, so the
-    // expectation is `Paints` — but note it is a shaping artefact of the
-    // split, not a mark the op added.
-    c.push(paints("InsertHyperlink", "text", |m| {
-        let (story_id, chars) = biggest_story(m);
-        Mutation::InsertHyperlink {
-            story_id,
-            start: 0,
-            end: chars.min(12),
-            url: "https://paged.media".into(),
-            page: None,
-        }
-    }));
+    // A link is a REGION, not a mark: it restyles no glyph, and the
+    // display list carries no link command (the clickable area rides
+    // `collect_link_regions` onto `BuiltPage`, beside the display list
+    // rather than inside it). Tagging `[start, end)` splits the run at the
+    // link boundary, and the digest used to move with it: the font's
+    // kerning pair across the split was dropped. Runs the shaper cannot
+    // tell apart now kern across their boundary (ADR 166), so the split
+    // sets as the one run did.
+    c.push(inert(
+        "InsertHyperlink",
+        "text",
+        "a link is a region, not a mark; the runs it splits set as one run",
+        |m| {
+            let (story_id, chars) = biggest_story(m);
+            Mutation::InsertHyperlink {
+                story_id,
+                start: 0,
+                end: chars.min(12),
+                url: "https://paged.media".into(),
+                page: None,
+            }
+        },
+    ));
     // v73 (ADR 164) — a link is a region beside the display list (see
     // `InsertHyperlink`), and deleting one leaves its runs split where the
     // insert split them: the glyph stream is the one already drawn.

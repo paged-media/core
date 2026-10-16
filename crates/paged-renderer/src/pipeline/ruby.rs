@@ -206,7 +206,11 @@ impl ParentSpacing {
 /// `RubyParentOverhangAmount`: how far a wider ruby may reach over each
 /// neighbour of its base. InDesign overhangs a neighbour that is not a
 /// kanji (kana, brackets and Latin, measured), never past a line's start
-/// or end, and by at most half the ruby's excess on each side.
+/// or end, by at most half the ruby's excess on each side, and never by
+/// more than the neighbour's natural width, its em box before `palt` (a
+/// 14.34 pt `c` takes 14.34 pt of a 15 pt overhang, a kana a whole em
+/// however `palt` narrows it: `ruby-parent-spacing-probe` `latin`,
+/// `wide-onechar`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Overhang {
     /// `RubyOverhangOneRuby`, the default: one ruby character.
@@ -266,8 +270,8 @@ struct WideSettings {
 /// Fit a ruby `ruby_w` wide (1/64 pt, at `x_scale`) over a base of
 /// `base_chars` characters `base_w` wide, for each line position: the
 /// space before and after each base character, and where the ruby starts
-/// and how wide it prints. `left_ok` / `right_ok`: whether the characters
-/// beside the base may be overhung.
+/// and how wide it prints. `left` / `right`: the width of the character
+/// beside the base where it may be overhung.
 #[allow(clippy::too_many_arguments)]
 fn fit_wide(
     settings: &WideSettings,
@@ -277,7 +281,7 @@ fn fit_wide(
     x_scale: f32,
     ruby_em: i32,
     base_em: i32,
-    (left_ok, right_ok): (bool, bool),
+    (left_w, right_w): (Option<i32>, Option<i32>),
 ) -> ([Vec<(i32, i32)>; 4], [WideFit; 4]) {
     let excess = ruby_w - base_w;
     let n = base_chars.max(1);
@@ -291,8 +295,8 @@ fn fit_wide(
             continue;
         }
         let limit = settings.overhang.limit(ruby_em, base_em).min(excess / 2);
-        let left = if left_ok && !at_start { limit } else { 0 };
-        let right = if right_ok && !at_end { limit } else { 0 };
+        let left = left_w.filter(|_| !at_start).map_or(0, |w| limit.min(w));
+        let right = right_w.filter(|_| !at_end).map_or(0, |w| limit.min(w));
         let mut room = excess - left - right;
         let mut scale = x_scale;
         if let Some(min) = settings.min_scale {
@@ -375,6 +379,35 @@ pub(super) fn ruby_groups<'f>(
     let mut out = Vec::new();
     let mut at = 0u32;
     let paragraph: String = runs.iter().map(|r| r.text).collect();
+    let starts: Vec<usize> = runs
+        .iter()
+        .scan(0, |at, r| {
+            let start = *at;
+            *at += r.text.len();
+            Some(start)
+        })
+        .collect();
+    // The natural width of the character at `byte` where a wider ruby may
+    // overhang it, in its own run's face and size.
+    let overhang_room = |byte: usize| -> Option<i32> {
+        let c = paragraph[byte..]
+            .chars()
+            .next()
+            .filter(|&c| overhangs(Some(c)))?;
+        let r = &runs[starts.iter().rposition(|&s| s <= byte)?];
+        let mut buf = [0u8; 4];
+        let text = c.encode_utf8(&mut buf);
+        let natural = paged_text::ShapingFeatures {
+            proportional_widths: false,
+            ..r.shaping_features
+        };
+        let shaped = if vertical {
+            paged_text::shape::shape_run_vertical_at(r.face, text, r.point_size, natural, &mut 0.0)
+        } else {
+            paged_text::shape_run_with_features(r.face, text, r.point_size, natural)
+        };
+        Some((shaped.total_advance as f32 * r.horizontal_scale_pct / 100.0).round() as i32)
+    };
     for (k, run) in runs.iter().enumerate() {
         let start = at;
         at += run.text.len() as u32;
@@ -462,8 +495,11 @@ pub(super) fn ruby_groups<'f>(
                 .collect();
             let (aki, fit) = if ruby_w > base_w {
                 let neighbours = (
-                    overhangs(paragraph[..base.start as usize].chars().next_back()),
-                    overhangs(paragraph[base.end as usize..].chars().next()),
+                    paragraph[..base.start as usize]
+                        .char_indices()
+                        .next_back()
+                        .and_then(|(i, _)| overhang_room(i)),
+                    overhang_room(base.end as usize),
                 );
                 let (variants, fit) = fit_wide(
                     &wide,

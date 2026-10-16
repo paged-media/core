@@ -309,3 +309,50 @@ fn kana_take_proportional_widths_under_metrics_kerning_ruby_does_not() {
         );
     }
 }
+
+/// A neighbour narrower than the overhang allowed is overhung by no more
+/// than its width (InDesign's `latin` case: Kozuka's 14.34 pt `c` takes
+/// that much of one ruby em), and what it leaves spaces the base 1-2-1.
+/// `b`, wider than a ruby em, takes the whole em.
+#[test]
+fn a_neighbour_is_overhung_no_further_than_it_is_wide() {
+    let i = {
+        let page = build(&[("", "i山")]);
+        let x = xs(&page, 30.0);
+        x[1] - x[0]
+    };
+    assert!(i < 15.0, "Noto Sans JP's i is narrower than a ruby em: {i}");
+    let page = build(&[("", "ab"), (RUBY6, "漢字"), ("", "i山")]);
+    let base = xs(&page, 30.0);
+    let ruby = xs(&page, 15.0);
+    let rest = 15.0 - i;
+    let start = ruby[0] + 15.0;
+    assert_xs(
+        &base[2..5],
+        &[
+            start + rest / 4.0,
+            start + 30.0 + rest * 3.0 / 4.0,
+            start + 60.0 + rest,
+        ],
+        "base",
+    );
+}
+
+/// A kana is overhung by up to its whole em, however `palt` narrows it
+/// (InDesign's `wide-onechar`: 30 pt over い): one base character of
+/// overhang each side leaves a ruby 60 pt wider than its base solid.
+#[test]
+fn a_kana_is_overhung_by_its_whole_em() {
+    let ruby8 = r#"RubyFlag="1" RubyType="GroupRuby" RubyString="かんじかんじかん" RubyParentOverhangAmount="RubyOverhangOneChar""#;
+    let page = build(&[("", "あい"), (ruby8, "漢字"), ("", "うえ")]);
+    let base = xs(&page, 30.0);
+    let ruby = xs(&page, 15.0);
+    assert!(
+        (base[3] - base[2] - 30.0).abs() < 0.02,
+        "base solid: {base:?}"
+    );
+    assert!(
+        (base[2] - 30.0 - ruby[0]).abs() < 0.02,
+        "a whole em over い: {ruby:?}, base {base:?}"
+    );
+}

@@ -8,7 +8,8 @@
   - `paged-text`: `LayoutOptions::ruby_aki` (a `RubyAki` per base: the space before and after each
     base character mid-line, at a line's start, at its end and both) replaces the symmetric
     `glyph_aki`; each line takes the variant its base's place on it asks for.
-    `ShapingFeatures::proportional_widths` (`palt`) and `ShapingFeatures::ruby()`.
+    `ShapingFeatures::proportional_widths` (`palt`) and `ShapingFeatures::ruby()`; `layout_runs`
+    kerns across the boundary of two runs the shaper cannot tell apart.
   - `paged-renderer`: `pipeline::ruby` fits a wider ruby (`ParentSpacing`, `Overhang`, `fit_wide`);
     `metrics::shaping_features_from` sets `palt` under Metrics kerning.
   - plugin-publish `idml-import` / `idml-export`: reads and writes the five attributes.
@@ -43,8 +44,11 @@ With E the room a ruby still needs past its base and n the base's characters:
 | `RubyAutoScaling` | narrows the ruby, down to `RubyParentScalingPercent` (66 % default) |
 
 - The ruby overhangs first: over kana, brackets and Latin, never a kanji, never past a line's start
-  or end, and by at most half its excess on each side. Then it narrows, if allowed; what is left
-  spaces the base.
+  or end, by at most half its excess on each side, and by no more than the neighbour's natural
+  width, its em box before `palt` (Kozuka's 14.34 pt `c` takes 14.34 pt of a 15 pt overhang and
+  the base takes the other 0.66 pt 1-2-1; with one base character of overhang allowed, a kana is
+  overhung by its whole 30 pt, though `palt` sets い 26.7 pt wide). Then it narrows, if allowed;
+  what is left spaces the base.
 - A base starting a line drops its share before, one ending a line its share after, and the room
   goes to the shares left (line start, 15 pt over two characters: 0, 10 between, 5 after).
 - Ruby is set full width (no kerning, no proportional widths) in the face's ruby forms: the PDF
@@ -62,15 +66,19 @@ With E the room a ruby still needs past its base and n the base's characters:
   mid-line one and each line swaps in its own, then the ruby is drawn from the slot its base took.
 - **Metrics kerning sets proportional widths** (`palt`, with `kern`); ruby is shaped with
   `ShapingFeatures::ruby()` (kerning off, `ruby` forms).
+- **Runs the shaper cannot tell apart kern across their boundary** (`layout_runs`,
+  `boundary_kern`): where two adjacent runs share face, size, features and scale, the font's
+  kerning between the last character of one and the first of the next is added, as one run would
+  set it. A ruby base, a kenten or a colour change no longer drops the pair. `kerning-runs-probe`
+  asked InDesign: Minion Pro's AV, Ta and Wa kern across a colour or underline change exactly as in
+  one run, and not at all across a change of size or font.
 
 ## Result
 
-Paged against the probes' PDFs: every one of the 40 ruby cases within 0.02 pt but one (Latin
-beside the base, 0.66 pt: InDesign's spacing between Japanese and Latin); the kana lines within
-0.012 pt under Metrics and with kerning off.
+Paged against the probes' PDFs: every one of the 40 ruby cases within 0.012 pt; the kana lines
+within 0.012 pt under Metrics and with kerning off; the kerning-runs lines (one run, kerning off,
+colour, underline and size changes) within 0.008 pt.
 
 ## Not yet
 
 - Optical kerning (InDesign's outline-driven pass) is set with the face's kerning pairs only.
-- Kerning pairs across style runs (a kenten or colour change inside a pair) are not applied: runs
-  are shaped one by one.
