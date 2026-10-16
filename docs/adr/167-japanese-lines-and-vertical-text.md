@@ -1,4 +1,4 @@
-# ADR 165 — Japanese lines, and vertical text as horizontal text turned
+# ADR 167 — Japanese lines, and vertical text as horizontal text turned
 
 - **Status:** Accepted 2026-10-16.
 - **Scope:**
@@ -69,7 +69,7 @@ kerning, ruby, kenten, and horizontal controls). Read with `pdf-glyphs.py`:
 Every glyph of every vertical case against InDesign's PDF within 0.02 pt — columns, upright and
 turned glyphs, ruby and kenten — but two: the kinsoku cases this InDesign cannot measure (dropped
 from the probe), and a line whose kenten change from character to character (its kerning pairs
-cross style runs, ADR 164 "Not yet").
+cross style runs, ADR 166 "Not yet").
 
 ## Not yet
 

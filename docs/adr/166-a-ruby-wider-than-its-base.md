@@ -1,4 +1,4 @@
-# ADR 164 — A ruby wider than its base, and kana at their proportional widths
+# ADR 166 — A ruby wider than its base, and kana at their proportional widths
 
 - **Status:** Accepted 2026-10-16.
 - **Scope:**
