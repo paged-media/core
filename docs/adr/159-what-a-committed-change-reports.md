@@ -13,7 +13,7 @@
   - `crates/paged-canvas-wasm/src/dispatch.rs` and `crates/paged-cli/src/engine.rs` thread the
     new fields onto the replies.
   - No protocol change: every field is new and optional, and no message kind or operation
-    changes. The fields arrive in `v0.71.12`, on protocol 71.
+    changes. The fields arrive in `v0.71.13`, on protocol 71.
 
 ## Context
 
@@ -95,18 +95,18 @@ The table read now resolves a name against every path, not only the advertised o
 **No protocol bump.** Every addition is a new optional field or a new read-only
 `PropertyPath`, which governance rule 1
 ([`reference/protocol-governance.md`](../reference/protocol-governance.md)) says never bumps:
-`PROTOCOL_VERSION` stays 71 and the fields ship in the `v0.71.12` patch release. An older host
+`PROTOCOL_VERSION` stays 71 and the fields ship in the `v0.71.13` patch release. An older host
 reads every reply as before, and a newer host talking to an older engine simply sees the fields
 absent. So a consumer detects them by presence: an absent `reflow`, `writes`, `pageIds`,
 `pageOrigin` or `spreadId` means an engine that does not send it, and the consumer keeps the
 fallback it has today. A consumer that needs them (and wants to drop its fallback) requires
-`@paged-media/canvas-wasm >= 0.71.12` by package version, not by protocol number. The two
+`@paged-media/canvas-wasm >= 0.71.13` by package version, not by protocol number. The two
 band-count paths answer "no such readable path" on an older engine, which is the same signal.
 
 ## Consequences
 
 - The plugin SDK re-syncs its vendored wire types and catalog from `@paged-media/canvas-wasm`
-  0.71.12 and keys off presence: it passes `reflow` through on `gestureCommitted` when the reply
+  0.71.13 and keys off presence: it passes `reflow` through on `gestureCommitted` when the reply
   carries it; for a script it sends no change event when `writes` is `0`, takes `pageIds` from
   the reply when it is there, and keeps `pageIds: []` / `pagesUnknown: true` when `writes` or
   `pageIds` is absent (an older engine).

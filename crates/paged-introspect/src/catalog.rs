@@ -979,9 +979,9 @@ property_paths! {
         TableColumnCount => "tableColumnCount" : count().derived(),
             "READ-ONLY by contract: `SetProperty` carrying either table count is rejected, and structure edits go through Insert/DeleteTableRow and Insert/DeleteTableColumn. `settablePaths` means settable, so advertising them published a promise the apply layer refuses. `paged.get` still reads them — it matches on `wire_name`, not on this list",
         TableHeaderRowCount => "tableHeaderRowCount" : count().derived(),
-            "READ-ONLY by contract, like `tableRowCount` (v0.71.12): the header band grows and shrinks through InsertHeaderRow / RemoveHeaderRow, which mint and remove the rows with it. A count setter would have to choose between InDesign's two meanings (Table Options adds or removes rows, Convert Rows re-designates existing ones), so none is advertised. `paged.get` and `RequestGet` on a `table:` address read it",
+            "READ-ONLY by contract, like `tableRowCount` (v0.71.13): the header band grows and shrinks through InsertHeaderRow / RemoveHeaderRow, which mint and remove the rows with it. A count setter would have to choose between InDesign's two meanings (Table Options adds or removes rows, Convert Rows re-designates existing ones), so none is advertised. `paged.get` and `RequestGet` on a `table:` address read it",
         TableFooterRowCount => "tableFooterRowCount" : count().derived(),
-            "READ-ONLY by contract, like `tableRowCount` (v0.71.12): the footer band grows and shrinks through InsertFooterRow / RemoveFooterRow, which mint and remove the rows with it. A count setter would have to choose between InDesign's two meanings (Table Options adds or removes rows, Convert Rows re-designates existing ones), so none is advertised. `paged.get` and `RequestGet` on a `table:` address read it",
+            "READ-ONLY by contract, like `tableRowCount` (v0.71.13): the footer band grows and shrinks through InsertFooterRow / RemoveFooterRow, which mint and remove the rows with it. A count setter would have to choose between InDesign's two meanings (Table Options adds or removes rows, Convert Rows re-designates existing ones), so none is advertised. `paged.get` and `RequestGet` on a `table:` address read it",
         NextTextFrame => "nextTextFrame" : text().derived(),
             "NOT settable at all: the apply layer has no arm for it, so the old reason here — `settable on a TextFrame` — was untrue about the engine. And it could not usefully gain one: a forward pointer on its own does nothing, because the chain walk starts from the STORY, and `linkFrames` is what also rewrites the target's ParentStory. A raw property write would apply cleanly, change the model and move no pixels — the defect that lane already shipped once",
         PreviousTextFrame => "previousTextFrame" : text().derived(),
@@ -1166,7 +1166,7 @@ mod tests {
     // left is the honest residue — eleven that are structurally not
     // property writes or have no address form, plus three still
     // carrying "no recorded reason".
-    // 10 → 12 on 2026-10-15 (v0.71.12): `tableHeaderRowCount` and
+    // 10 → 12 on 2026-10-15 (v0.71.13): `tableHeaderRowCount` and
     // `tableFooterRowCount`, read-only by the same decision as the two
     // table counts above them — not a capability hidden without one.
     const UNADVERTISED: usize = 12;

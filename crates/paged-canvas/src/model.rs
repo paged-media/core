@@ -647,7 +647,7 @@ pub struct FrameMutationOutcome {
     pub applied_seq: u64,
     pub page_ids: Vec<PageId>,
     pub applied: paged_mutate::AppliedOperation,
-    /// v0.71.12 — the content-box reflow a gesture commit reports
+    /// v0.71.13 — the content-box reflow a gesture commit reports
     /// (`GestureCommitted.reflow`): set by `commit_gesture` for a resize
     /// of one frame, `None` from every other path.
     pub reflow: Option<crate::channel::FrameReflowInfo>,
@@ -1767,7 +1767,7 @@ pub struct CanvasModel {
     last_dirty_pages: Vec<usize>,
     /// Whether `last_dirty_pages` was narrowed below every page.
     last_dirty_narrowed: bool,
-    /// v0.71.12 — while armed ([`Self::begin_page_change_tracking`]), the union
+    /// v0.71.13 — while armed ([`Self::begin_page_change_tracking`]), the union
     /// of every build's dirty pages since: what a script run reports as
     /// `ScriptResult.page_ids`.
     page_changes: Option<std::collections::BTreeSet<PageId>>,
@@ -8297,7 +8297,7 @@ impl CanvasModel {
                 path: PropertyPath::TableColumnCount,
                 value: Some(Value::Length(Some(table.column_count as f32))),
             },
-            // v0.71.12 — the header and footer bands inside that total.
+            // v0.71.13 — the header and footer bands inside that total.
             PropertyEntry {
                 path: PropertyPath::TableHeaderRowCount,
                 value: Some(Value::Length(Some(table.header_row_count as f32))),
@@ -8686,7 +8686,7 @@ impl CanvasModel {
         // v70 — page self id → the spread whose labels hold its metadata.
         let mut spread_of: std::collections::HashMap<&str, &paged_model::Spread> =
             std::collections::HashMap::new();
-        // v0.71.12 — page self id → its spread's id, spelled as `spreads()`
+        // v0.71.13 — page self id → its spread's id, spelled as `spreads()`
         // spells it (the `Self` id, the file name when there is none).
         let mut spread_id_of: std::collections::HashMap<&str, String> =
             std::collections::HashMap::new();
@@ -11667,7 +11667,7 @@ impl CanvasModel {
             .collect()
     }
 
-    /// v0.71.12 — start collecting the pages every build from now on changes
+    /// v0.71.13 — start collecting the pages every build from now on changes
     /// (the union of [`Self::dirty_page_ids`] across them), replacing any
     /// collection in progress. [`Self::end_page_change_tracking`] stops it.
     /// A script run brackets each of its segments with the pair, so the
@@ -11676,7 +11676,7 @@ impl CanvasModel {
         self.page_changes = Some(std::collections::BTreeSet::new());
     }
 
-    /// v0.71.12 — stop collecting and return the pages the builds since
+    /// v0.71.13 — stop collecting and return the pages the builds since
     /// [`Self::begin_page_change_tracking`] changed (empty when it was not
     /// armed). A page deleted since is still named; see
     /// [`Self::in_document_order`].
@@ -11684,7 +11684,7 @@ impl CanvasModel {
         self.page_changes.take().unwrap_or_default()
     }
 
-    /// v0.71.12 — the pages of `ids` the document still has, in document order.
+    /// v0.71.13 — the pages of `ids` the document still has, in document order.
     pub fn in_document_order(&self, ids: &std::collections::BTreeSet<PageId>) -> Vec<PageId> {
         self.built
             .pages

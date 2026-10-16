@@ -669,12 +669,12 @@ export type WorkerToMain = WorkerToMainKind & {
 //     script's own writes fold into the script's undo step — an edit
 //     made while the script waited (a UI edit) is never folded, and the
 //     script's records on either side of it stay separate steps.
-// Additive on 71, no bump (governance rule 1), v0.71.12 — what a committed
+// Additive on 71, no bump (governance rule 1), v0.71.13 — what a committed
 //   change reports and where a page sits (ADR 159): `GestureCommitted.reflow`,
 //   `ScriptResult.writes` / `page_ids`, `PageSummary.page_origin` /
 //   `spread_id`, and the read-only `tableHeaderRowCount` /
 //   `tableFooterRowCount` paths. All optional: a consumer detects them by
-//   presence, and one that needs them requires `canvas-wasm >= 0.71.12`.
+//   presence, and one that needs them requires `canvas-wasm >= 0.71.13`.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(71);
 
 /// A per-run script budget on the wire (v63). Every field is optional
@@ -2311,7 +2311,7 @@ pub enum WorkerToMainKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[tsify(optional)]
         stats: Option<crate::model::DocumentStats>,
-        /// v0.71.12 — how many writes the run committed to the document
+        /// v0.71.13 — how many writes the run committed to the document
         /// itself: each one step the engine logged (a `paged.set`, an
         /// insert, a `paged.undo`, …). `0` for a read-only script. The
         /// engine writes a host made answering a suspended script are
@@ -2320,7 +2320,7 @@ pub enum WorkerToMainKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[tsify(optional)]
         writes: Option<u32>,
-        /// v0.71.12 — the pages the run's writes changed, in document order:
+        /// v0.71.13 — the pages the run's writes changed, in document order:
         /// the pages the engine laid out afresh for them. A text edit
         /// narrows to its story's pages; any other write names every
         /// page, as `MutationApplied.page_ids` does for it. Empty when no
@@ -2365,7 +2365,7 @@ pub enum WorkerToMainKind {
         applied_seq: u64,
         page_ids: Vec<PageId>,
         cache_stats: LayoutCacheStats,
-        /// v0.71.12 — content-box reflow: what `MutationApplied.reflow`
+        /// v0.71.13 — content-box reflow: what `MutationApplied.reflow`
         /// reports for the equivalent `resizeFrame`. Present when the
         /// gesture resized ONE frame by its handles; absent for a move,
         /// rotate, scale or shear (display geometry only, the §8.5
@@ -3213,7 +3213,7 @@ pub struct PageSummary {
     /// when it has none.
     #[serde(default)]
     pub plugin_metadata: Vec<PluginMetadataEntry>,
-    /// v0.71.12 — the page's origin (its top-left) in its spread's
+    /// v0.71.13 — the page's origin (its top-left) in its spread's
     /// coordinates, `[x, y]`: the same value `ElementGeometryItem.page_origin`
     /// carries for an item on this page. Page 2 of a two-page spread whose
     /// first page starts at the spread's origin sits at `[width of page 1,
@@ -3221,7 +3221,7 @@ pub struct PageSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[tsify(optional)]
     pub page_origin: Option<[f32; 2]>,
-    /// v0.71.12 — the spread the page belongs to: `SpreadSummary.self_id` and
+    /// v0.71.13 — the spread the page belongs to: `SpreadSummary.self_id` and
     /// `ElementGeometryItem.spread_id` name the same spread. Older workers
     /// omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

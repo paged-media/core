@@ -1472,7 +1472,7 @@ impl WorkerCore {
                 let step =
                     paged_script::start_script(model, &source, effective, clock, host_objects, id);
                 // A script may touch any page or story (or none). Its reply
-                // names the pages its own writes changed (v0.71.12), but a host
+                // names the pages its own writes changed (v0.71.13), but a host
                 // may have written while it waited. Clear the GPU scene
                 // cache wholesale so `present_frame` rebuilds the visible
                 // pages — otherwise a
@@ -1571,7 +1571,7 @@ impl WorkerCore {
                             applied_seq: outcome.applied_seq,
                             page_ids: outcome.page_ids,
                             cache_stats: stats,
-                            // v0.71.12 — a handle resize of one frame reports
+                            // v0.71.13 — a handle resize of one frame reports
                             // the reflow its `resizeFrame` would.
                             reflow: outcome.reflow,
                         }
@@ -1706,7 +1706,7 @@ impl WorkerCore {
                 // The counts after the script: it wrote without the
                 // round trip that refreshes the host's counters.
                 stats: self.model.as_ref().map(|m| m.document_stats()),
-                // v0.71.12 — whether it wrote, and the pages its writes changed.
+                // v0.71.13 — whether it wrote, and the pages its writes changed.
                 writes: result.writes,
                 page_ids: result.page_ids,
             },

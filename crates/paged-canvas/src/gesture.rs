@@ -723,7 +723,7 @@ impl CanvasModel {
                 reflow: None,
             });
         };
-        // v0.71.12 — a resize of ONE frame by its handles is `resizeFrame` by
+        // v0.71.13 — a resize of ONE frame by its handles is `resizeFrame` by
         // another door, so it reports the reflow that mutation reports
         // (`MutationApplied.reflow`), read back from the committed scene by
         // the same lookup. A resize of several frames is a batch, which

@@ -205,14 +205,14 @@ pub struct ScriptResult {
     /// the JSON for ordinary results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_kind: Option<ScriptBudgetKind>,
-    /// v0.71.12 — how many writes the run committed to the document itself
+    /// v0.71.13 — how many writes the run committed to the document itself
     /// (each a step the engine logged). `0` for a read-only script. The
     /// writes a host made answering a suspended script are its own
     /// replies' to report, not counted here. `None` only where no run
     /// happened. Additive: absent in the JSON when `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writes: Option<u32>,
-    /// v0.71.12 — the pages the run's writes changed, in document order, as
+    /// v0.71.13 — the pages the run's writes changed, in document order, as
     /// the engine's rebuilds named them (a text edit narrows to its
     /// story's pages; any other write names every page). Empty when no
     /// write changed a page. `None` when it cannot say.
@@ -448,7 +448,7 @@ pub struct ScriptSession {
     host_commits: Vec<u64>,
     /// `applied_seq` when the running segment began.
     segment_start: u64,
-    /// v0.71.12 — the writes this script's own segments committed, and the
+    /// v0.71.13 — the writes this script's own segments committed, and the
     /// pages their builds changed (collected per segment, so an edit made
     /// while the script waited on the host is never counted as its own).
     writes: u64,

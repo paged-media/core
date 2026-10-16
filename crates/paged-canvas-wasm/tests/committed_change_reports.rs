@@ -12,7 +12,7 @@
  *  @license    MPL-2.0 OR Paged Media Enterprise License (PMEL)
  */
 
-//! ADR 159 (v0.71.12, additive on protocol 71) — four reads a consumer
+//! ADR 159 (v0.71.13, additive on protocol 71) — four reads a consumer
 //! needs to follow the document without re-reading all of it, driven
 //! through the worker dispatch exactly as the browser worker drives it: a
 //! JSON `MainToWorker` in, a JSON `WorkerToMain` out.
